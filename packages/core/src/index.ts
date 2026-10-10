@@ -163,6 +163,8 @@ export {
   loadModelsConfigFromFile,
   MODELS_CONFIG_DIR,
   MODELS_CONFIG_FILE,
+  normalizeGlobalToolConfig,
+  normalizeRawGlobalToolConfig,
   parseModelStyle,
   parseModelsConfig,
   readModelsConfigFile,

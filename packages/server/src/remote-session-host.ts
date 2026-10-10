@@ -67,6 +67,9 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           extensionDirs: createOptions.extensionDirs,
           continueSession: createOptions.continueSession,
           resumeSessionId: createOptions.resumeSessionId,
+          // Websearch keys / provider preference for the server-side agent loop. The
+          // server's create schema accepts this field (write-only; never echoed back).
+          ...(createOptions.toolConfig ? { toolConfig: createOptions.toolConfig } : {}),
         }),
       });
       if (!response.ok) {

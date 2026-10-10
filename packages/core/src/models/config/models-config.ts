@@ -44,6 +44,11 @@ const globalSchema = z.object({
   toolConfig: z
     .object({
       braveApiKey: z.string().optional(),
+      exaApiKey: z.string().optional(),
+      parallelApiKey: z.string().optional(),
+      tavilyApiKey: z.string().optional(),
+      provider: z.string().optional(),
+      /** Legacy name for `provider`; read for backward compatibility, rewritten as `provider`. */
       websearchProvider: z.string().optional(),
     })
     .optional(),
@@ -81,7 +86,20 @@ export interface ModelsConfigGlobal {
   maxIterations?: number;
   mcpConfigPath?: string;
   systemPrompt?: string;
-  toolConfig?: { braveApiKey?: string; websearchProvider?: string };
+  /**
+   * Websearch secrets / preference, applied to the agent's `AgentToolConfig` at creation.
+   * `provider` is the preferred provider name; `websearchProvider` is the legacy spelling
+   * and is mapped onto `provider` on read (see {@link normalizeGlobalToolConfig}).
+   */
+  toolConfig?: {
+    braveApiKey?: string;
+    exaApiKey?: string;
+    parallelApiKey?: string;
+    tavilyApiKey?: string;
+    provider?: string;
+    /** @deprecated use `provider` */
+    websearchProvider?: string;
+  };
 }
 
 export interface DirectModelsConfigEntry {
@@ -169,7 +187,43 @@ export interface ProviderInfo {
 // ============================================================================
 
 export function parseModelsConfig(raw: string): ModelsConfig {
-  return validateModelsConfig(JSON.parse(raw));
+  return normalizeGlobalToolConfig(validateModelsConfig(JSON.parse(raw)));
+}
+
+/**
+ * Map the legacy `global.toolConfig.websearchProvider` spelling onto `provider`.
+ *
+ * The key was renamed to match the runtime `WebsearchToolConfig.provider`, but existing
+ * `models.json` files still carry the old name; reading it here means a file written
+ * before the rename keeps working, and the next save emits `provider` only. Returns a new
+ * object — the input is not mutated.
+ */
+export function normalizeGlobalToolConfig(config: ModelsConfig): ModelsConfig {
+  const toolConfig = config.global?.toolConfig;
+  if (!toolConfig?.websearchProvider) return config;
+  const { websearchProvider, ...rest } = toolConfig;
+  return {
+    ...config,
+    global: { ...config.global, toolConfig: { ...rest, provider: rest.provider ?? websearchProvider } },
+  };
+}
+
+/**
+ * Same rename as {@link normalizeGlobalToolConfig}, for a **raw** (unvalidated) `global`
+ * block. The write path carries `global` across by reference to preserve unknown keys, so it
+ * must normalize explicitly or a legacy `websearchProvider` survives every save. Returns a
+ * new object when it renames; the input is not mutated.
+ */
+export function normalizeRawGlobalToolConfig(global: unknown): unknown {
+  if (!global || typeof global !== "object" || Array.isArray(global)) return global;
+  const block = global as Record<string, unknown>;
+  const toolConfig = block.toolConfig;
+  if (!toolConfig || typeof toolConfig !== "object" || Array.isArray(toolConfig)) return global;
+  const tc = toolConfig as Record<string, unknown>;
+  if (tc.websearchProvider === undefined) return global;
+  const { websearchProvider, ...rest } = tc;
+  const provider = rest.provider ?? websearchProvider;
+  return { ...block, toolConfig: { ...rest, ...(provider !== undefined ? { provider } : {}) } };
 }
 
 /**
@@ -245,7 +299,7 @@ export async function writeModelsConfigFile(config: unknown, rootPath?: string):
 export async function loadModelsConfigFromFile(rootPath?: string): Promise<ModelsConfig | null> {
   const raw = await readModelsConfigFile(rootPath);
   if (raw === null) return null;
-  return validateModelsConfig(raw);
+  return normalizeGlobalToolConfig(validateModelsConfig(raw));
 }
 
 /**

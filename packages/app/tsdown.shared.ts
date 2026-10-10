@@ -127,6 +127,7 @@ export const ENTRIES = [
   "src/utils/user-message-segments.ts",
   "src/utils/attachment-hash.ts",
   "src/utils/apply-app-config.ts",
+  "src/utils/merge-tool-config.ts",
   "src/utils/get-messages.ts",
   "src/utils/user-input-helpers.ts",
 

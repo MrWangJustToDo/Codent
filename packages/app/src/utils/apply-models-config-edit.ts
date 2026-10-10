@@ -28,6 +28,7 @@ import {
   loadModels,
   readModelsConfigFile,
   registerModelProviderForEntry,
+  normalizeRawGlobalToolConfig,
   writeModelsConfigFile,
   type LoadedModelsState,
   type ModelsConfig,
@@ -82,7 +83,14 @@ export async function applyModelsConfigEdit(
     const existing = await readModelsConfigFile();
     const merged = mergeModelsConfig(existing, draft, options);
 
-    await writeModelsConfigFile(merged);
+    // Rewrite the legacy `global.toolConfig.websearchProvider` key to `provider` on save.
+    // `mergeModelsConfig` carries `global` across by reference to preserve unknown keys, so
+    // without this the legacy spelling survives every save even though the read path maps it.
+    const normalizedGlobal = normalizeRawGlobalToolConfig(merged.global);
+    const toWrite =
+      normalizedGlobal === merged.global ? merged : { ...merged, global: normalizedGlobal as ModelsConfig["global"] };
+
+    await writeModelsConfigFile(toWrite);
 
     // Read back what was actually written — the merge and the schema both get a
     // vote here, so a live provider can never disagree with the file. The write is

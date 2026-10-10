@@ -180,6 +180,21 @@ const createBodySchema = z.object({
   extensionDirs: z.array(z.string()).optional(),
   continueSession: z.boolean().optional(),
   resumeSessionId: z.string().optional(),
+  // Websearch secrets / provider preference for the server-side agent loop. Like the
+  // model `apiKey` above, this is write-only: it is never echoed in the snapshot.
+  toolConfig: z
+    .object({
+      websearch: z
+        .object({
+          braveApiKey: z.string().optional(),
+          exaApiKey: z.string().optional(),
+          parallelApiKey: z.string().optional(),
+          tavilyApiKey: z.string().optional(),
+          provider: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 async function loadCore() {
@@ -335,11 +350,16 @@ export const agentSessionRoutes = new Hono()
       modelInfo,
       continueSession: body.continueSession,
       resumeSessionId: body.resumeSessionId,
+      ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
     });
     sessions.set(session.id, session as unknown as SessionLike);
     attachToolBuffer(session.id, session as unknown as SessionLike);
+    // Redact secrets: `body` now carries toolConfig (websearch API keys) alongside the model
+    // apiKey, so never stringify the whole payload — only its non-secret shape.
+    const { apiKey: _apiKey, toolConfig: _toolConfig, ...safeBody } = body;
     diag(
-      `POST /api/agent body=${JSON.stringify(body)} -> id=${session.id} sessions.size=${sessions.size} ` +
+      `POST /api/agent body=${JSON.stringify({ ...safeBody, toolConfig: body.toolConfig ? "[redacted]" : undefined })} ` +
+        `-> id=${session.id} sessions.size=${sessions.size} ` +
         `inManager=${agentManager.getAgent(session.id)?.id ?? "NONE"}`
     );
     return c.json({ id: session.id, snapshot: (session as SessionLike).getSnapshot() });

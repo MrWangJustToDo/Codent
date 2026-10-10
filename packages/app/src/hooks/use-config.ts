@@ -10,6 +10,7 @@ import {
 import { createState } from "reactivity-store";
 
 import { applyOptionalAppConfig, clearOptionalAppConfig } from "../utils/apply-app-config.js";
+import { mergeModelsConfigToolConfig } from "../utils/merge-tool-config.js";
 
 import type { AppConfig } from "../adapter/types.js";
 
@@ -83,6 +84,12 @@ export const useConfig = createState(
           const loaded = await loadModels(source);
           if (loaded) {
             if (!config.remoteSession) {
+              // Apply the file's websearch toolConfig under the host value (per field): the
+              // CLI/env `toolConfig` wins, the file fills the gaps. Done here (before agent
+              // creation / `adapter.initialize`) so `Host.create` sees the merged result.
+              const mergedToolConfig = mergeModelsConfigToolConfig(state.config.toolConfig, loaded.config.global);
+              if (mergedToolConfig) state.config.toolConfig = mergedToolConfig;
+
               await registerModelProviderForEntry(loaded);
               const entry = loaded.entries[loaded.active.entryIndex];
               if (entry) {

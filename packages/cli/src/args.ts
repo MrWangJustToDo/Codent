@@ -139,16 +139,18 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     : undefined;
 
   const braveApiKey = getEnv("BRAVE_API_KEY") || undefined;
+  const exaApiKey = getEnv("EXA_API_KEY") || undefined;
+  const parallelApiKey = getEnv("PARALLEL_API_KEY") || undefined;
+  const tavilyApiKey = getEnv("TAVILY_API_KEY") || undefined;
   const websearchProvider = getEnv("WEBSEARCH_PROVIDER") || undefined;
-  const toolConfig =
-    braveApiKey || websearchProvider
-      ? {
-          websearch: {
-            ...(braveApiKey ? { braveApiKey } : {}),
-            ...(websearchProvider ? { provider: websearchProvider } : {}),
-          },
-        }
-      : undefined;
+  const websearchConfig = {
+    ...(braveApiKey ? { braveApiKey } : {}),
+    ...(exaApiKey ? { exaApiKey } : {}),
+    ...(parallelApiKey ? { parallelApiKey } : {}),
+    ...(tavilyApiKey ? { tavilyApiKey } : {}),
+    ...(websearchProvider ? { provider: websearchProvider } : {}),
+  };
+  const toolConfig = Object.keys(websearchConfig).length > 0 ? { websearch: websearchConfig } : undefined;
 
   let resumeSession = "";
   const resumeFlag = getFlag(parsed, "resume", "r");

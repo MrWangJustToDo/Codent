@@ -33,6 +33,8 @@ export {
   loadModelEntries,
   loadModels,
   loadModelsConfigFromFile,
+  normalizeGlobalToolConfig,
+  normalizeRawGlobalToolConfig,
   parseModelsConfig,
   readModelsConfigFile,
   registerModelProviderForEntry,
