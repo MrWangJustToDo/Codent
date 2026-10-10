@@ -60,9 +60,12 @@ BASE_URL=https://openrouter.ai/api/v1
 API_KEY=sk-or-v1-xxx
 maxIterations=30
 
-# Optional
-BRAVE_API_KEY=...           # websearch
-WEBSEARCH_PROVIDER=...      # override the websearch provider
+# Optional — websearch providers (Brave → Parallel → Exa → Tavily → DuckDuckGo)
+BRAVE_API_KEY=...           # Brave Search API (keyed)
+EXA_API_KEY=...             # Exa keyed tier (free public MCP without it)
+PARALLEL_API_KEY=...        # Parallel keyed tier (free public MCP without it)
+TAVILY_API_KEY=...          # Tavily (has no free tier — required to use it)
+WEBSEARCH_PROVIDER=...      # pin a provider: brave | parallel | exa | tavily | duckduckgo | auto
 MCP_CONFIG_PATH=...         # MCP server config
 ```
 

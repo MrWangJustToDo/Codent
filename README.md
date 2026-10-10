@@ -48,7 +48,7 @@ A **runtime-agnostic** AI coding agent — same core logic, runs in terminal, Ch
 | **Code Mode** | Sandboxed TypeScript execution via TanStack `ai-code-mode` — the model can write and run TS in an isolated V8 context with a curated subset of agent tools exposed as `external_*` functions (read-only fs eager, shell/websearch lazy) |
 | **MCP Integration** | Connect to external MCP servers for additional tools |
 | **LSP / Tree-sitter** | Built-in LSP extension: diagnostics, hover, definition, references, symbols, completions, rename, code actions + structural tree-sitter search/rewrite (`.lsp.json` config) |
-| **Web** | Multi-provider search (Brave when host passes `toolConfig.websearch.braveApiKey`, else free Exa MCP, else DuckDuckGo) + page fetch |
+| **Web** | Multi-provider search (a configured API key provider — Brave/Exa/Parallel/Tavily — else free providers spread by session across Parallel/Exa, else DuckDuckGo) + page fetch |
 | **Devtools** | Built-in [myreact-devtools](https://github.com/MrWangJustToDo/myreact-devtools) for debugging |
 
 ---
