@@ -223,7 +223,8 @@
     "validate:cancel-semantics": "pnpm run build && node scripts/validate-cancel-semantics.mjs",
     "validate:extension-order": "pnpm run build && node scripts/validate-extension-order.mjs",
     "validate:tool-timeout-contract": "pnpm run build && node scripts/validate-tool-timeout-contract.mjs",
-    "validate:session-search": "pnpm run build && node scripts/validate-session-search.mjs"
+    "validate:session-search": "pnpm run build && node scripts/validate-session-search.mjs",
+    "validate:session-branching": "pnpm run build && node scripts/validate-session-branching.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.65.1",

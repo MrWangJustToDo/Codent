@@ -37,6 +37,7 @@ export {
   createLocalAgentSessionHost,
   sessionForSubagent,
 } from "./agent-session";
+export { branchSession, startNewDiskSession } from "./agent-session/session-lifecycle-commands.js";
 export { generateId, resetGeneratedIdsForTesting } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
 export { clearCoreEnv, registerCoreEnv } from "./env.js";

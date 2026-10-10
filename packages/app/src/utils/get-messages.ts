@@ -42,7 +42,7 @@ const DEFAULT_NAMESPACE = "transcript";
  * selection: treating one as a turn boundary would leave the real user message outside
  * the window (see {@link resolveWindowStart}).
  */
-const isSyntheticContextMessage = (message: UIMessage): boolean => {
+export const isSyntheticContextMessage = (message: UIMessage): boolean => {
   if (message.role !== "user") return false;
   if (message.parts.length !== 1) return false;
   const part = message.parts[0];

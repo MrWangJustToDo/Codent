@@ -203,6 +203,17 @@ export type AgentSessionCommand =
    * brand-new agent process.
    */
   | { type: "session.new" }
+  /**
+   * Duplicate the current session into a new one and switch to it (`/clone`).
+   * The source session is left untouched.
+   */
+  | { type: "session.clone"; name?: string }
+  /**
+   * Start a new session from an earlier user message (`/fork`): copy the messages
+   * strictly before `upToMessageId`, switch to the new session, and return that
+   * message's text so the caller can put it back in the editor.
+   */
+  | { type: "session.fork"; upToMessageId: string; name?: string }
   /** Query the global usage history store for the contribution graph (`/usage`). */
   | { type: "usage.history"; weeks?: number };
 

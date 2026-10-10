@@ -242,6 +242,44 @@ export async function dispatchLocalAgentSessionCommand(
           ? { ok: true, data: { sessionId: result.sessionId } }
           : { ok: false, code: "failed", error: result.error };
       }
+      case "session.clone": {
+        const { branchSession } = await import("./session-lifecycle-commands.js");
+        const result = await branchSession(managed, {
+          mode: "clone",
+          ...(command.name ? { name: command.name } : {}),
+        });
+        return result.ok
+          ? {
+              ok: true,
+              data: {
+                sessionId: result.sessionId,
+                name: result.name,
+                model: result.model,
+                uiMessages: result.uiMessages,
+              },
+            }
+          : { ok: false, code: "failed", error: result.error };
+      }
+      case "session.fork": {
+        const { branchSession } = await import("./session-lifecycle-commands.js");
+        const result = await branchSession(managed, {
+          mode: "fork",
+          upToMessageId: command.upToMessageId,
+          ...(command.name ? { name: command.name } : {}),
+        });
+        return result.ok
+          ? {
+              ok: true,
+              data: {
+                sessionId: result.sessionId,
+                name: result.name,
+                model: result.model,
+                uiMessages: result.uiMessages,
+                ...(result.forkText ? { forkText: result.forkText } : {}),
+              },
+            }
+          : { ok: false, code: "failed", error: result.error };
+      }
       case "usage.history": {
         const weeks = Math.min(52, Math.max(1, Math.floor(command.weeks ?? 12)));
         const history = await managed.usageHistory.getHistory(weeks);

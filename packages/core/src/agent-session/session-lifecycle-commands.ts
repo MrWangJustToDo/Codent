@@ -3,12 +3,14 @@
  */
 
 import { extractTextFromContent } from "../agent/compaction/message-utils.js";
+import { partTextContent } from "../agent/stream/message-parts.js";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 
 import { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
 
 import type { ManagedAgent } from "../managers/managed-agent.js";
+import type { UIMessage } from "@tanstack/ai";
 
 export async function generateAndApplySessionTitle(
   managed: ManagedAgent
@@ -175,4 +177,75 @@ export async function startNewDiskSession(
   managed.refreshState();
 
   return { ok: true, sessionId: newSession.id };
+}
+
+/** Plain text of a UI message's text parts (used to hand a fork point back to the editor). */
+function uiMessageText(message: UIMessage): string {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  return parts
+    .map((part) => partTextContent(part as { type?: string; content?: unknown }))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+/**
+ * Clone (`mode: "clone"`) or fork (`mode: "fork"`) the current session into a new one
+ * and switch to it. `/clone` copies the whole transcript; `/fork` copies the messages
+ * strictly before `upToMessageId` and returns that message's text for the caller to
+ * put back in the editor. The source session is left untouched.
+ *
+ * Refused while a run is active (the channel would be a half-finished turn). The new
+ * session is written to disk and then adopted through {@link ManagedAgent.restoreSession},
+ * the same switch path as `session.resume`.
+ */
+export async function branchSession(
+  managed: ManagedAgent,
+  options: { mode: "clone" | "fork"; upToMessageId?: string; name?: string }
+): Promise<
+  | { ok: true; sessionId: string; name: string; model: string; uiMessages: UIMessage[]; forkText?: string }
+  | { ok: false; error: string }
+> {
+  const store = managed.getSessionStore();
+  const current = managed.getSessionData();
+  if (!store || !current) {
+    return { ok: false, error: "No active session" };
+  }
+
+  if (managed.getChatController()?.isRunActive?.()) {
+    return { ok: false, error: `Cannot ${options.mode} while the agent is running — stop it first (Esc).` };
+  }
+
+  // Branch from the live channel so unsaved turns are included.
+  const messages = (managed.getUI()?.getMessages() ?? current.uiMessages) as UIMessage[];
+
+  let upToIndex: number | undefined;
+  let forkText: string | undefined;
+  if (options.mode === "fork") {
+    const id = options.upToMessageId;
+    const index = id ? messages.findIndex((message) => message.id === id) : -1;
+    if (index <= 0) {
+      return { ok: false, error: "Fork point must be an earlier user message with messages before it" };
+    }
+    upToIndex = index;
+    forkText = uiMessageText(messages[index]!);
+  }
+
+  const newSession = store.branchFrom(current, {
+    ...(upToIndex !== undefined ? { upToIndex } : {}),
+    ...(options.name ? { name: options.name } : {}),
+    messages: messages as never,
+  });
+
+  await store.save(newSession);
+  const restored = await managed.restoreSession(newSession.id);
+
+  return {
+    ok: true,
+    sessionId: newSession.id,
+    name: restored.name,
+    model: restored.model,
+    uiMessages: restored.uiMessages,
+    ...(forkText ? { forkText } : {}),
+  };
 }

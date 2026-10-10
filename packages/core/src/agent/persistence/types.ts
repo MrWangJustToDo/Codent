@@ -163,6 +163,11 @@ export interface SessionData {
   /** When true, skip all tool approvals (auto / YOLO mode). Older sessions omit this. */
   autoMode?: boolean;
   /**
+   * Source session id when this session was created by `/clone` or `/fork`.
+   * Lineage pointer only; it does not participate in model context.
+   */
+  forkedFrom?: string;
+  /**
    * Derived, non-persisted approval decision timestamps (toolCallId → epoch ms),
    * reconstructed on load by folding the message timestamps. Never serialized
    * into the log's `state` snapshot (see {@link SessionStateFields}).

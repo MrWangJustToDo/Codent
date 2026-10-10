@@ -132,6 +132,39 @@ export class SessionStore {
   }
 
   /**
+   * Build a new session by copying `source`'s messages (optionally truncated) and
+   * model settings. Per-session work state is reset (usage/todos/plan/auto) and the
+   * source is recorded as `forkedFrom`. The caller persists the result.
+   *
+   * `upToIndex` copies messages strictly before that index (`/fork`); omit it to
+   * copy all messages (`/clone`). `messages` overrides `source.uiMessages` so a
+   * caller can branch from the live channel (including unsaved turns).
+   */
+  branchFrom(
+    source: SessionData,
+    options: { upToIndex?: number; name?: string; messages?: PersistedUIMessage[] } = {}
+  ): SessionData {
+    const all = (options.messages ?? source.uiMessages) as PersistedUIMessage[];
+    const messages = options.upToIndex === undefined ? all.slice() : all.slice(0, options.upToIndex);
+    const now = Date.now();
+    const name = options.name?.trim();
+    return {
+      id: generateId("ses"),
+      name: name && name.length > 0 ? name : source.name,
+      version: SESSION_VERSION,
+      modelStyle: source.modelStyle,
+      model: source.model,
+      uiMessages: messages as SessionData["uiMessages"],
+      usage: { ...EMPTY_USAGE },
+      todos: [],
+      forkedFrom: source.id,
+      ...(source.reasoningEffort ? { reasoningEffort: source.reasoningEffort } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  /**
    * Save a session: append only the messages whose content changed since the
    * last write, plus a full state snapshot on each appended line. State-only
    * changes re-emit the last message line. Skips all IO when nothing changed.
