@@ -30,7 +30,8 @@ async function* mockStream() {
   }
 }
 
-const text = await streamToText(mockStream());
+// `streamToText()` returns a `ChatResult` (`{ text, chunks }`) as of @tanstack/ai 0.66.
+const { text } = await streamToText(mockStream());
 assert.equal(text, "hello world");
 assert.equal(typeof runSideTextQuery, "function");
 

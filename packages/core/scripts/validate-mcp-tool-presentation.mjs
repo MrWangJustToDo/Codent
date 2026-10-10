@@ -148,6 +148,9 @@ function makeStubManager() {
       return undefined;
     },
     getServerStatuses: () => [{ name: "probe", transport: "stdio", toolCount: 2, status: "connected" }],
+    // Handshake instructions (`MCPClient.instructions`, `@tanstack/ai-mcp` 0.8+); the
+    // extension surfaces these as a turn-context section.
+    getServerInstructions: () => [{ server: "probe", instructions: "Call mcp__probe_do_thing to do the thing." }],
   };
 }
 
@@ -209,6 +212,28 @@ for (const def of toolDefs) {
 }
 
 console.log(`✓ ${toolDefs.length} MCP tools declare keepRow + detailed under a generic category`);
+
+// ============================================================================
+// 1b. Server handshake instructions reach the model as a turn-context section
+// ============================================================================
+//
+// `MCPClient.instructions` (`@tanstack/ai-mcp` 0.8+) carries the server's own usage
+// guidance from the connect handshake. The extension surfaces it through its single
+// context provider (one per extension, keyed by id) alongside the disabled notice.
+
+{
+  const { turnContextSections } = await runner.collectBeforeAgentStart("probe", "sess-mcp");
+  const mcpSection = turnContextSections.find((section) => section.id === "codent-mcp");
+  assert.ok(mcpSection, "the MCP extension contributes a turn-context section");
+  assert.match(
+    mcpSection.content,
+    /Call mcp__probe_do_thing to do the thing\./,
+    "the server's handshake instructions reach the model"
+  );
+  assert.match(mcpSection.content, /### probe/, "the section names the originating server");
+}
+
+console.log("✓ MCP handshake instructions surface as a turn-context section");
 
 // ============================================================================
 // 2. The declared descriptor actually resolves, and it is what decides rows

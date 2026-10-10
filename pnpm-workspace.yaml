@@ -23,14 +23,15 @@ minimumReleaseAgeExclude:
   - "@git-diff-view/file@0.1.7"
   - "@git-diff-view/lowlight@0.1.7"
   - "@git-diff-view/cli@0.1.10"
-  - "@tanstack/ai-client@0.26.0"
-  - '@tanstack/ai-openai@0.21.1 || 0.22.6'
-  - '@tanstack/ai@0.48.0 || 0.54.0 || 0.65.1'
-  - '@tanstack/openai-base@0.10.3 || 0.10.11'
-  - "@tanstack/ai-mcp@0.3.10"
-  - "@tanstack/ai-anthropic@0.18.6"
-  - "@tanstack/ai-code-mode@0.4.9"
-  - "@tanstack/ai-mcp@0.8.0"
+  # Only the @tanstack versions the lockfile currently resolves AND that are still
+  # younger than the quarantine window need an entry. A version the lockfile no longer
+  # resolves, or one that has aged past the window, is dead weight. Add a new entry only
+  # when an install reports a fresh version as quarantined.
+  - "@tanstack/ai@0.68.0"
+  - "@tanstack/openai-base@0.13.1"
+  - "@tanstack/ai-mcp@0.8.3"
+  - "@tanstack/ai-anthropic@0.21.1"
+  - "@tanstack/ai-code-mode@0.5.2"
 
 publicHoistPattern:
   - "*eslint-*"
@@ -44,7 +45,7 @@ publicHoistPattern:
 # prebuilds (incl. linux-arm64) so the native addon loads without compiling.
 overrides:
   isolated-vm: 7.0.1
-  # Pin @tanstack/ai to a single instance across the chain: ai-mcp@0.8.0 declares
-  # `@tanstack/ai: ^0.65.0` as a dependency and would otherwise pull a second
-  # 0.65.0 copy beside the 0.65.1 the workspace resolves from ^0.65.1.
-  "@tanstack/ai": 0.65.1
+  # Pin @tanstack/ai to a single instance across the chain: ai-mcp declares a
+  # `@tanstack/ai` dependency range of its own and would otherwise pull a second
+  # copy beside the one the workspace resolves from the package.json ranges.
+  "@tanstack/ai": 0.68.0

@@ -37,7 +37,11 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
     description:
       "Model Context Protocol: connect external MCP servers over stdio/SSE/HTTP and expose their tools (mcp__<server>_<tool>) plus the /mcp status command",
     async activate(ctx) {
+      // One context provider per extension (`ExtensionRunner` keys the map by extension id),
+      // so the handshake instructions and the disabled notice share this single registration.
+      // `content` is evaluated per turn, after `activateMcp` has connected and captured them.
       ctx.registerContextProvider({
+        content: () => formatMcpInstructions(mcpManager.getServerInstructions()),
         disabledContent: () =>
           "MCP extension is disabled — external MCP servers (mcp__<server>_<tool>) and the /mcp status command are unavailable.",
       });
@@ -107,6 +111,17 @@ async function activateMcp(ctx: ExtensionContext, mcpManager: McpManager, config
 // ============================================================================
 // /mcp status formatting (mirrors the previous app-layer builtin command)
 // ============================================================================
+
+/**
+ * Render MCP server handshake `instructions` as a turn-context section.
+ * Returns `undefined` (inject nothing) when no server provided any text.
+ */
+function formatMcpInstructions(entries: Array<{ server: string; instructions: string }>): string | undefined {
+  const withText = entries.filter((entry) => entry.instructions.trim().length > 0);
+  if (withText.length === 0) return undefined;
+  const body = withText.map((entry) => `### ${entry.server}\n${entry.instructions.trim()}`).join("\n\n");
+  return `The connected MCP servers provided the following usage instructions:\n\n${body}`;
+}
 
 function formatMcpStatus(servers: McpServerStatus[]): string {
   if (servers.length === 0) {

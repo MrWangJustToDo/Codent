@@ -4,7 +4,10 @@ import OpenAI from "openai";
 import { liftToolMediaForChatCompletions } from "./lift-tool-media-for-chat-completions.js";
 
 import type { ContentPart, TextOptions } from "@tanstack/ai";
-import type { ChatCompletionContentPart } from "openai/resources/chat/completions/completions";
+import type {
+  ChatCompletionContentPart,
+  ChatCompletionCreateParamsStreaming,
+} from "openai/resources/chat/completions/completions";
 
 export interface ChatCompletionsTextAdapterConfig {
   apiKey: string;
@@ -35,7 +38,7 @@ export class ChatCompletionsTextAdapter extends OpenAIBaseChatCompletionsTextAda
     );
   }
 
-  protected override mapOptionsToRequest(options: TextOptions) {
+  protected override mapOptionsToRequest(options: TextOptions): ChatCompletionCreateParamsStreaming {
     return super.mapOptionsToRequest({
       ...options,
       messages: liftToolMediaForChatCompletions(options.messages),

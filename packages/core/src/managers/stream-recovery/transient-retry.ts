@@ -84,6 +84,28 @@ export function isTransientRetryableError(error: unknown): boolean {
 }
 
 /**
+ * Provider-normalized retry hint in **milliseconds**, straight from the SDK.
+ *
+ * `@tanstack/ai` 0.67+ sets `retryAfterMs` on a `RUN_ERROR` (mirrored to
+ * `metadata.tanstack.retryAfterMs`), resolving the `retry-after-ms` header first
+ * then `retry-after` in seconds or as an HTTP date. Prefer this over
+ * {@link extractRetryAfterSeconds}'s own header/message scraping: it is the same
+ * value the adapter already normalized, and it lives on the chunk we are holding.
+ */
+export function extractRetryAfterMs(source: unknown): number | undefined {
+  if (source == null || typeof source !== "object") return undefined;
+  const record = source as {
+    retryAfterMs?: unknown;
+    metadata?: { tanstack?: { retryAfterMs?: unknown } };
+  };
+  const direct = record.retryAfterMs;
+  if (typeof direct === "number" && direct > 0) return direct;
+  const nested = record.metadata?.tanstack?.retryAfterMs;
+  if (typeof nested === "number" && nested > 0) return nested;
+  return undefined;
+}
+
+/**
  * Best-effort Retry-After seconds from SDK errors or message text.
  */
 export function extractRetryAfterSeconds(error: unknown): number | undefined {

@@ -257,6 +257,61 @@ assert.equal(retryEvents.length, 1);
 assert.equal(retryEvents[0].strategy, "transient");
 assert.equal(retryEvents[0].attempt, 1);
 
+// --- the SDK-normalized `retryAfterMs` on a RUN_ERROR drives the backoff --------
+//
+// @tanstack/ai 0.67+ resolves `retry-after` / `retry-after-ms` / an HTTP date into
+// `retryAfterMs` on the RUN_ERROR (and mirrors it to `metadata.tanstack.retryAfterMs`).
+// The loop must prefer that over its own header/message scraping — `extractRetryAfterSeconds`
+// stays the fallback for a thrown error that never became a RUN_ERROR.
+
+let msAttempts = 0;
+async function* retryAfterMsThenOk() {
+  msAttempts += 1;
+  if (msAttempts === 1) {
+    yield {
+      type: "RUN_ERROR",
+      message: "429 Too Many Requests",
+      error: { message: "429 Too Many Requests" },
+      retryAfterMs: 20,
+    };
+    return;
+  }
+  yield { type: "TEXT_MESSAGE_CONTENT", delta: "ok" };
+  yield { type: "RUN_FINISHED", finishReason: "stop" };
+}
+
+const msRetryStates = [];
+const msManaged = {
+  parentId: "sub-agent",
+  run: makeRunCoordinatorStub(),
+  usage: null,
+  log: { warn() {}, debug() {}, error() {} },
+  getUI: () => undefined,
+  setError() {},
+  setRetry(state) {
+    msRetryStates.push(state);
+  },
+  emitEvent() {},
+};
+
+const msOut = [];
+for await (const chunk of runStreamWithRecovery({
+  managed: msManaged,
+  manager: {},
+  getMessages: () => msgs,
+  run: () => retryAfterMsThenOk(),
+})) {
+  msOut.push(chunk.type);
+}
+assert.equal(msAttempts, 2, "a RUN_ERROR carrying retryAfterMs is retried");
+assert.deepEqual(msOut, ["TEXT_MESSAGE_CONTENT", "RUN_FINISHED"], "the retried stream is forwarded");
+assert.equal(
+  msRetryStates[0].retryAfterSeconds,
+  0.02,
+  "the provider retryAfterMs (20ms) drives the backoff, not header/message scraping"
+);
+assert.equal(msRetryStates[0].delayMs, 20, "the recorded delay matches the provider hint");
+
 // --- subagent restart-style retry soft-resets UI + clears error status ---
 
 attempts = 0;

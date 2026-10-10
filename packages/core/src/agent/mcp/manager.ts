@@ -71,6 +71,14 @@ export class McpManager {
   private serverStatuses: Map<string, McpServerStatus> = new Map();
 
   /**
+   * Server-provided usage instructions captured from the MCP connect handshake
+   * (`MCPClient.instructions`, `@tanstack/ai-mcp` 0.8+). Surfaced to the model as a
+   * turn-context section so a server can describe how to use its tools without each
+   * of its tool descriptions having to repeat it.
+   */
+  private serverInstructions: Map<string, string> = new Map();
+
+  /**
    * Config file path (explicit or resolved default) used to load MCP servers,
    * and the actual source path that was loaded. Recorded by the MCP extension
    * (or any loader) so session-bootstrap telemetry can report where config came
@@ -143,6 +151,10 @@ export class McpManager {
 
           this.clients.set(name, client);
 
+          if (client.instructions) {
+            this.serverInstructions.set(name, client.instructions);
+          }
+
           this.serverStatuses.set(name, {
             name,
             transport: serverConfig.transport,
@@ -195,6 +207,14 @@ export class McpManager {
   }
 
   /**
+   * Handshake `instructions` from every connected server that sent them.
+   * Empty when no server provides any — callers should then inject nothing.
+   */
+  getServerInstructions(): Array<{ server: string; instructions: string }> {
+    return Array.from(this.serverInstructions, ([server, instructions]) => ({ server, instructions }));
+  }
+
+  /**
    * Drop this manager's model-output registrations and forget the names.
    *
    * `forceKill`/`shutdown` closed the clients but left these behind — nothing else removes
@@ -232,6 +252,7 @@ export class McpManager {
     this.stdioTransports = [];
     this.clients.clear();
     this.serverStatuses.clear();
+    this.serverInstructions.clear();
     this.clearModelOutputRegistrations();
   }
 
@@ -246,6 +267,7 @@ export class McpManager {
     this.clients.clear();
     this.stdioTransports = [];
     this.serverStatuses.clear();
+    this.serverInstructions.clear();
     this.clearModelOutputRegistrations();
   }
 

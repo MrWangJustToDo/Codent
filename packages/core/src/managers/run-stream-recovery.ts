@@ -9,7 +9,11 @@ import {
   readTruncationProgress,
 } from "./stream-recovery/max-tokens-continue.js";
 import { tryReactiveCompactRetry } from "./stream-recovery/reactive-compact-retry.js";
-import { extractRetryAfterSeconds, isTransientRetryableError } from "./stream-recovery/transient-retry.js";
+import {
+  extractRetryAfterMs,
+  extractRetryAfterSeconds,
+  isTransientRetryableError,
+} from "./stream-recovery/transient-retry.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent } from "./managed-agent.js";
@@ -19,7 +23,11 @@ import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 
 export { armCapabilityStrip, tryCapabilitySanitizeRetry } from "./stream-recovery/capability-sanitize.js";
 export { tryReactiveCompactRetry } from "./stream-recovery/reactive-compact-retry.js";
-export { extractRetryAfterSeconds, isTransientRetryableError } from "./stream-recovery/transient-retry.js";
+export {
+  extractRetryAfterSeconds,
+  extractRetryAfterMs,
+  isTransientRetryableError,
+} from "./stream-recovery/transient-retry.js";
 export {
   CONTINUATION_PROMPT,
   ESCALATED_MAX_TOKENS,
@@ -87,7 +95,8 @@ async function attemptErrorRecovery(
   options: AttemptRecoveryOptions,
   error: unknown,
   multimodalStripAttempted: boolean,
-  recoveryAttempts: number
+  recoveryAttempts: number,
+  providerRetryAfterMs?: number
 ): Promise<RecoveryResult | null> {
   // Never start a new recovery strategy for an already-cancelled run.
   if (options.signal?.aborted) return null;
@@ -114,7 +123,13 @@ async function attemptErrorRecovery(
 
   // Same messages + backoff (429 / gateway / network). Applies to root and subagents.
   if (isTransientRetryableError(error)) {
-    const retryAfterSeconds = extractRetryAfterSeconds(error);
+    // The SDK-normalized `retryAfterMs` (on the RUN_ERROR chunk we were handed) wins
+    // over our own header/message scraping; `extractRetryAfterSeconds` is the fallback
+    // for a thrown error that never became a RUN_ERROR.
+    const retryAfterSeconds =
+      providerRetryAfterMs != null && providerRetryAfterMs > 0
+        ? providerRetryAfterMs / 1000
+        : extractRetryAfterSeconds(error);
     options.managed.log?.warn("agent", "Transient provider error — retrying with backoff", {
       attempt: recoveryAttempts + 1,
       maxAttempts: MAX_RECOVERY_ATTEMPTS,
@@ -226,7 +241,13 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
         if (chunk.type === "RUN_ERROR") {
           const runError = errorFromUnknown(extractRunErrorMessage(chunk) || "Agent run failed");
           lastErrorMessage = runError.message;
-          const result = await attemptErrorRecovery(options, runError, multimodalStripAttempted, recoveryAttempts);
+          const result = await attemptErrorRecovery(
+            options,
+            runError,
+            multimodalStripAttempted,
+            recoveryAttempts,
+            extractRetryAfterMs(chunk)
+          );
           if (result) {
             shouldRetry = true;
             multimodalStripAttempted = result.multimodalStripAttempted;
