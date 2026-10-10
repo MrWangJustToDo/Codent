@@ -1,19 +1,21 @@
 /**
- * Exa Provider — Free web search via Exa's public MCP endpoint (no API key).
+ * Exa Provider — Free web search via Exa's public MCP endpoint, or its keyed MCP tier.
  *
- * Calls the `web_search_exa` tool over JSON-RPC at https://mcp.exa.ai/mcp and
- * parses the SSE/JSON payload. Used as the default free provider because the
- * DuckDuckGo HTML endpoint is increasingly blocked by anti-bot challenges.
+ * Calls the `web_search_exa` tool over JSON-RPC at https://mcp.exa.ai/mcp and parses the
+ * SSE/JSON payload. The public endpoint needs no key and is the default free provider
+ * (the DuckDuckGo HTML endpoint is increasingly blocked by anti-bot challenges); when
+ * `?exaApiKey=` and runs on the keyed tier when the host configures an Exa key.
  *
- * No configuration required — {@link isAvailable} always returns true; failures
- * surface as thrown errors so the ProviderManager can fall back.
+ * `isAvailable` always returns true; failures surface as thrown errors so the
+ * ProviderManager can fall back.
  *
  * @see https://exa.ai
  */
 
-import { getEnv } from "../../../../env.js";
-import { createTimeoutAbort } from "../../util/abort-timeout.js";
 import { filterResultsByDomain } from "../domain-filter.js";
+import { getProviderManager } from "../provider.js";
+
+import { callMcpTool } from "./mcp-client.js";
 
 import type { SearchProvider, SearchResult, SearchOptions } from "../types.js";
 
@@ -79,35 +81,6 @@ export function parseExaResults(text: string): SearchResult[] {
   return results;
 }
 
-/**
- * Extract the tool text from an Exa MCP response, accepting either an SSE
- * stream (`data: {...}` lines) or a plain JSON body.
- */
-export function parseExaResponse(body: string): string | undefined {
-  for (const line of body.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === "[DONE]" || data === "null") continue;
-    const text = extractContentText(data);
-    if (text) return text;
-  }
-
-  return extractContentText(body);
-}
-
-function extractContentText(raw: string): string | undefined {
-  try {
-    const parsed = JSON.parse(raw) as { result?: { content?: Array<{ text?: string }> } };
-    const content = parsed?.result?.content;
-    if (Array.isArray(content) && typeof content[0]?.text === "string") {
-      return content[0].text;
-    }
-  } catch {
-    // Not JSON — fall through.
-  }
-  return undefined;
-}
-
 // ============================================================================
 // Exa Provider
 // ============================================================================
@@ -122,43 +95,24 @@ export const exaProvider: SearchProvider = {
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const maxResults = options?.maxResults ?? 10;
     const timeoutMs = options?.timeoutMs ?? 30000;
-    const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal: options?.signal });
+    const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);
 
-    try {
-      const response = await getEnv().fetch(EXA_MCP_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: {
-            name: EXA_TOOL_NAME,
-            arguments: { query, numResults: maxResults },
-          },
-        }),
-      });
+    const url = apiKey ? `${EXA_MCP_URL}?exaApiKey=${encodeURIComponent(apiKey)}` : EXA_MCP_URL;
+    const text = await callMcpTool({
+      url,
+      toolName: EXA_TOOL_NAME,
+      args: { query, numResults: maxResults },
+      timeoutMs,
+      signal: options?.signal,
+    });
 
-      if (!response.ok) {
-        throw new Error(`Exa search failed with status: ${response.status}`);
-      }
+    let results = parseExaResults(text);
+    results = filterResultsByDomain(results, options?.allowedDomains, options?.blockedDomains);
 
-      const body = await response.text();
-      const text = parseExaResponse(body);
-      let results = text ? parseExaResults(text) : [];
-      results = filterResultsByDomain(results, options?.allowedDomains, options?.blockedDomains);
-
-      if (options?.maxResults && results.length > options.maxResults) {
-        results = results.slice(0, options.maxResults);
-      }
-
-      return results;
-    } finally {
-      cleanup();
+    if (options?.maxResults && results.length > options.maxResults) {
+      results = results.slice(0, options.maxResults);
     }
+
+    return results;
   },
 };

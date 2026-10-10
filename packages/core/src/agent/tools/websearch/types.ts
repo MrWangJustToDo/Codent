@@ -36,6 +36,12 @@ export interface SearchOptions {
   timeoutMs?: number;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /**
+   * Stable session identifier. Free providers are spread by this value so different
+   * conversations use different public endpoints; providers may also forward it as an
+   * upstream rate-limit key (Parallel's `session_id`).
+   */
+  sessionId?: string;
 }
 
 export interface SearchProvider {

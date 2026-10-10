@@ -1,9 +1,32 @@
 /**
- * ProviderManager — Manages search providers, auto-detection, and fallback.
+ * ProviderManager — Manages search providers, auto-detection, spreading, and fallback.
  */
+
+import { PROVIDER_KEY_FIELDS } from "./key-fields.js";
 
 import type { WebsearchToolConfig } from "../tool-config.js";
 import type { SearchOutcome, SearchProvider, SearchOptions, ProviderInfo } from "./types.js";
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Deterministic index in `[0, length)` derived from a string. Used to spread sessions
+ * across the free providers so one unauthenticated public endpoint is not the single
+ * dependency for every session. A tiny FNV-1a — the quality bar is "different sessions
+ * land on different providers, the same session always lands on the same one", not
+ * uniformity.
+ */
+export function hashToIndex(value: string, length: number): number {
+  if (length <= 0) return 0;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % length;
+}
 
 // ============================================================================
 // ProviderManager
@@ -12,26 +35,48 @@ import type { SearchOutcome, SearchProvider, SearchOptions, ProviderInfo } from 
 export class ProviderManager {
   private providers: SearchProvider[] = [];
   private preferredProvider?: string;
-  private braveApiKey?: string;
+  private apiKeys = new Map<string, string>();
+  private sessionId?: string;
 
   /**
    * Apply host-supplied websearch config (secrets + preferred provider).
    * Call before select/search so availability matches the active agent.
    */
   configure(config?: WebsearchToolConfig): void {
-    this.braveApiKey = config?.braveApiKey?.trim() || undefined;
+    this.apiKeys.clear();
+    // Key wiring comes from PROVIDER_KEY_FIELDS, not a name switch here — adding a keyed
+    // provider is a registry + key-fields edit, never a change to selection/transport code.
+    const raw = (config ?? {}) as Record<string, unknown>;
+    for (const [name, field] of Object.entries(PROVIDER_KEY_FIELDS)) {
+      const value = raw[field];
+      if (typeof value === "string" && value.trim()) this.apiKeys.set(name, value.trim());
+    }
+
     const preferred = config?.provider?.trim();
     this.preferredProvider = preferred && preferred !== "" ? preferred : undefined;
   }
 
+  /** API key for a provider name from the last {@link configure} call (not CoreEnv). */
+  getApiKey(name: string): string | undefined {
+    return this.apiKeys.get(name);
+  }
+
   /** Brave API key from the last {@link configure} call (not CoreEnv). */
   getBraveApiKey(): string | undefined {
-    return this.braveApiKey;
+    return this.getApiKey("brave");
+  }
+
+  /**
+   * Set the session id used to spread selection across free providers. A single
+   * conversation keeps the same provider across calls.
+   */
+  setSessionId(sessionId?: string): void {
+    this.sessionId = sessionId && sessionId !== "" ? sessionId : undefined;
   }
 
   /**
    * Register a provider. Earlier registrations are preferred in auto mode
-   * (first available wins).
+   * (first available wins, apart from free-provider spreading).
    */
   register(provider: SearchProvider): void {
     // Avoid duplicate registrations of the same provider instance/name.
@@ -39,13 +84,23 @@ export class ProviderManager {
     this.providers.push(provider);
   }
 
+  /** Registered provider names, in registration order. */
+  listProviderNames(): string[] {
+    return this.providers.map((p) => p.name);
+  }
+
   /**
-   * Get the best available provider based on configured preference.
+   * Get the best available provider.
    *
    * Selection logic:
-   * 1. If preferred provider is a specific name and that provider is available, use it
-   * 2. Otherwise auto-select: first available provider in registration order
-   * 3. If none report available, use the last registered provider (DuckDuckGo)
+   * 1. An explicit `provider` preference, when that provider is available
+   * 2. Otherwise, a provider with a configured API key (keyed = higher quality / official
+   *    tier, so a configured key wins over the free pool: the host-supplied Brave key must run Brave)
+   * 3. Otherwise, with more than one free (no-key) provider available, a deterministic pick
+   *    from the session id, so different sessions spread across the free providers while one
+   *    session stays on a single one
+   * 4. Otherwise the first available provider in registration order
+   * 5. If none report available, the last registered provider (DuckDuckGo)
    */
   async selectProvider(): Promise<SearchProvider> {
     const preferred = this.preferredProvider;
@@ -57,11 +112,23 @@ export class ProviderManager {
       }
     }
 
+    const available: SearchProvider[] = [];
     for (const provider of this.providers) {
-      if (await this.isProviderAvailable(provider)) {
-        return provider;
-      }
+      if (await this.isProviderAvailable(provider)) available.push(provider);
     }
+
+    // A configured key is a deliberate choice of quality: prefer a keyed provider over the
+    // free pool. (Without this, the free-provider spread below would swallow a configured
+    // Brave key and it would look ignored.)
+    const keyed = available.find((p) => this.getApiKey(p.name));
+    if (keyed) return keyed;
+
+    // Only free providers (no key configured) are spread across sessions.
+    if (available.length > 1 && this.sessionId) {
+      return available[hashToIndex(this.sessionId, available.length)];
+    }
+
+    if (available.length > 0) return available[0];
 
     const last = this.providers[this.providers.length - 1];
     if (!last) {

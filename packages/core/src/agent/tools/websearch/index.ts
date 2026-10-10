@@ -1,26 +1,29 @@
 /**
  * WebSearch Module — Barrel export for the multi-provider search architecture.
  *
- * Registers providers with the global ProviderManager singleton.
- * Call {@link initializeProviders} before first use.
+ * Registers providers from the {@link PROVIDER_REGISTRY} with the global
+ * ProviderManager singleton. Call {@link initializeProviders} before first use.
  */
 
 import { getProviderManager, resetProviderManager } from "./provider.js";
-import { braveProvider } from "./providers/brave.js";
-import { duckduckgoProvider } from "./providers/duckduckgo.js";
-import { exaProvider } from "./providers/exa.js";
+import { PROVIDER_REGISTRY } from "./registry.js";
 
 import type { WebsearchToolConfig } from "../tool-config.js";
 import type { SearchProvider, SearchResult, SearchOptions, SearchOutcome, ProviderInfo } from "./types.js";
 
 export type { SearchProvider, SearchResult, SearchOptions, SearchOutcome, ProviderInfo };
+export type { ProviderRegistration } from "./registry.js";
 
-export { ProviderManager, getProviderManager, resetProviderManager } from "./provider.js";
+export { ProviderManager, getProviderManager, resetProviderManager, hashToIndex } from "./provider.js";
+export { PROVIDER_REGISTRY } from "./registry.js";
+export { PROVIDER_KEY_FIELDS } from "./key-fields.js";
 export { filterResultsByDomain } from "./domain-filter.js";
 export { createTimeoutAbort, withTimeoutAbort } from "../util/abort-timeout.js";
 export { duckduckgoProvider } from "./providers/duckduckgo.js";
 export { braveProvider } from "./providers/brave.js";
-export { exaProvider, parseExaResults, parseExaResponse } from "./providers/exa.js";
+export { exaProvider, parseExaResults } from "./providers/exa.js";
+export { parallelProvider, parseParallelResults } from "./providers/parallel.js";
+export { tavilyProvider } from "./providers/tavily.js";
 
 // ============================================================================
 // Initialization
@@ -29,12 +32,11 @@ export { exaProvider, parseExaResults, parseExaResponse } from "./providers/exa.
 let initialized = false;
 
 /**
- * Initialize the provider manager with all available providers.
+ * Initialize the provider manager with all registered providers.
  *
- * Registration order determines preference (first available wins):
- * 1. Brave (API-based, when braveApiKey is configured)
- * 2. Exa (free public MCP endpoint, no key — default free provider)
- * 3. DuckDuckGo (free HTML scrape, last-resort fallback)
+ * Registration order comes from {@link PROVIDER_REGISTRY} (Brave → Parallel → Exa →
+ * Tavily → DuckDuckGo): earlier entries are preferred, free providers are spread by
+ * session id, and the last entry is the unconditional fallback.
  *
  * Pass {@link WebsearchToolConfig} so secrets come from the host, not CoreEnv.
  */
@@ -42,9 +44,9 @@ export function initializeProviders(config?: WebsearchToolConfig): void {
   if (!initialized) {
     initialized = true;
     const pm = getProviderManager();
-    pm.register(braveProvider);
-    pm.register(exaProvider);
-    pm.register(duckduckgoProvider);
+    for (const registration of PROVIDER_REGISTRY) {
+      pm.register(registration.create());
+    }
   }
   getProviderManager().configure(config);
 }

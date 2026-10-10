@@ -3,12 +3,14 @@
  *
  * Provider architecture:
  * - Brave Search API (when toolConfig.websearch.braveApiKey is set)
- * - Exa public MCP endpoint (free, no API key required — default free provider)
+ * - Parallel MCP endpoint (free, no key; keyed tier with parallelApiKey)
+ * - Exa MCP endpoint (free, no key; keyed tier with exaApiKey)
+ * - Tavily REST API (tavilyApiKey required)
  * - DuckDuckGo HTML search (free, no API key required, last-resort fallback)
  *
  * Provider selection via ProviderManager:
- * 1. toolConfig.websearch.provider can override (e.g., "brave", "exa", "duckduckgo", "auto")
- * 2. auto mode: Brave (if key available) → Exa → DuckDuckGo
+ * 1. toolConfig.websearch.provider can override (e.g., "brave", "parallel", "exa", "tavily", "duckduckgo", "auto")
+ * 2. auto mode: a free provider chosen from the session id, else first available
  * 3. On failure, automatically falls back to the next available provider
  */
 
@@ -69,7 +71,9 @@ export type WebsearchOutput = z.infer<typeof websearchOutputSchema>;
  *
  * Features:
  * - Brave Search API (when toolConfig.websearch.braveApiKey is set)
- * - Exa public MCP search (free, no API key, default)
+ * - Parallel MCP search (free, no API key; keyed tier an optional upgrade)
+ * - Exa MCP search (free, no API key; keyed tier an optional upgrade)
+ * - Tavily REST search (requires tavilyApiKey)
  * - DuckDuckGo HTML search (free, no API key, fallback)
  * - Automatic provider selection and fallback
  * - Domain filtering (allow/block specific domains)
@@ -84,7 +88,7 @@ export const createWebsearchTool = ({ managed }: { managed?: ManagedAgent }) => 
     description: `Search the web and return titles, snippets, and URLs.
 
 Use when you need current information, docs, or to discover URLs (then webfetch). Prefer over webfetch when the URL is unknown.
-Supports domain allow/block filters. Provider is chosen automatically (Brave when a key is configured, else Exa, else DuckDuckGo).
+Supports domain allow/block filters. Provider is chosen automatically (Brave when a key is configured, else a free provider spread by session, else DuckDuckGo).
 
 When answering from search results, include a Sources section with markdown links: [Title](URL).
 Use the current year from <current_date> in turn context for time-sensitive queries.`,
@@ -146,12 +150,19 @@ Use the current year from <current_date> in turn context for time-sensitive quer
         try {
           const pm = getProviderManager();
           pm.configure(managed?.config?.toolConfig?.websearch);
+          // A stable per-session value lets the manager spread sessions across the free
+          // providers (so one public endpoint is not the single dependency) and lets a
+          // provider forward it upstream (Parallel's `session_id`). Subagents have no
+          // session data of their own, so fall back to the agent id — still stable per agent.
+          const sessionId = managed?.getSessionData()?.id ?? managed?.id;
+          pm.setSessionId(sessionId);
           const { results: rawResults, provider } = await pm.search(query, {
             maxResults: limit,
             allowedDomains,
             blockedDomains,
             timeoutMs,
             signal: controller.signal,
+            ...(sessionId ? { sessionId } : {}),
           });
 
           const filteredResults = filterResultsByDomain(rawResults, allowedDomains, blockedDomains);

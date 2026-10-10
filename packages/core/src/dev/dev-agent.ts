@@ -155,10 +155,22 @@ export {
   createTimeoutAbort,
   filterResultsByDomain,
   getProviderManager,
+  hashToIndex,
   initializeProviders,
+  PROVIDER_KEY_FIELDS,
+  PROVIDER_REGISTRY,
   resetWebsearchProviders,
   withTimeoutAbort,
 } from "../agent/tools/websearch";
+export { parseParallelResults } from "../agent/tools/websearch/providers/parallel.js";
+export { parseExaResults } from "../agent/tools/websearch/providers/exa.js";
+export { parseMcpResponse } from "../agent/tools/websearch/providers/mcp-client.js";
+// models.json global.toolConfig normalization (internal validation exports).
+export {
+  normalizeGlobalToolConfig,
+  normalizeRawGlobalToolConfig,
+  parseModelsConfig,
+} from "../models/config/models-config.js";
 export { resolveSelectedMemoryFilename } from "../agent/memory/memory-retrieval.js";
 export { MemoryManager } from "../agent/memory/memory-manager.js";
 export { extractMemories, consolidateMemories } from "../agent/memory/memory-extractor.js";
