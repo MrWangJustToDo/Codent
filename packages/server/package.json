@@ -60,6 +60,7 @@
     "start": "node dist/index.mjs",
     "typecheck": "tsc --noEmit",
     "validate:all:server": "node ../../scripts/run-all-validators.mjs --dir packages/server",
+    "validate:websearch-tool-config": "pnpm run build && node scripts/validate-websearch-tool-config.mjs",
     "validate:agent-session-channels": "pnpm run build && node scripts/validate-agent-session-channels.mjs",
     "validate:agent-session-http": "pnpm run build && node scripts/validate-agent-session-http.mjs",
     "validate:coreenv-http": "pnpm run build && node scripts/validate-coreenv-http.mjs",

@@ -91,6 +91,15 @@ jobs:
         # here: the suite includes it and reports it by name.
         run: pnpm run validate:all
 
+      - name: Prove the websearch assertions fail on their defects
+        # A green validator proves nothing on its own — it only proves the assertions run. The
+        # negative-patch harness mutates one defect at a time (keyed selection, the MCP isError
+        # check, the remote toolConfig forward, …), rebuilds, and requires the validator to fail
+        # on the *matching* assertion. A `.sh` script no workflow invoked was exactly how a
+        # previous validator (`validate:render-smoke`) rotted into a false negative; this step is
+        # what keeps the proof honest. Linux-only: it shells out to `python3` for the mutations.
+        run: bash packages/core/scripts/negative-patch-websearch.sh
+
       - name: Workspace panel refresh check
         # The suite above deliberately SKIPS this one: its subject is the panel's real 10s refresh
         # timer, so it costs ~40s of genuine waiting and is the only check that renders the TUI.
