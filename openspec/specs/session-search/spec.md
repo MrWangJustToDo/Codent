@@ -8,7 +8,10 @@ TBD - created by archiving change add-session-search. Update Purpose after archi
 The system SHALL provide a `session_search` server tool that searches past conversation in the
 session logs — the complete, authoritative record — and returns bounded, readable matches. Each
 match MUST identify the originating session, the message role and time when known, a text snippet,
-and the message index.
+the message index, and the match's **surface** relative to that session's own latest compaction
+summary: `current` (still in that session's model context) or `shadowed` (compacted out of context,
+present only in the log). The tool SHALL accept an optional time window (`since` / `until`) and
+filter matches by message timestamp.
 
 The session log is the only search source: compaction appends a summary checkpoint to the channel
 without removing the pre-cut messages, and the session is persisted from that channel, so the log
@@ -25,6 +28,22 @@ a lower-fidelity duplicate of content already in the log.
 - **WHEN** a match is found in a `.session.jsonl` line
 - **THEN** the reported match carries the session id, the message role, and a text snippet extracted
   from the message parts — never the raw JSON line
+
+#### Scenario: Match surface is reported
+
+- **WHEN** a session has compacted and `session_search` returns a match from before its latest
+  summary alongside one from after it
+- **THEN** the earlier match is `shadowed` and the later is `current`
+
+#### Scenario: A session that never compacted is all-current
+
+- **WHEN** `session_search` returns matches from a session with no compaction summary
+- **THEN** every match is `current`
+
+#### Scenario: A time window narrows results
+
+- **WHEN** `session_search` is given `since` or `until`
+- **THEN** only messages whose timestamp falls in the inclusive window are returned
 
 #### Scenario: Compact archives are not a search source
 
@@ -61,15 +80,16 @@ a lower-fidelity duplicate of content already in the log.
 ### Requirement: The agent can read one session as text
 
 The system SHALL provide a `session_read` server tool that renders one session's messages as readable
-text, paginated so the model can walk a long conversation without loading all of it at once. This is
-the read path the append-only JSONL log otherwise lacks, and its output MUST be bounded — per message
-and per page — spilling to the tool-output cache when a page is large.
+text, paginated so the model can walk a long conversation without loading all of it at once. Each
+message MUST carry its `surface` (`current` / `shadowed`, relative to that session's latest
+compaction summary). This is the read path the append-only JSONL log otherwise lacks, and its output
+MUST be bounded — per message and per page — spilling to the tool-output cache when a page is large.
 
 #### Scenario: Read a session
 
 - **WHEN** `session_read` runs with a known session id
-- **THEN** it returns that session's messages in order, each rendered with its role and text (tool
-  calls summarized), bounded to the requested window
+- **THEN** it returns that session's messages in order, each rendered with its role, text (tool
+  calls summarized), and surface, bounded to the requested window
 
 #### Scenario: Pagination
 

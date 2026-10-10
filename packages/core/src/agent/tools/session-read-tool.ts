@@ -35,7 +35,10 @@ function truncateMessageText(text: string): string {
 
 /** Render one message as a text block (role + time, then text and a tool summary line). */
 function renderMessage(message: SessionMessage): string {
-  const head = `[${message.role}]${message.timestamp ? ` (${new Date(message.timestamp).toISOString()})` : ""}`;
+  const surface = message.surface === "shadowed" ? " · shadowed" : "";
+  const head = `[${message.role}${surface}]${
+    message.timestamp ? ` (${new Date(message.timestamp).toISOString()})` : ""
+  }`;
   const parts = [message.text].filter(Boolean);
   if (message.toolSummary) parts.push(`<${message.toolSummary}>`);
   return `${head} ${parts.join(" ")}`.trim();
@@ -45,6 +48,9 @@ const sessionMessageSchema = z.object({
   index: z.number().int().nonnegative().describe("0-based message index."),
   role: z.string().describe("Message role: user | assistant | tool."),
   timestamp: z.number().optional().describe("Message time in epoch ms when known."),
+  surface: z
+    .enum(["current", "shadowed"])
+    .describe("`current` = still in the session's context; `shadowed` = compacted out (log only)."),
   text: z.string().describe("Message text (empty for a tool-only message)."),
   toolSummary: z.string().nullable().describe("One-line summary of the message's tool calls, or null."),
 });

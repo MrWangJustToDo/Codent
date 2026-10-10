@@ -15,6 +15,7 @@
  */
 
 import { getEnv } from "../../../env.js";
+import { isCompactionSummaryUIMessage } from "../../compaction/compaction-summary.js";
 import { foldLog, getJournalPath, readLog } from "../../persistence/session-journal.js";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../../persistence/types.js";
 import { isToolCallPart, partTextContent } from "../../stream/message-parts.js";
@@ -46,6 +47,13 @@ export const DEFAULT_SEARCH_ROLES = ["user", "assistant"] as const;
 // Shapes
 // ============================================================================
 
+/**
+ * A message's position relative to its session's latest compaction summary:
+ * `current` = at/after the summary (still in that session's model context);
+ * `shadowed` = before it (compacted out of context, present only in the log).
+ */
+export type EventSurface = "current" | "shadowed";
+
 /** One message of a session, rendered for retrieval. */
 export interface SessionMessage {
   sessionId: string;
@@ -54,6 +62,8 @@ export interface SessionMessage {
   role: string;
   /** Epoch ms when known. */
   timestamp?: number;
+  /** Whether the message is still in context or compacted out. */
+  surface: EventSurface;
   /** Extracted text of the message (text parts joined). */
   text: string;
   /** One-line summary of the message's tool calls, or null. */
@@ -66,6 +76,8 @@ export interface HistoryMatch {
   role?: string;
   timestamp?: number;
   snippet: string;
+  /** Whether the message is still in context or compacted out. */
+  surface: EventSurface;
   /** 0-based message index within the session — pass to `session_read` to read the context. */
   messageIndex?: number;
 }
@@ -76,6 +88,10 @@ export interface SearchHistoryOptions {
   sessionId?: string;
   /** Restrict to one role. */
   role?: string;
+  /** Inclusive lower bound on message time (epoch ms). */
+  since?: number;
+  /** Inclusive upper bound on message time (epoch ms). */
+  until?: number;
   /** Maximum matches returned. */
   limit: number;
   /** Session to exclude unless `sessionId` explicitly names it. */
@@ -144,15 +160,33 @@ function messageTimestamp(message: PersistedUIMessage): number | undefined {
   return undefined;
 }
 
-function toSessionMessage(sessionId: string, index: number, message: PersistedUIMessage): SessionMessage {
+function toSessionMessage(
+  sessionId: string,
+  index: number,
+  message: PersistedUIMessage,
+  surface: EventSurface
+): SessionMessage {
   return {
     sessionId,
     index,
     role: typeof message.role === "string" ? message.role : "unknown",
     timestamp: messageTimestamp(message),
+    surface,
     text: messageText(message),
     toolSummary: messageToolSummary(message),
   };
+}
+
+/**
+ * Index of a session's latest compaction summary — the boundary between `shadowed` (before it,
+ * compacted out of that session's context) and `current` (at/after it). `0` when the session never
+ * compacted, so every message is `current`.
+ */
+function latestSummaryIndex(messages: PersistedUIMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isCompactionSummaryUIMessage(messages[i]!)) return i;
+  }
+  return 0;
 }
 
 // ============================================================================
@@ -195,7 +229,15 @@ export async function readSessionMessages(sessionId: string): Promise<SessionMes
     if (!(await env.fs.exists(path))) return [];
     const lines = await readLog(env.fs, path);
     const { uiMessages } = foldLog(lines);
-    return uiMessages.map((message, index) => toSessionMessage(sessionId, index, message));
+    const summaryIndex = latestSummaryIndex(uiMessages as unknown as PersistedUIMessage[]);
+    return uiMessages.map((message, index) =>
+      toSessionMessage(
+        sessionId,
+        index,
+        message as unknown as PersistedUIMessage,
+        index >= summaryIndex ? "current" : "shadowed"
+      )
+    );
   } catch {
     return [];
   }
@@ -231,24 +273,36 @@ export function makeSnippet(text: string, query: string, max = MAX_SNIPPET_CHARS
 // Search
 // ============================================================================
 
+/** Whether a message timestamp is inside the inclusive window (no window = always in). */
+function inTimeWindow(ts: number | undefined, since?: number, until?: number): boolean {
+  if (since === undefined && until === undefined) return true;
+  if (ts === undefined) return false;
+  if (since !== undefined && ts < since) return false;
+  if (until !== undefined && ts > until) return false;
+  return true;
+}
+
 /** Collect literal, case-insensitive matches from one session's messages. */
 function searchSession(
   sessionId: string,
   messages: SessionMessage[],
   query: string,
   roles: readonly string[],
+  window: { since?: number; until?: number },
   collect: (match: HistoryMatch) => boolean
 ): number {
   let found = 0;
   for (const message of messages) {
     if (!roles.includes(message.role)) continue;
     if (!message.text) continue;
+    if (!inTimeWindow(message.timestamp, window.since, window.until)) continue;
     if (!message.text.toLowerCase().includes(query)) continue;
     found += 1;
     collect({
       sessionId,
       role: message.role,
       timestamp: message.timestamp,
+      surface: message.surface,
       messageIndex: message.index,
       snippet: makeSnippet(message.text, query),
     });
@@ -317,7 +371,7 @@ export async function searchHistory(options: SearchHistoryOptions): Promise<Sear
       continue;
     }
     const messages = await readSessionMessages(id);
-    total += searchSession(id, messages, query, roles, collect);
+    total += searchSession(id, messages, query, roles, { since: options.since, until: options.until }, collect);
   }
 
   return {

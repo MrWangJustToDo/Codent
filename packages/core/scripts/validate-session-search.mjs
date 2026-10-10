@@ -73,6 +73,18 @@ const FILES = {
   // A compact archive that duplicates session-log content — it must NOT be searched (the log is
   // the complete source; the archive is a derived, lower-fidelity copy).
   ".agents/transcripts/ses_old/compact-1.md": ["# Compaction", "ARCHIVE_ONLY_TOKEN blue-green."].join("\n"),
+  // A compacted session: SURFACE_PROBE before the summary is `shadowed`, after is `current`.
+  // Timestamps let the time-window filter be exercised.
+  ".agents/sessions/ses_compacted.session.jsonl": [
+    line({ id: "p1", role: "user", parts: [text("SURFACE_PROBE early note")], updatedAt: 1000 }),
+    line({
+      id: "p2",
+      role: "user",
+      parts: [text("[CONVERSATION SUMMARY]\nrolled up earlier turns")],
+      updatedAt: 2000,
+    }),
+    line({ id: "p3", role: "user", parts: [text("SURFACE_PROBE recent note")], updatedAt: 3000 }),
+  ].join("\n"),
 };
 
 function readdirOf(dir) {
@@ -128,7 +140,11 @@ try {
   // ==========================================================================
   {
     const ids = await listSessionIds();
-    assert.deepEqual(ids.sort(), ["ses_big", "ses_current", "ses_old", "ses_other"], "all session logs enumerated");
+    assert.deepEqual(
+      ids.sort(),
+      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other"],
+      "all session logs enumerated"
+    );
 
     const messages = await readSessionMessages("ses_old");
     assert.equal(messages.length, 3, "every message of the session is read");
@@ -156,6 +172,45 @@ try {
     // must not surface — the session log is the single, complete source.
     const archiveOnly = await searchHistory({ query: "ARCHIVE_ONLY_TOKEN", limit: 10 });
     assert.equal(archiveOnly.total, 0, "compact archives are not searched (the session log is complete)");
+  }
+
+  // ==========================================================================
+  // 2b. Surface: shadowed (before the summary) vs current (after)
+  // ==========================================================================
+  {
+    const result = await searchHistory({ query: "SURFACE_PROBE", limit: 10, sessionId: "ses_compacted" });
+    assert.deepEqual(
+      result.matches.map((m) => m.surface).sort(),
+      ["current", "shadowed"],
+      "a match before the summary is shadowed, after it is current"
+    );
+
+    // A session that never compacted is all-current.
+    const noSummary = await searchHistory({ query: "blue-green", limit: 10, sessionId: "ses_old" });
+    assert.ok(noSummary.matches.length > 0);
+    assert.ok(
+      noSummary.matches.every((m) => m.surface === "current"),
+      "without a compaction summary every match is current"
+    );
+
+    // Time window: only the recent note (updatedAt 3000) survives `since: 2500`.
+    const windowed = await searchHistory({
+      query: "SURFACE_PROBE",
+      limit: 10,
+      sessionId: "ses_compacted",
+      since: 2500,
+    });
+    assert.equal(windowed.total, 1, "the time window narrows matches");
+    assert.equal(windowed.matches[0].timestamp, 3000);
+
+    const until = await searchHistory({
+      query: "SURFACE_PROBE",
+      limit: 10,
+      sessionId: "ses_compacted",
+      until: 1500,
+    });
+    assert.equal(until.total, 1, "until keeps only earlier matches");
+    assert.equal(until.matches[0].surface, "shadowed");
   }
 
   // ==========================================================================

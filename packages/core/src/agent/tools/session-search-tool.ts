@@ -26,6 +26,11 @@ const sessionMatchSchema = z.object({
   sessionId: z.string().describe("Session the match came from."),
   role: z.string().optional().describe("Message role."),
   timestamp: z.number().optional().describe("Message time in epoch ms when known."),
+  surface: z
+    .enum(["current", "shadowed"])
+    .describe(
+      "Position relative to the session's latest compaction summary: `current` = still in that session's context; `shadowed` = compacted out of context (log only)."
+    ),
   messageIndex: z
     .number()
     .int()
@@ -78,6 +83,16 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
         .enum(["user", "assistant"])
         .optional()
         .describe(`Only match messages of this role. Defaults to both (${DEFAULT_SEARCH_ROLES.join(", ")}).`),
+      since: z
+        .number()
+        .int({ message: "since: must be an integer (epoch ms)" })
+        .optional()
+        .describe("Only match messages at or after this time (epoch ms)."),
+      until: z
+        .number()
+        .int({ message: "until: must be an integer (epoch ms)" })
+        .optional()
+        .describe("Only match messages at or before this time (epoch ms)."),
       limit: z
         .number()
         .int({ message: "limit: must be an integer" })
@@ -87,13 +102,15 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
         .describe(`Maximum matches to return. Defaults to ${DEFAULT_LIMIT}.`),
     }),
     outputSchema: sessionSearchOutputSchema,
-    execute: async ({ query, sessionId, role, limit }) => {
+    execute: async ({ query, sessionId, role, since, until, limit }) => {
       return withDuration(async () => {
         const currentSessionId = managed?.getSessionData()?.id;
         const result = await searchHistory({
           query,
           sessionId,
           role,
+          since,
+          until,
           limit: limit ?? DEFAULT_LIMIT,
           // Only the implicit "search everything" case excludes the live session; naming one is explicit intent.
           excludeSessionId: sessionId ? undefined : currentSessionId,
@@ -119,7 +136,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
         const where = `${match.sessionId}${match.role ? ` · ${match.role}` : ""}${
           match.messageIndex !== undefined ? ` #${match.messageIndex}` : ""
         }`;
-        return `- ${where}: ${match.snippet}`;
+        return `- ${where} [${match.surface}]: ${match.snippet}`;
       });
       const withheldNote =
         output.withheld > 0 ? `\n(${output.withheld} more withheld — raise limit or narrow the query)` : "";
