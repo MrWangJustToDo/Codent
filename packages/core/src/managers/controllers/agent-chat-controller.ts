@@ -14,7 +14,6 @@ import {
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
-import { throwOnRunError } from "../../agent/stream/stream-errors.js";
 import {
   hasPendingAskUser,
   hasPendingToolApprovals,
@@ -524,7 +523,6 @@ export class AgentChatController {
         agentId: this.managed.id,
         messages,
         channel: this.channel,
-        transformStream: throwOnRunError,
       });
       if (!token.isCurrent || this.managed.getStatus() === "aborted") {
         this.applyCancelledIncompleteTools(true);

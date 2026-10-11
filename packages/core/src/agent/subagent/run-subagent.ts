@@ -5,8 +5,8 @@
 
 import { generateId } from "../../utils/generate-id.js";
 import { ensureUIChannel, runAgentOnce } from "../run/run-agent-skeleton.js";
+import { formatAgentStreamError } from "../stream/assert-async-iterable.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
-import { throwOnRunError } from "../stream/stream-errors.js";
 import { summaryStreamKey } from "../summary-stream";
 
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
@@ -65,17 +65,6 @@ export function subagentResultToTaskOutput(result: SubagentResult) {
  */
 export function destroySubagent(manager: AgentManager, subagentId: string) {
   manager.destroyAgent(subagentId);
-}
-
-/** Human-readable message from a subagent run failure (best effort). */
-function extractRunErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message || err.name || "Subagent run failed";
-  if (typeof err === "string") return err || "Subagent run failed";
-  if (err && typeof err === "object" && "message" in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === "string" && message) return message;
-  }
-  return "Subagent run failed";
 }
 
 async function executeSubagentRun(config: SubagentConfig, manager: AgentManager): Promise<SubagentResult> {
@@ -207,16 +196,14 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         compactLabel,
         compactEpoch,
         transformStream: (stream) =>
-          throwOnRunError(
-            captureStreamFinishReason(
-              tapTextDeltas(
-                tapBeginSummary(stream, parentTaskToolCallId ? () => enterSummaryPhase() : undefined),
-                config.onTextDelta
-              ),
-              (reason) => {
-                finishReason = reason;
-              }
-            )
+          captureStreamFinishReason(
+            tapTextDeltas(
+              tapBeginSummary(stream, parentTaskToolCallId ? () => enterSummaryPhase() : undefined),
+              config.onTextDelta
+            ),
+            (reason) => {
+              finishReason = reason;
+            }
           ),
         // Outcome applied below — abort ends the stream without throwing, so we must
         // not hardcode `finished` (that would clobber `aborted` / skip cancel notice).
@@ -230,7 +217,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         previewMessages = channel?.getMessages() ?? previewMessages;
         output = extractAssistantText(previewMessages)?.trim() || "(no summary)";
       } else {
-        const errorMessage = extractRunErrorMessage(err);
+        const errorMessage = formatAgentStreamError(err, "Subagent run failed").message;
         // Non-abort failure: surface a real terminal state before propagating.
         // Keep the task prompt + record the error in the preview (so the detail
         // view never spins on an empty transcript), flip the subagent status to

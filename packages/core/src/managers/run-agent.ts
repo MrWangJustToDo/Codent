@@ -295,7 +295,7 @@ export async function ensureAgentRunner(_manager: AgentManager, managed: Managed
 }
 
 // ============================================================================
-// runAgentStream / runAgent
+// runManagedAgentStream / runManagedAgent
 // ============================================================================
 
 async function executeManagedAgentRun(
@@ -348,6 +348,12 @@ async function executeManagedAgentRun(
   });
 }
 
+/**
+ * Streaming entry — a lazy {@link AsyncIterable} of AG-UI chunks for one managed run.
+ * `prepareForRun` runs on the first iteration, so a setup failure surfaces there rather
+ * than at this call. Raw engine chunks only: no UI bridging (the caller consumes into a
+ * channel — see `runAgentOnce`).
+ */
 export function runManagedAgentStream(
   manager: AgentManager,
   agentId: string,
@@ -360,7 +366,12 @@ export function runManagedAgentStream(
   })();
 }
 
-/** Start a managed agent run and return the AG-UI chunk stream (no UI bridging). */
+/**
+ * Awaiting entry — a promise that resolves to the same AG-UI chunk stream as
+ * {@link runManagedAgentStream}. Awaiting runs `prepareForRun` eagerly, so setup
+ * failures reject the promise instead of surfacing at the first iteration; that eager
+ * boundary is the only difference from the lazy streaming sibling. No UI bridging.
+ */
 export async function runManagedAgent(
   manager: AgentManager,
   agentId: string,

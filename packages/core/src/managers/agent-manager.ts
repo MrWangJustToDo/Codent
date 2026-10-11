@@ -517,16 +517,19 @@ export class AgentManager {
   }
 
   /**
-   * Run an agent via TanStack `AgentRunner` and yield AG-UI chunks in-process.
-   * Updates {@link ManagedAgent.status} and {@link ManagedAgent.usage} via lifecycle middleware.
+   * Lazy streaming entry — an {@link AsyncIterable} of AG-UI chunks for one run.
+   * `prepareForRun` runs on the first iteration. Updates {@link ManagedAgent.status}
+   * and {@link ManagedAgent.usage} via lifecycle middleware. UI consume / outcome
+   * finalization use `runAgentOnce`.
    */
   runAgentStream(agentId: string, input: RunAgentStreamInput): AsyncIterable<StreamChunk> {
     return runManagedAgentStream(this, agentId, input);
   }
 
   /**
-   * Run an agent via TanStack `AgentRunner`.
-   * Returns AG-UI stream chunks. UI consume / outcome finalization use `runAgentOnce`.
+   * Awaiting entry — a promise resolving to the AG-UI chunk stream. Awaiting runs
+   * `prepareForRun` eagerly, so setup failures reject here instead of at the first
+   * iteration. Same stream as {@link runAgentStream}.
    */
   runAgent(agentId: string, input: RunAgentStreamInput): Promise<AsyncIterable<StreamChunk>> {
     return runManagedAgent(this, agentId, input);
