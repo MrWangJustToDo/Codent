@@ -88,7 +88,7 @@ export const createWebsearchTool = ({ managed }: { managed?: ManagedAgent }) => 
     description: `Search the web and return titles, snippets, and URLs.
 
 Use when you need current information, docs, or to discover URLs (then webfetch). Prefer over webfetch when the URL is unknown.
-Supports domain allow/block filters. Provider is chosen automatically (Brave when a key is configured, else a free provider spread by session, else DuckDuckGo).
+Supports domain allow/block filters. Provider is chosen automatically: a configured API key wins, else a free provider spread by session, else DuckDuckGo; on failure it falls back to the next available.
 
 When answering from search results, include a Sources section with markdown links: [Title](URL).
 Use the current year from <current_date> in turn context for time-sensitive queries.`,

@@ -165,6 +165,11 @@ const stubEnv = {
                 "URL: https://second.example.com",
                 "Content:",
                 "Another body",
+                "---",
+                "Title: N/A",
+                "URL: https://third.example.com",
+                "Text:",
+                "Third body",
               ].join("\n"),
             },
           ],
@@ -253,6 +258,10 @@ try {
   assert.equal(exaOutcome.results[0].snippet, "Hello from Exa");
   assert.equal(exaOutcome.results[1].url, "https://second.example.com");
   assert.equal(exaOutcome.results[1].snippet, "Another body");
+  // `Text:` body is parsed (not just Highlights/Content); `Title: N/A` falls back to the URL.
+  assert.equal(exaOutcome.results[2].url, "https://third.example.com");
+  assert.equal(exaOutcome.results[2].snippet, "Third body");
+  assert.equal(exaOutcome.results[2].title, "https://third.example.com", "Title: N/A falls back to the URL");
   assert.equal(lastUrl.includes("exaApiKey="), false, "exa free transport carries no key");
 
   // Explicitly prefer duckduckgo — still selectable and parses HTML.

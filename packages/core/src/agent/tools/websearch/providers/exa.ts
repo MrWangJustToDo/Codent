@@ -36,7 +36,8 @@ const EXA_TOOL_NAME = "web_search_exa";
  * bounded single-line snippet.
  */
 function extractBody(block: string): string {
-  const match = block.match(/^(?:Highlights|Content):[ \t]*([\s\S]*)$/m);
+  // Exa's formatter emits `Highlights:` / `Content:` / `Text:` depending on the result.
+  const match = block.match(/^(?:Highlights|Content|Text):[ \t]*([\s\S]*)$/m);
   const body = match?.[1] ?? block;
   return body
     .replace(/^(?:Title|URL|Published|Author):.*$/gm, "")
@@ -63,7 +64,9 @@ export function parseExaResults(text: string): SearchResult[] {
     if (seen.has(url)) continue;
     seen.add(url);
 
-    const title = block.match(/^Title:\s*(.+)$/m)?.[1]?.trim() || url;
+    // Exa emits `Title: N/A` for a result with no title; fall back to the URL.
+    const rawTitle = block.match(/^Title:\s*(.+)$/m)?.[1]?.trim();
+    const title = rawTitle && rawTitle.toUpperCase() !== "N/A" ? rawTitle : url;
     results.push({ title, url, snippet: extractBody(block) });
   }
 

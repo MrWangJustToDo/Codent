@@ -5,6 +5,7 @@
 import { extractTextFromContent } from "../agent/compaction/message-utils.js";
 import { dehydrateUIMessages } from "../agent/media/media-utils.js";
 import { partTextContent } from "../agent/stream/message-parts.js";
+import { isContextUIMessage } from "../agent/turn-context";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 
@@ -191,10 +192,34 @@ function uiMessageText(message: UIMessage): string {
 }
 
 /**
+ * Resolve a fork selector to a message index: either a message id, or a 1-based index
+ * into the genuine user messages (the list the `/fork` picker shows, synthetic `<ctx>`
+ * messages excluded). Returns -1 when it matches nothing.
+ */
+function resolveForkIndex(messages: UIMessage[], raw: string | undefined): number {
+  if (!raw) return -1;
+  if (/^\d+$/.test(raw)) {
+    const nth = Number(raw);
+    if (nth < 1) return -1;
+    let seen = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]!;
+      if (message.role === "user" && !isContextUIMessage(message)) {
+        seen += 1;
+        if (seen === nth) return i;
+      }
+    }
+    return -1;
+  }
+  return messages.findIndex((message) => message.id === raw);
+}
+
+/**
  * Clone (`mode: "clone"`) or fork (`mode: "fork"`) the current session into a new one
  * and switch to it. `/clone` copies the whole transcript; `/fork` copies the messages
- * strictly before `upToMessageId` and returns that message's text for the caller to
- * put back in the editor. The source session is left untouched.
+ * strictly before the chosen user message and returns that message's text for the caller
+ * to put back in the editor. The fork point is selected by message id, or by a 1-based
+ * index into the session's (genuine) user messages. The source session is left untouched.
  *
  * Refused while a run is active (the channel would be a half-finished turn). The new
  * session is written to disk and then adopted through {@link ManagedAgent.restoreSession},
@@ -228,10 +253,14 @@ export async function branchSession(
   let upToIndex: number | undefined;
   let forkText: string | undefined;
   if (options.mode === "fork") {
-    const id = options.upToMessageId;
-    const index = id ? messages.findIndex((message) => message.id === id) : -1;
+    const index = resolveForkIndex(messages, options.upToMessageId?.trim());
     if (index <= 0) {
       return { ok: false, error: "Fork point must be an earlier user message with messages before it" };
+    }
+    // The picker only offers user messages, but a hand-typed id (or an out-of-range
+    // index) could name an assistant/tool message — reject it rather than forking there.
+    if (messages[index]?.role !== "user" || isContextUIMessage(messages[index]!)) {
+      return { ok: false, error: "Fork point must be a user message" };
     }
     upToIndex = index;
     forkText = uiMessageText(messages[index]!);

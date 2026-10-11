@@ -12,11 +12,11 @@
 
 import { z } from "zod";
 
-import { ExecutionError } from "../../env-types.js";
 import { getEnv } from "../../env.js";
 import { isAbortError } from "../../runtime-types/abort.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
+import { createTimeoutAbort } from "./util/abort-timeout.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -144,25 +144,15 @@ Usage notes:
 
         const timeoutMs = Math.min((timeout ?? DEFAULT_TIMEOUT) * 1000, MAX_TIMEOUT * 1000);
 
-        // Create abort controller for timeout. The reason matters: a bare `abort()` makes
-        // `fetch` reject with the platform's `AbortError`, which `isAbortError` accepts by
-        // `name` alone — so a 30s timeout was reported to the model as
-        // `[Fetch cancelled by user.]`.
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(new ExecutionError("timeout", `Fetch timed out after ${timeoutMs}ms`)),
-          timeoutMs
-        );
+        // Timeout + run-abort linked through the shared helper (one deadline implementation).
+        // The reason matters: a bare `abort()` makes `fetch` reject with the platform
+        // `AbortError`, which `isAbortError` accepts by `name` alone — so a 30s timeout was
+        // reported to the model as `[Fetch cancelled by user.]`.
+        const { controller, cleanup: cleanupAbort } = createTimeoutAbort({ timeoutMs, signal: abortSignal });
 
         const managedAgent = managed;
 
         const hasParentAgent = managedAgent?.parentId;
-
-        // Carry the run's abort reason so the linked fetch controller aborts with it (a bare
-        // abort becomes the platform `AbortError`), and detach after the call so a long run does
-        // not accumulate one listener per fetch.
-        const onAbort = () => controller.abort(abortSignal?.reason);
-        abortSignal?.addEventListener("abort", onAbort, { once: true });
 
         try {
           if (!hasParentAgent) {
@@ -291,11 +281,10 @@ Usage notes:
             cachedOutputPath: null,
           };
         } finally {
-          abortSignal?.removeEventListener("abort", onAbort);
+          cleanupAbort();
           if (!hasParentAgent) {
             managedAgent?.removePendingAbortController(controller);
           }
-          clearTimeout(timeoutId);
         }
       });
     },

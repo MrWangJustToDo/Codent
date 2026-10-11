@@ -542,7 +542,6 @@ emit compaction:auto-start
 autoCompact(messages, config, agentId, manager)
   → findCutPointByBudget (token-budget keep window)
   → summarizeConversation with <to_compress> + <still_in_context> (+ optional <previous-summary>)
-  → writeCompactArchive (.agents/transcripts/<sessionId>/compact-<n>.md) — non-fatal; merged ## Compact archives list appended (newest-first search guidance); prior archive sections stripped from <previous-summary> input
 applyCompactionResult(channel, usage, result)
   → append `[CONVERSATION SUMMARY]` UIMessage onto the UI channel, reset window usage
   → return chronological post-append messages (for orphan tool-cache cleanup)
@@ -817,10 +816,9 @@ truth for how the model reaches past conversation, emitted as `<ctx kind=session
 Gated on workspace history existing, evaluated **once per agent** so the section stays
 byte-stable (a per-turn probe would flip on the first new session and re-inject); the body is
 static with no counts for the same reason. Root agents only — the kind is deliberately absent
-from `SUBAGENT_ALLOWED_KINDS`. Usage guidance is not duplicated elsewhere: the compaction
-summary's `## Compact archives` block carries this session's paths plus a scope line, and the
-archive header is self-describing metadata only. Validate: `validate:session-retrieval`,
-`validate:compact-archive`.
+from `SUBAGENT_ALLOWED_KINDS`. There is no separate transcript archive: the whole conversation
+(including compacted-away messages) stays in the session log, and recall goes through
+`session_search` / `session_read`. Validate: `validate:session-retrieval`, `validate:session-search`.
 
 **Provider cache wiring** (`prompt-cache-middleware`, `models/prompt-cache.ts`):
 

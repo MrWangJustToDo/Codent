@@ -163,6 +163,22 @@ try {
     assert.equal(atStart.ok, false, "forking at the first message (nothing before it) fails");
   }
 
+  // --------------------------------------------------------------------------
+  // 6. branchSession: 1-based user-message index shortcut + non-user rejection
+  // --------------------------------------------------------------------------
+  {
+    const byIndex = await branchSession(fakeManaged(source), { mode: "fork", upToMessageId: "2" });
+    assert.equal(byIndex.ok, true, "a 1-based user-message index forks like the id");
+    assert.equal(byIndex.forkText, "second prompt", "index 2 selects the second user message");
+    assert.equal((await store.load(byIndex.sessionId)).uiMessages.length, 2, "index fork truncates the same way");
+
+    const first = await branchSession(fakeManaged(source), { mode: "fork", upToMessageId: "1" });
+    assert.equal(first.ok, false, "index 1 (nothing before the first user message) fails");
+
+    const atAssistant = await branchSession(fakeManaged(source), { mode: "fork", upToMessageId: "a1" });
+    assert.equal(atAssistant.ok, false, "forking at a non-user message is rejected");
+  }
+
   console.log("session-branching validation passed");
 } finally {
   clearCoreEnv();

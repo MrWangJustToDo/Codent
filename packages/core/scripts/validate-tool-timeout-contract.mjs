@@ -153,6 +153,30 @@ function extContext() {
 }
 
 // ============================================================================
+// 3b. A body that catches the abort and resolves partial output keeps it
+// ============================================================================
+{
+  // The body observes its deadline signal and RESOLVES a partial output (the "full output
+  // with cancelled:true" shape). The wrapper must not preempt that graceful-cancel result
+  // with a synchronous rejection — a tool-caught cancel stays a result, not a throw.
+  const tool = defineServerTool({
+    name: "graceful_cancel",
+    description: "resolves partial output on abort",
+    inputSchema: { type: "object" },
+    timeoutMs: 5,
+    execute: (_args, ctx) =>
+      new Promise((resolve) => {
+        ctx.deadlineSignal.addEventListener("abort", () => resolve({ cancelled: true, partial: "kept" }), {
+          once: true,
+        });
+      }),
+  });
+
+  const result = await tool.execute({}, { toolCallId: "g1", abortSignal: new AbortController().signal, context: {} });
+  assert.deepEqual(result, { cancelled: true, partial: "kept" }, "a body that resolves on abort keeps its output");
+}
+
+// ============================================================================
 // 4. Extension tools share the same implementation and error shape
 // ============================================================================
 {

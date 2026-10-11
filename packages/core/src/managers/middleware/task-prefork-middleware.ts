@@ -1,11 +1,12 @@
 /**
  * Eagerly start `task` subagents while the model streams.
  *
- * TanStack `chat()` executes tool calls sequentially, but a model emitting N
- * parallel task calls finishes streaming ALL of their arguments before the
- * execution phase begins. This middleware watches `TOOL_CALL_END` for `task`
- * calls and spawns the subagent right away; the sequential executor later
- * joins the already-running promise via the task tool (task-prefork.ts).
+ * Since `@tanstack/ai` 0.64, `chat()` runs a turn's server tools in parallel. A model
+ * emitting N `task` calls finishes streaming ALL of their arguments before the tool
+ * phase begins. This middleware watches `TOOL_CALL_END` for `task` calls and spawns the
+ * subagent right away, so the pre-fork is the concurrency throttle + eager start (not a
+ * serial-execution workaround); the tool phase later joins the already-running promise
+ * via the task tool (task-prefork.ts).
  *
  * Epoch hygiene. TanStack fires `RUN_STARTED` once per model **iteration**, not once per
  * run (`lifecycle-middleware` relies on the same fact for per-round timing), so a single

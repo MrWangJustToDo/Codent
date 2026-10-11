@@ -23,11 +23,11 @@ export function createTimeoutAbort(options: { timeoutMs: number; signal?: AbortS
     options.timeoutMs
   );
 
-  const onAbort = () => controller.abort();
+  const onAbort = () => controller.abort(options.signal?.reason);
   const external = options.signal;
   if (external) {
     if (external.aborted) {
-      controller.abort();
+      controller.abort(external.reason);
     } else {
       external.addEventListener("abort", onAbort, { once: true });
     }
@@ -69,28 +69,53 @@ export async function withTimeoutAbort<T>(
   const { controller, cleanup } = createTimeoutAbort(options);
   const runSignal = options.signal;
 
-  const reasonFor = (): unknown => {
+  // Rejections must be `Error`s (typed across boundaries); production cancels carry a
+  // bare string reason (`managed.abort("user-cancelled")`), which must not leak as one.
+  const asError = (reason: unknown, fallback: string): Error =>
+    reason instanceof Error ? reason : new Error(typeof reason === "string" && reason ? reason : fallback);
+
+  const reasonFor = (): Error => {
     // A run abort (whichever fired first) is always a cancel — never the deadline error.
-    if (runSignal?.aborted) return runSignal.reason ?? new Error("aborted");
+    if (runSignal?.aborted) return asError(runSignal.reason, "aborted");
     const reason = controller.signal.reason;
     if (options.timeoutMessage && reason instanceof ExecutionError && reason.code === "timeout") {
       return new ExecutionError("timeout", options.timeoutMessage);
     }
-    return reason ?? new Error("aborted");
+    return asError(reason, "aborted");
   };
 
   try {
-    return await Promise.race([
-      Promise.resolve(operation(controller.signal)),
-      new Promise<never>((_resolve, reject) => {
-        const onAbort = () => reject(reasonFor());
-        if (controller.signal.aborted) {
-          onAbort();
-        } else {
-          controller.signal.addEventListener("abort", onAbort, { once: true });
+    return await new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const claim = (): boolean => {
+        if (settled) return false;
+        settled = true;
+        controller.signal.removeEventListener("abort", onAbort);
+        return true;
+      };
+      function onAbort(): void {
+        // Defer the rejection one microtask. A body that observes the same abort and settles
+        // in its own listener (e.g. resolves its partial output with `cancelled: true`) has
+        // already queued that resolution when the abort dispatched, so it wins here.
+        // Rejecting synchronously would preempt that graceful-cancel result and turn a
+        // tool-caught cancel back into a thrown one.
+        queueMicrotask(() => {
+          if (claim()) reject(reasonFor());
+        });
+      }
+      // Start the operation first so any abort listener it registers is dispatched before ours.
+      const operationPromise = Promise.resolve(operation(controller.signal));
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener("abort", onAbort, { once: true });
+      operationPromise.then(
+        (value) => {
+          if (claim()) resolve(value);
+        },
+        (error) => {
+          if (claim()) reject(error);
         }
-      }),
-    ]);
+      );
+    });
   } finally {
     cleanup();
   }
