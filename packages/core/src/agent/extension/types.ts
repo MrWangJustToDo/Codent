@@ -768,8 +768,12 @@ export interface ExtensionInfo {
   declaredOrder?: number;
   /** Tools this extension registered (when enabled). */
   tools: string[];
-  /** Commands this extension registered (when enabled), with whether each exposes secondary-menu options. */
-  commands: Array<{ name: string; hasOptions: boolean }>;
+  /**
+   * Commands this extension registered (when enabled), with whether each exposes
+   * secondary-menu options and its human-readable description (so a headless host
+   * can advertise them without reading the live `ExtensionCommand`).
+   */
+  commands: Array<{ name: string; hasOptions: boolean; description: string }>;
 }
 
 // ============================================================================

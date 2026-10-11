@@ -23,7 +23,7 @@ This file provides guidelines for AI coding agents working in this repository.
 
 ## Project Overview
 
-A pnpm monorepo with ten packages organized in a layered architecture.
+A pnpm monorepo with eleven packages organized in a layered architecture.
 
 **Core runtime deep-dive:** [packages/core/ARCHITECTURE.md](packages/core/ARCHITECTURE.md) — startup, initialization, session/memory/compaction/approval flows.
 
@@ -38,7 +38,8 @@ A pnpm monorepo with ten packages organized in a layered architecture.
 | `@codent/playground` | In-browser WebContainer host (Vite) |
 | `@codent/mcp-server` | MCP server for external tool integration |
 | `@codent/im-bridge` | Generic IM bridge (Telegram adapter) — a headless AgentSession client like the remote CLI; no CoreEnv/ModelProvider of its own in remote mode, in-process local mode otherwise |
-| `codent-cli` | **Release host.** Local-only terminal CLI (no remote planes) published as one fully bundled, self-contained tarball — `@codent/app` / `core` / `node` are inlined, so no sibling has to be on the registry. The npm name is `codent-cli` (plain `codent` is rejected as too similar to `code` / `dedent`); the installed command is still `codent`. See `packages/codent/tsdown.config.ts`. |
+| `@codent/acp` | Agent-side Agent Client Protocol host. Serves an `AgentSessionHost` over ACP (stdio) via `@agentclientprotocol/sdk`, so editors (Zed/JetBrains) and ACP→IM bridges drive the agent without host-specific code. `codent acp` / `codent-acp` entry; also used in-process (`createAcpAgent`). See `packages/acp/README.md`. |
+| `codent-cli` | **Release host.** Local-only terminal CLI (no remote planes) published as one fully bundled, self-contained tarball — `@codent/app` / `core` / `node` / `acp` are inlined, so no sibling has to be on the registry. The npm name is `codent-cli` (plain `codent` is rejected as too similar to `code` / `dedent`); the installed command is still `codent`. `codent acp` serves ACP over stdio. See `packages/codent/tsdown.config.ts`. |
 
 ## Architecture
 

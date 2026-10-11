@@ -53,6 +53,7 @@ module.exports = [
             "./tsconfig.json",
             "./packages/core/tsconfig.json",
             "./packages/app/tsconfig.json",
+            "./packages/acp/tsconfig.json",
             "./packages/cli/tsconfig.json",
             "./packages/codent/tsconfig.json",
             "./packages/node/tsconfig.json",
@@ -106,6 +107,7 @@ module.exports = [
     files: [
       "packages/app/test/**",
       "packages/app/scripts/**",
+      "packages/acp/scripts/**",
       "packages/codent/scripts/**",
       "packages/core/scripts/**",
       "packages/node/scripts/**",

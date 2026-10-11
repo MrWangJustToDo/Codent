@@ -79,6 +79,13 @@ export type { TokenUsage } from "./agent/compaction";
 export type { LogEntry, LogCategory, LogLevel } from "./agent/agent-log";
 export { installAgentLogProcessGuards } from "./agent/agent-log";
 export type { TodoItem, TodoStatus, TodoPriority } from "./agent/todo";
+export {
+  BUILTIN_COMMAND_CATALOG,
+  findBuiltinCommand,
+  listAdvertisableCommands,
+  type BuiltinCommandInfo,
+  type BuiltinCommandScope,
+} from "./agent/commands/catalog.js";
 export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from "./agent/persistence";
 export type { UsageRecord, UsageRecordInput } from "./agent/usage";
 export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage";

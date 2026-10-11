@@ -107,6 +107,12 @@ jobs:
         # its own dist entry, so it must run after Build.
         run: pnpm --filter @codent/app test
 
+      - name: Run all validators
+        # Mirrors CI: every `validate-*.mjs` (including the ACP host and the
+        # command-catalog parity check) must pass before a tag publishes, so a
+        # release cannot ship a commit that never went through main CI.
+        run: pnpm run validate:all
+
       - name: Verify the bundle is self-contained
         # The release contract, checked against the *packed* output rather than
         # assumed: no `@codent/*` specifier may survive into `dist`, and the

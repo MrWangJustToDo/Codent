@@ -24,6 +24,7 @@ import { config as loadEnv } from "dotenv";
 import { render } from "ink";
 import { useEffect, useState } from "react";
 
+import { isAcpRequested, runAcpCommand } from "./acp-command.js";
 import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs } from "./args.js";
 import { readClipboardImage } from "./clipboard.js";
 import { LocalAgentAdapter } from "./local-adapter.js";
@@ -52,6 +53,12 @@ loadEnv({ quiet: true });
 // Land buffered agent-log entries (and any fatal error) on disk even when the
 // process crashes or is hard-exited before the 250 ms batch flush fires.
 installAgentLogProcessGuards();
+
+// `codent acp` — headless Agent Client Protocol server. Intercepted before the
+// TUI boots: stdout must carry only JSON-RPC frames (never a rendered transcript).
+if (isAcpRequested(argv)) {
+  await runAcpCommand();
+}
 
 const appConfig = parseCliArgs(argv);
 

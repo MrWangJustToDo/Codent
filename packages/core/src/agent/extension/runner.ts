@@ -527,6 +527,7 @@ export class ExtensionRunner {
         commands: instance.registrations.commands.map((name) => ({
           name,
           hasOptions: Boolean(this.commandRegistry.get(name)?.getOptions),
+          description: this.commandRegistry.get(name)?.description ?? "",
         })),
       }));
   }

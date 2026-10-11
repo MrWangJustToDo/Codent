@@ -64,6 +64,7 @@
     "isolated-vm": "7.0.1"
   },
   "devDependencies": {
+    "@codent/acp": "workspace:*",
     "@codent/app": "workspace:*",
     "@codent/core": "workspace:*",
     "@codent/node": "workspace:*",
