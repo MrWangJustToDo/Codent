@@ -19,7 +19,7 @@ import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { CompactionConfig } from "../agent/compaction/types.js";
 import type { TodoManager } from "../agent/todo";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type { ModelMessage, UIMessage as TanStackUIMessage } from "@tanstack/ai";
 

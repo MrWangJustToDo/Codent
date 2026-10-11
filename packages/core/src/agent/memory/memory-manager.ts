@@ -19,7 +19,7 @@
 
 import { parse as parseYaml } from "yaml";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import {
   DEFAULT_CONSOLIDATE_THRESHOLD,

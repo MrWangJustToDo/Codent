@@ -12,7 +12,7 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { isAbortError } from "../../runtime-types/abort.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";

@@ -20,14 +20,14 @@ export {
   type CoreEnvExecResult,
   type McpStdioTransportConfig,
   type McpProcessHandle,
-} from "./env.js";
+} from "./env";
 
 // ============================================================================
 // LSP transport (optional, Node.js only — feature-detected by LSP extension)
 // ============================================================================
 
-export type { LspServerConfig, LspConnection, LspMessage } from "./env-lsp.js";
-export type { LspConnectionFactory } from "./env.js";
+export type { LspServerConfig, LspConnection, LspMessage } from "./env/lsp";
+export type { LspConnectionFactory } from "./env";
 export {
   LspManager,
   type LspServerConfigRecord,
@@ -307,9 +307,9 @@ export type { TaskOutput } from "./agent/subagent/task-tool.js";
 // CoreEnv errors & workspace I/O types (node / server adapters)
 // ============================================================================
 
-export { FileError, ExecutionError } from "./env-types.js";
-export type { CoreEnvExecFileOptions } from "./env.js";
-export type { CoreEnvShellInfo } from "./env-types.js";
+export { FileError, ExecutionError } from "./env/types";
+export type { CoreEnvExecFileOptions } from "./env";
+export type { CoreEnvShellInfo } from "./env/types";
 export type {
   FileEntry,
   FileStat,
@@ -318,7 +318,7 @@ export type {
   CommandJobStatus,
   StartCommandOptions,
   StartCommandHandle,
-} from "./env-types.js";
+} from "./env/types";
 
 // ============================================================================
 // Extension types (Session-safe). Loaders/runners stay package-private / `dev.ts`.

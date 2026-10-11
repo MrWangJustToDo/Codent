@@ -11,7 +11,7 @@
  * {@link UsageHistoryService} (managers/services) owns the write policy.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { totalTokensOf } from "../../runtime-types/token-usage.js";
 
 import type { TokenUsage } from "../../runtime-types/token-usage.js";

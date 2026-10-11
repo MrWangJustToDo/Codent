@@ -14,7 +14,7 @@
  * count, and collected matches — so a large history cannot blow the model context or the turn.
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 import { isCompactionSummaryUIMessage } from "../../compaction/compaction-summary.js";
 import { foldLog, getJournalPath, readLog } from "../../persistence/session-journal.js";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../../persistence/types.js";

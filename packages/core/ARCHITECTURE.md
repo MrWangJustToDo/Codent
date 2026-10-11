@@ -125,12 +125,12 @@ runtime value from crossing — a re-exported type is an edge, but a weaker one.
 - `agent/**` MUST NOT import `managers/**` (the manager-side ports it needs are declared in `runtime-types/hosts.ts`)
 - `models/**` MUST NOT import `managers/**`
 - `runtime-types/**` may only reach upward from `hosts.ts` (the port file), type-only
-- `env.ts` is the bottom of the stack and must not import upward — process-scoped teardown is registered via `env-teardown.ts` hooks instead
+- `env/index.ts` is the bottom of the stack and must not import upward — process-scoped teardown is registered via `env/teardown.ts` hooks instead
 - Edges that must stay type-only: `agent → agent-session`, `models → agent` (narrowed to two leaf modules), `runtime-types → {managers, agent, models}`
 - Package-wide stream helpers live in `agent/stream/` (not under `subagent/`)
-- UI channel lives in `agent/ui-channel.ts`
+- UI channel lives in `agent/ui/ui-channel.ts`
 - Run middleware lives in `managers/middleware/` (wired by `run-agent`); plan-mode middleware stays in `agent/plan/`
-- The LSP transport port lives in `env-lsp.ts`, beside the `CoreEnv.createLspConnection` that names it
+- The LSP transport port lives in `env/lsp.ts`, beside the `CoreEnv.createLspConnection` that names it
 
 > History: this replaced two gates that shared one regex (a specifier containing `/managers/`), so `models → agent`, `runtime-types → *`, `env → agent` and `agent → agent-session` had no coverage at all. Two gates covering two of six edges reads as coverage and is not.
 
@@ -954,7 +954,7 @@ The non-bus extension surfaces are therefore exactly: `registerTool`, `registerC
 | **Chain** (front-to-back) | interceptor dispatch, message-transformer chaining, turn-context section position | which extension runs **earlier** — a cancelling interceptor suppresses everything after it |
 | **Resolution** (back-to-front) | same-named extension tools | which extension **wins** — the highest order, because a later-running extension supersedes |
 
-Both readings come from one sort on `(order, load sequence)` (`agent/dispatch-order.ts`): chain surfaces read it forward, the resolution surface reads the last entry. Ties keep **load sequence**, recorded by `ExtensionRunner` when the extension loads — so an extension that declares nothing keeps the exact position it would have had, and only declared extensions move. It is a **dispatch** rule (which position an extension runs in) and is deliberately unrelated to the loader's **resolution** rule for a duplicated extension id (`extension/paths.ts`, later directory wins).
+Both readings come from one sort on `(order, load sequence)` (`agent/extension/dispatch-order.ts`): chain surfaces read it forward, the resolution surface reads the last entry. Ties keep **load sequence**, recorded by `ExtensionRunner` when the extension loads — so an extension that declares nothing keeps the exact position it would have had, and only declared extensions move. It is a **dispatch** rule (which position an extension runs in) and is deliberately unrelated to the loader's **resolution** rule for a duplicated extension id (`extension/paths.ts`, later directory wins).
 
 It governs **nothing else**: observer delivery stays registration-ordered, `ui.render` slots are combined by key, commands are looked up by name, and the flush phases are phase-scoped. The effective order is reported on `ExtensionInfo` (`order`, plus `declaredOrder` to tell "declared 0" from "defaulted"), and `getExtensionInfos()` returns entries in dispatch order, so the Extensions panel (`Ctrl+Y`) shows where each extension actually runs. The bus's interceptor array is re-sorted **on mutation**, not inside `intercept` (a per-tool-call hot path); the ranked tool stack lives in `ExtensionRegistryService`, whose live entry is re-derived from the ranks so a middle-owner disable promotes the right survivor.
 
@@ -1068,7 +1068,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Runner              | `agent/runner/agent-runner.ts`                                                                                                               |
 | Middleware          | `managers/middleware/*.ts` (+ `agent/plan/plan-mode-middleware.ts`)                                                                          |
 | Stream helpers      | `agent/stream/*`                                                                                                                             |
-| UI channel          | `agent/ui-channel.ts`                                                                                                                        |
+| UI channel          | `agent/ui/ui-channel.ts`                                                                                                                        |
 | Shared types        | `runtime-types/*`                                                                                                                            |
 | Telemetry           | `agent/agent-event-bus/*` (the unified bus), `managers/telemetry/emit-agent-telemetry.ts`, `agent/log/*` (the log extension)                                        |
 | Persistence         | `managers/services/session-service.ts`, `agent/persistence/session-store.ts`                                                                          |
@@ -1082,7 +1082,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Tools               | `agent/tools/*.ts` (universal), `agent/tools/runtime/define-tool.ts`; domain tools under `plan/` / `skills/` / `subagent/` / `todo/`                     |
 | Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`                                                                              |
 | Models              | `models/model-config.ts`, `models/adapter-factory.ts`, `models/prompt-cache.ts`                                                              |
-| CoreEnv             | `env.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
+| CoreEnv             | `env/index.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
 
 ---
 

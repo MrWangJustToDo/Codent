@@ -1,17 +1,17 @@
-import { getEnv, hasCoreEnv } from "../../env.js";
+import { getEnv, hasCoreEnv } from "../../env";
 // The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
 // it on the same two hooks (fatal handler + `exit`) that already land the active logs.
 import { createAgentEventBus } from "../agent-event-bus";
 import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
-import { compareDispatchRank, resolveExtensionOrder, sortByDispatchRank } from "../dispatch-order.js";
 
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
 import { DefaultExtensionUI } from "./default-extension-ui.js";
+import { compareDispatchRank, resolveExtensionOrder, sortByDispatchRank } from "./dispatch-order.js";
 import { z } from "./extension-zod.js";
 import { MessageTransformerRegistry } from "./message-transformer-registry.js";
 import { createObserverSurface } from "./observer-surface.js";
 
-import type { DispatchRank } from "../dispatch-order.js";
+import type { DispatchRank } from "./dispatch-order.js";
 import type {
   ExtensionInstance,
   ExtensionAPI,
@@ -35,7 +35,7 @@ import type {
   MessageTransformContext,
   MessageTransformer,
 } from "./types.js";
-import type { CoreEnv } from "../../env.js";
+import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 import type { ModelMessage } from "@tanstack/ai";

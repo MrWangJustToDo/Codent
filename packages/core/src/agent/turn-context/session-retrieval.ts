@@ -12,7 +12,7 @@
  * a figure that does not change what the model should do.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../persistence/types.js";
 
 import { TURN_CONTEXT_KINDS, type TurnContextKind } from "./turn-context-message.js";

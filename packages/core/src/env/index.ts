@@ -16,9 +16,9 @@
 
 import * as pathe from "pathe";
 
-import { runEnvTeardownHooks } from "./env-teardown.js";
+import { runEnvTeardownHooks } from "./teardown.js";
 
-import type { LspServerConfig, LspConnection } from "./env-lsp.js";
+import type { LspServerConfig, LspConnection } from "./lsp.js";
 import type {
   CommandResult,
   CoreEnvShellInfo,
@@ -26,7 +26,7 @@ import type {
   RunCommandOptions,
   StartCommandHandle,
   StartCommandOptions,
-} from "./env-types.js";
+} from "./types.js";
 import type { IsolateDriver } from "@tanstack/ai-code-mode";
 
 // ============================================================================

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";

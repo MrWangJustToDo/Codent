@@ -7,7 +7,7 @@
  * itself (exact match first, then fuzzy match fallback).
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 import { fuzzyIncludes, fuzzyReplace, fuzzyReplaceAll, normalizeForFuzzyMatch } from "./fuzzy-match.js";
 

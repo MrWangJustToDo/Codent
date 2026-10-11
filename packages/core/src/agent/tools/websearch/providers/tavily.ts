@@ -9,7 +9,7 @@
  * @see https://docs.tavily.com/documentation/api-reference/endpoint/search
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 import { getProviderManager } from "../provider.js";

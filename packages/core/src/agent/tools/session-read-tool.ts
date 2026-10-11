@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 
-import { FileError } from "../../env-types.js";
+import { FileError } from "../../env/types";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { readSessionMessages, sessionExists, type SessionMessage } from "./session-search/session-reader.js";

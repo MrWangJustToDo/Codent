@@ -20,7 +20,7 @@
 
 import type { AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 
 /** What {@link RunnerWiring} needs from the agent that owns it. */

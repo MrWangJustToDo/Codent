@@ -1,4 +1,4 @@
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 import { SEARCH_COMMAND_TIMEOUT, SEARCH_OUTPUT_BYTE_LIMIT, looksLikeMissingBinary } from "./search-command.js";
 

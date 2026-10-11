@@ -5,8 +5,8 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
-import { appendChannelMessages } from "../channel-write.js";
 import { cleanupOrphanedToolCache } from "../tools/util/tool-output-cache.js";
+import { appendChannelMessages } from "../ui/channel-write.js";
 
 import { extractCompactionSummaryBody } from "./compaction-summary.js";
 import { deriveKeepRecentTokens } from "./keep-policy.js";
@@ -15,7 +15,7 @@ import { DEFAULT_SUMMARIZATION_CONTEXT_WINDOW } from "./summarization-budget.js"
 
 import type { CompactionResult } from "./types.js";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
-import type { AgentUIChannel } from "../ui-channel.js";
+import type { AgentUIChannel } from "../ui/ui-channel.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 export interface ApplyCompactionResultOptions {

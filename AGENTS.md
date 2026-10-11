@@ -210,7 +210,7 @@ Key integration points:
 - `core/src/models/adapter-factory.ts` — TanStack text adapters (`createOpenaiChatCompletions`, `createAnthropicChat`)
 - `core/src/managers/run-agent.ts` — `AgentRunner` + `chat()` stream, compaction middleware
 - `core/src/agent/compaction/` — Channel convert + summary-first wire projection (`getModelVisibleMessages`); engine messages are ephemeral
-- `core/src/agent/ui-channel.ts` — Durable UIMessage chain (SoT); compaction appends SUMMARY here
+- `core/src/agent/ui/ui-channel.ts` — Durable UIMessage chain (SoT); compaction appends SUMMARY here
 - `core/src/agent/mcp/` — MCP via `@tanstack/ai-mcp` (`McpManager` re-wraps tool execute so multimodal `content[]` is not dropped when `structuredContent` is present)
 - `app/src/hooks/use-agent-chat.ts` — React hook via Session `dispatch` / subscribe (no ManagedAgent)
 
@@ -1102,14 +1102,13 @@ Note: In the TUI, modifier chords use **Ctrl** (not Cmd/⌘). On macOS, prefer `
 ```
 packages/
 ├── core/src/                          # @codent/core — runtime-agnostic core
-│   ├── env.ts                         # CoreEnv interface, registry (registerCoreEnv/getEnv/clearCoreEnv)
-│   ├── env-types.ts                   # FileError / ExecutionError / fs+command result types
+│   ├── env/                          # CoreEnv interface + registry (index.ts, types.ts, lsp.ts, teardown.ts)
 │   ├── agent/
 │   │   ├── agent-log/                 # AgentLog — the emission seam only: level filter, run stamp, envelope
 │   │   ├── log/                       # Log policy: createLogExtension, entry schema, JSONL sink + rotation, "*" consumer
 │   │   ├── approval/                  # Auto-mode controller + tool-approval table
 │   │   ├── compaction/                # Append SUMMARY + summary-first wire projection
-│   │   ├── extension/                 # Extension API (loader, runner, EventBus interception)
+│   │   ├── extension/                 # Extension API (loader, runner, EventBus interception, dispatch order)
 │   │   ├── lsp/                       # Built-in LSP extension (extension.ts) + LSP/tree-sitter tools
 │   │   ├── mcp/                       # MCP integration
 │   │   ├── media/                     # Multimodal media store (media:// refs) + repair helpers
@@ -1126,9 +1125,8 @@ packages/
 │   │   ├── todo/                      # Todo tracking + todo tool
 │   │   ├── tools/                     # Universal AI tools (fs, shell, web) + runtime/util
 │   │   ├── turn-context/              # Per-turn dynamic context (<ctx kind=...> payload)
-│   │   ├── ui-channel.ts              # AgentUIChannel (chat / subagent preview)
-│   │   ├── default-prompt.ts          # System prompt builder
-│   │   └── agent-doc-loader.ts        # Agent documentation loader
+│   │   ├── ui/                        # AgentUIChannel (chat / subagent preview) + channel-write
+│   │   └── prompt/                    # System prompt builder, agent-doc loader, instruction files
 │   ├── agent-session/                 # Host-facing AgentSession / Host API
 │   ├── managers/                      # AgentManager, ManagedAgent, RunCoordinator, services/, middleware
 │   │   ├── run-coordinator.ts          # Run lifecycle flags/timing (prepare/run/finalize)

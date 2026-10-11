@@ -11,7 +11,7 @@ import { findLombokJar } from "./lombok.js";
 import { pathToFileUri } from "./shared/format.js";
 import { RESTART_INITIAL_BACKOFF_MS, RESTART_MAX_BACKOFF_MS, RESTART_MAX_ATTEMPTS } from "./shared/timing.js";
 
-import type { LspConnection, LspServerConfig } from "../../env-lsp.js";
+import type { LspConnection, LspServerConfig } from "../../env/lsp";
 
 /** Minimal path helpers LspManager needs from the runtime host. */
 export interface LspPathHelpers {

@@ -23,7 +23,7 @@ import {
 } from "../../agent/stream/tool-phase-utils.js";
 import { analyzeCommand, createAnalysisContext } from "../../agent/tools/command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "../../agent/tools/command-safety/command-approval-policy.js";
-import { AgentUIChannel } from "../../agent/ui-channel.js";
+import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";

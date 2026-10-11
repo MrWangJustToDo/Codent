@@ -20,7 +20,7 @@
  * byte-identical and the prompt-cache breakpoint stays stable.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import {
   INSTRUCTION_FILENAMES,
   INSTRUCTION_MAX_BYTES,

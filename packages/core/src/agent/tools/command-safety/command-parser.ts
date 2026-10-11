@@ -14,7 +14,7 @@
  * `run_command`. See `command-analyzer.ts` for the table-driven fallback.
  */
 
-import { getEnv, defaultPath } from "../../../env.js";
+import { getEnv, defaultPath } from "../../../env";
 import { TreeSitterManager } from "../../lsp/tree-sitter/parser-manager.js";
 
 import type { TreeSitterEnv } from "../../lsp/tree-sitter/parser-manager.js";

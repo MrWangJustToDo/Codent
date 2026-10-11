@@ -29,7 +29,7 @@ export interface ModelProviderConnection {
   apiKey: string;
 }
 
-/** LLM connection source — orthogonal to {@link import("../env.js").CoreEnv}. */
+/** LLM connection source — orthogonal to {@link import("../env").CoreEnv}. */
 export interface ModelProvider {
   getConnection(): Promise<ModelProviderConnection>;
   destroy?(): Promise<void>;

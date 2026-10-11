@@ -19,7 +19,7 @@
  * @see https://agents.md/ — the cross-tool standard for AGENTS.md
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { toPosixPathKey } from "../../utils/posix-path.js";
 
 // ============================================================================

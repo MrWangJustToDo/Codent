@@ -2,7 +2,7 @@
  * ExtensionLoader — discover and load extensions from factories and filesystem dirs.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { isExtensionModuleFile, pathToFileUrl, resolveExtensionDir } from "./paths.js";
 

@@ -13,7 +13,7 @@
  * (bash-first).
  */
 
-import { defaultPath, getEnv } from "../../../env.js";
+import { defaultPath, getEnv } from "../../../env";
 import { toPosixPathKey } from "../../../utils/posix-path.js";
 
 import { canonicalizeCommandName, commandName, commandPrefix } from "./command-arity.js";
@@ -21,7 +21,7 @@ import { extractCommands, parseCommandTree, resolveShellKind } from "./command-p
 import { hasCommandSubstitution, tokenizeCommandString } from "./command-tokenizer.js";
 
 import type { ParsedCommand, ShellKind } from "./command-parser.js";
-import type { CoreEnvPath } from "../../../env.js";
+import type { CoreEnvPath } from "../../../env";
 
 // ============================================================================
 // Types

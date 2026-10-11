@@ -5,7 +5,7 @@
  * needed by both the root agent's turn context system and subagent runs.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 export interface GitInfo {
   branch?: string;

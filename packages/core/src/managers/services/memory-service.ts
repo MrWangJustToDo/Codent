@@ -6,7 +6,7 @@
 import { extractTextFromContent } from "../../agent/compaction/message-utils.js";
 import { extractMemories, consolidateMemories } from "../../agent/memory/memory-extractor.js";
 import { findRelevantMemories, formatRelevantMemories } from "../../agent/memory/memory-retrieval.js";
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import type { AgentLog } from "../../agent/agent-log";
 import type { MemoryManager } from "../../agent/memory/memory-manager.js";

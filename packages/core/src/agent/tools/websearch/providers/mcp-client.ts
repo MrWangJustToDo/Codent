@@ -10,7 +10,7 @@
  * The response body may be SSE (`data: {...}` frames) or plain JSON; both are accepted.
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 
 /** One MCP `tools/call`, returning the first text content block. */

@@ -17,7 +17,7 @@
  * @see https://agents.md/
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import {
   INSTRUCTION_FILENAMES,

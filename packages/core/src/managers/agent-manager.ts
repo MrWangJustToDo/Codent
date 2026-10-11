@@ -3,7 +3,7 @@ import { createLogExtension, type LogExtension } from "../agent/log/extension.js
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { getEnv } from "../env.js";
+import { getEnv } from "../env";
 import { ACTIVE_STATUSES } from "../runtime-types/agent-status.js";
 
 import { buildManagedAgent } from "./agent-factory.js";

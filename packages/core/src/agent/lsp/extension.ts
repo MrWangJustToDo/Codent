@@ -15,7 +15,7 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
-import { defaultPath } from "../../env.js";
+import { defaultPath } from "../../env";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
 import { FileSync } from "./file-sync.js";

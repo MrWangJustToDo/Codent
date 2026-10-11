@@ -10,19 +10,19 @@
  * caller passes the record plus invalidation callbacks per call.
  */
 
-import { compareDispatchRank, DEFAULT_EXTENSION_ORDER, INCUMBENT_RANK } from "../../agent/dispatch-order.js";
+import { compareDispatchRank, DEFAULT_EXTENSION_ORDER, INCUMBENT_RANK } from "../../agent/extension/dispatch-order.js";
 import { forgetToolPresentationOwner } from "../../agent/tools/presentation/registry.js";
 import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
 import { toModelOutputRegistry } from "../../agent/tools/runtime/to-model-output-registry.js";
 import { withTimeoutAbort } from "../../agent/tools/util/abort-timeout.js";
 
-import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
   ExtensionLoader,
   ExtensionRunner,
   ExtensionToolDefinition,
 } from "../../agent/extension";
+import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
 import type { McpManager } from "../../agent/mcp/manager.js";
 import type { SkillRegistry } from "../../agent/skills";
 import type { TodoManager } from "../../agent/todo";

@@ -13,7 +13,7 @@ import type { ExtensionRunner } from "../agent/extension/runner.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import type { ModelInfo } from "../models/types.js";
 import type { AgentIterationState } from "../runtime-types/session-payloads.js";

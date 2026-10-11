@@ -4,27 +4,26 @@
 
 import { StreamProcessor } from "@tanstack/ai";
 
-import { generateId } from "../utils/generate-id.js";
-
-import { repairMessagesSnapshotChunk } from "./media/repair-stringified-multimodal.js";
-import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "./stream/apply-tool-denial-reason.js";
-import { stripEmptyAssistantShells } from "./stream/empty-assistant-shell.js";
+import { generateId } from "../../utils/generate-id.js";
+import { repairMessagesSnapshotChunk } from "../media/repair-stringified-multimodal.js";
+import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "../stream/apply-tool-denial-reason.js";
+import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import {
   resolveTaskRunPhase,
   type TaskSummaryPhase,
   type TaskSummaryStreamState,
-} from "./stream/extract-assistant-text.js";
-import { isToolCallPart } from "./stream/message-parts.js";
-import { throwOnRunError } from "./stream/stream-errors.js";
-import { shouldSuppressMessagesSnapshot } from "./stream/suppress-messages-snapshot.js";
-import { shouldSuppressReplayedToolChunk } from "./stream/suppress-replayed-tool-chunks.js";
-import { shouldSuppressStaleTextChunk } from "./stream/suppress-stale-text-chunks.js";
-import { BEGIN_SUMMARY_TOOL_NAME } from "./subagent/begin-summary-tool.js";
-import { summaryStreamKey, type SummaryStreamHub } from "./summary-stream";
-import { computeToolDisplay } from "./tools/presentation/compute-display.js";
+} from "../stream/extract-assistant-text.js";
+import { isToolCallPart } from "../stream/message-parts.js";
+import { throwOnRunError } from "../stream/stream-errors.js";
+import { shouldSuppressMessagesSnapshot } from "../stream/suppress-messages-snapshot.js";
+import { shouldSuppressReplayedToolChunk } from "../stream/suppress-replayed-tool-chunks.js";
+import { shouldSuppressStaleTextChunk } from "../stream/suppress-stale-text-chunks.js";
+import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
+import { summaryStreamKey, type SummaryStreamHub } from "../summary-stream";
+import { computeToolDisplay } from "../tools/presentation/compute-display.js";
 
-import type { AgentEventBus } from "./agent-event-bus";
-import type { ToolDisplayPayload } from "./tools/presentation/types.js";
+import type { AgentEventBus } from "../agent-event-bus";
+import type { ToolDisplayPayload } from "../tools/presentation/types.js";
 import type { StreamChunk, StreamProcessorEvents, UIMessage as TanStackUIMessage, ContentPart } from "@tanstack/ai";
 
 // ============================================================================

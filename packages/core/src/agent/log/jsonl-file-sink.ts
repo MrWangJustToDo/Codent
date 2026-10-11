@@ -18,7 +18,7 @@
  * must never fail because logging could not be wired up.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { logEntrySchema } from "./schemas.js";
 

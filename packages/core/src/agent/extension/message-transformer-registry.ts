@@ -26,10 +26,10 @@
  * A transformer that wants to change a part returns a new message rather than mutating.
  */
 
-import { compareDispatchRank } from "../dispatch-order.js";
+import { compareDispatchRank } from "./dispatch-order.js";
 
+import type { DispatchRank } from "./dispatch-order.js";
 import type { MessageTransformContext, MessageTransformer } from "./types.js";
-import type { DispatchRank } from "../dispatch-order.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 /**

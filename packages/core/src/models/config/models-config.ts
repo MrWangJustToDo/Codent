@@ -18,7 +18,7 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { createDirectModelProvider, registerModelProvider } from "../provider/model-provider.js";
 import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../provider/remote-model-provider.js";
 

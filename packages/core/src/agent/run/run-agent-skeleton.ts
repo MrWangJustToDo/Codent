@@ -11,7 +11,7 @@
  * agent→managers boundary. Managers may import this module.
  */
 
-import { AgentUIChannel } from "../ui-channel.js";
+import { AgentUIChannel } from "../ui/ui-channel.js";
 
 import type { AgentManager, ManagedAgent } from "../../runtime-types/hosts.js";
 import type { SummaryStreamHub } from "../summary-stream";

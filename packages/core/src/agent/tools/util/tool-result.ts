@@ -1,4 +1,4 @@
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 /** Read a file through the registered `CoreEnv` (no host-specific fs import). */
 export async function getFile(path: string): Promise<string> {

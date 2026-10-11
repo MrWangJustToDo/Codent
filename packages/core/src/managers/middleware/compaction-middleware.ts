@@ -16,7 +16,7 @@ import type { WireProjectionCache } from "../../agent/compaction";
 import type { CompactionConfig } from "../../agent/compaction/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TodoManager } from "../../agent/todo";
-import type { AgentUIChannel } from "../../agent/ui-channel.js";
+import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { AgentManager, AgentStatusController, UsageTracker } from "../../runtime-types";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 

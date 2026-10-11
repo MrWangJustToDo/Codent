@@ -2,9 +2,9 @@
  * File type detection for read_file (MIME + extension + binary sampling).
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
-import type { FileStat } from "../../../env-types.js";
+import type { FileStat } from "../../../env/types";
 
 export type ReadFileType = "text" | "image" | "pdf" | "directory" | "binary";
 

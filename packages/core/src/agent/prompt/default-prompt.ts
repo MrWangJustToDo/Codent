@@ -6,7 +6,7 @@
  * belong in AGENTS.md / CLAUDE.md, not here.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 export async function buildDefaultSystemPrompt(platform?: string): Promise<string> {
   const env = getEnv();

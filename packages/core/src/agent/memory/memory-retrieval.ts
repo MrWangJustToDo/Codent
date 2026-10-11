@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 
 import {

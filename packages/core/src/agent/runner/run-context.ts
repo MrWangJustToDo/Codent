@@ -1,6 +1,6 @@
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
-import type { CoreEnv } from "../../env.js";
+import type { CoreEnv } from "../../env";
 
 // ============================================================================
 // Tool run context (passed to chat({ context }) and tool execute functions)

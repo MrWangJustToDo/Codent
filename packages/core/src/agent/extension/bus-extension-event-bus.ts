@@ -8,7 +8,7 @@
  */
 
 import type { AgentEventBus } from "../agent-event-bus";
-import type { DispatchRank } from "../dispatch-order.js";
+import type { DispatchRank } from "./dispatch-order.js";
 import type { EventInterceptor, ExtensionEventBus, InterceptableEvent } from "./types.js";
 
 export class BusExtensionEventBus implements ExtensionEventBus {

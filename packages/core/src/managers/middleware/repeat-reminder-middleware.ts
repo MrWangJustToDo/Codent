@@ -27,7 +27,7 @@ import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-inje
 
 import { defineMiddleware } from "./phase.js";
 
-import type { AgentUIChannel } from "../../agent/ui-channel.js";
+import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 // ============================================================================

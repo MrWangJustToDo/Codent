@@ -1,12 +1,12 @@
 import { createMCPClient } from "@tanstack/ai-mcp";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
 import { resolveMcpModelOutput, wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
 
 import type { McpConfig, McpServerConfig } from "./types.js";
-import type { McpProcessHandle } from "../../env.js";
+import type { McpProcessHandle } from "../../env";
 import type { McpServerStatus } from "../../runtime-types/mcp-status.js";
 import type { AnyServerTool } from "@tanstack/ai";
 import type { MCPClient, TransportInput } from "@tanstack/ai-mcp";

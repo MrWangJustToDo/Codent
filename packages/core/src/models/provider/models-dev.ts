@@ -11,7 +11,7 @@
  *   a 24h TTL, so offline launches still work.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import type { ModelCapability, ModelInfo, ModelStyle, ReasoningEchoField, ReasoningEffort } from "../types.js";
 

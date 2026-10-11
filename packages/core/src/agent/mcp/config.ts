@@ -1,9 +1,9 @@
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { mcpConfigSchema } from "./types.js";
 
 import type { McpConfig } from "./types.js";
-import type { CoreEnvFs } from "../../env.js";
+import type { CoreEnvFs } from "../../env";
 
 export interface McpConfigLoadResult {
   config: McpConfig;

@@ -20,12 +20,12 @@
  * age sweep (`stale-file-sweep.ts`).
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 import { createStaleFileSweeper } from "./stale-file-sweep.js";
 
 import type { StaleSweepOptions } from "./stale-file-sweep.js";
-import type { CoreEnvFs } from "../../../env.js";
+import type { CoreEnvFs } from "../../../env";
 
 // ============================================================================
 // Constants

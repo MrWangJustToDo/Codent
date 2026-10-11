@@ -23,7 +23,7 @@
  * Both are non-fatal by contract: a failed delete never fails the tool call.
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 import { createStaleFileSweeper } from "./stale-file-sweep.js";
 

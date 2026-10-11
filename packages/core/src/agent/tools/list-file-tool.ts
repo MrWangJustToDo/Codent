@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";

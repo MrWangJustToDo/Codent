@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -10,7 +10,7 @@ import { detectReadFileType, isBinaryContent } from "./util/read-file-detect.js"
 import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
-import type { FileStat } from "../../env-types.js";
+import type { FileStat } from "../../env/types";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
 
 // ============================================================================

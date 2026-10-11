@@ -16,7 +16,7 @@
 
 import { parse as parseYaml } from "yaml";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { skillMetadataSchema } from "./types.js";
 

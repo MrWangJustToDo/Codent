@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { toPosixPath, toPosixPathKey } from "../../utils/posix-path.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -11,7 +11,7 @@ import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
-import type { CoreEnvFs } from "../../env.js";
+import type { CoreEnvFs } from "../../env";
 
 /** Maximum characters for tree output */
 const MAX_TREE_CHARS = OUTPUT_LIMITS.MAX_CONTENT_CHARS;

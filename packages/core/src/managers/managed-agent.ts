@@ -127,7 +127,6 @@ import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
 import type { CompactionConfig, CompactionConfigInput } from "../agent/compaction/types.js";
-import type { DispatchRank } from "../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
   ExtensionFactory,
@@ -135,6 +134,7 @@ import type {
   ExtensionRunner,
   ExtensionToolDefinition,
 } from "../agent/extension";
+import type { DispatchRank } from "../agent/extension/dispatch-order.js";
 import type { ExtensionTurnContextSection } from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
@@ -149,7 +149,7 @@ import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
 import type { ModelInfo } from "../models/types.js";

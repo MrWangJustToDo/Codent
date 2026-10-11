@@ -2,7 +2,7 @@
  * Extension discovery paths — project and user defaults under `.agents/`.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { toPosixPath } from "../../utils/posix-path.js";
 
 /** Project-local extension directory (relative to CoreEnv rootPath). */

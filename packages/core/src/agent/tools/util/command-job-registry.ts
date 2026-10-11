@@ -6,7 +6,7 @@
  * trimming and stays readable from surfaces that cannot poll a job.
  */
 
-import { registerEnvTeardownHook } from "../../../env-teardown.js";
+import { registerEnvTeardownHook } from "../../../env/teardown";
 import { generateId } from "../../../utils/generate-id.js";
 
 import { createCommandJobLogWriter, sweepStaleJobLogs } from "./command-output-log.js";

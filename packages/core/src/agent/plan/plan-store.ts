@@ -4,7 +4,7 @@
 
 import { join } from "pathe";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { extractPlan } from "./extract-plan.js";
 

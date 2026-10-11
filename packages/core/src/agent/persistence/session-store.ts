@@ -14,7 +14,7 @@
  * SessionService via `media-utils.ts`.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { generateId } from "../../utils/generate-id.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 

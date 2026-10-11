@@ -11,7 +11,7 @@
  * won't match, and the tool will error naturally — the LLM re-reads and retries.
  */
 
-import { getEnv } from "../../../env.js";
+import { getEnv } from "../../../env";
 
 // ============================================================================
 // Queue State

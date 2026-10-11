@@ -12,7 +12,7 @@ import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
-import type { AgentUIChannel } from "../../agent/ui-channel.js";
+import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 /**

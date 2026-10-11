@@ -15,7 +15,7 @@
  * ```
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { MEDIA_DIR, mimeToExtension } from "./types.js";
 

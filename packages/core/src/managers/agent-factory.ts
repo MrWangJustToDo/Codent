@@ -19,7 +19,7 @@ import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
-import { getEnv } from "../env.js";
+import { getEnv } from "../env";
 
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
