@@ -153,6 +153,7 @@ import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
 import type { ModelInfo } from "../models/types.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AgentEventPayloadMap } from "../runtime-types/agent-event-payloads.js";
 import type { AgentEventType } from "../runtime-types/agent-events.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
@@ -364,6 +365,11 @@ export class ManagedAgent {
   private eventBus?: AgentEventBus;
   /** Owning manager — set when registered via {@link AgentManager.createManagedAgent}. */
   manager?: AgentManager;
+  /**
+   * Runtime this agent belongs to (env + model provider) — set by the factory from the
+   * owning manager. `undefined` means the ambient runtime (legacy single-instance hosts).
+   */
+  runtime?: AgentRuntime;
   modelInfo: ModelInfo | null;
 
   // ============================================================================

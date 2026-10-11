@@ -62,11 +62,11 @@ existing capability.
 
 ## Impact
 
-- Affected code (core): `env.ts`, `models/provider/model-provider.ts`, `managers/agent-manager.ts`,
+- Affected code (core): `env/`, `provider/` (moved out of `models/`), `managers/agent-manager.ts`,
   `managers/agent-factory.ts`, `managers/run-agent.ts` (run context), `agent/runner/run-context.ts`,
   `agent/media/media-store.ts` (+ `media-utils.ts`), `agent/persistence/session-store.ts` (and its
   `SessionStore` constructors), `agent/tools/websearch/provider.ts` (+ `websearch/index.ts`),
-  `models/models-dev.ts`, `agent/turn-context/env-context.ts`, `agent/usage/usage-history-service.ts`,
+  `agent/turn-context/env-context.ts`, `agent/usage/usage-history-service.ts`,
   and the ~56 `getEnv()` call sites on the run path (now reading the run context / injected runtime).
 - New/changed public API (`@codent/core`): `CodentAgent` + `CodentAgentOptions` + `AgentRuntime` (type)
   exported from `index.ts`; `registerCoreEnv` / `registerModelProvider` / `agentManager` remain as the

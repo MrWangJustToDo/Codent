@@ -110,9 +110,12 @@ See `scripts/validate-core-public-exports.mjs` for the authoritative DENY/EXPECT
 ### 1.5 Module layering
 
 ```
-hosts / app  →  managers (orchestration)  →  agent/* (domain)  →  models / env
+hosts / app  →  runtime (CodentAgent / AgentRuntime)  →  managers (orchestration)  →  agent/* (domain)  →  models / provider / env
                               ↓
                        runtime-types/   (shared status, events, TokenUsage — no manager deps)
+
+provider/ is the LLM plane (ModelProvider + registry) and env/ is the workspace plane
+(CoreEnv); both are orthogonal leaves the runtime composes.
 ```
 
 **Rules (enforced by `validate:layer-boundaries`):**
@@ -488,7 +491,7 @@ That cache has **two** collectors, and neither subsumes the other: compaction's 
 
 The capability list has exactly one source of truth: `MODEL_CAPABILITIES` in `models/types.ts`. `ModelCapability` is derived from it, and the extension-facing boolean flags (`MODEL_CAPABILITY_FLAGS`, exhaustively keyed by that union) name each member — so the union, the list and the flag surface cannot drift apart, and a new capability is a compile error until it is named in both places.
 
-`parseModelsDevModel` (`models/provider/models-dev.ts`) fills the list for a metadata-resolved model:
+`parseModelsDevModel` (`provider/models-dev.ts`) fills the list for a metadata-resolved model:
 
 | Source | Grants | Notes |
 | ------ | ------ | ----- |

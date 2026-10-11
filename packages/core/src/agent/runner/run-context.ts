@@ -1,5 +1,3 @@
-import { getEnv } from "../../env";
-
 import type { CoreEnv } from "../../env";
 
 // ============================================================================
@@ -13,10 +11,10 @@ import type { CoreEnv } from "../../env";
 export interface ToolRunContext {
   /** Managed agent id for this run */
   agentId: string;
-  /** Workspace CoreEnv (filesystem, shell, fetch) */
+  /** Workspace CoreEnv (filesystem, shell, fetch) of the runtime that owns this run */
   coreEnv: CoreEnv;
 }
 
-export function createToolRunContext(agentId: string): ToolRunContext {
-  return { agentId, coreEnv: getEnv() };
+export function createToolRunContext(agentId: string, coreEnv: CoreEnv): ToolRunContext {
+  return { agentId, coreEnv };
 }

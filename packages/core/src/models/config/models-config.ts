@@ -19,8 +19,9 @@
 import { z } from "zod";
 
 import { getEnv } from "../../env";
-import { createDirectModelProvider, registerModelProvider } from "../provider/model-provider.js";
-import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../provider/remote-model-provider.js";
+import { registerModelProvider } from "../../provider/model-provider-registry.js";
+import { createDirectModelProvider } from "../../provider/model-provider.js";
+import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../../provider/remote-model-provider.js";
 
 import type { ModelInfo, ModelStyle } from "../types.js";
 
@@ -519,6 +520,6 @@ export async function resolveModelInfoFromModelsDev(
   modelId: string,
   style?: ModelStyle
 ): Promise<ModelInfo | undefined> {
-  const { lookupModelFromModelsDev } = await import("../provider/models-dev.js");
+  const { lookupModelFromModelsDev } = await import("../../provider/models-dev.js");
   return lookupModelFromModelsDev(modelId, style);
 }

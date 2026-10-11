@@ -174,6 +174,25 @@ const ALLOWED_EDGES = {
   "agent-session → runtime-types": { mode: "allow", reason: "session payload types" },
   "agent-session → utils": { mode: "allow", reason: "ids, emitters" },
   "agent-session → env": { mode: "allow", reason: "CoreEnv access" },
+
+  // runtime composes an env + model provider + AgentManager + AgentSessionHost into one
+  // instantiable instance (the top of the managers stack); lower layers reference its types.
+  "runtime → env": { mode: "allow", reason: "owns the workspace CoreEnv" },
+  "runtime → models": { mode: "allow", reason: "owns the ModelProvider" },
+  "runtime → managers": { mode: "allow", reason: "owns the AgentManager" },
+  "runtime → agent-session": { mode: "allow", reason: "owns / creates the AgentSessionHost" },
+  "runtime → agent": { mode: "allow", reason: "tool-config type for session defaults" },
+  "runtime → utils": { mode: "allow", reason: "ids" },
+  "managers → runtime": { mode: "allow", reason: "ManagedAgent / manager carry the owning runtime (type-only)" },
+  "models → runtime": { mode: "allow", reason: "ambient model-provider registry" },
+
+  // provider is the LLM plane, orthogonal to CoreEnv: the ModelProvider abstraction,
+  // its factories/registry, and models.dev metadata lookup.
+  "provider → models": { mode: "allow", reason: "model config + metadata types" },
+  "provider → env": { mode: "allow", reason: "CoreEnv.fetch for models.dev lookup" },
+  "provider → utils": { mode: "allow", reason: "ids" },
+  "models → provider": { mode: "allow", reason: "model config re-exports / builds providers" },
+  "runtime → provider": { mode: "allow", reason: "runtime owns the ModelProvider" },
 };
 
 /**
@@ -291,7 +310,17 @@ for (const file of walkTsFiles(srcRoot)) {
 
 // A layer that never appears as a target or source in the table is an undeclared
 // layer: this makes adding a directory a deliberate act.
-const knownLayers = new Set(["env", "agent", "agent-session", "managers", "models", "runtime-types", "utils"]);
+const knownLayers = new Set([
+  "env",
+  "agent",
+  "agent-session",
+  "managers",
+  "models",
+  "provider",
+  "runtime",
+  "runtime-types",
+  "utils",
+]);
 for (const file of walkTsFiles(srcRoot)) {
   if (file.endsWith(".d.ts")) continue;
   const layer = splitLayer(relative(srcRoot, file)).layer;

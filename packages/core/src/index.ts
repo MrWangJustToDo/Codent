@@ -45,17 +45,23 @@ export {
   clearModelProvider,
   getModelProvider,
   hasModelProvider,
+} from "./provider/model-provider-registry.js";
+
+export {
   createDirectModelProvider,
   type ModelProviderMode,
   type ModelProviderConnection,
   type ModelProvider,
-} from "./models/provider/model-provider.js";
+} from "./provider/model-provider.js";
 
-export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./models/provider/remote-model-provider.js";
+export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./provider/remote-model-provider.js";
 
 // ============================================================================
 // Runtime — agent manager (host bootstrap; Session-only UI must not import ManagedAgent)
 // ============================================================================
+
+export { CodentAgent } from "./runtime/codent-agent.js";
+export type { CodentAgentOptions, CodentAgentDefaults } from "./runtime/codent-agent.js";
 
 export { agentManager, AgentManager } from "./managers/agent-manager.js";
 export type { AgentEvent, AgentEventListener, AgentEventType, RunAgentStreamInput } from "./managers/agent-manager.js";

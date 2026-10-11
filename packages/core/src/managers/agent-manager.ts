@@ -15,6 +15,7 @@ import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent
 import type { ResumeResult, SessionData } from "../agent/persistence/types.js";
 import type { SkillDirectory } from "../agent/skills/skill-registry.js";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { StreamChunk } from "@tanstack/ai";
 
 export type { AgentEvent, AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
@@ -74,6 +75,12 @@ export class AgentManager {
   private agents: Map<string, ManagedAgent> = new Map();
 
   /**
+   * Runtime this manager belongs to (env + model provider). `undefined` = the ambient
+   * runtime (legacy single-instance hosts); agents created here inherit it.
+   */
+  readonly runtime?: AgentRuntime;
+
+  /**
    * Disk session ownership registry: maps a persisted session id to the live
    * agent id that currently holds (has resumed/owns) it. Because each root
    * agent owns an independent SessionStore, a second live agent would otherwise
@@ -118,7 +125,8 @@ export class AgentManager {
    */
   private pendingTeardowns = new Set<Promise<void>>();
 
-  constructor() {
+  constructor(runtime?: AgentRuntime) {
+    this.runtime = runtime;
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
     this.logExtension = createLogExtension({
@@ -185,6 +193,7 @@ export class AgentManager {
       parentId,
       manager: this,
       getDefaultSkillDirs,
+      runtime: this.runtime,
     });
 
     if (this.agents.has(managed.id)) {

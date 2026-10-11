@@ -26,6 +26,7 @@ import { resolveTextAdapterForManaged } from "./run-agent.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionBootstrapContext } from "./session-bootstrap-events.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AnyServerTool } from "@tanstack/ai";
 
 export interface BuildManagedAgentResult {
@@ -38,6 +39,8 @@ export interface BuildManagedAgentOptions {
   parentId?: string;
   manager: AgentManager;
   getDefaultSkillDirs: () => Promise<SkillDirectory[]>;
+  /** Runtime this agent belongs to (env + provider); undefined = ambient. */
+  runtime?: AgentRuntime;
 }
 
 /**
@@ -49,6 +52,7 @@ export async function buildManagedAgent({
   parentId,
   manager,
   getDefaultSkillDirs,
+  runtime,
 }: BuildManagedAgentOptions): Promise<BuildManagedAgentResult> {
   const {
     id: customId,
@@ -62,7 +66,8 @@ export async function buildManagedAgent({
   } = config;
 
   const resolvedModelInfo = explicitModelInfo ?? null;
-  const fsRootPath = getEnv().rootPath;
+  // The runtime's env when bound; ambient otherwise (legacy single-instance hosts).
+  const fsRootPath = (runtime?.env ?? getEnv()).rootPath;
   const log = new AgentLog();
   const todoManager = parentId ? null : new TodoManager();
 
@@ -83,6 +88,7 @@ export async function buildManagedAgent({
 
   const toolsRecord: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
   managed.tools = toolsRecord;
+  managed.runtime = runtime;
   managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
   // Scoped unified event bus for this agent. Routes session-channel projections
   // AND telemetry `dispatchEvent` (up-flows to the root observer / Event→Log bridge).
@@ -205,7 +211,7 @@ export async function buildManagedAgent({
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
       onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
       cwd: fsRootPath,
-      getCoreEnv: () => getEnv(),
+      getCoreEnv: () => runtime?.env ?? getEnv(),
       // Scoped unified bus backing extension interception (hook names unchanged)
       // and extension telemetry (`agent:extension-error`).
       eventBus: manager.of(managed.id, parentId),

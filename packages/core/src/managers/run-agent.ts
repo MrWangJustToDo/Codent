@@ -262,6 +262,8 @@ export function buildAgentRunner(
     reasoningEffort: config.reasoningEffort ?? deps.getModelInfo()?.reasoningConfig?.defaultEffort,
     modelStyle: config.modelStyle,
     lazyToolsConfig: config.lazyToolsConfig,
+    // The owning runtime's env reaches tools via the run context; ambient otherwise.
+    ...(deps.runtime ? { coreEnv: deps.runtime.env } : {}),
   });
 }
 

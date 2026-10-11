@@ -5,11 +5,16 @@
  * the provider so clients cannot bypass the key-holding remote provider.
  */
 
-import { resolveModelConfig, type ResolveModelConfigInput, type ResolvedModelConfig } from "../config/model-config.js";
+import {
+  resolveModelConfig,
+  type ResolveModelConfigInput,
+  type ResolvedModelConfig,
+} from "../models/config/model-config.js";
 
-import { getModelProvider, type ModelProviderMode } from "./model-provider.js";
+import { getModelProvider } from "./model-provider-registry.js";
+import { type ModelProviderMode } from "./model-provider.js";
 
-import type { ModelStyle } from "../types.js";
+import type { ModelStyle } from "../models/types.js";
 
 function asStyle(value: string | undefined): ModelStyle | undefined {
   if (value === "openai" || value === "anthropic") return value;

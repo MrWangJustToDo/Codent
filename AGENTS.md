@@ -1132,7 +1132,8 @@ packages/
 │   │   ├── run-coordinator.ts          # Run lifecycle flags/timing (prepare/run/finalize)
 │   │   ├── services/                   # Session / memory / compaction / extension-registry / usage-history services
 │   │   └── telemetry/                  # Usage tracking + telemetry emit helpers (bus lives in agent/agent-event-bus)
-│   ├── models/                        # Model config (model-config.ts), adapters, models.dev lookup
+│   ├── models/                        # Model config (model-config.ts), adapters, cache
+│   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata
 │   ├── runtime-types/                 # Shared status / event / usage types (no manager deps)
 │   ├── utils/                         # Cross-cutting helpers (Emitter, generateId)
 │   ├── index.ts                       # Curated public API exports (hosts / adapters)

@@ -8,18 +8,18 @@
 
 ## 2. Stage 0 — Additive runtime core
 
-- [ ] 2.1 Add `packages/core/src/runtime/agent-runtime.ts`: `AgentRuntime` class instance holding `env`, `modelProvider`, `rootPath` (and id).
-- [ ] 2.2 Add `packages/core/src/runtime/model-provider-registry.ts`; move the ambient `_provider` storage and `register/get/clear/has` there (`ModelProvider` type + factories stay in `models/provider/`). `models/provider/model-provider.ts` re-exports the helper names.
-- [ ] 2.3 Keep the ambient env registry in `env/index.ts` (`registerCoreEnv`/`getEnv`/`clearCoreEnv`/`hasCoreEnv`); `getEnv()` resolves the ambient runtime only.
-- [ ] 2.4 Add `packages/core/src/runtime/codent-agent.ts`: `CodentAgent` + `CodentAgentOptions` (incl. `name?` runtime label) with `create`, `createSession`/`getSession`/`listSessions`/`destroySession`, `dispose`; owns an `AgentRuntime`, an `AgentManager` bound to it, an `AgentSessionHost` (local by default, `options.host` for remote-session, option a), and the runtime-scoped stores. Session-only (no one-shot `run`).
-- [ ] 2.5 Export `CodentAgent` + `CodentAgentOptions` from `packages/core/src/index.ts` (keep `AgentRuntime` internal for now); keep `registerCoreEnv`/`registerModelProvider`/`agentManager` as the ambient surface.
-- [ ] 2.6 Add `validate:agent-runtime-instances` (two instances, different `rootPath` + different providers; assert isolated fs roots, isolated provider connections, isolated session lists; assert ambient fallback) and wire it via the `validate:*` glob discovery.
-- [ ] 2.7 Build core + run existing `validate:*` to confirm the additive stage is behavior-neutral.
+- [x] 2.1 Add `packages/core/src/runtime/agent-runtime.ts`: `AgentRuntime` class instance holding `env`, `modelProvider`, `rootPath` (and id).
+- [x] 2.2 Add `packages/core/src/provider/` (pull the LLM plane out of `models/`): move `models/provider/*` there and add `provider/model-provider-registry.ts`; move the ambient `_provider` storage and `register/get/clear/has` into it (`ModelProvider` type + factories live in `provider/model-provider.ts`). `models/` re-exports the provider symbols.
+- [x] 2.3 Keep the ambient env registry in `env/index.ts` (`registerCoreEnv`/`getEnv`/`clearCoreEnv`/`hasCoreEnv`); `getEnv()` resolves the ambient runtime only.
+- [x] 2.4 Add `packages/core/src/runtime/codent-agent.ts`: `CodentAgent` + `CodentAgentOptions` (incl. `name?` runtime label) with `create`, `createSession`/`getSession`/`listSessions`/`destroySession`, `dispose`; owns an `AgentRuntime`, an `AgentManager` bound to it, an `AgentSessionHost` (local by default, `options.host` for remote-session, option a), and the runtime-scoped stores. Session-only (no one-shot `run`).
+- [x] 2.5 Export `CodentAgent` + `CodentAgentOptions` from `packages/core/src/index.ts` (keep `AgentRuntime` internal for now); keep `registerCoreEnv`/`registerModelProvider`/`agentManager` as the ambient surface.
+- [x] 2.6 Add `validate:agent-runtime-instances` (two instances, different `rootPath` + different providers; assert isolated fs roots, isolated provider connections, isolated session lists; assert ambient fallback) and wire it via the `validate:*` glob discovery.
+- [x] 2.7 Build core + run existing `validate:*` to confirm the additive stage is behavior-neutral.
 
 ## 3. Stage 1 — Bind manager/agent/run context to the runtime
 
-- [ ] 3.1 Give `AgentManager` an `AgentRuntime` in its constructor (default = ambient); `buildManagedAgent` records `runtime` on the `ManagedAgent`.
-- [ ] 3.2 Change `createToolRunContext(agentId, env)` to take the agent's runtime env; pass it from the runner so `chat({ context })` carries the instance's `coreEnv`.
+- [x] 3.1 Give `AgentManager` an `AgentRuntime` in its constructor (default = ambient); `buildManagedAgent` records `runtime` on the `ManagedAgent`.
+- [x] 3.2 Change `createToolRunContext(agentId, env)` to take the agent's runtime env; pass it from the runner so `chat({ context })` carries the instance's `coreEnv`.
 - [ ] 3.3 Migrate the tool / middleware `getEnv()` call sites to the run context (`ctx.context.coreEnv`); list the migrated files.
 - [ ] 3.4 Migrate the remaining run-path consumers (media, persistence, mcp, managers) from `getEnv()` to their injected `runtime.env`.
 - [ ] 3.5 Add a validator guard that scans the run path (`agent/tools/**`, `agent/media/**`, `agent/persistence/**`, `agent/mcp/**`, `managers/**`) for direct `getEnv()` / `getModelProvider()` reads and fails on any that is not the run context or an injected runtime.

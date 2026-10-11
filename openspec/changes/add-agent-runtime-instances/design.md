@@ -1,7 +1,7 @@
 ## Context
 
 Core currently has no instance boundary. `CoreEnv` and `ModelProvider` are process-global module
-singletons (`env.ts` `_env`; `models/provider/model-provider.ts` `_provider`), `agentManager` is a
+singletons (`env.ts` `_env`; `provider/model-provider.ts` `_provider`), `agentManager` is a
 module-level `new AgentManager()`, and ~56 core modules read `getEnv()` / `getModelProvider()` at run
 time. The stores are built on the same global: `SessionStore` exposes `get fs() { return getEnv().fs }`,
 and `MediaStore` is a module singleton that reads `getEnv()` inside `save`/`load`. Every host
@@ -154,12 +154,15 @@ Two new top-level directories under `packages/core/src/`, plus a cleanup of the 
   - `env/lsp.ts` - from `env-lsp.ts`.
   - `env/teardown.ts` - from `env-teardown.ts`.
   Imports become the directory form (`../env`, `../env/types`).
-- `runtime/` - the runtime instance and its ambient registry:
+- `runtime/` - the runtime instance:
   - `runtime/agent-runtime.ts` - `AgentRuntime`: a class instance holding `env`, `modelProvider`,
     `rootPath`. This is how non-tool code reaches the environment.
   - `runtime/codent-agent.ts` - the `CodentAgent` facade.
-  - `runtime/model-provider-registry.ts` - the ambient `registerModelProvider` / `getModelProvider`
-    registry (the `ModelProvider` type + factories stay in `models/provider/`).
+- `provider/` - the LLM plane, orthogonal to CoreEnv (pulled out of `models/`):
+  - `provider/model-provider.ts` - the `ModelProvider` type + `createDirectModelProvider`.
+  - `provider/model-provider-registry.ts` - the ambient `registerModelProvider` / `getModelProvider`
+    registry (compat fallback; the runtime carries its own provider).
+  - `provider/remote-model-provider.ts`, `provider/resolve-from-provider.ts`, `provider/models-dev.ts`.
 - `agent/` root cleanup (the three loose files move to their domain directories):
   `agent/ui-channel.ts` and `agent/channel-write.ts` -> `agent/ui/`; `agent/dispatch-order.ts` ->
   `agent/extension/`.
