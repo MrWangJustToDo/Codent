@@ -19,6 +19,13 @@ export interface ExtensionsMiddlewareDeps {
    * instead of a tool fault. Same accessor shape as the other middlewares' `getAbortSignal`.
    */
   getAbortSignal?: () => AbortSignal | undefined;
+  /**
+   * Whether an eager `agent:tool-start` is deferred for this call because the task
+   * pre-fork already owns it (it emits the start when the run acquires a concurrency
+   * slot). Without this, the eager start fires at the top of the tool phase — TanStack
+   * runs tools in parallel — and the row times while a queued subagent merely waits.
+   */
+  isTaskToolStartDeferred?: (toolCallId: string) => boolean;
 }
 
 export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -31,12 +38,17 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
   return defineMiddleware("tools", {
     name: "extensions",
     onBeforeToolCall: async (_ctx, hookCtx) => {
-      deps.emitEvent?.("agent:tool-start", {
-        tool_name: hookCtx.toolName,
-        tool_call_id: hookCtx.toolCallId,
-        tool_input: hookCtx.args,
-        timestamp: Date.now(),
-      });
+      // A pre-forked `task` emits its own start when it is admitted (see task-prefork);
+      // emitting here too would start the row's clock while a queued run still waits.
+      const deferStart = hookCtx.toolName === "task" && deps.isTaskToolStartDeferred?.(hookCtx.toolCallId) === true;
+      if (!deferStart) {
+        deps.emitEvent?.("agent:tool-start", {
+          tool_name: hookCtx.toolName,
+          tool_call_id: hookCtx.toolCallId,
+          tool_input: hookCtx.args,
+          timestamp: Date.now(),
+        });
+      }
 
       const runner = deps.getExtensionRunner();
       if (!runner) return;

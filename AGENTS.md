@@ -739,11 +739,15 @@ Each `task` tool call owns a one-way phase state machine (`TaskRunState` in `sub
 its report). Phases are authoritative — never inferred from messages. Registered per parent via `WeakMap`,
 keyed by `parentTaskToolCallId`; `readTaskRunPhase` defaults to `running` for unknown tasks.
 
-Parallelism: `subagent/task-prefork.ts` pre-forks subagents eagerly — once all tool args finish streaming
-(`TOOL_CALL_END`), each `task` call starts its subagent immediately, so N parallel tasks in one turn run
-concurrently (wall-clock ≈ the slowest one). Scheduling is a rolling FIFO window capped at
-`MAX_ACTIVE_TASK_PREFORKS = 4`; extra runs queue until a slot frees instead of running serially. The task
-loop's own `execute` just joins the already-running promise.
+Parallelism: `@tanstack/ai` ≥ 0.64 runs one turn's server tools **in parallel** (default
+`toolExecution`, opt out with `"sequential"`), so codent's `subagent/task-prefork.ts` is no longer a
+serial-execution workaround — it is the **concurrency throttle** plus an eager start. Once all tool
+args finish streaming (`TOOL_CALL_END`), each `task` call starts its subagent immediately; scheduling
+is a rolling FIFO window capped at `ManagedAgentConfig.maxConcurrentTasks` (default 4), and extra runs
+queue until a slot frees (not serially, not all at once). The task loop's own `execute` just joins the
+already-running promise. A queued run does not start — or emit its `agent:tool-start` — until admitted,
+so a waiting task's row never times; the extensions middleware defers its eager start for a `task` the
+coordinator owns. Cap resolution: `resolveMaxConcurrentTasks` (finite integer ≥ 1, else the default).
 
 When a subagent hits its iteration limit before `begin_summary`, the **progress-summary fallback**
 (`subagent/progress-summary.ts`) spawns a side-LLM summarizer (parent-spawned, no tools) that turns the

@@ -98,6 +98,8 @@ export {
   discardRegisteredPrefork,
   getTaskPreforkCoordinator,
   MAX_ACTIVE_TASK_PREFORKS,
+  peekTaskPreforkCoordinator,
+  resolveMaxConcurrentTasks,
   TaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
 export {

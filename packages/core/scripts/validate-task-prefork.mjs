@@ -9,7 +9,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MAX_ACTIVE_TASK_PREFORKS, TaskPreforkCoordinator } from "../dist/dev.mjs";
+import {
+  createExtensionsMiddleware,
+  getTaskPreforkCoordinator,
+  MAX_ACTIVE_TASK_PREFORKS,
+  peekTaskPreforkCoordinator,
+  resolveMaxConcurrentTasks,
+  TaskPreforkCoordinator,
+} from "../dist/dev.mjs";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
@@ -375,6 +382,79 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   // Chunks pass through untouched when no agent is bound.
   const chunk = { type: "TOOL_CALL_END", toolCallId: "t1" };
   assert.deepEqual(await middleware.onChunk({}, chunk), chunk);
+}
+
+// --- peek is non-creating; get lazily creates ---
+
+{
+  const parent = {};
+  assert.equal(peekTaskPreforkCoordinator(parent), undefined, "peek returns undefined before any coordinator exists");
+  const created = getTaskPreforkCoordinator(parent);
+  assert.equal(peekTaskPreforkCoordinator(parent), created, "peek returns the created coordinator");
+}
+
+// --- a pre-forked task does not get the eager (tool-phase) start ---
+//
+// TanStack runs tools in parallel, so `onBeforeToolCall` fires for every task at the
+// top of the tool phase; the pre-fork emits the real start on admission. If the eager
+// one is not deferred, a queued run's row times while it merely waits for a slot.
+
+{
+  const emitted = [];
+  const middleware = createExtensionsMiddleware({
+    getExtensionRunner: () => null,
+    getSessionId: () => "s",
+    emitEvent: (type, payload) => emitted.push({ type, payload }),
+    isTaskToolStartDeferred: (id) => id === "call-queued",
+  });
+  const hook = middleware.onBeforeToolCall;
+  assert.equal(typeof hook, "function", "extensions middleware exposes onBeforeToolCall");
+
+  await hook({}, { toolName: "task", toolCallId: "call-queued", args: { prompt: "x" } });
+  assert.equal(emitted.length, 0, "a pre-forked task emits no eager tool-start (the pre-fork owns it)");
+
+  await hook({}, { toolName: "task", toolCallId: "call-serial", args: { prompt: "y" } });
+  assert.equal(emitted.length, 1, "a task the pre-fork does not own still emits its start");
+  assert.equal(emitted[0].type, "agent:tool-start");
+
+  await hook({}, { toolName: "grep", toolCallId: "call-grep", args: {} });
+  assert.equal(emitted.length, 2, "non-task tools are unaffected by the deferral");
+}
+
+// --- a configured cap is honored (default stays the constant) ---
+
+{
+  const coordinator = new TaskPreforkCoordinator(() => 2);
+  let running = 0;
+  let maxRunning = 0;
+  for (const id of ["a", "b", "c", "d"]) {
+    coordinator.start(
+      id,
+      () => {},
+      async () => {
+        running += 1;
+        maxRunning = Math.max(maxRunning, running);
+        await sleep(30);
+        running -= 1;
+        return { subagentId: id, output: id };
+      }
+    );
+  }
+  await Promise.all(["a", "b", "c", "d"].map((id) => coordinator.join(id)));
+  assert.equal(maxRunning, 2, "a cap of 2 admits exactly 2 and queues the rest");
+}
+
+// --- resolveMaxConcurrentTasks: default / custom / clamp ---
+
+{
+  const managed = (maxConcurrentTasks) => ({ config: { maxConcurrentTasks } });
+  assert.equal(resolveMaxConcurrentTasks(managed(undefined)), MAX_ACTIVE_TASK_PREFORKS, "missing cap → default");
+  assert.equal(resolveMaxConcurrentTasks({ config: {} }), MAX_ACTIVE_TASK_PREFORKS, "no config field → default");
+  assert.equal(resolveMaxConcurrentTasks(managed(8)), 8, "custom cap honored");
+  assert.equal(resolveMaxConcurrentTasks(managed(0)), 1, "0 clamps to 1");
+  assert.equal(resolveMaxConcurrentTasks(managed(-3)), 1, "negative clamps to 1");
+  assert.equal(resolveMaxConcurrentTasks(managed(2.9)), 2, "fractional floors");
+  assert.equal(resolveMaxConcurrentTasks(managed(Number.NaN)), MAX_ACTIVE_TASK_PREFORKS, "NaN → default");
 }
 
 console.log("task-prefork validation passed");

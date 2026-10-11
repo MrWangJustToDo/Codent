@@ -2,16 +2,22 @@
  * Task pre-fork coordinator — starts subagents eagerly while the model is
  * still streaming, so multiple `task` calls in one turn run in parallel.
  *
- * TanStack AI executes tool calls sequentially (`executeToolCalls` yields each
- * result in order). But by the time the execution phase starts, every tool
- * call's arguments have finished streaming (`TOOL_CALL_END`). The pre-fork
- * middleware spawns the subagent at that moment; when the sequential loop
- * reaches the `task` tool, its `execute` just joins the already-running
- * promise. Wall-clock cost of N parallel tasks ≈ the slowest one.
+ * TanStack `chat()` runs tool calls in parallel by default (every call's
+ * `onBeforeToolCall` fires, then the server tools start together). A `task`
+ * call's subagent must not begin before its arguments finish streaming, so the
+ * pre-fork middleware spawns it at `TOOL_CALL_END`; the tool phase's `execute`
+ * later joins the already-running promise via the task tool.
  *
- * Scheduling is a rolling FIFO window: every registered run is accepted, and
- * runs beyond {@link MAX_ACTIVE_TASK_PREFORKS} queue until a slot frees — so
- * the 5th+ task starts as soon as an earlier one finishes, not serially.
+ * The pre-fork also caps concurrency: it is the throttle that keeps N parallel
+ * `task` calls from opening N provider streams at once. Scheduling is a rolling
+ * FIFO window — every registered run is accepted, and runs beyond
+ * {@link MAX_ACTIVE_TASK_PREFORKS} queue until a slot frees, so the 5th+ starts
+ * as soon as an earlier one finishes (not serially, and not all at once).
+ *
+ * A queued run has not begun: it fires its `agent:tool-start` only when it
+ * acquires a slot (see {@link TaskPreforkCoordinator.start}'s `onRunStart`), and
+ * the extensions middleware skips its own eager `agent:tool-start` for a call the
+ * coordinator already owns — otherwise the row would time while merely waiting.
  */
 
 import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
@@ -88,6 +94,13 @@ export class TaskPreforkCoordinator {
   private readonly entries = new Map<string, PreforkEntry>();
   private readonly waiting = new Set<PreforkEntry>();
   private active = 0;
+
+  /**
+   * @param getMaxActive Concurrency cap provider, read per admission so a value
+   *   changed through `ManagedAgent.updateConfig` takes effect on the next run.
+   *   Defaults to the module constant so the class is usable stand-alone.
+   */
+  constructor(private readonly getMaxActive: () => number = () => MAX_ACTIVE_TASK_PREFORKS) {}
 
   get size(): number {
     return this.entries.size;
@@ -192,7 +205,7 @@ export class TaskPreforkCoordinator {
     // `entry.promise`, and this only marks the rejection as handled.
     void entry.promise.catch(() => {});
 
-    if (this.active < MAX_ACTIVE_TASK_PREFORKS) {
+    if (this.active < this.getMaxActive()) {
       this.admit(entry);
     } else {
       this.waiting.add(entry);
@@ -254,14 +267,37 @@ export class TaskPreforkCoordinator {
 
 const coordinators = new WeakMap<ManagedAgent, TaskPreforkCoordinator>();
 
+/**
+ * Resolve a parent's concurrent-task cap: a finite integer `>= 1`, else the
+ * default. A missing/0/negative/fractional/NaN value must not stall admission.
+ */
+export function resolveMaxConcurrentTasks(parentManaged: ManagedAgent): number {
+  const configured = parentManaged.config?.maxConcurrentTasks;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) return MAX_ACTIVE_TASK_PREFORKS;
+  return Math.max(1, Math.floor(configured));
+}
+
 /** Get (or lazily create) the pre-fork coordinator for a parent agent. */
 export function getTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator {
   let coordinator = coordinators.get(parentManaged);
   if (!coordinator) {
-    coordinator = new TaskPreforkCoordinator();
+    // Read the cap through the parent so an `updateConfig` after creation is honored.
+    coordinator = new TaskPreforkCoordinator(() => resolveMaxConcurrentTasks(parentManaged));
     coordinators.set(parentManaged, coordinator);
   }
   return coordinator;
+}
+
+/**
+ * The pre-fork coordinator for a parent, or `undefined` when none exists yet.
+ *
+ * Non-creating, unlike {@link getTaskPreforkCoordinator}: a reader that only
+ * wants to know whether a call is already pre-forked (the extensions middleware
+ * deferring its eager `agent:tool-start`) must not bring a coordinator into
+ * existence for an agent that never pre-forked anything.
+ */
+export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator | undefined {
+  return coordinators.get(parentManaged);
 }
 
 /**

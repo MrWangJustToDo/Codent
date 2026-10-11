@@ -30,6 +30,8 @@ export interface AgentSessionCreateOptions {
   providerMode?: "direct" | "remote";
   systemPrompt?: string;
   maxIterations?: number;
+  /** Max concurrent `task` subagents under this agent (default 4). */
+  maxConcurrentTasks?: number;
   mcpConfigPath?: string;
   extensionDirs?: string[];
   /** Continue the latest on-disk session after the agent is created (bootstrap only). */

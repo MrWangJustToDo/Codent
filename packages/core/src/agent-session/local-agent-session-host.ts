@@ -60,6 +60,7 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
     name: options.name,
     model: options.model,
     maxIterations: options.maxIterations ?? SESSION_HOST_DEFAULT_MAX_ITERATIONS,
+    ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
     ...(options.modelStyle ? { modelStyle: options.modelStyle } : {}),
     ...(options.modelBaseURL ? { modelBaseURL: options.modelBaseURL } : {}),
     ...(options.modelApiKey ? { modelApiKey: options.modelApiKey } : {}),

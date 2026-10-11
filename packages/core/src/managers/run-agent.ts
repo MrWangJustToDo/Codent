@@ -5,6 +5,7 @@ import {
 } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
+import { peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
 import { resolveToolsRecord, SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
@@ -208,6 +209,9 @@ export function buildAgentRunner(
       getTodoManager: deps.getTodoManager,
       emitEvent,
       getAbortSignal: () => run.currentAbortController?.signal,
+      // A pre-forked `task` emits its own start on admission; skip the eager one so a
+      // queued run does not time while it waits for a concurrency slot.
+      isTaskToolStartDeferred: (toolCallId) => peekTaskPreforkCoordinator(managed)?.has(toolCallId) === true,
     }),
     // TanStack batches TOOL_CALL_END until all tools finish; mirror each result into UI early.
     createEarlyToolResultUiMiddleware({
