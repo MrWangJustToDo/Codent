@@ -712,8 +712,8 @@ The project supports **subagents** — context-isolated agents spawned to handle
 ### Subagent UI Preview
 
 `runSubagent` always attaches an `AgentUIChannel` via `ensureUIChannel`.
-`bridgeUI: true` enables the task panel (`Ctrl+T`) and parent streaming ids;
-`bridgeUI: false` keeps the channel internal only.
+`bridgeUI: true` enables the task panel (`Ctrl+T`) and parent task-tool routing
+(summary stream keyed by the task tool-call id); `bridgeUI: false` keeps the channel internal only.
 Task-tool subagents use `autoDestroy: false` so the preview stays available; after the stream ends,
 detached outcome finalization marks them `completed`/`aborted`. Esc while a task is active aborts the
 subagent first: `runSubagent` sets `aborted: true` and appends `[Task cancelled by user.]` into the

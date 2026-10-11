@@ -190,7 +190,6 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         abortSignal,
         channel,
         parentTaskToolCallId: bridgeUI ? parentTaskToolCallId : undefined,
-        streamingAgentId: bridgeUI ? parentAgentId : undefined,
         summaryHub,
         compactId,
         compactLabel,

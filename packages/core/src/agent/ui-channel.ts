@@ -47,11 +47,6 @@ export interface ConsumeRunOptions {
   /** Parent task tool call ID — summary text streams via {@link summaryHub}. */
   parentTaskToolCallId?: string;
   /**
-   * Agent id that owns the parent task tool UI (usually the parent agent).
-   * Kept for callers / events; summary emits go through {@link summaryHub}.
-   */
-  streamingAgentId?: string;
-  /**
    * Parent agent's summary stream hub. When set with task or compact ids,
    * TEXT deltas are appended after the stream is unlocked (begin_summary or compact).
    */
@@ -145,7 +140,6 @@ export class AgentUIChannel {
   private readonly approvalListeners = new Set<ApprovalListener>();
   private readonly customEventListeners = new Set<UICustomEventListener>();
   private parentTaskToolCallId?: string;
-  private streamingAgentId?: string;
   private summaryHub?: SummaryStreamHub;
   private compactId?: string;
   private compactLabel?: string;
@@ -466,7 +460,6 @@ export class AgentUIChannel {
 
   private beginSummaryStream(options: ConsumeRunOptions): void {
     this.parentTaskToolCallId = options.parentTaskToolCallId;
-    this.streamingAgentId = options.streamingAgentId;
     this.summaryHub = options.summaryHub;
     this.compactId = options.compactId;
     this.compactLabel = options.compactLabel;
@@ -501,7 +494,6 @@ export class AgentUIChannel {
       this.summaryHub.end(this.activeSummaryKey);
     }
     this.parentTaskToolCallId = undefined;
-    this.streamingAgentId = undefined;
     this.summaryHub = undefined;
     this.compactId = undefined;
     this.compactLabel = undefined;

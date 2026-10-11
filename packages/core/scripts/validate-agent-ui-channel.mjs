@@ -255,7 +255,6 @@ await summaryChannel.consumeRun({
     };
   })(),
   parentTaskToolCallId: summaryStreamId,
-  streamingAgentId: "agent-parent",
   summaryHub,
 });
 
@@ -341,7 +340,6 @@ await monoChannel.consumeRun({
     };
   })(),
   parentTaskToolCallId: "task-mono",
-  streamingAgentId: "agent-mono",
   summaryHub: monoHub,
 });
 
@@ -466,7 +464,6 @@ await retryChannel.consumeRun({
     };
   })(),
   parentTaskToolCallId: "task-retry",
-  streamingAgentId: "agent-retry",
   summaryHub: retryHub,
 });
 
