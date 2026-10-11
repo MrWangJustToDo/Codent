@@ -63,6 +63,7 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           apiKey: createOptions.modelApiKey,
           systemPrompt: createOptions.systemPrompt,
           maxIterations: createOptions.maxIterations,
+          maxConcurrentTasks: createOptions.maxConcurrentTasks,
           mcpConfigPath: createOptions.mcpConfigPath,
           extensionDirs: createOptions.extensionDirs,
           continueSession: createOptions.continueSession,

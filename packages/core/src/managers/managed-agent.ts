@@ -205,13 +205,6 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   subagentTools?: ToolsRecord | null;
   /**
-   * Maximum number of `task` subagents running concurrently under this parent.
-   * Defaults to 4. Values below 1 are treated as 1. This is the concurrency
-   * throttle for parallel `task` calls; runs beyond it queue and roll forward as
-   * slots free.
-   */
-  maxConcurrentTasks?: number;
-  /**
    * Programmatic extension factories to load on bootstrap.
    * Each factory is called during agent initialization.
    */

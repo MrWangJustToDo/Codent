@@ -407,9 +407,17 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
       }
       const body = typeof init?.body === "string" ? init.body : undefined;
 
-      const res = await client.fetch.proxy.$post({
-        json: { url, method, headers: Object.keys(headers).length > 0 ? headers : undefined, body },
-      });
+      // Forward the caller's AbortSignal onto the RPC call. Without it a provider's
+      // timeout (or a user cancel) could not abort the remote proxy request: the local
+      // timer fires but the `await` never rejects, so a hung upstream held the search
+      // past its deadline. Aborting the RPC aborts `c.req.raw.signal` server-side, which
+      // the fetch route wires to its own outbound request.
+      const res = await client.fetch.proxy.$post(
+        {
+          json: { url, method, headers: Object.keys(headers).length > 0 ? headers : undefined, body },
+        },
+        { init: { signal: init?.signal } }
+      );
       const data = await unwrap<{
         status: number;
         statusText: string;

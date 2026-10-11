@@ -81,7 +81,10 @@ export const parallelProvider: SearchProvider = {
     const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);
     const sessionId = options?.sessionId;
 
-    const url = apiKey ? `${PARALLEL_MCP_URL}?apiKey=${encodeURIComponent(apiKey)}` : PARALLEL_MCP_URL;
+    // Parallel's Search MCP authenticates with `Authorization: Bearer <key>` — never a
+    // query parameter (query params are search overrides, and unknown fields 400 the
+    // handshake). Putting the key in the URL would also leak it to logs/proxies.
+    const url = PARALLEL_MCP_URL;
     const text = await callMcpTool({
       url,
       toolName: PARALLEL_TOOL_NAME,
@@ -94,6 +97,7 @@ export const parallelProvider: SearchProvider = {
       },
       timeoutMs,
       signal: options?.signal,
+      ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
     });
 
     let results = parseParallelResults(text);

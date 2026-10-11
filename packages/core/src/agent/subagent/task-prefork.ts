@@ -246,8 +246,12 @@ export class TaskPreforkCoordinator {
       return cancelledStubResult();
     }
     entry.state = "running";
-    onRunStart?.();
     try {
+      // Inside the try: if the callback throws (a telemetry subscriber fault), the
+      // finally still releases the slot. Outside, the leak was permanent — `active`
+      // never dropped, so once it reached the cap admission stalled for the
+      // coordinator's whole lifetime (cached per agent).
+      onRunStart?.();
       return await factory();
     } finally {
       entry.occupying = false;
@@ -257,10 +261,18 @@ export class TaskPreforkCoordinator {
   }
 
   private promote(): void {
-    for (const candidate of this.waiting) {
-      if (candidate.aborted) continue;
-      this.admit(candidate);
-      return;
+    // Admit up to the cap, re-reading the provider each time: a cap lowered mid-run
+    // must not be overshot by promotion, and a cap raised while runs wait should top
+    // up. One admission per completion (the common case) falls out of the loop.
+    while (this.active < this.getMaxActive()) {
+      let admitted = false;
+      for (const candidate of this.waiting) {
+        if (candidate.aborted) continue;
+        this.admit(candidate);
+        admitted = true;
+        break;
+      }
+      if (!admitted) break;
     }
   }
 }

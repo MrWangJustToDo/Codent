@@ -206,4 +206,38 @@ assert.equal(
   assert.equal(input.length, 1, "input wire must not be mutated");
 }
 
+// A second identical loop later in the same session still gets a reminder.
+// (Without a per-kind nonce the content-hash id collides with the first reminder and
+// `injectSyntheticMessages` dedupes it away — leaving the second loop un-nudged.)
+{
+  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "please search" }] }]);
+  let persisted = 0;
+  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => persisted++ });
+
+  const wire1 = [userMessage("please search")];
+  await config(mw, wire1);
+  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`);
+  await config(mw, wire1);
+  assert.equal(channel.messages.length, 2, "the first loop injects a reminder");
+
+  const wire2 = [userMessage("please search"), userMessage("try again")];
+  await config(mw, wire2); // new genuine prompt resets the chain
+  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `b${i}`);
+  await config(mw, wire2);
+  assert.equal(channel.messages.length, 3, "a second identical loop still injects a reminder (per-kind nonce)");
+  assert.equal(persisted, 2, "the second reminder is persisted too");
+}
+
+// A reminder left pending when the run is aborted must not leak into the next unrelated turn.
+{
+  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "first" }] }]);
+  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
+  await config(mw, [userMessage("first")]); // seen = 1
+  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`); // pending set
+  // …aborted here: no onConfig consumes `pending`.
+  const out = await config(mw, [userMessage("first"), userMessage("an unrelated task")]);
+  assert.deepEqual(out, {}, "a pending reminder is dropped when a new user prompt resets the chain");
+  assert.equal(channel.messages.length, 1, "no stale reminder is injected into the unrelated turn");
+}
+
 console.log("repeat-reminder validation passed");

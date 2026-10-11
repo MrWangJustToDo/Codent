@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AgentConfigSchema,
   createExtensionsMiddleware,
   getTaskPreforkCoordinator,
   MAX_ACTIVE_TASK_PREFORKS,
@@ -455,6 +456,72 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(resolveMaxConcurrentTasks(managed(-3)), 1, "negative clamps to 1");
   assert.equal(resolveMaxConcurrentTasks(managed(2.9)), 2, "fractional floors");
   assert.equal(resolveMaxConcurrentTasks(managed(Number.NaN)), MAX_ACTIVE_TASK_PREFORKS, "NaN → default");
+}
+
+// --- a cap lowered mid-run must not be overshot by promotion ---
+//
+// `promote()` is an admission, so it must re-read the cap provider; otherwise a lowered cap
+// is silently ignored and queued runs refill the old window.
+
+{
+  let cap = 4;
+  const coordinator = new TaskPreforkCoordinator(() => cap);
+  const resolvers = {};
+  for (const id of ["e0", "e1", "e2", "e3", "e4", "e5"]) {
+    coordinator.start(
+      id,
+      () => {},
+      () => new Promise((resolve) => (resolvers[id] = resolve))
+    );
+  }
+  await sleep(0);
+  assert.equal(coordinator.activeCount, 4, "4 admitted at cap 4; the rest queue");
+
+  cap = 2;
+  resolvers["e0"]({ subagentId: "e0", output: "e0" });
+  await sleep(0);
+  assert.equal(coordinator.activeCount, 3, "promotion must not refill a slot past the lowered cap");
+}
+
+// --- a throwing onRunStart must release its slot (no permanent stall) ---
+
+{
+  const coordinator = new TaskPreforkCoordinator(() => 1);
+  coordinator.start(
+    "x",
+    () => {},
+    async () => ({ subagentId: "x", output: "x" }),
+    () => {
+      throw new Error("telemetry boom");
+    }
+  );
+  await sleep(0);
+  assert.equal(coordinator.activeCount, 0, "the slot is released even when onRunStart throws");
+
+  let ran = false;
+  coordinator.start(
+    "y",
+    () => {},
+    async () => {
+      ran = true;
+      return { subagentId: "y", output: "y" };
+    }
+  );
+  await sleep(0);
+  assert.equal(ran, true, "the next run is admitted after the fault");
+}
+
+// --- the cap is an AgentConfig field, so it survives updateConfig's schema round-trip ---
+
+{
+  const parsed = AgentConfigSchema.parse({ model: "m", maxConcurrentTasks: 6 });
+  assert.equal(
+    parsed.maxConcurrentTasks,
+    6,
+    "AgentConfigSchema keeps maxConcurrentTasks — updateConfig (AgentConfigSchema.parse) would otherwise strip it"
+  );
+  const stripped = AgentConfigSchema.parse({ model: "m", someUnknownExtra: 1 });
+  assert.equal("someUnknownExtra" in stripped, false, "unknown agent extras are still stripped");
 }
 
 console.log("task-prefork validation passed");

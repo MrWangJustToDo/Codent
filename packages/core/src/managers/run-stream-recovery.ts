@@ -1,5 +1,5 @@
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
-import { extractRunErrorMessage } from "../agent/stream/stream-errors.js";
+import { attachRunErrorCode, extractRunErrorMessage } from "../agent/stream/stream-errors.js";
 import { discardRegisteredPrefork } from "../agent/subagent/task-prefork.js";
 
 import { armCapabilityStrip, tryCapabilitySanitizeRetry } from "./stream-recovery/capability-sanitize.js";
@@ -239,7 +239,10 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
         }
 
         if (chunk.type === "RUN_ERROR") {
-          const runError = errorFromUnknown(extractRunErrorMessage(chunk) || "Agent run failed");
+          const runError = attachRunErrorCode(
+            errorFromUnknown(extractRunErrorMessage(chunk) || "Agent run failed"),
+            chunk
+          );
           lastErrorMessage = runError.message;
           const result = await attemptErrorRecovery(
             options,

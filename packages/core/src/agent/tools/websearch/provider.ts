@@ -37,6 +37,33 @@ export class ProviderManager {
   private preferredProvider?: string;
   private apiKeys = new Map<string, string>();
   private sessionId?: string;
+  /**
+   * Serializes configure-and-search. `configure`/`setSessionId` mutate process-global
+   * instance state that `search` (and every provider, via `getApiKey`) reads after an
+   * `await`; two concurrent runs would otherwise interleave — run A's configure, run B's
+   * configure, then A's search reading B's keys. Held only around the call, so searches
+   * run one at a time (search is not a hot path; correctness beats parallelism here).
+   */
+  private mutex: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `fn` with exclusive access to this manager, so a configure+search pair cannot be
+   * interleaved by another caller. `fn` receives this manager; any rejection releases the
+   * lock.
+   */
+  async runExclusive<T>(fn: (manager: ProviderManager) => Promise<T>): Promise<T> {
+    const previous = this.mutex;
+    let release!: () => void;
+    this.mutex = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => {});
+    try {
+      return await fn(this);
+    } finally {
+      release();
+    }
+  }
 
   /**
    * Apply host-supplied websearch config (secrets + preferred provider).

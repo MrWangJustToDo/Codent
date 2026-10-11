@@ -181,8 +181,13 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
       const messages = config.messages as ModelMessage[];
 
       // A new user prompt changes the context; repetition across it is not a loop.
+      // Drop any un-delivered reminder too: it belongs to the chain being abandoned,
+      // and injecting it into an unrelated turn would misattribute the loop.
       const userMessages = messages.filter(isGenuineUserMessage).length;
-      if (userMessages > seenUserMessages) chain = undefined;
+      if (userMessages > seenUserMessages) {
+        chain = undefined;
+        pending = undefined;
+      }
       seenUserMessages = userMessages;
 
       if (pending === undefined) return {};
@@ -195,10 +200,25 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
         return { messages: [...messages, { role: "user", content }] };
       }
 
-      const { messages: next } = injectSyntheticMessages(messages, [{ kind: REPEAT_REMINDER_KIND, content }], {
-        ui,
-        persist: deps.persistMessages,
-      });
+      // Per-kind admission episode (same rule as turn-context): count the existing
+      // `ctx-<kind>-` ids so a repeat loop that recurs later in the session gets a
+      // fresh id. Without it the content-hash id collides with the earlier reminder
+      // (the gentle body is constant, the detailed one is stable per tool/args) and
+      // `injectSyntheticMessages` dedupes it away — so the second loop got no nudge.
+      let kindCount = 0;
+      const prefix = `ctx-${REPEAT_REMINDER_KIND}-`;
+      for (const message of ui.getMessages()) {
+        if (typeof message.id === "string" && message.id.startsWith(prefix)) kindCount++;
+      }
+
+      const { messages: next } = injectSyntheticMessages(
+        messages,
+        [{ kind: REPEAT_REMINDER_KIND, content, nonce: kindCount + 1 }],
+        {
+          ui,
+          persist: deps.persistMessages,
+        }
+      );
       return { messages: next };
     },
   });

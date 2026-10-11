@@ -221,7 +221,13 @@ export async function listSessionIds(): Promise<string[]> {
   return stamped.sort((a, b) => b.mtime - a.mtime).map((entry) => entry.id);
 }
 
-/** All messages of one session, folded and in order. Empty when the log is missing. */
+/**
+ * All messages of one session, folded and in order. Empty when the log is missing.
+ *
+ * Reads the whole log: `searchHistory` bounds *scanning* by per-file size, but a direct
+ * `session_read` folds whatever the file holds — bounding the model-visible result is the
+ * tool's job (message-count + rendered-size caps, then the output cache/preview spill).
+ */
 export async function readSessionMessages(sessionId: string): Promise<SessionMessage[]> {
   const env = getEnv();
   const path = getJournalPath(sessionId);

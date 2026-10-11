@@ -3,6 +3,7 @@
  */
 
 import { extractTextFromContent } from "../agent/compaction/message-utils.js";
+import { dehydrateUIMessages } from "../agent/media/media-utils.js";
 import { partTextContent } from "../agent/stream/message-parts.js";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
@@ -216,8 +217,13 @@ export async function branchSession(
     return { ok: false, error: `Cannot ${options.mode} while the agent is running — stop it first (Esc).` };
   }
 
-  // Branch from the live channel so unsaved turns are included.
-  const messages = (managed.getUI()?.getMessages() ?? current.uiMessages) as UIMessage[];
+  // Branch from the live channel so unsaved turns are included. Dehydrate first: the
+  // channel holds hydrated media (inline base64 / data URLs), but the session log
+  // stores `media://` refs — writing it raw would bake base64 into the append-only log
+  // and leave it there forever (later saves only append). The canonical persist path
+  // (`SessionService.persistSession`) dehydrates for exactly this reason.
+  const liveMessages = (managed.getUI()?.getMessages() ?? current.uiMessages) as UIMessage[];
+  const messages = (await dehydrateUIMessages(liveMessages)) as UIMessage[];
 
   let upToIndex: number | undefined;
   let forkText: string | undefined;
@@ -231,6 +237,7 @@ export async function branchSession(
     forkText = uiMessageText(messages[index]!);
   }
 
+  const sourceId = current.id;
   const newSession = store.branchFrom(current, {
     ...(upToIndex !== undefined ? { upToIndex } : {}),
     ...(options.name ? { name: options.name } : {}),
@@ -239,6 +246,13 @@ export async function branchSession(
 
   await store.save(newSession);
   const restored = await managed.restoreSession(newSession.id);
+
+  // Relinquish the source session so another live agent may resume it — mirroring
+  // `startNewDiskSession`. `restoreSession` only acquires the *new* id, so without this
+  // the source stayed claimed by this agent (and the session-owners map grew per branch).
+  if (sourceId && sourceId !== newSession.id) {
+    managed.manager?.releaseSessionOwnership(sourceId, managed.id);
+  }
 
   return {
     ok: true,

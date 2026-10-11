@@ -45,6 +45,7 @@ try {
     const { session } = await host.create({
       name: "toolconfig-agent",
       model: process.env.MODEL || "test-model",
+      maxConcurrentTasks: 7,
       toolConfig: { websearch: WEBSEARCH },
     });
     const snapshot = session.getSnapshot();
@@ -55,6 +56,7 @@ try {
     assert.equal(effective.provider, WEBSEARCH.provider, "provider preference must be forwarded");
     assert.equal(effective.braveApiKey, WEBSEARCH.braveApiKey, "brave key must be forwarded");
     assert.equal(effective.parallelApiKey, WEBSEARCH.parallelApiKey, "parallel key must be forwarded");
+    assert.equal(agent.config.maxConcurrentTasks, 7, "maxConcurrentTasks must be forwarded to the server-side agent");
   }
 
   // ── 2. A create WITHOUT toolConfig keeps the server default (no leakage from case 1) ──
@@ -68,6 +70,7 @@ try {
     const effective = agent.config.toolConfig?.websearch;
     assert.equal(effective?.provider, undefined, "no client toolConfig → no forwarded provider");
     assert.equal(effective?.braveApiKey, undefined, "no client toolConfig → no forwarded key");
+    assert.equal(agent.config.maxConcurrentTasks, undefined, "no client cap → server default");
   }
 
   console.log("websearch toolConfig forwarding validation passed");

@@ -20,8 +20,10 @@ export async function callMcpTool(options: {
   args: Record<string, unknown>;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Extra request headers (e.g. `Authorization: Bearer <key>`). Keys are never put in the URL. */
+  headers?: Record<string, string>;
 }): Promise<string> {
-  const { url, toolName, args, timeoutMs, signal } = options;
+  const { url, toolName, args, timeoutMs, signal, headers } = options;
   const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal });
 
   try {
@@ -31,6 +33,7 @@ export async function callMcpTool(options: {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
+        ...headers,
       },
       body: JSON.stringify({
         jsonrpc: "2.0",

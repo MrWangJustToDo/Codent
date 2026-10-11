@@ -54,13 +54,18 @@ function sanitizeConfigForClient(config: ModelsConfig, connection: ModelConnecti
     // the proxy injects baseURL/apiKey server-side.
     return { type: entry.type, style: entry.style, models: entry.models };
   });
+  // `global.toolConfig` carries server-side websearch keys (braveApiKey/exaApiKey/
+  // parallelApiKey/tavilyApiKey). It is a server secret like a direct entry's apiKey,
+  // and no client consumes it (they read only `models` / `active`), so it must never
+  // leave the process.
+  const { global: _global, models: _models, ...safeRest } = config;
   if (!servedModel) {
     // No served model (the server's `.env` names none): nothing to advertise — the
     // proxy forwards whatever the client sends against its own allowlist.
-    return { ...config, models: others };
+    return { ...safeRest, models: others };
   }
   return {
-    ...config,
+    ...safeRest,
     models: [
       // The served model leads, under the connection's own style — the style the proxy
       // will actually use for it, which a hand-written models.json entry may disagree
@@ -332,7 +337,7 @@ async function proxyStream(
  * Server config shape safe to hand to remote clients: direct entries keep only
  * the selectable model ids — upstream `baseURL`/`apiKey` never leave the server.
  */
-export type SanitizedProviderConfig = Omit<ModelsConfig, "models"> & {
+export type SanitizedProviderConfig = Omit<ModelsConfig, "models" | "global"> & {
   models: Array<{ type: "direct"; style: string; models?: string[] } | { type: "remote-provider"; url: string }>;
 };
 

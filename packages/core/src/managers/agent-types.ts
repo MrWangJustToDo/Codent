@@ -42,6 +42,16 @@ export const AgentConfigSchema = z.object({
     .optional()
     .default(DEFAULT_AGENT_MAX_ITERATIONS)
     .describe("Maximum agentic loop iterations"),
+  /**
+   * Maximum number of `task` subagents running concurrently under this parent.
+   * Defaults to 4. Values below 1 are treated as 1. Part of `AgentConfig` (not a
+   * manager-only extra) so `ManagedAgent.updateConfig` can change it at runtime —
+   * `AgentConfigSchema` strips anything it does not declare.
+   */
+  maxConcurrentTasks: z
+    .number()
+    .optional()
+    .describe("Max concurrent `task` subagents per parent (default 4; values below 1 treated as 1)"),
   maxTokens: z.number().int().min(1).optional().describe("Maximum tokens per response"),
   temperature: z.number().min(0).max(2).optional().describe("Sampling temperature"),
   reasoningEffort: z

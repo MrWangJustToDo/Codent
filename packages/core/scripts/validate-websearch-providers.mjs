@@ -127,6 +127,7 @@ for (const name of PROVIDER_REGISTRY.map((r) => r.name)) {
 // ============================================================================
 
 let lastUrl = "";
+let lastInit;
 const stubEnv = {
   rootPath: "/tmp",
   getPlatform: async () => "linux",
@@ -144,8 +145,9 @@ const stubEnv = {
   },
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
-  fetch: async (url) => {
+  fetch: async (url, init) => {
     lastUrl = String(url);
+    lastInit = init;
     // Exa MCP — SSE framing with a Google-style `Highlights:` body.
     if (lastUrl.includes("mcp.exa.ai")) {
       const payload = {
@@ -457,13 +459,17 @@ try {
 resetWebsearchProviders();
 registerCoreEnv(stubEnv);
 try {
-  // Parallel with a key → the same MCP endpoint but carrying `?apiKey=`.
+  // Parallel with a key → the same MCP endpoint, key in the Authorization header (never the url).
   initializeProviders({ parallelApiKey: "parallel-secret", provider: "parallel" });
   {
     const pm = getProviderManager();
     const outcome = await pm.search("q", { maxResults: 2, timeoutMs: 5000 });
     assert.equal(outcome.provider, "parallel");
-    assert.ok(lastUrl.includes("apiKey=parallel-secret"), "parallel keyed transport sends the key on the MCP url");
+    const authHeader = Object.entries(lastInit?.headers ?? {}).find(
+      ([key]) => key.toLowerCase() === "authorization"
+    )?.[1];
+    assert.equal(authHeader, "Bearer parallel-secret", "parallel keyed transport sends the key as a Bearer header");
+    assert.equal(lastUrl.includes("apiKey"), false, "parallel keyed transport never puts the key in the url");
   }
 } finally {
   clearCoreEnv();

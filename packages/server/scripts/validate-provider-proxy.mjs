@@ -152,6 +152,14 @@ assert.equal(info.basePath, "/api/provider/openai/v1");
   writeFileSync(
     join(root, ".agents", "config", "models.json"),
     JSON.stringify({
+      global: {
+        toolConfig: {
+          braveApiKey: "brave-must-not-leak",
+          exaApiKey: "exa-must-not-leak",
+          parallelApiKey: "parallel-must-not-leak",
+          tavilyApiKey: "tavily-must-not-leak",
+        },
+      },
       models: [
         {
           type: "direct",
@@ -183,6 +191,12 @@ assert.equal(info.basePath, "/api/provider/openai/v1");
   );
   assert.ok(!JSON.stringify(advertised).includes("sk-must-not-leak"), "no apiKey may leave the server");
   assert.ok(!JSON.stringify(advertised).includes("upstream.example.com"), "no upstream baseURL either");
+  // `global.toolConfig` holds websearch keys — a server secret like a direct entry's apiKey.
+  // No client consumes it, so it must not appear in the sanitized payload at all.
+  assert.equal(advertised.config.global, undefined, "global.toolConfig must be stripped from /api/provider/info");
+  for (const key of ["brave-must-not-leak", "exa-must-not-leak", "parallel-must-not-leak", "tavily-must-not-leak"]) {
+    assert.ok(!JSON.stringify(advertised).includes(key), `websearch key ${key} must not leave the server`);
+  }
 
   rmSync(root, { recursive: true, force: true });
 }

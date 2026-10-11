@@ -149,20 +149,24 @@ Use the current year from <current_date> in turn context for time-sensitive quer
 
         try {
           const pm = getProviderManager();
-          pm.configure(managed?.config?.toolConfig?.websearch);
           // A stable per-session value lets the manager spread sessions across the free
           // providers (so one public endpoint is not the single dependency) and lets a
           // provider forward it upstream (Parallel's `session_id`). Subagents have no
           // session data of their own, so fall back to the agent id — still stable per agent.
           const sessionId = managed?.getSessionData()?.id ?? managed?.id;
-          pm.setSessionId(sessionId);
-          const { results: rawResults, provider } = await pm.search(query, {
-            maxResults: limit,
-            allowedDomains,
-            blockedDomains,
-            timeoutMs,
-            signal: controller.signal,
-            ...(sessionId ? { sessionId } : {}),
+          // configure + search run under one lock: both mutate/read the process-global
+          // manager, so concurrent runs must not interleave (see ProviderManager.runExclusive).
+          const { results: rawResults, provider } = await pm.runExclusive(async (m) => {
+            m.configure(managed?.config?.toolConfig?.websearch);
+            m.setSessionId(sessionId);
+            return m.search(query, {
+              maxResults: limit,
+              allowedDomains,
+              blockedDomains,
+              timeoutMs,
+              signal: controller.signal,
+              ...(sessionId ? { sessionId } : {}),
+            });
           });
 
           const filteredResults = filterResultsByDomain(rawResults, allowedDomains, blockedDomains);
