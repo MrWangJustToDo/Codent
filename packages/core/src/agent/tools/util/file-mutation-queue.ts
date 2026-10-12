@@ -26,9 +26,11 @@ const fileMutationQueues = new Map<string, Promise<void>>();
  */
 function getQueueKey(env: ResolvedCoreEnv, filePath: string): string {
   try {
-    return env.path.resolve(filePath);
+    // Key includes the workspace root so two runtimes with the same relative path do not
+    // share (and serialize against each other's) mutation queue.
+    return `${env.rootPath}::${env.path.resolve(filePath)}`;
   } catch {
-    return filePath;
+    return `${env.rootPath}::${filePath}`;
   }
 }
 

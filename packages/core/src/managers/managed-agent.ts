@@ -1409,7 +1409,7 @@ export class ManagedAgent {
     }
 
     const currentDate = getCurrentDate();
-    const { branch: gitBranch, status: gitStatus } = await getGitInfo();
+    const { branch: gitBranch, status: gitStatus } = await getGitInfo(this.getCoreEnv());
 
     const planState = this.planMode.getState();
     const planModeContent = buildPlanModePrompt(planState.phase, planState.planMarkdown, planState.planFilePath);
