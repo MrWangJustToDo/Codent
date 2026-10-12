@@ -1,4 +1,4 @@
-import { clearAgentStore, createAgentFromConfig } from "@codent/app";
+import { clearAgentStore, createAgentSessionFromConfig } from "@codent/app";
 import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
@@ -36,7 +36,7 @@ export class ExtensionAgentAdapter implements AgentAdapter {
           env: this._env,
           ...(this._provider ? { provider: this._provider } : {}),
         });
-    const result = await createAgentFromConfig({ config, name: "extension-chat", host: this.agent.host });
+    const result = await createAgentSessionFromConfig({ config, name: "extension-chat", runtime: this.agent });
     this.host = this.agent.host;
     this.agentId = result.session.id;
     return result;

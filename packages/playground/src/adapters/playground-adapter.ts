@@ -1,4 +1,4 @@
-import { clearAgentStore, createAgentFromConfig } from "@codent/app";
+import { clearAgentStore, createAgentSessionFromConfig } from "@codent/app";
 import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
@@ -35,7 +35,7 @@ export class PlaygroundAgentAdapter implements AgentAdapter {
           env: this._env,
           ...(this._provider ? { provider: this._provider } : {}),
         });
-    const result = await createAgentFromConfig({ config, name: "playground-chat", host: this.agent.host });
+    const result = await createAgentSessionFromConfig({ config, name: "playground-chat", runtime: this.agent });
     this.host = this.agent.host;
     this.agentId = result.session.id;
     return result;

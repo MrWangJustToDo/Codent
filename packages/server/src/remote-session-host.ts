@@ -3,7 +3,7 @@
  * (create / connect / list / destroy) over the `/api/agent` HTTP plane.
  *
  * The host process constructs this when `--remote-session` is configured and
- * injects it into `createAgentFromConfig`; the UI layer stays Session-only.
+ * injects it into `createAgentSessionFromConfig`; the UI layer stays Session-only.
  */
 
 import { RemoteSessionClient } from "./remote-session-client.js";

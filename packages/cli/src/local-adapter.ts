@@ -32,7 +32,7 @@ export class LocalAgentAdapter implements AgentAdapter {
   }
 
   async initialize(config: AppConfig): Promise<InitResult> {
-    const { createAgentFromConfig } = await import("@codent/app");
+    const { createAgentSessionFromConfig } = await import("@codent/app");
     // Session-plane wiring is host-process owned: a local manager, or a remote HTTP
     // host when --remote-session is configured (agent loop runs server-side). Both
     // are held by one CodentAgent so the provider/env planes resolve per runtime.
@@ -48,7 +48,7 @@ export class LocalAgentAdapter implements AgentAdapter {
         ...(this._ownsEnv ? { ownsEnv: true } : {}),
       });
     }
-    const result = await createAgentFromConfig({ config, name: "local-chat", host: this.agent.host });
+    const result = await createAgentSessionFromConfig({ config, name: "local-chat", runtime: this.agent });
     return result;
   }
 
