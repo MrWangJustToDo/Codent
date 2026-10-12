@@ -6,7 +6,7 @@
  * 2. Provider plane: unified model pipeline — `.agents/config/models.json`
  *    via `loadModels({kind:"file"})` + `registerModelProviderForEntry`, then
  *    `resolveModelConfigFromProvider` for the final connection (same as the
- *    CLI's `createAgentFromConfig`). Falls back to `.env` (MODEL / MODEL_STYLE
+ *    CLI's `createAgentSessionFromConfig`). Falls back to `.env` (MODEL / MODEL_STYLE
  *    / BASE_URL / API_KEY — the field names the server reads) when no usable
  *    models.json exists.
  * 3. Session plane: a `CodentAgent` runtime (own env + provider + manager + host).
@@ -81,7 +81,7 @@ export async function createLocalSessionHost(
         await registerModelProviderForEntry(loaded);
         provider = getModelProvider();
         // Resolve the final connection through the registered provider (mirrors
-        // createAgentFromConfig). IM_BRIDGE_MODEL overrides the active entry.
+        // createAgentSessionFromConfig). IM_BRIDGE_MODEL overrides the active entry.
         const fromProvider = await resolveModelConfigFromProvider(
           config.model ? { model: config.model } : {},
           provider

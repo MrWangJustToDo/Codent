@@ -15,6 +15,8 @@ export interface AppConfig {
   systemPrompt: string;
   initialPrompt: string;
   maxIterations: number;
+  /** Max concurrent `task` subagents under this agent (core default 4). */
+  maxConcurrentTasks?: number;
   debug: boolean;
   mcpConfigPath: string;
   /**
@@ -38,6 +40,12 @@ export interface AppConfig {
    */
   remotePlanes?: boolean;
   /**
+   * Whether this host serves the Agent Client Protocol over stdio (`codent acp`) for
+   * editors / ACP clients. Undefined means no — only the release host wires the ACP
+   * subcommand, so the help screen omits it elsewhere.
+   */
+  acp?: boolean;
+  /**
    * Optional remote CoreEnv (workspace) base URL (`--remote-env` / REMOTE_ENV).
    * When set, hosts register a remote CoreEnv instead of the local Node env.
    */
@@ -53,6 +61,14 @@ export interface AppConfig {
   remoteSession?: string;
   /** Optional model metadata override (hosts may parse MODEL_* env vars) */
   modelInfo?: ModelInfo;
+  /**
+   * Set by the CLI bootstrap when any explicit model flag (`--model` / `--style` /
+   * `--base-url` / `--api-key`) was passed. It makes the session **isolated from the
+   * on-disk `.agents/config/models.json`**: the flags are authoritative, `initConfig`
+   * does not load the file, and `/models` lists nothing. Also why the first-run config
+   * editor is skipped (an explicit model counts as configured).
+   */
+  modelExplicit?: boolean;
   /**
    * Server-resolved model (e.g. `--remote-session` defers model to the server's
    * `.env`). Display-only: kept out of the agent-chat effect deps so the

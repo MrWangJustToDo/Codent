@@ -1,11 +1,12 @@
 // Adapter
 export * from "./adapter/types.js";
 export {
-  createAgentFromConfig,
+  createAgentSessionFromConfig,
   clearAgentStore,
   bindAgentSession,
-  type CreateAgentOptions,
-} from "./adapter/create-agent.js";
+  type AgentRuntimePort,
+  type CreateAgentSessionOptions,
+} from "./adapter/session-bootstrap.js";
 
 // Context
 export { AdapterProvider, useAdapter } from "./context/adapter-context.js";

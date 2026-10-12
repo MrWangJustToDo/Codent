@@ -57,6 +57,7 @@ export const useConfig = createState(
           config.systemPrompt || (config.remoteSession ? "" : await buildDefaultSystemPrompt());
         state.config.initialPrompt = config.initialPrompt || "";
         state.config.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+        state.config.maxConcurrentTasks = config.maxConcurrentTasks;
         state.config.debug = config.debug ?? false;
         state.config.apiKey = config.apiKey || "";
         state.config.mcpConfigPath = config.mcpConfigPath || "";
@@ -80,8 +81,13 @@ export const useConfig = createState(
           : config.remoteProvider
             ? { kind: "provider" as const, serverUrl: config.remoteProvider }
             : { kind: "file" as const };
+        // Explicit model flags (`--model` / `--style` / `--base-url` / `--api-key`) isolate
+        // the session from the on-disk `.agents/config/models.json`: the flags are
+        // authoritative and `/models` lists nothing. Remote provider/session hosts keep
+        // their server-owned list (the flags do not apply there).
+        const skipModelsConfig = config.modelExplicit === true && source.kind === "file";
         try {
-          const loaded = await loadModels(source);
+          const loaded = skipModelsConfig ? null : await loadModels(source);
           if (loaded) {
             if (!config.remoteSession) {
               // Apply the file's websearch toolConfig under the host value (per field): the
@@ -174,6 +180,7 @@ export const useConfig = createState(
         state.config.systemPrompt = "";
         state.config.initialPrompt = "";
         state.config.maxIterations = DEFAULT_MAX_ITERATIONS;
+        state.config.maxConcurrentTasks = undefined;
         state.config.debug = false;
         state.config.apiKey = "";
         state.config.mcpConfigPath = "";

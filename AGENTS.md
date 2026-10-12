@@ -116,7 +116,7 @@ hasCoreEnv();           // Check if registered
 
 ### ModelProvider — LLM plane (orthogonal to CoreEnv)
 
-LLM credentials are **not** part of CoreEnv. Hosts register a `ModelProvider` separately so local/remote workspace and local/remote keys combine freely. The provider is carried on the runtime: pass it to `CodentAgent.create({ provider })` (or `{ direct }`), and model resolution reads it back through the runtime — `resolveModelConfigFromProvider(input, provider?)` takes the runtime's provider and only falls back to the ambient registry when none is passed. `AgentSessionHost.getModelProvider()` exposes the local runtime's provider so `createAgentFromConfig` resolves per runtime (remote-session hosts omit it).
+LLM credentials are **not** part of CoreEnv. Hosts register a `ModelProvider` separately so local/remote workspace and local/remote keys combine freely. The provider is carried on the runtime: pass it to `CodentAgent.create({ provider })` (or `{ direct }`), and model resolution reads it back through the runtime — `resolveModelConfigFromProvider(input, provider?)` takes the runtime's provider and only falls back to the ambient registry when none is passed. `CodentAgent.getModelProvider()` exposes the runtime's provider (surfaced to the app as the `AgentRuntimePort` it consumes) so `createAgentSessionFromConfig` resolves per runtime (remote-session runtimes omit it).
 
 ```typescript
 import { CodentAgent, createDirectModelProvider } from "@codent/core";
@@ -139,7 +139,7 @@ const agent = await CodentAgent.create({
 
 The exclusivity is a **client** rule: a server (`pnpm start:server`) may itself register `REMOTE_ENV` (remote workspace; `REMOTE_PROVIDER` forwarding planned) so a `--remote-session` server chains further remote planes.
 
-`createAgentFromConfig` uses `resolveModelConfigFromProvider()` with the host's `getModelProvider()` (the runtime's provider; ambient only for hosts that omit it). All hosts share one model-config pipeline (`models-config.ts`): a local `.agents/config/models.json` (file), a remote provider (`/api/provider/info`), or a remote-session server (`/api/agent/models`) — `/models` switches the active entry/model. Remote mode forces `baseURL`/`apiKey` from the provider (re-forced after models.dev so upstream URLs cannot bypass). Remote mode forces the **model** too, so a remote entry's effective model is the one its provider serves (`/api/provider/info.model`, i.e. the server's `MODEL` env): `loadModels` reports it as `active.model` and guarantees it is in the entry's selectable list, because the recorded selection (a file's `active.model`, or the server's own models.json `active`) is never what a request carries. The serving side keeps the same invariant — `/api/provider/info` advertises the served model first and as `active`, `/api/agent/models` always offers the server's `.env` model. Validate: `pnpm --filter @codent/core run validate:provider-model-list`. `/api/env/vars` strips `API_KEY` / `*_API_KEY`. Footer shows `model · remote` when `providerMode === "remote"`.
+`createAgentSessionFromConfig` uses `resolveModelConfigFromProvider()` with the runtime's `getModelProvider()` (the runtime's provider; ambient only for runtimes that omit it). All hosts share one model-config pipeline (`models-config.ts`): a local `.agents/config/models.json` (file), a remote provider (`/api/provider/info`), or a remote-session server (`/api/agent/models`) — `/models` switches the active entry/model. Remote mode forces `baseURL`/`apiKey` from the provider (re-forced after models.dev so upstream URLs cannot bypass). Remote mode forces the **model** too, so a remote entry's effective model is the one its provider serves (`/api/provider/info.model`, i.e. the server's `MODEL` env): `loadModels` reports it as `active.model` and guarantees it is in the entry's selectable list, because the recorded selection (a file's `active.model`, or the server's own models.json `active`) is never what a request carries. The serving side keeps the same invariant — `/api/provider/info` advertises the served model first and as `active`, `/api/agent/models` always offers the server's `.env` model. Validate: `pnpm --filter @codent/core run validate:provider-model-list`. `/api/env/vars` strips `API_KEY` / `*_API_KEY`. Footer shows `model · remote` when `providerMode === "remote"`. Explicit model flags (`--model` / `--style` / `--base-url` / `--api-key`) set `AppConfig.modelExplicit`, which **isolates** the session from the on-disk `models.json` — `initConfig` skips loading it (so the flags are authoritative and `/models` lists nothing) and the first-run config editor is skipped; remote provider/session hosts keep their server-owned list.
 
 **Model capabilities** have one source of truth — `MODEL_CAPABILITIES` in `packages/core/src/models/types.ts`, from which the `ModelCapability` union and the extension `MODEL_CAPABILITY_FLAGS` are both derived. **Every member must be evidenceable** from metadata `deriveCapabilities` actually reads (`streaming` was granted to all entries with no field behind it, and `computer_use` had no source at all — both removed). `parseModelsDevModel` fills the list: `modalities.input` is authoritative per modality (`image`→`vision`, `audio`, `video`, `pdf`→`document`); `attachment` is a fallback used only when `modalities` is absent and grants `vision` alone (it cannot distinguish modalities, so it never implies `document`); `reasoning` / `tool_call` / `structured_output` map one-to-one; cache pricing implies `prompt_caching`. **Reasoning echo** is a separate `ModelInfo` concern, not a capability: `interleaved` (models.dev) sets `reasoningInterleaved` (the **adapter routing** signal — `capabilities.includes("reasoning")` alone is not enough) and `reasoningEchoField` (**only** the non-default `reasoning_details`; 15 of 7842 entries). The field is not consumed yet — TanStack's `extractReasoning` seam is `{ text: string }`, so structured/signed blocks cannot be carried. **`undefined` means "unknown" (permissive) and `[]` means "declared, none apply" (strict)** — `UsageTracker` holds `null` for the former, and a successful parse must return `[]`, never `undefined`, for a plain text model, so its modalities are stripped instead of sent to an endpoint that rejects them. Three hops preserve the distinction (`deriveCapabilities`, `mergeModelInfo`, `setCapabilities`). Validate: `pnpm --filter @codent/core run validate:model-capabilities`, `validate:capability-unknown-vs-none`, and `validate:reasoning-echo`.
 
@@ -157,7 +157,7 @@ interface AgentAdapter {
 }
 ```
 
-Shared initialization logic is in `createAgentFromConfig()` (`@codent/app/adapter/create-agent.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (Brave / websearch) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
+Shared initialization logic is in `createAgentSessionFromConfig()` (`@codent/app/adapter/session-bootstrap.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (Brave / websearch) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
 
 ### Bootstrap Sequences
 
@@ -168,7 +168,7 @@ loadEnv → parseCliArgs
   → registerCoreEnv(coreEnv) / registerModelProvider(provider)      (ambient fallback)
   → initConfig → useWorkspaceInfo.init(coreEnv)
   → render(<CoreEnvProvider value={coreEnv}><AdapterProvider value={new LocalAgentAdapter({ env, provider })}>…)
-  → adapter.initialize → CodentAgent.create({ env, provider }).host → createAgentFromConfig
+  → adapter.initialize → CodentAgent.create({ env, provider }) → createAgentSessionFromConfig
 ```
 
 **CLI (remote planes):**
@@ -188,7 +188,7 @@ loadEnv → parseCliArgs
 ConnectionGuard(/health) → env = createRemoteEnv(url); provider = apiKey ? direct : createRemoteProvider(url)
   → registerCoreEnv(env) / registerModelProvider(provider)          (ambient fallback)
   → initConfig → render(<CoreEnvProvider value={env}><AdapterProvider value={new ExtensionAgentAdapter({ env, provider })}>…)
-  → adapter.initialize → CodentAgent.create({ env, provider }).host → createAgentFromConfig
+  → adapter.initialize → CodentAgent.create({ env, provider }) → createAgentSessionFromConfig
 ```
 
 The same shape applies to the other hosts: `codent` (local release host), `acp` / `im-bridge` (local bootstrap), `playground` (WebContainer env), and `server` (one server-owned `CodentAgent` over its CoreEnv; the `/api/agent/*` plane drives its manager).
@@ -527,7 +527,7 @@ Use section separators in large files:
 
 Hosts should prefer `AgentSession` (`getSnapshot` / `dispatch` / `subscribe`) over reading `ManagedAgent` fields. Local: `createLocalAgentSession`. HTTP: `@codent/server/agent-session` / `@codent/server/client`'s `createRemoteAgentSessionHost` against `/api/agent/*`. Subagents reuse the same Session contract by id.
 
-**Host-owned session plane:** hosts construct the `AgentSessionHost` (local manager, or remote HTTP when `--remote-session`) and inject it into `createAgentFromConfig`; the UI layer never imports core runtime singletons (enforced by app's `validate:core-imports`). Remote client features: SSE auto-reconnect with exponential backoff, server heartbeat ping + client watchdog, remount seeds (`/tool-buffers`, `/summary-streams`) so in-flight tool output and summary streams survive reconnects; the retained `state` channel carries the session identity (`name`, `sessionId`) plus model identity (`model` / `modelInfo` / `reasoningEffort`), so commands and model switches sync without a full-snapshot refetch.
+**Host-owned session plane:** hosts build the runtime (`CodentAgent` — local manager, or one wrapping a remote HTTP host for `--remote-session`) and inject it (as the app's `AgentRuntimePort`) into `createAgentSessionFromConfig`, which creates the root session through `runtime.createSession` (so the runtime defaults apply); the UI layer never imports core runtime singletons (enforced by app's `validate:core-imports`). Remote client features: SSE auto-reconnect with exponential backoff, server heartbeat ping + client watchdog, remount seeds (`/tool-buffers`, `/summary-streams`) so in-flight tool output and summary streams survive reconnects; the retained `state` channel carries the session identity (`name`, `sessionId`) plus model identity (`model` / `modelInfo` / `reasoningEffort`), so commands and model switches sync without a full-snapshot refetch.
 
 All domain updates route through a single unified `AgentEventBus` (`agent/agent-event-bus`) — one type registry (`AgentEvents` + `AGENT_EVENT_META`), two dispatch modes: observer `emit` (sync, fire-and-forget, retained values) and interceptor `intercept` (async, ordered, cancel short-circuit; `tool:before:*` patterns). `AgentManager.of(agentId, parentId?)` mints per-agent scoped buses (subagent events up-flow to parent/root). `AgentSession` subscribes the scoped bus once and projects every observer event to its channel via `AGENT_EVENT_META[type].channel`, replaying retained values per subscriber. The former structured `log` channel was **removed** — log observability is provided exclusively by the persisted JSONL file sink (`.agents/logs/<sessionId>/agent.log`).
 
@@ -1164,7 +1164,7 @@ packages/
 ├── app/src/                           # @codent/app — shared UI layer
 │   ├── adapter/
 │   │   ├── types.ts                   # AgentAdapter, AppConfig, InitResult interfaces
-│   │   └── create-agent.ts            # Shared createAgentFromConfig() helper
+│   │   └── session-bootstrap.ts       # Shared createAgentSessionFromConfig() helper
 │   ├── app/                           # Main app components (App.tsx, Agent.tsx)
 │   ├── commands/                      # Slash commands (/help, /appearance, /mode, /models, /usage, /compact, /clear, /rename, /resume, /effort, /quit)
 │   ├── components/                    # React components (UserInput, EditDiff, Help, etc.)
@@ -1181,7 +1181,7 @@ packages/
 │   ├── index.tsx                      # Entry point: arg parsing, CoreEnv registration, render
 │   ├── args.ts                        # CLI argument parser (sync, no CoreEnv dependency)
 │   ├── model-env.ts                   # MODEL_* env → ModelInfo (host-owned, not core)
-│   └── local-adapter.ts              # LocalAgentAdapter (delegates to createAgentFromConfig)
+│   └── local-adapter.ts              # LocalAgentAdapter (delegates to createAgentSessionFromConfig)
 │
 ├── node/src/                          # @codent/node — Node.js CoreEnv implementation
 │   ├── index.ts                       # createNodeEnv() factory
@@ -1268,5 +1268,5 @@ Validate **once at the end of the task** (not after every small edit). Prefer sc
 4. **Type Exports** — Use `export type` for type-only exports.
 5. **CoreEnv is the single source of truth** — `rootPath` comes only from `getEnv().rootPath`, never from config objects. Tools access all platform APIs via `getEnv()`.
 6. **Tests** — The only `node:test` suite lives in `@codent/app` (`pnpm --filter @codent/app test`, which imports its own `dist`); everything else is validated by `validate:*` scripts and `pnpm typecheck`. CI runs lint + typecheck + build + the app suite on every PR.
-7. **Adapter pattern** — Both hosts (CLI, extension) implement `AgentAdapter` and delegate shared init logic to `createAgentFromConfig()` in `@codent/app`.
+7. **Adapter pattern** — Both hosts (CLI, extension) implement `AgentAdapter` and delegate shared init logic to `createAgentSessionFromConfig()` in `@codent/app`.
 8. **Process-global code registries (known multi-runtime limitation)** — the tool-presentation registry (`agent/tools/presentation/registry.ts`) and the `toModelOutput` registry (`agent/tools/runtime/to-model-output-registry.ts`) are **process-global**, keyed by tool name + `ownerId`. `ManagedAgent` namespaces `ownerId` by agent, which makes *removal* per-agent, but lookup (`getToolPresentation` / the tool-compact middleware) still returns the top of the global stack. Consequence: two runtimes that load different extensions declaring the **same tool name** with different `present`/`toModelOutput` cross-bind (last registered wins for both). Built-ins are unaffected (identical handlers, re-registration replaces the same owner). A per-agent registry threaded through the tool factories is the fix; it is deliberately out of scope here (a design change, not a migration gap).

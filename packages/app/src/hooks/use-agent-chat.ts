@@ -3,7 +3,9 @@ import { throttle } from "lodash-es";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toRaw } from "reactivity-store";
 
-import { bindAgentSession } from "../adapter/create-agent.js";
+import { bindAgentSession } from "../adapter/session-bootstrap.js";
+import { clearExtensionCommands } from "../commands/utils/registry.js";
+import { syncExtensionCommands } from "../commands/utils/sync-extension-commands.js";
 import { useAdapter } from "../context/adapter-context.js";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { relinkSessionModel } from "../utils/apply-model-selection.js";
@@ -208,14 +210,14 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
       void adapter.destroy();
     };
     // Deliberately NOT depending on config.model/baseURL/style/apiKey (or the whole
-    // `config` object): createAgentFromConfig writes the resolved provider values
+    // `config` object): createAgentSessionFromConfig writes the resolved provider values
     // back into the config store DURING adapter.initialize (remote-provider mode
     // always changes them). Depending on them here would flip the effect mid-init
     // and rebuild the session, racing with the stale init's host.create — the old
     // session ends up registered too (Header shows "2 sessions"). Only rebuild for
     // inputs that genuinely require a fresh session.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `config` intentionally excluded; see comment above.
-  }, [config.systemPrompt, config.maxIterations, config.mcpConfigPath, adapter, env]);
+  }, [config.systemPrompt, config.maxIterations, config.maxConcurrentTasks, config.mcpConfigPath, adapter, env]);
 
   useEffect(() => {
     if (!session) return;
@@ -249,6 +251,11 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
 
   useEffect(() => {
     if (!session) return;
+
+    // Extension slash commands live in the UI registry, sourced from the session — not
+    // from the bootstrap. Sync on every session (init + switch) and again whenever an
+    // extension is toggled (`extensions` channel) so `/skill`, `/mcp`, … stay current.
+    syncExtensionCommands(session);
 
     const setAgentStatus = useAgentStatus.getActions().setStatus;
 
@@ -291,6 +298,10 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
           // No store projection — Footer subscribes to the session `todos` channel directly.
           return;
         }
+        if (event.channel === "extensions") {
+          syncExtensionCommands(session);
+          return;
+        }
         if (event.channel === "lifecycle") {
           const payload = event.payload;
           if (payload.type === "session:save-error") {
@@ -300,11 +311,12 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
           handleToolLifecycleEvent(payload);
         }
       },
-      { channels: ["messages", "queues", "state", "todos", "lifecycle", "interaction"] }
+      { channels: ["messages", "queues", "state", "todos", "lifecycle", "interaction", "extensions"] }
     );
 
     return () => {
       unsub();
+      clearExtensionCommands();
     };
   }, [session]);
 

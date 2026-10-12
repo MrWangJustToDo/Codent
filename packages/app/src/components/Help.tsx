@@ -21,6 +21,8 @@ export const Help = () => {
   // `remotePlanes: false` hides the remote flags a host cannot honour.
   const name = config.productName || "codent";
   const remotePlanes = config.remotePlanes !== false;
+  // The ACP subcommand is wired only by the release host; `acp: true` opts in.
+  const acp = config.acp === true;
 
   // `--help` used to render and then hang: nothing in this branch ever ended the
   // process, and by the time it mounted the CoreEnv, the OS sandbox and the Ink
@@ -48,6 +50,7 @@ export const Help = () => {
         </Text>
         <Box paddingLeft={2} flexDirection="column">
           <Text>{name} [options] [prompt]</Text>
+          {acp && <Text>{name} acp - serve the agent over ACP on stdio (for editors / ACP clients)</Text>}
           <Text>{name} -h, --help</Text>
         </Box>
       </Box>
@@ -93,6 +96,12 @@ export const Help = () => {
               <Text color={COLORS.success}>--max-iterations</Text>
             </Box>
             <Text>Max agent loop iterations (default: 50)</Text>
+          </Box>
+          <Box>
+            <Box width={24}>
+              <Text color={COLORS.success}>--max-concurrent-tasks</Text>
+            </Box>
+            <Text>Max concurrent task subagents (default: 4)</Text>
           </Box>
           {remotePlanes && (
             <>

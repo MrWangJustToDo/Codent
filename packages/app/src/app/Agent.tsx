@@ -44,7 +44,7 @@ export const Agent = () => {
   useFlattenCacheCleanup();
 
   // The config store wraps state as DeepReadonly; downstream consumers
-  // (useAgentChat → adapter.initialize → createAgentFromConfig) treat it as a
+  // (useAgentChat → adapter.initialize → createAgentSessionFromConfig) treat it as a
   // mutable AppConfig. The store is the single owner, so a cast is safe here.
   const config = useConfig((s) => s.config) as AppConfig;
 

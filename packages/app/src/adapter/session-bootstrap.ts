@@ -1,22 +1,47 @@
 /**
- * Shared agent initialization — binds an {@link AgentSession} into the app.
+ * Shared session bootstrap — binds the runtime's root {@link AgentSession} into the app.
  *
- * The host process owns session-plane wiring: it constructs the
- * {@link AgentSessionHost} (local via `@codent/core`'s
- * `createLocalAgentSessionHost`, or remote via `@codent/server`'s
- * `createRemoteAgentSessionHost`) and injects it here. CoreEnv / model
- * provider registration likewise happens in the host process before render —
- * this module stays free of core runtime singletons.
+ * The host process owns the runtime: it builds a `CodentAgent` (which carries the CoreEnv
+ * and model provider) and passes that runtime's `host` here. This module only turns the
+ * resolved config into the root session and wires it into the app store — it creates no
+ * agent itself and reads no core runtime singleton.
+ *
+ * Extension slash commands are deliberately NOT synced here: they are a UI-layer concern
+ * and are kept current by `useAgentChat`'s session subscription (the `extensions` channel).
  */
 
 import { buildDefaultSystemPrompt, resolveModelConfigFromProvider } from "@codent/core";
 
-import { clearExtensionCommands, syncExtensionCommands } from "../commands";
 import { useAgent } from "../hooks/use-agent.js";
 import { useConfig } from "../hooks/use-config.js";
 
 import type { AppConfig, InitResult } from "./types.js";
-import type { AgentSession, AgentSessionHost } from "@codent/core";
+import type {
+  AgentSession,
+  AgentSessionCreateOptions,
+  AgentSessionCreateResult,
+  AgentSessionHost,
+  CoreEnv,
+  ModelProvider,
+} from "@codent/core";
+
+/**
+ * The minimal runtime surface the bootstrap needs to create + bind the root session.
+ *
+ * Structurally satisfied by `CodentAgent`, so the UI stays decoupled from the runtime class
+ * while session creation still goes through the runtime's `createSession` — applying the
+ * runtime's defaults instead of the raw host.
+ */
+export interface AgentRuntimePort {
+  /** The runtime's session host (bound into the app store). */
+  readonly host: AgentSessionHost;
+  /** Create a root session, applying the runtime's defaults. */
+  createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult>;
+  /** The runtime's workspace env (default system prompt). */
+  getEnv(): CoreEnv;
+  /** The runtime's model provider, or `undefined` (remote-session / no local provider). */
+  getModelProvider(): ModelProvider | undefined;
+}
 
 /** Wire the runtime's root AgentSession (+ Host) into the app store. */
 export function bindAgentSession(session: AgentSession | null, host?: AgentSessionHost | null): void {
@@ -26,18 +51,22 @@ export function bindAgentSession(session: AgentSession | null, host?: AgentSessi
   }
 }
 
-export interface CreateAgentOptions {
+export interface CreateAgentSessionOptions {
   config: AppConfig;
   name: string;
   /**
-   * Session plane owner, constructed by the host process (required).
-   * Local: `createLocalAgentSessionHost({ manager: agentManager })`.
-   * Remote: `createRemoteAgentSessionHost(baseUrl)` (`@codent/server`).
+   * The owning runtime (required) — `CodentAgent` satisfies {@link AgentRuntimePort}. Built
+   * by the host process (a local runtime, or one wrapping a remote
+   * `createRemoteAgentSessionHost(baseUrl)`); the app never constructs it.
    */
-  host: AgentSessionHost;
+  runtime: AgentRuntimePort;
 }
 
-export async function createAgentFromConfig({ config, name, host }: CreateAgentOptions): Promise<InitResult> {
+export async function createAgentSessionFromConfig({
+  config,
+  name,
+  runtime,
+}: CreateAgentSessionOptions): Promise<InitResult> {
   const { connection, modelInfo, providerMode } = await resolveModelConfigFromProvider(
     {
       model: config.model,
@@ -46,10 +75,9 @@ export async function createAgentFromConfig({ config, name, host }: CreateAgentO
       apiKey: config.apiKey,
       modelInfo: config.modelInfo,
     },
-    // Prefer the session host's runtime provider over the process-global registry,
-    // so a CodentAgent's LLM keys/baseURL resolve from its own runtime. Remote hosts
-    // omit it, falling back to the ambient provider (legacy behavior).
-    host.getModelProvider?.()
+    // The runtime's provider — so a CodentAgent's LLM keys/baseURL resolve from its own
+    // runtime (remote-session / no-provider runtimes leave ambient resolution).
+    runtime.getModelProvider()
   );
 
   if (!connection.model?.trim() && !config.remoteSession) {
@@ -68,13 +96,15 @@ export async function createAgentFromConfig({ config, name, host }: CreateAgentO
     providerMode,
   });
 
-  const { session, initialMessages } = await host.create({
+  const { session, initialMessages } = await runtime.createSession({
     name,
     model: connection.model,
     systemPrompt:
       config.systemPrompt ||
-      (config.remoteSession ? undefined : await buildDefaultSystemPrompt(undefined, host.getEnv?.())),
+      (config.remoteSession ? undefined : await buildDefaultSystemPrompt(undefined, runtime.getEnv())),
     maxIterations: config.maxIterations,
+    // Optional: pass only when set, so the runtime/agent default (4) applies otherwise.
+    ...(config.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: config.maxConcurrentTasks } : {}),
     mcpConfigPath: config.mcpConfigPath || undefined,
     extensionDirs: config.extensionDirs?.length ? config.extensionDirs : undefined,
     modelStyle: connection.style,
@@ -107,14 +137,12 @@ export async function createAgentFromConfig({ config, name, host }: CreateAgentO
   // old init's session could overwrite the store unconditionally (no currentInitId
   // guard here). The caller binds after its initId guard, so a stale init's session
   // never enters the store.
-  useAgent.getActions().setHost(host);
-  syncExtensionCommands(session);
+  useAgent.getActions().setHost(runtime.host);
 
-  return { host, session, ...(initial.length ? { initialMessages: initial } : {}) };
+  return { host: runtime.host, session, ...(initial.length ? { initialMessages: initial } : {}) };
 }
 
 export function clearAgentStore(): void {
-  clearExtensionCommands();
   useAgent.getActions().setHost(null);
   useAgent.getActions().setSession(null);
 }

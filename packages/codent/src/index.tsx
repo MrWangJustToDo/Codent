@@ -59,8 +59,19 @@ installAgentLogProcessGuards();
 
 // `codent acp` — headless Agent Client Protocol server. Intercepted before the
 // TUI boots: stdout must carry only JSON-RPC frames (never a rendered transcript).
+// Flags after the subcommand configure the model directly (`codent acp --model …`).
 if (isAcpRequested(argv)) {
-  await runAcpCommand();
+  const acpConfig = parseCliArgs(argv.slice(1));
+  await runAcpCommand(
+    acpConfig.modelExplicit
+      ? {
+          model: acpConfig.model,
+          style: acpConfig.style,
+          baseURL: acpConfig.baseURL,
+          apiKey: acpConfig.apiKey,
+        }
+      : undefined
+  );
 }
 
 const appConfig = parseCliArgs(argv);
@@ -68,6 +79,7 @@ const appConfig = parseCliArgs(argv);
 // Cosmetic host identity. Purely display: help screen + OSC-0 terminal title.
 appConfig.productName = "codent";
 appConfig.remotePlanes = false;
+appConfig.acp = true;
 
 if (isHelpRequested(argv)) {
   useConfig.getActions().setHelpRequested(true);

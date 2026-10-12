@@ -60,6 +60,9 @@ BASE_URL=https://openrouter.ai/api/v1
 API_KEY=sk-or-v1-xxx
 maxIterations=30
 
+# Optional — max concurrent `task` subagents (default 4)
+MAX_CONCURRENT_TASKS=4
+
 # Optional — websearch providers (Brave → Parallel → Exa → Tavily → DuckDuckGo)
 BRAVE_API_KEY=...           # Brave Search API (keyed)
 EXA_API_KEY=...             # Exa keyed tier (free public MCP without it)
@@ -81,6 +84,30 @@ codent --resume             # pick a session
 ```
 
 `codent -h` lists every flag and keyboard shortcut.
+
+### Agent Client Protocol (ACP)
+
+`codent acp` (alias `codent --acp`) serves the agent over the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdio, so editors such as Zed or JetBrains can drive it. It is headless — stdout carries only
+JSON-RPC frames, never the TUI — and is intercepted before the terminal UI boots.
+
+An ACP client must spawn it with **cwd = the workspace root**. The model is resolved three ways, in
+priority order: flags on the command (`codent acp --model … --base-url … --api-key …`, which are
+authoritative and skip `models.json`), the on-disk `.agents/config/models.json`, or `MODEL` /
+`BASE_URL` / `API_KEY` in `.env`. Without any of them it exits with a clear error.
+
+```bash
+codent acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
+```
+
+```jsonc
+// Zed settings.json — run the local codent as an ACP agent
+{ "agent_servers": { "codent": { "command": "codent", "args": ["acp"] } } }
+```
+
+The development host `@codent/cli` does not expose this subcommand. The `@codent/acp` package also
+publishes a standalone `codent-acp` bin (bootstrapping the same local runtime) if you prefer to
+depend on it directly instead of the bundled `codent acp`.
 
 ## Difference from `@codent/cli`
 

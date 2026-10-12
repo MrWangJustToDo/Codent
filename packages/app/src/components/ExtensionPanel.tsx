@@ -2,7 +2,6 @@ import { Box, Text, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import { toRaw } from "reactivity-store";
 
-import { syncExtensionCommands } from "../commands/utils/sync-extension-commands.js";
 import { useAgent } from "../hooks/use-agent.js";
 import { useExtensionPanel } from "../hooks/use-extension-panel.js";
 import { COLORS } from "../theme/colors.js";
@@ -153,7 +152,6 @@ export const ExtensionPanel = () => {
     const info = session.getSnapshot().extensions.extensions.find((i) => i.id === id);
     if (!info) return;
     await session.dispatch({ type: "extension.toggle", id, enabled: !info.enabled });
-    syncExtensionCommands(session);
     refresh();
   };
 

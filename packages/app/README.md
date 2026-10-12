@@ -25,7 +25,7 @@ Shared UI layer (CLI + extension). Agent control is **Session-only**: hooks, lay
 
 | Symbol | File |
 |--------|------|
-| `resolveModelConfigFromProvider`, `buildDefaultSystemPrompt` | `adapter/create-agent.ts` |
+| `resolveModelConfigFromProvider`, `buildDefaultSystemPrompt` | `adapter/session-bootstrap.ts` |
 | `buildDefaultSystemPrompt` | `hooks/use-config.ts` (default prompt fill) |
 
 Remote session Host bootstrap (`createRemoteAgentSessionHost`) replaces the Local exception when `--remote-session` is used.

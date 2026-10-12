@@ -15,10 +15,18 @@ pnpm --filter @codent/acp build && node packages/acp/dist/bin.mjs
 
 # or via the release host
 codent acp          # installed via: npm i -g codent-cli
+
+# configure the model directly (authoritative; skips .agents/config/models.json)
+codent acp  --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
+codent-acp  --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
 ```
 
-The workspace root is the process `cwd` (our CoreEnv root is process-global), so a
-client should spawn the agent **inside** the workspace it wants it to see.
+The workspace root is the process `cwd` — the local CoreEnv is built from it
+(`createNodeEnv`) — so a client should spawn the agent **inside** the workspace it
+wants it to see.
+
+Model resolution order: `--model` / `--base-url` / `--api-key` flags (authoritative, skip
+`models.json`) > `.agents/config/models.json` > `.env` (`MODEL` / `BASE_URL` / `API_KEY`).
 
 ## Use in-process
 

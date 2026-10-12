@@ -112,6 +112,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
   const envModel = getEnv("MODEL") || getEnv("model");
   const envMaxIterations = getEnv("MAX_ITERATIONS") || getEnv("maxIterations");
   const envMaxIter = envMaxIterations ? parseInt(envMaxIterations, 10) : CLI_DEFAULT_MAX_ITERATIONS;
+  const envMaxConcurrentTasks = getEnv("MAX_CONCURRENT_TASKS") || getEnv("maxConcurrentTasks");
 
   const cliStyle = parseCliStyle(getFlagString(parsed, "", "style"));
   const cliBaseURL = getFlagString(parsed, "", "base-url", "baseURL", "url", "u");
@@ -180,6 +181,12 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     .map((d) => d.trim())
     .filter((d) => d.length > 0);
 
+  const maxConcurrentTasks = getFlagNumber(
+    parsed,
+    envMaxConcurrentTasks ? parseInt(envMaxConcurrentTasks, 10) : NaN,
+    "max-concurrent-tasks"
+  );
+
   return {
     model: connection.model,
     style: connection.style,
@@ -188,6 +195,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     systemPrompt: getFlagString(parsed, "", "system", "s"),
     initialPrompt: parsed.positional.join(" "),
     maxIterations: getFlagNumber(parsed, isNaN(envMaxIter) ? CLI_DEFAULT_MAX_ITERATIONS : envMaxIter, "max-iterations"),
+    ...(Number.isFinite(maxConcurrentTasks) ? { maxConcurrentTasks } : {}),
     debug: getFlagBoolean(parsed, "debug", "d"),
     mcpConfigPath: getFlagString(parsed, envMcpConfig, "mcp-config"),
     extensionDirs,
