@@ -52,4 +52,4 @@
 - [x] 6.2 Promote `agentManager` to a documented ambient-only, deprecated surface in `AGENTS.md`.
 - [x] 6.3 Update `AGENTS.md` bootstrap sequences (CLI/extension) to show `CodentAgent.create`; re-check the file-structure map after all moves.
 - [x] 6.4 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `validate:core-public-exports`.
-- [ ] 6.5 Archive the change and sync its spec deltas into `openspec/specs/`.
+- [x] 6.5 Archive the change and sync its spec deltas into `openspec/specs/`.
