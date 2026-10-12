@@ -157,7 +157,7 @@ interface AgentAdapter {
 }
 ```
 
-Shared initialization logic is in `createAgentSessionFromConfig()` (`@codent/app/adapter/session-bootstrap.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (Brave / websearch) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
+Shared initialization logic is in `createAgentSessionFromConfig()` (`@codent/app/adapter/session-bootstrap.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (websearch keys / preferred provider) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
 
 ### Bootstrap Sequences
 

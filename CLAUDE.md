@@ -11,12 +11,14 @@ See @AGENTS.md for full architecture, code conventions, and detailed guidelines.
 - **`@codent/core`** — Runtime-agnostic core: ManagedAgent, AgentSession, tools, models, CoreEnv
 - **`@codent/app`** — Shared UI: React, hooks, commands. Session-only for agent control
 - **`@codent/cli`** — Terminal host using @my-react/react-terminal
+- **`@codent/acp`** — Agent-side Agent Client Protocol host — serves the agent over ACP (stdio) so editors (Zed/JetBrains) and ACP→IM bridges drive it without host-specific code; `codent acp`
 - **`@codent/node`** — Node.js CoreEnv implementation (filesystem, shell, OS sandbox, code-mode `createIsolateDriver` via `isolated-vm`)
 - **`@codent/server`** — CoreEnv HTTP + provider proxy + Agent Session routes
 - **`@codent/extension`** — Chrome extension host using WXT (needs a server)
 - **`@codent/playground`** — In-browser WebContainer host
 - **`@codent/mcp-server`** — MCP server for external tool integration
 - **`@codent/im-bridge`** — Generic IM bridge (Telegram adapter); AgentSession client — remote mode (server resolves model) or in-process local mode
+- **`codent-cli`** — Release host: local-only terminal CLI published as one fully bundled tarball (app / core / node / acp inlined); installed command is `codent`
 
 ## Commands
 

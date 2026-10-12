@@ -4,7 +4,7 @@
 [![npm](https://img.shields.io/npm/v/codent-cli?label=npm)](https://www.npmjs.com/package/codent-cli)
 [![Node](https://img.shields.io/badge/Node-24%2B-339933?logo=node.js)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-9%2B-F69220?logo=pnpm)](https://pnpm.io)
-[![TanStack AI](https://img.shields.io/badge/TanStack%20AI-0.48-000000?logo=vercel)](https://tanstack.com/ai)
+[![TanStack AI](https://img.shields.io/badge/TanStack%20AI-0.68-000000?logo=vercel)](https://tanstack.com/ai)
 
 A **runtime-agnostic** AI coding agent — same core logic, runs in terminal, Chrome extension, or WebContainer playground. Workspace, LLM provider, and agent session are three orthogonal planes; mix local/remote however you want. Built on [TanStack AI SDK](https://tanstack.com/ai).
 
@@ -164,6 +164,7 @@ Client planes combine per the boundary rules below; every row is a working confi
 | `@codent/core` | Runtime-agnostic core: `ManagedAgent`, AgentSession, tools, models, MCP, skills, memory, compaction, telemetry |
 | `@codent/app` | Shared UI: React components, hooks, commands. **Session-only** for agent control |
 | `@codent/cli` | Terminal host using [@my-react/react-terminal](https://github.com/MrWangJustToDo/MyReact) |
+| `@codent/acp` | Agent-side Agent Client Protocol host — serves the agent over ACP (stdio) for editors and ACP→IM bridges; bundled into the release `codent acp` |
 | `@codent/node` | Node.js CoreEnv: native filesystem, shell, OS sandbox |
 | `@codent/server` | CoreEnv HTTP + provider proxy + Agent Session routes + type-safe clients |
 | `@codent/extension` | Chrome extension host (WXT); requires a running server |
@@ -280,7 +281,13 @@ codent --version                        # print installed version
 ```
 
 > Published as **`codent-cli`** on npm (the command is still `codent`). Currently a
-> **pre-release** — `0.0.1-beta.4`. Requires **Node.js 24+**.
+> **pre-release** — `0.0.1-beta.5`. Requires **Node.js 24+**.
+
+**Editor integration (ACP).** `codent acp` serves the agent over the
+[Agent Client Protocol](https://agentclientprotocol.com) on stdio, so editors such as Zed or
+JetBrains drive it directly. It is headless — stdout carries only JSON-RPC frames — and an ACP
+client must spawn it with **cwd = the workspace root**. See
+[packages/codent/README.md](packages/codent/README.md#agent-client-protocol-acp).
 
 Runtime data (sessions, memory, plans, …) is written to `./.agents/` in the directory you run from.
 
@@ -317,9 +324,12 @@ MODEL=deepseek-v4-flash
 # Sandbox: native (no sandbox) | local (OS sandbox)
 SANDBOX_ENV=native
 
-# Optional websearch (default: free Exa MCP, no key required)
-# BRAVE_API_KEY=...
-# WEBSEARCH_PROVIDER=brave   # or exa / duckduckgo / auto
+# Optional websearch (no key required — free providers are used and spread by session)
+# BRAVE_API_KEY=...        # Brave Search API (keyed)
+# EXA_API_KEY=...          # Exa keyed tier (free public MCP without it)
+# PARALLEL_API_KEY=...     # Parallel keyed tier (free public MCP without it)
+# TAVILY_API_KEY=...       # Tavily (has no free tier — required to use it)
+# WEBSEARCH_PROVIDER=brave # pin one: brave | parallel | exa | tavily | duckduckgo | auto
 
 # Remote planes (CLI: --remote-env and --remote-provider combine freely;
 # --remote-session is exclusive — cannot be combined with the other two.
@@ -429,7 +439,7 @@ mention-only.
 |----------|-------|
 | **File** | `read_file`, `write_file`, `edit_file`, `delete_file`, `glob`, `grep`, `tree`, `list_file` |
 | **System** | `run_command`, `get_command_output`, `kill_command` |
-| **Web** | `websearch` (Brave when host passes `toolConfig.websearch.braveApiKey`, else free Exa MCP, else DuckDuckGo), `webfetch` |
+| **Web** | `websearch` (a configured keyed provider — Brave / Exa / Parallel / Tavily — else free providers spread by session across Parallel / Exa, else DuckDuckGo), `webfetch` |
 | **Agent** | `task` (subagents), `ask_user`, `todo` |
 | **Skills** | `list_skills`, `load_skill` |
 | **Memory** | `memory_list`, `memory_read`, `memory_write` |
