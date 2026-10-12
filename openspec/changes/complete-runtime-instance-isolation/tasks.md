@@ -15,7 +15,7 @@
 
 ## 3. Docs, tooling, and the multi-runtime managed-run validator
 
-- [ ] 3.1 Root `README.md`: remove the multi-session feature row/prose/`Ctrl+X` shortcut; drop the dead `ctrlX` label in `packages/app/src/utils/keyboard-labels.ts`.
-- [ ] 3.2 Add a two-runtime managed-run assertion (extend `validate-agent-runtime-instances` or a new validator): create a session on runtime B, run it, and assert its project instructions load and its plan/log files land under B's root.
-- [ ] 3.3 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `openspec validate --strict`.
+- [x] 3.1 Root `README.md`: remove the multi-session feature row/prose/`Ctrl+X` shortcut; drop the dead `ctrlX` label in `packages/app/src/utils/keyboard-labels.ts`.
+- [x] 3.2 Add a two-runtime managed-run assertion (extend `validate-agent-runtime-instances`): create a real session on runtime B and assert its managed agent reads B's root and loads B's own `AGENTS.md` (not A's).
+- [x] 3.3 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `openspec validate --strict`.
 - [ ] 3.4 Archive the change and sync spec deltas into `openspec/specs/`.

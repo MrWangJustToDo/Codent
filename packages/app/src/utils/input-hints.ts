@@ -3,8 +3,8 @@
  *
  * Copy is grounded in the real shortcut reference (`getKeyboardShortcutSections`
  * in utils/keyboard-labels.js) and the registered slash commands — never add a
- * chord the app does not handle (e.g. `KeyLabel.ctrlX` is labelled but unused),
- * and keep the `/help` wording in sync when a command description changes.
+ * chord the app does not actually handle, and keep the `/help` wording in sync
+ * when a command description changes.
  *
  * Rotation is a **shuffled pass without repeats**: every hint is shown once before
  * any hint repeats, and a fresh pass never opens with the hint that is still on

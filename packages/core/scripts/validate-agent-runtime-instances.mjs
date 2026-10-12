@@ -9,9 +9,19 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   AgentRuntime,
@@ -159,6 +169,99 @@ const fakeEnv = (root) => ({
   const sb = JSON.stringify(outB);
   assert.ok(sa.includes("a-only.txt") && !sa.includes("b-only.txt"), "runtime A's tool lists only A's workspace");
   assert.ok(sb.includes("b-only.txt") && !sb.includes("a-only.txt"), "runtime B's tool lists only B's workspace");
+
+  await agentA.dispose();
+  await agentB.dispose();
+  rmSync(rootA, { recursive: true, force: true });
+  rmSync(rootB, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 5. A managed agent on a second runtime loads ITS OWN project instructions
+//
+// The ambient-reads bug this guards: project-instruction loading used the process-global
+// getEnv(), so runtime B (a different root) either loaded A's AGENTS.md or nothing. This
+// creates a real managed agent on each runtime and asserts each reads its own root.
+// ---------------------------------------------------------------------------
+{
+  const realEnv = (root) => {
+    const abs = (p) => (p.startsWith("/") ? p : join(root, p));
+    return {
+      rootPath: root,
+      path: {
+        resolve: (...a) => a.join("/"),
+        join: (...a) => a.join("/"),
+        dirname: (p) => p.slice(0, p.lastIndexOf("/")) || "/",
+        basename: (p, ext) => {
+          const b = p.split("/").pop() ?? p;
+          return ext && b.endsWith(ext) ? b.slice(0, -ext.length) : b;
+        },
+        extname: (p) => p.slice(p.lastIndexOf(".")),
+        isAbsolute: (p) => p.startsWith("/"),
+        normalize: (p) => p,
+        parse: (p) => {
+          const base = p.split("/").pop() ?? "";
+          const i = base.lastIndexOf(".");
+          return { root: "", dir: "", base, name: i > 0 ? base.slice(0, i) : base, ext: i > 0 ? base.slice(i) : "" };
+        },
+        getSep: () => "/",
+      },
+      fs: {
+        exists: async (p) => existsSync(abs(p)),
+        readdir: async (p) =>
+          readdirSync(abs(p)).map((name) => {
+            const s = statSync(join(abs(p), name));
+            return { name, type: s.isDirectory() ? "directory" : "file", size: s.size, mtime: s.mtime };
+          }),
+        stat: async (p) => {
+          const s = statSync(abs(p));
+          return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size, mtime: s.mtime };
+        },
+        readFile: async (p) => readFileSync(abs(p), "utf-8"),
+        writeFile: async (p, content) => {
+          mkdirSync(dirname(abs(p)), { recursive: true });
+          writeFileSync(abs(p), content);
+        },
+        mkdir: async (p) => mkdirSync(abs(p), { recursive: true }),
+        remove: async (p) => rmSync(abs(p), { recursive: true, force: true }),
+        appendFile: async (p, content) => {
+          mkdirSync(dirname(abs(p)), { recursive: true });
+          appendFileSync(abs(p), content);
+        },
+      },
+      getPlatform: async () => "linux",
+      getArch: async () => "x64",
+      getEnv: async () => ({}),
+      homedir: async () => root,
+      runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+      fetch: async () => new Response(""),
+    };
+  };
+
+  const rootA = mkdtempSync(join(tmpdir(), "rt-managed-a-"));
+  const rootB = mkdtempSync(join(tmpdir(), "rt-managed-b-"));
+  writeFileSync(join(rootA, "AGENTS.md"), "# Project A\n\nA-ONLY-MARKER\n");
+  writeFileSync(join(rootB, "AGENTS.md"), "# Project B\n\nB-ONLY-MARKER\n");
+
+  const agentA = await CodentAgent.create({
+    env: realEnv(rootA),
+    name: "A",
+    direct: { model: "m-a", style: "openai", baseURL: "http://a", apiKey: "ka" },
+  });
+  const agentB = await CodentAgent.create({
+    env: realEnv(rootB),
+    name: "B",
+    direct: { model: "m-b", style: "openai", baseURL: "http://b", apiKey: "kb" },
+  });
+
+  const { session: sessionB } = await agentB.createSession({ name: "b", model: "m-b" });
+  const managedB = agentB.getManager()?.getAgent(sessionB.id);
+  assert.ok(managedB, "runtime B created a managed agent");
+  assert.equal(managedB.getCoreEnv().rootPath, rootB, "the managed agent reads its runtime root");
+  const docB = managedB.getAgentDocContent();
+  assert.ok(docB && docB.includes("B-ONLY-MARKER"), "runtime B loads its own AGENTS.md");
+  assert.ok(!docB.includes("A-ONLY-MARKER"), "runtime B does not load runtime A's AGENTS.md");
 
   await agentA.dispose();
   await agentB.dispose();
