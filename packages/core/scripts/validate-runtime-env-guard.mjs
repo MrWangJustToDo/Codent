@@ -43,10 +43,6 @@ const SCAN_DIRS = [
 /** Files allowed to reference the global env, with the reason. */
 const ALLOWLIST = new Map([
   [
-    "agent/tools/runtime/define-tool.ts",
-    "the ambient fallback Proxy — resolves getEnv() only when a tool runs without a run context",
-  ],
-  [
     "agent/tools/command-safety/command-parser.ts",
     "resolves the host's shell kind + grammar; host-level, not workspace-scoped data",
   ],

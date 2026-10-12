@@ -1,6 +1,6 @@
 import { toolDefinition, type InferSchemaType, type SchemaInput, type ServerTool, type ClientTool } from "@tanstack/ai";
 
-import { getEnv } from "../../../env";
+import { getAmbientEnv } from "../../../env/ambient.js";
 import { declareToolPresentation } from "../presentation/registry.js";
 import { withTimeoutAbort } from "../util/abort-timeout.js";
 
@@ -46,23 +46,6 @@ export interface ToolExecuteCtx {
 
 export type { ModelToolContent, ToModelOutputContext };
 export { toModelOutputRegistry };
-
-/**
- * Lazily-resolved ambient env for tool executions with no run context (ad-hoc / test calls).
- * A Proxy so an env-free tool path never touches `getEnv()` — only the first property read
- * resolves it, matching the pre-runtime behaviour where a tool only reached the env when it
- * actually used one.
- */
-let ambientEnvProxy: ResolvedCoreEnv | null = null;
-function ambientEnv(): ResolvedCoreEnv {
-  if (!ambientEnvProxy) {
-    ambientEnvProxy = new Proxy({} as ResolvedCoreEnv, {
-      get: (_target, prop, receiver) => Reflect.get(getEnv(), prop, receiver),
-      has: (_target, prop) => prop in getEnv(),
-    });
-  }
-  return ambientEnvProxy;
-}
 
 // ============================================================================
 // Factories
@@ -168,7 +151,7 @@ export function defineServerTool<
       abortSignal: ctx?.abortSignal,
       agentId: runContext?.agentId,
       // The run context carries the owning runtime's env; ambient (lazy) only for ad-hoc calls.
-      coreEnv: runContext?.coreEnv ?? ambientEnv(),
+      coreEnv: runContext?.coreEnv ?? getAmbientEnv(),
       timeoutMs: config.timeoutMs,
     };
 
