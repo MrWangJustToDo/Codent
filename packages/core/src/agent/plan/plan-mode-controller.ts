@@ -5,6 +5,7 @@ import { savePlanFile } from "./plan-store.js";
 import { extractGoalFromPlanMarkdown } from "./plan-summary.js";
 import { parseVerificationItemsFromPlanMarkdown } from "./plan-verification.js";
 
+import type { ResolvedCoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { TodoManager } from "../todo/todo-manager.js";
 
@@ -28,6 +29,8 @@ export interface PlanModeState {
 
 export interface PlanModeControllerDeps {
   getTodoManager: () => TodoManager | null;
+  /** Owning runtime's env, so plan files land under the runtime root. Ambient when omitted. */
+  getCoreEnv?: () => ResolvedCoreEnv;
   /** Invalidate runner / notify UI when phase changes. */
   onPhaseChange?: () => void;
 }
@@ -344,9 +347,12 @@ export class PlanModeController {
     const persistPath = options?.existingRelativePath ?? this.planFilePath ?? undefined;
     const nameHint = options?.nameHint ?? extractGoalFromPlanMarkdown(planMarkdown);
     try {
-      const { path } = await savePlanFile(planMarkdown, nameHint, {
-        existingRelativePath: persistPath,
-      });
+      const { path } = await savePlanFile(
+        planMarkdown,
+        nameHint,
+        { existingRelativePath: persistPath },
+        this.deps.getCoreEnv?.()
+      );
       this.planFilePath = path;
     } catch {
       // Non-fatal: keep in-memory plan even if disk write fails

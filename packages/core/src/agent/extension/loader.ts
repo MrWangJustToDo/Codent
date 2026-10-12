@@ -2,7 +2,7 @@
  * ExtensionLoader — discover and load extensions from factories and filesystem dirs.
  */
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import { isExtensionModuleFile, pathToFileUrl, resolveExtensionDir } from "./paths.js";
 
@@ -72,6 +72,9 @@ export async function normalizeExtensionExport(moduleExport: unknown, fallbackId
 export class ExtensionLoader {
   private factories = new Map<string, ExtensionFactory>();
 
+  /** Owning runtime's env, so discovery reads the runtime root. Ambient when omitted. */
+  constructor(private readonly env?: ResolvedCoreEnv) {}
+
   registerFactory(id: string, factory: ExtensionFactory): void {
     this.factories.set(id, factory);
   }
@@ -118,13 +121,13 @@ export class ExtensionLoader {
    * Missing or inaccessible directories (e.g. home path outside CoreEnv workspace) are skipped.
    */
   async discoverFiles(dirs: string[]): Promise<{ files: DiscoveredExtensionFile[]; errors: Error[] }> {
-    const env = getEnv();
+    const env = this.env ?? getEnv();
     const files: DiscoveredExtensionFile[] = [];
     const errors: Error[] = [];
     const seenIds = new Set<string>();
 
     for (const dir of dirs) {
-      const absDir = resolveExtensionDir(dir);
+      const absDir = resolveExtensionDir(dir, this.env);
       try {
         const exists = await env.fs.exists(absDir);
         if (!exists) continue;

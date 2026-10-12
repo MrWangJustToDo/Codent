@@ -487,6 +487,7 @@ export class ManagedAgent {
 
     this.planMode = new PlanModeController({
       getTodoManager: () => this.getTodoManager(),
+      getCoreEnv: () => this.getCoreEnv(),
       onPhaseChange: () => {
         this.invalidateRunner();
         this.emitStateChange();
@@ -1019,7 +1020,7 @@ export class ManagedAgent {
     this.logSinkDetach?.();
     // Bind through the built-in log extension (which tracks the sink for teardown); fall back to
     // the seam's own convenience attach for a standalone log with no manager.
-    const options = { dir };
+    const options = { dir, env: this.getCoreEnv() };
     this.logSinkDetach =
       this.manager?.getLogExtension()?.attachSink(this.log, options) ?? this.log.attachFileSink(options);
     // Track for the process-level crash/exit guards.
@@ -1210,7 +1211,7 @@ export class ManagedAgent {
    * agents (see `agent-factory`), matching `setAgentDocContent`.
    */
   async primeSessionHistoryGate(): Promise<void> {
-    this.sessionHistoryPresent = await hasSessionHistory();
+    this.sessionHistoryPresent = await hasSessionHistory(this.getCoreEnv());
   }
 
   getAgentDocContent(): string {
@@ -1466,7 +1467,7 @@ export class ManagedAgent {
    */
   private async readChangedInstructionContext(): Promise<string | undefined> {
     try {
-      const current = await readInstructionContextState();
+      const current = await readInstructionContextState(this.getCoreEnv());
       // Baseline: the first evaluation only stores the snapshot without injecting —
       // the frozen system prompt already carries the initial instructions. This also
       // covers the restore-from-session case (fresh instance, no prior snapshot).
@@ -1483,7 +1484,7 @@ export class ManagedAgent {
       // the payload stays stable across turns (prompt-cache friendly). A fresh
       // change re-reads the newest file content into the section.
       this.instructionContextActive = true;
-      const loaded = await loadLatestInstructionContent();
+      const loaded = await loadLatestInstructionContent(this.getCoreEnv());
       return formatInstructionContextSection(loaded);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1596,7 +1597,7 @@ export class ManagedAgent {
   }
 
   async listWorkspacePlans(): Promise<string[]> {
-    return listWorkspacePlansHelper();
+    return listWorkspacePlansHelper(this);
   }
 
   // ============================================================================
@@ -1709,7 +1710,7 @@ export class ManagedAgent {
    * own map of `run_in_background` jobs, so job ids/state never leak across agents.
    */
   getCommandJobRegistry(): CommandJobRegistry {
-    this.commandJobRegistry ??= new CommandJobRegistry();
+    this.commandJobRegistry ??= new CommandJobRegistry(this.getCoreEnv());
     return this.commandJobRegistry;
   }
 

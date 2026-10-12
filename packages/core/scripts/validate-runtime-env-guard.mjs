@@ -4,8 +4,9 @@
  * `getEnv()` / `getModelProvider()` registries.
  *
  * Allowed forms:
- *   - a fallback/default: `x ?? getEnv()`, `= getEnv()` (injected value wins; ambient only when
- *     no runtime was supplied — the documented compatibility seam);
+ *   - an explicit fallback: `x ?? getEnv()` (the injected value wins; ambient only when no runtime
+ *     was supplied — the documented compatibility seam). A bare assignment (`const env = getEnv()`)
+ *     is NOT a fallback and is reported; it reads the ambient registry unconditionally.
  *   - the explicit allowlist below, each with the reason it is not a workspace-scoped read.
  *
  * Run: pnpm --filter @codent/core run validate:runtime-env-guard
@@ -18,7 +19,26 @@ import { fileURLToPath } from "node:url";
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
 /** Run-path directories whose files must not read the global env directly. */
-const SCAN_DIRS = ["agent/tools", "agent/media", "agent/persistence", "agent/mcp", "managers"];
+const SCAN_DIRS = [
+  "agent/tools",
+  "agent/media",
+  "agent/persistence",
+  "agent/mcp",
+  "managers",
+  "agent/prompt",
+  "agent/turn-context",
+  "agent/plan",
+  "agent/log",
+  "agent/extension",
+  "agent/skills",
+  "agent/memory",
+  "agent/subagent",
+  "agent/runner",
+  "agent/compaction",
+  "agent/ui",
+  "agent/approval",
+  "agent/todo",
+];
 
 /** Files allowed to reference the global env, with the reason. */
 const ALLOWLIST = new Map([
@@ -31,12 +51,8 @@ const ALLOWLIST = new Map([
     "resolves the host's shell kind + grammar; host-level, not workspace-scoped data",
   ],
   [
-    "agent/tools/util/command-output-log.ts",
-    "background-job log files; the job registry is converged to the runtime in Stage 4",
-  ],
-  [
-    "agent/tools/util/preview-edit.ts",
-    "public host helper with no internal caller; ambient env is the intended source",
+    "agent/extension/runner.ts",
+    "resolveCoreEnv()'s final fallback: injected getCoreEnv wins, then a hasCoreEnv()-guarded ambient read, then a non-throwing stub for standalone runners",
   ],
 ]);
 
@@ -71,7 +87,10 @@ for (const rel of SCAN_DIRS) {
       let m;
       while ((m = CALL_RE.exec(line)) !== null) {
         const before = line.slice(0, m.index);
-        const isFallback = /\?\?\s*$/.test(before) || /=\s*$/.test(before);
+        // A fallback is either `x ?? getEnv()` or a typed default parameter (`env: CoreEnv = getEnv()`).
+        // A bare assignment (`const env = getEnv()`) reads the ambient registry unconditionally and is
+        // reported — the blind spot that hid the unmigrated call sites.
+        const isFallback = /\?\?\s*$/.test(before) || /:[\s\w.<>[\],|]+\s*=\s*$/.test(before);
         if (isFallback) continue;
         // A method *named* `getEnv` (e.g. `getEnv(): ResolvedCoreEnv {`) is not the registry call.
         if (/^getEnv\s*\(\s*\)\s*:/.test(line.slice(m.index))) continue;

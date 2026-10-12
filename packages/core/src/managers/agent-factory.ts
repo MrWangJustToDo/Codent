@@ -19,7 +19,7 @@ import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
-import { getEnv } from "../env";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
@@ -38,7 +38,7 @@ export interface BuildManagedAgentOptions {
   config: ManagedAgentConfig;
   parentId?: string;
   manager: AgentManager;
-  getDefaultSkillDirs: () => Promise<SkillDirectory[]>;
+  getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
   /** Runtime this agent belongs to (env + provider); undefined = ambient. */
   runtime?: AgentRuntime;
 }
@@ -111,6 +111,7 @@ export async function buildManagedAgent({
       rootPath: fsRootPath,
       filenames: config.agentDocFilenames,
       loadOverride: config.agentDocLoadOverride !== false,
+      env: coreEnv,
     });
     if (docResult.content) {
       const instructions = docResult.overrideContent
@@ -160,7 +161,7 @@ export async function buildManagedAgent({
 
     const dirsToLoad: SkillDirectory[] = skillDirs
       ? skillDirs.map((path) => ({ path, source: "project" as const }))
-      : await getDefaultSkillDirs();
+      : await getDefaultSkillDirs(coreEnv);
     await skillRegistry.loadFromDirectories(dirsToLoad);
 
     // Built-ins are registered LAST so every directory skill keeps priority —
@@ -224,10 +225,10 @@ export async function buildManagedAgent({
     });
     managed.extensions.setExtensionRunner(extensionRunner);
 
-    const extensionLoader = new ExtensionLoader();
+    const extensionLoader = new ExtensionLoader(coreEnv);
     managed.extensions.setExtensionLoader(extensionLoader);
 
-    const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs);
+    const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, coreEnv);
     log.debug("system", "Extension search directories", { dirs: extensionDirs });
 
     // Individual extension load successes are not logged — one aggregated

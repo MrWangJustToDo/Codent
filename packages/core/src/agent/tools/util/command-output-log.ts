@@ -25,7 +25,7 @@ import { getEnv } from "../../../env";
 import { createStaleFileSweeper } from "./stale-file-sweep.js";
 
 import type { StaleSweepOptions } from "./stale-file-sweep.js";
-import type { CoreEnvFs } from "../../../env";
+import type { CoreEnvFs, ResolvedCoreEnv } from "../../../env";
 
 // ============================================================================
 // Constants
@@ -72,12 +72,15 @@ export interface CommandJobLogWriterOptions {
   startedAt: number;
   /** Called when a write failed and this job's logging was disabled. */
   onDisabled?: () => void;
+  /** Owning runtime's env, so the log lands under the runtime root. Ambient when omitted. */
+  env?: ResolvedCoreEnv;
 }
 
 class FileJobLogWriter implements CommandJobLogWriter {
   readonly path: string;
 
   private readonly fs: CoreEnvFs;
+  private readonly env: ResolvedCoreEnv | undefined;
   private readonly appendFile: (path: string, content: string) => Promise<void>;
   private readonly header: string;
   private readonly onDisabled: (() => void) | undefined;
@@ -93,6 +96,7 @@ class FileJobLogWriter implements CommandJobLogWriter {
 
   constructor(options: CommandJobLogWriterOptions & { fs: CoreEnvFs }) {
     this.fs = options.fs;
+    this.env = options.env;
     this.onDisabled = options.onDisabled;
     // The capability check happens in `createCommandJobLogWriter`, so the
     // assertion below only documents what the type cannot express.
@@ -131,7 +135,7 @@ class FileJobLogWriter implements CommandJobLogWriter {
     // Let an in-flight flush settle before deleting: otherwise its append could
     // recreate the file right after removal.
     await this.chain.catch(() => {});
-    await removeJobLog(this.path);
+    await removeJobLog(this.path, this.env);
   }
 
   /**
@@ -220,7 +224,8 @@ class FileJobLogWriter implements CommandJobLogWriter {
 export function createCommandJobLogWriter(options: CommandJobLogWriterOptions): CommandJobLogWriter | null {
   let fs: CoreEnvFs;
   try {
-    fs = getEnv().fs;
+    // The owning runtime's env when supplied; ambient only for standalone/legacy callers.
+    fs = (options.env ?? getEnv()).fs;
   } catch {
     return null; // CoreEnv not registered (validators, teardown) — degrade
   }
@@ -229,9 +234,9 @@ export function createCommandJobLogWriter(options: CommandJobLogWriterOptions): 
 }
 
 /** Best-effort delete of a job log. */
-export async function removeJobLog(path: string): Promise<void> {
+export async function removeJobLog(path: string, env?: ResolvedCoreEnv): Promise<void> {
   try {
-    const fs = getEnv().fs;
+    const fs = (env ?? getEnv()).fs;
     if (await fs.exists(path)) await fs.remove(path);
   } catch {
     // Non-fatal — stale logs are swept later.
@@ -256,6 +261,6 @@ const jobLogSweeper = createStaleFileSweeper({
   maxAgeMs: MAX_JOB_LOG_AGE_MS,
 });
 
-export function sweepStaleJobLogs(options?: StaleSweepOptions): Promise<number> {
-  return jobLogSweeper.sweep(getEnv(), options);
+export function sweepStaleJobLogs(options?: StaleSweepOptions, env?: ResolvedCoreEnv): Promise<number> {
+  return jobLogSweeper.sweep(env ?? getEnv(), options);
 }

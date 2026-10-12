@@ -3,7 +3,7 @@ import { createLogExtension, type LogExtension } from "../agent/log/extension.js
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { getEnv } from "../env";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 import { ACTIVE_STATUSES } from "../runtime-types/agent-status.js";
 
 import { buildManagedAgent } from "./agent-factory.js";
@@ -42,11 +42,11 @@ export const SKILL_DIRS_ENV_VAR = "AGENT_SKILL_DIRS";
  *
  * @returns Array of tagged skill directories (absolute or relative)
  */
-export async function getDefaultSkillDirs(): Promise<SkillDirectory[]> {
-  const env = getEnv();
+export async function getDefaultSkillDirs(env?: ResolvedCoreEnv): Promise<SkillDirectory[]> {
+  const e = env ?? getEnv();
   const dirs: SkillDirectory[] = [];
 
-  const runEnv = await env.getEnv();
+  const runEnv = await e.getEnv();
 
   const envDirs = runEnv[SKILL_DIRS_ENV_VAR];
   if (envDirs) {
@@ -57,7 +57,7 @@ export async function getDefaultSkillDirs(): Promise<SkillDirectory[]> {
     dirs.push(...parsedDirs.map((path) => ({ path, source: "user" as const })));
   }
 
-  const userSkillDir = env.path.join(await env.homedir(), ".agents", "skills");
+  const userSkillDir = e.path.join(await e.homedir(), ".agents", "skills");
 
   dirs.push({ path: userSkillDir, source: "user" });
 
@@ -262,7 +262,11 @@ export class AgentManager {
     const subagentLog = subagent.getLog();
     if (parentLogDir && subagentLog) {
       subagent.setLogSinkDetach(
-        this.logExtension.attachSink(subagentLog, { dir: parentLogDir, filename: `${subagent.id}.log` })
+        this.logExtension.attachSink(subagentLog, {
+          dir: parentLogDir,
+          filename: `${subagent.id}.log`,
+          env: this.runtime?.env,
+        })
       );
     }
 

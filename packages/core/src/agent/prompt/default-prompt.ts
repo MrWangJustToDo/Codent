@@ -6,12 +6,12 @@
  * belong in AGENTS.md / CLAUDE.md, not here.
  */
 
-import { getEnv } from "../../env";
+import { getEnv, type CoreEnv } from "../../env";
 
-export async function buildDefaultSystemPrompt(platform?: string): Promise<string> {
-  const env = getEnv();
-  const rootPath = env.rootPath;
-  const platformStr = platform ?? `${await env.getPlatform()} (${await env.getArch()})`;
+export async function buildDefaultSystemPrompt(platform?: string, env?: CoreEnv): Promise<string> {
+  const resolvedEnv = env ?? getEnv();
+  const rootPath = resolvedEnv.rootPath;
+  const platformStr = platform ?? `${await resolvedEnv.getPlatform()} (${await resolvedEnv.getArch()})`;
 
   return `You are an AI coding assistant with access to a full development environment.
 

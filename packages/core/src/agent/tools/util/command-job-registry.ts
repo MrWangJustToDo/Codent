@@ -12,6 +12,7 @@ import { generateId } from "../../../utils/generate-id.js";
 import { createCommandJobLogWriter, sweepStaleJobLogs } from "./command-output-log.js";
 
 import type { CommandJobLogWriter } from "./command-output-log.js";
+import type { ResolvedCoreEnv } from "../../../env";
 
 /**
  * Mirrors `CoreEnv`'s `CommandJobStatus` (`env-types.ts`), which is the one the host contract and
@@ -80,6 +81,9 @@ export interface CompletedCommandJob {
 }
 
 export class CommandJobRegistry {
+  /** Owning runtime's env, so durable job logs land under the runtime root. Ambient when omitted. */
+  constructor(private readonly env?: ResolvedCoreEnv) {}
+
   private readonly jobs = new Map<string, CommandJobRecord>();
 
   /** Durable log writers for jobs where logging is available. */
@@ -96,10 +100,16 @@ export class CommandJobRegistry {
       const current = this.jobs.get(id);
       if (current) current.logPath = null;
     };
-    const log = createCommandJobLogWriter({ jobId: id, command, startedAt, onDisabled: stopAdvertising });
+    const log = createCommandJobLogWriter({
+      jobId: id,
+      command,
+      startedAt,
+      onDisabled: stopAdvertising,
+      ...(this.env ? { env: this.env } : {}),
+    });
     if (log) this.logs.set(id, log);
     // Opportunistic safety net for logs left behind by an earlier run.
-    void sweepStaleJobLogs();
+    void sweepStaleJobLogs(undefined, this.env);
     const record: CommandJobRecord = {
       id,
       command,

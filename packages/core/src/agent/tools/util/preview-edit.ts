@@ -7,7 +7,7 @@
  * itself (exact match first, then fuzzy match fallback).
  */
 
-import { getEnv } from "../../../env";
+import { getEnv, type CoreEnv } from "../../../env";
 
 import { fuzzyIncludes, fuzzyReplace, fuzzyReplaceAll, normalizeForFuzzyMatch } from "./fuzzy-match.js";
 
@@ -59,10 +59,10 @@ export interface PreviewEditResult {
  * });
  * ```
  */
-export async function previewEdit(input: PreviewEditInput): Promise<PreviewEditResult> {
+export async function previewEdit(input: PreviewEditInput, env?: CoreEnv): Promise<PreviewEditResult> {
   const { path, edits } = input;
 
-  const oldFile = await getEnv().fs.readFile(path);
+  const oldFile = await (env ?? getEnv()).fs.readFile(path);
 
   let content = oldFile;
   // Normalize once and reuse; invalidated whenever `content` changes.

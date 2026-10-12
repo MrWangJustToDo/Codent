@@ -2,7 +2,7 @@
  * Extension discovery paths — project and user defaults under `.agents/`.
  */
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { toPosixPath } from "../../utils/posix-path.js";
 
 /** Project-local extension directory (relative to CoreEnv rootPath). */
@@ -23,8 +23,8 @@ export const EXTENSION_DIRS_ENV_VAR = "AGENT_EXTENSION_DIRS";
  * Project-specific demo dirs (e.g. `examples/extensions`) are **not** included —
  * pass them via `extraDirs`, CLI `--extension-dirs`, or `AGENT_EXTENSION_DIRS`.
  */
-export async function getDefaultExtensionDirs(extraDirs?: readonly string[]): Promise<string[]> {
-  const env = getEnv();
+export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env?: ResolvedCoreEnv): Promise<string[]> {
+  const e = env ?? getEnv();
   const dirs: string[] = [];
 
   if (extraDirs) {
@@ -34,7 +34,7 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[]): Pr
     }
   }
 
-  const runEnv = await env.getEnv();
+  const runEnv = await e.getEnv();
   const envDirs = runEnv[EXTENSION_DIRS_ENV_VAR];
   if (envDirs) {
     const parsedDirs = envDirs
@@ -45,15 +45,15 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[]): Pr
   }
 
   dirs.push(DEFAULT_EXTENSION_DIR);
-  dirs.push(env.path.join(await env.homedir(), ".agents", "extension"));
+  dirs.push(e.path.join(await e.homedir(), ".agents", "extension"));
 
   return dirs;
 }
 
 /** Resolve a search dir against CoreEnv rootPath when relative. */
-export function resolveExtensionDir(dir: string): string {
-  const env = getEnv();
-  return env.path.isAbsolute(dir) ? env.path.normalize(dir) : env.path.join(env.rootPath, dir);
+export function resolveExtensionDir(dir: string, env?: ResolvedCoreEnv): string {
+  const e = env ?? getEnv();
+  return e.path.isAbsolute(dir) ? e.path.normalize(dir) : e.path.join(e.rootPath, dir);
 }
 
 /** True for loadable extension entry files (not tests / declarations). */

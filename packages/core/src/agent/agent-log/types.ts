@@ -2,6 +2,8 @@
 // Log Types
 // ============================================================================
 
+import type { ResolvedCoreEnv } from "../../env";
+
 /** Log levels */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -70,4 +72,6 @@ export interface AgentLogFileSinkOptions {
   maxFiles?: number;
   /** Batch-flush interval in ms (default 250). */
   flushIntervalMs?: number;
+  /** Owning runtime's env, so the log lands under the runtime root. Ambient when omitted. */
+  env?: ResolvedCoreEnv;
 }

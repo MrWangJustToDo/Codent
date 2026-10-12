@@ -118,7 +118,8 @@ export class MemoryService {
         {},
         usage,
         log ?? undefined,
-        abortSignal
+        abortSignal,
+        this.manager.getEnv()
       );
 
       if (relevant.length > 0) {

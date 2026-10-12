@@ -23,11 +23,14 @@ export async function emitSessionBootstrapEvents(
     emitAgentTelemetry(managed, "session:doc", {
       source: docSource,
       length: docContent.length,
-      message: formatAgentDocResult({
-        content: docContent,
-        source: docSource || undefined,
-        importNotices: [],
-      }),
+      message: formatAgentDocResult(
+        {
+          content: docContent,
+          source: docSource || undefined,
+          importNotices: [],
+        },
+        managed.getCoreEnv()
+      ),
     });
   }
 

@@ -111,6 +111,11 @@ export class MemoryManager {
     this.maxIndexBytes = config.maxIndexBytes ?? DEFAULT_MAX_INDEX_BYTES;
   }
 
+  /** The owning runtime's env (for callers that need to thread it onward). */
+  getEnv(): ResolvedCoreEnv {
+    return this.env;
+  }
+
   /**
    * Ensure the memory directory exists and load the initial index.
    * Awaits the first index refresh so `getIndexContent()` is usable immediately after.
