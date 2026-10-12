@@ -41,7 +41,7 @@
 - [x] 5.0 Wire the provider plane through the runtime (the spec's "Two runtimes with different providers" scenario): `resolveModelConfigFromProvider(input, provider?)` uses a passed provider before the ambient registry; `AgentSessionHost` gains an optional `getModelProvider()` (local host returns its manager's runtime provider, remote hosts omit it); `CodentAgent` exposes `getModelProvider()`; app `createAgentFromConfig` resolves via `host.getModelProvider?.()`; extend `validate:agent-runtime-instances` to assert two runtimes resolve distinct provider connections.
 - [x] 5.1 `packages/cli`: build the runtime via `CodentAgent.create` (env + provider planes) and pass `agent.host` into `createAgentFromConfig`.
 - [x] 5.2 `packages/codent`: same migration.
-- [ ] 5.3 `packages/acp` (`bootstrap.ts`) and `packages/im-bridge` (`local-host.ts`): build via `CodentAgent.create`.
+- [x] 5.3 `packages/acp` (`bootstrap.ts`) and `packages/im-bridge` (`local-host.ts`): build via `CodentAgent.create`.
 - [ ] 5.4 `packages/extension` and `packages/playground`: build via `CodentAgent.create` (remote env / WebContainer env), keeping ambient registration only where a full runtime cannot be constructed.
 - [ ] 5.5 `packages/server`: construct runtimes per server (env + optional remote env); drop reliance on the process-wide `agentManager`.
 - [ ] 5.6 Run per-package bootstrap validators + `validate:coreenv-http`, `validate:provider-proxy`, `validate:agent-session-http`, `validate:websearch-tool-config`.
