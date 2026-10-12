@@ -412,13 +412,7 @@ export type {
 } from "../agent/plan";
 export { TodoManager } from "../agent/todo";
 export { createTodoTool } from "../agent/todo/todo-tool.js";
-export {
-  getMediaStore,
-  resetMediaStore,
-  extractBase64Content,
-  buildDataUrl,
-  sha256Stable,
-} from "../agent/media/media-store.js";
+export { extractBase64Content, buildDataUrl, sha256Stable } from "../agent/media/media-store.js";
 export { MediaStore } from "../agent/media/media-store.js";
 export type { MediaRef } from "../agent/media/types.js";
 export { MEDIA_DIR, mimeToExtension, parseMediaRefPath, buildMediaRefPath } from "../agent/media/types.js";

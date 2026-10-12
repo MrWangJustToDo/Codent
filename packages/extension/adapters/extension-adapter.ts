@@ -5,6 +5,7 @@ import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "
 import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
 
 export class ExtensionAgentAdapter implements AgentAdapter {
+  private agent: CodentAgent | null = null;
   private host: AgentSessionHost | null = null;
   private agentId: string | null = null;
   private _env: CoreEnv;
@@ -16,10 +17,15 @@ export class ExtensionAgentAdapter implements AgentAdapter {
   }
 
   async initialize(config: AppConfig): Promise<InitResult> {
+    // A re-init (config change) must not orphan the previous runtime — release its
+    // local manager before building the next one. `dispose` is only safe/owned here
+    // when the runtime is local (see destroy).
+    if (this.agent?.getManager()) await this.agent.dispose();
+
     // Session plane: remote HTTP host when configured, else the in-page local
     // manager (agent loop runs against the registered CoreEnv / provider). Both
     // are held by one CodentAgent so the provider/env planes resolve per runtime.
-    const agent = config.remoteSession
+    this.agent = config.remoteSession
       ? await CodentAgent.create({
           env: this._env,
           host: (await import("@codent/server/client")).createRemoteAgentSessionHost({
@@ -30,8 +36,8 @@ export class ExtensionAgentAdapter implements AgentAdapter {
           env: this._env,
           ...(this._provider ? { provider: this._provider } : {}),
         });
-    const result = await createAgentFromConfig({ config, name: "extension-chat", host: agent.host });
-    this.host = agent.host;
+    const result = await createAgentFromConfig({ config, name: "extension-chat", host: this.agent.host });
+    this.host = this.agent.host;
     this.agentId = result.session.id;
     return result;
   }
@@ -42,6 +48,13 @@ export class ExtensionAgentAdapter implements AgentAdapter {
       this.host = null;
       this.agentId = null;
     }
+    // Release the local runtime (manager + provider + command jobs). A remote-session
+    // runtime has no manager and its host is the server — disposing it would DELETE
+    // every session the server lists, not just ours, so only dispose a local runtime.
+    if (this.agent?.getManager()) {
+      await this.agent.dispose();
+    }
+    this.agent = null;
     clearAgentStore();
   }
 

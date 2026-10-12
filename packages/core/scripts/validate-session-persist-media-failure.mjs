@@ -16,14 +16,7 @@
 
 import assert from "node:assert/strict";
 
-import {
-  SessionService,
-  SessionStore,
-  UsageTracker,
-  clearCoreEnv,
-  registerCoreEnv,
-  resetMediaStore,
-} from "../dist/dev.mjs";
+import { SessionService, SessionStore, UsageTracker, clearCoreEnv, registerCoreEnv } from "../dist/dev.mjs";
 
 const MEDIA_DIR = ".agents/media";
 
@@ -36,7 +29,6 @@ const files = new Map();
 
 function setupEnv({ failMediaWrites }) {
   clearCoreEnv();
-  resetMediaStore();
   files.clear();
 
   registerCoreEnv({

@@ -116,8 +116,11 @@ hosts / app  →  runtime (CodentAgent / AgentRuntime)  →  managers (orchestra
                               ↓
                        runtime-types/   (shared status, events, TokenUsage — no manager deps)
 
-provider/ is the LLM plane (ModelProvider + registry) and env/ is the workspace plane
-(CoreEnv); both are orthogonal leaves the runtime composes.
+env/ is the workspace plane (CoreEnv) — an orthogonal leaf. provider/ is the LLM plane
+(ModelProvider + registry); `models/` (config + models.dev metadata) and `provider/` are a
+**coupled pair** — `provider→models` resolves a connection from config, `models→provider`
+lists/registers an entry's provider — a known, bounded cycle (both edges are narrowed in
+`validate:layer-boundaries`). The runtime composes the planes.
 ```
 
 **Rules (enforced by `validate:layer-boundaries`):**
