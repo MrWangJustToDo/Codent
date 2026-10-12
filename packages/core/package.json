@@ -69,6 +69,7 @@
     "validate:layer-boundaries": "node scripts/validate-layer-boundaries.mjs",
     "validate:module-organization": "node scripts/validate-module-organization.mjs",
     "validate:agent-runtime-instances": "pnpm run build && node scripts/validate-agent-runtime-instances.mjs",
+    "validate:runtime-env-guard": "node scripts/validate-runtime-env-guard.mjs",
     "validate:run-deps-completeness": "node scripts/validate-run-deps-completeness.mjs",
     "validate:plan-retro-continuation": "node scripts/validate-plan-retro-continuation.mjs",
     "validate:runner-wiring": "node scripts/validate-runner-wiring.mjs",

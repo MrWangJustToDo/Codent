@@ -156,7 +156,7 @@ export const duckduckgoProvider: SearchProvider = {
     const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal: options?.signal });
 
     try {
-      const response = await getEnv().fetch(searchUrl, {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(searchUrl, {
         signal: controller.signal,
         headers: {
           "User-Agent":

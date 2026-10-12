@@ -9,8 +9,11 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { AgentRuntime, clearCoreEnv, CodentAgent, getEnv, registerCoreEnv } from "../dist/dev.mjs";
+import { AgentRuntime, clearCoreEnv, CodentAgent, createListFileTool, getEnv, registerCoreEnv } from "../dist/dev.mjs";
 
 /** Minimal CoreEnv stub: create() only reads `rootPath`; dispose reads `destroy?`. */
 const fakeEnv = (root) => ({
@@ -77,6 +80,69 @@ const fakeEnv = (root) => ({
   registerCoreEnv(fakeEnv("/tmp/ambient"));
   assert.equal(getEnv().rootPath, "/tmp/ambient", "getEnv() resolves the ambient runtime");
   clearCoreEnv();
+}
+
+// ---------------------------------------------------------------------------
+// 4. A real tool run resolves the CALLING runtime's env (two runtimes in flight)
+// ---------------------------------------------------------------------------
+{
+  const makeNodeEnv = (root) => ({
+    rootPath: root,
+    fs: {
+      exists: async (p) => {
+        try {
+          statSync(join(root, p));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      readdir: async (p) =>
+        readdirSync(join(root, p)).map((name) => {
+          const s = statSync(join(root, p, name));
+          return { name, type: s.isDirectory() ? "directory" : "file", size: s.size, mtime: s.mtime };
+        }),
+      stat: async (p) => {
+        const s = statSync(join(root, p));
+        return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size, mtime: s.mtime };
+      },
+      readFile: async () => "",
+      writeFile: async () => {},
+      mkdir: async () => {},
+      remove: async () => {},
+    },
+    path: { resolve: (...a) => a.join("/"), join: (...a) => a.join("/"), extname: (p) => p.slice(p.lastIndexOf(".")) },
+    getPlatform: async () => "linux",
+    getArch: async () => "x64",
+    getEnv: async () => ({}),
+    homedir: async () => root,
+    runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    fetch: async () => new Response(""),
+  });
+
+  const rootA = mkdtempSync(join(tmpdir(), "rt-inst-a-"));
+  const rootB = mkdtempSync(join(tmpdir(), "rt-inst-b-"));
+  writeFileSync(join(rootA, "a-only.txt"), "A");
+  writeFileSync(join(rootB, "b-only.txt"), "B");
+
+  const agentA = await CodentAgent.create({ env: makeNodeEnv(rootA), name: "A" });
+  const agentB = await CodentAgent.create({ env: makeNodeEnv(rootB), name: "B" });
+  const tool = createListFileTool();
+
+  const [outA, outB] = await Promise.all([
+    tool.execute({ path: "." }, { context: { agentId: "a", coreEnv: agentA.getEnv() }, toolCallId: "a" }),
+    tool.execute({ path: "." }, { context: { agentId: "b", coreEnv: agentB.getEnv() }, toolCallId: "b" }),
+  ]);
+  const sa = JSON.stringify(outA);
+  const sb = JSON.stringify(outB);
+  assert.ok(sa.includes("a-only.txt") && !sa.includes("b-only.txt"), "runtime A's tool lists only A's workspace");
+  assert.ok(sb.includes("b-only.txt") && !sb.includes("a-only.txt"), "runtime B's tool lists only B's workspace");
+
+  await agentA.dispose();
+  await agentB.dispose();
+  rmSync(rootA, { recursive: true, force: true });
+  rmSync(rootB, { recursive: true, force: true });
 }
 
 console.log("agent-runtime-instances validation passed");

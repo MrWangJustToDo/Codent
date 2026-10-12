@@ -107,6 +107,7 @@ export const exaProvider: SearchProvider = {
       args: { query, numResults: maxResults },
       timeoutMs,
       signal: options?.signal,
+      coreEnv: options?.coreEnv,
     });
 
     let results = parseExaResults(text);

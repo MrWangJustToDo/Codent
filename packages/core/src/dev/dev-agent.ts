@@ -123,6 +123,7 @@ export { extractFileOpsFromMessages, formatFileOperations } from "../agent/compa
 export { buildDefaultSystemPrompt } from "../agent/prompt/default-prompt.js";
 export { AgentRuntime } from "../runtime/agent-runtime.js";
 export { CodentAgent } from "../runtime/codent-agent.js";
+export { createListFileTool } from "../agent/tools/list-file-tool.js";
 export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
 export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache, toModelOutputRegistry } from "../agent/compaction";
 export {

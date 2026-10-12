@@ -20,11 +20,11 @@
 
 - [x] 3.1 Give `AgentManager` an `AgentRuntime` in its constructor (default = ambient); `buildManagedAgent` records `runtime` on the `ManagedAgent`.
 - [x] 3.2 Change `createToolRunContext(agentId, env)` to take the agent's runtime env; pass it from the runner so `chat({ context })` carries the instance's `coreEnv`.
-- [ ] 3.3 Migrate the tool / middleware `getEnv()` call sites to the run context (`ctx.context.coreEnv`); list the migrated files.
-- [ ] 3.4 Migrate the remaining run-path consumers (media, persistence, mcp, managers) from `getEnv()` to their injected `runtime.env`.
-- [ ] 3.5 Add a validator guard that scans the run path (`agent/tools/**`, `agent/media/**`, `agent/persistence/**`, `agent/mcp/**`, `managers/**`) for direct `getEnv()` / `getModelProvider()` reads and fails on any that is not the run context or an injected runtime.
-- [ ] 3.6 Extend `validate:agent-runtime-instances`: a tool run in runtime A resolves A's `rootPath` while runtime B is concurrently active (filesystem + shell).
-- [ ] 3.7 Run the full core `validate:*` set; confirm no regression with a single ambient runtime.
+- [x] 3.3 Migrate the tool / middleware `getEnv()` call sites to the run context (`ctx.context.coreEnv`); list the migrated files.
+- [x] 3.4 Migrate the remaining run-path consumers (media, persistence, mcp, managers) from `getEnv()` to their injected `runtime.env`.
+- [x] 3.5 Add a validator guard that scans the run path (`agent/tools/**`, `agent/media/**`, `agent/persistence/**`, `agent/mcp/**`, `managers/**`) for direct `getEnv()` / `getModelProvider()` reads and fails on any that is not the run context or an injected runtime.
+- [x] 3.6 Extend `validate:agent-runtime-instances`: a tool run in runtime A resolves A's `rootPath` while runtime B is concurrently active (filesystem + shell).
+- [x] 3.7 Run the full core `validate:*` set; confirm no regression with a single ambient runtime.
 
 ## 4. Stage 2 — Runtime-scoped stores and caches
 

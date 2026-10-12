@@ -124,7 +124,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
 
     outputSchema: websearchOutputSchema,
 
-    execute: async ({ query, maxResults, allowedDomains, blockedDomains, timeout }, { abortSignal }) => {
+    execute: async ({ query, maxResults, allowedDomains, blockedDomains, timeout }, { abortSignal, coreEnv }) => {
       return withDuration(async () => {
         if (allowedDomains?.length && blockedDomains?.length) {
           throw new Error("Cannot specify both allowedDomains and blockedDomains in the same request");
@@ -165,6 +165,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
               blockedDomains,
               timeoutMs,
               signal: controller.signal,
+              coreEnv,
               ...(sessionId ? { sessionId } : {}),
             });
           });

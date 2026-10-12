@@ -5,7 +5,7 @@
  * Auto-generates a `MEMORY.md` index that is injected per-turn as the
  * `<memory_index>` section by the built-in Memory extension.
  *
- * Uses getEnv().fs for all I/O.
+ * Uses this.env.fs for all I/O.
  *
  * @example
  * ```typescript
@@ -19,7 +19,7 @@
 
 import { parse as parseYaml } from "yaml";
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import {
   DEFAULT_CONSOLIDATE_THRESHOLD,
@@ -96,7 +96,11 @@ export class MemoryManager {
   /** Debounce timeout for index refresh */
   private refreshTimeout?: ReturnType<typeof setTimeout>;
 
+  /** Workspace env for memory I/O (runtime-provided; ambient by default). */
+  private readonly env: ResolvedCoreEnv;
+
   constructor(config: MemoryManagerConfig) {
+    this.env = config.env ?? getEnv();
     this.rootPath = config.rootPath;
     this.memoryDir = config.memoryDir ?? DEFAULT_MEMORY_DIR;
     // placeholder
@@ -112,12 +116,12 @@ export class MemoryManager {
    * Awaits the first index refresh so `getIndexContent()` is usable immediately after.
    */
   async initialize(): Promise<void> {
-    const { path } = getEnv();
+    const { path } = this.env;
     this.memoryPath = path.join(this.rootPath, this.memoryDir);
     this.indexPath = path.join(this.memoryPath, MEMORY_INDEX_FILENAME);
-    const exists = await getEnv().fs.exists(this.memoryPath);
+    const exists = await this.env.fs.exists(this.memoryPath);
     if (!exists) {
-      await getEnv().fs.mkdir(this.memoryPath);
+      await this.env.fs.mkdir(this.memoryPath);
     }
 
     await this.refreshIndex();
@@ -140,11 +144,11 @@ export class MemoryManager {
    * Read the full content of a specific memory file.
    */
   async readMemory(filename: string): Promise<string | null> {
-    const filePath = getEnv().path.join(this.memoryPath, filename);
+    const filePath = this.env.path.join(this.memoryPath, filename);
     try {
-      const exists = await getEnv().fs.exists(filePath);
+      const exists = await this.env.fs.exists(filePath);
       if (!exists) return null;
-      return await getEnv().fs.readFile(filePath);
+      return await this.env.fs.readFile(filePath);
     } catch {
       return null;
     }
@@ -157,15 +161,15 @@ export class MemoryManager {
     const result: Memory[] = [];
 
     try {
-      const entries = await getEnv().fs.readdir(this.memoryPath);
+      const entries = await this.env.fs.readdir(this.memoryPath);
       const mdFiles = entries
         .filter((e) => e.type === "file" && e.name.endsWith(".md") && e.name !== MEMORY_INDEX_FILENAME)
         .sort((a, b) => a.name.localeCompare(b.name));
 
       for (const entry of mdFiles) {
         try {
-          const filePath = getEnv().path.join(this.memoryPath, entry.name);
-          const content = await getEnv().fs.readFile(filePath);
+          const filePath = this.env.path.join(this.memoryPath, entry.name);
+          const content = await this.env.fs.readFile(filePath);
           const { metadata, body } = this.parseFrontmatter(content);
 
           result.push({
@@ -195,7 +199,7 @@ export class MemoryManager {
    */
   async getMemoryCount(): Promise<number> {
     try {
-      const entries = await getEnv().fs.readdir(this.memoryPath);
+      const entries = await this.env.fs.readdir(this.memoryPath);
       return entries.filter((e) => e.type === "file" && e.name.endsWith(".md") && e.name !== MEMORY_INDEX_FILENAME)
         .length;
     } catch {
@@ -226,7 +230,7 @@ export class MemoryManager {
   ): Promise<string> {
     const slug = slugify(name);
     const filename = `${slug}.md`;
-    const filePath = getEnv().path.join(this.memoryPath, filename);
+    const filePath = this.env.path.join(this.memoryPath, filename);
 
     const now = new Date().toISOString();
 
@@ -235,9 +239,9 @@ export class MemoryManager {
     let existingImportance: number | undefined;
     let existingExpiresAt: string | undefined;
     try {
-      const existing = await getEnv().fs.exists(filePath);
+      const existing = await this.env.fs.exists(filePath);
       if (existing) {
-        const existingContent = await getEnv().fs.readFile(filePath);
+        const existingContent = await this.env.fs.readFile(filePath);
         const { metadata } = this.parseFrontmatter(existingContent);
         if (metadata?.createdAt) {
           createdAt = metadata.createdAt;
@@ -271,7 +275,7 @@ export class MemoryManager {
 
     const content = lines.join("\n");
 
-    await getEnv().fs.writeFile(filePath, content);
+    await this.env.fs.writeFile(filePath, content);
 
     this.scheduleRefreshIndex();
     return filename;
@@ -281,9 +285,9 @@ export class MemoryManager {
    * Delete a memory file, then rebuild the index.
    */
   async deleteMemory(filename: string): Promise<void> {
-    const filePath = getEnv().path.join(this.memoryPath, filename);
+    const filePath = this.env.path.join(this.memoryPath, filename);
     try {
-      await getEnv().fs.remove(filePath);
+      await this.env.fs.remove(filePath);
     } catch {
       // Failed to delete memory
     }
@@ -295,11 +299,11 @@ export class MemoryManager {
    */
   async deleteAllMemories(): Promise<void> {
     try {
-      const entries = await getEnv().fs.readdir(this.memoryPath);
+      const entries = await this.env.fs.readdir(this.memoryPath);
       for (const entry of entries) {
         if (entry.type === "file" && entry.name.endsWith(".md") && entry.name !== MEMORY_INDEX_FILENAME) {
-          const filePath = getEnv().path.join(this.memoryPath, entry.name);
-          await getEnv().fs.remove(filePath);
+          const filePath = this.env.path.join(this.memoryPath, entry.name);
+          await this.env.fs.remove(filePath);
         }
       }
     } catch {
@@ -356,7 +360,7 @@ export class MemoryManager {
 
     const indexContent = lines.length > 0 ? lines.join("\n") + "\n" : "";
 
-    const bytes = getEnv().byteLength(indexContent, "utf-8");
+    const bytes = this.env.byteLength(indexContent, "utf-8");
     if (bytes > this.maxIndexBytes) {
       const truncated = indexContent.slice(0, this.maxIndexBytes);
       const lastNewline = truncated.lastIndexOf("\n");
@@ -367,7 +371,7 @@ export class MemoryManager {
 
     // Write the index file
     try {
-      await getEnv().fs.writeFile(this.indexPath, this.cachedIndex);
+      await this.env.fs.writeFile(this.indexPath, this.cachedIndex);
     } catch {
       // Failed to write MEMORY.md index
     }

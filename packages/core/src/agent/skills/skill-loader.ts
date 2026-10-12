@@ -16,7 +16,7 @@
 
 import { parse as parseYaml } from "yaml";
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import { skillMetadataSchema } from "./types.js";
 
@@ -29,6 +29,8 @@ import type { Skill, SkillMetadata, SkillSource } from "./types.js";
 export interface SkillLoaderConfig {
   /** Root path for resolving relative paths */
   rootPath: string;
+  /** Workspace env for reading skill files (runtime-provided; ambient by default). */
+  env?: ResolvedCoreEnv;
 }
 
 export interface ParsedFrontmatter {
@@ -49,16 +51,19 @@ export interface ParsedFrontmatter {
  */
 export class SkillLoader {
   private rootPath: string;
+  /** Workspace env for reading skill files (runtime-provided; ambient by default). */
+  private readonly env: ResolvedCoreEnv;
 
   constructor(config: SkillLoaderConfig) {
     this.rootPath = config.rootPath;
+    this.env = config.env ?? getEnv();
   }
 
   /**
    * Check if directory exists.
    */
   private async directoryExists(dirPath: string): Promise<boolean> {
-    const env = getEnv();
+    const env = this.env;
     try {
       const stat = await env.fs.stat(dirPath);
       return stat.isDirectory;
@@ -71,7 +76,7 @@ export class SkillLoader {
    * Read file content.
    */
   private async readFileContent(filePath: string): Promise<string> {
-    return getEnv().fs.readFile(filePath);
+    return this.env.fs.readFile(filePath);
   }
 
   /**
@@ -83,7 +88,7 @@ export class SkillLoader {
    * broke outright on Windows. The walk is also simpler — it needs no external binary.
    */
   private async findSkillFiles(dirPath: string): Promise<string[]> {
-    const env = getEnv();
+    const env = this.env;
 
     if (env.path.isAbsolute(dirPath)) {
       return this.findSkillFilesRecursive(dirPath);
@@ -96,7 +101,7 @@ export class SkillLoader {
    * Recursively find SKILL.md files using env.fs.
    */
   private async findSkillFilesRecursive(dirPath: string): Promise<string[]> {
-    const env = getEnv();
+    const env = this.env;
     const files: string[] = [];
 
     try {
@@ -183,7 +188,7 @@ export class SkillLoader {
    */
   async loadFromDirectory(dirPath: string, source: SkillSource = "project"): Promise<Map<string, Skill>> {
     const skills = new Map<string, Skill>();
-    const env = getEnv();
+    const env = this.env;
 
     const dirExists = await this.directoryExists(dirPath);
     if (!dirExists) {

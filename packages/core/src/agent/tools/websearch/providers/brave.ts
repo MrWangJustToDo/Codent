@@ -72,7 +72,7 @@ export const braveProvider: SearchProvider = {
       url.searchParams.set("count", String(Math.min(maxResults, 20)));
       url.searchParams.set("safesearch", "moderate");
 
-      const response = await getEnv().fetch(url.toString(), {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(url.toString(), {
         signal: controller.signal,
         headers: {
           Accept: "application/json",

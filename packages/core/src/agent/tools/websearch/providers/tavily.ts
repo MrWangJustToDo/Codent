@@ -57,7 +57,7 @@ export const tavilyProvider: SearchProvider = {
     const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal: options?.signal });
 
     try {
-      const response = await getEnv().fetch(TAVILY_SEARCH_API, {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(TAVILY_SEARCH_API, {
         method: "POST",
         signal: controller.signal,
         headers: {

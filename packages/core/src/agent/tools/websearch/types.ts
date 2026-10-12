@@ -2,6 +2,8 @@
  * WebSearch Types — Shared types for the multi-provider search architecture.
  */
 
+import type { ResolvedCoreEnv } from "../../../env";
+
 // ============================================================================
 // Search Result
 // ============================================================================
@@ -36,6 +38,11 @@ export interface SearchOptions {
   timeoutMs?: number;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /**
+   * Workspace env of the calling runtime (for `fetch`). Providers fall back to the
+   * ambient env when omitted (standalone provider use / tests).
+   */
+  coreEnv?: ResolvedCoreEnv;
   /**
    * Stable session identifier. Free providers are spread by this value so different
    * conversations use different public endpoints; providers may also forward it as an

@@ -152,6 +152,7 @@ export async function buildManagedAgent({
 
     skillRegistry = new SkillRegistry({
       rootPath: fsRootPath,
+      env: coreEnv,
       logger: { warn: (message) => log.warn("system", message) },
     });
     managed.setSkillRegistry(skillRegistry);
@@ -188,14 +189,14 @@ export async function buildManagedAgent({
     // MCP data layer: created (but not connected) here — connection + tool
     // registration happens in the built-in MCP extension (loaded below), so MCP
     // participates in the unified extension lifecycle (enable/disable, activate/deactivate).
-    const mcpManager = new McpManager();
+    const mcpManager = new McpManager(coreEnv);
     managed.setMcpManager(mcpManager);
 
     // Memory manager is always created when enabled (drives the per-turn
     // relevance query + extraction in MemoryService). The built-in Memory
     // extension (loaded below) wraps it for presentation: tools, index injection.
     if (config.memory !== false) {
-      const memoryManager = new MemoryManager({ rootPath: fsRootPath });
+      const memoryManager = new MemoryManager({ rootPath: fsRootPath, env: coreEnv });
       await memoryManager.initialize();
       managed.setMemoryManager(memoryManager);
       // Memory init is logged once via the bridged `session:memory` event — no direct log.

@@ -97,6 +97,7 @@ export const parallelProvider: SearchProvider = {
       },
       timeoutMs,
       signal: options?.signal,
+      coreEnv: options?.coreEnv,
       ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
     });
 
