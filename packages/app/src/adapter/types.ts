@@ -60,6 +60,14 @@ export interface AppConfig {
   /** Optional model metadata override (hosts may parse MODEL_* env vars) */
   modelInfo?: ModelInfo;
   /**
+   * Set by the CLI bootstrap when any explicit model flag (`--model` / `--style` /
+   * `--base-url` / `--api-key`) was passed. It makes the session **isolated from the
+   * on-disk `.agents/config/models.json`**: the flags are authoritative, `initConfig`
+   * does not load the file, and `/models` lists nothing. Also why the first-run config
+   * editor is skipped (an explicit model counts as configured).
+   */
+  modelExplicit?: boolean;
+  /**
    * Server-resolved model (e.g. `--remote-session` defers model to the server's
    * `.env`). Display-only: kept out of the agent-chat effect deps so the
    * initialization-time update does not tear down the just-created session.
