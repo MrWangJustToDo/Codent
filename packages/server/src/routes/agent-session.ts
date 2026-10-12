@@ -16,7 +16,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import { createMessagesDeltaWriter } from "../messages-delta.js";
-import { getServerManager } from "../server-runtime.js";
+import { getServerEnv, getServerManager } from "../server-runtime.js";
 
 import { readServerModelEnv } from "./provider.js";
 
@@ -343,7 +343,7 @@ export const agentSessionRoutes = new Hono()
     const { session } = await host.create({
       name: body.name || "remote",
       model: connection.model,
-      systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt()),
+      systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt(undefined, getServerEnv())),
       maxIterations: body.maxIterations,
       ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
       mcpConfigPath: body.mcpConfigPath,

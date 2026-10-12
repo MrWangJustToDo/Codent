@@ -1,7 +1,9 @@
-import { FileError, getEnv } from "@codent/core";
+import { FileError } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
+
+import { getServerEnv } from "../server-runtime.js";
 
 const pathSchema = z.object({ path: z.string() });
 
@@ -47,7 +49,7 @@ export const fsRoutes = new Hono()
     async (c) => {
       try {
         const { path, encoding } = c.req.valid("json");
-        const env = getEnv();
+        const env = getServerEnv();
         if (encoding === "base64" || encoding === "buffer") {
           const bytes = await env.fs.readFile(path, "buffer");
           return c.json({ content: env.base64Encode(bytes), encoding: "base64" as const });
@@ -63,7 +65,7 @@ export const fsRoutes = new Hono()
   .post("/stat", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      const stat = await getEnv().fs.stat(path);
+      const stat = await getServerEnv().fs.stat(path);
       return c.json({
         isDirectory: stat.isDirectory,
         isFile: stat.isFile,
@@ -78,7 +80,7 @@ export const fsRoutes = new Hono()
   .post("/readdir", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      const entries = await getEnv().fs.readdir(path);
+      const entries = await getServerEnv().fs.readdir(path);
       return c.json({
         entries: entries.map((e) => ({
           name: e.name,
@@ -106,7 +108,7 @@ export const fsRoutes = new Hono()
     async (c) => {
       try {
         const { path, content, encoding } = c.req.valid("json");
-        const env = getEnv();
+        const env = getServerEnv();
         if (encoding === "base64") {
           await env.fs.writeFile(path, env.base64Decode(content));
         } else {
@@ -122,7 +124,7 @@ export const fsRoutes = new Hono()
   .post("/mkdir", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      await getEnv().fs.mkdir(path);
+      await getServerEnv().fs.mkdir(path);
       return c.json({ ok: true });
     } catch (err) {
       const { body, status } = handleFsError(err);
@@ -132,7 +134,7 @@ export const fsRoutes = new Hono()
   .post("/exists", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      const exists = await getEnv().fs.exists(path);
+      const exists = await getServerEnv().fs.exists(path);
       return c.json({ exists });
     } catch (err) {
       const { body, status } = handleFsError(err);
@@ -142,7 +144,7 @@ export const fsRoutes = new Hono()
   .post("/remove", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      await getEnv().fs.remove(path);
+      await getServerEnv().fs.remove(path);
       return c.json({ ok: true });
     } catch (err) {
       const { body, status } = handleFsError(err);
@@ -152,7 +154,7 @@ export const fsRoutes = new Hono()
   .post("/appendFile", zValidator("json", z.object({ path: z.string(), content: z.string() })), async (c) => {
     try {
       const { path, content } = c.req.valid("json");
-      const env = getEnv();
+      const env = getServerEnv();
       if (!env.fs.appendFile) {
         return c.json({ error: true, name: "Error", code: "not_supported", message: "appendFile not available" }, 400);
       }
@@ -166,7 +168,7 @@ export const fsRoutes = new Hono()
   .post("/rename", zValidator("json", z.object({ oldPath: z.string(), newPath: z.string() })), async (c) => {
     try {
       const { oldPath, newPath } = c.req.valid("json");
-      const env = getEnv();
+      const env = getServerEnv();
       if (!env.fs.rename) {
         return c.json({ error: true, name: "Error", code: "not_supported", message: "rename not available" }, 400);
       }
@@ -180,7 +182,7 @@ export const fsRoutes = new Hono()
   .post("/mimeType", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");
-      const env = getEnv();
+      const env = getServerEnv();
       if (!env.getMimeType) {
         return c.json({ mimeType: false as const });
       }

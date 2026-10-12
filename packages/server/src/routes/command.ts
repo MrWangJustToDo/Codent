@@ -1,7 +1,9 @@
-import { ExecutionError, getEnv } from "@codent/core";
+import { ExecutionError } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
+
+import { getServerEnv } from "../server-runtime.js";
 
 import type { CommandJobStatus, StartCommandHandle } from "@codent/core";
 
@@ -91,7 +93,7 @@ export const commandRoutes = new Hono()
   .post("/run", zValidator("json", runCommandSchema), async (c) => {
     try {
       const { command, options } = c.req.valid("json");
-      const result = await getEnv().runCommand(command, options);
+      const result = await getServerEnv().runCommand(command, options);
       return c.json(result);
     } catch (err) {
       const { body, status } = handleCommandError(err);
@@ -101,7 +103,7 @@ export const commandRoutes = new Hono()
   .post("/exec", zValidator("json", execSchema), async (c) => {
     try {
       const { command, options } = c.req.valid("json");
-      const result = await getEnv().exec(command, options);
+      const result = await getServerEnv().exec(command, options);
       return c.json(result);
     } catch (err) {
       const { body, status } = handleCommandError(err);
@@ -111,7 +113,7 @@ export const commandRoutes = new Hono()
   .post("/exec-file", zValidator("json", execFileSchema), async (c) => {
     try {
       const { file, args, options } = c.req.valid("json");
-      const coreEnv = getEnv();
+      const coreEnv = getServerEnv();
       // Feature-detect rather than assume: a server whose environment has no process
       // runtime cannot exec, and the client falls back to the string path in that case.
       if (!coreEnv.execFile) {
@@ -140,7 +142,7 @@ export const commandRoutes = new Hono()
     try {
       const { command, options } = c.req.valid("json");
 
-      const coreEnv = getEnv();
+      const coreEnv = getServerEnv();
       if (!coreEnv.startCommand) {
         return c.json(
           {

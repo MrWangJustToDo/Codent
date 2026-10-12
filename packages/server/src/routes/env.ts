@@ -1,5 +1,6 @@
-import { getEnv } from "@codent/core";
 import { Hono } from "hono";
+
+import { getServerEnv } from "../server-runtime.js";
 
 import { destroyAllServerJobs } from "./command.js";
 
@@ -65,7 +66,7 @@ function parseAheadBehind(output: string): { ahead: number; behind: number } {
  */
 async function fetchWorkspaceGitInfo(rootPath: string): Promise<WorkspaceGitInfo | null> {
   if (!rootPath) return null;
-  const env = getEnv();
+  const env = getServerEnv();
   try {
     const inside = await env.runCommand("git rev-parse --is-inside-work-tree", { cwd: rootPath });
     if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") {
@@ -92,23 +93,23 @@ async function fetchWorkspaceGitInfo(rootPath: string): Promise<WorkspaceGitInfo
 
 export const envRoutes = new Hono()
   .get("/info", async (c) => {
-    const env = getEnv();
+    const env = getServerEnv();
     const [platform, arch, homedir] = await Promise.all([env.getPlatform(), env.getArch(), env.homedir()]);
     return c.json({ rootPath: env.rootPath, platform, arch, homedir, sep: env.path.getSep() });
   })
   .get("/workspace", async (c) => {
-    const env = getEnv();
+    const env = getServerEnv();
     const rootPath = env.rootPath;
     const git = await fetchWorkspaceGitInfo(rootPath);
     return c.json({ rootPath, git });
   })
   .get("/vars", async (c) => {
-    const vars = await getEnv().getEnv();
+    const vars = await getServerEnv().getEnv();
     return c.json(filterSensitiveVars(vars));
   })
   .post("/destroy", async (c) => {
     destroyAllServerJobs();
-    const env = getEnv();
+    const env = getServerEnv();
     if (env.destroy) {
       await env.destroy();
     }

@@ -24,7 +24,7 @@ import {
   providerRoutes,
   readServerModelEnv,
 } from "./routes/provider.js";
-import { initServerRuntime } from "./server-runtime.js";
+import { getServerEnv, initServerRuntime } from "./server-runtime.js";
 
 import type { CoreEnv } from "@codent/core";
 
@@ -147,7 +147,9 @@ app.use(
 );
 
 app.get("/health", (c) => {
-  return c.json({ status: "ok", rootPath: ROOT_PATH, sandboxEnv: SANDBOX_ENV });
+  // Report the EFFECTIVE workspace root (the runtime's), not the local config constant —
+  // under REMOTE_ENV the two differ.
+  return c.json({ status: "ok", rootPath: getServerEnv().rootPath, sandboxEnv: SANDBOX_ENV });
 });
 
 app.route("/api", api);
@@ -158,7 +160,7 @@ export const createServer = () => {
   return serve({ fetch: app.fetch, port: PORT }, (info) => {
     console.log(`[server] CoreEnv HTTP server listening on http://localhost:${info.port}`);
     console.log(`[server] CoreEnv HTTP server listening on http://${getLocalIP()}:${info.port}`);
-    console.log(`[server] rootPath=${ROOT_PATH}, sandbox=${SANDBOX_ENV}`);
+    console.log(`[server] rootPath=${getServerEnv().rootPath}, sandbox=${SANDBOX_ENV}`);
   });
 };
 

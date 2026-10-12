@@ -25,7 +25,7 @@ import type {
   AgentSessionListEntry,
 } from "../agent-session/host-types.js";
 import type { AgentSession } from "../agent-session/types.js";
-import type { CoreEnv } from "../env";
+import type { CoreEnv, ResolvedCoreEnv } from "../env";
 import type { ModelStyle } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 
@@ -111,8 +111,8 @@ export class CodentAgent {
     return new CodentAgent(runtime, host, manager, options.defaults ?? {});
   }
 
-  /** The runtime's workspace env (fs/shell/fetch). */
-  getEnv(): CoreEnv {
+  /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */
+  getEnv(): ResolvedCoreEnv {
     return this.runtime.env;
   }
 
