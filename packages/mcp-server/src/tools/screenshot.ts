@@ -50,7 +50,7 @@ export const screenshotTool = tool("screenshot", {
     width: z.number().describe("Image width in pixels (0 when capture failed)"),
     height: z.number().describe("Image height in pixels (0 when capture failed)"),
     sizeKB: z.number().describe("Compressed image size in KB (0 when capture failed)"),
-    error: z.string().optional().describe("Error message when screenshot capture failed"),
+    errorText: z.string().optional().describe("Error message when screenshot capture failed (errorText, not error)"),
   }),
   annotations: {
     title: "Screenshot",
@@ -89,13 +89,13 @@ export const screenshotTool = tool("screenshot", {
         width: 0,
         height: 0,
         sizeKB: 0,
-        error: message,
+        errorText: message,
       };
     }
   },
   format: (result): ContentBlock[] => {
-    if (result.error) {
-      return [{ type: "text" as const, text: `Screenshot failed: ${result.error}` }];
+    if (result.errorText) {
+      return [{ type: "text" as const, text: `Screenshot failed: ${result.errorText}` }];
     }
 
     return [
