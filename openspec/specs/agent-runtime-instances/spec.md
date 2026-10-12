@@ -29,8 +29,11 @@ connection, or an agent registry.
 
 `CodentAgent` SHALL expose `createSession`, `getSession`, `listSessions`, `destroySession`, and
 `dispose`. `createSession` SHALL delegate to the runtime's `AgentSessionHost` and apply the runtime's
-default options. `dispose` SHALL destroy every live session owned by the runtime and release the
-provider and environment.
+default options. `dispose` SHALL destroy every live session owned by the runtime, release the provider,
+and release the environment only when the runtime owns it (`ownsEnv`); a borrowed environment (a
+remote `CoreEnv` for `--remote-env` / `--remote-session`, or a host-supplied env) SHALL NOT be
+destroyed, because a remote `destroy()` posts a destructive teardown to the server. `dispose` SHALL be
+idempotent.
 
 #### Scenario: Creating a session
 
@@ -39,8 +42,18 @@ provider and environment.
 
 #### Scenario: Disposing a runtime
 
-- **WHEN** `dispose()` is called
-- **THEN** every agent the runtime created is destroyed, `ModelProvider.destroy()` (if present) runs, and the runtime no longer appears in any list
+- **WHEN** `dispose()` is called on a runtime that owns its environment
+- **THEN** every agent the runtime created is destroyed, `ModelProvider.destroy()` (if present) runs, the environment is destroyed, and the runtime no longer appears in any list
+
+#### Scenario: Disposing a borrowed environment
+
+- **WHEN** `dispose()` is called on a runtime whose `ownsEnv` is false (a remote or host-supplied env)
+- **THEN** the sessions and provider are released but the environment is left intact
+
+#### Scenario: Dispose is idempotent
+
+- **WHEN** `dispose()` is called more than once
+- **THEN** the second call performs no additional teardown
 
 ### Requirement: The runtime is passed explicitly to where it is read
 
@@ -83,7 +96,7 @@ remain only as the ambient fallback for code that has not been migrated.
 
 #### Scenario: No direct global read on the run path
 
-- **WHEN** core's run path (tools, media, persistence, MCP, managers) is searched for a direct `getEnv()` / `getModelProvider()` read
+- **WHEN** core's run path is searched for a direct `getEnv()` / `getModelProvider()` read — as guarded by `validate:runtime-env-guard`, which scans the whole run path (tools, media, persistence, MCP, managers, prompt, turn-context, plan, log, extension, skills, memory, subagent, runner, compaction, UI) and accepts only an explicit fallback (`?? getEnv()` / a default parameter), never a bare assignment
 - **THEN** none is found; every such read resolves from the runtime carried into the call
 
 #### Scenario: Ambient fallback
@@ -110,14 +123,25 @@ SHALL persist and read independently even when their backends differ (one local,
 ### Requirement: Workspace-scoped state is owned by the runtime
 
 State that belongs to a workspace SHALL be owned by the runtime (shared by that runtime's agents,
-isolated from other runtimes): the session store, media store, websearch provider manager, usage
-history, git info cache, file-mutation queues, and command-job registry. State that is not workspace
-data SHALL remain process-global.
+isolated from other runtimes): the session store, media store, websearch provider manager and its API
+keys, usage history, git info cache, file-mutation queues, command-job registry and its durable job-log
+files, project-instruction/plan/log paths, and extension + skill discovery. State that is not
+workspace data SHALL remain process-global.
 
 #### Scenario: Usage history and git cache do not leak across runtimes
 
 - **WHEN** an agent in runtime A records usage and reads git info, and runtime B has its own workspace
 - **THEN** runtime B's usage history and git info are its own, and neither observes the other's
+
+#### Scenario: Websearch keys do not leak across runtimes
+
+- **WHEN** two runtimes configure different websearch API keys
+- **THEN** each agent's websearch selections use its own runtime's keys, and neither observes the other's
+
+#### Scenario: Job logs and discovery use the runtime root
+
+- **WHEN** an agent in runtime B starts a background job, reads extensions, or resolves default skills
+- **THEN** the job's durable log is written under B's root (so the advertised `cachedOutputPath` is readable through B's env) and B's own extension/skill directories are used
 
 #### Scenario: Non-workspace state stays global
 
@@ -154,4 +178,21 @@ continues to function without change.
 
 - **WHEN** a host calls `registerCoreEnv(env)` and `registerModelProvider(provider)` and then uses `agentManager`
 - **THEN** agent creation and runs behave exactly as before adoption of `CodentAgent`
+
+### Requirement: A managed agent resolves its project data from its runtime
+
+Running a managed agent SHALL resolve all workspace-scoped project data from that runtime's env: its
+project-instruction files (`AGENTS.md` / `CLAUDE.md` and `@` imports), its plan files, its session log
+files, and its extension/skill discovery roots SHALL be read and written under the runtime's
+`rootPath`, not the process-global env.
+
+#### Scenario: A second runtime loads its own project instructions
+
+- **WHEN** a managed agent runs on runtime B whose `rootPath` differs from the ambient env
+- **THEN** its system prompt contains runtime B's project instructions, and none of runtime A's
+
+#### Scenario: A second runtime writes its plan and log under its own root
+
+- **WHEN** an agent on runtime B saves a plan or writes its session log
+- **THEN** the files are created under runtime B's `rootPath`, and runtime A's workspace is untouched
 
