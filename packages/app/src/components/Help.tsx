@@ -97,6 +97,12 @@ export const Help = () => {
             </Box>
             <Text>Max agent loop iterations (default: 50)</Text>
           </Box>
+          <Box>
+            <Box width={24}>
+              <Text color={COLORS.success}>--max-concurrent-tasks</Text>
+            </Box>
+            <Text>Max concurrent task subagents (default: 4)</Text>
+          </Box>
           {remotePlanes && (
             <>
               <Box>

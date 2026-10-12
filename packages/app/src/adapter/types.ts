@@ -15,6 +15,8 @@ export interface AppConfig {
   systemPrompt: string;
   initialPrompt: string;
   maxIterations: number;
+  /** Max concurrent `task` subagents under this agent (core default 4). */
+  maxConcurrentTasks?: number;
   debug: boolean;
   mcpConfigPath: string;
   /**

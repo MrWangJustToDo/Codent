@@ -60,6 +60,9 @@ BASE_URL=https://openrouter.ai/api/v1
 API_KEY=sk-or-v1-xxx
 maxIterations=30
 
+# Optional — max concurrent `task` subagents (default 4)
+MAX_CONCURRENT_TASKS=4
+
 # Optional — websearch providers (Brave → Parallel → Exa → Tavily → DuckDuckGo)
 BRAVE_API_KEY=...           # Brave Search API (keyed)
 EXA_API_KEY=...             # Exa keyed tier (free public MCP without it)

@@ -217,7 +217,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     // session ends up registered too (Header shows "2 sessions"). Only rebuild for
     // inputs that genuinely require a fresh session.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `config` intentionally excluded; see comment above.
-  }, [config.systemPrompt, config.maxIterations, config.mcpConfigPath, adapter, env]);
+  }, [config.systemPrompt, config.maxIterations, config.maxConcurrentTasks, config.mcpConfigPath, adapter, env]);
 
   useEffect(() => {
     if (!session) return;

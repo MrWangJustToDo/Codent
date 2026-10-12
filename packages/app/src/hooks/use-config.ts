@@ -57,6 +57,7 @@ export const useConfig = createState(
           config.systemPrompt || (config.remoteSession ? "" : await buildDefaultSystemPrompt());
         state.config.initialPrompt = config.initialPrompt || "";
         state.config.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+        state.config.maxConcurrentTasks = config.maxConcurrentTasks;
         state.config.debug = config.debug ?? false;
         state.config.apiKey = config.apiKey || "";
         state.config.mcpConfigPath = config.mcpConfigPath || "";
@@ -179,6 +180,7 @@ export const useConfig = createState(
         state.config.systemPrompt = "";
         state.config.initialPrompt = "";
         state.config.maxIterations = DEFAULT_MAX_ITERATIONS;
+        state.config.maxConcurrentTasks = undefined;
         state.config.debug = false;
         state.config.apiKey = "";
         state.config.mcpConfigPath = "";

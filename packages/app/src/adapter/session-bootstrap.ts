@@ -103,6 +103,8 @@ export async function createAgentSessionFromConfig({
       config.systemPrompt ||
       (config.remoteSession ? undefined : await buildDefaultSystemPrompt(undefined, runtime.getEnv())),
     maxIterations: config.maxIterations,
+    // Optional: pass only when set, so the runtime/agent default (4) applies otherwise.
+    ...(config.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: config.maxConcurrentTasks } : {}),
     mcpConfigPath: config.mcpConfigPath || undefined,
     extensionDirs: config.extensionDirs?.length ? config.extensionDirs : undefined,
     modelStyle: connection.style,
