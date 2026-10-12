@@ -82,6 +82,25 @@ codent --resume             # pick a session
 
 `codent -h` lists every flag and keyboard shortcut.
 
+### Agent Client Protocol (ACP)
+
+`codent acp` (alias `codent --acp`) serves the agent over the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdio, so editors such as Zed or JetBrains can drive it. It is headless — stdout carries only
+JSON-RPC frames, never the TUI — and is intercepted before the terminal UI boots.
+
+An ACP client must spawn it with **cwd = the workspace root**, and a model must be configured
+(`.agents/config/models.json`, or `MODEL` / `BASE_URL` / `API_KEY`); without one it exits with a
+clear error.
+
+```jsonc
+// Zed settings.json — run the local codent as an ACP agent
+{ "agent_servers": { "codent": { "command": "codent", "args": ["acp"] } } }
+```
+
+The development host `@codent/cli` does not expose this subcommand. The `@codent/acp` package also
+publishes a standalone `codent-acp` bin (bootstrapping the same local runtime) if you prefer to
+depend on it directly instead of the bundled `codent acp`.
+
 ## Difference from `@codent/cli`
 
 > The published name is **`codent-cli`**; it is *not* `@codent/cli`. `@codent/cli` is the

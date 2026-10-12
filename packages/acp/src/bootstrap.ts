@@ -7,8 +7,8 @@
  *     (MODEL / MODEL_STYLE / BASE_URL / API_KEY), then `registerModelProvider`.
  *  3. Session plane: a `CodentAgent` runtime (own env + provider + manager + host).
  *
- * `cwd` MUST be the workspace root: our CoreEnv root is process-global, so an ACP
- * client should spawn `codent acp` inside the workspace it wants the agent to see.
+ * `cwd` MUST be the workspace root: the local CoreEnv is built from it (`createNodeEnv`),
+ * so an ACP client should spawn `codent acp` inside the workspace it wants the agent to see.
  */
 
 import {

@@ -68,6 +68,7 @@ const appConfig = parseCliArgs(argv);
 // Cosmetic host identity. Purely display: help screen + OSC-0 terminal title.
 appConfig.productName = "codent";
 appConfig.remotePlanes = false;
+appConfig.acp = true;
 
 if (isHelpRequested(argv)) {
   useConfig.getActions().setHelpRequested(true);

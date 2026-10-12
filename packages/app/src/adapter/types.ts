@@ -38,6 +38,12 @@ export interface AppConfig {
    */
   remotePlanes?: boolean;
   /**
+   * Whether this host serves the Agent Client Protocol over stdio (`codent acp`) for
+   * editors / ACP clients. Undefined means no — only the release host wires the ACP
+   * subcommand, so the help screen omits it elsewhere.
+   */
+  acp?: boolean;
+  /**
    * Optional remote CoreEnv (workspace) base URL (`--remote-env` / REMOTE_ENV).
    * When set, hosts register a remote CoreEnv instead of the local Node env.
    */
