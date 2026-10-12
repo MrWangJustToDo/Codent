@@ -82,6 +82,7 @@ import {
 } from "../agent/turn-context/instruction-context.js";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-context/session-retrieval.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import { getEnv, resolveCoreEnv } from "../env";
 import { generateId } from "../utils/generate-id.js";
 
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
@@ -122,6 +123,7 @@ import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
+import type { ResolvedCoreEnv } from "../env";
 import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
@@ -1688,6 +1690,11 @@ export class ManagedAgent {
   getContextWindow(): number | undefined {
     return this.modelInfo?.contextWindow ?? undefined;
   }
+
+  /** Resolved workspace env for this agent: its runtime's env, or the ambient env. */
+  getCoreEnv(): ResolvedCoreEnv {
+    return resolveCoreEnv(this.runtime?.env ?? getEnv());
+  }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).
@@ -1716,6 +1723,7 @@ export class ManagedAgent {
         statusController: this.statusController,
         compactionConfig: this.compaction.getConfig(),
         getContextWindow: () => this.getContextWindow(),
+        getCoreEnv: () => this.getCoreEnv(),
         resetAdmittedTurnContext: () => this.resetAdmittedTurnContext(),
         resetSystemPrompt: () => this.resetSystemPrompt(),
         persistSession: () => this.persistSession(),

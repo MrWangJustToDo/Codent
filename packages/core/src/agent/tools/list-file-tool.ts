@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { withDuration } from "./util/tool-result.js";
@@ -34,13 +32,13 @@ export const createListFileTool = () => {
         .describe(`Maximum number of entries to return. Defaults to ${DEFAULT_LIMIT}.`),
     }),
     outputSchema: listFileOutputSchema,
-    execute: async ({ path: inputPath, offset, limit }) => {
+    execute: async ({ path: inputPath, offset, limit }, { coreEnv }) => {
       return withDuration(async () => {
         const path = inputPath ?? ".";
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
 
-        const fs = getEnv().fs;
+        const fs = coreEnv.fs;
         const exists = await fs.exists(path);
 
         if (!exists) {

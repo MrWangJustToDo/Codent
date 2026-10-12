@@ -415,6 +415,21 @@ export function clearCoreEnv(): void {
 }
 
 /**
+ * Apply the built-in defaults (path, byteLength, base64 helpers) to a raw {@link CoreEnv},
+ * so a runtime can expose a fully-resolved env to tools without going through the ambient
+ * registry. Pure; safe for any env.
+ */
+export function resolveCoreEnv(env: CoreEnv): ResolvedCoreEnv {
+  return {
+    ...env,
+    path: env.path ?? defaultPath,
+    byteLength: env.byteLength ?? defaultByteLength,
+    base64Encode: env.base64Encode ?? defaultBase64Encode,
+    base64Decode: env.base64Decode ?? defaultBase64Decode,
+  };
+}
+
+/**
  * Get the registered runtime environment with defaults applied.
  *
  * @throws if {@link registerCoreEnv} has not been called yet.
@@ -426,13 +441,7 @@ export function getEnv(): ResolvedCoreEnv {
         "See the CoreEnv interface for the required API surface."
     );
   }
-  return {
-    ..._env,
-    path: _env.path ?? defaultPath,
-    byteLength: _env.byteLength ?? defaultByteLength,
-    base64Encode: _env.base64Encode ?? defaultBase64Encode,
-    base64Decode: _env.base64Decode ?? defaultBase64Decode,
-  };
+  return resolveCoreEnv(_env);
 }
 
 /**

@@ -1,7 +1,6 @@
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
-import { getEnv } from "../../env";
 import { isAbortError } from "../../runtime-types/abort.js";
 
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
@@ -64,7 +63,10 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
     }),
     outputSchema: runCommandOutputSchema,
     needsApproval: !subagentSafe,
-    execute: async ({ command, cwd, env, timeout, run_in_background }, { toolCallId, abortSignal, agentId }) => {
+    execute: async (
+      { command, cwd, env, timeout, run_in_background },
+      { toolCallId, abortSignal, agentId, coreEnv }
+    ) => {
       // Hard safety policy for subagents (no approval UI): only read-only,
       // project-internal commands execute; anything else is denied with a
       // reason surfaced to the model (insufficient permissions).
@@ -79,7 +81,6 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       }
 
       if (run_in_background) {
-        const coreEnv = getEnv();
         if (!coreEnv.startCommand) {
           throw new Error(
             "Background commands are not supported in this environment. " +
@@ -142,7 +143,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       // Everything else still throws, so genuine failures keep their error row.
       let result;
       try {
-        result = await getEnv().runCommand(command, {
+        result = await coreEnv.runCommand(command, {
           cwd,
           env,
           timeout,
@@ -163,8 +164,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
         stderrAccumulator.finish();
         const stdoutRaw = stdoutAccumulator.snapshot().content;
         const stderrRaw = stderrAccumulator.snapshot().content;
-        const stdoutResult = await maybeCacheOutput(stdoutRaw, `${toolCallId}-stdout`);
-        const stderrResult = await maybeCacheOutput(stderrRaw, `${toolCallId}-stderr`);
+        const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
+        const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
         return {
           command,
           stdout: stdoutResult.content,
@@ -187,8 +188,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       const stdoutRaw = stdoutAccumulator.snapshot().content || result.stdout || "";
       const stderrRaw = stderrAccumulator.snapshot().content || result.stderr || "";
 
-      const stdoutResult = await maybeCacheOutput(stdoutRaw, `${toolCallId}-stdout`);
-      const stderrResult = await maybeCacheOutput(stderrRaw, `${toolCallId}-stderr`);
+      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
+      const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
 
       const cachedOutputPath = stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null;
 

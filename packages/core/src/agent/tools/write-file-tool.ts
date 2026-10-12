@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { withDuration } from "./util/tool-result.js";
@@ -33,10 +31,10 @@ export const createWriteFileTool = () => {
     }),
     outputSchema: writeFileOutputSchema,
     needsApproval: true,
-    execute: async ({ path, content, overwrite, createDirectories }) => {
+    execute: async ({ path, content, overwrite, createDirectories }, { coreEnv }) => {
       return withFileMutationQueue(path, async () =>
         withDuration(async () => {
-          const fs = getEnv().fs;
+          const fs = coreEnv.fs;
           const fileExisted = await fs.exists(path);
 
           if (fileExisted && overwrite !== true) {

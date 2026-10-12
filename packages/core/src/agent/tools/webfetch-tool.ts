@@ -12,7 +12,6 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env";
 import { isAbortError } from "../../runtime-types/abort.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -135,7 +134,7 @@ Usage notes:
 
     outputSchema: webfetchOutputSchema,
 
-    execute: async ({ url, format, timeout }, { abortSignal, toolCallId }) => {
+    execute: async ({ url, format, timeout }, { abortSignal, toolCallId, coreEnv }) => {
       return withDuration(async () => {
         // Validate URL
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -166,7 +165,7 @@ Usage notes:
             "Accept-Language": "en-US,en;q=0.9",
           };
 
-          const envFetch = getEnv().fetch;
+          const envFetch = coreEnv.fetch;
 
           let response = await envFetch(url, {
             signal: controller.signal,
@@ -204,7 +203,7 @@ Usage notes:
           // Handle images
           const isImage = mime.startsWith("image/") && mime !== "image/svg+xml";
           if (isImage) {
-            const base64Content = getEnv().base64Encode(new Uint8Array(arrayBuffer));
+            const base64Content = coreEnv.base64Encode(new Uint8Array(arrayBuffer));
             return {
               url,
               contentType,
@@ -250,7 +249,7 @@ Usage notes:
           let truncated = false;
 
           if (content.length > MAX_CONTENT_CHARS) {
-            const cached = await maybeCacheOutput(content, `${toolCallId}-webfetch`);
+            const cached = await maybeCacheOutput(coreEnv, content, `${toolCallId}-webfetch`);
             content = cached.content;
             cachedOutputPath = cached.cachedOutputPath;
             truncated = cachedOutputPath !== null;

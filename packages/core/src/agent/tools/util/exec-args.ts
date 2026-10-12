@@ -1,6 +1,6 @@
-import { getEnv } from "../../../env";
-
 import { SEARCH_COMMAND_TIMEOUT, SEARCH_OUTPUT_BYTE_LIMIT, looksLikeMissingBinary } from "./search-command.js";
+
+import type { CoreEnv } from "../../../env";
 
 /** Outcome of an argv-based external command. */
 export interface ExecArgsResult {
@@ -39,12 +39,11 @@ export interface ExecArgsResult {
  * candidate; anything else that produced output is a result.
  */
 export async function execArgs(
+  env: CoreEnv,
   file: string,
   args: string[],
   timeout = SEARCH_COMMAND_TIMEOUT
 ): Promise<ExecArgsResult> {
-  const env = getEnv();
-
   // Feature-detect: hosts without argument-vector execution (a remote environment on an
   // older server, or a runtime with no process API) must degrade rather than fail. The
   // caller decides what fallback to use; reporting `missing` here keeps that decision with
@@ -96,11 +95,12 @@ export async function execArgs(
  * `TextDecoder` so a multi-byte character is never split into an invalid one.
  */
 export async function execArgsCapture(
+  env: CoreEnv,
   file: string,
   args: string[],
   timeout = SEARCH_COMMAND_TIMEOUT
 ): Promise<string | undefined> {
-  const result = await execArgs(file, args, timeout);
+  const result = await execArgs(env, file, args, timeout);
   if (result.missing || result.killed) return undefined;
   return truncateToBytes(result.stdout, SEARCH_OUTPUT_BYTE_LIMIT);
 }
@@ -118,6 +118,6 @@ export function truncateToBytes(text: string, maxBytes: number): string {
 }
 
 /** True when the host can run binaries with an argument vector (no shell). */
-export function canExecArgs(): boolean {
-  return Boolean(getEnv().execFile);
+export function canExecArgs(env: CoreEnv): boolean {
+  return Boolean(env.execFile);
 }

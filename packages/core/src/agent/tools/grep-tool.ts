@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
@@ -15,6 +13,7 @@ import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { grepOutputSchema } from "./util/types.js";
 
+import type { CoreEnv } from "../../env";
 import type { GrepOutput } from "./util/types.js";
 
 /** Maximum characters per matching line content (to prevent context overflow) */
@@ -231,6 +230,7 @@ function quoteForShell(arg: string): string {
  * pipeline — the shell is never responsible for correctness.
  */
 async function runGrepSearch(
+  env: CoreEnv,
   pattern: string,
   searchPath: string,
   options: {
@@ -242,10 +242,10 @@ async function runGrepSearch(
     searchPathIsFile: boolean;
   }
 ): Promise<string> {
-  if (canExecArgs()) {
-    const rgStdout = await execArgsCapture("rg", buildRgArgs(pattern, searchPath, options));
+  if (canExecArgs(env)) {
+    const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options));
     if (rgStdout !== undefined) return truncateLines(rgStdout, options.fetchCount);
-    const grepStdout = await execArgsCapture("grep", buildGrepArgs(pattern, searchPath, options));
+    const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options));
     if (grepStdout !== undefined) return truncateLines(grepStdout, options.fetchCount);
     // Neither binary is available — an empty result is the honest answer.
     return "";
@@ -253,7 +253,6 @@ async function runGrepSearch(
 
   // Legacy path for hosts without argument-vector execution (task 1.7): the same argv,
   // joined and quoted, with truncation still in JS.
-  const env = getEnv();
   const timeout = SEARCH_COMMAND_TIMEOUT;
   const rgArgv = buildRgArgs(pattern, searchPath, options).map(quoteForShell);
   const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, { timeout });
@@ -401,7 +400,10 @@ export const createGrepTool = () => {
         .describe("Lines of surrounding context per match (only with output_mode 'content'). Defaults to 0."),
     }),
     outputSchema: grepOutputSchema,
-    execute: async ({ pattern, path, include, ignoreCase, offset, limit, outputMode, context }, { toolCallId }) => {
+    execute: async (
+      { pattern, path, include, ignoreCase, offset, limit, outputMode, context },
+      { toolCallId, coreEnv }
+    ) => {
       return withDuration(async () => {
         // Agents sometimes wrap the regex in quotes (e.g. `"extensions"`), which
         // grep treats as literal quote chars and matches nothing. Strip one pair
@@ -422,7 +424,7 @@ export const createGrepTool = () => {
         // so the search still works for new/relative paths.
         let searchPathIsFile = false;
         try {
-          const stat = await getEnv().fs.stat(searchPath);
+          const stat = await coreEnv.fs.stat(searchPath);
           searchPathIsFile = stat.isFile;
         } catch {
           // Non-fatal — treat as directory for backward compatibility
@@ -437,7 +439,7 @@ export const createGrepTool = () => {
           searchPathIsFile,
         };
 
-        const rawOutput = await runGrepSearch(searchPattern, searchPath, searchOptions);
+        const rawOutput = await runGrepSearch(coreEnv, searchPattern, searchPath, searchOptions);
 
         const lines = rawOutput
           .split("\n")
@@ -494,7 +496,7 @@ export const createGrepTool = () => {
         const paginatedMatches = validMatches.slice(skip, skip + take);
 
         const fullMatchText = paginatedMatches.map((m) => `${m.file}:${m.lineNumber}:${m.content}`).join("\n");
-        const cached = await maybeCacheOutput(fullMatchText, `${toolCallId}-grep`);
+        const cached = await maybeCacheOutput(coreEnv, fullMatchText, `${toolCallId}-grep`);
         const { cachedOutputPath } = cached;
 
         // matches always carries the requested page (structured metadata for the UI

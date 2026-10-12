@@ -13,9 +13,10 @@
 
 import { basename } from "pathe";
 
+import { resolveCoreEnv } from "../env";
 import { generateId } from "../utils/generate-id.js";
 
-import type { CoreEnv } from "../env";
+import type { CoreEnv, ResolvedCoreEnv } from "../env";
 import type { ModelProvider } from "../provider/model-provider.js";
 
 export interface AgentRuntimeOptions {
@@ -31,16 +32,17 @@ export interface AgentRuntimeOptions {
 
 export class AgentRuntime {
   readonly id: string;
-  readonly env: CoreEnv;
+  readonly env: ResolvedCoreEnv;
   readonly modelProvider?: ModelProvider;
   readonly name: string;
   readonly rootPath: string;
 
   constructor(options: AgentRuntimeOptions) {
     this.id = generateId("rt");
-    this.env = options.env;
+    // Resolve defaults once so tools read a fully-formed env off the runtime.
+    this.env = resolveCoreEnv(options.env);
     this.modelProvider = options.modelProvider;
-    this.rootPath = options.rootPath ?? options.env.rootPath;
+    this.rootPath = options.rootPath ?? this.env.rootPath;
     this.name = options.name?.trim() || basename(this.rootPath) || "agent";
   }
 }

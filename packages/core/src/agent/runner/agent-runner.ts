@@ -7,7 +7,7 @@ import { assertAsyncIterable } from "../stream/assert-async-iterable.js";
 
 import { createToolRunContext, type ToolRunContext } from "./run-context.js";
 
-import type { CoreEnv } from "../../env";
+import type { ResolvedCoreEnv } from "../../env";
 import type { ModelStyle } from "../../models/config/model-config.js";
 import type { ReasoningEffort } from "../../models/types.js";
 import type {
@@ -47,7 +47,7 @@ export interface AgentRunnerConfig {
    * Workspace env for this run's tool context. The owning runtime's env when bound;
    * omitted (→ ambient `getEnv()`) for the unwired/legacy path.
    */
-  coreEnv?: CoreEnv;
+  coreEnv?: ResolvedCoreEnv;
   /**
    * Optional lazy-tool discovery config. Only used when some tool is `lazy: true`;
    * tunes how much of each lazy tool's description appears in the discovery catalog.

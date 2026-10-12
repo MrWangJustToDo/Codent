@@ -1,4 +1,4 @@
-import type { CoreEnv } from "../../env";
+import type { ResolvedCoreEnv } from "../../env";
 
 // ============================================================================
 // Tool run context (passed to chat({ context }) and tool execute functions)
@@ -12,9 +12,9 @@ export interface ToolRunContext {
   /** Managed agent id for this run */
   agentId: string;
   /** Workspace CoreEnv (filesystem, shell, fetch) of the runtime that owns this run */
-  coreEnv: CoreEnv;
+  coreEnv: ResolvedCoreEnv;
 }
 
-export function createToolRunContext(agentId: string, coreEnv: CoreEnv): ToolRunContext {
+export function createToolRunContext(agentId: string, coreEnv: ResolvedCoreEnv): ToolRunContext {
   return { agentId, coreEnv };
 }

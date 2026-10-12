@@ -17,6 +17,7 @@ import type { CompactionConfig } from "../../agent/compaction/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TodoManager } from "../../agent/todo";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { AgentManager, AgentStatusController, UsageTracker } from "../../runtime-types";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
@@ -26,6 +27,8 @@ export interface CompactionMiddlewareDeps {
   agentId: string;
   manager: AgentManager;
   getCompactionConfig: () => CompactionConfig | null;
+  /** Resolved workspace env (owning runtime or ambient) for tool-cache maintenance. */
+  getCoreEnv: () => ResolvedCoreEnv;
   /** Model input context window in tokens, if known (drives keep policy + trigger). */
   getContextWindow?: () => number | undefined;
   getUIChannel: () => AgentUIChannel | null;
@@ -95,7 +98,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           });
 
           if (
-            applyCompactionResult(fromChannel, channel, usage, result, {
+            applyCompactionResult(deps.getCoreEnv(), fromChannel, channel, usage, result, {
               ...keepPolicyProjectionOptions(resolveKeepPolicy(compactionConfig ?? {}, contextWindow)),
               onCacheCleanupError: (err) => {
                 deps.emitEvent?.("compaction:auto-error", {

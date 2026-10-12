@@ -34,7 +34,7 @@ const fakeEnv = (root) => ({
   const runtime = new AgentRuntime({ env });
   assert.equal(runtime.rootPath, "/workspaces/project-alpha");
   assert.equal(runtime.name, "project-alpha", "name defaults to the workspace root basename");
-  assert.equal(runtime.env, env);
+  assert.equal(runtime.env.rootPath, "/workspaces/project-alpha", "runtime carries its env (resolved copy)");
   assert.ok(runtime.id.startsWith("rt"), "the runtime carries a stable id");
 
   const named = new AgentRuntime({ env, name: "custom" });

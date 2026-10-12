@@ -257,5 +257,5 @@ const jobLogSweeper = createStaleFileSweeper({
 });
 
 export function sweepStaleJobLogs(options?: StaleSweepOptions): Promise<number> {
-  return jobLogSweeper.sweep(options);
+  return jobLogSweeper.sweep(getEnv(), options);
 }

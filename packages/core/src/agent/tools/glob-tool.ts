@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
@@ -15,6 +13,7 @@ import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { globOutputSchema } from "./util/types.js";
 
+import type { CoreEnv } from "../../env";
 import type { GlobOutput } from "./util/types.js";
 
 /** Default number of files to return per page */
@@ -114,6 +113,7 @@ function quoteForShell(arg: string): string {
  * Truncation to `fetchCount` happens in JS on both paths.
  */
 async function runGlobSearch(
+  env: CoreEnv,
   pattern: string,
   searchPath: string,
   options: {
@@ -122,12 +122,12 @@ async function runGlobSearch(
     fetchCount: number;
   }
 ): Promise<string> {
-  if (canExecArgs()) {
+  if (canExecArgs(env)) {
     for (const binary of FD_BINARIES) {
-      const stdout = await execArgsCapture(binary, buildFdArgs(pattern, searchPath, options));
+      const stdout = await execArgsCapture(env, binary, buildFdArgs(pattern, searchPath, options));
       if (stdout !== undefined) return truncateLines(stdout, options.fetchCount);
     }
-    const findStdout = await execArgsCapture("find", buildFindArgs(pattern, searchPath, options));
+    const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options));
     if (findStdout !== undefined) return truncateLines(findStdout, options.fetchCount);
     // Both binaries are absent — an empty result is the honest answer. Falling through to
     // the shell path would only re-attempt the same missing binaries.
@@ -136,7 +136,6 @@ async function runGlobSearch(
 
   // Legacy path for hosts without argument-vector execution (task 1.7): the same argv,
   // joined and quoted, with truncation still in JS.
-  const env = getEnv();
   for (const binary of FD_BINARIES) {
     const argv = buildFdArgs(pattern, searchPath, options).map(quoteForShell);
     const result = await env.runCommand(`${binary} ${argv.join(" ")}`, { timeout: SEARCH_COMMAND_TIMEOUT });
@@ -183,7 +182,7 @@ export const createGlobTool = () => {
         .describe("Additional directory or file pattern to exclude (e.g., 'vendor', '*.log')."),
     }),
     outputSchema: globOutputSchema,
-    execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId }) => {
+    execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId, coreEnv }) => {
       return withDuration(async () => {
         const searchPath = path ?? ".";
         const skip = offset ?? 0;
@@ -199,7 +198,7 @@ export const createGlobTool = () => {
           fetchCount,
         };
 
-        const rawOutput = await runGlobSearch(pattern, searchPath, searchOptions);
+        const rawOutput = await runGlobSearch(coreEnv, pattern, searchPath, searchOptions);
 
         const allFiles = rawOutput
           .split("\n")
@@ -219,7 +218,7 @@ export const createGlobTool = () => {
         const paginatedFiles = allFiles.slice(skip, skip + take);
 
         const fullOutputText = paginatedFiles.join("\n");
-        const cached = await maybeCacheOutput(fullOutputText, `${toolCallId}-glob`);
+        const cached = await maybeCacheOutput(coreEnv, fullOutputText, `${toolCallId}-glob`);
         const { cachedOutputPath } = cached;
 
         // files always carries the requested page (structured metadata for the UI

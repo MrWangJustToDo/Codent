@@ -197,6 +197,18 @@ function oversizedWire() {
     getMessagesForLLM: () => oversizedWire(),
     emitEvent: (type, data) => events.push({ type, data }),
     getContextWindow: () => 0,
+    getCoreEnv: () => ({
+      rootPath: "/tmp",
+      fs: {},
+      path: {},
+      runCommand: async () => ({}),
+      exec: async () => ({}),
+      fetch: async () => new Response(""),
+      getPlatform: async () => "linux",
+      getArch: async () => "x64",
+      getEnv: async () => ({}),
+      homedir: async () => "/tmp",
+    }),
     compactionConfig: { keepRecentTokens: 8_000 },
   };
 
@@ -307,6 +319,18 @@ for (const [label, error, expectSilent] of [
     },
     emitEvent: (type, data) => events.push({ type, data }),
     getContextWindow: () => 0,
+    getCoreEnv: () => ({
+      rootPath: "/tmp",
+      fs: {},
+      path: {},
+      runCommand: async () => ({}),
+      exec: async () => ({}),
+      fetch: async () => new Response(""),
+      getPlatform: async () => "linux",
+      getArch: async () => "x64",
+      getEnv: async () => ({}),
+      homedir: async () => "/tmp",
+    }),
     compactionConfig: { keepRecentTokens: 8_000 },
   };
 

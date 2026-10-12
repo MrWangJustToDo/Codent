@@ -1,5 +1,6 @@
+import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
+
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { RunCoordinator } from "./run-coordinator.js";
@@ -76,8 +77,11 @@ export interface AgentRunDeps {
   config: Readonly<ManagedAgentConfig>;
   /** Immutable after construction. */
   parentId: string | undefined;
-  /** Runtime this agent belongs to (env + provider); undefined = ambient. Immutable. */
-  runtime: AgentRuntime | undefined;
+  /**
+   * Workspace env for this run's tools/consumers — the owning runtime's resolved env, or the
+   * ambient env for legacy single-instance hosts. Resolved once here (the composition point).
+   */
+  coreEnv: ResolvedCoreEnv;
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
@@ -128,7 +132,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getUIChannel: () => managed.getUI() ?? null,
     config: managed.config,
     parentId: managed.parentId,
-    runtime: managed.runtime,
+    coreEnv: resolveCoreEnv(managed.runtime?.env ?? getEnv()),
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),

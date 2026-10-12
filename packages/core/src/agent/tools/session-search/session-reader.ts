@@ -14,13 +14,13 @@
  * count, and collected matches — so a large history cannot blow the model context or the turn.
  */
 
-import { getEnv } from "../../../env";
 import { isCompactionSummaryUIMessage } from "../../compaction/compaction-summary.js";
 import { foldLog, getJournalPath, readLog } from "../../persistence/session-journal.js";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../../persistence/types.js";
 import { isToolCallPart, partTextContent } from "../../stream/message-parts.js";
 import { OUTPUT_LIMITS } from "../util/output-limits.js";
 
+import type { ResolvedCoreEnv } from "../../../env";
 import type { PersistedUIMessage } from "../../persistence/types.js";
 
 // ============================================================================
@@ -194,8 +194,7 @@ function latestSummaryIndex(messages: PersistedUIMessage[]): number {
 // ============================================================================
 
 /** Session ids present on disk, newest-modified first. */
-export async function listSessionIds(): Promise<string[]> {
-  const env = getEnv();
+export async function listSessionIds(env: ResolvedCoreEnv): Promise<string[]> {
   let entries: Awaited<ReturnType<typeof env.fs.readdir>>;
   try {
     if (!(await env.fs.exists(SESSION_DIR))) return [];
@@ -228,8 +227,7 @@ export async function listSessionIds(): Promise<string[]> {
  * `session_read` folds whatever the file holds — bounding the model-visible result is the
  * tool's job (message-count + rendered-size caps, then the output cache/preview spill).
  */
-export async function readSessionMessages(sessionId: string): Promise<SessionMessage[]> {
-  const env = getEnv();
+export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: string): Promise<SessionMessage[]> {
   const path = getJournalPath(sessionId);
   try {
     if (!(await env.fs.exists(path))) return [];
@@ -250,9 +248,9 @@ export async function readSessionMessages(sessionId: string): Promise<SessionMes
 }
 
 /** Whether a session log exists on disk. */
-export async function sessionExists(sessionId: string): Promise<boolean> {
+export async function sessionExists(env: ResolvedCoreEnv, sessionId: string): Promise<boolean> {
   try {
-    return await getEnv().fs.exists(getJournalPath(sessionId));
+    return await env.fs.exists(getJournalPath(sessionId));
   } catch {
     return false;
   }
@@ -323,8 +321,7 @@ function searchSession(
  * message order. The scan is bounded by {@link MAX_SESSIONS_SCANNED}, {@link MAX_SCAN_BYTES} and
  * {@link MAX_MATCHES_COLLECTED}; when a bound is hit `truncated` is true so the caller can say so.
  */
-export async function searchHistory(options: SearchHistoryOptions): Promise<SearchHistoryResult> {
-  const env = getEnv();
+export async function searchHistory(env: ResolvedCoreEnv, options: SearchHistoryOptions): Promise<SearchHistoryResult> {
   const query = options.query.toLowerCase();
   const roles = options.role ? [options.role] : DEFAULT_SEARCH_ROLES;
 
@@ -332,7 +329,7 @@ export async function searchHistory(options: SearchHistoryOptions): Promise<Sear
   if (options.sessionId) {
     sessionIds = [options.sessionId];
   } else {
-    sessionIds = (await listSessionIds()).filter((id) => id !== options.excludeSessionId);
+    sessionIds = (await listSessionIds(env)).filter((id) => id !== options.excludeSessionId);
   }
 
   const matches: HistoryMatch[] = [];
@@ -376,7 +373,7 @@ export async function searchHistory(options: SearchHistoryOptions): Promise<Sear
     } catch {
       continue;
     }
-    const messages = await readSessionMessages(id);
+    const messages = await readSessionMessages(env, id);
     total += searchSession(id, messages, query, roles, { since: options.since, until: options.until }, collect);
   }
 

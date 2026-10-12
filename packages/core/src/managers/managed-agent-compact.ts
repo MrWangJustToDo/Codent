@@ -12,6 +12,7 @@ import { isPromptTooLongError, reactiveCompact } from "../agent/compaction/react
 import { estimateTokens } from "../agent/compaction/token-estimator.js";
 
 import type { AgentManager } from "./agent-manager.js";
+import type { ResolvedCoreEnv } from "../env";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
@@ -37,6 +38,8 @@ export interface ReactiveCompactHost {
   compactionConfig?: { keepRecentTokens?: number } | null;
   /** Model input context window in tokens, if known (drives the reactive tail budget). */
   getContextWindow: () => number | undefined;
+  /** Resolved workspace env (owning runtime or ambient). */
+  getCoreEnv: () => ResolvedCoreEnv;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
 }
@@ -77,7 +80,7 @@ export async function handleManagedReactiveCompact(
     // Capture window fill before apply (usage is reset by applyReactiveCompactionResult).
     const tokensBefore = host.usage.getContextFillTokens();
 
-    applyReactiveCompactionResult(canon, channel, host.usage, compactedMessages, {
+    applyReactiveCompactionResult(host.getCoreEnv(), canon, channel, host.usage, compactedMessages, {
       ...keepPolicyProjectionOptions(resolveKeepPolicy(host.compactionConfig ?? {}, host.getContextWindow())),
       onCacheCleanupError: (err) => {
         host.emitEvent("compaction:reactive-error", {
@@ -127,6 +130,8 @@ export interface ManualCompactHost {
   compactionConfig: CompactionConfig | null;
   /** Model input context window in tokens, if known (drives the keep policy). */
   getContextWindow: () => number | undefined;
+  /** Resolved workspace env (owning runtime or ambient). */
+  getCoreEnv: () => ResolvedCoreEnv;
   resetAdmittedTurnContext: () => void;
   resetSystemPrompt: () => void;
   persistSession: () => void;
@@ -190,7 +195,7 @@ export async function runManualCompact(
       ...(abortSignal ? { abortSignal } : {}),
     });
 
-    const applied = applyCompactionResult(allModelMessages, channel, host.usage, result, {
+    const applied = applyCompactionResult(host.getCoreEnv(), allModelMessages, channel, host.usage, result, {
       ...keepOptions,
       onCacheCleanupError: (err) => {
         host.getLog?.()?.warn("agent", "Failed to cleanup tool cache after compact", { error: err.message });

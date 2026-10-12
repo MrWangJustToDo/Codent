@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env";
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -145,15 +144,15 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         ),
     }),
 
-    execute: async ({ path: filePath, offset, limit }) => {
+    execute: async ({ path: filePath, offset, limit }, { coreEnv }) => {
       const result = await withDuration(async () => {
-        const fsys = getEnv().fs;
+        const fsys = coreEnv.fs;
 
         // Check if file/directory exists
         const exists = await fsys.exists(filePath);
         if (!exists) {
           // Try to find similar files for suggestion
-          const envPath = getEnv().path;
+          const envPath = coreEnv.path;
           const dir = envPath.dirname(filePath);
           const base = envPath.basename(filePath).toLowerCase();
           let suggestion = "";
@@ -241,7 +240,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // instead of rejecting outright (optional CoreEnv capability — Node
           // hosts implement it via sharp; browsers/WebContainer degrade to reject).
           if (estimatedTokens > remainingTokens) {
-            const resized = await getEnv().resizeImage?.(data, { maxWidth: 1024, quality: 80 });
+            const resized = await coreEnv.resizeImage?.(data, { maxWidth: 1024, quality: 80 });
             if (resized && resized.length > 0 && resized.length < data.length) {
               data = resized;
               mimeType = "image/jpeg";
@@ -257,7 +256,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
             );
           }
 
-          const base64 = getEnv().base64Encode(data);
+          const base64 = coreEnv.base64Encode(data);
 
           return {
             type: "image" as const,
@@ -297,7 +296,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           return {
             type: "pdf" as const,
             path: filePath,
-            base64: getEnv().base64Encode(buffer),
+            base64: coreEnv.base64Encode(buffer),
             size: buffer.length,
             ...(extractedText ? { extractedText } : {}),
             ...(extracted?.totalPages != null ? { pageCount: extracted.totalPages } : {}),
