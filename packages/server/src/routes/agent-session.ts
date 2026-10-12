@@ -16,6 +16,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import { createMessagesDeltaWriter } from "../messages-delta.js";
+import { getServerManager } from "../server-runtime.js";
 
 import { readServerModelEnv } from "./provider.js";
 
@@ -259,10 +260,11 @@ async function resolveServerModelSetCommand(command: unknown): Promise<unknown> 
 async function getSession(id: string): Promise<SessionLike | undefined> {
   const existing = sessions.get(id);
   if (existing) return existing;
-  const { agentManager, createLocalAgentSession } = await loadCore();
-  const managed = agentManager.getAgent(id);
+  const { createLocalAgentSession } = await loadCore();
+  const manager = getServerManager();
+  const managed = manager.getAgent(id);
   if (!managed) return undefined;
-  const session = createLocalAgentSession({ managed, manager: agentManager }) as unknown as SessionLike;
+  const session = createLocalAgentSession({ managed, manager }) as unknown as SessionLike;
   sessions.set(id, session);
   attachToolBuffer(id, session);
   return session;
@@ -271,8 +273,8 @@ async function getSession(id: string): Promise<SessionLike | undefined> {
 export const agentSessionRoutes = new Hono()
   // Catalog list — mirrors Local `AgentSessionHost.list()`.
   .get("/", async (c) => {
-    const { agentManager } = await loadCore();
-    const entries = agentManager.getAgents().map((managed) => ({
+    const manager = getServerManager();
+    const entries = manager.getAgents().map((managed) => ({
       agentId: managed.id,
       name: managed.name,
       ...(managed.parentId ? { parentId: managed.parentId } : {}),
@@ -314,8 +316,7 @@ export const agentSessionRoutes = new Hono()
   })
   .post("/", async (c) => {
     const body = createBodySchema.parse(await c.req.json());
-    const { agentManager, buildDefaultSystemPrompt, createLocalAgentSessionHost, resolveModelConfig } =
-      await loadCore();
+    const { buildDefaultSystemPrompt, createLocalAgentSessionHost, resolveModelConfig } = await loadCore();
     // Explicit client model wins; otherwise use the server's own `.env` provider
     // so a `--remote-session` client can leave model configuration on the server.
     const explicitModel = body.model?.trim();
@@ -337,7 +338,8 @@ export const agentSessionRoutes = new Hono()
         400
       );
     }
-    const host = createLocalAgentSessionHost({ manager: agentManager });
+    const manager = getServerManager();
+    const host = createLocalAgentSessionHost({ manager });
     const { session } = await host.create({
       name: body.name || "remote",
       model: connection.model,
@@ -362,7 +364,7 @@ export const agentSessionRoutes = new Hono()
     diag(
       `POST /api/agent body=${JSON.stringify({ ...safeBody, toolConfig: body.toolConfig ? "[redacted]" : undefined })} ` +
         `-> id=${session.id} sessions.size=${sessions.size} ` +
-        `inManager=${agentManager.getAgent(session.id)?.id ?? "NONE"}`
+        `inManager=${manager.getAgent(session.id)?.id ?? "NONE"}`
     );
     return c.json({ id: session.id, snapshot: (session as SessionLike).getSnapshot() });
   })
@@ -480,9 +482,9 @@ export const agentSessionRoutes = new Hono()
     sessions.delete(id);
     clearIdleStop(id);
     dropToolBuffer(id);
-    const { agentManager } = await loadCore();
-    if (agentManager.getAgent(id)) {
-      agentManager.destroyAgent(id);
+    const manager = getServerManager();
+    if (manager.getAgent(id)) {
+      manager.destroyAgent(id);
     }
     return c.json({ ok: true });
   });

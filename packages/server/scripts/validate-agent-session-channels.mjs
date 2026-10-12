@@ -24,13 +24,14 @@ process.env.ROOT_PATH = mkdtempSync(join(tmpdir(), "agent-session-channels-"));
 process.env.SERVER_PORT = "0";
 process.env.SANDBOX_ENV = "native";
 
-const { createServer } = await import("../dist/index.mjs");
+const { createServer, getServerManager } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
 const { RemoteSessionClient } = await import("../dist/remote-session-client.mjs");
 
-// The server externalizes `@codent/core`, so this import resolves to the SAME
-// module instances the server uses internally (shared agentManager / bus).
-const { agentManager, summaryStreamKey } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
+// The server owns its agent runtime (a `CodentAgent` over the workspace CoreEnv);
+// `getServerManager()` from the server entry reaches the agents it created.
+// `summaryStreamKey` is a pure helper shared through the externalized core.
+const { summaryStreamKey } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
 
 const waitFor = async (label, fn, timeoutMs = 6000) => {
   const start = Date.now();
@@ -161,8 +162,8 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
 // the projected `tool` / `summary` session events.
 {
   const agentId = session.getSnapshot().agentId;
-  const managed = agentManager.getAgent(agentId);
-  assert.ok(managed, "server agent is registered in the shared core agentManager");
+  const managed = getServerManager().getAgent(agentId);
+  assert.ok(managed, "server agent is registered in the server runtime's manager");
 
   const client = new RemoteSessionClient({ baseUrl, agentId });
   /** @type {Array<{channel: string; payload: any}>} */

@@ -108,7 +108,7 @@ await withServer(notFound, async (url) => {
   registerCoreEnv(env);
   check(
     "canExecArgs() therefore reports the argv path as unavailable",
-    canExecArgs() === false,
+    canExecArgs(env) === false,
     "a defined function would make the tools take the argv path and throw"
   );
 
