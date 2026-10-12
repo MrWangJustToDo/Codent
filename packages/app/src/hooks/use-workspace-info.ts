@@ -1,4 +1,3 @@
-import { getEnv } from "@codent/core";
 import { createState } from "reactivity-store";
 
 import { refreshKeyboardPlatform } from "../utils/keyboard-labels.js";
@@ -7,6 +6,7 @@ import { fetchWorkspaceGitInfo } from "../utils/workspace-git-info";
 import { useConfig } from "./use-config.js";
 
 import type { WorkspaceGitInfo } from "../utils/workspace-git-info";
+import type { CoreEnv } from "@codent/core";
 
 type WorkspaceInfo = {
   path: string;
@@ -17,7 +17,7 @@ function shortenPath(rootPath: string): string {
   return rootPath.length > 40 ? `...${rootPath.slice(-37)}` : rootPath;
 }
 
-export const getWorkSpaceInfo = async () => {
+export const getWorkSpaceInfo = async (env: CoreEnv) => {
   let path = "";
   let git: WorkspaceGitInfo | undefined;
 
@@ -37,11 +37,11 @@ export const getWorkSpaceInfo = async () => {
       }
     }
     if (!path) {
-      const rootPath = getEnv().rootPath;
+      const rootPath = env.rootPath;
       path = rootPath ? shortenPath(rootPath) : "";
-      git = git ?? ((await fetchWorkspaceGitInfo(rootPath)) || undefined);
+      git = git ?? ((await fetchWorkspaceGitInfo(env, rootPath)) || undefined);
     }
-    await refreshKeyboardPlatform();
+    await refreshKeyboardPlatform(env);
   } catch {
     void 0;
   }

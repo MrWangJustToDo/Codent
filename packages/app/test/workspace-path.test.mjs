@@ -13,10 +13,8 @@ import assert from "node:assert/strict";
 
 import { workspaceRelativePath, joinWorkspacePath } from "../dist/utils/workspace-path.mjs";
 
-// `joinWorkspacePath` reads CoreEnv's path utils, and `getEnv()` throws when nothing is
-// registered. Register a stub so the join assertion exercises the real code path rather than
-// being skipped.
-registerCoreEnv({
+// `joinWorkspacePath` reads CoreEnv's path utils from the env it is handed. A stub is enough.
+const env = {
   rootPath: "/repo",
   getPlatform: async () => "linux",
   getArch: async () => "x64",
@@ -26,7 +24,8 @@ registerCoreEnv({
   runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0, durationMs: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
   fetch: async () => new Response(),
-});
+};
+registerCoreEnv(env);
 
 // --- Windows roots ----------------------------------------------------------
 assert.equal(workspaceRelativePath("C:\\repo", "C:/repo/src/a.ts"), "src/a.ts");
@@ -54,7 +53,7 @@ assert.equal(workspaceRelativePath("/repo", "/elsewhere/a.ts"), "/elsewhere/a.ts
 
 // --- joinWorkspacePath ------------------------------------------------------
 // Uses CoreEnv's path utils (POSIX via pathe by default).
-assert.equal(joinWorkspacePath("a", "b", "c.ts"), "a/b/c.ts");
-assert.equal(joinWorkspacePath("/repo", "src", "a.ts"), "/repo/src/a.ts");
+assert.equal(joinWorkspacePath(env, "a", "b", "c.ts"), "a/b/c.ts");
+assert.equal(joinWorkspacePath(env, "/repo", "src", "a.ts"), "/repo/src/a.ts");
 
 console.log("workspace-path: ok");

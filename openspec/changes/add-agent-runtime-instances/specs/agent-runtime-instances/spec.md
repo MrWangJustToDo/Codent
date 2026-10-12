@@ -63,6 +63,11 @@ remain only as the ambient fallback for code that has not been migrated.
 - **WHEN** model configuration is resolved for a `CodentAgent` (app-side `resolveModelConfigFromProvider` against that runtime's host)
 - **THEN** the resolution uses that runtime's `ModelProvider` and not the process-global registry, so two runtimes created with different keys resolve different connections
 
+#### Scenario: The app reads the workspace env from its provider
+
+- **WHEN** an app component or workspace utility needs the environment (fs, rootPath, runCommand)
+- **THEN** it receives the env the host supplied through `CoreEnvProvider` / `useCoreEnv` (passed explicitly into the utility) and never reads the ambient `getEnv()` registry
+
 #### Scenario: A host exposes its runtime provider
 
 - **WHEN** an `AgentSessionHost` created by a local runtime is asked for its model provider

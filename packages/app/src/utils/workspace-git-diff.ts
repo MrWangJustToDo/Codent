@@ -1,6 +1,8 @@
 import { namesAFile } from "./workspace-git-paths.js";
 import { workspaceRelativePath } from "./workspace-path.js";
 
+import type { CoreEnv } from "@codent/core";
+
 export type WorkspaceFileDiff = {
   relativePath: string;
   fileName: string;
@@ -20,12 +22,12 @@ export function clearWorkspaceDiffCache(): void {
   diffCache.clear();
 }
 
-export function fetchWorkspaceFileDiff(rootPath: string, filePath: string): Promise<WorkspaceFileDiff> {
+export function fetchWorkspaceFileDiff(env: CoreEnv, rootPath: string, filePath: string): Promise<WorkspaceFileDiff> {
   const key = `${rootPath}\0${filePath}`;
   const cached = diffCache.get(key);
   if (cached) return cached;
 
-  const promise = loadWorkspaceFileDiff(rootPath, filePath).catch((error: unknown) => {
+  const promise = loadWorkspaceFileDiff(env, rootPath, filePath).catch((error: unknown) => {
     diffCache.delete(key);
     throw error;
   });
@@ -33,7 +35,7 @@ export function fetchWorkspaceFileDiff(rootPath: string, filePath: string): Prom
   return promise;
 }
 
-async function loadWorkspaceFileDiff(rootPath: string, filePath: string): Promise<WorkspaceFileDiff> {
+async function loadWorkspaceFileDiff(env: CoreEnv, rootPath: string, filePath: string): Promise<WorkspaceFileDiff> {
   // The caller passes an absolute path taken from a diff-tree row, and the tree excludes
   // directory-shaped paths (`workspace-git-paths`), so this is unreachable with a directory
   // today. Guarded anyway: it is the third consumer of git output in this view, and it is the
@@ -53,8 +55,6 @@ async function loadWorkspaceFileDiff(rootPath: string, filePath: string): Promis
     };
   }
   const fileName = filePath.split("/").pop() || filePath;
-  const { getEnv } = await import("@codent/core");
-  const env = getEnv();
 
   let oldContent = "";
   const quoted = quoteShellArg(relativePath);

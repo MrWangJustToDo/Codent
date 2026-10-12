@@ -48,7 +48,7 @@
 
 ## 6. Stage 4 — App env routing, docs, archive
 
-- [ ] 6.1 Route app direct `getEnv()` reads (`components/FileTree.tsx`, `components/FileContent.tsx`, `components/WorkspaceFileMode.tsx`, `components/Help.tsx`, `hooks/use-workspace-info.ts`) through the active session's runtime.
+- [x] 6.1 Route app direct `getEnv()` reads through the active runtime: add a `CoreEnvProvider` / `useCoreEnv` context supplied by each host, and pass the env explicitly into the workspace utils (`workspace-path`, `workspace-git-*`, `workspace-diff-*`, `workspace-file-search`, `keyboard-labels`, `use-workspace-info`, `use-workspace-git`) + the components/hooks that consume them. Forbid `getEnv`/`hasCoreEnv` in app code via `validate:core-imports`.
 - [ ] 6.2 Promote `agentManager` to a documented ambient-only, deprecated surface in `AGENTS.md`.
 - [ ] 6.3 Update `AGENTS.md` bootstrap sequences (CLI/extension) to show `CodentAgent.create`; re-check the file-structure map after all moves.
 - [ ] 6.4 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `validate:core-public-exports`.

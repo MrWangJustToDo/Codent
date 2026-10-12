@@ -2,8 +2,11 @@ import { CodeView, type CodeViewRef, type ScrollState } from "@git-diff-view/cli
 import { Box, Text } from "ink";
 import { forwardRef, useEffect, useMemo, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { COLORS } from "../theme/colors.js";
 import { isLikelyBinaryPath } from "../utils/file-icons.js";
+
+import type { CoreEnv } from "@codent/core";
 
 // ============================================================================
 // File content cache
@@ -11,16 +14,14 @@ import { isLikelyBinaryPath } from "../utils/file-icons.js";
 
 const contentCache = new Map<string, Promise<string>>();
 
-function fetchFileContent(path: string): Promise<string> {
+function fetchFileContent(env: CoreEnv, path: string): Promise<string> {
   const cached = contentCache.get(path);
   if (cached) return cached;
 
-  const promise = import("@codent/core")
-    .then(({ getEnv }) => getEnv().fs.readFile(path))
-    .catch((error: unknown) => {
-      contentCache.delete(path);
-      throw error;
-    });
+  const promise = env.fs.readFile(path).catch((error: unknown) => {
+    contentCache.delete(path);
+    throw error;
+  });
 
   contentCache.set(path, promise);
   return promise;
@@ -53,6 +54,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
   { filePath, width, height, onScrollChange },
   ref
 ) {
+  const env = useCoreEnv();
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [scrollState, setScrollState] = useState<ScrollState | null>(null);
   const fileName = useMemo(() => filePath.split("/").pop() || filePath, [filePath]);
@@ -72,7 +74,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
       return;
     }
 
-    fetchFileContent(filePath)
+    fetchFileContent(env, filePath)
       .then((raw) => {
         if (cancelled) return;
         const totalLines = raw.length === 0 ? 0 : raw.split("\n").length;
@@ -95,7 +97,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
     return () => {
       cancelled = true;
     };
-  }, [filePath]);
+  }, [env, filePath]);
 
   const handleScrollChange = (next: ScrollState) => {
     setScrollState(next);

@@ -1,5 +1,7 @@
 import { parseGitStatusZ } from "./workspace-git-paths.js";
 
+import type { CoreEnv } from "@codent/core";
+
 // ============================================================================
 // Git Status
 // ============================================================================
@@ -26,17 +28,16 @@ export function clearGitStatusCache(): void {
   gitStatusCache = null;
 }
 
-export async function fetchGitStatus(rootPath: string): Promise<Map<string, string>> {
+export async function fetchGitStatus(env: CoreEnv, rootPath: string): Promise<Map<string, string>> {
   if (gitStatusCache && gitStatusCache.rootPath === rootPath) {
     return gitStatusCache.status;
   }
   try {
-    const { getEnv } = await import("@codent/core");
     // `-z` (NUL-delimited, never quoted) and `--untracked-files=all` (expand untracked
     // directories into their files). Without `-uall` git reports one record for a wholly
     // untracked directory, which has no file behind it and no name of its own — the
     // nameless row this parsing exists to avoid.
-    const result = await getEnv().runCommand("git status --porcelain -z --untracked-files=all", {
+    const result = await env.runCommand("git status --porcelain -z --untracked-files=all", {
       cwd: rootPath,
     });
     const status = parseGitStatus(result.stdout);

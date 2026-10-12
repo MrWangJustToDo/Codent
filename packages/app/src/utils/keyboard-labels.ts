@@ -14,16 +14,16 @@
  * - Platform comes from CoreEnv (`getPlatform`), never `process.platform`.
  */
 
-import { getEnv, hasCoreEnv } from "@codent/core";
+import type { CoreEnv } from "@codent/core";
 
 /** Cached CoreEnv platform id (`darwin`, `linux`, `win32`, …). */
 let cachedPlatform: string | undefined;
 
 /**
- * Refresh the cached platform from CoreEnv.
- * Call after `registerCoreEnv` (e.g. during workspace / agent bootstrap).
+ * Refresh the cached platform from the active session's CoreEnv.
+ * Call during workspace / agent bootstrap with that runtime's env.
  */
-export async function refreshKeyboardPlatform(): Promise<string | undefined> {
+export async function refreshKeyboardPlatform(env?: CoreEnv): Promise<string | undefined> {
   // Keyboard shortcuts reflect the physical terminal the user types in, not the
   // (possibly remote) CoreEnv the agent runs on — a macOS CLI attached to a
   // Linux server must still show ⌘ labels. Node hosts report the local platform
@@ -32,11 +32,11 @@ export async function refreshKeyboardPlatform(): Promise<string | undefined> {
     cachedPlatform = process.platform;
     return cachedPlatform;
   }
-  if (!hasCoreEnv()) {
+  if (!env) {
     cachedPlatform = undefined;
     return undefined;
   }
-  cachedPlatform = await getEnv().getPlatform();
+  cachedPlatform = await env.getPlatform();
   return cachedPlatform;
 }
 

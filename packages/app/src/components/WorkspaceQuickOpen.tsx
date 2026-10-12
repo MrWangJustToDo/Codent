@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { useWorkspaceView } from "../hooks/use-workspace-view.js";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatIconGlyph, getFileIconStyle } from "../utils/file-icons.js";
@@ -43,6 +44,7 @@ interface WorkspaceQuickOpenProps {
 }
 
 export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOpenProps) => {
+  const env = useCoreEnv();
   const quickOpen = useWorkspaceView((s) => s.quickOpen);
   const { closeQuickOpen, moveQuickOpenCursor, selectFile, setMode, setQuickOpenCursor, setQuickOpenQuery } =
     useWorkspaceView.getActions();
@@ -53,7 +55,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
   useEffect(() => {
     if (!rootPath) return;
     let cancelled = false;
-    fetchWorkspaceFileList(rootPath)
+    fetchWorkspaceFileList(env, rootPath)
       .then((list) => {
         if (!cancelled) setFiles(list);
       })
@@ -63,7 +65,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [env, rootPath]);
 
   const query = quickOpen?.query ?? "";
   const cursor = quickOpen?.cursor ?? 0;
@@ -90,7 +92,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
     // files, so staying in diff mode would show an empty diff for a jump target
     // that has no changes.
     setMode("preview");
-    selectFile(joinWorkspacePath(rootPath, result.path));
+    selectFile(joinWorkspacePath(env, rootPath, result.path));
   };
 
   useInput((inputChar, key) => {

@@ -3,6 +3,8 @@ import { toPosixPath } from "@codent/core";
 import { namesAFile } from "./workspace-git-paths.js";
 import { joinWorkspacePath } from "./workspace-path.js";
 
+import type { CoreEnv } from "@codent/core";
+
 // ============================================================================
 // Diff-only tree preprocessing
 //
@@ -44,7 +46,7 @@ interface DiffTreeNode {
 }
 
 /** Build the tree skeleton from changed relative paths only (no fs reads). */
-function buildDiffTree(gitStatus: Map<string, string>, rootPath: string): DiffTreeNode[] {
+function buildDiffTree(env: CoreEnv, gitStatus: Map<string, string>, rootPath: string): DiffTreeNode[] {
   const roots: DiffTreeNode[] = [];
   const index = new Map<string, DiffTreeNode>();
 
@@ -70,7 +72,7 @@ function buildDiffTree(gitStatus: Map<string, string>, rootPath: string): DiffTr
         node = {
           key,
           name: segments[i],
-          path: joinWorkspacePath(rootPath, key),
+          path: joinWorkspacePath(env, rootPath, key),
           type: isLast ? "file" : "directory",
           children: [],
         };
@@ -161,12 +163,13 @@ function flattenDiffTree(
  * @param collapsed relative paths of directories the user collapsed
  */
 export function buildDiffTreeItems(
+  env: CoreEnv,
   gitStatus: Map<string, string>,
   rootPath: string,
   collapsed: Set<string>
 ): FlatTreeItem[] {
   if (!rootPath || gitStatus.size === 0) return [];
-  const roots = sortDiffChildren(buildDiffTree(gitStatus, rootPath)).map((root) =>
+  const roots = sortDiffChildren(buildDiffTree(env, gitStatus, rootPath)).map((root) =>
     root.type === "directory" ? { ...root, children: compressDiffTree(root.children) } : root
   );
   const out: FlatTreeItem[] = [];
@@ -186,8 +189,8 @@ export function buildDiffTreeItems(
  * inside a collapsed directory, which must stay reachable. The companions below
  * give the caller what it needs to reveal such a target.
  */
-export function orderedChangedFiles(gitStatus: Map<string, string>, rootPath: string): string[] {
-  return buildDiffTreeItems(gitStatus, rootPath, new Set())
+export function orderedChangedFiles(env: CoreEnv, gitStatus: Map<string, string>, rootPath: string): string[] {
+  return buildDiffTreeItems(env, gitStatus, rootPath, new Set())
     .filter((item) => item.type === "file")
     .map((item) => item.path);
 }
@@ -211,12 +214,13 @@ export function orderedChangedFiles(gitStatus: Map<string, string>, rootPath: st
  *   only one file is changed).
  */
 export function changedFileJumpTarget(
+  env: CoreEnv,
   gitStatus: Map<string, string>,
   rootPath: string,
   selectedPath: string | null,
   direction: 1 | -1
 ): { target: string; revealKeys: string[] } | null {
-  const changed = orderedChangedFiles(gitStatus, rootPath);
+  const changed = orderedChangedFiles(env, gitStatus, rootPath);
   if (changed.length === 0) return null;
   const cur = selectedPath ? changed.indexOf(selectedPath) : -1;
   let next: number;
@@ -228,7 +232,7 @@ export function changedFileJumpTarget(
   // target's own row, so the row could not report its own ancestors. Reading the
   // chain off the rendered rows is the trap a first fix fell into (dead code for
   // exactly this case, while every pure formatter test still passed).
-  const row = buildDiffTreeItems(gitStatus, rootPath, new Set()).find(
+  const row = buildDiffTreeItems(env, gitStatus, rootPath, new Set()).find(
     (item) => item.type === "file" && item.path === target
   );
   return { target, revealKeys: row?.ancestorKeys ?? [] };

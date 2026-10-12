@@ -1,8 +1,9 @@
-import { DEFAULT_BASE_URLS, DEFAULT_LOCAL_OPENAI_BASE_URL, getEnv } from "@codent/core";
+import { DEFAULT_BASE_URLS, DEFAULT_LOCAL_OPENAI_BASE_URL } from "@codent/core";
 import { Box, Text } from "ink";
 import { useEffect } from "react";
 
 import { useAdapter } from "../context/adapter-context.js";
+import { useCoreEnv } from "../context/core-env-context.js";
 import { useConfig } from "../hooks/use-config.js";
 import { COLORS } from "../theme/colors.js";
 import { getKeyboardShortcutSections } from "../utils/keyboard-labels.js";
@@ -13,6 +14,7 @@ const HELP_EXIT_DELAY_MS = 150;
 export const Help = () => {
   const config = useConfig((s) => s.config);
   const adapter = useAdapter();
+  const env = useCoreEnv();
   const shortcutSections = getKeyboardShortcutSections();
   // Cosmetic host identity. `productName` is the host's own name (`codent` for
   // the bundled release host, `@codent/cli` for the development host), and
@@ -209,7 +211,7 @@ export const Help = () => {
             <Box width={14}>
               <Text color={COLORS.primary}>path:</Text>
             </Box>
-            <Text>{getEnv().rootPath}</Text>
+            <Text>{env.rootPath}</Text>
           </Box>
           <Box>
             <Box width={14}>

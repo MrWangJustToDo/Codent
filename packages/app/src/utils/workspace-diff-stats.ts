@@ -3,6 +3,8 @@ import { toPosixPath } from "@codent/core";
 import { namesAFile, parseGitNumstatZ } from "./workspace-git-paths.js";
 import { joinWorkspacePath } from "./workspace-path.js";
 
+import type { CoreEnv } from "@codent/core";
+
 // ============================================================================
 // Diff stats (per-file +/− line counts vs HEAD, plus untracked file lines)
 //
@@ -44,12 +46,16 @@ export function clearWorkspaceDiffStatsCache(): void {
   statsCache.clear();
 }
 
-export function fetchWorkspaceDiffStats(rootPath: string, untracked: string[]): Promise<WorkspaceDiffStats> {
+export function fetchWorkspaceDiffStats(
+  env: CoreEnv,
+  rootPath: string,
+  untracked: string[]
+): Promise<WorkspaceDiffStats> {
   const key = `${rootPath}\0${untracked.join("\n")}`;
   const cached = statsCache.get(key);
   if (cached) return cached;
 
-  const promise = loadWorkspaceDiffStats(rootPath, untracked).catch((error: unknown) => {
+  const promise = loadWorkspaceDiffStats(env, rootPath, untracked).catch((error: unknown) => {
     statsCache.delete(key);
     throw error;
   });
@@ -57,10 +63,11 @@ export function fetchWorkspaceDiffStats(rootPath: string, untracked: string[]): 
   return promise;
 }
 
-async function loadWorkspaceDiffStats(rootPath: string, untracked: string[]): Promise<WorkspaceDiffStats> {
-  const { getEnv } = await import("@codent/core");
-  const env = getEnv();
-
+async function loadWorkspaceDiffStats(
+  env: CoreEnv,
+  rootPath: string,
+  untracked: string[]
+): Promise<WorkspaceDiffStats> {
   const files = new Map<string, WorkspaceFileDiffStat>();
   let totalAdded = 0;
   let totalDeleted = 0;
@@ -79,7 +86,7 @@ async function loadWorkspaceDiffStats(rootPath: string, untracked: string[]): Pr
   }
 
   for (const rel of untracked) {
-    const stat = await countUntrackedLines(rootPath, rel);
+    const stat = await countUntrackedLines(env, rootPath, rel);
     if (!stat) continue;
     const key = toPosixPath(rel);
     files.set(key, stat);
@@ -90,14 +97,13 @@ async function loadWorkspaceDiffStats(rootPath: string, untracked: string[]): Pr
   return { files, totalAdded, totalDeleted };
 }
 
-async function countUntrackedLines(rootPath: string, rel: string): Promise<WorkspaceFileDiffStat | null> {
+async function countUntrackedLines(env: CoreEnv, rootPath: string, rel: string): Promise<WorkspaceFileDiffStat | null> {
   // The caller derives `rel` from the status parse, which already rejects directories. The
   // guard stays because this is the one place that *reads* the path: handed a directory it
   // would attempt a read that cannot succeed, and report no stat instead of a wrong one.
   if (!namesAFile(rel)) return null;
   try {
-    const { getEnv } = await import("@codent/core");
-    const content = await getEnv().fs.readFile(joinWorkspacePath(rootPath, rel));
+    const content = await env.fs.readFile(joinWorkspacePath(env, rootPath, rel));
     const capped = content.slice(0, MAX_UNTRACKED_STAT_CHARS);
     const added = capped.split("\n").length;
     return { added, deleted: 0 };

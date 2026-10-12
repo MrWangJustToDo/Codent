@@ -3,6 +3,7 @@ import {
   AdapterProvider,
   App,
   ConfigEditor,
+  CoreEnvProvider,
   initConfig,
   initHighlighter,
   configureEnv,
@@ -167,7 +168,7 @@ const needsConfigEditor =
 
 if (!needsConfigEditor) {
   await initConfig(appConfig);
-  await useWorkspaceInfo.getActions().init();
+  await useWorkspaceInfo.getActions().init(coreEnv);
 }
 
 const adapter = new LocalAgentAdapter({
@@ -220,10 +221,12 @@ useSize.getActions().init();
 initHighlighter()
   .then(() => {
     render(
-      <AdapterProvider value={adapter}>
-        <TerminalTitle />
-        <Bootstrap />
-      </AdapterProvider>,
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <TerminalTitle />
+          <Bootstrap />
+        </AdapterProvider>
+      </CoreEnvProvider>,
       {
         maxFps: 30,
         exitOnCtrlC: false,

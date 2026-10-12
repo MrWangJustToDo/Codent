@@ -1,4 +1,4 @@
-import { AdapterProvider, App, configureEnv, initConfig, initHighlighter } from "@codent/app";
+import { AdapterProvider, App, CoreEnvProvider, configureEnv, initConfig, initHighlighter } from "@codent/app";
 import {
   clearCoreEnv,
   clearModelProvider,
@@ -50,6 +50,7 @@ export const AgentSurface = memo(() => {
   const { setBoot, setAgentRestart } = useShellState.getActions();
 
   const [adapter, setAdapter] = useState<AgentAdapter | null>(null);
+  const [coreEnv, setCoreEnv] = useState<CoreEnv | null>(null);
   const adapterRef = useRef<AgentAdapter | null>(null);
   const containerReadyRef = useRef(false);
   const initIdRef = useRef(0);
@@ -84,6 +85,7 @@ export const AgentSurface = memo(() => {
       });
       const env = await ensureCoreEnv();
       if (currentInitId !== initIdRef.current) return;
+      setCoreEnv(env);
 
       const serverUrl = providerServerUrl.trim();
       const remoteMode = Boolean(serverUrl);
@@ -157,7 +159,7 @@ export const AgentSurface = memo(() => {
     );
   }
 
-  if (!adapter) {
+  if (!adapter || !coreEnv) {
     return (
       <div className="workarea__state">
         <State loading title={boot.message} hint="Preparing the in-browser workspace and agent runtime." />
@@ -182,9 +184,11 @@ export const AgentSurface = memo(() => {
         }
       }}
     >
-      <AdapterProvider value={adapter}>
-        <App />
-      </AdapterProvider>
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <App />
+        </AdapterProvider>
+      </CoreEnvProvider>
     </InkTerminalBox>
   );
 });
