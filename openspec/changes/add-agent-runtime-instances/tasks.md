@@ -51,5 +51,5 @@
 - [x] 6.1 Route app direct `getEnv()` reads through the active runtime: add a `CoreEnvProvider` / `useCoreEnv` context supplied by each host, and pass the env explicitly into the workspace utils (`workspace-path`, `workspace-git-*`, `workspace-diff-*`, `workspace-file-search`, `keyboard-labels`, `use-workspace-info`, `use-workspace-git`) + the components/hooks that consume them. Forbid `getEnv`/`hasCoreEnv` in app code via `validate:core-imports`.
 - [x] 6.2 Promote `agentManager` to a documented ambient-only, deprecated surface in `AGENTS.md`.
 - [x] 6.3 Update `AGENTS.md` bootstrap sequences (CLI/extension) to show `CodentAgent.create`; re-check the file-structure map after all moves.
-- [ ] 6.4 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `validate:core-public-exports`.
+- [x] 6.4 Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, the full `validate:*` set, and `validate:core-public-exports`.
 - [ ] 6.5 Archive the change and sync its spec deltas into `openspec/specs/`.

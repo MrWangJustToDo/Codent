@@ -26,7 +26,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Several files sharing a directory: no merge, normal nesting.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["src/a.ts", "M"],
       ["src/b.ts", "??"],
@@ -39,7 +40,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Mixed: file + subdir inside the same dir prevents merging that chain.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["src/x.ts", "M"],
       ["src/lib/y.ts", "D"],
@@ -52,7 +54,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Top-level files stay at indent 0 (directories sort first).
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["README.md", "M"],
       ["z.md", "??"],
@@ -71,7 +74,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Collapsed directories hide their subtree.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["a/b/c.ts", "M"],
       ["a/b/d.ts", "M"],
@@ -107,7 +111,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 // The regression proper: with the directory expanded (as `-uall` now does), every file inside
 // is its own row — previously none of them were listed.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["brand-new/sub/deep/file.ts", "??"],
       ["brand-new/top.txt", "??"],
@@ -121,7 +126,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // No row may ever have an empty name — the invariant the reported symptom violated.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["brand-new/", "??"],
       ["has space.ts", "M"],
@@ -139,7 +145,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Renamed paths (old -> new) render both sides as rows.
 {
-  const items = buildDiffTreeItems(env,
+  const items = buildDiffTreeItems(
+    env,
     status([
       ["old/name.ts", "R"],
       ["new/name.ts", "R"],
@@ -177,7 +184,8 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
 
 // Same-name file vs directory: directory subtree sorts before the sibling file.
 {
-  const ordered = orderedChangedFiles(env,
+  const ordered = orderedChangedFiles(
+    env,
     status([
       ["src/foo.ts", "M"],
       ["src/foo/bar.ts", "M"],
