@@ -6,9 +6,11 @@
  * like the CLI's local mode, then hands stdio to the ACP agent.
  */
 
-export async function runAcpCommand(): Promise<never> {
+import type { AcpModelOverride } from "@codent/acp";
+
+export async function runAcpCommand(model?: AcpModelOverride): Promise<never> {
   const { bootstrapAcpAgent, runAcpAgentStdio } = await import("@codent/acp");
-  const options = await bootstrapAcpAgent();
+  const options = await bootstrapAcpAgent(model ? { model } : {});
   const connection = runAcpAgentStdio(options);
 
   const shutdown = (): void => {

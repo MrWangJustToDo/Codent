@@ -91,9 +91,14 @@ codent --resume             # pick a session
 on stdio, so editors such as Zed or JetBrains can drive it. It is headless — stdout carries only
 JSON-RPC frames, never the TUI — and is intercepted before the terminal UI boots.
 
-An ACP client must spawn it with **cwd = the workspace root**, and a model must be configured
-(`.agents/config/models.json`, or `MODEL` / `BASE_URL` / `API_KEY`); without one it exits with a
-clear error.
+An ACP client must spawn it with **cwd = the workspace root**. The model is resolved three ways, in
+priority order: flags on the command (`codent acp --model … --base-url … --api-key …`, which are
+authoritative and skip `models.json`), the on-disk `.agents/config/models.json`, or `MODEL` /
+`BASE_URL` / `API_KEY` in `.env`. Without any of them it exits with a clear error.
+
+```bash
+codent acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
+```
 
 ```jsonc
 // Zed settings.json — run the local codent as an ACP agent

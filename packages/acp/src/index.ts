@@ -6,7 +6,7 @@
  */
 
 export { createAcpAgent, runAcpAgentStdio, type AcpAgentOptions, type AcpAgentDefaults } from "./agent.js";
-export { bootstrapLocalAcp, bootstrapAcpAgent, type LocalAcpBootstrap } from "./bootstrap.js";
+export { bootstrapLocalAcp, bootstrapAcpAgent, type LocalAcpBootstrap, type AcpModelOverride } from "./bootstrap.js";
 export { AcpProjector, type AcpProjectorOptions } from "./projector.js";
 export { promptBlocksToContent, textBlock, type PromptCaps, type PromptMapping } from "./content.js";
 export { toolKindFor, toolTitleFor, toolLocationsFor, toolDiffFor, toolStatusFor, toolResultText } from "./tools.js";

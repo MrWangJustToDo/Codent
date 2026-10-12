@@ -32,6 +32,18 @@ function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
 }
 
+/**
+ * Explicit model connection for a directly-configured launch
+ * (`codent acp --model … --base-url … --api-key …`). When `model` is set it is
+ * authoritative and the on-disk `.agents/config/models.json` is skipped.
+ */
+export interface AcpModelOverride {
+  model?: string;
+  style?: ModelStyle;
+  baseURL?: string;
+  apiKey?: string;
+}
+
 export interface LocalAcpBootstrap {
   host: AgentSessionHost;
   defaults: AcpAgentDefaults;
@@ -40,7 +52,7 @@ export interface LocalAcpBootstrap {
 
 /** Register CoreEnv + model provider and return a local host + defaults. */
 export async function bootstrapLocalAcp(
-  options: { cwd?: string; sandbox?: "local" | "native" } = {}
+  options: { cwd?: string; sandbox?: "local" | "native"; model?: AcpModelOverride } = {}
 ): Promise<LocalAcpBootstrap> {
   const rootPath = options.cwd ?? process.cwd();
   const sandboxMode = options.sandbox ?? (process.env.SANDBOX_ENV === "native" ? "native" : "local");
@@ -54,38 +66,15 @@ export async function bootstrapLocalAcp(
   let apiKey: string | undefined;
   let modelInfo: AcpAgentDefaults["modelInfo"];
 
-  try {
-    const loaded = await loadModels({ kind: "file" });
-    if (loaded) {
-      const entry = loaded.entries[loaded.active.entryIndex];
-      const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
-      if (entry && activeModel) {
-        await registerModelProviderForEntry(loaded);
-        provider = getModelProvider();
-        const fromProvider = await resolveModelConfigFromProvider({}, provider);
-        model = fromProvider.connection.model;
-        style = fromProvider.connection.style;
-        baseURL = fromProvider.connection.baseURL;
-        apiKey = fromProvider.connection.apiKey;
-        modelInfo = fromProvider.modelInfo;
-      }
-    }
-  } catch {
-    // Corrupt/unreadable models.json — fall back to `.env`.
-  }
-
-  if (!model) {
+  if (options.model?.model?.trim()) {
+    // Explicit CLI override: the flags are authoritative and the on-disk models.json is
+    // skipped — same isolation as the TUI's `--model` startup.
     const { connection } = await resolveModelConfig({
-      model: process.env.MODEL ?? process.env.model ?? "",
-      style: parseModelStyle(process.env.MODEL_STYLE ?? process.env.STYLE),
-      baseURL: process.env.BASE_URL ?? process.env.MODEL_BASE_URL,
-      apiKey: process.env.API_KEY ?? "",
+      model: options.model.model,
+      style: options.model.style,
+      baseURL: options.model.baseURL,
+      apiKey: options.model.apiKey,
     });
-    if (!connection.model?.trim()) {
-      throw new Error(
-        "ACP host requires a model — set `.agents/config/models.json` or MODEL (plus BASE_URL / API_KEY) in .env."
-      );
-    }
     provider = createDirectModelProvider({
       model: connection.model,
       style: connection.style,
@@ -97,7 +86,55 @@ export async function bootstrapLocalAcp(
     style = connection.style;
     baseURL = connection.baseURL;
     apiKey = connection.apiKey;
-    modelInfo = undefined;
+  } else {
+    try {
+      const loaded = await loadModels({ kind: "file" });
+      if (loaded) {
+        const entry = loaded.entries[loaded.active.entryIndex];
+        const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
+        if (entry && activeModel) {
+          await registerModelProviderForEntry(loaded);
+          provider = getModelProvider();
+          const fromProvider = await resolveModelConfigFromProvider({}, provider);
+          model = fromProvider.connection.model;
+          style = fromProvider.connection.style;
+          baseURL = fromProvider.connection.baseURL;
+          apiKey = fromProvider.connection.apiKey;
+          modelInfo = fromProvider.modelInfo;
+        }
+      }
+    } catch {
+      // Corrupt/unreadable models.json — fall back to `.env`.
+    }
+
+    if (!model) {
+      const { connection } = await resolveModelConfig({
+        model: process.env.MODEL ?? process.env.model ?? "",
+        style: parseModelStyle(process.env.MODEL_STYLE ?? process.env.STYLE),
+        baseURL: process.env.BASE_URL ?? process.env.MODEL_BASE_URL,
+        apiKey: process.env.API_KEY ?? "",
+      });
+      if (connection.model?.trim()) {
+        provider = createDirectModelProvider({
+          model: connection.model,
+          style: connection.style,
+          baseURL: connection.baseURL,
+          apiKey: connection.apiKey,
+        });
+        registerModelProvider(provider);
+        model = connection.model;
+        style = connection.style;
+        baseURL = connection.baseURL;
+        apiKey = connection.apiKey;
+        modelInfo = undefined;
+      }
+    }
+  }
+
+  if (!model?.trim()) {
+    throw new Error(
+      "ACP host requires a model — pass --model (with --base-url / --api-key), set `.agents/config/models.json`, or set MODEL/BASE_URL/API_KEY in .env."
+    );
   }
 
   const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
@@ -118,7 +155,7 @@ export async function bootstrapLocalAcp(
 
 /** Build the full option set by bootstrapping locally. */
 export async function bootstrapAcpAgent(
-  options: { cwd?: string; sandbox?: "local" | "native"; version?: string } = {}
+  options: { cwd?: string; sandbox?: "local" | "native"; version?: string; model?: AcpModelOverride } = {}
 ): Promise<AcpAgentOptions> {
   const boot = await bootstrapLocalAcp(options);
   return {
