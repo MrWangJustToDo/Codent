@@ -84,6 +84,7 @@ export async function buildManagedAgent({
       tools: {},
       todoManager,
       parentId,
+      ...(runtime ? { runtime } : {}),
     }
   );
 

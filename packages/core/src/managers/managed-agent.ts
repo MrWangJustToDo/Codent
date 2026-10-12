@@ -71,6 +71,7 @@ import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
 import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
 import {
@@ -82,6 +83,7 @@ import {
 } from "../agent/turn-context/instruction-context.js";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-context/session-retrieval.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
 import { generateId } from "../utils/generate-id.js";
 
@@ -361,6 +363,8 @@ export class ManagedAgent {
   /** Task / compact summary streams for the session `summary` channel. */
   readonly summaryStreams: SummaryStreamHub;
   private chatController?: AgentChatController;
+  /** Per-agent background command jobs (see {@link getCommandJobRegistry}). */
+  private commandJobRegistry?: CommandJobRegistry;
   /** Set by AgentManager to route events to listeners. */
   dispatchEvent?: (event: AgentEvent) => void;
   /** Scoped unified event bus for this agent (set by the factory). */
@@ -424,6 +428,8 @@ export class ManagedAgent {
       tools: ToolsRecord;
       todoManager: TodoManager | null;
       parentId?: string;
+      /** Runtime this agent belongs to (env + provider); undefined = ambient. */
+      runtime?: AgentRuntime;
       usage?: UsageTracker;
       memory?: MemoryService;
       session?: SessionService;
@@ -459,10 +465,12 @@ export class ManagedAgent {
     this.extensions = new ExtensionRegistryService();
     if (init.todoManager) this.extensions.setTodoManager(init.todoManager);
     this.parentId = init.parentId;
+    this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
     this.memory = init.memory ?? new MemoryService();
     this.session = init.session ?? new SessionService();
-    this.usageHistory = init.usageHistory ?? new UsageHistoryService();
+    // The store resolves the runtime env when bound, else ambient lazily at first write.
+    this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
     this.run = new RunCoordinator();
     this.childIds = [];
     this.createdAt = Date.now();
@@ -1694,6 +1702,15 @@ export class ManagedAgent {
   /** Resolved workspace env for this agent: its runtime's env, or the ambient env. */
   getCoreEnv(): ResolvedCoreEnv {
     return resolveCoreEnv(this.runtime?.env ?? getEnv());
+  }
+
+  /**
+   * Per-agent background command-job registry. Each agent (hence each runtime) owns its
+   * own map of `run_in_background` jobs, so job ids/state never leak across agents.
+   */
+  getCommandJobRegistry(): CommandJobRegistry {
+    this.commandJobRegistry ??= new CommandJobRegistry();
+    return this.commandJobRegistry;
   }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).

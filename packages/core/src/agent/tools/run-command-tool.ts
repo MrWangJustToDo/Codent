@@ -13,10 +13,12 @@ import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { runCommandOutputSchema } from "./util/types.js";
 
 import type { RunCommandOutput } from "./util/types.js";
+import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 const COMMAND_CANCELLED_NOTICE = "[Command cancelled by user.]";
 
-export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
+export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed?: ManagedAgent }) => {
+  const registry = options?.managed?.getCommandJobRegistry() ?? commandJobRegistry;
   const subagentSafe = options?.subagentSafe ?? false;
   return defineServerTool({
     name: "run_command",
@@ -88,26 +90,26 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
           );
         }
 
-        const job = commandJobRegistry.create(command);
+        const job = registry.create(command);
 
         try {
           const handle = await coreEnv.startCommand(command, {
             cwd,
             env,
             onStdout: (chunk) => {
-              commandJobRegistry.appendStdout(job.id, chunk);
+              registry.appendStdout(job.id, chunk);
             },
             onStderr: (chunk) => {
-              commandJobRegistry.appendStderr(job.id, chunk);
+              registry.appendStderr(job.id, chunk);
             },
             onExit: (exitCode) => {
-              commandJobRegistry.markExited(job.id, exitCode);
+              registry.markExited(job.id, exitCode);
             },
           });
-          commandJobRegistry.setKill(job.id, handle.kill);
+          registry.setKill(job.id, handle.kill);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          commandJobRegistry.markFailed(job.id, message);
+          registry.markFailed(job.id, message);
           throw err;
         }
 

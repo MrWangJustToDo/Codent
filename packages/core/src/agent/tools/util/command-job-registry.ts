@@ -79,7 +79,7 @@ export interface CompletedCommandJob {
   endedAt: number | null;
 }
 
-class CommandJobRegistry {
+export class CommandJobRegistry {
   private readonly jobs = new Map<string, CommandJobRecord>();
 
   /** Durable log writers for jobs where logging is available. */

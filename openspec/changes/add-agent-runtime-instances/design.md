@@ -116,11 +116,11 @@ workspace/state-scoped (bind to the runtime) or process-global (keep). The runti
 scoped instance; agents of one runtime share it, different runtimes do not.
 
 Bind to the runtime:
-- `MediaStore` and the websearch `ProviderManager` (+ `websearch/index.ts` `initialized` flag).
-- `sharedUsageHistory` (`agent/usage/usage-history-service.ts`) and its write chain (writes `.agents/usage/`).
-- `gitInfoCache` (`agent/turn-context/env-context.ts`) - keyed by the workspace root today but stored globally.
-- `fileMutationQueues` (`agent/tools/util/file-mutation-queue.ts`) - its key is `getEnv().path.resolve(path)`, so two roots collide globally.
-- `commandJobRegistry` (`agent/tools/util/command-job-registry.ts`) - background command jobs of a workspace.
+- `MediaStore` and the websearch `ProviderManager` (each agent's tool owns one).
+- `UsageStore` / `UsageHistoryService` (the per-agent usage history; writes `.agents/usage/`).
+- `gitInfoCache` (`agent/turn-context/env-context.ts`) - keyed by the workspace root.
+- `fileMutationQueues` (`agent/tools/util/file-mutation-queue.ts`) - key includes the root.
+- `commandJobRegistry` (per-agent `CommandJobRegistry`; the global instance is the ambient fallback).
 - `AgentManager` (the ambient one becomes the ambient runtime's manager).
 
 Keep process-global (not workspace data, with the reason):
@@ -131,6 +131,12 @@ Keep process-global (not workspace data, with the reason):
 - `env-teardown` hooks, `generate-id` issued ids, `agent-log/lifecycle-guards` active logs / exit
   flushes, `streaming-callback` agent-bus map, the many static `Set`s of tool/type names, and the
   `task-prefork` / `task-run-state` WeakMaps (already keyed by `ManagedAgent`).
+
+Ambient by design (documented):
+- `sharedUsageHistory` (side-text-query telemetry with no agent context) and the background-job log
+  files (`command-output-log`) use the ambient env; the primary per-agent usage + job registry are
+  runtime-scoped.
+
 
 `AgentLog` is already `new AgentLog()` per agent (`agent-factory.ts`), so it stays per-agent; the
 runtime's `name`/`id` is what per-runtime services (usage history, command jobs, log naming) associate

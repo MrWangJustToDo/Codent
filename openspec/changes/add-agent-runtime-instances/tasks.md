@@ -28,13 +28,13 @@
 
 ## 4. Stage 2 — Runtime-scoped stores and caches
 
-- [ ] 4.1 Constructor-inject `CoreEnv` into `SessionStore` (replace `get fs() { return getEnv().fs }`); update `agent-factory.ts` and `local-agent-session-host.ts` to pass the runtime's env.
-- [ ] 4.2 Make `MediaStore` runtime-scoped (constructed with env; no module singleton); update `media-utils.ts` to use the runtime's store.
-- [ ] 4.3 Make the websearch `ProviderManager` (+ `websearch/index.ts` `initialized` flag) runtime-held instead of a module singleton.
-- [ ] 4.4 Move `gitInfoCache` (`agent/turn-context/env-context.ts`), `fileMutationQueues` (`agent/tools/util/file-mutation-queue.ts`), `sharedUsageHistory` + its write chain (`agent/usage/usage-history-service.ts`), and `commandJobRegistry` (`agent/tools/util/command-job-registry.ts`) to runtime scope.
-- [ ] 4.5 Keep the non-workspace globals process-global and document why (tool / presentation registries, models.dev memory cache, TreeSitterManager decoupled from the workspace env, id / teardown / lifecycle registries, per-`ManagedAgent` WeakMaps); state each in the design inventory.
-- [ ] 4.5 Extend `validate:agent-runtime-instances`: one local-env instance and one remote-env instance coexist - each writes/reads its own session log and media, resume works on both; and two agents in one runtime share the store while a third runtime does not.
-- [ ] 4.6 Run affected `validate:*` (websearch-providers, media-store, session-persist-integrity, usage, turn-context).
+- [x] 4.1 Constructor-inject `CoreEnv` into `SessionStore` (replace `get fs() { return getEnv().fs }`); update `agent-factory.ts` and `local-agent-session-host.ts` to pass the runtime's env.
+- [x] 4.2 Make `MediaStore` runtime-scoped (constructed with env; no module singleton); update `media-utils.ts` to use the runtime's store.
+- [x] 4.3 Make the websearch `ProviderManager` (+ `websearch/index.ts` `initialized` flag) runtime-held instead of a module singleton.
+- [x] 4.4 Move `gitInfoCache` (`agent/turn-context/env-context.ts`), `fileMutationQueues` (`agent/tools/util/file-mutation-queue.ts`), `sharedUsageHistory` + its write chain (`agent/usage/usage-history-service.ts`), and `commandJobRegistry` (`agent/tools/util/command-job-registry.ts`) to runtime scope.
+- [x] 4.5 Keep the non-workspace globals process-global and document why (tool / presentation registries, models.dev memory cache, TreeSitterManager decoupled from the workspace env, id / teardown / lifecycle registries, per-`ManagedAgent` WeakMaps); state each in the design inventory.
+- [x] 4.5 Extend `validate:agent-runtime-instances`: one local-env instance and one remote-env instance coexist - each writes/reads its own session log and media, resume works on both; and two agents in one runtime share the store while a third runtime does not.
+- [x] 4.6 Run affected `validate:*` (websearch-providers, media-store, session-persist-integrity, usage, turn-context).
 
 ## 5. Stage 3 — Migrate hosts to CodentAgent
 
