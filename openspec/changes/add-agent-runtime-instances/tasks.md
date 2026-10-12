@@ -38,6 +38,7 @@
 
 ## 5. Stage 3 — Migrate hosts to CodentAgent
 
+- [x] 5.0 Wire the provider plane through the runtime (the spec's "Two runtimes with different providers" scenario): `resolveModelConfigFromProvider(input, provider?)` uses a passed provider before the ambient registry; `AgentSessionHost` gains an optional `getModelProvider()` (local host returns its manager's runtime provider, remote hosts omit it); `CodentAgent` exposes `getModelProvider()`; app `createAgentFromConfig` resolves via `host.getModelProvider?.()`; extend `validate:agent-runtime-instances` to assert two runtimes resolve distinct provider connections.
 - [ ] 5.1 `packages/cli`: build the runtime via `CodentAgent.create` (env + provider planes) and pass `agent.host` into `createAgentFromConfig`.
 - [ ] 5.2 `packages/codent`: same migration.
 - [ ] 5.3 `packages/acp` (`bootstrap.ts`) and `packages/im-bridge` (`local-host.ts`): build via `CodentAgent.create`.

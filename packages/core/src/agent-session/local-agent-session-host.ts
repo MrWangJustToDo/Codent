@@ -164,6 +164,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     return this.manager.getAgents().map(toListEntry);
   }
 
+  getModelProvider() {
+    return this.manager.runtime?.modelProvider;
+  }
+
   async destroy(agentId: string): Promise<void> {
     // Capture the root session's store/id before the manager drops the agent.
     const managed = this.manager.getAgent(agentId);

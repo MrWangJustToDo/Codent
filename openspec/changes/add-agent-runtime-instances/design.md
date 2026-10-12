@@ -212,6 +212,13 @@ same change.
    agent's env; migrate the tool `getEnv()` call sites to the run context.
 3. **Stage 2**: constructor-inject `SessionStore`; make `MediaStore`, websearch `ProviderManager`,
    models.dev cache, git cache, usage-history chain runtime-scoped.
+3.5. **Stage 2.5 (provider wiring)**: the provider plane is orthogonal to `CoreEnv` and reached in the
+   app through `resolveModelConfigFromProvider`, which must read the runtime's provider, not the ambient
+   registry. `resolveModelConfigFromProvider(input, provider?)` takes the provider explicitly;
+   `AgentSessionHost` exposes an optional `getModelProvider()` (the local host returns its manager's
+   runtime provider; a remote-session host omits it, leaving ambient resolution); `CodentAgent` exposes
+   `getModelProvider()`; `createAgentFromConfig` resolves via `host.getModelProvider?.()`. Hosts that
+   have not migrated still fall back to the ambient provider, so this is behavior-neutral until Stage 3.
 4. **Stage 3**: migrate hosts (`cli`, `acp`, `im-bridge`, `codent`, `extension`, `playground`,
    `server`) to `CodentAgent.create`.
 5. **Stage 4**: app routes direct `getEnv()` reads through the active runtime; organization

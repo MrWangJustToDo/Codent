@@ -42,13 +42,19 @@ export interface CreateAgentOptions {
 }
 
 export async function createAgentFromConfig({ config, name, host }: CreateAgentOptions): Promise<InitResult> {
-  const { connection, modelInfo, providerMode } = await resolveModelConfigFromProvider({
-    model: config.model,
-    style: config.style,
-    baseURL: config.baseURL,
-    apiKey: config.apiKey,
-    modelInfo: config.modelInfo,
-  });
+  const { connection, modelInfo, providerMode } = await resolveModelConfigFromProvider(
+    {
+      model: config.model,
+      style: config.style,
+      baseURL: config.baseURL,
+      apiKey: config.apiKey,
+      modelInfo: config.modelInfo,
+    },
+    // Prefer the session host's runtime provider over the process-global registry,
+    // so a CodentAgent's LLM keys/baseURL resolve from its own runtime. Remote hosts
+    // omit it, falling back to the ambient provider (legacy behavior).
+    host.getModelProvider?.()
+  );
 
   if (!connection.model?.trim() && !config.remoteSession) {
     throw new Error(

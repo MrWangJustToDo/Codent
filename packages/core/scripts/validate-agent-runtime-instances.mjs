@@ -13,7 +13,15 @@ import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AgentRuntime, clearCoreEnv, CodentAgent, createListFileTool, getEnv, registerCoreEnv } from "../dist/dev.mjs";
+import {
+  AgentRuntime,
+  clearCoreEnv,
+  CodentAgent,
+  createListFileTool,
+  getEnv,
+  registerCoreEnv,
+  resolveModelConfigFromProvider,
+} from "../dist/dev.mjs";
 
 /** Minimal CoreEnv stub: create() only reads `rootPath`; dispose reads `destroy?`. */
 const fakeEnv = (root) => ({
@@ -68,6 +76,19 @@ const fakeEnv = (root) => ({
 
   assert.deepEqual(await a.listSessions(), [], "runtime A owns no sessions");
   assert.deepEqual(await b.listSessions(), [], "runtime B owns no sessions (no shared registry)");
+
+  // Provider isolation: the host exposes the runtime provider, and model resolution
+  // through it resolves THAT runtime's connection (not the ambient registry).
+  assert.equal(a.host.getModelProvider(), a.getModelProvider(), "the local host exposes its runtime's provider");
+  const { connection: connA } = await resolveModelConfigFromProvider({}, a.host.getModelProvider());
+  const { connection: connB } = await resolveModelConfigFromProvider({}, b.host.getModelProvider());
+  assert.equal(connA.baseURL, "http://a");
+  assert.equal(connA.apiKey, "key-a");
+  assert.equal(connA.model, "m-a");
+  assert.equal(connB.baseURL, "http://b");
+  assert.equal(connB.apiKey, "key-b");
+  assert.equal(connB.model, "m-b");
+  assert.notEqual(connA.apiKey, connB.apiKey, "each runtime resolves its own provider key");
 
   await a.dispose();
   await b.dispose();

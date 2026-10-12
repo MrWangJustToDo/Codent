@@ -117,6 +117,11 @@ export class CodentAgent {
     return this.runtime.rootPath;
   }
 
+  /** The runtime's model provider (undefined for remote-session runtimes). */
+  getModelProvider(): ModelProvider | undefined {
+    return this.runtime.modelProvider;
+  }
+
   /** Create a root session, applying the runtime defaults. */
   createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
     return this.host.create({ ...this.defaults, ...options });

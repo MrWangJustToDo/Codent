@@ -58,6 +58,16 @@ remain only as the ambient fallback for code that has not been migrated.
 - **WHEN** a store, service, or manager needs the environment or model provider
 - **THEN** it reads it from the `AgentRuntime` instance it was constructed with
 
+#### Scenario: Model config resolution uses the runtime provider
+
+- **WHEN** model configuration is resolved for a `CodentAgent` (app-side `resolveModelConfigFromProvider` against that runtime's host)
+- **THEN** the resolution uses that runtime's `ModelProvider` and not the process-global registry, so two runtimes created with different keys resolve different connections
+
+#### Scenario: A host exposes its runtime provider
+
+- **WHEN** an `AgentSessionHost` created by a local runtime is asked for its model provider
+- **THEN** it returns that runtime's `ModelProvider`; a remote-session host returns nothing, leaving resolution to the ambient/provider server path
+
 #### Scenario: Concurrent runs see their own environment
 
 - **WHEN** an agent in runtime A and an agent in runtime B run concurrently, each with its own `rootPath`

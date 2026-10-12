@@ -12,7 +12,7 @@ import {
 } from "../models/config/model-config.js";
 
 import { getModelProvider } from "./model-provider-registry.js";
-import { type ModelProviderMode } from "./model-provider.js";
+import { type ModelProvider, type ModelProviderMode } from "./model-provider.js";
 
 import type { ModelStyle } from "../models/types.js";
 
@@ -27,13 +27,17 @@ export interface ResolvedModelConfigFromProvider extends ResolvedModelConfig {
 }
 
 /**
- * Resolve connection + model metadata, merging AppConfig overrides with the
- * registered {@link ModelProvider}.
+ * Resolve connection + model metadata, merging AppConfig overrides with a
+ * {@link ModelProvider}.
+ *
+ * @param provider - The runtime's provider. When omitted, the ambient registry
+ *   (`getModelProvider()`) is used, preserving the legacy bootstrap.
  */
 export async function resolveModelConfigFromProvider(
-  input: ResolveModelConfigInput = {}
+  input: ResolveModelConfigInput = {},
+  provider?: ModelProvider
 ): Promise<ResolvedModelConfigFromProvider> {
-  const providerConn = await getModelProvider().getConnection();
+  const providerConn = await (provider ?? getModelProvider()).getConnection();
 
   const merged: ResolveModelConfigInput = {
     ...input,

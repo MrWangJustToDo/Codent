@@ -3,6 +3,7 @@
  * Aggregated by `dev.ts`; not part of the public API.
  */
 
+export { resolveModelConfigFromProvider } from "../provider/resolve-from-provider.js";
 export { createTextAdapter } from "../models/adapter/adapter-factory.js";
 export { liftToolMediaForChatCompletions } from "../models/adapter/lift-tool-media-for-chat-completions.js";
 export {
