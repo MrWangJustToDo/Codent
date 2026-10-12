@@ -28,6 +28,13 @@ export interface AgentRuntimeOptions {
   name?: string;
   /** Override the workspace root used for display/naming (env carries the real root). */
   rootPath?: string;
+  /**
+   * Whether this runtime owns the env lifecycle. Default `false`: the host that built the
+   * env (a borrowed remote env for `--remote-env` / `--remote-session`, or a host-supplied
+   * env) owns it, so `dispose` must not destroy it — a remote env's `destroy()` POSTs a
+   * destructive teardown to the server.
+   */
+  ownsEnv?: boolean;
 }
 
 export class AgentRuntime {
@@ -36,6 +43,8 @@ export class AgentRuntime {
   readonly modelProvider?: ModelProvider;
   readonly name: string;
   readonly rootPath: string;
+  /** True when `dispose` may call `env.destroy()`. See {@link AgentRuntimeOptions.ownsEnv}. */
+  readonly ownsEnv: boolean;
 
   constructor(options: AgentRuntimeOptions) {
     this.id = generateId("rt");
@@ -44,5 +53,6 @@ export class AgentRuntime {
     this.modelProvider = options.modelProvider;
     this.rootPath = options.rootPath ?? this.env.rootPath;
     this.name = options.name?.trim() || basename(this.rootPath) || "agent";
+    this.ownsEnv = options.ownsEnv ?? false;
   }
 }

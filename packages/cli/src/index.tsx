@@ -178,6 +178,8 @@ const adapter = new LocalAgentAdapter({
   readClipboardImage,
   env: coreEnv,
   provider: modelProvider,
+  // Only the locally-built Node env is ours to destroy; a remote env is borrowed.
+  ownsEnv: !remoteEnv && !appConfig.remoteSession,
 });
 
 /** CSI hide — re-sent after every frame so the hardware cursor stays off. */

@@ -14,17 +14,21 @@ export class LocalAgentAdapter implements AgentAdapter {
   private _readClipboardImage: (() => Promise<ClipboardImageResult | null>) | null;
   private _env: CoreEnv;
   private _provider: ModelProvider | undefined;
+  private _ownsEnv: boolean;
 
   constructor(options: {
     exit: () => void;
     readClipboardImage?: () => Promise<ClipboardImageResult | null>;
     env: CoreEnv;
     provider?: ModelProvider;
+    /** True only for a locally-built env; a borrowed remote env must not be destroyed on exit. */
+    ownsEnv?: boolean;
   }) {
     this._exit = options.exit;
     this._readClipboardImage = options.readClipboardImage ?? null;
     this._env = options.env;
     this._provider = options.provider;
+    this._ownsEnv = options.ownsEnv ?? false;
   }
 
   async initialize(config: AppConfig): Promise<InitResult> {
@@ -41,6 +45,7 @@ export class LocalAgentAdapter implements AgentAdapter {
       this.agent = await CodentAgent.create({
         env: this._env,
         ...(this._provider ? { provider: this._provider } : {}),
+        ...(this._ownsEnv ? { ownsEnv: true } : {}),
       });
     }
     const result = await createAgentFromConfig({ config, name: "local-chat", host: this.agent.host });

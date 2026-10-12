@@ -56,12 +56,20 @@ export interface CodentAgentOptions {
   manager?: AgentManager;
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
   host?: AgentSessionHost;
+  /**
+   * Whether this runtime owns the env lifecycle (dispose destroys it). Default `false` —
+   * pass `true` only when this runtime built a local env; borrowed/remote envs must not be
+   * destroyed by dispose (a remote `destroy()` tears down the server's CoreEnv).
+   */
+  ownsEnv?: boolean;
 }
 
 export class CodentAgent {
   private readonly runtime: AgentRuntime;
   private readonly manager?: AgentManager;
   private readonly defaults: CodentAgentDefaults;
+  /** Guards {@link dispose} against re-running (double session destroy / env destroy). */
+  private disposed = false;
 
   /** The runtime's session host. */
   readonly host: AgentSessionHost;
@@ -95,6 +103,7 @@ export class CodentAgent {
       ...(provider ? { modelProvider: provider } : {}),
       ...(options.name ? { name: options.name } : {}),
       ...(options.rootPath ? { rootPath: options.rootPath } : {}),
+      ...(options.ownsEnv !== undefined ? { ownsEnv: options.ownsEnv } : {}),
     };
     const runtime = new AgentRuntime(runtimeOptions);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
@@ -142,14 +151,21 @@ export class CodentAgent {
     await this.host.destroy(agentId);
   }
 
-  /** Destroy every session and release the provider and environment. */
+  /**
+   * Destroy every session and release the provider — and the environment only when this
+   * runtime owns it ({@link CodentAgentOptions.ownsEnv}). Idempotent.
+   */
   async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
     const entries = await this.host.list();
     for (const entry of entries) {
       await this.host.destroy(entry.agentId);
     }
     await this.runtime.modelProvider?.destroy?.();
-    await this.runtime.env.destroy?.();
+    if (this.runtime.ownsEnv) {
+      await this.runtime.env.destroy?.();
+    }
   }
 
   /** @internal The owning manager (local runtimes only). */

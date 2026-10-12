@@ -1712,6 +1712,16 @@ export class ManagedAgent {
     this.commandJobRegistry ??= new CommandJobRegistry();
     return this.commandJobRegistry;
   }
+
+  /**
+   * Kill this agent's background jobs and drop the registry (no-op if none was ever created).
+   * Called on destroy so a disposed runtime does not leak `run_in_background` child processes.
+   */
+  destroyCommandJobRegistry(): Promise<void> {
+    const registry = this.commandJobRegistry;
+    this.commandJobRegistry = undefined;
+    return registry ? registry.destroyAll() : Promise.resolve();
+  }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).

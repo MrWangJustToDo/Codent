@@ -29,7 +29,7 @@ export class LocalAgentAdapter implements AgentAdapter {
 
   async initialize(config: AppConfig): Promise<InitResult> {
     const { createAgentFromConfig } = await import("@codent/app");
-    this.agent = await CodentAgent.create({ env: this._env, provider: this._provider });
+    this.agent = await CodentAgent.create({ env: this._env, provider: this._provider, ownsEnv: true });
     const result = await createAgentFromConfig({ config, name: "local-chat", host: this.agent.host });
     return result;
   }

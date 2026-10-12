@@ -98,7 +98,7 @@ export const exaProvider: SearchProvider = {
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const maxResults = options?.maxResults ?? 10;
     const timeoutMs = options?.timeoutMs ?? 30000;
-    const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);
 
     const url = apiKey ? `${EXA_MCP_URL}?exaApiKey=${encodeURIComponent(apiKey)}` : EXA_MCP_URL;
     const text = await callMcpTool({

@@ -126,7 +126,7 @@ export async function createLocalSessionHost(
     modelInfo = undefined;
   }
 
-  const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}) });
+  const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
 
   return {
     host: agent.host,

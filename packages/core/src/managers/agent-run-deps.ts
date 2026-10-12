@@ -14,6 +14,7 @@ import type { WireProjectionCache } from "../agent/compaction/wire-projection-ca
 import type { ExtensionRunner } from "../agent/extension/runner.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
+import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { UsageHistoryService } from "../agent/usage/usage-history-service.js";
@@ -60,6 +61,8 @@ export interface AgentRunDeps {
   getLog: () => AgentLog;
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
+  /** The agent's background-job registry (drained by the notification middleware). */
+  getCommandJobRegistry: () => CommandJobRegistry;
   getCompactionConfig: () => CompactionConfig | null;
   getModelInfo: () => ModelInfo | null;
   getToolCompactCache: () => ToolCompactCache;
@@ -123,6 +126,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
+    getCommandJobRegistry: () => managed.getCommandJobRegistry(),
     getCompactionConfig: () => managed.getCompactionConfig(),
     getModelInfo: () => managed.getModelInfo(),
     getToolCompactCache: () => managed.getToolCompactCache(),

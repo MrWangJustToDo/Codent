@@ -49,13 +49,20 @@ export interface SearchOptions {
    * upstream rate-limit key (Parallel's `session_id`).
    */
   sessionId?: string;
+  /**
+   * API-key lookup scoped to the {@link ProviderManager} running the search. Providers
+   * MUST prefer this over the process-global manager, so a key configured for one agent
+   * is used by that agent (two runtimes never share key state). Absent only for
+   * standalone provider use, where the ambient manager is the intended source.
+   */
+  getApiKey?: (providerName: string) => string | undefined;
 }
 
 export interface SearchProvider {
   /** Unique provider name */
   readonly name: string;
   /** Whether this provider is available (e.g., API key configured) */
-  isAvailable(): boolean | Promise<boolean>;
+  isAvailable(options?: Pick<SearchOptions, "getApiKey">): boolean | Promise<boolean>;
   /**
    * Search the web.
    * Should throw on failure so the ProviderManager can fallback.

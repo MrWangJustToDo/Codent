@@ -50,12 +50,12 @@ interface BraveSearchResponse {
 export const braveProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
-  async isAvailable(): Promise<boolean> {
-    return Boolean(getBraveApiKey());
+  async isAvailable(options?: SearchOptions): Promise<boolean> {
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey());
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = getBraveApiKey();
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey();
     if (!apiKey) {
       throw new Error(
         "Brave Search API key not configured. Pass toolConfig.websearch.braveApiKey when creating the agent."

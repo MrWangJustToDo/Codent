@@ -158,6 +158,7 @@ export {
 } from "../agent/compaction";
 export { extractTextFromContent } from "../agent/compaction/message-utils.js";
 export {
+  createConfiguredProviderManager,
   createTimeoutAbort,
   filterResultsByDomain,
   getProviderManager,
@@ -168,6 +169,8 @@ export {
   resetWebsearchProviders,
   withTimeoutAbort,
 } from "../agent/tools/websearch";
+export { braveProvider } from "../agent/tools/websearch/providers/brave.js";
+export { tavilyProvider } from "../agent/tools/websearch/providers/tavily.js";
 export { parseParallelResults } from "../agent/tools/websearch/providers/parallel.js";
 export { parseExaResults } from "../agent/tools/websearch/providers/exa.js";
 export { parseMcpResponse } from "../agent/tools/websearch/providers/mcp-client.js";

@@ -42,12 +42,12 @@ interface TavilySearchResponse {
 export const tavilyProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
-  isAvailable(): boolean {
-    return Boolean(getProviderManager().getApiKey(PROVIDER_NAME));
+  isAvailable(options?: SearchOptions): boolean {
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);
     if (!apiKey) {
       throw new Error("Tavily API key not configured. Pass toolConfig.websearch.tavilyApiKey when creating the agent.");
     }
