@@ -16,6 +16,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useServerConfig } from "@/hooks/useServerConfig";
 
 import type { AgentAdapter } from "@codent/app";
+import type { ModelProvider } from "@codent/core";
 
 configureEnv({ allowNonBrowserUpdates: true });
 
@@ -53,11 +54,10 @@ const AgentBootstrap = () => {
       registerCoreEnv(env);
 
       // Provider plane: local keys when apiKey is set; otherwise remote provider on the same host.
-      if (apiKey.trim()) {
-        registerModelProvider(createDirectModelProvider({ model, style, baseURL, apiKey }));
-      } else {
-        registerModelProvider(await createRemoteProvider(url));
-      }
+      const provider: ModelProvider = apiKey.trim()
+        ? createDirectModelProvider({ model, style, baseURL, apiKey })
+        : await createRemoteProvider(url);
+      registerModelProvider(provider);
       if (currentInitId !== initIdRef.current) return;
 
       await initConfig({
@@ -72,7 +72,7 @@ const AgentBootstrap = () => {
       await initHighlighter();
       if (currentInitId !== initIdRef.current) return;
 
-      const ext = new ExtensionAgentAdapter();
+      const ext = new ExtensionAgentAdapter({ env, provider });
 
       adapterRef.current = ext;
       setAdapter(ext);
