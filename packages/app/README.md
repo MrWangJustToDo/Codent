@@ -16,7 +16,7 @@ Shared UI layer (CLI + extension). Agent control is **Session-only**: hooks, lay
 | Serializable types | `AgentStatus`, `AgentMode`, `TodoItem`, `TokenUsage`, `LogEntry`, `PlanModeState`, `SessionMeta`, tool output types, `ExtensionInfo`, `AgentEvent` (typed envelope) |
 | Status helpers | `isActiveStatus` |
 | Presentation registry | `getToolPresentation` / `registerToolPresentation` / `describeToolPresentations` (tools declare a single `present` descriptor in core; the UI reads it) |
-| CoreEnv plane | `getEnv`, `hasCoreEnv`, `FileEntry`, … (workspace panels only) |
+| CoreEnv plane | `CoreEnv` type, `FileEntry`, … — the env itself reaches the app through `CoreEnvProvider` / `useCoreEnv` (host-supplied) and is passed explicitly into the workspace utils; never ambient `getEnv()` |
 | Model types | `DEFAULT_BASE_URLS`, `DEFAULT_LOCAL_OPENAI_BASE_URL`, `ModelStyle` / `ModelInfo` / `ModelCapability` / `ModelPricing` / `ReasoningConfig` |
 | Summary stream protocol | `summaryStreamKey`, `compactSummaryStreamId`, display-window helpers, `SummaryStreamEvent` types |
 | Edit preview (CoreEnv) | `previewEdit` (workspace read; no ManagedAgent) |
@@ -25,7 +25,7 @@ Shared UI layer (CLI + extension). Agent control is **Session-only**: hooks, lay
 
 | Symbol | File |
 |--------|------|
-| `agentManager`, `createLocalAgentSessionHost`, `resolveModelConfigFromProvider`, `buildDefaultSystemPrompt` | `adapter/create-agent.ts` |
+| `resolveModelConfigFromProvider`, `buildDefaultSystemPrompt` | `adapter/create-agent.ts` |
 | `buildDefaultSystemPrompt` | `hooks/use-config.ts` (default prompt fill) |
 
 Remote session Host bootstrap (`createRemoteAgentSessionHost`) replaces the Local exception when `--remote-session` is used.
@@ -33,6 +33,7 @@ Remote session Host bootstrap (`createRemoteAgentSessionHost`) replaces the Loca
 ### Forbidden in app UI / commands / hooks (except bootstrap files above)
 
 - `ManagedAgent`, `agentManager`, `createManagedAgent`, `AgentManager`
+- Ambient CoreEnv registry: `getEnv`, `hasCoreEnv`, `registerCoreEnv`, `clearCoreEnv` (take the env from `useCoreEnv` / pass it into the workspace utils)
 - Live `TodoManager` / `AgentLog` class instances (use Session snapshot / `lifecycle`; AgentLog is a persisted JSONL sink — no in-memory ring)
 - `SessionStore` (use `session.dispatch({ type: "session.list" })` / Host catalog)
 - Compaction executors: `autoCompact`, `applyCompactionResult`, `estimateTokens` (not on public core entry; run via `dispatch({ type: "compact" })`)

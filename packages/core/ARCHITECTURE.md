@@ -63,21 +63,22 @@ For monorepo-wide context see [AGENTS.md](../../AGENTS.md). For public exports s
 packages/cli/src/index.tsx
   loadEnv()
   parseCliArgs()
-  registerCoreEnv(createNodeEnv(...) | createRemoteEnv(url))
-  registerModelProvider(createDirectModelProvider(...) | createRemoteProvider(url))
-  initConfig()
-  render(<App />)
+  coreEnv = createNodeEnv(...) | createRemoteEnv(url)
+  provider = createDirectModelProvider(...) | createRemoteProvider(url)
+  registerCoreEnv(coreEnv) / registerModelProvider(provider)   // ambient fallback
+  initConfig() → useWorkspaceInfo.init(coreEnv)
+  render(<CoreEnvProvider value={coreEnv}><AdapterProvider value={new LocalAgentAdapter({ env, provider })}>…<App/></…)
 ```
 
-**Rule:** `registerCoreEnv()` must run before any `@codent/core` API that touches filesystem, shell, or platform. `registerModelProvider()` must run before agent creation / `resolveModelConfigFromProvider`.
+**Rule:** prefer `CodentAgent.create({ env, provider | direct, host? })`; the ambient `registerCoreEnv()` / `registerModelProvider()` are the fallback for scripts and code without a runtime in scope. `registerCoreEnv()` must run before any `@codent/core` API that touches filesystem, shell, or platform (that includes `initConfig` / `useWorkspaceInfo.init`); model resolution goes through the runtime's provider — `CodentAgent.create` must be given the provider (or `direct` fields) before agents run.
 
 ### 1.2 App agent creation
 
 ```
 packages/app/src/adapter/create-agent.ts
-  resolveModelConfigFromProvider({ model, style, baseURL, apiKey })
-    // merges ModelProvider (remote forces baseURL/apiKey)
-  agentManager.createManagedAgent({ modelInfo, modelStyle, ... })
+  resolveModelConfigFromProvider({ model, style, baseURL, apiKey }, host.getModelProvider?.())
+    // uses the runtime's ModelProvider (remote forces baseURL/apiKey); ambient fallback when omitted
+  host.create({ modelInfo, modelStyle, ... })   // host = CodentAgent.host (local) | remote host
   wire React stores (useAgent)
   optional: continueLatestSession() / resumeSession() → initialMessages
 ```
