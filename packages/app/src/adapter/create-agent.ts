@@ -18,13 +18,9 @@ import { useConfig } from "../hooks/use-config.js";
 import type { AppConfig, InitResult } from "./types.js";
 import type { AgentSession, AgentSessionHost } from "@codent/core";
 
-/** Wire AgentSession (+ Host) into the app store. */
+/** Wire the runtime's root AgentSession (+ Host) into the app store. */
 export function bindAgentSession(session: AgentSession | null, host?: AgentSessionHost | null): void {
-  if (session) {
-    useAgent.getActions().registerSession(session, { activate: true });
-  } else {
-    useAgent.getActions().setSession(null);
-  }
+  useAgent.getActions().setSession(session);
   if (host !== undefined) {
     useAgent.getActions().setHost(host);
   }
@@ -103,54 +99,15 @@ export async function createAgentFromConfig({ config, name, host }: CreateAgentO
     useConfig.getActions().updateConfig({ serverModel: snap.model });
   }
 
-  // Session registration is the caller's job (`bindAgentSession`), NOT done here.
-  // Registering inside this async function races with use-agent-chat's effect
-  // rebuild: `updateConfig` above flips the effect deps (config.model/baseURL/...),
-  // the old init's session gets registered unconditionally (no currentInitId guard
-  // here), and the store ends up with two live sessions (Header shows "2 sessions").
-  // The caller registers after its initId guard, so a stale init's session never
-  // enters the store.
+  // Session binding is the caller's job (`bindAgentSession`), NOT done here.
+  // Binding inside this async function races with use-agent-chat's effect rebuild:
+  // `updateConfig` above flips the effect deps (config.model/baseURL/...), and the
+  // old init's session could overwrite the store unconditionally (no currentInitId
+  // guard here). The caller binds after its initId guard, so a stale init's session
+  // never enters the store.
   useAgent.getActions().setHost(host);
   syncExtensionCommands(session);
 
-  return { host, session, ...(initial.length ? { initialMessages: initial } : {}) };
-}
-
-let sessionCounter = 0;
-
-/**
- * Create an additional live session on an already-initialized host, reusing the
- * resolved model config from {@link useConfig} (the bootstrap session's provider
- * resolution). Registers and activates it in the app store.
- */
-export async function createSessionOnHost({
-  host,
-  name,
-}: {
-  host: AgentSessionHost;
-  name?: string;
-}): Promise<InitResult> {
-  const config = { ...useConfig.getReadonlyState().config } as AppConfig;
-
-  const { session, initialMessages } = await host.create({
-    name: name ?? `session-${++sessionCounter}`,
-    model: config.model,
-    systemPrompt: config.systemPrompt,
-    maxIterations: config.maxIterations,
-    mcpConfigPath: config.mcpConfigPath || undefined,
-    extensionDirs: config.extensionDirs?.length ? config.extensionDirs : undefined,
-    modelStyle: config.style,
-    modelBaseURL: config.baseURL,
-    modelApiKey: config.apiKey,
-    modelInfo: config.modelInfo,
-    providerMode: config.providerMode,
-    ...(config.toolConfig ? { toolConfig: config.toolConfig } : {}),
-  });
-
-  useAgent.getActions().registerSession(session, { activate: true });
-  syncExtensionCommands(session);
-
-  const initial = initialMessages ?? [];
   return { host, session, ...(initial.length ? { initialMessages: initial } : {}) };
 }
 

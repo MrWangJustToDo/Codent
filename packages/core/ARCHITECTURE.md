@@ -248,7 +248,7 @@ Worker profile (runSubagent — task / compact)
   → outcome path "detached" (avoids task-panel ghosts)
 ```
 
-Host observation remains **AgentSession** only. Multiple live root sessions are supported: each root is a separate `ManagedAgent` instance (registered in the app store's live-session registry, switched via `Ctrl+X`), and they reuse this same run skeleton per instance. `AgentManager`'s ownership registry (`Map<sessionId, agentId>`) keeps each disk session bound to one live agent (§6.3).
+Host observation remains **AgentSession** only. One runtime owns exactly one live root session (a second session is a second runtime); it reuses this same run skeleton. `AgentManager`'s ownership registry (`Map<sessionId, agentId>`) keeps each disk session bound to one live agent (§6.3).
 
 ### 3.2 `runAgentStream` pipeline
 

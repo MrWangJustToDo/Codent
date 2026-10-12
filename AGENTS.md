@@ -30,7 +30,7 @@ A pnpm monorepo with eleven packages organized in a layered architecture.
 | Package | Role |
 |---------|------|
 | `@codent/core` | Runtime-agnostic core: agent loop, tools, LLM model factory, CoreEnv interface |
-| `@codent/app` | Shared UI layer: React components, hooks, commands, AgentAdapter interface. **Session-only** for agent control — keeps a live-session registry (`sessions`/`activeSessionId` + `registerSession`/`activateSession`) so multiple live agents can coexist and be switched. Reads the workspace env from a host-supplied `CoreEnvProvider` (never ambient `getEnv()`). See [`packages/app/README.md`](packages/app/README.md) import allowlist |
+| `@codent/app` | Shared UI layer: React components, hooks, commands, AgentAdapter interface. **Session-only** for agent control — one runtime owns exactly one live root session (a second session means a second runtime, not a second entry in the app store). Reads the workspace env from a host-supplied `CoreEnvProvider` (never ambient `getEnv()`). See [`packages/app/README.md`](packages/app/README.md) import allowlist |
 | `@codent/cli` | Terminal host — thin shell that registers CoreEnv and renders `@codent/app` |
 | `@codent/node` | Node.js CoreEnv implementation: native filesystem, shell, OS sandbox |
 | `@codent/server` | CoreEnv HTTP server (Hono RPC) + remote client factory |
@@ -157,7 +157,7 @@ interface AgentAdapter {
 }
 ```
 
-Shared initialization logic is in `createAgentFromConfig()` (`@codent/app/adapter/create-agent.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (Brave / websearch) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` tracks live sessions through the host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so no agent leaks on exit.
+Shared initialization logic is in `createAgentFromConfig()` (`@codent/app/adapter/create-agent.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (Brave / websearch) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
 
 ### Bootstrap Sequences
 

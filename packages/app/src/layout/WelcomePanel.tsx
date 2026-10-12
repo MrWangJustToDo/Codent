@@ -227,8 +227,6 @@ export interface WelcomePanelProps {
   workspacePath?: string;
   /** Active remote planes, shown as a badge under the tagline (ready only). */
   remotePlanes?: string[];
-  /** Number of open sessions; >1 is shown in the badge (ready only). */
-  sessionCount?: number;
   /** Status line for the `loading` variant. */
   loadingText?: string;
   /** Message shown by the `error` variant. */
@@ -246,7 +244,6 @@ export const WelcomePanel = ({
   git = null,
   workspacePath = "",
   remotePlanes = [],
-  sessionCount = 1,
   loadingText = "Initializing sandbox…",
   errorMessage,
 }: WelcomePanelProps) => {
@@ -254,7 +251,7 @@ export const WelcomePanel = ({
   const paddingX = tier === "narrow" ? 1 : 3;
   const innerWidth = Math.max(0, screenWidth - paddingX * 2);
 
-  const badge = [...remotePlanes, ...(sessionCount > 1 ? [`${sessionCount} sessions`] : [])].join(" · ");
+  const badge = remotePlanes.join(" · ");
 
   const showBadge = variant === "ready" && badge.length > 0;
   const showMeta = variant === "ready" && tier !== "narrow" && (Boolean(workspacePath) || git != null);

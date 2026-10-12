@@ -48,9 +48,8 @@ export class LocalAgentAdapter implements AgentAdapter {
   }
 
   async destroy(): Promise<void> {
-    // Tear down every live agent owned by this host (the bootstrap session plus
-    // any additional sessions created via /session new), then release the runtime's
-    // provider/env. `dispose` iterates the host so no live agent leaks on exit.
+    // Tear down the runtime's live agent(s) and release its provider/env.
+    // `dispose` iterates the host so nothing leaks on exit.
     if (this.agent) {
       await this.agent.dispose();
       this.agent = null;
