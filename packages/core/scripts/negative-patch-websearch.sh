@@ -18,7 +18,10 @@ restore() {
   if [ -n "$backup" ] && [ -n "$backup_target" ]; then
     cp "$backup" "$backup_target" 2>/dev/null || true
   fi
-  [ -n "$backup" ] && rm -f "$backup"
+  # `if`, not `[ -n "$backup" ] && rm -f "$backup"`: with `set -e`, when `$backup` is empty
+  # (the EXIT trap after the last case) the `&&` short-circuits and the function returns 1,
+  # which aborts the EXIT trap with status 1 — masking the real exit code.
+  if [ -n "$backup" ]; then rm -f "$backup"; fi
 }
 trap restore EXIT INT TERM
 
