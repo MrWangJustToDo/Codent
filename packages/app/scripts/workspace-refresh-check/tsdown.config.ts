@@ -26,6 +26,7 @@ export default defineConfig({
   plugins: [rewriteRendererSpecifiers()],
   entry: [
     `${src}/components/WorkspaceFileMode.tsx`,
+    `${src}/context/core-env-context.ts`,
     `${src}/hooks/use-workspace-view.ts`,
     `${src}/hooks/use-workspace-git.ts`,
     `${src}/hooks/use-size.ts`,

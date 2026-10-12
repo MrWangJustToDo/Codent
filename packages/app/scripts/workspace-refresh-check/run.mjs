@@ -31,6 +31,7 @@ import { Readable } from "node:stream";
 import { configureEnv } from "reactivity-store";
 
 import { WorkspaceFileMode } from "./dist/components/WorkspaceFileMode.mjs";
+import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
 import { useSize } from "./dist/hooks/use-size.mjs";
 import { useWorkspaceGit } from "./dist/hooks/use-workspace-git.mjs";
 import { useWorkspaceView } from "./dist/hooks/use-workspace-view.mjs";
@@ -105,7 +106,11 @@ const runCommand = async (cmd) => {
   return ok("");
 };
 
-registerCoreEnv({
+/**
+ * The workspace env the panel reads from `<CoreEnvProvider>` (`useCoreEnv` throws without it).
+ * `registerCoreEnv` also installs it as the ambient env for any core-side code path.
+ */
+const env = {
   rootPath: ROOT,
   path: path.posix,
   getPlatform: async () => "linux",
@@ -129,7 +134,8 @@ registerCoreEnv({
     exists: async (p) => p === ROOT || files.has(p.slice(ROOT.length + 1)),
     remove: async () => {},
   },
-});
+};
+registerCoreEnv(env);
 
 // ── the panel, mounted in a fake terminal ────────────────────────────────────
 
@@ -167,7 +173,7 @@ useSize.getReactiveState().state.screenWidth = 120;
 useSize.getReactiveState().state.screenHeight = 32;
 
 const stdin = fakeStdin();
-const instance = render(createElement(WorkspaceFileMode, null), {
+const instance = render(createElement(CoreEnvProvider, { value: env }, createElement(WorkspaceFileMode, null)), {
   stdout: new FakeStdout(),
   stdin,
   exitOnCtrlC: false,
@@ -335,7 +341,7 @@ const IdentityProbe = () => {
 };
 
 const probeStdin = fakeStdin();
-const probe = render(createElement(IdentityProbe, null), {
+const probe = render(createElement(CoreEnvProvider, { value: env }, createElement(IdentityProbe, null)), {
   stdout: new FakeStdout(),
   stdin: probeStdin,
   exitOnCtrlC: false,
