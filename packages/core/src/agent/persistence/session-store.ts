@@ -116,6 +116,11 @@ export class SessionStore {
     return this.env.fs;
   }
 
+  /** The workspace env this store persists through (shared with media I/O). */
+  getEnv(): ResolvedCoreEnv {
+    return this.env;
+  }
+
   // ==========================================================================
   // Public API
   // ==========================================================================

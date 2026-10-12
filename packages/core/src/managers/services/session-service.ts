@@ -258,7 +258,7 @@ export class SessionService {
         // failure and fall through with the previous messages, still saving the rest
         // of the session state.
         try {
-          const dehydrated = await dehydrateUIMessages(uiMessages);
+          const dehydrated = await dehydrateUIMessages(uiMessages, { env: this.store?.getEnv() });
           this.data.uiMessages = dehydrated;
         } catch (err) {
           messagesPersisted = false;
@@ -330,9 +330,12 @@ export class SessionService {
     // through `onMissingMedia` so the silent data loss becomes observable.
     let hydrated: UIMessage[];
     try {
-      hydrated = await hydrateUIMessages(session.uiMessages, { onMissing: input.onMissingMedia });
+      hydrated = await hydrateUIMessages(session.uiMessages, {
+        onMissing: input.onMissingMedia,
+        env: this.store?.getEnv(),
+      });
       try {
-        const dehydrated = await dehydrateUIMessages(hydrated);
+        const dehydrated = await dehydrateUIMessages(hydrated, { env: this.store?.getEnv() });
         session.uiMessages = dehydrated;
       } catch {
         // Canonicalize is best-effort; keep the stored form when media writes fail.

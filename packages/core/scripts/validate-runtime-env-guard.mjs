@@ -73,6 +73,8 @@ for (const rel of SCAN_DIRS) {
         const before = line.slice(0, m.index);
         const isFallback = /\?\?\s*$/.test(before) || /=\s*$/.test(before);
         if (isFallback) continue;
+        // A method *named* `getEnv` (e.g. `getEnv(): ResolvedCoreEnv {`) is not the registry call.
+        if (/^getEnv\s*\(\s*\)\s*:/.test(line.slice(m.index))) continue;
         if (allowReason) continue;
         offenders.push(`${relPath}:${i + 1}  ${line.trim()}`);
       }

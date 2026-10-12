@@ -248,7 +248,7 @@ export async function branchSession(
   // and leave it there forever (later saves only append). The canonical persist path
   // (`SessionService.persistSession`) dehydrates for exactly this reason.
   const liveMessages = (managed.getUI()?.getMessages() ?? current.uiMessages) as UIMessage[];
-  const messages = (await dehydrateUIMessages(liveMessages)) as UIMessage[];
+  const messages = (await dehydrateUIMessages(liveMessages, { env: store.getEnv() })) as UIMessage[];
 
   let upToIndex: number | undefined;
   let forkText: string | undefined;

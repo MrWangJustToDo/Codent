@@ -29,7 +29,7 @@
  * the session file (a single screenshot is ~100 KB, a read_file image >1 MB).
  */
 
-import { getMediaStore } from "./media-store.js";
+import { getMediaStore, MediaStore } from "./media-store.js";
 import {
   parseStringifiedMultimodalContent,
   repairStringifiedMultimodalUIMessages,
@@ -37,6 +37,7 @@ import {
 import { MEDIA_PROTOCOL, buildMediaRefPath, parseMediaRefPath } from "./types.js";
 
 import type { MediaRef } from "./types.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { AudioPart, DocumentPart, ImagePart, UIMessage, VideoPart } from "@tanstack/ai";
 
 // ============================================================================
@@ -224,8 +225,11 @@ function cloneMessages(messages: UIMessage[]): UIMessage[] {
  * @param messages - Original UIMessage[] (NOT mutated)
  * @returns A new UIMessage[] with dehydrated source values
  */
-export async function dehydrateUIMessages(messages: UIMessage[]): Promise<UIMessage[]> {
-  const store = getMediaStore();
+export async function dehydrateUIMessages(
+  messages: UIMessage[],
+  options?: { env?: ResolvedCoreEnv }
+): Promise<UIMessage[]> {
+  const store = options?.env ? new MediaStore(options.env) : getMediaStore();
   // Repair interrupt-snapshot corruption before extracting media (legacy sessions).
   const cloned = cloneMessages(repairStringifiedMultimodalUIMessages(messages));
 
@@ -290,6 +294,8 @@ export interface MediaHydrationMiss {
 export interface HydrateUIMessagesOptions {
   /** Invoked once per un-hydratable media ref. Hydration itself never throws. */
   onMissing?: (miss: MediaHydrationMiss) => void;
+  /** Workspace env for media I/O (runtime-provided; ambient store by default). */
+  env?: ResolvedCoreEnv;
 }
 
 /**
@@ -304,7 +310,7 @@ export async function hydrateUIMessages(
   messages: UIMessage[],
   options?: HydrateUIMessagesOptions
 ): Promise<UIMessage[]> {
-  const store = getMediaStore();
+  const store = options?.env ? new MediaStore(options.env) : getMediaStore();
   const onMissing = options?.onMissing;
   // Restore multimodal parts that were persisted as JSON.stringify(ContentPart[]).
   const cloned = cloneMessages(repairStringifiedMultimodalUIMessages(messages));
