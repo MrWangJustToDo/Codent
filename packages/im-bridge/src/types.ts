@@ -7,6 +7,8 @@
  * references or implement business logic.
  */
 
+import type { BUILTIN_TOOL_NAMES } from "@codent/core";
+
 /** Unified conversation pointer. `threadId` maps Slack `thread_ts`, Telegram forum topics and Discord threads onto one field. */
 export interface ChatTarget {
   chatId: string;
@@ -116,7 +118,7 @@ export type PendingInteraction =
       segmentKey: string;
     }
   | {
-      kind: "ask_user";
+      kind: typeof BUILTIN_TOOL_NAMES.askUser;
       /** Client-tool call id — answered via `dispatch({type:"addToolResult"})`. */
       toolCallId: string;
       question: string;

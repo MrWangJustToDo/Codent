@@ -23,10 +23,12 @@
  * one-line status list.
  */
 
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
+
 import type { PendingInteraction } from "../types.js";
 import type { ToolCallPart, UIMessage } from "@tanstack/ai";
 
-const ASK_USER_TOOL = "ask_user";
+const ASK_USER_TOOL = BUILTIN_TOOL_NAMES.askUser;
 const INPUT_SUMMARY_LIMIT = 80;
 const ERROR_EXCERPT_LIMIT = 200;
 
@@ -100,7 +102,7 @@ function truncate(text: string, limit: number): string {
 function formatFilePathInput(input: Record<string, unknown>, toolName?: string): string {
   const path = input.path as string | undefined;
   if (!path) return "";
-  if (toolName === "read_file" && (input.offset !== undefined || input.limit !== undefined)) {
+  if (toolName === BUILTIN_TOOL_NAMES.readFile && (input.offset !== undefined || input.limit !== undefined)) {
     const offset = typeof input.offset === "number" ? input.offset : undefined;
     const limit = typeof input.limit === "number" ? input.limit : undefined;
     if (offset !== undefined && limit !== undefined) return `${path} lines ${offset}-${offset + limit - 1}`;
@@ -147,48 +149,48 @@ function formatGenericInput(input: unknown): string {
 export function formatInputSummary(toolName: string, input: Record<string, unknown> | undefined): string {
   if (!input) return "";
   switch (toolName) {
-    case "read_file":
-    case "list_file":
-    case "write_file":
-    case "edit_file":
-    case "delete_file":
+    case BUILTIN_TOOL_NAMES.readFile:
+    case BUILTIN_TOOL_NAMES.listFile:
+    case BUILTIN_TOOL_NAMES.writeFile:
+    case BUILTIN_TOOL_NAMES.editFile:
+    case BUILTIN_TOOL_NAMES.deleteFile:
       return formatFilePathInput(input, toolName);
-    case "run_command":
+    case BUILTIN_TOOL_NAMES.runCommand:
       return formatRunCommandInput(input);
-    case "grep":
+    case BUILTIN_TOOL_NAMES.grep:
       return formatGrepInput(input);
-    case "glob": {
+    case BUILTIN_TOOL_NAMES.glob: {
       const pattern = input.pattern as string | undefined;
       if (!pattern) return "";
       const parts = [JSON.stringify(pattern)];
       if (typeof input.path === "string" && input.path) parts.push(`in ${input.path}`);
       return parts.join(" ");
     }
-    case "task": {
+    case BUILTIN_TOOL_NAMES.task: {
       const description = input.description as string | undefined;
       const prompt = input.prompt as string | undefined;
       if (description) return truncate(description, 60);
       if (prompt) return truncate(prompt, 60);
       return "";
     }
-    case "todo":
+    case BUILTIN_TOOL_NAMES.todo:
       return (input.title as string | undefined) ?? "";
-    case "websearch":
+    case BUILTIN_TOOL_NAMES.websearch:
       return (input.query as string | undefined) ?? "";
-    case "webfetch":
+    case BUILTIN_TOOL_NAMES.webfetch:
       return (input.url as string | undefined) ?? "";
-    case "tree":
+    case BUILTIN_TOOL_NAMES.tree:
       return (input.path as string | undefined) ?? ".";
-    case "load_skill":
+    case BUILTIN_TOOL_NAMES.loadSkill:
       return (input.name as string | undefined) ?? "";
-    case "ask_user":
+    case BUILTIN_TOOL_NAMES.askUser:
       return (input.question as string | undefined) ?? "";
-    case "create_plan":
-    case "update_plan": {
+    case BUILTIN_TOOL_NAMES.createPlan:
+    case BUILTIN_TOOL_NAMES.updatePlan: {
       const goal = typeof input.goal === "string" ? input.goal : "";
       return goal ? truncate(goal, 60) : "";
     }
-    case "list_skills":
+    case BUILTIN_TOOL_NAMES.listSkills:
       return "";
     default:
       return formatGenericInput(input);
@@ -255,7 +257,7 @@ function fencedPreview(lines: string[], omittedLines: number, omittedEdits: numb
  * preview must already exist while the call is still awaiting approval.
  */
 function formatEditDiff(part: ToolCallPart): string {
-  if (part.name !== "edit_file") return "";
+  if (part.name !== BUILTIN_TOOL_NAMES.editFile) return "";
   const edits = parseInputJson(part)?.edits;
   if (!Array.isArray(edits) || edits.length === 0) return "";
 
@@ -293,7 +295,7 @@ function formatEditDiff(part: ToolCallPart): string {
  * tail marker.
  */
 function formatWritePreview(part: ToolCallPart): string {
-  if (part.name !== "write_file") return "";
+  if (part.name !== BUILTIN_TOOL_NAMES.writeFile) return "";
   const content = parseInputJson(part)?.content;
   if (typeof content !== "string" || content.trim().length === 0) return "";
   const lines = prefixedLines("+", content.endsWith("\n") ? content.slice(0, -1) : content);
@@ -325,7 +327,7 @@ function errorExcerpt(part: ToolCallPart): string {
 
 /** Optional result hint (e.g. grep match count) appended after `✅`. */
 function resultHint(part: ToolCallPart): string {
-  if (part.name === "grep" && typeof part.output === "object" && part.output !== null) {
+  if (part.name === BUILTIN_TOOL_NAMES.grep && typeof part.output === "object" && part.output !== null) {
     const matches = (part.output as { matches?: unknown }).matches;
     // Only when non-empty: oversized outputs may spill matches to a cache file
     // (empty array would be misleading).
@@ -386,7 +388,7 @@ export function scanPendingInteractions(messages: UIMessage[]): PendingInteracti
       if (part.name === ASK_USER_TOOL && part.state === "input-complete" && part.output === undefined) {
         const input = parseInputJson(part) ?? {};
         pending.push({
-          kind: "ask_user",
+          kind: BUILTIN_TOOL_NAMES.askUser,
           toolCallId: part.id,
           question: typeof input.question === "string" ? input.question : "(no question)",
           options: Array.isArray(input.options) ? input.options.filter((o): o is string => typeof o === "string") : [],

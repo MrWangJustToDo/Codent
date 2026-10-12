@@ -1,5 +1,6 @@
 /** Select mode: ask_user option list navigation / toggle / submit. */
 
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { useInput } from "ink";
 
 import { isAnyPanelOpen } from "./context.js";
@@ -52,7 +53,7 @@ export function useSelectModeKeybindings(ctx: KeybindingContext): void {
         const draft = selectActions.getFreeformDraft();
         if (draft) inputActions.setValue(draft);
         inputActions.setLoading(false);
-        modeActions.setDenyMode(true, "ask_user");
+        modeActions.setDenyMode(true, BUILTIN_TOOL_NAMES.askUser);
         return;
       }
       if (inputKey.escape) {

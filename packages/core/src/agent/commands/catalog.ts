@@ -16,6 +16,8 @@
  * `AgentSession.dispatch`.
  */
 
+import type { AgentSessionCommand } from "../../agent-session/types.js";
+
 /**
  * Where a command is meaningful. A headless ACP host filters to
  * `scope !== "ui"`; the terminal app shows all of them.
@@ -34,11 +36,18 @@ export interface BuiltinCommandInfo {
   /** Where the command applies (see {@link BuiltinCommandScope}). */
   scope: BuiltinCommandScope;
   /**
-   * The `AgentSessionCommand` type this command ultimately dispatches, when it
-   * maps to exactly one (its type name, e.g. `"session.new"`). `undefined` means
-   * the command is handled entirely in the host UI (e.g. `/settings`, `/quit`).
+   * The primary `AgentSessionCommand` this command dispatches (its type name, e.g.
+   * `"session.new"`), so a host can route without restating the command name. A command
+   * may dispatch more than one session command (e.g. `/mode` also toggles, `/rename` also
+   * generates, `/effort` also clears) — this is the entry's primary and the host handles
+   * the rest. `undefined` means the command is handled entirely in the host UI
+   * (e.g. `/settings`, `/quit`).
+   *
+   * Typed as the `AgentSessionCommand` discriminant so a headless host's dispatch switch
+   * is compile-checked against core and a catalog typo is a build error, not a silently
+   * dead command.
    */
-  command?: string;
+  command?: AgentSessionCommand["type"];
 }
 
 /** The canonical built-in command list. Keep descriptions in sync with the app handlers. */

@@ -106,8 +106,8 @@ const ALLOWED_EDGES = {
   "agent → agent-session": {
     mode: "type-only",
     reason:
-      "agent-event-bus/types.ts names the session channel union (`AgentSessionChannel`) so the event→channel projection is type-checked against the wire. Types only — the bus never drives a session.",
-    onlySources: ["agent-event-bus/types"],
+      "agent-event-bus/types.ts names the session channel union (`AgentSessionChannel`) so the event→channel projection is type-checked against the wire, and agent/commands/catalog.ts types a command's dispatched `command` field as the `AgentSessionCommand` discriminant so a host's dispatch switch is compile-checked. Types only.",
+    onlySources: ["agent-event-bus/types", "commands/catalog"],
   },
 
   // models is the LLM plane: config, adapter factories, prompt cache, pricing.

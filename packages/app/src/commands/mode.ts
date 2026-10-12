@@ -1,17 +1,14 @@
 import { getActiveSession } from "../utils/session-resolve.js";
 import { isPendingToolApproval, isToolCallPart } from "../utils/tool-part.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { CommandOption, CommandResult } from "./utils/types.js";
 import type { AgentMode } from "@codent/core";
 
 const PLAN_LOAD_LIMIT = 15;
 
-registerCommand({
-  name: "mode",
-  description: "Switch agent mode — normal / auto / plan (contextual menu)",
-  usage: "/mode [plan|auto|off|switch plan|switch auto|status|execute|done|cancel|save [name]|load <name>|list]",
+registerBuiltinCommand("mode", {
   immediate: false,
   getOptions: async (): Promise<CommandOption[]> => {
     const session = getActiveSession();

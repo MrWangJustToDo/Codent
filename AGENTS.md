@@ -386,6 +386,19 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   tracker to mark it done at 514 lines and never revisit it at 1750. A file that needs the 800
   ceiling at all should say so in its header, because at that size a reader is owed the reason.
 
+**Built-in identity**
+
+- A built-in's name is written in core exactly once: a tool in its `defineServerTool({ name })`
+  (and the exported `BUILTIN_TOOL_NAMES` registry), a command in `BUILTIN_COMMAND_CATALOG`.
+- Hosts (`@codent/app`, `@codent/acp`, `@codent/im-bridge`, …) MUST compare, route, and label a
+  built-in through `BUILTIN_TOOL_NAMES` / the command catalog — never a private name table, `case`
+  list, or `Set` of tool names. A host's tool classification (row treatment, editor tool kind)
+  derives from core's `present` descriptors / catalog; only a host-owned view may be *selected* by a
+  core identifier. Adding or renaming a built-in is then a core-only edit.
+- Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
+  `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
+  (app/acp/im-bridge keep no built-in name literals in tool-identity positions).
+
 ### Error Handling
 ```typescript
 try {

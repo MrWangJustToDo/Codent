@@ -53,8 +53,6 @@ export {
   DURATION_THRESHOLD_MS,
 } from "./utils/format.js";
 export {
-  ALWAYS_VISIBLE_TOOL_NAMES,
-  DETAILED_OUTPUT_TOOL_NAMES,
   hasDetailedOutputBlock,
   keepsCompactRow,
   getToolStatusGlyph,

@@ -293,6 +293,8 @@ export {
 } from "./agent/tools/presentation/inline-summary.js";
 export { formatToolArgs, formatToolOutput } from "./agent/tools/presentation/output-format.js";
 export { formatToolInput } from "./agent/tools/presentation/input-format.js";
+export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "./agent/tools/tool-names.js";
+export { BEGIN_SUMMARY_TOOL_NAME } from "./agent/subagent/begin-summary-tool.js";
 
 // ============================================================================
 // Tool output types (message formatting)

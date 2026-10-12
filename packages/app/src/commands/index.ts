@@ -18,8 +18,11 @@ export {
   dispatchCommand,
   getAllCommands,
   getCommand,
+  registerBuiltinCommand,
+  registerCommand,
   registerExtensionCommand,
 } from "./utils/registry.js";
+export type { BuiltinCommandDefinition } from "./utils/registry.js";
 export { splitExtensionCommandArgs, syncExtensionCommands } from "./utils/sync-extension-commands.js";
 export { COMMAND_FREEFORM_VALUE, typedArgsAfterCommand, withFreeformOption } from "./utils/command-options.js";
 

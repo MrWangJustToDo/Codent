@@ -1,9 +1,17 @@
+import { findBuiltinCommand } from "@codent/core";
+
 import { useCommandOutput } from "../../hooks/use-command-output.js";
 
 import type { Command, CommandContext, CommandResult } from "./types.js";
 
 /** Built-in slash commands (module-load registration). */
 const builtinCommands: Command[] = [];
+
+/**
+ * A built-in command's host-local behavior: everything `Command` carries except the
+ * identity fields core owns (`name` / `aliases` / `description` / `usage`).
+ */
+export type BuiltinCommandDefinition = Omit<Command, "name" | "description" | "usage" | "aliases">;
 
 /** Extension slash commands (synced from Session extensions snapshot after bootstrap). */
 const extensionCommands = new Map<string, Command>();
@@ -15,6 +23,28 @@ export function registerCommand(command: Command): void {
     return;
   }
   builtinCommands.push(command);
+}
+
+/**
+ * Register a built-in slash command from core's `BUILTIN_COMMAND_CATALOG`.
+ *
+ * Identity — `name`, `aliases`, `description`, `usage` — comes from the catalog (the
+ * single source a headless host also advertises), so a command file supplies only its
+ * behavior. A name with no catalog entry throws here rather than shipping a command no
+ * host can describe.
+ */
+export function registerBuiltinCommand(name: string, definition: BuiltinCommandDefinition): void {
+  const entry = findBuiltinCommand(name);
+  if (!entry) {
+    throw new Error(`[commands] "/${name}" is not in BUILTIN_COMMAND_CATALOG`);
+  }
+  registerCommand({
+    name: entry.name,
+    ...(entry.aliases ? { aliases: entry.aliases } : {}),
+    description: entry.description,
+    usage: entry.usage,
+    ...definition,
+  });
 }
 
 /**

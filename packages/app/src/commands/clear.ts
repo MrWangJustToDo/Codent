@@ -3,12 +3,9 @@ import { useDiffFileCache } from "../hooks/use-diff-file-cache.js";
 import { useDynamic } from "../hooks/use-dynamic.js";
 import { clearFlatMessageCache } from "../utils/message-flat-cache.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "clear",
-  description: "Clear the screen and start a new session",
-  usage: "/clear",
+registerBuiltinCommand("clear", {
   immediate: true,
   execute: async (_args, ctx) => {
     const session = ctx.getSession();

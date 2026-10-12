@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { useEffect, useMemo, useRef } from "react";
 
 import { dispatchCommand } from "../commands";
@@ -114,7 +115,7 @@ export function useAgentInputControls({
     // setClientToolWaiting(false);
     const durationMs = askUserStartTimeRef.current ? Date.now() - askUserStartTimeRef.current : 0;
     addToolOutput({
-      tool: "ask_user",
+      tool: BUILTIN_TOOL_NAMES.askUser,
       toolCallId: pendingAskUser.toolCallId,
       output: {
         question: pendingAskUser.question,
@@ -146,7 +147,7 @@ export function useAgentInputControls({
       } else {
         inputActions.clear();
         inputActions.setLoading(false);
-        modeActions.setDenyMode(true, "ask_user");
+        modeActions.setDenyMode(true, BUILTIN_TOOL_NAMES.askUser);
       }
     } else if (!key && prevPendingQuestionRef.current) {
       prevPendingQuestionRef.current = undefined;

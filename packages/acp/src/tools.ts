@@ -7,46 +7,36 @@
  * coupled to ACP, and we never fabricate a diff we cannot reconstruct.
  */
 
-import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
+import { BUILTIN_TOOL_NAMES, getToolPresentation } from "@codent/core";
 
-/** Per-name overrides that beat the category table (e.g. delete vs edit). */
-const NAME_KIND_OVERRIDES: Record<string, ToolKind> = {
-  read_file: "read",
-  list_file: "read",
-  tree: "read",
-  lsp_definition: "read",
-  lsp_references: "read",
-  lsp_hover: "read",
-  lsp_symbols: "read",
-  code_overview: "read",
-  memory_read: "read",
-  load_skill: "read",
-  edit_file: "edit",
-  write_file: "edit",
-  lsp_rename: "edit",
-  code_rewrite: "edit",
-  memory_write: "edit",
-  delete_file: "delete",
-  grep: "search",
-  glob: "search",
-  websearch: "fetch",
-  webfetch: "fetch",
-  lsp_diagnostics: "search",
-  lsp_completions: "search",
-  lsp_code_actions: "search",
-  ast_search: "search",
-  memory_list: "search",
-  list_skills: "search",
-  discover_tools: "search",
-  run_command: "execute",
-  get_command_output: "execute",
-  kill_command: "execute",
-  execute_typescript: "execute",
+import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
+import type { ToolActivityCategory } from "@codent/core";
+
+/** Core presentation category → ACP {@link ToolKind}. */
+const CATEGORY_KIND: Record<ToolActivityCategory, ToolKind> = {
+  reads: "read",
+  edits: "edit",
+  searches: "search",
+  commands: "execute",
+  tasks: "other",
+  other: "other",
 };
 
-/** Map a tool name to an ACP {@link ToolKind}. */
+/**
+ * The few tools whose ACP kind is not implied by their core presentation category
+ * (`delete_file` folds as an edit, the web tools as searches). Keyed by core's exported
+ * identifiers so a rename can never leave a stale key.
+ */
+const NAME_KIND_OVERRIDES: Record<string, ToolKind> = {
+  [BUILTIN_TOOL_NAMES.deleteFile]: "delete",
+  [BUILTIN_TOOL_NAMES.websearch]: "fetch",
+  [BUILTIN_TOOL_NAMES.webfetch]: "fetch",
+};
+
+/** Map a tool name to an ACP {@link ToolKind}, from core's presentation catalog. */
 export function toolKindFor(name: string): ToolKind {
-  return NAME_KIND_OVERRIDES[name] ?? "other";
+  const category = getToolPresentation(name)?.category ?? "other";
+  return NAME_KIND_OVERRIDES[name] ?? CATEGORY_KIND[category];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -92,23 +82,23 @@ export function toolTitleFor(name: string, input: unknown): string {
 }
 
 const TITLE_VERBS: Record<string, string> = {
-  read_file: "Read",
-  list_file: "List",
-  tree: "Tree",
-  edit_file: "Edit",
-  write_file: "Write",
-  delete_file: "Delete",
-  grep: "Search",
-  glob: "Find files",
-  websearch: "Web search",
-  webfetch: "Fetch",
-  run_command: "Run",
-  get_command_output: "Read command output",
-  kill_command: "Kill command",
-  execute_typescript: "Execute TypeScript",
-  task: "Task",
-  ask_user: "Ask user",
-  todo: "Todos",
+  [BUILTIN_TOOL_NAMES.readFile]: "Read",
+  [BUILTIN_TOOL_NAMES.listFile]: "List",
+  [BUILTIN_TOOL_NAMES.tree]: "Tree",
+  [BUILTIN_TOOL_NAMES.editFile]: "Edit",
+  [BUILTIN_TOOL_NAMES.writeFile]: "Write",
+  [BUILTIN_TOOL_NAMES.deleteFile]: "Delete",
+  [BUILTIN_TOOL_NAMES.grep]: "Search",
+  [BUILTIN_TOOL_NAMES.glob]: "Find files",
+  [BUILTIN_TOOL_NAMES.websearch]: "Web search",
+  [BUILTIN_TOOL_NAMES.webfetch]: "Fetch",
+  [BUILTIN_TOOL_NAMES.runCommand]: "Run",
+  [BUILTIN_TOOL_NAMES.getCommandOutput]: "Read command output",
+  [BUILTIN_TOOL_NAMES.killCommand]: "Kill command",
+  [BUILTIN_TOOL_NAMES.executeTypescript]: "Execute TypeScript",
+  [BUILTIN_TOOL_NAMES.task]: "Task",
+  [BUILTIN_TOOL_NAMES.askUser]: "Ask user",
+  [BUILTIN_TOOL_NAMES.todo]: "Todos",
 };
 
 /**
@@ -122,11 +112,11 @@ export function toolDiffFor(name: string, input: unknown, rootPath: string): Too
   const path = typeof rec.path === "string" ? rec.path : undefined;
   if (!path) return undefined;
 
-  if (name === "write_file" && typeof rec.content === "string") {
+  if (name === BUILTIN_TOOL_NAMES.writeFile && typeof rec.content === "string") {
     return { type: "diff", path: toAbsolute(path, rootPath), oldText: null, newText: rec.content };
   }
 
-  if (name === "edit_file") {
+  if (name === BUILTIN_TOOL_NAMES.editFile) {
     const edits = Array.isArray(rec.edits) ? rec.edits : [rec];
     const oldChunks: string[] = [];
     const newChunks: string[] = [];

@@ -1,9 +1,6 @@
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "rename",
-  description: "Rename current session (or auto-generate a title)",
-  usage: "/rename [title]",
+registerBuiltinCommand("rename", {
   immediate: false,
   allowCustomInput: true,
   getOptions: () => [

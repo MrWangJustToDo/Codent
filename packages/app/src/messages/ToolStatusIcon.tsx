@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { Text } from "ink";
 
 import { Spinner } from "../components/Spinner.js";
@@ -40,7 +41,7 @@ export const ToolStatusIcon = ({
     case "input-streaming":
     case "input-available":
     case "approval-responded":
-      return toolName === "ask_user" ? <Text color={COLORS.warning}>?</Text> : <Spinner text="" />;
+      return toolName === BUILTIN_TOOL_NAMES.askUser ? <Text color={COLORS.warning}>?</Text> : <Spinner text="" />;
     case "approval-requested":
       return <Text color={COLORS.warning}>?</Text>;
     default:

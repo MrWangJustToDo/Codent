@@ -15,7 +15,7 @@
  * default — the same path as the CLI's `--remote-session`.
  */
 
-import { isActiveStatus } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, isActiveStatus } from "@codent/core";
 import { createRemoteAgentSessionHost } from "@codent/server/client";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -564,7 +564,7 @@ export class BridgeRuntime {
    * without options.
    */
   private async answerAskUser(record: PendingRecord, answer: string): Promise<void> {
-    if (record.pending.kind !== "ask_user") return;
+    if (record.pending.kind !== BUILTIN_TOOL_NAMES.askUser) return;
     this.pending.resolveById(record.requestId);
     const preview = answer.length > 120 ? `${answer.slice(0, 119)}…` : answer;
     this.settleInteractionRow(record, `▸ ${preview}`);

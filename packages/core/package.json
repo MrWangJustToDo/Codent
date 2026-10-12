@@ -215,6 +215,7 @@
     "validate:extension-event-observation": "pnpm run build && node scripts/validate-extension-event-observation.mjs",
     "validate:extension-flush": "pnpm run build && node scripts/validate-extension-flush.mjs",
     "validate:tool-presentation": "node scripts/validate-tool-presentation.mjs",
+    "validate:builtin-tool-names": "pnpm run build && node scripts/validate-builtin-tool-names.mjs",
     "validate:tool-display": "pnpm run build && node scripts/validate-tool-display.mjs",
     "validate:mcp-tool-presentation": "pnpm run build && node scripts/validate-mcp-tool-presentation.mjs",
     "validate:mid-run-tool-display": "pnpm run build && node scripts/validate-mid-run-tool-display.mjs",

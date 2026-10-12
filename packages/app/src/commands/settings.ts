@@ -5,7 +5,7 @@ import { useTheme } from "../hooks/use-theme.js";
 import { useTranscriptDisplay } from "../hooks/use-transcript-display.js";
 import { isThemeName, THEME_NAMES } from "../theme/colors.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { TranscriptDisplayMode } from "../hooks/use-transcript-display.js";
 
@@ -30,11 +30,7 @@ function configEditBlockedReason(): string {
   return "";
 }
 
-registerCommand({
-  name: "settings",
-  aliases: ["appearance"],
-  description: "Toggle UI appearance — color theme, transcript density, diff renderer — and edit the model config",
-  usage: "/settings [theme|display|diff|config]",
+registerBuiltinCommand("settings", {
   immediate: false,
   // One row per setting: every toggle is binary, so an explicit value row
   // (`theme gemini` / `theme claude`) only repeated what its toggle did — four
