@@ -69,5 +69,6 @@ export const usePreviewPorts = createState(
         }
       },
     }),
+    withNamespace: "usePreviewPorts",
   }
 );

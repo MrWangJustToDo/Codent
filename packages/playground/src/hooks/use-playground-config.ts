@@ -75,4 +75,5 @@ export const usePlaygroundConfig = createState(() => ({ ...initial }), {
       });
     },
   }),
+  withNamespace: "usePlaygroundConfig",
 });

@@ -78,5 +78,7 @@ export const useShellState = createState(
         state.previewUrl = url;
       },
     }),
+    withNamespace: "useShellState",
+    withStableSelector: true,
   }
 );

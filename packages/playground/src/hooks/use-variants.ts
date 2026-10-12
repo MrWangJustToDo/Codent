@@ -34,5 +34,6 @@ export const useVariants = createState(
         }
       },
     }),
+    withNamespace: "useVariants",
   }
 );
