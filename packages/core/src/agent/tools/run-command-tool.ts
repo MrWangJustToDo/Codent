@@ -71,7 +71,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       // project-internal commands execute; anything else is denied with a
       // reason surfaced to the model (insufficient permissions).
       if (subagentSafe) {
-        const ctx = await createAnalysisContext();
+        const ctx = await createAnalysisContext(coreEnv);
         const absoluteCwd = cwd ? ctx.path.resolve(ctx.rootPath, cwd) : ctx.cwd;
         const report = await analyzeCommand(command, { ...ctx, cwd: absoluteCwd });
         const decision = evaluateCommandApproval(report, { agentKind: "subagent" });

@@ -67,7 +67,8 @@ export async function buildManagedAgent({
 
   const resolvedModelInfo = explicitModelInfo ?? null;
   // The runtime's env when bound; ambient otherwise (legacy single-instance hosts).
-  const fsRootPath = (runtime?.env ?? getEnv()).rootPath;
+  const coreEnv = runtime?.env ?? getEnv();
+  const fsRootPath = coreEnv.rootPath;
   const log = new AgentLog();
   const todoManager = parentId ? null : new TodoManager();
 
@@ -211,7 +212,7 @@ export async function buildManagedAgent({
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
       onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
       cwd: fsRootPath,
-      getCoreEnv: () => runtime?.env ?? getEnv(),
+      getCoreEnv: () => coreEnv,
       // Scoped unified bus backing extension interception (hook names unchanged)
       // and extension telemetry (`agent:extension-error`).
       eventBus: manager.of(managed.id, parentId),
@@ -378,7 +379,7 @@ export async function buildManagedAgent({
   }
 
   if (!parentId) {
-    const sessionStore = new SessionStore();
+    const sessionStore = new SessionStore(coreEnv);
     managed.setSessionStore(sessionStore, {
       modelStyle: config.modelStyle ?? resolvedModelInfo?.style ?? "openai",
       model: restConfig.model,

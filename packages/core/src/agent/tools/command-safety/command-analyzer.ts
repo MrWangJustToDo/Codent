@@ -13,7 +13,6 @@
  * (bash-first).
  */
 
-import { defaultPath, getEnv } from "../../../env";
 import { toPosixPathKey } from "../../../utils/posix-path.js";
 
 import { canonicalizeCommandName, commandName, commandPrefix } from "./command-arity.js";
@@ -21,7 +20,7 @@ import { extractCommands, parseCommandTree, resolveShellKind } from "./command-p
 import { hasCommandSubstitution, tokenizeCommandString } from "./command-tokenizer.js";
 
 import type { ParsedCommand, ShellKind } from "./command-parser.js";
-import type { CoreEnvPath } from "../../../env";
+import type { ResolvedCoreEnv, CoreEnvPath } from "../../../env";
 
 // ============================================================================
 // Types
@@ -552,15 +551,15 @@ function analyzeParsedCommands(
  * `overrides` allow callers to pin cwd/home/env for testing or specific runs.
  */
 export async function createAnalysisContext(
+  env: ResolvedCoreEnv,
   overrides?: Partial<CommandAnalysisContext>
 ): Promise<CommandAnalysisContext> {
-  const env = getEnv();
   const [home, envVars] = await Promise.all([env.homedir(), env.getEnv()]);
   return {
     rootPath: overrides?.rootPath ?? env.rootPath,
     cwd: overrides?.cwd ?? env.rootPath,
     home: overrides?.home ?? home,
     env: overrides?.env ?? envVars,
-    path: overrides?.path ?? env.path ?? defaultPath,
+    path: overrides?.path ?? env.path,
   };
 }

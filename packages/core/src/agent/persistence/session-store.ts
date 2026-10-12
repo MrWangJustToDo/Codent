@@ -14,7 +14,7 @@
  * SessionService via `media-utils.ts`.
  */
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { generateId } from "../../utils/generate-id.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
@@ -90,6 +90,17 @@ interface TimestampSnapshot {
 // ============================================================================
 
 export class SessionStore {
+  /**
+   * Workspace env this store persists through. The owning runtime's env when a runtime
+   * creates the agent; the ambient env by default (legacy single-instance / tests), so a
+   * local runtime and a remote runtime never share a session directory.
+   */
+  private readonly env: ResolvedCoreEnv;
+
+  constructor(env: ResolvedCoreEnv = getEnv()) {
+    this.env = env;
+  }
+
   /** Last durable write per session — drives delta computation and no-op dedupe. */
   private lastSaved: Map<string, LastSaved> = new Map();
 
@@ -102,7 +113,7 @@ export class SessionStore {
   private saveLocks: Map<string, Promise<void>> = new Map();
 
   private get fs() {
-    return getEnv().fs;
+    return this.env.fs;
   }
 
   // ==========================================================================

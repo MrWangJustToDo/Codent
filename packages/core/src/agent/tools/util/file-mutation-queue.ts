@@ -11,7 +11,7 @@
  * won't match, and the tool will error naturally — the LLM re-reads and retries.
  */
 
-import { getEnv } from "../../../env";
+import type { ResolvedCoreEnv } from "../../../env";
 
 // ============================================================================
 // Queue State
@@ -24,9 +24,9 @@ const fileMutationQueues = new Map<string, Promise<void>>();
  * Uses `path.resolve` to normalize relative paths, symlinks, etc.
  * Falls back to the raw path if resolution fails.
  */
-function getQueueKey(filePath: string): string {
+function getQueueKey(env: ResolvedCoreEnv, filePath: string): string {
   try {
-    return getEnv().path.resolve(filePath);
+    return env.path.resolve(filePath);
   } catch {
     return filePath;
   }
@@ -48,8 +48,12 @@ function getQueueKey(filePath: string): string {
  * @param fn       - Async function that reads, modifies, and writes the file.
  * @returns The return value of `fn`.
  */
-export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  const key = getQueueKey(filePath);
+export async function withFileMutationQueue<T>(
+  env: ResolvedCoreEnv,
+  filePath: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const key = getQueueKey(env, filePath);
 
   // Chain the new operation after the current one for this file.
   const previous = fileMutationQueues.get(key) ?? Promise.resolve();

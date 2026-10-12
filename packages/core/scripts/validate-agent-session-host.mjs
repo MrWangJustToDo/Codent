@@ -5,7 +5,26 @@
  */
 import assert from "node:assert/strict";
 
-import { SummaryStreamHub, TodoManager, UsageTracker, createLocalAgentSessionHost } from "../dist/dev.mjs";
+import {
+  SummaryStreamHub,
+  TodoManager,
+  UsageTracker,
+  createLocalAgentSessionHost,
+  registerCoreEnv,
+} from "../dist/dev.mjs";
+
+registerCoreEnv({
+  rootPath: "/tmp",
+  fs: { exists: async () => false },
+  path: {},
+  runCommand: async () => ({}),
+  exec: async () => ({}),
+  fetch: async () => new Response(""),
+  getPlatform: async () => "linux",
+  getArch: async () => "x64",
+  getEnv: async () => ({}),
+  homedir: async () => "/tmp",
+});
 
 function createFake(id, parentId) {
   const usage = new UsageTracker();

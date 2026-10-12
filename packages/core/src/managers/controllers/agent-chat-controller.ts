@@ -628,7 +628,7 @@ export class AgentChatController {
       const command = input?.command;
       if (!approvalId || !command) continue;
 
-      const ctx = await createAnalysisContext();
+      const ctx = await createAnalysisContext(this.managed.getCoreEnv());
       const report = await analyzeCommand(command, ctx);
       const decision = evaluateCommandApproval(report, { agentKind: "root" });
 

@@ -9,6 +9,7 @@
  */
 
 import { SessionStore } from "../agent/persistence/session-store.js";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 
 import { createLocalAgentSession } from "./local-agent-session.js";
 
@@ -22,9 +23,12 @@ import type { LocalAgentSessionManager } from "./local-agent-session.js";
 import type { AgentSession } from "./types.js";
 import type { AgentManager } from "../managers/agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "../managers/managed-agent.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 
 /** Minimal manager surface required by the Local Host (AgentManager satisfies this). */
 export interface LocalAgentSessionHostManager extends LocalAgentSessionManager {
+  /** Runtime this host's manager belongs to (env scope for session storage). */
+  readonly runtime?: AgentRuntime;
   createManagedAgent(config: ManagedAgentConfig, parentId?: string): Promise<ManagedAgent>;
   getAgents(): ManagedAgent[];
   destroyAgent(id: string): void;
@@ -84,10 +88,13 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
  * Returns `undefined` when a fresh session should be created. Best-effort: a
  * degraded/missing CoreEnv fs falls back to a fresh session.
  */
-async function resolveBootstrapSessionId(options: AgentSessionCreateOptions): Promise<string | undefined> {
+async function resolveBootstrapSessionId(
+  options: AgentSessionCreateOptions,
+  env: ResolvedCoreEnv
+): Promise<string | undefined> {
   if (options.resumeSessionId) return options.resumeSessionId;
   try {
-    const store = new SessionStore();
+    const store = new SessionStore(env);
     if (options.continueSession) {
       return (await store.getLatest())?.id;
     }
@@ -112,7 +119,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // Resolve the reuse/resume target up front and pass it through as
     // `initialSessionId`, so the managed agent's session id (and thus the
     // session-scoped log sink) is correct before any bootstrap log entry.
-    const targetSessionId = await resolveBootstrapSessionId(options);
+    const targetSessionId = await resolveBootstrapSessionId(options, this.manager.runtime?.env ?? getEnv());
     const managed = await this.manager.createManagedAgent({
       ...toManagedConfig(options),
       ...(targetSessionId ? { initialSessionId: targetSessionId } : {}),

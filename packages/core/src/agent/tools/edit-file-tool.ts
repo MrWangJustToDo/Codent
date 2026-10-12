@@ -77,9 +77,9 @@ export const createEditFileTool = () => {
     outputSchema: editFileOutputSchema,
     needsApproval: true,
     execute: async ({ path, edits }, { coreEnv }) => {
-      return withFileMutationQueue(path, async () =>
+      return withFileMutationQueue(coreEnv, path, async () =>
         withDuration(async () => {
-          const originalContent = await getFile(path);
+          const originalContent = await getFile(coreEnv, path);
 
           let content = originalContent;
           let normalizedContent = normalizeForFuzzyMatch(content);

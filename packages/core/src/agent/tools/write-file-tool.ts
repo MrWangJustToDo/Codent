@@ -32,7 +32,7 @@ export const createWriteFileTool = () => {
     outputSchema: writeFileOutputSchema,
     needsApproval: true,
     execute: async ({ path, content, overwrite, createDirectories }, { coreEnv }) => {
-      return withFileMutationQueue(path, async () =>
+      return withFileMutationQueue(coreEnv, path, async () =>
         withDuration(async () => {
           const fs = coreEnv.fs;
           const fileExisted = await fs.exists(path);

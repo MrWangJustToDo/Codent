@@ -174,6 +174,7 @@ const ALLOWED_EDGES = {
   "agent-session → runtime-types": { mode: "allow", reason: "session payload types" },
   "agent-session → utils": { mode: "allow", reason: "ids, emitters" },
   "agent-session → env": { mode: "allow", reason: "CoreEnv access" },
+  "agent-session → runtime": { mode: "allow", reason: "local host reads its manager's runtime env" },
 
   // runtime composes an env + model provider + AgentManager + AgentSessionHost into one
   // instantiable instance (the top of the managers stack); lower layers reference its types.

@@ -15,7 +15,7 @@
  * ```
  */
 
-import { getEnv } from "../../env";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import { MEDIA_DIR, mimeToExtension } from "./types.js";
 
@@ -70,6 +70,9 @@ export function buildDataUrl(mimeType: string, base64: string): string {
 // ============================================================================
 
 export class MediaStore {
+  /** Workspace env for media reads/writes (runtime-provided; ambient by default). */
+  constructor(private readonly env: ResolvedCoreEnv = getEnv()) {}
+
   /**
    * Save a binary asset from a base64-encoded value.
    *
@@ -85,7 +88,7 @@ export class MediaStore {
   ): Promise<MediaRef> {
     const base64 = extractBase64Content(value);
     const hash = await sha256Stable(base64);
-    const env = getEnv();
+    const env = this.env;
     const bytes = env.base64Decode(base64);
     const size = bytes.byteLength;
     const ext = mimeToExtension(mimeType);
@@ -109,7 +112,7 @@ export class MediaStore {
   async load(ref: MediaRef): Promise<string> {
     const ext = mimeToExtension(ref.mimeType);
     const filePath = `${MEDIA_DIR}/${ref.hash}.${ext}`;
-    const env = getEnv();
+    const env = this.env;
     const bytes = await env.fs.readFile(filePath, "buffer");
     const base64 = env.base64Encode(bytes);
 

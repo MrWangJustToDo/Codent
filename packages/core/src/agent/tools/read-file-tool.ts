@@ -188,7 +188,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         }
 
         // Detect file type
-        const fileTypeInfo = await detectReadFileType(filePath, stat);
+        const fileTypeInfo = await detectReadFileType(coreEnv, filePath, stat);
 
         // Handle directory
         if (fileTypeInfo.type === "directory") {
@@ -315,7 +315,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         }
 
         // Read text file
-        const content = await getFile(filePath);
+        const content = await getFile(coreEnv, filePath);
 
         const lines = content.split("\n");
         const totalLines = lines.length;
