@@ -29,7 +29,7 @@
  * the session file (a single screenshot is ~100 KB, a read_file image >1 MB).
  */
 
-import { getMediaStore } from "./media-store.js";
+import { MediaStore } from "./media-store.js";
 import {
   parseStringifiedMultimodalContent,
   repairStringifiedMultimodalUIMessages,
@@ -37,6 +37,7 @@ import {
 import { MEDIA_PROTOCOL, buildMediaRefPath, parseMediaRefPath } from "./types.js";
 
 import type { MediaRef } from "./types.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { AudioPart, DocumentPart, ImagePart, UIMessage, VideoPart } from "@tanstack/ai";
 
 // ============================================================================
@@ -128,7 +129,7 @@ async function mapNestedMediaPart(
  * a string (the wire path revives it via `toModelOutput`), only shrinking the
  * embedded `source.value`s to `media://` references.
  */
-async function dehydrateToolResultContent(content: unknown, store: ReturnType<typeof getMediaStore>): Promise<string> {
+async function dehydrateToolResultContent(content: unknown, store: MediaStore): Promise<string> {
   const parts = parseToolResultParts(content);
   if (!parts) return content as string;
 
@@ -162,7 +163,7 @@ async function dehydrateToolResultContent(content: unknown, store: ReturnType<ty
 /** Reverse of {@link dehydrateToolResultContent}: restore nested `source.value`s. */
 async function hydrateToolResultContent(
   content: unknown,
-  store: ReturnType<typeof getMediaStore>,
+  store: MediaStore,
   onMissing?: (miss: MediaHydrationMiss) => void
 ): Promise<string> {
   const parts = parseToolResultParts(content);
@@ -224,8 +225,11 @@ function cloneMessages(messages: UIMessage[]): UIMessage[] {
  * @param messages - Original UIMessage[] (NOT mutated)
  * @returns A new UIMessage[] with dehydrated source values
  */
-export async function dehydrateUIMessages(messages: UIMessage[]): Promise<UIMessage[]> {
-  const store = getMediaStore();
+export async function dehydrateUIMessages(
+  messages: UIMessage[],
+  options: { env: ResolvedCoreEnv }
+): Promise<UIMessage[]> {
+  const store = new MediaStore(options.env);
   // Repair interrupt-snapshot corruption before extracting media (legacy sessions).
   const cloned = cloneMessages(repairStringifiedMultimodalUIMessages(messages));
 
@@ -290,6 +294,8 @@ export interface MediaHydrationMiss {
 export interface HydrateUIMessagesOptions {
   /** Invoked once per un-hydratable media ref. Hydration itself never throws. */
   onMissing?: (miss: MediaHydrationMiss) => void;
+  /** Workspace env for media I/O — always the owning runtime's env. */
+  env: ResolvedCoreEnv;
 }
 
 /**
@@ -302,9 +308,9 @@ export interface HydrateUIMessagesOptions {
  */
 export async function hydrateUIMessages(
   messages: UIMessage[],
-  options?: HydrateUIMessagesOptions
+  options: HydrateUIMessagesOptions
 ): Promise<UIMessage[]> {
-  const store = getMediaStore();
+  const store = new MediaStore(options.env);
   const onMissing = options?.onMissing;
   // Restore multimodal parts that were persisted as JSON.stringify(ContentPart[]).
   const cloned = cloneMessages(repairStringifiedMultimodalUIMessages(messages));

@@ -1,7 +1,8 @@
-import { getEnv } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
+
+import { getServerEnv } from "../server-runtime.js";
 
 const fetchRequestSchema = z.object({
   url: z.string(),
@@ -17,7 +18,7 @@ export const fetchRoutes = new Hono().post("/proxy", zValidator("json", fetchReq
     const controller = new AbortController();
     c.req.raw.signal.addEventListener("abort", () => controller.abort(), { once: true });
 
-    const res = await getEnv().fetch(url, { method, headers, body, signal: controller.signal });
+    const res = await getServerEnv().fetch(url, { method, headers, body, signal: controller.signal });
 
     const contentType = res.headers.get("content-type") || "";
     const isText =
@@ -37,7 +38,7 @@ export const fetchRoutes = new Hono().post("/proxy", zValidator("json", fetchReq
       encoding = "text";
     } else {
       const buffer = new Uint8Array(await res.arrayBuffer());
-      responseBody = getEnv().base64Encode(buffer);
+      responseBody = getServerEnv().base64Encode(buffer);
       encoding = "base64";
     }
 

@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * const store = new MediaStore();
+ * const store = new MediaStore(env); // the owning runtime's CoreEnv
  * const ref = await store.save("iVBORw0KGgo...", "image/png", "screenshot.png");
  * // File written to .agents/media/abc123...png (binary PNG bytes)
  * const dataUrl = await store.load(ref);
@@ -15,11 +15,10 @@
  * ```
  */
 
-import { getEnv } from "../../env.js";
-
 import { MEDIA_DIR, mimeToExtension } from "./types.js";
 
 import type { MediaRef } from "./types.js";
+import type { ResolvedCoreEnv } from "../../env";
 
 // ============================================================================
 // SHA-256 Hash
@@ -70,6 +69,9 @@ export function buildDataUrl(mimeType: string, base64: string): string {
 // ============================================================================
 
 export class MediaStore {
+  /** Workspace env for media reads/writes — always the owning runtime's env. */
+  constructor(private readonly env: ResolvedCoreEnv) {}
+
   /**
    * Save a binary asset from a base64-encoded value.
    *
@@ -85,7 +87,7 @@ export class MediaStore {
   ): Promise<MediaRef> {
     const base64 = extractBase64Content(value);
     const hash = await sha256Stable(base64);
-    const env = getEnv();
+    const env = this.env;
     const bytes = env.base64Decode(base64);
     const size = bytes.byteLength;
     const ext = mimeToExtension(mimeType);
@@ -109,7 +111,7 @@ export class MediaStore {
   async load(ref: MediaRef): Promise<string> {
     const ext = mimeToExtension(ref.mimeType);
     const filePath = `${MEDIA_DIR}/${ref.hash}.${ext}`;
-    const env = getEnv();
+    const env = this.env;
     const bytes = await env.fs.readFile(filePath, "buffer");
     const base64 = env.base64Encode(bytes);
 
@@ -131,25 +133,5 @@ export class MediaStore {
   }
 }
 
-// ============================================================================
-// Singleton instance
-// ============================================================================
-
-let _instance: MediaStore | null = null;
-
-/**
- * Get or create the shared MediaStore singleton.
- */
-export function getMediaStore(): MediaStore {
-  if (!_instance) {
-    _instance = new MediaStore();
-  }
-  return _instance;
-}
-
-/**
- * Reset the shared MediaStore singleton (for testing).
- */
-export function resetMediaStore(): void {
-  _instance = null;
-}
+// (No module singleton: a MediaStore is always constructed with its runtime's env, so two
+// runtimes never share media storage. Callers that need one build `new MediaStore(env)`.)

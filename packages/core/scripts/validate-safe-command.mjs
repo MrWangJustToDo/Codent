@@ -19,6 +19,7 @@ import {
   commandPrefix,
   evaluateCommandApproval,
   normalizedCommand,
+  getEnv,
   registerCoreEnv,
 } from "../dist/dev.mjs";
 
@@ -135,7 +136,7 @@ registerCoreEnv({
   fetch: async () => new Response(""),
 });
 const { createAnalysisContext, analyzeCommand } = await import("../dist/dev.mjs");
-const cmdCtx = await createAnalysisContext();
+const cmdCtx = await createAnalysisContext(getEnv());
 
 /** Decision for a command, via the real analyzer. */
 async function decide(command) {

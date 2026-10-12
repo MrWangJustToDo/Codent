@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { Box, Text } from "ink";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
@@ -88,8 +89,8 @@ export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartView
   const toolCallId = part.id;
   const toolInput = parseToolInput(part);
 
-  const isRunCommand = toolName === "run_command";
-  const isTask = toolName === "task";
+  const isRunCommand = toolName === BUILTIN_TOOL_NAMES.runCommand;
+  const isTask = toolName === BUILTIN_TOOL_NAMES.task;
   const isExecuting = isToolExecuting(part);
   const screenWidth = useSize((s) => s.state.screenWidth);
   // Same box metrics as ToolOutputView: message container paddingX=1 + tool

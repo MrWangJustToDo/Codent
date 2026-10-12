@@ -22,7 +22,7 @@ import type {
   SessionInteractionsSnapshot,
   UsageChangeSnapshot,
 } from "../../runtime-types/session-payloads.js";
-import type { DispatchRank } from "../dispatch-order.js";
+import type { DispatchRank } from "../extension/dispatch-order.js";
 import type {
   EventInterceptor,
   ExtensionInfo,

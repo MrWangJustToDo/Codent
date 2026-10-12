@@ -1,6 +1,8 @@
 import { parseGitPathList } from "./workspace-git-paths.js";
 import { joinWorkspacePath } from "./workspace-path.js";
 
+import type { CoreEnv } from "@codent/core";
+
 // ============================================================================
 // Quick-open file search
 //
@@ -116,11 +118,8 @@ const SKIP_FS_DIRS = new Set([
   "target",
 ]);
 
-export async function fetchWorkspaceFileList(rootPath: string): Promise<string[]> {
+export async function fetchWorkspaceFileList(env: CoreEnv, rootPath: string): Promise<string[]> {
   if (fileListCache && fileListCache.rootPath === rootPath) return fileListCache.files;
-
-  const { getEnv } = await import("@codent/core");
-  const env = getEnv();
 
   const files = new Set<string>();
   try {
@@ -140,7 +139,7 @@ export async function fetchWorkspaceFileList(rootPath: string): Promise<string[]
   if (files.size > 0) {
     result = [...files];
   } else {
-    result = await walkWorkspaceFiles(rootPath);
+    result = await walkWorkspaceFiles(env, rootPath);
   }
   result.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
@@ -149,14 +148,12 @@ export async function fetchWorkspaceFileList(rootPath: string): Promise<string[]
 }
 
 /** Bounded recursive fs walk (non-git fallback). */
-async function walkWorkspaceFiles(rootPath: string): Promise<string[]> {
-  const { getEnv } = await import("@codent/core");
-  const env = getEnv();
+async function walkWorkspaceFiles(env: CoreEnv, rootPath: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [""];
   while (stack.length > 0) {
     const relDir = stack.pop()!;
-    const absDir = relDir ? joinWorkspacePath(rootPath, relDir) : rootPath;
+    const absDir = relDir ? joinWorkspacePath(env, rootPath, relDir) : rootPath;
     let entries;
     try {
       entries = await env.fs.readdir(absDir);

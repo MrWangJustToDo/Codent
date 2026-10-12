@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 
 import {
@@ -205,7 +205,8 @@ function filterExpired(memories: Memory[], logger?: AgentLog): Memory[] {
 function truncateBody(
   body: string,
   maxLines: number = DEFAULT_MAX_MEMORY_LINES_PER_FILE,
-  maxBytes: number = DEFAULT_MAX_MEMORY_BYTES_PER_FILE
+  maxBytes: number = DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
+  env?: ResolvedCoreEnv
 ): string {
   let result = body;
 
@@ -214,14 +215,14 @@ function truncateBody(
     result = lines.slice(0, maxLines).join("\n") + "\n[truncated: exceeded line limit]";
   }
 
-  const env = getEnv();
-  const bytes = env.byteLength(result, "utf-8");
+  const e = env ?? getEnv();
+  const bytes = e.byteLength(result, "utf-8");
   if (bytes > maxBytes) {
     let lo = 0;
     let hi = result.length;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (env.byteLength(result.slice(0, mid), "utf-8") <= maxBytes - 30) {
+      if (e.byteLength(result.slice(0, mid), "utf-8") <= maxBytes - 30) {
         lo = mid;
       } else {
         hi = mid - 1;
@@ -363,8 +364,10 @@ export async function findRelevantMemories(
   options: FindRelevantMemoriesOptions = {},
   usage?: UsageTracker | null,
   logger?: AgentLog,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  env?: ResolvedCoreEnv
 ): Promise<RelevantMemory[]> {
+  const resolvedEnv = env ?? getEnv();
   const {
     maxItems = DEFAULT_MAX_RELEVANT_MEMORIES,
     maxBytesPerFile = DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
@@ -444,8 +447,8 @@ export async function findRelevantMemories(
   let totalBytes = 0;
 
   for (const mem of resolved) {
-    const content = truncateBody(mem.body, maxLinesPerFile, maxBytesPerFile);
-    const contentBytes = getEnv().byteLength(content, "utf-8");
+    const content = truncateBody(mem.body, maxLinesPerFile, maxBytesPerFile, resolvedEnv);
+    const contentBytes = resolvedEnv.byteLength(content, "utf-8");
 
     // Enforce session-level budget
     if (totalBytes + contentBytes > maxSessionBytes) {

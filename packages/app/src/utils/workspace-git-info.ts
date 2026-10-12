@@ -1,3 +1,5 @@
+import type { CoreEnv } from "@codent/core";
+
 /**
  * Resolve lightweight git workspace metadata for header display.
  */
@@ -18,11 +20,8 @@ export type WorkspaceGitInfo = {
 /**
  * Return git branch/sha/dirty for `rootPath`, or null when not a git worktree.
  */
-export async function fetchWorkspaceGitInfo(rootPath: string): Promise<WorkspaceGitInfo | null> {
+export async function fetchWorkspaceGitInfo(env: CoreEnv, rootPath: string): Promise<WorkspaceGitInfo | null> {
   if (!rootPath) return null;
-
-  const { getEnv } = await import("@codent/core");
-  const env = getEnv();
 
   try {
     const inside = await env.runCommand("git rev-parse --is-inside-work-tree", { cwd: rootPath });

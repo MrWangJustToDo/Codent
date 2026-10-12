@@ -26,7 +26,7 @@ export {
   SUBAGENT_DENY_MESSAGE,
 } from "./agent/tools/command-safety/command-approval-policy.js";
 export { commandPrefix, normalizedCommand } from "./agent/tools/command-safety/command-arity.js";
-export { defaultPath } from "./env.js";
+export { defaultPath } from "./env";
 
 // Root-level modules
 export { Emitter } from "./utils/emitter.js";
@@ -40,8 +40,8 @@ export {
 export { branchSession, startNewDiskSession } from "./agent-session/session-lifecycle-commands.js";
 export { generateId, resetGeneratedIdsForTesting } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
-export { clearCoreEnv, registerCoreEnv } from "./env.js";
-export type { CoreEnv } from "./env.js";
+export { clearCoreEnv, getEnv, registerCoreEnv } from "./env";
+export type { CoreEnv } from "./env";
 
 // Agent-log crash/exit guards (internal validation exports)
 export {

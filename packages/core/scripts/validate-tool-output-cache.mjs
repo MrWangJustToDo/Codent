@@ -20,6 +20,7 @@ import {
   cacheToolOutput,
   clearCoreEnv,
   maybeCacheOutput,
+  getEnv,
   registerCoreEnv,
   resetToolOutputSweepForTesting,
   sweepStaleToolOutput,
@@ -97,7 +98,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   const staleLog = await writeEntry("job_whatever.log", { ageMs: STALE_AGE });
 
   resetToolOutputSweepForTesting();
-  const removed = await sweepStaleToolOutput({ force: true });
+  const removed = await sweepStaleToolOutput(getEnv(), { force: true });
   assert.equal(removed, 1, `expected exactly the stale .txt to be swept, got ${removed}`);
   assert.equal(await exists(stale), false, "stale .txt removed");
   assert.equal(await exists(fresh), true, "fresh .txt kept");
@@ -112,13 +113,13 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   const stale = await writeEntry("call_stale2-stdout.txt", { ageMs: STALE_AGE });
 
   resetToolOutputSweepForTesting();
-  assert.equal(await sweepStaleToolOutput(), 1, "first unforced sweep removes");
+  assert.equal(await sweepStaleToolOutput(getEnv()), 1, "first unforced sweep removes");
   const laterStale = await writeEntry("call_stale3-stdout.txt", { ageMs: STALE_AGE });
-  assert.equal(await sweepStaleToolOutput(), 0, "second unforced sweep is a no-op");
+  assert.equal(await sweepStaleToolOutput(getEnv()), 0, "second unforced sweep is a no-op");
   assert.equal(await exists(laterStale), true, "later stale file survives the guarded call");
 
   resetToolOutputSweepForTesting();
-  assert.equal(await sweepStaleToolOutput(), 1, "force re-arms the guard and picks up the later file");
+  assert.equal(await sweepStaleToolOutput(getEnv()), 1, "force re-arms the guard and picks up the later file");
   assert.equal(await exists(stale), false, "first stale file stays removed");
   assert.equal(await exists(laterStale), false, "later stale file removed once the guard is re-armed");
   console.log("once-per-process guard OK");
@@ -131,7 +132,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   const stale = await writeEntry("call_wiring-stdout.txt", { ageMs: STALE_AGE });
 
   resetToolOutputSweepForTesting();
-  const written = await cacheToolOutput("hello\n", "call_wiring-grep");
+  const written = await cacheToolOutput(getEnv(), "hello\n", "call_wiring-grep");
   assert.equal(written, `${TOOL_OUTPUT_CACHE_DIR}/call_wiring-grep.txt`, "path shape unchanged");
   assert.equal(await exists(written), true, "cache write landed");
   assert.equal(
@@ -146,12 +147,12 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 // 4. maybeCacheOutput contract: threshold decides whether anything is written
 // ---------------------------------------------------------------------------
 {
-  const small = await maybeCacheOutput("small\n", "call_small-grep");
+  const small = await maybeCacheOutput(getEnv(), "small\n", "call_small-grep");
   assert.deepEqual(small, { content: "small\n", cachedOutputPath: null }, "below threshold → no cache, no path");
   assert.equal(await exists(`${TOOL_OUTPUT_CACHE_DIR}/call_small-grep.txt`), false, "nothing written below threshold");
 
   const body = "y".repeat(CACHE_THRESHOLD + 10);
-  const big = await maybeCacheOutput(body, "call_big-grep");
+  const big = await maybeCacheOutput(getEnv(), body, "call_big-grep");
   assert.equal(big.cachedOutputPath, `${TOOL_OUTPUT_CACHE_DIR}/call_big-grep.txt`, "above threshold → path returned");
   assert.equal(big.content.includes("Full output saved to:"), true, "preview references the cache path");
   assert.equal(await exists(big.cachedOutputPath), true, "a returned path always exists on disk");
@@ -166,8 +167,8 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 
   clearCoreEnv();
   resetToolOutputSweepForTesting();
-  assert.equal(await sweepStaleToolOutput({ force: true }), 0, "missing CoreEnv → 0 removed, no throw");
-  assert.doesNotThrow(() => sweepStaleToolOutput({ force: true }));
+  assert.equal(await sweepStaleToolOutput(undefined, { force: true }), 0, "missing env → 0 removed, no throw");
+  assert.doesNotThrow(() => sweepStaleToolOutput(undefined, { force: true }));
   assert.equal(await exists(stale), true, "nothing removed without an env");
 
   registerCoreEnv(createEnv(rootPath));

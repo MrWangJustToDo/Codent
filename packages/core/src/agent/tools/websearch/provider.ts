@@ -173,9 +173,12 @@ export class ProviderManager {
   async search(query: string, options?: SearchOptions): Promise<SearchOutcome> {
     const primary = await this.selectProvider();
     let lastError: Error | null = null;
+    // Bind the key lookup to THIS manager so a provider reads the keys configured for the
+    // agent/runtime this search belongs to, not the process-global manager (see SearchOptions.getApiKey).
+    const scopedOptions: SearchOptions = { ...options, getApiKey: (name) => this.getApiKey(name) };
 
     try {
-      const results = await primary.search(query, options);
+      const results = await primary.search(query, scopedOptions);
       return { results, provider: primary.name };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -191,7 +194,7 @@ export class ProviderManager {
         if (provider === primary) continue;
         if (!(await this.isProviderAvailable(provider))) continue;
         try {
-          const results = await provider.search(query, options);
+          const results = await provider.search(query, scopedOptions);
           return { results, provider: provider.name };
         } catch (fallbackErr) {
           lastError = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
@@ -220,7 +223,7 @@ export class ProviderManager {
   }
 
   private async isProviderAvailable(provider: SearchProvider): Promise<boolean> {
-    return Boolean(await provider.isAvailable());
+    return Boolean(await provider.isAvailable({ getApiKey: (name) => this.getApiKey(name) }));
   }
 }
 

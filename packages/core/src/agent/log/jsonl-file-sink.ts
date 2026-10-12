@@ -18,7 +18,7 @@
  * must never fail because logging could not be wired up.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 
 import { logEntrySchema } from "./schemas.js";
 
@@ -55,7 +55,8 @@ function inertSink(): LogFileSink {
 export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSink {
   let fs: ReturnType<typeof getEnv>["fs"] | null;
   try {
-    fs = getEnv().fs;
+    // The owning runtime's env when supplied; ambient only for standalone/legacy callers.
+    fs = (options.env ?? getEnv()).fs;
   } catch {
     return inertSink(); // CoreEnv not registered
   }

@@ -1,9 +1,9 @@
+import type { DispatchRank } from "./dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
-import type { CoreEnv } from "../../env.js";
+import type { CoreEnv } from "../../env";
 import type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
 import type { ModelCapability } from "../../models/types.js";
-import type { DispatchRank } from "../dispatch-order.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
 import type { ModelToolContent, ToModelOutputContext } from "../tools/runtime/to-model-output-registry.js";
 import type { ModelMessage, SchemaInput } from "@tanstack/ai";

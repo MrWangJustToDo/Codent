@@ -5,7 +5,7 @@
  * ProviderManager singleton. Call {@link initializeProviders} before first use.
  */
 
-import { getProviderManager, resetProviderManager } from "./provider.js";
+import { ProviderManager, getProviderManager, resetProviderManager } from "./provider.js";
 import { PROVIDER_REGISTRY } from "./registry.js";
 
 import type { WebsearchToolConfig } from "../tool-config.js";
@@ -57,4 +57,18 @@ export function initializeProviders(config?: WebsearchToolConfig): void {
 export function resetWebsearchProviders(): void {
   initialized = false;
   resetProviderManager();
+}
+
+/**
+ * Create a fresh, agent/runtime-scoped provider manager with the standard providers
+ * registered. Each agent's `websearch` tool owns one, so two runtimes/agents never share
+ * selection + key state (the process-global singleton is kept only for compatibility and
+ * standalone provider use).
+ */
+export function createConfiguredProviderManager(): ProviderManager {
+  const pm = new ProviderManager();
+  for (const registration of PROVIDER_REGISTRY) {
+    pm.register(registration.create());
+  }
+  return pm;
 }

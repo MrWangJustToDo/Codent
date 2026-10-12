@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { applyResolvedEdit, isErrorResult, resolveEditMatch } from "./util/find-edit-match.js";
@@ -78,10 +76,10 @@ export const createEditFileTool = () => {
     }),
     outputSchema: editFileOutputSchema,
     needsApproval: true,
-    execute: async ({ path, edits }) => {
-      return withFileMutationQueue(path, async () =>
+    execute: async ({ path, edits }, { coreEnv }) => {
+      return withFileMutationQueue(coreEnv, path, async () =>
         withDuration(async () => {
-          const originalContent = await getFile(path);
+          const originalContent = await getFile(coreEnv, path);
 
           let content = originalContent;
           let normalizedContent = normalizeForFuzzyMatch(content);
@@ -125,7 +123,7 @@ export const createEditFileTool = () => {
             }
           }
 
-          await getEnv().fs.writeFile(path, content);
+          await coreEnv.fs.writeFile(path, content);
 
           const totalReplacements = results.reduce((sum, r) => sum + r.count, 0);
 

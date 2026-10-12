@@ -1,4 +1,4 @@
-import { getToolPresentation } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, getToolPresentation } from "@codent/core";
 import { Box, Text } from "ink";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
@@ -40,7 +40,7 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // message boxes (screenWidth - 2).
   const boxWidth = Math.max(screenWidth - 4, 1);
 
-  if (toolName === "todo") {
+  if (toolName === BUILTIN_TOOL_NAMES.todo) {
     const output = part.output as { items?: TodoItem[]; title?: string; source?: "plan" | "agent" };
     if (!output.items) return null;
     return (
@@ -50,7 +50,7 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
     );
   }
 
-  if (toolName === "ask_user" && uiState === "output-error") return null;
+  if (toolName === BUILTIN_TOOL_NAMES.askUser && uiState === "output-error") return null;
 
   const isDetailed = hasDetailedOutputBlock(toolName);
   // Core renders the result text once, at completion, and ships it with the part. Hosts
@@ -83,7 +83,9 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // choice the glyph makes, and it survives the part being rewritten (the synthetic cancel
   // payload and the tool's own catch both leave `success: false`).
   const failed =
-    toolName === "run_command" && (part.output as { success?: boolean } | undefined)?.success === false && !hasCanceld;
+    toolName === BUILTIN_TOOL_NAMES.runCommand &&
+    (part.output as { success?: boolean } | undefined)?.success === false &&
+    !hasCanceld;
   const lineColor = failed ? COLORS.danger : COLORS.muted;
 
   return (

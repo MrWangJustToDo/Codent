@@ -1,8 +1,7 @@
 import { Emitter } from "../../utils/emitter.js";
-import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
+import { compareDispatchRank, resolveExtensionOrder } from "../extension/dispatch-order.js";
 import { INTERNAL_EXTENSION_EVENTS } from "../extension/event-visibility.js";
 
-import type { DispatchRank } from "../dispatch-order.js";
 import type {
   AgentEvent,
   AgentEventBus,
@@ -13,6 +12,7 @@ import type {
   EventInterceptor,
   InterceptableEvent,
 } from "./types.js";
+import type { DispatchRank } from "../extension/dispatch-order.js";
 
 // ============================================================================
 // Scope node

@@ -49,6 +49,7 @@
     "start": "node dist/cli.mjs",
     "validate:all:im-bridge": "node ../../scripts/run-all-validators.mjs --dir packages/im-bridge",
     "validate:bridge": "pnpm run build && node scripts/validate-bridge.mjs && node scripts/validate-bridge-groups.mjs && node scripts/validate-bridge-tool-preview.mjs",
+    "validate:host-tool-names": "node scripts/validate-host-tool-names.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

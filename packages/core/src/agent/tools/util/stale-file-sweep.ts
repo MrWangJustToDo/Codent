@@ -17,7 +17,7 @@
  * ever merged.
  */
 
-import { getEnv } from "../../../env.js";
+import type { ResolvedCoreEnv } from "../../../env";
 
 // ============================================================================
 // Types
@@ -45,7 +45,7 @@ export interface StaleFileSweeper {
    * forced. Best-effort: a missing CoreEnv, an unreadable directory, or a racing
    * delete is swallowed and never fails the caller.
    */
-  sweep(options?: StaleSweepOptions): Promise<number>;
+  sweep(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number>;
   /** Test-only escape hatch for the once-per-process guard. */
   reset(): void;
 }
@@ -66,14 +66,14 @@ export function createStaleFileSweeper(spec: StaleFileSweepSpec): StaleFileSweep
       sweptThisProcess = false;
     },
 
-    async sweep(options?: StaleSweepOptions): Promise<number> {
+    async sweep(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number> {
       if (sweptThisProcess && !options?.force) return 0;
       sweptThisProcess = true;
 
       const now = options?.now ?? Date.now();
       let removed = 0;
       try {
-        const fs = getEnv().fs;
+        const fs = env.fs;
         if (!(await fs.exists(spec.dir))) return 0;
         const entries = await fs.readdir(spec.dir);
         for (const entry of entries) {

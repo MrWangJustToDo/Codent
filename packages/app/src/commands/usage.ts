@@ -9,7 +9,7 @@ import { BG } from "../theme/colors.js";
 import { formatCompactNumber } from "../utils/format-usage.js";
 import { usageHeatmapWindow } from "../utils/usage-heatmap.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { CommandContext } from "./utils/types.js";
 import type { DailyUsageBucket, ModelUsageTotal } from "@codent/core";
@@ -105,10 +105,7 @@ async function fetchGlobalHistory(
 // Command
 // ============================================================================
 
-registerCommand({
-  name: "usage",
-  description: "Show session token usage, cost, and a global activity graph",
-  usage: "/usage [Nw]",
+registerBuiltinCommand("usage", {
   immediate: true,
   execute: async (args, ctx) => {
     const session = ctx.getSession();

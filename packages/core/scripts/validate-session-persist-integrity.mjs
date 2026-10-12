@@ -36,7 +36,6 @@ import {
   clearCoreEnv,
   createSessionSyncTracker,
   registerCoreEnv,
-  resetMediaStore,
   saveSessionUIMessages,
 } from "../dist/dev.mjs";
 
@@ -81,7 +80,6 @@ async function settleReleasingNewestFirst(promises) {
 
 function setupEnv(options = {}) {
   clearCoreEnv();
-  resetMediaStore();
   files.clear();
   parkedMediaWrites = [];
 

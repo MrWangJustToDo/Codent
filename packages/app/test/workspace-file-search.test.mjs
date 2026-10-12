@@ -103,9 +103,10 @@ const { fuzzyFilterFiles, fuzzyMatch } = await import("../dist/utils/workspace-f
 
   // A real CoreEnv, not a stub: this asserts on git's actual bytes, so the runner must be one
   // that really executes git. `@codent/node` is a workspace sibling, so no install is needed.
-  registerCoreEnv(createNodeEnv({ rootPath: repo }));
+  const env = createNodeEnv({ rootPath: repo });
+  registerCoreEnv(env);
   clearWorkspaceFileListCache();
-  const files = await fetchWorkspaceFileList(repo);
+  const files = await fetchWorkspaceFileList(env, repo);
   clearCoreEnv();
 
   for (const expected of [

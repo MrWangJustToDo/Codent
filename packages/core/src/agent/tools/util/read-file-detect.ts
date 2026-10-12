@@ -2,9 +2,8 @@
  * File type detection for read_file (MIME + extension + binary sampling).
  */
 
-import { getEnv } from "../../../env.js";
-
-import type { FileStat } from "../../../env-types.js";
+import type { ResolvedCoreEnv } from "../../../env";
+import type { FileStat } from "../../../env/types";
 
 export type ReadFileType = "text" | "image" | "pdf" | "directory" | "binary";
 
@@ -55,8 +54,8 @@ const BINARY_EXTENSIONS = new Set([
   ".sqlite3",
 ]);
 
-function isBinaryExtension(filePath: string): boolean {
-  const ext = getEnv().path.extname(filePath).toLowerCase();
+function isBinaryExtension(env: ResolvedCoreEnv, filePath: string): boolean {
+  const ext = env.path.extname(filePath).toLowerCase();
   return BINARY_EXTENSIONS.has(ext);
 }
 
@@ -68,12 +67,16 @@ function isBinaryExtension(filePath: string): boolean {
  * 2. Use extension list to detect known binary files
  * 3. Everything else is assumed to be text (with binary content check later)
  */
-export async function detectReadFileType(filePath: string, stat?: FileStat): Promise<ReadFileTypeInfo> {
+export async function detectReadFileType(
+  env: ResolvedCoreEnv,
+  filePath: string,
+  stat?: FileStat
+): Promise<ReadFileTypeInfo> {
   if (stat?.isDirectory) {
     return { type: "directory" };
   }
 
-  const getMimeType = getEnv().getMimeType;
+  const getMimeType = env.getMimeType;
   const mimeType = (getMimeType ? await getMimeType(filePath) : false) || undefined;
 
   if (
@@ -89,7 +92,7 @@ export async function detectReadFileType(filePath: string, stat?: FileStat): Pro
     return { type: "pdf", mimeType };
   }
 
-  if (isBinaryExtension(filePath)) {
+  if (isBinaryExtension(env, filePath)) {
     return { type: "binary", mimeType };
   }
 

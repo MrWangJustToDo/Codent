@@ -5,7 +5,7 @@
  * Core does not read environment-variable bags for LLM credentials.
  */
 
-import { lookupModelFromModelsDev } from "../provider/models-dev.js";
+import { lookupModelFromModelsDev } from "../../provider/models-dev.js";
 
 import type { ModelInfo, ModelStyle } from "../types.js";
 

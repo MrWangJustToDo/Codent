@@ -5,11 +5,16 @@
  * the provider so clients cannot bypass the key-holding remote provider.
  */
 
-import { resolveModelConfig, type ResolveModelConfigInput, type ResolvedModelConfig } from "../config/model-config.js";
+import {
+  resolveModelConfig,
+  type ResolveModelConfigInput,
+  type ResolvedModelConfig,
+} from "../models/config/model-config.js";
 
-import { getModelProvider, type ModelProviderMode } from "./model-provider.js";
+import { getModelProvider } from "./model-provider-registry.js";
+import { type ModelProvider, type ModelProviderMode } from "./model-provider.js";
 
-import type { ModelStyle } from "../types.js";
+import type { ModelStyle } from "../models/types.js";
 
 function asStyle(value: string | undefined): ModelStyle | undefined {
   if (value === "openai" || value === "anthropic") return value;
@@ -22,13 +27,17 @@ export interface ResolvedModelConfigFromProvider extends ResolvedModelConfig {
 }
 
 /**
- * Resolve connection + model metadata, merging AppConfig overrides with the
- * registered {@link ModelProvider}.
+ * Resolve connection + model metadata, merging AppConfig overrides with a
+ * {@link ModelProvider}.
+ *
+ * @param provider - The runtime's provider. When omitted, the ambient registry
+ *   (`getModelProvider()`) is used, preserving the legacy bootstrap.
  */
 export async function resolveModelConfigFromProvider(
-  input: ResolveModelConfigInput = {}
+  input: ResolveModelConfigInput = {},
+  provider?: ModelProvider
 ): Promise<ResolvedModelConfigFromProvider> {
-  const providerConn = await getModelProvider().getConnection();
+  const providerConn = await (provider ?? getModelProvider()).getConnection();
 
   const merged: ResolveModelConfigInput = {
     ...input,

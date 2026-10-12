@@ -6,33 +6,15 @@ import { COLORS } from "../theme/colors.js";
 import type { UiToolState } from "./tool-part.js";
 
 /**
- * Completed tool rows that stay visible in compact display: interactive or
- * structured results (an answer, a checklist, a plan summary) that a row header
- * cannot express. Single source of truth for both the compact projection (the
- * fold decision in `tool-activity-summary`) and the render layer (output block).
- */
-export const ALWAYS_VISIBLE_TOOL_NAMES: ReadonlySet<string> = new Set(["ask_user", "todo", "complete_plan"]);
-
-/** Built-in tools that render a detailed output block in full mode only. */
-export const DETAILED_OUTPUT_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "run_command",
-  "get_command_output",
-  "kill_command",
-  "task",
-]);
-
-/**
  * Whether a tool renders a detailed output block in full display.
  *
- * The descriptor wins — a tool that declares `detailed` or `keepRow` always keeps its
- * block, so a newly declared one cannot be missed by the static sets below. Those sets
- * remain as the fallback for a host whose process never created the tools (a remote
- * renderer, before the snapshot catalog is wired into the views).
+ * The decision lives in core's presentation descriptor (which falls back to the static
+ * built-in table), so a host process that never created the tools — a remote renderer —
+ * still gets the right answer, and there is no host-side name set that can drift.
  */
 export function hasDetailedOutputBlock(toolName: string): boolean {
   const present = getToolPresentation(toolName);
-  if (present?.detailed || present?.keepRow) return true;
-  return ALWAYS_VISIBLE_TOOL_NAMES.has(toolName) || DETAILED_OUTPUT_TOOL_NAMES.has(toolName);
+  return present?.detailed === true || present?.keepRow === true;
 }
 
 /**
@@ -40,19 +22,9 @@ export function hasDetailedOutputBlock(toolName: string): boolean {
  *
  * Core owns this rule — a descriptor that declares `keepRow` (structured result), `clientSide`
  * (the host supplies the result) or `text` (a curated line *is* the row's content) keeps its row.
- * This function must not restate that rule: it previously tested only `text`, so a descriptor with
- * `keepRow` but no renderer — which is what a runtime tool gets when there is no sensible line to
- * render — was judged "folds" here while core judged it "keeps its row", and the two hosts
- * disagreed about the same tool.
- *
- * {@link ALWAYS_VISIBLE_TOOL_NAMES} stays in front as the documented fallback, not as a second
- * rule: a host whose process never created the tools (a remote renderer, before the snapshot
- * catalog is wired into the views) has no descriptors at all, and would otherwise fold the
- * interactive rows away. It only ever adds visibility, so it cannot mask core's decision.
+ * Delegated to core so the two hosts cannot disagree about the same tool.
  */
-export function keepsCompactRow(toolName: string): boolean {
-  return ALWAYS_VISIBLE_TOOL_NAMES.has(toolName) || coreKeepsCompactRow(toolName);
-}
+export const keepsCompactRow = coreKeepsCompactRow;
 
 /** Get status color for tool invocation state. */
 export function getToolCallColor(state: UiToolState | string): string {

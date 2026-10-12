@@ -10,7 +10,7 @@
  * @see https://brave.com/search/api/
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 import { getProviderManager } from "../provider.js";
@@ -50,12 +50,12 @@ interface BraveSearchResponse {
 export const braveProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
-  async isAvailable(): Promise<boolean> {
-    return Boolean(getBraveApiKey());
+  async isAvailable(options?: SearchOptions): Promise<boolean> {
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey());
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = getBraveApiKey();
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey();
     if (!apiKey) {
       throw new Error(
         "Brave Search API key not configured. Pass toolConfig.websearch.braveApiKey when creating the agent."
@@ -72,7 +72,7 @@ export const braveProvider: SearchProvider = {
       url.searchParams.set("count", String(Math.min(maxResults, 20)));
       url.searchParams.set("safesearch", "moderate");
 
-      const response = await getEnv().fetch(url.toString(), {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(url.toString(), {
         signal: controller.signal,
         headers: {
           Accept: "application/json",

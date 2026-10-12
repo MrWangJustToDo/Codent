@@ -1,10 +1,13 @@
 import { toolDefinition, type InferSchemaType, type SchemaInput, type ServerTool, type ClientTool } from "@tanstack/ai";
 
+import { getAmbientEnv } from "../../../env/ambient.js";
 import { declareToolPresentation } from "../presentation/registry.js";
 import { withTimeoutAbort } from "../util/abort-timeout.js";
 
 import { toModelOutputRegistry, type ModelToolContent, type ToModelOutputContext } from "./to-model-output-registry.js";
 
+import type { ResolvedCoreEnv } from "../../../env";
+import type { ToolRunContext } from "../../runner/run-context.js";
 import type { ToolPresentation } from "../presentation/types.js";
 
 // ============================================================================
@@ -31,6 +34,12 @@ export interface ToolExecuteCtx {
   deadlineSignal?: AbortSignal;
   /** Managed agent id from {@link ToolRunContext} when available. */
   agentId?: string;
+  /**
+   * Workspace env for this run (the owning runtime's CoreEnv). Tools read the environment
+   * from here instead of the process-global `getEnv()`. Falls back to the ambient env only
+   * when a tool is executed without a run context (direct/ad-hoc calls in tests).
+   */
+  coreEnv: ResolvedCoreEnv;
   /** The tool's declared deadline, when it has one (see {@link defineServerTool} `timeoutMs`). */
   timeoutMs?: number;
 }
@@ -136,11 +145,13 @@ export function defineServerTool<
     needsApproval: config.needsApproval,
     lazy: config.lazy,
   }).server(async (args, ctx) => {
-    const runContext = ctx?.context as { agentId?: string } | undefined;
+    const runContext = ctx?.context as ToolRunContext | undefined;
     const execCtx: ToolExecuteCtx = {
       toolCallId: ctx?.toolCallId ?? "",
       abortSignal: ctx?.abortSignal,
       agentId: runContext?.agentId,
+      // The run context carries the owning runtime's env; ambient (lazy) only for ad-hoc calls.
+      coreEnv: runContext?.coreEnv ?? getAmbientEnv(),
       timeoutMs: config.timeoutMs,
     };
 

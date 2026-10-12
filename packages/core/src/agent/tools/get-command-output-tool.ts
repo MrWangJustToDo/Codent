@@ -5,8 +5,10 @@ import { commandJobRegistry } from "./util/command-job-registry.js";
 import { getCommandOutputSchema } from "./util/types.js";
 
 import type { GetCommandOutput } from "./util/types.js";
+import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
-export const createGetCommandOutputTool = () => {
+export const createGetCommandOutputTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
+  const registry = managed?.getCommandJobRegistry() ?? commandJobRegistry;
   return defineServerTool({
     name: "get_command_output",
     present: {
@@ -24,7 +26,7 @@ export const createGetCommandOutputTool = () => {
     needsApproval: false,
     lazy: true,
     execute: async ({ jobId }) => {
-      const result = commandJobRegistry.poll(jobId);
+      const result = registry.poll(jobId);
       if (!result) {
         throw new Error(`Unknown background jobId: ${jobId}`);
       }

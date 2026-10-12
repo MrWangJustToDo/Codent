@@ -2,7 +2,6 @@
 export * from "./adapter/types.js";
 export {
   createAgentFromConfig,
-  createSessionOnHost,
   clearAgentStore,
   bindAgentSession,
   type CreateAgentOptions,
@@ -10,6 +9,7 @@ export {
 
 // Context
 export { AdapterProvider, useAdapter } from "./context/adapter-context.js";
+export { CoreEnvProvider, useCoreEnv } from "./context/core-env-context.js";
 
 // App
 export { App } from "./app/App.js";
@@ -53,8 +53,6 @@ export {
   DURATION_THRESHOLD_MS,
 } from "./utils/format.js";
 export {
-  ALWAYS_VISIBLE_TOOL_NAMES,
-  DETAILED_OUTPUT_TOOL_NAMES,
   hasDetailedOutputBlock,
   keepsCompactRow,
   getToolStatusGlyph,

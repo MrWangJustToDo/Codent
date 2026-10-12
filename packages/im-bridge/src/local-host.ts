@@ -9,17 +9,17 @@
  *    CLI's `createAgentFromConfig`). Falls back to `.env` (MODEL / MODEL_STYLE
  *    / BASE_URL / API_KEY — the field names the server reads) when no usable
  *    models.json exists.
- * 3. Session plane: `createLocalAgentSessionHost({ manager: agentManager })`.
+ * 3. Session plane: a `CodentAgent` runtime (own env + provider + manager + host).
  *
  * No `REMOTE_SESSION` ⇒ local mode; the bridge then hosts the agent loop in
  * process instead of talking to an agent server.
  */
 
 import {
-  agentManager,
   buildDefaultSystemPrompt,
+  CodentAgent,
   createDirectModelProvider,
-  createLocalAgentSessionHost,
+  getModelProvider,
   loadModels,
   registerCoreEnv,
   registerModelProvider,
@@ -30,7 +30,7 @@ import {
 import { createNodeEnv } from "@codent/node";
 
 import type { BridgeConfig } from "./config.js";
-import type { AgentSessionHost, ModelStyle } from "@codent/core";
+import type { AgentSessionHost, ModelProvider, ModelStyle } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
@@ -61,8 +61,10 @@ export async function createLocalSessionHost(
 ): Promise<{ host: AgentSessionHost; defaults: LocalSessionDefaults }> {
   // CoreEnv must be registered first — the file pipeline reads models.json
   // through the registered CoreEnv (env.rootPath / env.fs / env.path).
-  registerCoreEnv(createNodeEnv({ rootPath: process.cwd(), sandbox: config.sandbox !== "native" }));
+  const env = createNodeEnv({ rootPath: process.cwd(), sandbox: config.sandbox !== "native" });
+  registerCoreEnv(env);
 
+  let provider: ModelProvider | undefined;
   let model: string | undefined;
   let style: ModelStyle | undefined;
   let baseURL: string | undefined;
@@ -77,9 +79,13 @@ export async function createLocalSessionHost(
       const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
       if (entry && activeModel) {
         await registerModelProviderForEntry(loaded);
+        provider = getModelProvider();
         // Resolve the final connection through the registered provider (mirrors
         // createAgentFromConfig). IM_BRIDGE_MODEL overrides the active entry.
-        const fromProvider = await resolveModelConfigFromProvider(config.model ? { model: config.model } : {});
+        const fromProvider = await resolveModelConfigFromProvider(
+          config.model ? { model: config.model } : {},
+          provider
+        );
         model = fromProvider.connection.model;
         style = fromProvider.connection.style;
         baseURL = fromProvider.connection.baseURL;
@@ -106,14 +112,13 @@ export async function createLocalSessionHost(
           "in .env / IM_BRIDGE_MODEL, or point REMOTE_SESSION at an agent server."
       );
     }
-    registerModelProvider(
-      createDirectModelProvider({
-        model: connection.model,
-        style: connection.style,
-        baseURL: connection.baseURL,
-        apiKey: connection.apiKey,
-      })
-    );
+    provider = createDirectModelProvider({
+      model: connection.model,
+      style: connection.style,
+      baseURL: connection.baseURL,
+      apiKey: connection.apiKey,
+    });
+    registerModelProvider(provider);
     model = connection.model;
     style = connection.style;
     baseURL = connection.baseURL;
@@ -121,8 +126,10 @@ export async function createLocalSessionHost(
     modelInfo = undefined;
   }
 
+  const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
+
   return {
-    host: createLocalAgentSessionHost({ manager: agentManager }),
+    host: agent.host,
     defaults: {
       model,
       style,

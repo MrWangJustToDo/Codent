@@ -17,7 +17,7 @@
  * @see https://agents.md/
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import {
   INSTRUCTION_FILENAMES,
@@ -85,18 +85,18 @@ export interface AgentDocLoadResult {
  * Human-readable description of what was loaded.
  * Returns a formatted string like "Loaded instructions from AGENTS.md (2.1 KB)"
  */
-export function formatAgentDocResult(result: AgentDocLoadResult): string {
-  const env = getEnv();
+export function formatAgentDocResult(result: AgentDocLoadResult, env?: ResolvedCoreEnv): string {
+  const e = env ?? getEnv();
   const parts: string[] = [];
 
   if (result.source) {
-    const sizeKB = (env.byteLength(result.content, "utf-8") / 1024).toFixed(1);
-    parts.push(`Loaded instructions from ${env.path.basename(result.source)} (${sizeKB} KB)`);
+    const sizeKB = (e.byteLength(result.content, "utf-8") / 1024).toFixed(1);
+    parts.push(`Loaded instructions from ${e.path.basename(result.source)} (${sizeKB} KB)`);
   }
 
   if (result.overrideSource && result.overrideContent != null) {
-    const sizeKB = (env.byteLength(result.overrideContent, "utf-8") / 1024).toFixed(1);
-    parts.push(`Loaded override from ${env.path.basename(result.overrideSource)} (${sizeKB} KB)`);
+    const sizeKB = (e.byteLength(result.overrideContent, "utf-8") / 1024).toFixed(1);
+    parts.push(`Loaded override from ${e.path.basename(result.overrideSource)} (${sizeKB} KB)`);
   }
 
   if (result.importNotices.length > 0) {
@@ -128,9 +128,9 @@ export function formatAgentDocResult(result: AgentDocLoadResult): string {
  * ```
  */
 export async function loadAgentDoc(config: AgentDocLoaderConfig): Promise<AgentDocLoadResult> {
-  const { rootPath, filenames = DEFAULT_AGENT_DOC_FILENAMES, maxBytes, loadOverride = true } = config;
+  const { rootPath, filenames = DEFAULT_AGENT_DOC_FILENAMES, maxBytes, loadOverride = true, env } = config;
 
-  const primary = await resolvePrimaryInstruction({ rootPath, filenames, maxBytes });
+  const primary = await resolvePrimaryInstruction({ rootPath, filenames, maxBytes, ...(env ? { env } : {}) });
   if (!primary) {
     return {
       content: "",
@@ -146,7 +146,12 @@ export async function loadAgentDoc(config: AgentDocLoaderConfig): Promise<AgentD
   };
 
   if (loadOverride) {
-    const override = await resolveOverrideInstruction(rootPath, primary.name, maxBytes ?? DEFAULT_AGENT_DOC_MAX_BYTES);
+    const override = await resolveOverrideInstruction(
+      rootPath,
+      primary.name,
+      maxBytes ?? DEFAULT_AGENT_DOC_MAX_BYTES,
+      env
+    );
     if (override) {
       result.overrideContent = override.content;
       result.overrideSource = override.path;

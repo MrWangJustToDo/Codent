@@ -11,7 +11,7 @@
  * {@link UsageHistoryService} (managers/services) owns the write policy.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { totalTokensOf } from "../../runtime-types/token-usage.js";
 
 import type { TokenUsage } from "../../runtime-types/token-usage.js";
@@ -136,6 +136,17 @@ function buildRecord(input: UsageRecordInput): Omit<UsageRecord, "v"> | null {
  * State-free like SessionStore — all durable state lives on disk.
  */
 export class UsageStore {
+  /** Workspace env this store persists through; resolved lazily (ambient) when omitted. */
+  private readonly env?: ResolvedCoreEnv;
+
+  constructor(env?: ResolvedCoreEnv) {
+    this.env = env;
+  }
+
+  private get fs() {
+    return (this.env ?? getEnv()).fs;
+  }
+
   /**
    * Append one usage record. Returns false (no-op) when the env fs does not
    * implement appendFile, or when the record has no tokens to count.
@@ -143,7 +154,7 @@ export class UsageStore {
   async append(input: UsageRecordInput): Promise<boolean> {
     const record = buildRecord(input);
     if (!record) return false;
-    const fs = getEnv().fs;
+    const fs = this.fs;
     if (!fs.appendFile) return false;
     const path = getUsageLogPath(new Date(record.ts).getFullYear());
     if (!(await fs.exists(USAGE_DIR))) {
@@ -162,7 +173,7 @@ export class UsageStore {
    * timezone) and aggregate into per-day buckets + per-model totals.
    */
   async readHistory(weeks: number): Promise<UsageHistoryResult> {
-    const fs = getEnv().fs;
+    const fs = this.fs;
     const result: UsageHistoryResult = { daily: [], models: [], skipped: 0 };
     const files = await this.listLogFiles();
     if (files.length === 0) return result;
@@ -232,7 +243,7 @@ export class UsageStore {
 
   /** List existing usage log files (year descending). */
   private async listLogFiles(): Promise<string[]> {
-    const fs = getEnv().fs;
+    const fs = this.fs;
     if (!(await fs.exists(USAGE_DIR))) return [];
     const entries = await fs.readdir(USAGE_DIR);
     return entries

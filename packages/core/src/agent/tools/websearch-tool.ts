@@ -21,7 +21,7 @@ import { isAbortError } from "../../runtime-types/abort.js";
 import { defineServerTool } from "./runtime/define-tool.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
-import { filterResultsByDomain, getProviderManager, initializeProviders } from "./websearch";
+import { createConfiguredProviderManager, filterResultsByDomain } from "./websearch";
 
 import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
@@ -80,7 +80,9 @@ export type WebsearchOutput = z.infer<typeof websearchOutputSchema>;
  * - Returns titles, snippets, and URLs
  */
 export const createWebsearchTool = ({ managed }: { managed?: ManagedAgent }) => {
-  initializeProviders(managed?.config?.toolConfig?.websearch);
+  // Agent-scoped provider manager: its own providers + key/session state, so two agents
+  // (or runtimes) never share selection or credentials.
+  const providerManager = createConfiguredProviderManager();
 
   return defineServerTool({
     name: "websearch",
@@ -124,7 +126,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
 
     outputSchema: websearchOutputSchema,
 
-    execute: async ({ query, maxResults, allowedDomains, blockedDomains, timeout }, { abortSignal }) => {
+    execute: async ({ query, maxResults, allowedDomains, blockedDomains, timeout }, { abortSignal, coreEnv }) => {
       return withDuration(async () => {
         if (allowedDomains?.length && blockedDomains?.length) {
           throw new Error("Cannot specify both allowedDomains and blockedDomains in the same request");
@@ -148,7 +150,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
         }
 
         try {
-          const pm = getProviderManager();
+          const pm = providerManager;
           // A stable per-session value lets the manager spread sessions across the free
           // providers (so one public endpoint is not the single dependency) and lets a
           // provider forward it upstream (Parallel's `session_id`). Subagents have no
@@ -165,6 +167,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
               blockedDomains,
               timeoutMs,
               signal: controller.signal,
+              coreEnv,
               ...(sessionId ? { sessionId } : {}),
             });
           });

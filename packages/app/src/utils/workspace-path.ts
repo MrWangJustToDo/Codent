@@ -1,8 +1,9 @@
-import { getEnv, toPosixPathKey } from "@codent/core";
+import { toPosixPathKey } from "@codent/core";
 
-/** Join paths using CoreEnv path utilities (POSIX-safe). */
-export function joinWorkspacePath(...parts: string[]): string {
-  const env = getEnv();
+import type { CoreEnv } from "@codent/core";
+
+/** Join paths using the active session's CoreEnv path utilities (POSIX-safe). */
+export function joinWorkspacePath(env: CoreEnv, ...parts: string[]): string {
   return env.path?.join(...parts) ?? parts.join("/");
 }
 

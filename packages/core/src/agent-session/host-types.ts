@@ -7,7 +7,9 @@
 
 import type { AgentSession } from "./types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
+import type { CoreEnv } from "../env";
 import type { ModelInfo, ModelStyle } from "../models/types.js";
+import type { ModelProvider } from "../provider/model-provider.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type { UIMessage } from "@tanstack/ai";
 
@@ -76,4 +78,16 @@ export interface AgentSessionHost {
   list(): AgentSessionListEntry[] | Promise<AgentSessionListEntry[]>;
   /** Destroy an agent (cascades to children) and drop its session handle. */
   destroy(agentId: string): Promise<void>;
+  /**
+   * The runtime's model provider, so app-side model resolution uses this runtime's
+   * connection rather than the process-global registry. Omitted by remote-session
+   * hosts (the agent server owns the model), which leaves ambient resolution.
+   */
+  getModelProvider?(): ModelProvider | undefined;
+  /**
+   * The runtime's workspace env, so a host-bound consumer (the app's default system
+   * prompt) uses this runtime's root/platform rather than the ambient env. Omitted
+   * by remote-session hosts, which leave ambient resolution.
+   */
+  getEnv?(): CoreEnv | undefined;
 }

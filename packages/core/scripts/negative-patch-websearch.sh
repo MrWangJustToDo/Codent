@@ -18,7 +18,10 @@ restore() {
   if [ -n "$backup" ] && [ -n "$backup_target" ]; then
     cp "$backup" "$backup_target" 2>/dev/null || true
   fi
-  [ -n "$backup" ] && rm -f "$backup"
+  # `if`, not `[ -n "$backup" ] && rm -f "$backup"`: with `set -e`, when `$backup` is empty
+  # (the EXIT trap after the last case) the `&&` short-circuits and the function returns 1,
+  # which aborts the EXIT trap with status 1 — masking the real exit code.
+  if [ -n "$backup" ]; then rm -f "$backup"; fi
 }
 trap restore EXIT INT TERM
 
@@ -32,6 +35,14 @@ run_case() {
     echo "PATCH FAILED (no-op?): $label"
     restore; backup=""; return 1
   }
+  # A `str.replace` that finds no anchor silently no-ops, which then reads as
+  # "validator PASSED" — a false negative in the *proof*. Treat an unchanged file
+  # as a stale patch, not as a passing assertion.
+  if cmp -s "$backup" "$file"; then
+    echo "❌ $label: patch was a no-op (stale anchor) — update the patch string"
+    restore; backup=""; backup_target=""
+    return 1
+  fi
 
   local out code
   if out="$($cmd 2>&1)"; then code=0; else code=$?; fi
@@ -65,11 +76,11 @@ run_case "spread removed" "$VALIDATOR/provider.ts" \
   "spread by session id" || fail=1
 
 run_case "tavily always available" "$VALIDATOR/providers/tavily.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(): boolean {\n    return Boolean(getProviderManager().getApiKey(PROVIDER_NAME));\n  },","  isAvailable(): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/websearch/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(options?: SearchOptions): boolean {\n    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));\n  },","  isAvailable(options?: SearchOptions): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
   "tavily must be unavailable" || fail=1
 
 run_case "exa ignores its key" "$VALIDATOR/providers/exa.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/websearch/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
   "exa keyed transport" || fail=1
 
 run_case "abort short-circuit removed" "$VALIDATOR/provider.ts" \
@@ -104,4 +115,11 @@ run_case "remote host drops toolConfig" "packages/server/src/remote-session-host
   "pnpm --filter @codent/server run validate:websearch-tool-config" || fail=1
 
 if [ "$fail" -eq 0 ]; then echo "ALL NEGATIVE PATCHES PROVEN"; else echo "SOME PATCHES FAILED"; fi
+
+# Each case rebuilt core from its temporary patch and only the SOURCE was restored, so
+# `dist` is left built from the LAST mutation. Rebuild from the restored sources so a
+# subsequent local `validate:*` run cannot fail against a deliberate defect. Not fatal:
+# the proof above already ran against the right builds.
+pnpm --filter @codent/core run build >/dev/null 2>&1 || true
+
 exit "$fail"

@@ -5,8 +5,8 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
-import { appendChannelMessages } from "../channel-write.js";
 import { cleanupOrphanedToolCache } from "../tools/util/tool-output-cache.js";
+import { appendChannelMessages } from "../ui/channel-write.js";
 
 import { extractCompactionSummaryBody } from "./compaction-summary.js";
 import { deriveKeepRecentTokens } from "./keep-policy.js";
@@ -14,8 +14,9 @@ import { createCompactionSummaryUIMessage, getModelVisibleMessages } from "./mes
 import { DEFAULT_SUMMARIZATION_CONTEXT_WINDOW } from "./summarization-budget.js";
 
 import type { CompactionResult } from "./types.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
-import type { AgentUIChannel } from "../ui-channel.js";
+import type { AgentUIChannel } from "../ui/ui-channel.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 export interface ApplyCompactionResultOptions {
@@ -32,6 +33,7 @@ export interface ApplyCompactionResultOptions {
  * @returns true if result was applied; false if nothing to apply
  */
 export function applyCompactionResult(
+  env: ResolvedCoreEnv,
   _messages: ModelMessage[],
   channel: AgentUIChannel,
   usage: UsageTracker,
@@ -55,7 +57,7 @@ export function applyCompactionResult(
   const visibleToolIds = collectToolCallIds(visible);
   const orphanCut = firstOrphanToolIndex(chronologic, visibleToolIds);
   if (orphanCut > 0) {
-    cleanupOrphanedToolCache(chronologic, orphanCut).catch((err) => {
+    cleanupOrphanedToolCache(env, chronologic, orphanCut).catch((err) => {
       const error = err instanceof Error ? err : new Error(String(err));
       options?.onCacheCleanupError?.(error);
     });
@@ -69,6 +71,7 @@ export function applyCompactionResult(
  * Tail continuity comes from in-chain look-back projection (not compactIndex).
  */
 export function applyReactiveCompactionResult(
+  env: ResolvedCoreEnv,
   messages: ModelMessage[],
   channel: AgentUIChannel,
   usage: UsageTracker,
@@ -94,6 +97,7 @@ export function applyReactiveCompactionResult(
   if (!body) return false;
 
   return applyCompactionResult(
+    env,
     messages,
     channel,
     usage,

@@ -10,7 +10,7 @@
  * The response body may be SSE (`data: {...}` frames) or plain JSON; both are accepted.
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 
 /** One MCP `tools/call`, returning the first text content block. */
@@ -22,12 +22,14 @@ export async function callMcpTool(options: {
   signal?: AbortSignal;
   /** Extra request headers (e.g. `Authorization: Bearer <key>`). Keys are never put in the URL. */
   headers?: Record<string, string>;
+  /** Workspace env for `fetch`; ambient when omitted. */
+  coreEnv?: ResolvedCoreEnv;
 }): Promise<string> {
   const { url, toolName, args, timeoutMs, signal, headers } = options;
   const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal });
 
   try {
-    const response = await getEnv().fetch(url, {
+    const response = await (options.coreEnv ?? getEnv()).fetch(url, {
       method: "POST",
       signal: controller.signal,
       headers: {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { clearWorkspaceDiffStatsCache, fetchWorkspaceDiffStats } from "../utils/workspace-diff-stats.js";
 import { fetchWorkspaceGitInfo } from "../utils/workspace-git-info.js";
 import { clearGitStatusCache, fetchGitStatus } from "../utils/workspace-git-status.js";
@@ -46,6 +47,7 @@ function sameStatus(a: Map<string, string>, b: Map<string, string>): boolean {
  * again" (the version).
  */
 export const useWorkspaceGit = (rootPath: string) => {
+  const env = useCoreEnv();
   const [gitStatus, setGitStatus] = useState<Map<string, string>>(new Map());
   const [gitInfo, setGitInfo] = useState<WorkspaceGitInfo | null>(null);
   const [diffStats, setDiffStats] = useState<WorkspaceDiffStats | null>(null);
@@ -53,32 +55,38 @@ export const useWorkspaceGit = (rootPath: string) => {
   const [statusVersion, setStatusVersion] = useState(0);
   const generationRef = useRef(0);
 
-  const refresh = useCallback(async (path: string) => {
-    if (!path) return;
-    const generation = ++generationRef.current;
-    try {
-      clearGitStatusCache();
-      clearWorkspaceDiffStatsCache();
-      const status = await fetchGitStatus(path);
-      const untracked = [...status.entries()].filter(([, s]) => s.trim() === "??").map(([rel]) => rel);
-      const [info, stats] = await Promise.all([fetchWorkspaceGitInfo(path), fetchWorkspaceDiffStats(path, untracked)]);
-      // A newer refresh was started while this one was in flight — its results
-      // are the ones the user asked for. Discard ours entirely (state AND the
-      // module cache the newer call already cleared and repopulated).
-      if (generation !== generationRef.current) return;
-      // Keep the previous reference when the worktree is unchanged — see the hook doc.
-      setGitStatus((prev) => (sameStatus(prev, status) ? prev : status));
-      setGitInfo(info);
-      setDiffStats(stats);
-      setStatusVersion((version) => version + 1);
-    } catch {
-      if (generation !== generationRef.current) return;
-      setGitStatus(new Map());
-      setGitInfo(null);
-      setDiffStats(null);
-      setStatusVersion((version) => version + 1);
-    }
-  }, []);
+  const refresh = useCallback(
+    async (path: string) => {
+      if (!path) return;
+      const generation = ++generationRef.current;
+      try {
+        clearGitStatusCache();
+        clearWorkspaceDiffStatsCache();
+        const status = await fetchGitStatus(env, path);
+        const untracked = [...status.entries()].filter(([, s]) => s.trim() === "??").map(([rel]) => rel);
+        const [info, stats] = await Promise.all([
+          fetchWorkspaceGitInfo(env, path),
+          fetchWorkspaceDiffStats(env, path, untracked),
+        ]);
+        // A newer refresh was started while this one was in flight — its results
+        // are the ones the user asked for. Discard ours entirely (state AND the
+        // module cache the newer call already cleared and repopulated).
+        if (generation !== generationRef.current) return;
+        // Keep the previous reference when the worktree is unchanged — see the hook doc.
+        setGitStatus((prev) => (sameStatus(prev, status) ? prev : status));
+        setGitInfo(info);
+        setDiffStats(stats);
+        setStatusVersion((version) => version + 1);
+      } catch {
+        if (generation !== generationRef.current) return;
+        setGitStatus(new Map());
+        setGitInfo(null);
+        setDiffStats(null);
+        setStatusVersion((version) => version + 1);
+      }
+    },
+    [env]
+  );
 
   useEffect(() => {
     if (!rootPath) return;

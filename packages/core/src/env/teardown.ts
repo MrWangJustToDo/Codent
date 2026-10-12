@@ -3,15 +3,15 @@
  *
  * `clearCoreEnv()` has to tear down process-scoped state that lives in *other*
  * layers (background shell jobs live under `agent/tools/`). Importing that state
- * from `env.ts` would make the bottom of the stack depend on the top, and the
- * dependency is not hypothetical: ~60 modules under `agent/` import `env.js`, so
+ * from `env/index.ts` would make the bottom of the stack depend on the top, and the
+ * dependency is not hypothetical: ~60 modules under `agent/` import `env/`, so
  * `env → agent/tools/util/command-job-registry` closed a real cycle
  * (`env → command-job-registry → command-output-log → env`).
  *
  * So the direction is inverted: the owner of the state registers a hook at module
- * load, and `clearCoreEnv()` drains whatever was registered. `env.ts` therefore
+ * load, and `clearCoreEnv()` drains whatever was registered. `env/index.ts` therefore
  * imports nothing above it, and a new process-scoped resource joins the teardown
- * without touching `env.ts` at all.
+ * without touching `env/index.ts` at all.
  *
  * Hooks are best-effort and synchronous — `clearCoreEnv()` is not async and callers
  * (`@codent/cli`, extension, playground) do not await it, so an async teardown has

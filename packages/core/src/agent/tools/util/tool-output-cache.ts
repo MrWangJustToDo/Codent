@@ -23,11 +23,10 @@
  * Both are non-fatal by contract: a failed delete never fails the tool call.
  */
 
-import { getEnv } from "../../../env.js";
-
 import { createStaleFileSweeper } from "./stale-file-sweep.js";
 
 import type { StaleSweepOptions } from "./stale-file-sweep.js";
+import type { ResolvedCoreEnv } from "../../../env";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -72,10 +71,10 @@ export const TOOL_OUTPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  * Sweeps before writing so the stale-file pass cannot observe its own output
  * (a freshly written file is never a candidate anyway — the filter is age-based).
  */
-export async function cacheToolOutput(content: string, id: string): Promise<string> {
-  await sweepStaleToolOutput();
+export async function cacheToolOutput(env: ResolvedCoreEnv, content: string, id: string): Promise<string> {
+  await sweepStaleToolOutput(env);
   const filePath = `${TOOL_OUTPUT_CACHE_DIR}/${id}${CACHE_ENTRY_SUFFIX}`;
-  await getEnv().fs.writeFile(filePath, content);
+  await env.fs.writeFile(filePath, content);
   return filePath;
 }
 
@@ -161,6 +160,7 @@ export function shouldCache(content: string): boolean {
  * content or a preview with cache path. Also returns the cache path if cached.
  */
 export async function maybeCacheOutput(
+  env: ResolvedCoreEnv,
   content: string,
   id: string,
   opts?: { headLines?: number; tailLines?: number }
@@ -169,7 +169,7 @@ export async function maybeCacheOutput(
     return { content, cachedOutputPath: null };
   }
 
-  const cachedPath = await cacheToolOutput(content, id);
+  const cachedPath = await cacheToolOutput(env, content, id);
   const preview = buildCachedPreview(content, cachedPath, opts);
   return { content: preview, cachedOutputPath: cachedPath };
 }
@@ -190,9 +190,9 @@ function extractCachedPathFromPart(part: unknown): string | null {
 /**
  * Delete a cached tool output file (best-effort).
  */
-export async function deleteToolOutputCacheFile(filePath: string): Promise<void> {
+export async function deleteToolOutputCacheFile(env: ResolvedCoreEnv, filePath: string): Promise<void> {
   try {
-    const fs = getEnv().fs;
+    const fs = env.fs;
     const exists = await fs.exists(filePath);
     if (exists) {
       await fs.remove(filePath);
@@ -206,7 +206,11 @@ export async function deleteToolOutputCacheFile(filePath: string): Promise<void>
  * Scan orphaned messages (those before compactIndex) for cached tool output
  * file paths and delete them from disk.
  */
-export async function cleanupOrphanedToolCache(messages: ModelMessage[], compactIndex: number): Promise<void> {
+export async function cleanupOrphanedToolCache(
+  env: ResolvedCoreEnv,
+  messages: ModelMessage[],
+  compactIndex: number
+): Promise<void> {
   if (compactIndex <= 0 || messages.length === 0) return;
 
   const pathsToDelete = new Set<string>();
@@ -226,7 +230,7 @@ export async function cleanupOrphanedToolCache(messages: ModelMessage[], compact
 
   if (pathsToDelete.size === 0) return;
 
-  const fs = getEnv().fs;
+  const fs = env.fs;
   const deletions = Array.from(pathsToDelete).map(async (filePath) => {
     try {
       const exists = await fs.exists(filePath);
@@ -261,8 +265,8 @@ const toolOutputSweeper = createStaleFileSweeper({
   maxAgeMs: TOOL_OUTPUT_MAX_AGE_MS,
 });
 
-export function sweepStaleToolOutput(options?: StaleSweepOptions): Promise<number> {
-  return toolOutputSweeper.sweep(options);
+export function sweepStaleToolOutput(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number> {
+  return toolOutputSweeper.sweep(env, options);
 }
 
 /** Test-only escape hatch for the once-per-process guard. */

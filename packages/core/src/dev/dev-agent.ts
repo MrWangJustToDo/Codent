@@ -14,7 +14,7 @@ export {
 export type { SessionSaveReason, SessionSyncSnapshot } from "../agent/persistence/session-sync-tracker.js";
 export { AgentLog, MAX_PENDING_LOG_ENTRIES } from "../agent/agent-log/agent-log.js";
 export { logEntrySchema, logCategorySchema } from "../agent/log/schemas.js";
-export { AgentUIChannel } from "../agent/ui-channel.js";
+export { AgentUIChannel } from "../agent/ui/ui-channel.js";
 export {
   findToolCallPart,
   shouldSuppressReplayedToolChunk,
@@ -121,6 +121,9 @@ export {
 } from "../agent/run/run-agent-skeleton.js";
 export { extractFileOpsFromMessages, formatFileOperations } from "../agent/compaction/file-ops-tracker.js";
 export { buildDefaultSystemPrompt } from "../agent/prompt/default-prompt.js";
+export { AgentRuntime } from "../runtime/agent-runtime.js";
+export { CodentAgent } from "../runtime/codent-agent.js";
+export { createListFileTool } from "../agent/tools/list-file-tool.js";
 export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
 export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache, toModelOutputRegistry } from "../agent/compaction";
 export {
@@ -155,6 +158,7 @@ export {
 } from "../agent/compaction";
 export { extractTextFromContent } from "../agent/compaction/message-utils.js";
 export {
+  createConfiguredProviderManager,
   createTimeoutAbort,
   filterResultsByDomain,
   getProviderManager,
@@ -165,6 +169,8 @@ export {
   resetWebsearchProviders,
   withTimeoutAbort,
 } from "../agent/tools/websearch";
+export { braveProvider } from "../agent/tools/websearch/providers/brave.js";
+export { tavilyProvider } from "../agent/tools/websearch/providers/tavily.js";
 export { parseParallelResults } from "../agent/tools/websearch/providers/parallel.js";
 export { parseExaResults } from "../agent/tools/websearch/providers/exa.js";
 export { parseMcpResponse } from "../agent/tools/websearch/providers/mcp-client.js";
@@ -325,6 +331,7 @@ export {
 } from "../agent/stream/tool-phase-utils.js";
 export { isStaleActiveRunStatus, shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
 export { createTanStackSubagentTools, createTanStackTools, getReadOnlyTanStackToolNames } from "../agent/tools/runtime";
+export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/tool-names.js";
 export {
   clearStreamingOutput,
   emitStreamingChunk,
@@ -406,13 +413,7 @@ export type {
 } from "../agent/plan";
 export { TodoManager } from "../agent/todo";
 export { createTodoTool } from "../agent/todo/todo-tool.js";
-export {
-  getMediaStore,
-  resetMediaStore,
-  extractBase64Content,
-  buildDataUrl,
-  sha256Stable,
-} from "../agent/media/media-store.js";
+export { extractBase64Content, buildDataUrl, sha256Stable } from "../agent/media/media-store.js";
 export { MediaStore } from "../agent/media/media-store.js";
 export type { MediaRef } from "../agent/media/types.js";
 export { MEDIA_DIR, mimeToExtension, parseMediaRefPath, buildMediaRefPath } from "../agent/media/types.js";

@@ -1,3 +1,5 @@
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
+
 import { useTranscriptDisplayMode } from "../context/transcript-display-context.js";
 import { useSize } from "../hooks";
 import { useTask } from "../hooks/use-task.js";
@@ -28,14 +30,14 @@ export const ToolInputView = ({
   // ToolCallPartView's padded column (x=3) and span to the shared right edge.
   const bodyWidth = width - 4;
   const isExecuting = isToolExecuting(part);
-  const isTask = toolName === "task";
+  const isTask = toolName === BUILTIN_TOOL_NAMES.task;
   const taskInput = toolInput as { prompt?: string; description?: string };
   const { phase: taskPhase, retry: taskRetry } = useTask({ taskId: isTask ? part.id : "" });
 
   // Compact: hide bulky diffs unless the user must review for approval.
   const showFileDiffs = mode === "full" || uiState === "approval-requested";
 
-  if (toolName === "task") {
+  if (toolName === BUILTIN_TOOL_NAMES.task) {
     if (!taskInput?.prompt || taskPhase === "summary") return null;
     // Keep the row visible while a transient retry is in flight (the tool-call
     // is briefly not executing) so the retry state has somewhere to render.
@@ -45,7 +47,7 @@ export const ToolInputView = ({
 
   if (hasError) return null;
 
-  if (toolName === "write_file") {
+  if (toolName === BUILTIN_TOOL_NAMES.writeFile) {
     if (!showFileDiffs) return null;
     const content = toolInput as { content?: string; path?: string };
     if (!content || uiState === "input-streaming") return null;
@@ -61,7 +63,7 @@ export const ToolInputView = ({
     );
   }
 
-  if (toolName === "edit_file") {
+  if (toolName === BUILTIN_TOOL_NAMES.editFile) {
     if (!showFileDiffs) return null;
     const content = toolInput as {
       path?: string;

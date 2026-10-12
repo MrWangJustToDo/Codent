@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 
-import { FileError } from "../../env-types.js";
+import { FileError } from "../../env/types";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { readSessionMessages, sessionExists, type SessionMessage } from "./session-search/session-reader.js";
@@ -101,13 +101,13 @@ Use after \`session_search\` returns a \`sessionId\` you want to read in full. O
         .describe(`Maximum messages to return. Defaults to ${DEFAULT_LIMIT}.`),
     }),
     outputSchema: sessionReadOutputSchema,
-    execute: async ({ sessionId, offset, limit }, { toolCallId }) => {
+    execute: async ({ sessionId, offset, limit }, { toolCallId, coreEnv }) => {
       return withDuration(async () => {
         const start = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
 
-        const all = await readSessionMessages(sessionId);
-        if (all.length === 0 && !(await sessionExists(sessionId))) {
+        const all = await readSessionMessages(coreEnv, sessionId);
+        if (all.length === 0 && !(await sessionExists(coreEnv, sessionId))) {
           throw new FileError("not_found", `Session "${sessionId}" has no log on disk`, sessionId);
         }
 
@@ -128,7 +128,7 @@ Use after \`session_search\` returns a \`sessionId\` you want to read in full. O
         const hasMore = start + page.length < all.length;
         const content = renderPage(sessionId, page, start, all.length, hasMore);
         // Spill the rendered page when large, so the model gets a head+tail preview plus a path.
-        const cached = await maybeCacheOutput(content, `${toolCallId}-session-read`);
+        const cached = await maybeCacheOutput(coreEnv, content, `${toolCallId}-session-read`);
 
         return {
           sessionId,

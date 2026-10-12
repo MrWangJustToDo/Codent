@@ -19,13 +19,14 @@ import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
-import { getEnv } from "../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionBootstrapContext } from "./session-bootstrap-events.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AnyServerTool } from "@tanstack/ai";
 
 export interface BuildManagedAgentResult {
@@ -37,7 +38,9 @@ export interface BuildManagedAgentOptions {
   config: ManagedAgentConfig;
   parentId?: string;
   manager: AgentManager;
-  getDefaultSkillDirs: () => Promise<SkillDirectory[]>;
+  getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
+  /** Runtime this agent belongs to (env + provider); undefined = ambient. */
+  runtime?: AgentRuntime;
 }
 
 /**
@@ -49,6 +52,7 @@ export async function buildManagedAgent({
   parentId,
   manager,
   getDefaultSkillDirs,
+  runtime,
 }: BuildManagedAgentOptions): Promise<BuildManagedAgentResult> {
   const {
     id: customId,
@@ -62,7 +66,9 @@ export async function buildManagedAgent({
   } = config;
 
   const resolvedModelInfo = explicitModelInfo ?? null;
-  const fsRootPath = getEnv().rootPath;
+  // The runtime's env when bound; ambient otherwise (legacy single-instance hosts).
+  const coreEnv = runtime?.env ?? getEnv();
+  const fsRootPath = coreEnv.rootPath;
   const log = new AgentLog();
   const todoManager = parentId ? null : new TodoManager();
 
@@ -78,11 +84,13 @@ export async function buildManagedAgent({
       tools: {},
       todoManager,
       parentId,
+      ...(runtime ? { runtime } : {}),
     }
   );
 
   const toolsRecord: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
   managed.tools = toolsRecord;
+  managed.runtime = runtime;
   managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
   // Scoped unified event bus for this agent. Routes session-channel projections
   // AND telemetry `dispatchEvent` (up-flows to the root observer / Event→Log bridge).
@@ -103,6 +111,7 @@ export async function buildManagedAgent({
       rootPath: fsRootPath,
       filenames: config.agentDocFilenames,
       loadOverride: config.agentDocLoadOverride !== false,
+      env: coreEnv,
     });
     if (docResult.content) {
       const instructions = docResult.overrideContent
@@ -145,13 +154,14 @@ export async function buildManagedAgent({
 
     skillRegistry = new SkillRegistry({
       rootPath: fsRootPath,
+      env: coreEnv,
       logger: { warn: (message) => log.warn("system", message) },
     });
     managed.setSkillRegistry(skillRegistry);
 
     const dirsToLoad: SkillDirectory[] = skillDirs
       ? skillDirs.map((path) => ({ path, source: "project" as const }))
-      : await getDefaultSkillDirs();
+      : await getDefaultSkillDirs(coreEnv);
     await skillRegistry.loadFromDirectories(dirsToLoad);
 
     // Built-ins are registered LAST so every directory skill keeps priority —
@@ -181,14 +191,14 @@ export async function buildManagedAgent({
     // MCP data layer: created (but not connected) here — connection + tool
     // registration happens in the built-in MCP extension (loaded below), so MCP
     // participates in the unified extension lifecycle (enable/disable, activate/deactivate).
-    const mcpManager = new McpManager();
+    const mcpManager = new McpManager(coreEnv);
     managed.setMcpManager(mcpManager);
 
     // Memory manager is always created when enabled (drives the per-turn
     // relevance query + extraction in MemoryService). The built-in Memory
     // extension (loaded below) wraps it for presentation: tools, index injection.
     if (config.memory !== false) {
-      const memoryManager = new MemoryManager({ rootPath: fsRootPath });
+      const memoryManager = new MemoryManager({ rootPath: fsRootPath, env: coreEnv });
       await memoryManager.initialize();
       managed.setMemoryManager(memoryManager);
       // Memory init is logged once via the bridged `session:memory` event — no direct log.
@@ -205,7 +215,7 @@ export async function buildManagedAgent({
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
       onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
       cwd: fsRootPath,
-      getCoreEnv: () => getEnv(),
+      getCoreEnv: () => coreEnv,
       // Scoped unified bus backing extension interception (hook names unchanged)
       // and extension telemetry (`agent:extension-error`).
       eventBus: manager.of(managed.id, parentId),
@@ -215,10 +225,10 @@ export async function buildManagedAgent({
     });
     managed.extensions.setExtensionRunner(extensionRunner);
 
-    const extensionLoader = new ExtensionLoader();
+    const extensionLoader = new ExtensionLoader(coreEnv);
     managed.extensions.setExtensionLoader(extensionLoader);
 
-    const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs);
+    const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, coreEnv);
     log.debug("system", "Extension search directories", { dirs: extensionDirs });
 
     // Individual extension load successes are not logged — one aggregated
@@ -372,7 +382,7 @@ export async function buildManagedAgent({
   }
 
   if (!parentId) {
-    const sessionStore = new SessionStore();
+    const sessionStore = new SessionStore(coreEnv);
     managed.setSessionStore(sessionStore, {
       modelStyle: config.modelStyle ?? resolvedModelInfo?.style ?? "openai",
       model: restConfig.model,

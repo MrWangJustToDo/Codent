@@ -1,9 +1,6 @@
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "quit",
-  description: "Exit the cli",
-  usage: "/quit",
+registerBuiltinCommand("quit", {
   immediate: true,
   execute: (_args, ctx) => {
     if (ctx.exit) {

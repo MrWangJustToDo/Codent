@@ -20,14 +20,14 @@ export {
   type CoreEnvExecResult,
   type McpStdioTransportConfig,
   type McpProcessHandle,
-} from "./env.js";
+} from "./env";
 
 // ============================================================================
 // LSP transport (optional, Node.js only — feature-detected by LSP extension)
 // ============================================================================
 
-export type { LspServerConfig, LspConnection, LspMessage } from "./env-lsp.js";
-export type { LspConnectionFactory } from "./env.js";
+export type { LspServerConfig, LspConnection, LspMessage } from "./env/lsp";
+export type { LspConnectionFactory } from "./env";
 export {
   LspManager,
   type LspServerConfigRecord,
@@ -45,17 +45,28 @@ export {
   clearModelProvider,
   getModelProvider,
   hasModelProvider,
+} from "./provider/model-provider-registry.js";
+
+export {
   createDirectModelProvider,
   type ModelProviderMode,
   type ModelProviderConnection,
   type ModelProvider,
-} from "./models/provider/model-provider.js";
+} from "./provider/model-provider.js";
 
-export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./models/provider/remote-model-provider.js";
+export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./provider/remote-model-provider.js";
+
+export {
+  resolveModelConfigFromProvider,
+  type ResolvedModelConfigFromProvider,
+} from "./provider/resolve-from-provider.js";
 
 // ============================================================================
 // Runtime — agent manager (host bootstrap; Session-only UI must not import ManagedAgent)
 // ============================================================================
+
+export { CodentAgent } from "./runtime/codent-agent.js";
+export type { CodentAgentOptions, CodentAgentDefaults } from "./runtime/codent-agent.js";
 
 export { agentManager, AgentManager } from "./managers/agent-manager.js";
 export type { AgentEvent, AgentEventListener, AgentEventType, RunAgentStreamInput } from "./managers/agent-manager.js";
@@ -177,7 +188,6 @@ export {
   readModelsConfigFile,
   registerModelProviderForEntry,
   resolveModelConfig,
-  resolveModelConfigFromProvider,
   resolveModelConnection,
   resolveModelInfoFromModelsDev,
   resolveModelsConfig,
@@ -215,7 +225,6 @@ export type {
   ReasoningEffort,
   RemoteProviderConfigEntry,
   ResolvedModelConfig,
-  ResolvedModelConfigFromProvider,
 } from "./models";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";
@@ -284,6 +293,8 @@ export {
 } from "./agent/tools/presentation/inline-summary.js";
 export { formatToolArgs, formatToolOutput } from "./agent/tools/presentation/output-format.js";
 export { formatToolInput } from "./agent/tools/presentation/input-format.js";
+export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "./agent/tools/tool-names.js";
+export { BEGIN_SUMMARY_TOOL_NAME } from "./agent/subagent/begin-summary-tool.js";
 
 // ============================================================================
 // Tool output types (message formatting)
@@ -307,9 +318,9 @@ export type { TaskOutput } from "./agent/subagent/task-tool.js";
 // CoreEnv errors & workspace I/O types (node / server adapters)
 // ============================================================================
 
-export { FileError, ExecutionError } from "./env-types.js";
-export type { CoreEnvExecFileOptions } from "./env.js";
-export type { CoreEnvShellInfo } from "./env-types.js";
+export { FileError, ExecutionError } from "./env/types";
+export type { CoreEnvExecFileOptions } from "./env";
+export type { CoreEnvShellInfo } from "./env/types";
 export type {
   FileEntry,
   FileStat,
@@ -318,7 +329,7 @@ export type {
   CommandJobStatus,
   StartCommandOptions,
   StartCommandHandle,
-} from "./env-types.js";
+} from "./env/types";
 
 // ============================================================================
 // Extension types (Session-safe). Loaders/runners stay package-private / `dev.ts`.

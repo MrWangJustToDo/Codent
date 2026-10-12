@@ -7,6 +7,8 @@
 
 import { z } from "zod";
 
+import type { ResolvedCoreEnv } from "../../env";
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -83,6 +85,8 @@ export type Memory = z.infer<typeof memorySchema>;
 export interface MemoryManagerConfig {
   /** Root path of the project */
   rootPath: string;
+  /** Workspace env for memory I/O (runtime-provided; ambient by default). */
+  env?: ResolvedCoreEnv;
   /** Memory directory name (relative to rootPath). Default: `.agents/memory` */
   memoryDir?: string;
   /** Trigger consolidation when file count exceeds this. Default: 25 */

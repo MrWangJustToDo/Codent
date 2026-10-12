@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
-
 import { defineServerTool } from "./runtime/define-tool.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -20,9 +18,9 @@ export const createDeleteFileTool = () => {
       ...toolOutputBaseSchema.shape,
     }),
     needsApproval: true,
-    execute: async ({ path }) => {
+    execute: async ({ path }, { coreEnv }) => {
       return withDuration(async () => {
-        await getEnv().fs.remove(path);
+        await coreEnv.fs.remove(path);
         return { path };
       });
     },

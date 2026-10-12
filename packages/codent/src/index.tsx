@@ -3,6 +3,7 @@ import {
   AdapterProvider,
   App,
   ConfigEditor,
+  CoreEnvProvider,
   initConfig,
   initHighlighter,
   configureEnv,
@@ -29,6 +30,8 @@ import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs } from ".
 import { readClipboardImage } from "./clipboard.js";
 import { LocalAgentAdapter } from "./local-adapter.js";
 import { TerminalTitle } from "./terminal-title.js";
+
+import type { CoreEnv, ModelProvider } from "@codent/core";
 
 // ============================================================================
 // codent — local-only release host
@@ -72,17 +75,17 @@ if (isHelpRequested(argv)) {
 
 // CoreEnv plane — local Node.js workspace (fs / shell / OS sandbox).
 const useOsSandbox = (process.env.SANDBOX_ENV || "local") !== "native";
-registerCoreEnv(createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox }));
+const coreEnv: CoreEnv = createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox });
+registerCoreEnv(coreEnv);
 
 // Provider plane — local LLM keys from flags / `.env`.
-registerModelProvider(
-  createDirectModelProvider({
-    model: appConfig.model,
-    style: appConfig.style,
-    baseURL: appConfig.baseURL,
-    apiKey: appConfig.apiKey,
-  })
-);
+const modelProvider: ModelProvider = createDirectModelProvider({
+  model: appConfig.model,
+  style: appConfig.style,
+  baseURL: appConfig.baseURL,
+  apiKey: appConfig.apiKey,
+});
+registerModelProvider(modelProvider);
 
 configureEnv({ allowNonBrowserUpdates: true });
 
@@ -96,7 +99,7 @@ const needsConfigEditor = !helpRequested && !appConfig.modelExplicit && !(await 
 
 if (!needsConfigEditor) {
   await initConfig(appConfig);
-  await useWorkspaceInfo.getActions().init();
+  await useWorkspaceInfo.getActions().init(coreEnv);
 }
 
 const adapter = new LocalAgentAdapter({
@@ -104,6 +107,8 @@ const adapter = new LocalAgentAdapter({
     setTimeout(() => process.exit(0), 200);
   },
   readClipboardImage,
+  env: coreEnv,
+  provider: modelProvider,
 });
 
 /** CSI hide — re-sent after every frame so the hardware cursor stays off. */
@@ -147,10 +152,12 @@ useSize.getActions().init();
 initHighlighter()
   .then(() => {
     render(
-      <AdapterProvider value={adapter}>
-        <TerminalTitle />
-        <Bootstrap />
-      </AdapterProvider>,
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <TerminalTitle />
+          <Bootstrap />
+        </AdapterProvider>
+      </CoreEnvProvider>,
       {
         maxFps: 30,
         exitOnCtrlC: false,

@@ -1,9 +1,10 @@
-import { AdapterProvider, App, configureEnv, initConfig, initHighlighter } from "@codent/app";
+import { AdapterProvider, App, CoreEnvProvider, configureEnv, initConfig, initHighlighter } from "@codent/app";
 import {
   clearCoreEnv,
   clearModelProvider,
   createDirectModelProvider,
   createRemoteProvider,
+  getEnv,
   hasCoreEnv,
   registerCoreEnv,
   registerModelProvider,
@@ -22,6 +23,7 @@ import { getWebContainerEnv } from "../webcontainer/create-env.js";
 import { resolveFetchProxyUrl, setFetchProxyUrl } from "../webcontainer/create-proxy-fetch.js";
 
 import type { AgentAdapter } from "@codent/app";
+import type { CoreEnv, ModelProvider } from "@codent/core";
 
 configureEnv({ allowNonBrowserUpdates: true });
 
@@ -48,19 +50,21 @@ export const AgentSurface = memo(() => {
   const { setBoot, setAgentRestart } = useShellState.getActions();
 
   const [adapter, setAdapter] = useState<AgentAdapter | null>(null);
+  const [coreEnv, setCoreEnv] = useState<CoreEnv | null>(null);
   const adapterRef = useRef<AgentAdapter | null>(null);
   const containerReadyRef = useRef(false);
   const initIdRef = useRef(0);
   const boot = useShellState((s) => s.boot);
 
-  const ensureCoreEnv = useCallback(async () => {
+  const ensureCoreEnv = useCallback(async (): Promise<CoreEnv> => {
     setFetchProxyUrl(resolveFetchProxyUrl(fetchProxyUrl));
 
-    if (hasCoreEnv()) return;
+    if (hasCoreEnv()) return getEnv();
 
     const env = await getWebContainerEnv({ fetchProxyUrl });
     registerCoreEnv(env);
     containerReadyRef.current = true;
+    return env;
   }, [fetchProxyUrl]);
 
   const runBootstrap = useCallback(async () => {
@@ -79,18 +83,21 @@ export const AgentSurface = memo(() => {
         phase: "booting",
         message: containerReadyRef.current ? "Restarting agent…" : "Booting WebContainer…",
       });
-      await ensureCoreEnv();
+      const env = await ensureCoreEnv();
       if (currentInitId !== initIdRef.current) return;
+      setCoreEnv(env);
 
       const serverUrl = providerServerUrl.trim();
       const remoteMode = Boolean(serverUrl);
+      let provider: ModelProvider;
       if (remoteMode) {
         // Remote mode: keys stay on the provider server; model/style/baseURL/apiKey come from /api/provider/info.
         setBoot({ phase: "booting", message: "Connecting to provider server…" });
-        registerModelProvider(await createRemoteProvider(serverUrl));
+        provider = await createRemoteProvider(serverUrl);
       } else {
-        registerModelProvider(createDirectModelProvider({ model, style, baseURL, apiKey }));
+        provider = createDirectModelProvider({ model, style, baseURL, apiKey });
       }
+      registerModelProvider(provider);
       if (currentInitId !== initIdRef.current) return;
 
       setBoot({ phase: "booting", message: "Initializing agent…" });
@@ -106,7 +113,7 @@ export const AgentSurface = memo(() => {
       await initHighlighter();
       if (currentInitId !== initIdRef.current) return;
 
-      const playground = new PlaygroundAgentAdapter();
+      const playground = new PlaygroundAgentAdapter({ env, provider });
 
       adapterRef.current = playground;
       setAdapter(playground);
@@ -152,7 +159,7 @@ export const AgentSurface = memo(() => {
     );
   }
 
-  if (!adapter) {
+  if (!adapter || !coreEnv) {
     return (
       <div className="workarea__state">
         <State loading title={boot.message} hint="Preparing the in-browser workspace and agent runtime." />
@@ -177,9 +184,11 @@ export const AgentSurface = memo(() => {
         }
       }}
     >
-      <AdapterProvider value={adapter}>
-        <App />
-      </AdapterProvider>
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <App />
+        </AdapterProvider>
+      </CoreEnvProvider>
     </InkTerminalBox>
   );
 });

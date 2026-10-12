@@ -1,9 +1,7 @@
-import { getEnv } from "../../env.js";
-
 import { mcpConfigSchema } from "./types.js";
 
 import type { McpConfig } from "./types.js";
-import type { CoreEnvFs } from "../../env.js";
+import type { CoreEnv, CoreEnvFs } from "../../env";
 
 export interface McpConfigLoadResult {
   config: McpConfig;
@@ -37,8 +35,8 @@ const FALLBACK_MCP_CONFIG_PATHS = [".mcp.json"];
  *
  * Returns null if no config file is found or all are invalid (MCP disabled).
  */
-export async function loadMcpConfig(configPath?: string): Promise<McpConfigLoadResult | null> {
-  const fs = getEnv().fs;
+export async function loadMcpConfig(env: CoreEnv, configPath?: string): Promise<McpConfigLoadResult | null> {
+  const fs = env.fs;
   const errors: string[] = [];
 
   // If an explicit path is given, only check that one

@@ -1,3 +1,4 @@
+import { BEGIN_SUMMARY_TOOL_NAME } from "@codent/core";
 import { useEffect, useState } from "react";
 
 import { resolveAgentSession } from "../utils/session-resolve.js";
@@ -7,8 +8,6 @@ import { useSubAgents } from "./use-sub-agents.js";
 
 import type { AgentSession, TokenUsage } from "@codent/core";
 import type { ToolCallState, UIMessage } from "@tanstack/ai";
-
-const BEGIN_SUMMARY_TOOL_NAME = "begin_summary";
 
 type TaskToolCall = {
   toolCallId: string;

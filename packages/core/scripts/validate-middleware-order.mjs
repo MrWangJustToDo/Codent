@@ -34,7 +34,21 @@ import {
   createWireRecoveryMiddleware,
   MIDDLEWARE_PHASE_RANK,
   sortMiddlewaresByPhase,
+  registerCoreEnv,
 } from "../dist/dev.mjs";
+
+registerCoreEnv({
+  rootPath: "/tmp",
+  fs: {},
+  path: {},
+  runCommand: async () => ({}),
+  exec: async () => ({}),
+  fetch: async () => new Response(""),
+  getPlatform: async () => "linux",
+  getArch: async () => "x64",
+  getEnv: async () => ({}),
+  homedir: async () => "/tmp",
+});
 
 /**
  * Universal self-returning stub: satisfies any deps object without calling

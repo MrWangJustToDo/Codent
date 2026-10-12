@@ -1,6 +1,8 @@
 import { previewEdit, type PreviewEditResult } from "@codent/core";
 import { useEffect, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
+
 /**
  * Cache of preview results keyed by toolCallId, so re-renders of the same
  * edit_file tool call don't re-read the file and re-apply edits.
@@ -24,6 +26,7 @@ export function usePreviewEdit(
   path: string | undefined,
   edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }> | undefined
 ): PreviewEditResult | null {
+  const env = useCoreEnv();
   // When toolCallId is undefined the caller has opted out of previewing
   // (e.g. the tool output already carries oldFile/newFile). Skip all work.
   const [result, setResult] = useState<PreviewEditResult | null>(() =>
@@ -44,7 +47,7 @@ export function usePreviewEdit(
     let cancelled = false;
     setResult(null);
 
-    previewEdit({ path, edits })
+    previewEdit({ path, edits }, env)
       .then((res) => {
         if (cancelled) return;
         previewCache.set(toolCallId, res);
@@ -59,7 +62,7 @@ export function usePreviewEdit(
     return () => {
       cancelled = true;
     };
-  }, [toolCallId, path, edits]);
+  }, [env, toolCallId, path, edits]);
 
   return result;
 }

@@ -10,8 +10,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 
 import {
-  getMediaStore,
-  resetMediaStore,
+  MediaStore,
+  getEnv,
   dehydrateUIMessages,
   hydrateUIMessages,
   mimeToExtension,
@@ -136,8 +136,7 @@ function cleanupMockEnv() {
 // ============================================================================
 
 async function testRoundTrip() {
-  resetMediaStore();
-  const store = getMediaStore();
+  const store = new MediaStore(getEnv());
 
   // 1. Save a base64 value
   const ref = await store.save(TINY_PNG_BASE64, "image/png", "test.png", "url");
@@ -186,8 +185,6 @@ async function testExtractBase64() {
 }
 
 async function testDehydrateHydrateRoundTrip() {
-  resetMediaStore();
-
   const messages = [
     makeMessage([makeImagePart("url", TINY_PNG_DATA_URL)]),
     makeMessage([makeImagePart("data", TINY_PNG_BASE64)]),
@@ -195,7 +192,7 @@ async function testDehydrateHydrateRoundTrip() {
   ];
 
   // Dehydrate
-  const dehydrated = await dehydrateUIMessages(messages);
+  const dehydrated = await dehydrateUIMessages(messages, { env: getEnv() });
   assert.equal(dehydrated.length, 3, "should keep same message count");
 
   // Check image parts are dehydrated
@@ -213,7 +210,7 @@ async function testDehydrateHydrateRoundTrip() {
   assert.ok(dehydrated[1].parts[0].metadata?.mediaRef, "dehydrated part should have mediaRef in metadata");
 
   // Hydrate
-  const hydrated = await hydrateUIMessages(dehydrated);
+  const hydrated = await hydrateUIMessages(dehydrated, { env: getEnv() });
   assert.equal(hydrated.length, 3, "should keep same message count");
 
   // Check parts are restored
@@ -230,12 +227,10 @@ async function testDehydrateHydrateRoundTrip() {
 }
 
 async function testInlineDataUrlWithoutMediaRef() {
-  resetMediaStore();
-
   // Runtime / not-yet-dehydrated message — no mediaRef, value is a data URL
   const messages = [makeMessage([makeImagePart("url", TINY_PNG_DATA_URL)])];
 
-  const hydrated = await hydrateUIMessages(messages);
+  const hydrated = await hydrateUIMessages(messages, { env: getEnv() });
   assert.equal(
     hydrated[0].parts[0].source.value,
     TINY_PNG_DATA_URL,
@@ -269,9 +264,7 @@ async function testTypesUtils() {
 }
 
 async function testDuplicateContent() {
-  resetMediaStore();
-
-  const store = getMediaStore();
+  const store = new MediaStore(getEnv());
 
   // Save same content twice
   const ref1 = await store.save(TINY_PNG_BASE64, "image/png", "a.png", "url");
@@ -288,8 +281,7 @@ async function testDuplicateContent() {
 }
 
 async function testBinaryOnDisk() {
-  resetMediaStore();
-  const store = getMediaStore();
+  const store = new MediaStore(getEnv());
   const ref = await store.save(TINY_PNG_BASE64, "image/png", "pixel.png", "url");
   const filePath = `.agents/media/${ref.hash}.png`;
   const stored = inMemoryFs.get(filePath);
@@ -305,8 +297,6 @@ async function testBinaryOnDisk() {
 }
 
 async function testRepairStringifiedMultimodalOnHydrate() {
-  resetMediaStore();
-
   const parts = [
     { type: "text", content: "[Image #1: clipboard-test.png] what is this?" },
     {
@@ -322,11 +312,11 @@ async function testRepairStringifiedMultimodalOnHydrate() {
   assert.equal(repaired[0].parts[0].type, "text");
   assert.equal(repaired[0].parts[1].type, "image");
 
-  const hydrated = await hydrateUIMessages(corrupted);
+  const hydrated = await hydrateUIMessages(corrupted, { env: getEnv() });
   assert.equal(hydrated[0].parts.length, 2, "hydrate should repair then process");
   assert.equal(hydrated[0].parts[1].type, "image");
 
-  const dehydrated = await dehydrateUIMessages(corrupted);
+  const dehydrated = await dehydrateUIMessages(corrupted, { env: getEnv() });
   assert.equal(dehydrated[0].parts[1].type, "image");
   assert.ok(dehydrated[0].parts[1].source.value.startsWith("media://"), "dehydrate after repair");
 
@@ -371,7 +361,7 @@ async function testCreatedAtRevival() {
     },
     { id: "msg_plain", role: "assistant", parts: [{ type: "text", content: "hi" }] },
   ];
-  const revivedMessages = await hydrateUIMessages(messages);
+  const revivedMessages = await hydrateUIMessages(messages, { env: getEnv() });
   assert.equal(revivedMessages[0].createdAt instanceof Date, true, "createdAt string must revive to Date");
   assert.equal(revivedMessages[0].createdAt.toISOString(), "2026-08-25T08:00:00.000Z");
   assert.ok(

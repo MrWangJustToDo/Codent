@@ -37,7 +37,6 @@ A **runtime-agnostic** AI coding agent — same core logic, runs in terminal, Ch
 | **Context Compaction** | `toModelOutput` tool shaping + auto/reactive LLM summarization; compacted-away detail stays in the session log and is reachable via `session_search` |
 | **Session Persistence** | Save/resume conversations under `.agents/sessions/` with auto-save |
 | **Usage Tracking** | Global per-LLM-call usage history (`/usage`, `.agents/usage/`) with a contribution graph, per-model totals, and cost rollups |
-| **Multiple Live Sessions** | Several live agent sessions can coexist and be switched on the fly (`Ctrl+X`) without losing state; core dedups disk-session ownership (a bound session can't be resumed twice) and the header shows the active session count |
 | **Memory** | Automatic cross-session knowledge extraction under `.agents/memory/` |
 | **Modes** | `Shift+Tab` cycles Normal → Auto (skip approvals) → Plan; `/mode` for explicit control (`plan` / `auto` / `off`) |
 | **Plan Mode** | Explore → review → Build → forced retro (`/mode plan`, persisted under `.agents/plans/`) |
@@ -138,7 +137,7 @@ The agent loop and its full session state (messages, queued messages, todos, app
 - **Local (default):** `createLocalAgentSessionHost()` — an in-process `AgentManager` + `ManagedAgent` running against the registered CoreEnv and provider.
 - **Remote (`--remote-session` / `REMOTE_SESSION`):** `createRemoteAgentSessionHost(url)` — commands go over REST (`POST /api/agent/:id/command`) and the loop streams back via SSE (`/api/agent/:id/events`) with a snapshot cache and auto-reconnect (plus tool-buffer and summary-stream remounting). The loop then runs server-side against the server's own registered workspace/keys.
 
-**Multiple live sessions.** The app store keeps a live-session registry (`useAgent`: `session` for the active handle, plus `sessions`/`activeSessionId` and `registerSession`/`activateSession` actions). More than one live agent can exist at once; `createSessionOnHost()` boots an additional session from the active config, `Ctrl+X` cycles the active session, and `use-agent-chat` re-subscribes to the newly active handle without destroying the old one. On the core side, `AgentManager` maintains a process-local ownership registry (`Map<sessionId, agentId>`): a disk session already bound to one live agent is **rejected** when another tries to `restore` it, and `startNewDiskSession`/`destroyAgent` release that ownership. `AgentSessionListEntry` carries a `sessionId` so `/resume` can mark entries as `bound (active)`.
+**One session per runtime.** A runtime holds exactly one live root session; multiple sessions mean multiple runtimes (each with its own `CodentAgent`). `/clear` `/clone` `/fork` branch the live agent to a new on-disk session (they swap the conversation, not the runtime). On the core side, `AgentManager` maintains a process-local ownership registry (`Map<sessionId, agentId>`): a disk session already bound to one live agent is **rejected** when another tries to `restore` it, and `startNewDiskSession`/`destroyAgent` release that ownership. `AgentSessionListEntry` carries a `sessionId` so `/resume` can mark entries as `bound (active)`.
 
 `--remote-session` is **exclusive on the client**: the agent loop runs server-side, so a single CLI cannot also proxy a remote workspace (`--remote-env`) or remote keys (`--remote-provider`). To use local LLM settings on the remote server, pass them with `--model <id>`; the **server** itself may register its own `REMOTE_ENV` / `REMOTE_PROVIDER` to run against an even further workspace/provider.
 
@@ -180,7 +179,7 @@ Client planes combine per the boundary rules below; every row is a working confi
 
 ### Welcome Screen
 
-Default and alternate theme on the idle screen. Header shortcuts: `/` commands, `Shift+Tab` cycle mode, `Ctrl+E` workspace, `Ctrl+T` task panel, `Ctrl+X` switch session, `Ctrl+Y` extensions, `Esc` abort.
+Default and alternate theme on the idle screen. Header shortcuts: `/` commands, `Shift+Tab` cycle mode, `Ctrl+E` workspace, `Ctrl+T` task panel, `Ctrl+Y` extensions, `Esc` abort.
 
 ![Welcome — default theme](start-default.png)
 ![Welcome — alternate theme](start-theme.png)
@@ -466,7 +465,6 @@ Global shortcuts (from the header):
 | `Shift+Tab` | Cycle mode: Normal → Auto → Plan |
 | `Ctrl+E` | Toggle workspace browser |
 | `Ctrl+T` | Open task / subagent panel |
-| `Ctrl+X` | Cycle active session (when multiple live sessions exist) |
 | `Ctrl+Y` | Open extensions panel |
 | `Ctrl+V` | Paste image from clipboard |
 | `Esc` | Abort run / dismiss panels (context-dependent) |

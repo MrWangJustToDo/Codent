@@ -4,7 +4,7 @@
 
 import { join } from "pathe";
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 
 import { extractPlan } from "./extract-plan.js";
 
@@ -25,10 +25,10 @@ export function planFilePath(name: string): string {
   return join(PLAN_STORE_DIR, `${safe}.md`);
 }
 
-export async function ensurePlanStoreDir(): Promise<string> {
-  const env = getEnv();
-  const dir = join(env.rootPath, PLAN_STORE_DIR);
-  await env.fs.mkdir(dir);
+export async function ensurePlanStoreDir(env?: ResolvedCoreEnv): Promise<string> {
+  const e = env ?? getEnv();
+  const dir = join(e.rootPath, PLAN_STORE_DIR);
+  await e.fs.mkdir(dir);
   return dir;
 }
 
@@ -40,42 +40,43 @@ export type SavePlanFileOptions = {
 export async function savePlanFile(
   markdown: string,
   nameHint?: string,
-  options?: SavePlanFileOptions
+  options?: SavePlanFileOptions,
+  env?: ResolvedCoreEnv
 ): Promise<{ path: string }> {
-  const env = getEnv();
-  await ensurePlanStoreDir();
+  const e = env ?? getEnv();
+  await ensurePlanStoreDir(e);
   const hint = nameHint?.trim() || extractPlan(markdown)?.steps[0]?.text || "plan";
   const relative = options?.existingRelativePath?.trim() || planFilePath(hint);
-  const absolute = join(env.rootPath, relative);
-  await env.fs.writeFile(absolute, markdown.endsWith("\n") ? markdown : `${markdown}\n`);
+  const absolute = join(e.rootPath, relative);
+  await e.fs.writeFile(absolute, markdown.endsWith("\n") ? markdown : `${markdown}\n`);
   return { path: relative };
 }
 
-export async function loadPlanFile(name: string): Promise<{ path: string; markdown: string }> {
-  const env = getEnv();
+export async function loadPlanFile(name: string, env?: ResolvedCoreEnv): Promise<{ path: string; markdown: string }> {
+  const e = env ?? getEnv();
   const relative = planFilePath(name);
-  const absolute = join(env.rootPath, relative);
-  const markdown = await env.fs.readFile(absolute);
+  const absolute = join(e.rootPath, relative);
+  const markdown = await e.fs.readFile(absolute);
   return { path: relative, markdown };
 }
 
 /** Read a plan file by workspace-relative path (e.g. from session `planFilePath`). */
-export async function readPlanFileAtRelativePath(relativePath: string): Promise<string | null> {
+export async function readPlanFileAtRelativePath(relativePath: string, env?: ResolvedCoreEnv): Promise<string | null> {
   const trimmed = relativePath.trim();
   if (!trimmed) return null;
   try {
-    const env = getEnv();
-    return await env.fs.readFile(join(env.rootPath, trimmed));
+    const e = env ?? getEnv();
+    return await e.fs.readFile(join(e.rootPath, trimmed));
   } catch {
     return null;
   }
 }
 
-export async function listPlanFiles(): Promise<string[]> {
-  const env = getEnv();
-  const dir = join(env.rootPath, PLAN_STORE_DIR);
+export async function listPlanFiles(env?: ResolvedCoreEnv): Promise<string[]> {
+  const e = env ?? getEnv();
+  const dir = join(e.rootPath, PLAN_STORE_DIR);
   try {
-    const entries = await env.fs.readdir(dir);
+    const entries = await e.fs.readdir(dir);
     return entries
       .map((e) => e.name)
       .filter((name) => name.endsWith(".md"))

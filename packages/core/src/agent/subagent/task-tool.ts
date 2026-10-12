@@ -168,7 +168,7 @@ Example use cases:
 
     outputSchema: taskOutputSchema,
 
-    execute: async ({ prompt, description }, { toolCallId }) => {
+    execute: async ({ prompt, description }, { toolCallId, coreEnv }) => {
       // Prefer the subagent's own wall-clock run duration — for pre-forked
       // tasks the join wait would undercount (or be ~0 when already done).
       let runDurationMs: number | undefined;
@@ -213,7 +213,7 @@ Example use cases:
 
         // Large summaries are previewed for the parent context; full text stays on disk.
         // Do NOT flip `truncated` here — that flag means maxOutputLength cut the summary.
-        const cached = await maybeCacheOutput(result.output, `${toolCallId}-task`);
+        const cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`);
         cachedOutputPath = cached.cachedOutputPath;
         if (cachedOutputPath) {
           summary = cached.content;

@@ -1,23 +1,42 @@
 import { clearAgentStore, createAgentFromConfig } from "@codent/app";
-import { agentManager, createLocalAgentSessionHost } from "@codent/core";
+import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
-import type { AgentSessionHost } from "@codent/core";
+import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
 
 export class PlaygroundAgentAdapter implements AgentAdapter {
+  private agent: CodentAgent | null = null;
   private host: AgentSessionHost | null = null;
   private agentId: string | null = null;
+  private _env: CoreEnv;
+  private _provider: ModelProvider | undefined;
 
-  constructor() {}
+  constructor(options: { env: CoreEnv; provider?: ModelProvider }) {
+    this._env = options.env;
+    this._provider = options.provider;
+  }
 
   async initialize(config: AppConfig): Promise<InitResult> {
+    // A re-init (config change) must not orphan the previous runtime — release its
+    // local manager before building the next one.
+    if (this.agent?.getManager()) await this.agent.dispose();
+
     // Session plane: remote HTTP host when configured, else the in-browser
-    // local manager running against the WebContainer CoreEnv.
-    const host = config.remoteSession
-      ? (await import("@codent/server/client")).createRemoteAgentSessionHost({ baseUrl: config.remoteSession })
-      : createLocalAgentSessionHost({ manager: agentManager });
-    const result = await createAgentFromConfig({ config, name: "playground-chat", host });
-    this.host = host;
+    // local manager running against the WebContainer CoreEnv. Both are held by
+    // one CodentAgent so the provider/env planes resolve per runtime.
+    this.agent = config.remoteSession
+      ? await CodentAgent.create({
+          env: this._env,
+          host: (await import("@codent/server/client")).createRemoteAgentSessionHost({
+            baseUrl: config.remoteSession,
+          }),
+        })
+      : await CodentAgent.create({
+          env: this._env,
+          ...(this._provider ? { provider: this._provider } : {}),
+        });
+    const result = await createAgentFromConfig({ config, name: "playground-chat", host: this.agent.host });
+    this.host = this.agent.host;
     this.agentId = result.session.id;
     return result;
   }
@@ -28,6 +47,12 @@ export class PlaygroundAgentAdapter implements AgentAdapter {
       this.host = null;
       this.agentId = null;
     }
+    // Release the local runtime; a remote-session runtime has no manager and its host
+    // is the server, so disposing it would DELETE every session the server lists.
+    if (this.agent?.getManager()) {
+      await this.agent.dispose();
+    }
+    this.agent = null;
     clearAgentStore();
   }
 

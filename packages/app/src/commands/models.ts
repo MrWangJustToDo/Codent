@@ -3,7 +3,7 @@ import { type LoadedModelsState } from "@codent/core";
 import { applyModelSelection, getLoadedModelsState } from "../utils/apply-model-selection.js";
 import { getActiveSession } from "../utils/session-resolve.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 // ============================================================================
 // /models — switch the model for the current session (models.json entries)
@@ -37,10 +37,7 @@ function buildOptions(): { label: string; value: string; description: string }[]
   return options;
 }
 
-registerCommand({
-  name: "models",
-  description: "Switch the model for the current session (models.json entries)",
-  usage: "/models [entryIndex:modelId] | /models",
+registerBuiltinCommand("models", {
   immediate: false,
   allowCustomInput: true,
   getOptions: buildOptions,

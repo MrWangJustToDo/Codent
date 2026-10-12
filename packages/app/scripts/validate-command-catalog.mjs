@@ -1,8 +1,10 @@
 /**
- * Command-catalog parity — the app's built-in commands MUST match the core
- * `BUILTIN_COMMAND_CATALOG` (name + description), which is the single source of
- * truth a headless host (ACP) advertises. Drift here means the ACP
- * `available_commands_update` and the terminal `/help` disagree.
+ * Command-catalog parity — the app's built-in commands MUST be derived from the core
+ * `BUILTIN_COMMAND_CATALOG` (the single source of truth a headless host, ACP, also
+ * advertises). Command files register behavior via `registerBuiltinCommand`, which
+ * sources `name` / `aliases` / `description` / `usage` from the catalog, so this script
+ * asserts the two cannot drift: every catalog entry is registered, and no app command
+ * carries a value of its own that disagrees with the catalog.
  *
  * Run: pnpm --filter @codent/app run validate:command-catalog
  */
@@ -14,8 +16,10 @@ import { getAllCommands } from "../dist/index.mjs";
 // At module-load time only built-ins are registered (extension commands sync later).
 const appCommands = getAllCommands();
 const problems = [];
+const registered = new Set();
 
 for (const cmd of appCommands) {
+  registered.add(cmd.name);
   const entry = findBuiltinCommand(cmd.name);
   if (!entry) {
     problems.push(`app command "/${cmd.name}" is missing from BUILTIN_COMMAND_CATALOG`);
@@ -26,10 +30,18 @@ for (const cmd of appCommands) {
       `description drift for "/${cmd.name}":\n  catalog: ${entry.description}\n  app:     ${cmd.description}`
     );
   }
+  if (entry.usage !== cmd.usage) {
+    problems.push(`usage drift for "/${cmd.name}":\n  catalog: ${entry.usage}\n  app:     ${cmd.usage}`);
+  }
+  const entryAliases = [...(entry.aliases ?? [])].sort().join(",");
+  const cmdAliases = [...(cmd.aliases ?? [])].sort().join(",");
+  if (entryAliases !== cmdAliases) {
+    problems.push(`alias drift for "/${cmd.name}":\n  catalog: ${entryAliases}\n  app:     ${cmdAliases}`);
+  }
 }
 
 for (const entry of BUILTIN_COMMAND_CATALOG) {
-  if (!appCommands.some((c) => c.name === entry.name)) {
+  if (!registered.has(entry.name)) {
     problems.push(`catalog command "/${entry.name}" is not registered by the app`);
   }
 }
@@ -39,4 +51,4 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log(`command-catalog parity OK (${appCommands.length} built-in commands)`);
+console.log(`command-catalog parity OK (${appCommands.length} built-in commands, catalog-derived)`);

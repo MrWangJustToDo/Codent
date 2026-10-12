@@ -61,9 +61,9 @@ export const createTools = async ({
     glob: createGlobTool(),
     grep: createGrepTool(),
     tree: createTreeTool(),
-    run_command: createRunCommandTool(),
-    get_command_output: createGetCommandOutputTool(),
-    kill_command: createKillCommandTool(),
+    run_command: createRunCommandTool({ managed }),
+    get_command_output: createGetCommandOutputTool({ managed }),
+    kill_command: createKillCommandTool({ managed }),
     session_search: createSessionSearchTool({ managed }),
     session_read: createSessionReadTool({ managed }),
   };

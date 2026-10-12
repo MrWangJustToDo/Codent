@@ -19,7 +19,7 @@ import {
   clearCoreEnv,
   hydrateUIMessages,
   registerCoreEnv,
-  resetMediaStore,
+  getEnv,
   restoreManagedSession,
 } from "../dist/dev.mjs";
 
@@ -123,8 +123,6 @@ for (const type of ["compaction:auto-start", "compaction:reactive-start"]) {
 
 async function testHydrateReportsMisses() {
   setupMockEnv();
-  resetMediaStore();
-
   const missingFileRef = { type: "image", source: { type: "url", value: "media://gone.png" }, metadata: {} };
   const malformedRef = { type: "image", source: { type: "url", value: "media://nope" }, metadata: {} };
   const toolResult = {
@@ -134,6 +132,7 @@ async function testHydrateReportsMisses() {
 
   const misses = [];
   await hydrateUIMessages([makeMessage([missingFileRef, malformedRef, toolResult])], {
+    env: getEnv(),
     onMissing: (miss) => misses.push(miss),
   });
 
@@ -149,11 +148,14 @@ async function testHydrateReportsMisses() {
 
   // Hydration must stay non-throwing even when every ref is gone.
   const again = [];
-  await hydrateUIMessages([makeMessage([missingFileRef])], { onMissing: (miss) => again.push(miss) });
+  await hydrateUIMessages([makeMessage([missingFileRef])], {
+    env: getEnv(),
+    onMissing: (miss) => again.push(miss),
+  });
   assert.equal(again.length, 1);
 
   // No hook → no crash (back-compat for existing callers).
-  await hydrateUIMessages([makeMessage([missingFileRef])]);
+  await hydrateUIMessages([makeMessage([missingFileRef])], { env: getEnv() });
 
   console.log("  ✓ hydrateUIMessages reports missing / malformed media refs");
 }

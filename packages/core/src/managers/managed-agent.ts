@@ -71,6 +71,7 @@ import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
 import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
 import {
@@ -82,6 +83,8 @@ import {
 } from "../agent/turn-context/instruction-context.js";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-context/session-retrieval.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import { UsageStore } from "../agent/usage/usage-store.js";
+import { getEnv, resolveCoreEnv } from "../env";
 import { generateId } from "../utils/generate-id.js";
 
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
@@ -122,12 +125,12 @@ import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
+import type { ResolvedCoreEnv } from "../env";
 import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
 import type { CompactionConfig, CompactionConfigInput } from "../agent/compaction/types.js";
-import type { DispatchRank } from "../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
   ExtensionFactory,
@@ -135,6 +138,7 @@ import type {
   ExtensionRunner,
   ExtensionToolDefinition,
 } from "../agent/extension";
+import type { DispatchRank } from "../agent/extension/dispatch-order.js";
 import type { ExtensionTurnContextSection } from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
@@ -149,10 +153,11 @@ import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
 import type { ModelInfo } from "../models/types.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AgentEventPayloadMap } from "../runtime-types/agent-event-payloads.js";
 import type { AgentEventType } from "../runtime-types/agent-events.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
@@ -358,12 +363,19 @@ export class ManagedAgent {
   /** Task / compact summary streams for the session `summary` channel. */
   readonly summaryStreams: SummaryStreamHub;
   private chatController?: AgentChatController;
+  /** Per-agent background command jobs (see {@link getCommandJobRegistry}). */
+  private commandJobRegistry?: CommandJobRegistry;
   /** Set by AgentManager to route events to listeners. */
   dispatchEvent?: (event: AgentEvent) => void;
   /** Scoped unified event bus for this agent (set by the factory). */
   private eventBus?: AgentEventBus;
   /** Owning manager — set when registered via {@link AgentManager.createManagedAgent}. */
   manager?: AgentManager;
+  /**
+   * Runtime this agent belongs to (env + model provider) — set by the factory from the
+   * owning manager. `undefined` means the ambient runtime (legacy single-instance hosts).
+   */
+  runtime?: AgentRuntime;
   modelInfo: ModelInfo | null;
 
   // ============================================================================
@@ -416,6 +428,8 @@ export class ManagedAgent {
       tools: ToolsRecord;
       todoManager: TodoManager | null;
       parentId?: string;
+      /** Runtime this agent belongs to (env + provider); undefined = ambient. */
+      runtime?: AgentRuntime;
       usage?: UsageTracker;
       memory?: MemoryService;
       session?: SessionService;
@@ -451,10 +465,12 @@ export class ManagedAgent {
     this.extensions = new ExtensionRegistryService();
     if (init.todoManager) this.extensions.setTodoManager(init.todoManager);
     this.parentId = init.parentId;
+    this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
     this.memory = init.memory ?? new MemoryService();
     this.session = init.session ?? new SessionService();
-    this.usageHistory = init.usageHistory ?? new UsageHistoryService();
+    // The store resolves the runtime env when bound, else ambient lazily at first write.
+    this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
     this.run = new RunCoordinator();
     this.childIds = [];
     this.createdAt = Date.now();
@@ -471,6 +487,7 @@ export class ManagedAgent {
 
     this.planMode = new PlanModeController({
       getTodoManager: () => this.getTodoManager(),
+      getCoreEnv: () => this.getCoreEnv(),
       onPhaseChange: () => {
         this.invalidateRunner();
         this.emitStateChange();
@@ -1003,7 +1020,7 @@ export class ManagedAgent {
     this.logSinkDetach?.();
     // Bind through the built-in log extension (which tracks the sink for teardown); fall back to
     // the seam's own convenience attach for a standalone log with no manager.
-    const options = { dir };
+    const options = { dir, env: this.getCoreEnv() };
     this.logSinkDetach =
       this.manager?.getLogExtension()?.attachSink(this.log, options) ?? this.log.attachFileSink(options);
     // Track for the process-level crash/exit guards.
@@ -1194,7 +1211,7 @@ export class ManagedAgent {
    * agents (see `agent-factory`), matching `setAgentDocContent`.
    */
   async primeSessionHistoryGate(): Promise<void> {
-    this.sessionHistoryPresent = await hasSessionHistory();
+    this.sessionHistoryPresent = await hasSessionHistory(this.getCoreEnv());
   }
 
   getAgentDocContent(): string {
@@ -1401,7 +1418,7 @@ export class ManagedAgent {
     }
 
     const currentDate = getCurrentDate();
-    const { branch: gitBranch, status: gitStatus } = await getGitInfo();
+    const { branch: gitBranch, status: gitStatus } = await getGitInfo(this.getCoreEnv());
 
     const planState = this.planMode.getState();
     const planModeContent = buildPlanModePrompt(planState.phase, planState.planMarkdown, planState.planFilePath);
@@ -1450,7 +1467,7 @@ export class ManagedAgent {
    */
   private async readChangedInstructionContext(): Promise<string | undefined> {
     try {
-      const current = await readInstructionContextState();
+      const current = await readInstructionContextState(this.getCoreEnv());
       // Baseline: the first evaluation only stores the snapshot without injecting —
       // the frozen system prompt already carries the initial instructions. This also
       // covers the restore-from-session case (fresh instance, no prior snapshot).
@@ -1467,7 +1484,7 @@ export class ManagedAgent {
       // the payload stays stable across turns (prompt-cache friendly). A fresh
       // change re-reads the newest file content into the section.
       this.instructionContextActive = true;
-      const loaded = await loadLatestInstructionContent();
+      const loaded = await loadLatestInstructionContent(this.getCoreEnv());
       return formatInstructionContextSection(loaded);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1580,7 +1597,7 @@ export class ManagedAgent {
   }
 
   async listWorkspacePlans(): Promise<string[]> {
-    return listWorkspacePlansHelper();
+    return listWorkspacePlansHelper(this);
   }
 
   // ============================================================================
@@ -1682,6 +1699,30 @@ export class ManagedAgent {
   getContextWindow(): number | undefined {
     return this.modelInfo?.contextWindow ?? undefined;
   }
+
+  /** Resolved workspace env for this agent: its runtime's env, or the ambient env. */
+  getCoreEnv(): ResolvedCoreEnv {
+    return resolveCoreEnv(this.runtime?.env ?? getEnv());
+  }
+
+  /**
+   * Per-agent background command-job registry. Each agent (hence each runtime) owns its
+   * own map of `run_in_background` jobs, so job ids/state never leak across agents.
+   */
+  getCommandJobRegistry(): CommandJobRegistry {
+    this.commandJobRegistry ??= new CommandJobRegistry(this.getCoreEnv());
+    return this.commandJobRegistry;
+  }
+
+  /**
+   * Kill this agent's background jobs and drop the registry (no-op if none was ever created).
+   * Called on destroy so a disposed runtime does not leak `run_in_background` child processes.
+   */
+  destroyCommandJobRegistry(): Promise<void> {
+    const registry = this.commandJobRegistry;
+    this.commandJobRegistry = undefined;
+    return registry ? registry.destroyAll() : Promise.resolve();
+  }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).
@@ -1710,6 +1751,7 @@ export class ManagedAgent {
         statusController: this.statusController,
         compactionConfig: this.compaction.getConfig(),
         getContextWindow: () => this.getContextWindow(),
+        getCoreEnv: () => this.getCoreEnv(),
         resetAdmittedTurnContext: () => this.resetAdmittedTurnContext(),
         resetSystemPrompt: () => this.resetSystemPrompt(),
         persistSession: () => this.persistSession(),

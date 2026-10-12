@@ -1,13 +1,15 @@
 import { createState } from "reactivity-store";
 
+import type { BUILTIN_TOOL_NAMES } from "@codent/core";
+
 // ============================================================================
 // Types
 // ============================================================================
 
 export type InputMode = "normal" | "approval" | "select" | "freeform";
 
-/** Why freeform mode was entered */
-export type FreeformContext = "deny" | "ask_user";
+/** Why freeform mode was entered. The second value is the `ask_user` tool identifier. */
+export type FreeformContext = "deny" | typeof BUILTIN_TOOL_NAMES.askUser;
 
 // ============================================================================
 // State Hook

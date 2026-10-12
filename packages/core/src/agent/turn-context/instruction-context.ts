@@ -20,7 +20,7 @@
  * byte-identical and the prompt-cache breakpoint stays stable.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import {
   INSTRUCTION_FILENAMES,
   INSTRUCTION_MAX_BYTES,
@@ -91,14 +91,14 @@ const INSTRUCTION_CONTEXT_CLOSE = "</instruction_context>";
  *
  * @returns The discovered instruction state (empty files when none found).
  */
-export async function readInstructionContextState(): Promise<InstructionContextState> {
-  const env = getEnv();
-  const rootPath = env.rootPath;
+export async function readInstructionContextState(env?: ResolvedCoreEnv): Promise<InstructionContextState> {
+  const resolvedEnv = env ?? getEnv();
+  const rootPath = resolvedEnv.rootPath;
 
-  const primary = await resolvePrimaryInstruction({ rootPath });
+  const primary = await resolvePrimaryInstruction({ rootPath, env: resolvedEnv });
   if (!primary) return { primary: undefined, override: undefined };
 
-  const override = await resolveOverrideInstruction(rootPath, primary.name);
+  const override = await resolveOverrideInstruction(rootPath, primary.name, INSTRUCTION_MAX_BYTES, resolvedEnv);
 
   return {
     primary: { path: primary.path, name: primary.name, digest: digestResolved(primary) },
@@ -148,14 +148,14 @@ export function instructionStateChanged(
  * file and returns their current, import-expanded text. Content is intentionally
  * not retained on the state object; it is fetched on demand at injection time.
  */
-export async function loadLatestInstructionContent(): Promise<LoadedInstructionContent> {
-  const env = getEnv();
-  const rootPath = env.rootPath;
+export async function loadLatestInstructionContent(env?: ResolvedCoreEnv): Promise<LoadedInstructionContent> {
+  const resolvedEnv = env ?? getEnv();
+  const rootPath = resolvedEnv.rootPath;
 
-  const primary = await resolvePrimaryInstruction({ rootPath });
+  const primary = await resolvePrimaryInstruction({ rootPath, env: resolvedEnv });
   if (!primary) return { primary: undefined, override: undefined };
 
-  const override = await resolveOverrideInstruction(rootPath, primary.name);
+  const override = await resolveOverrideInstruction(rootPath, primary.name, INSTRUCTION_MAX_BYTES, resolvedEnv);
 
   return {
     primary: toLoaded(primary, primary.name),

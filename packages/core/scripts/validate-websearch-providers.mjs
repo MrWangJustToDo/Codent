@@ -8,7 +8,9 @@
 import assert from "node:assert/strict";
 
 import {
+  braveProvider,
   clearCoreEnv,
+  createConfiguredProviderManager,
   createTimeoutAbort,
   filterResultsByDomain,
   getProviderManager,
@@ -22,6 +24,7 @@ import {
   PROVIDER_REGISTRY,
   registerCoreEnv,
   resetWebsearchProviders,
+  tavilyProvider,
 } from "../dist/dev.mjs";
 // The cancel verdict is a render-layer reader and lives on the public entry, not the
 // internal one — same split as validate-cancel-semantics.mjs.
@@ -120,6 +123,43 @@ assert.deepEqual(
 );
 for (const name of PROVIDER_REGISTRY.map((r) => r.name)) {
   assert.ok(name !== "duckduckgo" || !(name in PROVIDER_KEY_FIELDS), "a pure-free provider has no key field");
+}
+
+// ============================================================================
+// Per-agent key isolation (regression: providers must read the RUNNING manager's keys)
+// ============================================================================
+//
+// `createWebsearchTool` builds a per-agent manager and `configure()`s it with that agent's
+// toolConfig. Providers previously resolved keys from the process-global singleton, so the
+// agent-scoped keys were silently ignored (keyed providers read as unavailable; a configured
+// Brave key fell through to the free pool). The provider now receives the manager's
+// `getApiKey` through SearchOptions, so this is network-free and decisive.
+{
+  resetWebsearchProviders();
+  const a = createConfiguredProviderManager();
+  a.configure({ braveApiKey: "key-A" });
+  assert.equal(a.getApiKey("brave"), "key-A", "configure stores the key on the manager it was called on");
+
+  const picked = await a.selectProvider();
+  assert.equal(picked.name, "brave", "a manager-scoped key must win selection (global is unconfigured)");
+
+  // The provider itself honours the scoped accessor and stays keyless without one.
+  assert.equal(
+    await braveProvider.isAvailable({ getApiKey: (n) => a.getApiKey(n) }),
+    true,
+    "Brave is available when the running manager has its key"
+  );
+  assert.equal(await braveProvider.isAvailable(), false, "without a scoped/global key, Brave is unavailable");
+  assert.equal(
+    await tavilyProvider.isAvailable({ getApiKey: (n) => (n === "tavily" ? "tk" : undefined) }),
+    true,
+    "Tavily reads the scoped key too"
+  );
+
+  // Two managers keep independent key state — the isolation the per-agent manager exists for.
+  const b = createConfiguredProviderManager();
+  b.configure({ braveApiKey: "key-B" });
+  assert.notEqual(a.getApiKey("brave"), b.getApiKey("brave"), "each manager keeps its own key");
 }
 
 // ============================================================================

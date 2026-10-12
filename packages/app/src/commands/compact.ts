@@ -1,11 +1,8 @@
 import { bumpAgentUsage } from "../hooks/use-agent-usage.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "compact",
-  description: "Compress conversation context to reduce token usage",
-  usage: "/compact [focus]",
+registerBuiltinCommand("compact", {
   immediate: true,
   execute: async (args, ctx) => {
     const session = ctx.getSession();

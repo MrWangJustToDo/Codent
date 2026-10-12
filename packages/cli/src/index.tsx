@@ -3,6 +3,7 @@ import {
   AdapterProvider,
   App,
   ConfigEditor,
+  CoreEnvProvider,
   initConfig,
   initHighlighter,
   configureEnv,
@@ -28,6 +29,8 @@ import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs } from ".
 import { readClipboardImage } from "./clipboard.js";
 import { LocalAgentAdapter } from "./local-adapter.js";
 import { TerminalTitle } from "./terminal-title.js";
+
+import type { CoreEnv, ModelProvider } from "@codent/core";
 
 const argv = process.argv.slice(2);
 
@@ -67,12 +70,13 @@ if (appConfig.remoteSession && (appConfig.remoteEnv || appConfig.remoteProvider)
 
 // CoreEnv plane — workspace fs/shell (`--remote-env` / REMOTE_ENV)
 const remoteEnv = appConfig.remoteEnv;
+let coreEnv: CoreEnv;
 if (remoteEnv) {
   try {
     const { createRemoteEnv } = await import("@codent/server/client");
-    const remoteEnvInstance = await createRemoteEnv(remoteEnv);
-    registerCoreEnv(remoteEnvInstance);
-    console.log(`[cli] Connected to remote CoreEnv: ${remoteEnv} (rootPath=${remoteEnvInstance.rootPath})`);
+    coreEnv = await createRemoteEnv(remoteEnv);
+    registerCoreEnv(coreEnv);
+    console.log(`[cli] Connected to remote CoreEnv: ${remoteEnv} (rootPath=${coreEnv.rootPath})`);
   } catch (err) {
     console.error(`[cli] Failed to connect to remote CoreEnv at ${remoteEnv}`);
     console.error(`  ${err instanceof Error ? err.message : String(err)}`);
@@ -86,10 +90,10 @@ if (remoteEnv) {
   // `--remote-env`; a explicit `--remote-env` above still takes precedence.
   try {
     const { createRemoteEnv } = await import("@codent/server/client");
-    const remoteEnvInstance = await createRemoteEnv(appConfig.remoteSession);
-    registerCoreEnv(remoteEnvInstance);
+    coreEnv = await createRemoteEnv(appConfig.remoteSession);
+    registerCoreEnv(coreEnv);
     console.log(
-      `[cli] Remote session: workspace CoreEnv from server ${appConfig.remoteSession} (rootPath=${remoteEnvInstance.rootPath})`
+      `[cli] Remote session: workspace CoreEnv from server ${appConfig.remoteSession} (rootPath=${coreEnv.rootPath})`
     );
   } catch (err) {
     console.error(`[cli] Failed to connect to remote CoreEnv at ${appConfig.remoteSession}`);
@@ -99,7 +103,8 @@ if (remoteEnv) {
   }
 } else {
   const useOsSandbox = (process.env.SANDBOX_ENV || "local") !== "native";
-  registerCoreEnv(createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox }));
+  coreEnv = createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox });
+  registerCoreEnv(coreEnv);
 }
 
 // Provider plane — LLM keys (`--remote-provider` / REMOTE_PROVIDER); orthogonal to CoreEnv
@@ -118,10 +123,12 @@ if (appConfig.remoteSession && !remoteProvider && !appConfig.modelExplicit) {
   console.log("[cli] Remote session: no explicit --model, deferring model to the server provider.");
 }
 
+let modelProvider: ModelProvider;
 if (remoteProvider) {
   try {
     const { createRemoteProvider } = await import("@codent/server/client");
-    registerModelProvider(await createRemoteProvider(remoteProvider));
+    modelProvider = await createRemoteProvider(remoteProvider);
+    registerModelProvider(modelProvider);
     console.log(`[cli] Using remote model provider: ${remoteProvider}`);
   } catch (err) {
     console.error(`[cli] Failed to connect to remote model provider at ${remoteProvider}`);
@@ -129,14 +136,13 @@ if (remoteProvider) {
     process.exit(1);
   }
 } else {
-  registerModelProvider(
-    createDirectModelProvider({
-      model: appConfig.model,
-      style: appConfig.style,
-      baseURL: appConfig.baseURL,
-      apiKey: appConfig.apiKey,
-    })
-  );
+  modelProvider = createDirectModelProvider({
+    model: appConfig.model,
+    style: appConfig.style,
+    baseURL: appConfig.baseURL,
+    apiKey: appConfig.apiKey,
+  });
+  registerModelProvider(modelProvider);
 }
 
 if (appConfig.remoteSession) {
@@ -162,7 +168,7 @@ const needsConfigEditor =
 
 if (!needsConfigEditor) {
   await initConfig(appConfig);
-  await useWorkspaceInfo.getActions().init();
+  await useWorkspaceInfo.getActions().init(coreEnv);
 }
 
 const adapter = new LocalAgentAdapter({
@@ -170,6 +176,10 @@ const adapter = new LocalAgentAdapter({
     setTimeout(() => process.exit(0), 200);
   },
   readClipboardImage,
+  env: coreEnv,
+  provider: modelProvider,
+  // Only the locally-built Node env is ours to destroy; a remote env is borrowed.
+  ownsEnv: !remoteEnv && !appConfig.remoteSession,
 });
 
 /** CSI hide — re-sent after every frame so the hardware cursor stays off. */
@@ -213,10 +223,12 @@ useSize.getActions().init();
 initHighlighter()
   .then(() => {
     render(
-      <AdapterProvider value={adapter}>
-        <TerminalTitle />
-        <Bootstrap />
-      </AdapterProvider>,
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <TerminalTitle />
+          <Bootstrap />
+        </AdapterProvider>
+      </CoreEnvProvider>,
       {
         maxFps: 30,
         exitOnCtrlC: false,

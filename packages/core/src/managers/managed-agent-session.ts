@@ -5,6 +5,7 @@
 import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 
+import type { ResolvedCoreEnv } from "../env";
 import type { SessionPersistInput, SessionService } from "./services/session-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -15,7 +16,7 @@ import type { SessionSyncTracker } from "../agent/persistence/session-sync-track
 import type { SessionData } from "../agent/persistence/types.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { UIMessage as TanStackUIMessage } from "@tanstack/ai";
@@ -24,6 +25,8 @@ export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
   usage: UsageTracker;
   getTodoManager: () => TodoManager | null;
+  /** Owning runtime's env, so plan files are read under the runtime root. */
+  getCoreEnv: () => ResolvedCoreEnv;
   planMode: PlanModeController;
   isAutoModeEnabled: () => boolean;
   setAutoModeEnabled: (enabled: boolean) => void;
@@ -127,7 +130,7 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
 
   const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
   if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {
-    const markdown = await readPlanFileAtRelativePath(planSnapshot.planFilePath);
+    const markdown = await readPlanFileAtRelativePath(planSnapshot.planFilePath, host.getCoreEnv());
     if (markdown?.trim()) {
       planSnapshot.planMarkdown = markdown;
     }

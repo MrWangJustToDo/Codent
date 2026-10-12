@@ -11,7 +11,7 @@
  * already uses for `run_command` timeouts.
  */
 
-import { ExecutionError } from "../../../env-types.js";
+import { ExecutionError } from "../../../env/types";
 
 export function createTimeoutAbort(options: { timeoutMs: number; signal?: AbortSignal }): {
   controller: AbortController;

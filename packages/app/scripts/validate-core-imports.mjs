@@ -32,6 +32,12 @@ const FORBIDDEN_IDENTIFIERS = [
   "resolveTextAdapterForManaged",
   "ExtensionRunner",
   "ExtensionLoader",
+  // The workspace env reaches the app through <CoreEnvProvider> / useCoreEnv, never the
+  // ambient registry — an ambient read would bind to whichever runtime registered last.
+  "getEnv",
+  "hasCoreEnv",
+  "clearCoreEnv",
+  "registerCoreEnv",
 ];
 
 const CORE_IMPORT_RE =

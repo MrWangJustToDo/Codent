@@ -1,4 +1,8 @@
-import { commandJobRegistry, type CompletedCommandJob } from "../../agent/tools/util/command-job-registry.js";
+import {
+  commandJobRegistry,
+  type CommandJobRegistry,
+  type CompletedCommandJob,
+} from "../../agent/tools/util/command-job-registry.js";
 import { truncateString } from "../../agent/tools/util/output-limits.js";
 import { formatContextSectionUserContent } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
@@ -6,7 +10,7 @@ import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-inje
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { AgentUIChannel } from "../../agent/ui-channel.js";
+import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export interface BackgroundNotificationMiddlewareDeps {
@@ -16,6 +20,12 @@ export interface BackgroundNotificationMiddlewareDeps {
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (dehydrate session to disk). */
   persistMessages: (next: UIMessage[]) => void;
+  /**
+   * The owning agent's background-job registry (drained for completions). Falls back to the
+   * process-global registry when omitted, so standalone/legacy callers keep working — but the
+   * run path must pass the agent's own registry, or jobs it started live in a different map.
+   */
+  getCommandJobRegistry?: () => CommandJobRegistry;
 }
 
 const BACKGROUND_NOTIFICATION_KIND = "background_notification";
@@ -45,7 +55,7 @@ export function createBackgroundNotificationMiddleware(
   return defineMiddleware("tools", {
     name: "background-notification",
     onConfig: async (_ctx, config) => {
-      const completed = commandJobRegistry.collectCompleted();
+      const completed = (deps.getCommandJobRegistry?.() ?? commandJobRegistry).collectCompleted();
       if (completed.length === 0) return {};
 
       const messages = config.messages as ModelMessage[];

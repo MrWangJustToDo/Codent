@@ -1,8 +1,8 @@
-import { getEnv } from "../../../env.js";
+import type { ResolvedCoreEnv } from "../../../env";
 
 /** Read a file through the registered `CoreEnv` (no host-specific fs import). */
-export async function getFile(path: string): Promise<string> {
-  return getEnv().fs.readFile(path);
+export async function getFile(env: ResolvedCoreEnv, path: string): Promise<string> {
+  return env.fs.readFile(path);
 }
 
 /**

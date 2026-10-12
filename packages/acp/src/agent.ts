@@ -10,6 +10,7 @@
  */
 
 import { agent as createAgentApp, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
@@ -387,7 +388,7 @@ function askUserOutput(
     durationMs: 0,
     cachedOutputPath: null,
     success: true,
-    tool: "ask_user",
+    tool: BUILTIN_TOOL_NAMES.askUser,
     ...(answer?.selected ? { selected: answer.selected, multiSelect: true } : {}),
     ...(answer?.draft !== undefined ? { draft: answer.draft } : {}),
     ...(cancelled ? { cancelled: true } : {}),

@@ -23,14 +23,15 @@ const commands = [];
 
 // Minimal CoreEnv: record the command, return whatever payload the case wants.
 const payload = { stdout: "" };
-registerCoreEnv({
+const env = {
   rootPath: "/repo",
   runCommand: async (cmd) => {
     commands.push(cmd);
     return { stdout: payload.stdout, stderr: "", exitCode: 0 };
   },
   fs: { readFile: async () => "" },
-});
+};
+registerCoreEnv(env);
 
 // ============================================================================
 // The status query
@@ -40,7 +41,7 @@ registerCoreEnv({
   commands.length = 0;
   payload.stdout = ` M src/a.ts${NUL}`;
   clearGitStatusCache();
-  const status = await fetchGitStatus("/repo");
+  const status = await fetchGitStatus(env, "/repo");
 
   const cmd = commands[0];
   assert.match(cmd, /git status/, "the status query");
@@ -65,7 +66,7 @@ registerCoreEnv({
   commands.length = 0;
   payload.stdout = `2\t1\tsrc/a.ts${NUL}`;
   clearWorkspaceDiffStatsCache();
-  const stats = await fetchWorkspaceDiffStats("/repo", []);
+  const stats = await fetchWorkspaceDiffStats(env, "/repo", []);
   const cmd = commands.find((c) => c.includes("numstat") || c.includes("diff"));
 
   assert.ok(cmd, "a numstat query is issued");

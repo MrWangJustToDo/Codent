@@ -5,7 +5,7 @@
  * API-based providers are configured.
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 
@@ -156,7 +156,7 @@ export const duckduckgoProvider: SearchProvider = {
     const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal: options?.signal });
 
     try {
-      const response = await getEnv().fetch(searchUrl, {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(searchUrl, {
         signal: controller.signal,
         headers: {
           "User-Agent":

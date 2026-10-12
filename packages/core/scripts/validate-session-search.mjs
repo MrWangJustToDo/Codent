@@ -27,6 +27,7 @@ import {
   listSessionIds,
   makeSnippet,
   readSessionMessages,
+  getEnv,
   registerCoreEnv,
   clearCoreEnv,
   searchHistory,
@@ -139,27 +140,27 @@ try {
   // 1. Enumeration + parsing
   // ==========================================================================
   {
-    const ids = await listSessionIds();
+    const ids = await listSessionIds(getEnv());
     assert.deepEqual(
       ids.sort(),
       ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other"],
       "all session logs enumerated"
     );
 
-    const messages = await readSessionMessages("ses_old");
+    const messages = await readSessionMessages(getEnv(), "ses_old");
     assert.equal(messages.length, 3, "every message of the session is read");
     assert.equal(messages[0].role, "user");
     assert.match(messages[0].text, /blue-green/, "user message text is extracted from its parts");
     assert.equal(messages[2].toolSummary, 'run_command({"command":"deploy --blue"})', "tool calls render as a summary");
-    assert.equal(await sessionExists("ses_old"), true);
-    assert.equal(await sessionExists("nope"), false);
+    assert.equal(await sessionExists(getEnv(), "ses_old"), true);
+    assert.equal(await sessionExists(getEnv(), "nope"), false);
   }
 
   // ==========================================================================
   // 2. Search reads the session log (the complete conversation); hits are parsed
   // ==========================================================================
   {
-    const result = await searchHistory({ query: "blue-green", limit: 10 });
+    const result = await searchHistory(getEnv(), { query: "blue-green", limit: 10 });
     assert.ok(result.matches.length >= 1, "a session-log match is returned");
     const match = result.matches[0];
     assert.equal(match.sessionId, "ses_old");
@@ -170,7 +171,7 @@ try {
 
     // The compact archive (a derived duplicate) is NOT a search source: a token only it carries
     // must not surface — the session log is the single, complete source.
-    const archiveOnly = await searchHistory({ query: "ARCHIVE_ONLY_TOKEN", limit: 10 });
+    const archiveOnly = await searchHistory(getEnv(), { query: "ARCHIVE_ONLY_TOKEN", limit: 10 });
     assert.equal(archiveOnly.total, 0, "compact archives are not searched (the session log is complete)");
   }
 
@@ -178,7 +179,7 @@ try {
   // 2b. Surface: shadowed (before the summary) vs current (after)
   // ==========================================================================
   {
-    const result = await searchHistory({ query: "SURFACE_PROBE", limit: 10, sessionId: "ses_compacted" });
+    const result = await searchHistory(getEnv(), { query: "SURFACE_PROBE", limit: 10, sessionId: "ses_compacted" });
     assert.deepEqual(
       result.matches.map((m) => m.surface).sort(),
       ["current", "shadowed"],
@@ -186,7 +187,7 @@ try {
     );
 
     // A session that never compacted is all-current.
-    const noSummary = await searchHistory({ query: "blue-green", limit: 10, sessionId: "ses_old" });
+    const noSummary = await searchHistory(getEnv(), { query: "blue-green", limit: 10, sessionId: "ses_old" });
     assert.ok(noSummary.matches.length > 0);
     assert.ok(
       noSummary.matches.every((m) => m.surface === "current"),
@@ -194,7 +195,7 @@ try {
     );
 
     // Time window: only the recent note (updatedAt 3000) survives `since: 2500`.
-    const windowed = await searchHistory({
+    const windowed = await searchHistory(getEnv(), {
       query: "SURFACE_PROBE",
       limit: 10,
       sessionId: "ses_compacted",
@@ -203,7 +204,7 @@ try {
     assert.equal(windowed.total, 1, "the time window narrows matches");
     assert.equal(windowed.matches[0].timestamp, 3000);
 
-    const until = await searchHistory({
+    const until = await searchHistory(getEnv(), {
       query: "SURFACE_PROBE",
       limit: 10,
       sessionId: "ses_compacted",
@@ -217,10 +218,14 @@ try {
   // 3. Current session excluded by default, re-included explicitly
   // ==========================================================================
   {
-    const excluded = await searchHistory({ query: "secret token", limit: 10, excludeSessionId: "ses_current" });
+    const excluded = await searchHistory(getEnv(), {
+      query: "secret token",
+      limit: 10,
+      excludeSessionId: "ses_current",
+    });
     assert.equal(excluded.total, 0, "the current session is not searched by default");
 
-    const included = await searchHistory({ query: "secret token", limit: 10, sessionId: "ses_current" });
+    const included = await searchHistory(getEnv(), { query: "secret token", limit: 10, sessionId: "ses_current" });
     assert.equal(included.total, 1, "an explicit sessionId searches the current session");
     assert.equal(included.matches[0].sessionId, "ses_current");
   }
@@ -229,9 +234,9 @@ try {
   // 4. Role filter
   // ==========================================================================
   {
-    const both = await searchHistory({ query: "redis", limit: 10 });
+    const both = await searchHistory(getEnv(), { query: "redis", limit: 10 });
     assert.equal(both.total, 2, "both user and assistant messages match by default");
-    const userOnly = await searchHistory({ query: "redis", limit: 10, role: "user" });
+    const userOnly = await searchHistory(getEnv(), { query: "redis", limit: 10, role: "user" });
     assert.equal(userOnly.total, 1, "the role filter narrows to user messages");
     assert.equal(userOnly.matches[0].role, "user");
   }
@@ -240,7 +245,7 @@ try {
   // 5. Bounding: a limit withholds the rest
   // ==========================================================================
   {
-    const result = await searchHistory({ query: "cache", limit: 1 });
+    const result = await searchHistory(getEnv(), { query: "cache", limit: 1 });
     assert.equal(result.matches.length, 1, "at most `limit` matches are returned");
     assert.ok(result.total >= 2, "the total counts matches beyond the limit");
   }

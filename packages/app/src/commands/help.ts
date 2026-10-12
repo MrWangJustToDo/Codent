@@ -1,11 +1,8 @@
 import { formatKeyboardShortcutsHelp } from "../utils/keyboard-labels.js";
 
-import { getAllCommands, registerCommand } from "./utils/registry.js";
+import { getAllCommands, registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "help",
-  description: "Show keyboard shortcuts and available commands",
-  usage: "/help",
+registerBuiltinCommand("help", {
   immediate: true,
   execute: () => {
     const commands = getAllCommands();

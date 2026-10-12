@@ -20,9 +20,8 @@ process.env.ROOT_PATH = mkdtempSync(join(tmpdir(), "websearch-toolconfig-http-")
 process.env.SERVER_PORT = "0";
 process.env.SANDBOX_ENV = "native";
 
-const { createServer } = await import("../dist/index.mjs");
+const { createServer, getServerManager } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
-const { agentManager } = await import("@codent/core");
 
 const WEBSEARCH = {
   braveApiKey: "brave-secret-from-client",
@@ -49,7 +48,7 @@ try {
       toolConfig: { websearch: WEBSEARCH },
     });
     const snapshot = session.getSnapshot();
-    const agent = agentManager.getAgent(snapshot.agentId);
+    const agent = getServerManager().getAgent(snapshot.agentId);
     assert.ok(agent, "the server must own an agent for the created id");
     const effective = agent.config.toolConfig?.websearch;
     assert.ok(effective, "the server-side agent must carry a websearch tool config");
@@ -65,7 +64,7 @@ try {
       name: "no-toolconfig-agent",
       model: process.env.MODEL || "test-model",
     });
-    const agent = agentManager.getAgent(session.getSnapshot().agentId);
+    const agent = getServerManager().getAgent(session.getSnapshot().agentId);
     assert.ok(agent);
     const effective = agent.config.toolConfig?.websearch;
     assert.equal(effective?.provider, undefined, "no client toolConfig → no forwarded provider");

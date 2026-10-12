@@ -257,15 +257,20 @@ export class SessionService {
         // unhandled rejection. Keep persist best-effort: surface it like any save
         // failure and fall through with the previous messages, still saving the rest
         // of the session state.
-        try {
-          const dehydrated = await dehydrateUIMessages(uiMessages);
-          this.data.uiMessages = dehydrated;
-        } catch (err) {
+        const store = this.store;
+        if (!store) {
           messagesPersisted = false;
-          emitEvent?.("session:save-error", {
-            target: "session+uiMessages",
-            error: err instanceof Error ? err.message : String(err),
-          });
+        } else {
+          try {
+            const dehydrated = await dehydrateUIMessages(uiMessages, { env: store.getEnv() });
+            this.data.uiMessages = dehydrated;
+          } catch (err) {
+            messagesPersisted = false;
+            emitEvent?.("session:save-error", {
+              target: "session+uiMessages",
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
       }
     }
@@ -330,9 +335,12 @@ export class SessionService {
     // through `onMissingMedia` so the silent data loss becomes observable.
     let hydrated: UIMessage[];
     try {
-      hydrated = await hydrateUIMessages(session.uiMessages, { onMissing: input.onMissingMedia });
+      hydrated = await hydrateUIMessages(session.uiMessages, {
+        onMissing: input.onMissingMedia,
+        env: this.store.getEnv(),
+      });
       try {
-        const dehydrated = await dehydrateUIMessages(hydrated);
+        const dehydrated = await dehydrateUIMessages(hydrated, { env: this.store.getEnv() });
         session.uiMessages = dehydrated;
       } catch {
         // Canonicalize is best-effort; keep the stored form when media writes fail.

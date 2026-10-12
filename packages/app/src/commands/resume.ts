@@ -2,12 +2,9 @@ import { bumpAgentUsage } from "../hooks/use-agent-usage.js";
 import { useDynamic } from "../hooks/use-dynamic.js";
 import { getActiveHost, getActiveSession } from "../utils/session-resolve.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "resume",
-  description: "Resume a previous session",
-  usage: "/resume [session-id or name]",
+registerBuiltinCommand("resume", {
   immediate: false,
   allowCustomInput: true,
   getOptions: async () => {

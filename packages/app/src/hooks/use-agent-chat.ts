@@ -5,6 +5,7 @@ import { toRaw } from "reactivity-store";
 
 import { bindAgentSession } from "../adapter/create-agent.js";
 import { useAdapter } from "../context/adapter-context.js";
+import { useCoreEnv } from "../context/core-env-context.js";
 import { relinkSessionModel } from "../utils/apply-model-selection.js";
 import { clearFlatMessageCache } from "../utils/message-flat-cache.js";
 import { getActiveHost, resolveAgentSession } from "../utils/session-resolve.js";
@@ -136,6 +137,7 @@ function isAgentLoading(status: AgentStatus): boolean {
 
 export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   const adapter = useAdapter();
+  const env = useCoreEnv();
 
   const { loading: initLoading, error: initError } = useInit((s) => s);
 
@@ -170,7 +172,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
       setInitError(null);
 
       try {
-        await getWorkSpaceInfo();
+        await getWorkSpaceInfo(env);
         await adapter.destroy();
         if (currentInitId !== initIdRef.current) return;
 
@@ -213,7 +215,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     // session ends up registered too (Header shows "2 sessions"). Only rebuild for
     // inputs that genuinely require a fresh session.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `config` intentionally excluded; see comment above.
-  }, [config.systemPrompt, config.maxIterations, config.mcpConfigPath, adapter]);
+  }, [config.systemPrompt, config.maxIterations, config.mcpConfigPath, adapter, env]);
 
   useEffect(() => {
     if (!session) return;

@@ -5,7 +5,7 @@
  * needed by both the root agent's turn context system and subagent runs.
  */
 
-import { getEnv } from "../../env.js";
+import type { ResolvedCoreEnv } from "../../env";
 
 export interface GitInfo {
   branch?: string;
@@ -33,15 +33,16 @@ export function getCurrentDate(): string {
  * don't spawn two shell calls each time.
  */
 const GIT_INFO_TTL_MS = 2000;
-let gitInfoCache: { at: number; info: GitInfo } | null = null;
+/** Per-workspace-root cache (keyed by `env.rootPath`) so two runtimes never share git info. */
+const gitInfoCache = new Map<string, { at: number; info: GitInfo }>();
 
-export async function getGitInfo(): Promise<GitInfo> {
+export async function getGitInfo(env: ResolvedCoreEnv): Promise<GitInfo> {
   const now = Date.now();
-  if (gitInfoCache && now - gitInfoCache.at < GIT_INFO_TTL_MS) {
-    return { ...gitInfoCache.info };
+  const cached = gitInfoCache.get(env.rootPath);
+  if (cached && now - cached.at < GIT_INFO_TTL_MS) {
+    return { ...cached.info };
   }
 
-  const env = getEnv();
   const info: GitInfo = {};
 
   try {
@@ -68,6 +69,6 @@ export async function getGitInfo(): Promise<GitInfo> {
     // Git not available — skip
   }
 
-  gitInfoCache = { at: now, info };
+  gitInfoCache.set(env.rootPath, { at: now, info });
   return info;
 }

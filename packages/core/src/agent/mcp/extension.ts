@@ -54,7 +54,7 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
 }
 
 async function activateMcp(ctx: ExtensionContext, mcpManager: McpManager, configPath?: string): Promise<void> {
-  const loadResult = await loadMcpConfig(configPath);
+  const loadResult = await loadMcpConfig(ctx.coreEnv, configPath);
 
   if (loadResult?.loadErrors) {
     for (const err of loadResult.loadErrors) {

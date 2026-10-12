@@ -3,7 +3,7 @@ import { useDynamic } from "../hooks/use-dynamic.js";
 import { getTextContent, isSyntheticContextMessage } from "../utils/get-messages.js";
 import { getActiveSession } from "../utils/session-resolve.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { TextPart, UIMessage } from "@tanstack/ai";
 
@@ -15,10 +15,7 @@ function messageText(message: UIMessage): string {
   return textParts.map(getTextContent).join("\n").trim();
 }
 
-registerCommand({
-  name: "fork",
-  description: "Start a new session from an earlier user message",
-  usage: "/fork [message]",
+registerBuiltinCommand("fork", {
   immediate: false,
   allowCustomInput: true,
   getOptions: () => {

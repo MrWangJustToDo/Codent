@@ -1,7 +1,6 @@
 import { StaticRender } from "ink";
 import { useEffect, useMemo } from "react";
 
-import { useAgent } from "../hooks/use-agent";
 import { useConfig } from "../hooks/use-config";
 import { useSize } from "../hooks/use-size.js";
 import { useStatic } from "../hooks/use-static";
@@ -33,7 +32,6 @@ export const Header = () => {
   const remoteEnv = useConfig((s) => s.config.remoteEnv);
   const remoteProvider = useConfig((s) => s.config.remoteProvider);
   const remoteSession = useConfig((s) => s.config.remoteSession);
-  const sessionCount = Object.keys(useAgent((s) => s.sessions) ?? {}).length;
 
   const width = screenWidth;
 
@@ -44,7 +42,7 @@ export const Header = () => {
     [remoteEnv, remoteProvider, remoteSession]
   );
 
-  const headerKey = `${workspacePath}|${remotePlanes}|${sessionCount}|${Boolean(git)}`;
+  const headerKey = `${workspacePath}|${remotePlanes}|${Boolean(git)}`;
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -57,12 +55,11 @@ export const Header = () => {
             git={git || null}
             workspacePath={workspacePath}
             remotePlanes={remotePlanes}
-            sessionCount={sessionCount}
           />
         )}
       </StaticRender>
     );
-  }, [git, workspacePath, screenWidth, remotePlanes, sessionCount, width, headerKey, theme]);
+  }, [git, workspacePath, screenWidth, remotePlanes, width, headerKey, theme]);
 
   return null;
 };

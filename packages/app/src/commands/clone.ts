@@ -1,12 +1,9 @@
 import { bumpAgentUsage } from "../hooks/use-agent-usage.js";
 import { useDynamic } from "../hooks/use-dynamic.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
-registerCommand({
-  name: "clone",
-  description: "Clone this session into a new one and switch to it",
-  usage: "/clone [name]",
+registerBuiltinCommand("clone", {
   immediate: false,
   execute: async (args, ctx) => {
     const session = ctx.getSession();

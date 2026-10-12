@@ -9,7 +9,7 @@
  * @see https://docs.tavily.com/documentation/api-reference/endpoint/search
  */
 
-import { getEnv } from "../../../../env.js";
+import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 import { getProviderManager } from "../provider.js";
@@ -42,12 +42,12 @@ interface TavilySearchResponse {
 export const tavilyProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
-  isAvailable(): boolean {
-    return Boolean(getProviderManager().getApiKey(PROVIDER_NAME));
+  isAvailable(options?: SearchOptions): boolean {
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = getProviderManager().getApiKey(PROVIDER_NAME);
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);
     if (!apiKey) {
       throw new Error("Tavily API key not configured. Pass toolConfig.websearch.tavilyApiKey when creating the agent.");
     }
@@ -57,7 +57,7 @@ export const tavilyProvider: SearchProvider = {
     const { controller, cleanup } = createTimeoutAbort({ timeoutMs, signal: options?.signal });
 
     try {
-      const response = await getEnv().fetch(TAVILY_SEARCH_API, {
+      const response = await (options?.coreEnv ?? getEnv()).fetch(TAVILY_SEARCH_API, {
         method: "POST",
         signal: controller.signal,
         headers: {

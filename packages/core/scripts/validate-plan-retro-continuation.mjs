@@ -46,7 +46,21 @@ import {
   TodoManager,
   buildAgentRunner,
   createAgentEventBus,
+  registerCoreEnv,
 } from "../dist/dev.mjs";
+
+registerCoreEnv({
+  rootPath: "/tmp",
+  fs: {},
+  path: {},
+  runCommand: async () => ({}),
+  exec: async () => ({}),
+  fetch: async () => new Response(""),
+  getPlatform: async () => "linux",
+  getArch: async () => "x64",
+  getEnv: async () => ({}),
+  homedir: async () => "/tmp",
+});
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const srcRoot = join(scriptDir, "../src");

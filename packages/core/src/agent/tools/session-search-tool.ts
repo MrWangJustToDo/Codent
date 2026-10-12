@@ -102,10 +102,10 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
         .describe(`Maximum matches to return. Defaults to ${DEFAULT_LIMIT}.`),
     }),
     outputSchema: sessionSearchOutputSchema,
-    execute: async ({ query, sessionId, role, since, until, limit }) => {
+    execute: async ({ query, sessionId, role, since, until, limit }, { coreEnv }) => {
       return withDuration(async () => {
         const currentSessionId = managed?.getSessionData()?.id;
-        const result = await searchHistory({
+        const result = await searchHistory(coreEnv, {
           query,
           sessionId,
           role,

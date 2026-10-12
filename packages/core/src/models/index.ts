@@ -23,11 +23,6 @@ export {
 } from "./config/model-config.js";
 
 export {
-  resolveModelConfigFromProvider,
-  type ResolvedModelConfigFromProvider,
-} from "./provider/resolve-from-provider.js";
-
-export {
   MODELS_CONFIG_DIR,
   MODELS_CONFIG_FILE,
   loadModelEntries,
@@ -55,27 +50,6 @@ export {
   type RawModelsConfig,
   type RemoteProviderConfigEntry,
 } from "./config/models-config.js";
-
-export {
-  registerModelProvider,
-  clearModelProvider,
-  getModelProvider,
-  hasModelProvider,
-  createDirectModelProvider,
-  type ModelProviderMode,
-  type ModelProviderConnection,
-  type ModelProvider,
-} from "./provider/model-provider.js";
-
-export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./provider/remote-model-provider.js";
-
-// models.dev metadata lookup
-export {
-  fetchModelsDev,
-  getModelsByProviderFromModelsDev,
-  lookupModelFromModelsDev,
-  MODELS_DEV_URL,
-} from "./provider/models-dev.js";
 
 // TanStack text adapter (+ provider-specific protocol quirks live here only)
 export { createTextAdapter, type TextAdapterConfig, type ModelAdapterConfig } from "./adapter/adapter-factory.js";

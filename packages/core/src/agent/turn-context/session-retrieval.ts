@@ -12,7 +12,7 @@
  * a figure that does not change what the model should do.
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../persistence/types.js";
 
 import { TURN_CONTEXT_KINDS, type TurnContextKind } from "./turn-context-message.js";
@@ -40,13 +40,13 @@ export type SessionRetrievalSection = string;
  * fresh clone, a project that never ran an agent) gets no section rather than
  * guidance pointing at a directory that does not exist.
  */
-export async function hasSessionHistory(): Promise<boolean> {
-  const env = getEnv();
+export async function hasSessionHistory(env?: ResolvedCoreEnv): Promise<boolean> {
+  const resolvedEnv = env ?? getEnv();
 
   try {
-    const sessionsDir = env.path.join(env.rootPath, SESSION_DIR);
-    if (!(await env.fs.exists(sessionsDir))) return false;
-    const entries = await env.fs.readdir(sessionsDir);
+    const sessionsDir = resolvedEnv.path.join(resolvedEnv.rootPath, SESSION_DIR);
+    if (!(await resolvedEnv.fs.exists(sessionsDir))) return false;
+    const entries = await resolvedEnv.fs.readdir(sessionsDir);
     return entries.length > 0;
   } catch {
     return false;

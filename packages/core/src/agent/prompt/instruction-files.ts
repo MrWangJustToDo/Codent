@@ -19,7 +19,7 @@
  * @see https://agents.md/ — the cross-tool standard for AGENTS.md
  */
 
-import { getEnv } from "../../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { toPosixPathKey } from "../../utils/posix-path.js";
 
 // ============================================================================
@@ -81,6 +81,8 @@ export interface InstructionDiscoveryOptions {
   filenames?: string[];
   /** Byte budget for the expanded content. Defaults to {@link INSTRUCTION_MAX_BYTES}. */
   maxBytes?: number;
+  /** Owning runtime's env; ambient only when omitted (standalone/legacy callers). */
+  env?: ResolvedCoreEnv;
 }
 
 // ============================================================================
@@ -99,14 +101,14 @@ export interface InstructionDiscoveryOptions {
 export async function resolvePrimaryInstruction(
   options: InstructionDiscoveryOptions
 ): Promise<ResolvedInstructionFile | undefined> {
-  const env = getEnv();
+  const env = options.env ?? getEnv();
   const { rootPath, filenames = INSTRUCTION_FILENAMES, maxBytes = INSTRUCTION_MAX_BYTES } = options;
 
   for (const filename of filenames) {
     const filePath = env.path.join(rootPath, filename);
     try {
       if (!(await env.fs.exists(filePath))) continue;
-      return await resolveFile(filePath, filename, rootPath, maxBytes);
+      return await resolveFile(env, filePath, filename, rootPath, maxBytes);
     } catch {
       // Unreadable candidate — fall through to the next one.
       continue;
@@ -126,44 +128,46 @@ export async function resolvePrimaryInstruction(
 export async function resolveOverrideInstruction(
   rootPath: string,
   primaryFilename: string,
-  maxBytes: number = INSTRUCTION_MAX_BYTES
+  maxBytes: number = INSTRUCTION_MAX_BYTES,
+  env?: ResolvedCoreEnv
 ): Promise<ResolvedInstructionFile | undefined> {
-  const env = getEnv();
-  const overrideFilename = overrideFilenameFor(primaryFilename);
+  const resolvedEnv = env ?? getEnv();
+  const overrideFilename = overrideFilenameFor(primaryFilename, resolvedEnv);
   if (overrideFilename === primaryFilename) return undefined;
 
-  const overridePath = env.path.join(rootPath, overrideFilename);
+  const overridePath = resolvedEnv.path.join(rootPath, overrideFilename);
   try {
-    if (!(await env.fs.exists(overridePath))) return undefined;
-    return await resolveFile(overridePath, overrideFilename, rootPath, maxBytes);
+    if (!(await resolvedEnv.fs.exists(overridePath))) return undefined;
+    return await resolveFile(resolvedEnv, overridePath, overrideFilename, rootPath, maxBytes);
   } catch {
     return undefined;
   }
 }
 
 /** Derive the override filename for a primary filename (`AGENTS.md` → `AGENTS.override.md`). */
-export function overrideFilenameFor(primaryFilename: string): string {
-  const parsed = getEnv().path.parse(primaryFilename);
+export function overrideFilenameFor(primaryFilename: string, env?: ResolvedCoreEnv): string {
+  const parsed = (env ?? getEnv()).path.parse(primaryFilename);
   return `${parsed.name}.override${parsed.ext}`;
 }
 
 /** Read, expand imports in, and truncate a single instruction file. */
 async function resolveFile(
+  env: ResolvedCoreEnv,
   filePath: string,
   name: string,
   rootPath: string,
   maxBytes: number
 ): Promise<ResolvedInstructionFile> {
-  const env = getEnv();
   const raw = await env.fs.readFile(filePath);
 
   const expanded = await expandInstructionImports(raw, {
     baseDir: env.path.dirname(filePath),
     rootPath,
     maxBytes,
+    env,
   });
 
-  const truncated = truncateToBudget(expanded.content, maxBytes);
+  const truncated = truncateToBudget(expanded.content, maxBytes, env);
   return {
     path: filePath,
     name,
@@ -181,9 +185,13 @@ async function resolveFile(
  * `maxBytes` characters therefore overshoots the budget by up to ~4x, so the
  * largest fitting character prefix is found by binary search instead.
  */
-export function truncateToBudget(content: string, maxBytes: number): { content: string; truncated: boolean } {
-  const env = getEnv();
-  if (env.byteLength(content, "utf-8") <= maxBytes) {
+export function truncateToBudget(
+  content: string,
+  maxBytes: number,
+  env?: ResolvedCoreEnv
+): { content: string; truncated: boolean } {
+  const e = env ?? getEnv();
+  if (e.byteLength(content, "utf-8") <= maxBytes) {
     return { content, truncated: false };
   }
 
@@ -192,7 +200,7 @@ export function truncateToBudget(content: string, maxBytes: number): { content: 
   let high = Math.min(maxBytes, content.length);
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    if (env.byteLength(content.slice(0, mid), "utf-8") <= maxBytes) {
+    if (e.byteLength(content.slice(0, mid), "utf-8") <= maxBytes) {
       low = mid;
     } else {
       high = mid - 1;
@@ -217,6 +225,8 @@ export interface ExpandImportsOptions {
   maxBytes?: number;
   /** Max nesting depth. Defaults to {@link MAX_INSTRUCTION_IMPORT_DEPTH}. */
   maxDepth?: number;
+  /** Owning runtime's env; ambient only when omitted. */
+  env?: ResolvedCoreEnv;
 }
 
 /** Mutable per-chain expansion state. */
@@ -276,11 +286,12 @@ export async function expandInstructionImports(
     expandedBytes: 0,
     notices: [],
   };
-  return expandWithState(content, options.baseDir, options.rootPath, state);
+  return expandWithState(content, options.env ?? getEnv(), options.baseDir, options.rootPath, state);
 }
 
 async function expandWithState(
   content: string,
+  env: ResolvedCoreEnv,
   baseDir: string,
   rootPath: string,
   state: ImportState
@@ -300,10 +311,10 @@ async function expandWithState(
     const reference = rawToken.replace(TRAILING_PUNCTUATION_RE, "");
     if (!FILE_EXTENSION_RE.test(reference)) continue;
 
-    const target = await resolveImportTarget(reference, baseDir, rootPath, state);
+    const target = await resolveImportTarget(env, reference, baseDir, rootPath, state);
     if (!target) continue;
 
-    const nested = await readAndExpand(target, rootPath, state);
+    const nested = await readAndExpand(env, target, rootPath, state);
     if (nested === undefined) continue;
 
     parts.push(content.slice(cursor, start), nested);
@@ -322,15 +333,15 @@ async function expandWithState(
  * notice except a missing file, which is reported too so typos surface.
  */
 async function resolveImportTarget(
+  env: ResolvedCoreEnv,
   reference: string,
   baseDir: string,
   rootPath: string,
   state: ImportState
 ): Promise<string | undefined> {
-  const env = getEnv();
-  const resolved = env.path.resolve(resolveReference(reference, baseDir, rootPath));
+  const resolved = env.path.resolve(resolveReference(env, reference, baseDir, rootPath));
 
-  if (!isInside(rootPath, resolved)) {
+  if (!isInside(env, rootPath, resolved)) {
     state.notices.push(`@${reference} is outside the workspace root and was not imported.`);
     return undefined;
   }
@@ -378,13 +389,17 @@ async function resolveImportTarget(
  * `visited` and `depth` are copied per branch; `expandedBytes` is shared so the
  * budget bounds the whole expansion rather than each branch separately.
  */
-async function readAndExpand(target: string, rootPath: string, state: ImportState): Promise<string | undefined> {
-  const env = getEnv();
+async function readAndExpand(
+  env: ResolvedCoreEnv,
+  target: string,
+  rootPath: string,
+  state: ImportState
+): Promise<string | undefined> {
   try {
     const content = await env.fs.readFile(target);
     state.expandedBytes += env.byteLength(content, "utf-8");
 
-    const nested = await expandWithState(content, env.path.dirname(target), rootPath, {
+    const nested = await expandWithState(content, env, env.path.dirname(target), rootPath, {
       ...state,
       visited: new Set([...state.visited, target]),
       depth: state.depth + 1,
@@ -406,15 +421,13 @@ async function readAndExpand(target: string, rootPath: string, state: ImportStat
  * `AGENTS.md` uses (`@/openspec/AGENTS.md`). Without this, every such reference
  * would be rejected as outside the workspace.
  */
-function resolveReference(reference: string, baseDir: string, rootPath: string): string {
-  const env = getEnv();
+function resolveReference(env: ResolvedCoreEnv, reference: string, baseDir: string, rootPath: string): string {
   if (reference.startsWith("/")) return env.path.join(rootPath, reference.replace(/^\/+/, ""));
   return env.path.isAbsolute(reference) ? reference : env.path.join(baseDir, reference);
 }
 
 /** Whether `candidate` is `rootPath` itself or lives beneath it. */
-function isInside(rootPath: string, candidate: string): boolean {
-  const env = getEnv();
+function isInside(env: ResolvedCoreEnv, rootPath: string, candidate: string): boolean {
   // Compare in one canonical forward-slash form. The host's `path.resolve` is
   // separator-flavoured — `node:path` on win32 returns `C:\repo` — so a prefix
   // built with a hardcoded `/` never matched and every `@import` was rejected as

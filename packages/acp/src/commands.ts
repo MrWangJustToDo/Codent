@@ -57,47 +57,54 @@ export async function dispatchSlashCommand(
   snapshot: AgentSessionSnapshot,
   parsed: ParsedCommand
 ): Promise<SlashResult> {
-  const extensionNames = new Set(snapshot.extensions.extensions.flatMap((e) => e.commands.map((c) => c.name)));
+  const entry = findBuiltinCommand(parsed.name);
 
-  if (!findBuiltinCommand(parsed.name) && extensionNames.has(parsed.name)) {
-    const result = await session.dispatch({ type: "extension.invokeCommand", name: parsed.name, args: parsed.args });
-    const data = result.ok ? (result.data as { message?: string } | undefined) : undefined;
-    return { handled: true, message: data?.message };
+  if (!entry) {
+    const extensionNames = new Set(snapshot.extensions.extensions.flatMap((e) => e.commands.map((c) => c.name)));
+    if (extensionNames.has(parsed.name)) {
+      const result = await session.dispatch({ type: "extension.invokeCommand", name: parsed.name, args: parsed.args });
+      const data = result.ok ? (result.data as { message?: string } | undefined) : undefined;
+      return { handled: true, message: data?.message };
+    }
+    return { handled: false };
   }
 
-  switch (parsed.name) {
-    case "clear":
+  // Dispatch on the catalog's `command` (the AgentSessionCommand a built-in maps to), so
+  // the host never restates a command name — the catalog is the single source.
+  switch (entry.command) {
+    case "session.new":
       await session.dispatch({ type: "session.new" });
       return { handled: true };
     case "compact":
       return finish(await session.dispatch({ type: "compact", focus: parsed.raw || undefined }));
-    case "rename": {
-      const result = parsed.raw
-        ? await session.dispatch({ type: "rename", name: parsed.raw })
-        : await session.dispatch({ type: "rename.generate" });
-      return finish(result);
-    }
-    case "resume": {
+    case "rename":
+      return finish(
+        parsed.raw
+          ? await session.dispatch({ type: "rename", name: parsed.raw })
+          : await session.dispatch({ type: "rename.generate" })
+      );
+    case "session.resume": {
       if (!parsed.args[0]) return { handled: true, message: "Usage: /resume <session-id>" };
       return finish(await session.dispatch({ type: "session.resume", sessionId: parsed.args[0] }));
     }
-    case "clone":
+    case "session.clone":
       await session.dispatch({ type: "session.clone", ...(parsed.raw ? { name: parsed.raw } : {}) });
       return { handled: true };
-    case "mode": {
+    case "mode.set": {
       const mode = mapModeArg(parsed.args[0]);
       if (mode === "toggle") await session.dispatch({ type: "mode.toggle" });
       else await session.dispatch({ type: "mode.set", mode });
       return { handled: true };
     }
-    case "effort": {
+    case "effort.set": {
       const effort = parsed.args[0] === "off" ? undefined : (parsed.args[0] as never);
       await session.dispatch({ type: "effort.set", effort });
       return { handled: true };
     }
-    case "usage":
+    case "usage.history":
       return finish(await session.dispatch({ type: "usage.history" }));
     default:
+      // A built-in token with no session command is UI-only; the host does not dispatch it.
       return { handled: false };
   }
 }

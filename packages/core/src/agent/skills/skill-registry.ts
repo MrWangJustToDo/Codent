@@ -22,6 +22,7 @@
 import { SkillLoader } from "./skill-loader.js";
 
 import type { Skill, SkillSource, SkillSummary } from "./types.js";
+import type { ResolvedCoreEnv } from "../../env";
 
 // ============================================================================
 // Types
@@ -30,6 +31,8 @@ import type { Skill, SkillSource, SkillSummary } from "./types.js";
 export interface SkillRegistryConfig {
   /** Root path for resolving relative paths */
   rootPath: string;
+  /** Workspace env for reading skill files (runtime-provided; ambient by default). */
+  env?: ResolvedCoreEnv;
   /** Optional sink for override notices (duplicate names). */
   logger?: SkillRegistryLogger;
 }
@@ -63,6 +66,7 @@ export class SkillRegistry {
     this.logger = config.logger;
     this.loader = new SkillLoader({
       rootPath: config.rootPath,
+      ...(config.env ? { env: config.env } : {}),
     });
   }
 

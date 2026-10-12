@@ -24,6 +24,9 @@ import {
   providerRoutes,
   readServerModelEnv,
 } from "./routes/provider.js";
+import { getServerEnv, initServerRuntime } from "./server-runtime.js";
+
+import type { CoreEnv } from "@codent/core";
 
 export {
   REMOTE_PROVIDER_API_KEY,
@@ -37,6 +40,7 @@ export {
 };
 
 export { createRemoteProvider } from "./remote-provider.js";
+export { getServerManager, hasServerRuntime } from "./server-runtime.js";
 
 // ============================================================================
 // Configuration
@@ -47,6 +51,7 @@ const ROOT_PATH = process.env.ROOT_PATH || process.cwd();
 const SANDBOX_ENV = process.env.SANDBOX_ENV || "local";
 const REMOTE_ENV = process.env.REMOTE_ENV;
 
+let coreEnv: CoreEnv;
 if (REMOTE_ENV) {
   // Boundary: the server itself may register a remote CoreEnv (`REMOTE_ENV`),
   // e.g. when it hosts a remote-session whose workspace should be an even
@@ -54,17 +59,22 @@ if (REMOTE_ENV) {
   // (A server-side REMOTE_PROVIDER proxy is planned but not implemented yet.)
   try {
     const { createRemoteEnv } = await import("./client.js");
-    const remoteEnvInstance = await createRemoteEnv(REMOTE_ENV);
-    registerCoreEnv(remoteEnvInstance);
-    console.log(`[server] Registered remote CoreEnv: ${REMOTE_ENV} (rootPath=${remoteEnvInstance.rootPath})`);
+    coreEnv = await createRemoteEnv(REMOTE_ENV);
+    registerCoreEnv(coreEnv);
+    console.log(`[server] Registered remote CoreEnv: ${REMOTE_ENV} (rootPath=${coreEnv.rootPath})`);
   } catch (err) {
     console.error(`[server] Failed to connect to remote CoreEnv at ${REMOTE_ENV}`);
     console.error(`  ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 } else {
-  registerCoreEnv(createNodeEnv({ rootPath: ROOT_PATH, mode: SANDBOX_ENV === "native" ? "native" : "os" }));
+  coreEnv = createNodeEnv({ rootPath: ROOT_PATH, mode: SANDBOX_ENV === "native" ? "native" : "os" });
+  registerCoreEnv(coreEnv);
 }
+
+// Agent plane: one server-owned runtime over the workspace CoreEnv. The
+// `/api/agent/*` routes drive this manager instead of the ambient singleton.
+await initServerRuntime(coreEnv);
 
 // Land buffered agent-log entries (and any fatal error) on disk even when the
 // server crashes or is hard-exited before the batch flush fires.
@@ -137,7 +147,9 @@ app.use(
 );
 
 app.get("/health", (c) => {
-  return c.json({ status: "ok", rootPath: ROOT_PATH, sandboxEnv: SANDBOX_ENV });
+  // Report the EFFECTIVE workspace root (the runtime's), not the local config constant —
+  // under REMOTE_ENV the two differ.
+  return c.json({ status: "ok", rootPath: getServerEnv().rootPath, sandboxEnv: SANDBOX_ENV });
 });
 
 app.route("/api", api);
@@ -148,7 +160,7 @@ export const createServer = () => {
   return serve({ fetch: app.fetch, port: PORT }, (info) => {
     console.log(`[server] CoreEnv HTTP server listening on http://localhost:${info.port}`);
     console.log(`[server] CoreEnv HTTP server listening on http://${getLocalIP()}:${info.port}`);
-    console.log(`[server] rootPath=${ROOT_PATH}, sandbox=${SANDBOX_ENV}`);
+    console.log(`[server] rootPath=${getServerEnv().rootPath}, sandbox=${SANDBOX_ENV}`);
   });
 };
 

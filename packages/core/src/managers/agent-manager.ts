@@ -3,7 +3,7 @@ import { createLogExtension, type LogExtension } from "../agent/log/extension.js
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { getEnv } from "../env.js";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 import { ACTIVE_STATUSES } from "../runtime-types/agent-status.js";
 
 import { buildManagedAgent } from "./agent-factory.js";
@@ -15,6 +15,7 @@ import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent
 import type { ResumeResult, SessionData } from "../agent/persistence/types.js";
 import type { SkillDirectory } from "../agent/skills/skill-registry.js";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
+import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { StreamChunk } from "@tanstack/ai";
 
 export type { AgentEvent, AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
@@ -41,11 +42,11 @@ export const SKILL_DIRS_ENV_VAR = "AGENT_SKILL_DIRS";
  *
  * @returns Array of tagged skill directories (absolute or relative)
  */
-export async function getDefaultSkillDirs(): Promise<SkillDirectory[]> {
-  const env = getEnv();
+export async function getDefaultSkillDirs(env?: ResolvedCoreEnv): Promise<SkillDirectory[]> {
+  const e = env ?? getEnv();
   const dirs: SkillDirectory[] = [];
 
-  const runEnv = await env.getEnv();
+  const runEnv = await e.getEnv();
 
   const envDirs = runEnv[SKILL_DIRS_ENV_VAR];
   if (envDirs) {
@@ -56,7 +57,7 @@ export async function getDefaultSkillDirs(): Promise<SkillDirectory[]> {
     dirs.push(...parsedDirs.map((path) => ({ path, source: "user" as const })));
   }
 
-  const userSkillDir = env.path.join(await env.homedir(), ".agents", "skills");
+  const userSkillDir = e.path.join(await e.homedir(), ".agents", "skills");
 
   dirs.push({ path: userSkillDir, source: "user" });
 
@@ -72,6 +73,12 @@ export async function getDefaultSkillDirs(): Promise<SkillDirectory[]> {
 export class AgentManager {
   /** Managed agents by ID */
   private agents: Map<string, ManagedAgent> = new Map();
+
+  /**
+   * Runtime this manager belongs to (env + model provider). `undefined` = the ambient
+   * runtime (legacy single-instance hosts); agents created here inherit it.
+   */
+  readonly runtime?: AgentRuntime;
 
   /**
    * Disk session ownership registry: maps a persisted session id to the live
@@ -118,7 +125,8 @@ export class AgentManager {
    */
   private pendingTeardowns = new Set<Promise<void>>();
 
-  constructor() {
+  constructor(runtime?: AgentRuntime) {
+    this.runtime = runtime;
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
     this.logExtension = createLogExtension({
@@ -185,6 +193,7 @@ export class AgentManager {
       parentId,
       manager: this,
       getDefaultSkillDirs,
+      runtime: this.runtime,
     });
 
     if (this.agents.has(managed.id)) {
@@ -253,7 +262,11 @@ export class AgentManager {
     const subagentLog = subagent.getLog();
     if (parentLogDir && subagentLog) {
       subagent.setLogSinkDetach(
-        this.logExtension.attachSink(subagentLog, { dir: parentLogDir, filename: `${subagent.id}.log` })
+        this.logExtension.attachSink(subagentLog, {
+          dir: parentLogDir,
+          filename: `${subagent.id}.log`,
+          env: this.runtime?.env,
+        })
       );
     }
 
@@ -429,6 +442,9 @@ export class AgentManager {
       .catch(() => {
         // Teardown failures are reported per phase on the bus; never block the flush below.
       })
+      // Kill this agent's background jobs (each agent owns its own registry) so a disposed
+      // runtime does not leak child processes; awaited so `settleTeardowns` guarantees it.
+      .then(() => managedAgent.destroyCommandJobRegistry())
       .then(() => {
         // Land the buffered teardown/abort entries before the sink is dropped, so a
         // process exit immediately after destroy does not lose them to the batch timer.

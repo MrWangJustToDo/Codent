@@ -1,12 +1,12 @@
 import { createMCPClient } from "@tanstack/ai-mcp";
 
-import { getEnv } from "../../env.js";
+import { getEnv } from "../../env";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
 import { resolveMcpModelOutput, wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
 
 import type { McpConfig, McpServerConfig } from "./types.js";
-import type { McpProcessHandle } from "../../env.js";
+import type { McpProcessHandle, ResolvedCoreEnv } from "../../env";
 import type { McpServerStatus } from "../../runtime-types/mcp-status.js";
 import type { AnyServerTool } from "@tanstack/ai";
 import type { MCPClient, TransportInput } from "@tanstack/ai-mcp";
@@ -38,9 +38,8 @@ export const MCP_TOOL_OWNER = "codent-mcp";
 // Transport Factory
 // ============================================================================
 
-function createTransportInput(config: McpServerConfig): TransportInput {
+function createTransportInput(env: ResolvedCoreEnv, config: McpServerConfig): TransportInput {
   if (config.transport === "stdio") {
-    const env = getEnv();
     if (!env.createMCPStdioTransport) {
       throw new Error(
         "Stdio MCP transport is not available in this environment. " +
@@ -65,6 +64,9 @@ function createTransportInput(config: McpServerConfig): TransportInput {
 // ============================================================================
 
 export class McpManager {
+  /** Workspace env for stdio transports (runtime-provided; ambient by default). */
+  constructor(private readonly env: ResolvedCoreEnv = getEnv()) {}
+
   private clients: Map<string, MCPClient> = new Map();
   private stdioTransports: unknown[] = [];
 
@@ -117,7 +119,7 @@ export class McpManager {
     await Promise.allSettled(
       servers.map(async ([name, serverConfig]) => {
         try {
-          const transport = createTransportInput(serverConfig);
+          const transport = createTransportInput(this.env, serverConfig);
 
           if (serverConfig.transport === "stdio") {
             this.stdioTransports.push(transport);
@@ -232,7 +234,7 @@ export class McpManager {
   }
 
   forceKill(): void {
-    const env = getEnv();
+    const env = this.env;
     for (const transport of this.stdioTransports) {
       try {
         let child: McpProcessHandle | undefined;

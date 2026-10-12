@@ -1,7 +1,6 @@
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
 import { isAbortError } from "../../runtime-types/abort.js";
 
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
@@ -14,10 +13,12 @@ import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { runCommandOutputSchema } from "./util/types.js";
 
 import type { RunCommandOutput } from "./util/types.js";
+import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 const COMMAND_CANCELLED_NOTICE = "[Command cancelled by user.]";
 
-export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
+export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed?: ManagedAgent }) => {
+  const registry = options?.managed?.getCommandJobRegistry() ?? commandJobRegistry;
   const subagentSafe = options?.subagentSafe ?? false;
   return defineServerTool({
     name: "run_command",
@@ -64,12 +65,15 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
     }),
     outputSchema: runCommandOutputSchema,
     needsApproval: !subagentSafe,
-    execute: async ({ command, cwd, env, timeout, run_in_background }, { toolCallId, abortSignal, agentId }) => {
+    execute: async (
+      { command, cwd, env, timeout, run_in_background },
+      { toolCallId, abortSignal, agentId, coreEnv }
+    ) => {
       // Hard safety policy for subagents (no approval UI): only read-only,
       // project-internal commands execute; anything else is denied with a
       // reason surfaced to the model (insufficient permissions).
       if (subagentSafe) {
-        const ctx = await createAnalysisContext();
+        const ctx = await createAnalysisContext(coreEnv);
         const absoluteCwd = cwd ? ctx.path.resolve(ctx.rootPath, cwd) : ctx.cwd;
         const report = await analyzeCommand(command, { ...ctx, cwd: absoluteCwd });
         const decision = evaluateCommandApproval(report, { agentKind: "subagent" });
@@ -79,7 +83,6 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       }
 
       if (run_in_background) {
-        const coreEnv = getEnv();
         if (!coreEnv.startCommand) {
           throw new Error(
             "Background commands are not supported in this environment. " +
@@ -87,26 +90,26 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
           );
         }
 
-        const job = commandJobRegistry.create(command);
+        const job = registry.create(command);
 
         try {
           const handle = await coreEnv.startCommand(command, {
             cwd,
             env,
             onStdout: (chunk) => {
-              commandJobRegistry.appendStdout(job.id, chunk);
+              registry.appendStdout(job.id, chunk);
             },
             onStderr: (chunk) => {
-              commandJobRegistry.appendStderr(job.id, chunk);
+              registry.appendStderr(job.id, chunk);
             },
             onExit: (exitCode) => {
-              commandJobRegistry.markExited(job.id, exitCode);
+              registry.markExited(job.id, exitCode);
             },
           });
-          commandJobRegistry.setKill(job.id, handle.kill);
+          registry.setKill(job.id, handle.kill);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          commandJobRegistry.markFailed(job.id, message);
+          registry.markFailed(job.id, message);
           throw err;
         }
 
@@ -142,7 +145,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       // Everything else still throws, so genuine failures keep their error row.
       let result;
       try {
-        result = await getEnv().runCommand(command, {
+        result = await coreEnv.runCommand(command, {
           cwd,
           env,
           timeout,
@@ -163,8 +166,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
         stderrAccumulator.finish();
         const stdoutRaw = stdoutAccumulator.snapshot().content;
         const stderrRaw = stderrAccumulator.snapshot().content;
-        const stdoutResult = await maybeCacheOutput(stdoutRaw, `${toolCallId}-stdout`);
-        const stderrResult = await maybeCacheOutput(stderrRaw, `${toolCallId}-stderr`);
+        const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
+        const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
         return {
           command,
           stdout: stdoutResult.content,
@@ -187,8 +190,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean }) => {
       const stdoutRaw = stdoutAccumulator.snapshot().content || result.stdout || "";
       const stderrRaw = stderrAccumulator.snapshot().content || result.stderr || "";
 
-      const stdoutResult = await maybeCacheOutput(stdoutRaw, `${toolCallId}-stdout`);
-      const stderrResult = await maybeCacheOutput(stderrRaw, `${toolCallId}-stderr`);
+      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
+      const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
 
       const cachedOutputPath = stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null;
 

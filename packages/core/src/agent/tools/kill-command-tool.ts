@@ -5,8 +5,10 @@ import { commandJobRegistry } from "./util/command-job-registry.js";
 import { killCommandOutputSchema } from "./util/types.js";
 
 import type { KillCommandOutput } from "./util/types.js";
+import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
-export const createKillCommandTool = () => {
+export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
+  const registry = managed?.getCommandJobRegistry() ?? commandJobRegistry;
   return defineServerTool({
     name: "kill_command",
     present: {
@@ -21,12 +23,12 @@ export const createKillCommandTool = () => {
     needsApproval: true,
     lazy: true,
     execute: async ({ jobId }) => {
-      const existing = commandJobRegistry.get(jobId);
+      const existing = registry.get(jobId);
       if (!existing) {
         throw new Error(`Unknown background jobId: ${jobId}`);
       }
-      const killed = await commandJobRegistry.kill(jobId);
-      const after = commandJobRegistry.get(jobId);
+      const killed = await registry.kill(jobId);
+      const after = registry.get(jobId);
       return {
         jobId,
         status: after?.status ?? "killed",

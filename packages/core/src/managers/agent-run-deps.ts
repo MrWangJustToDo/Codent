@@ -1,3 +1,5 @@
+import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
+
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
@@ -12,8 +14,9 @@ import type { WireProjectionCache } from "../agent/compaction/wire-projection-ca
 import type { ExtensionRunner } from "../agent/extension/runner.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
+import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
-import type { AgentUIChannel } from "../agent/ui-channel.js";
+import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import type { ModelInfo } from "../models/types.js";
 import type { AgentIterationState } from "../runtime-types/session-payloads.js";
@@ -58,6 +61,8 @@ export interface AgentRunDeps {
   getLog: () => AgentLog;
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
+  /** The agent's background-job registry (drained by the notification middleware). */
+  getCommandJobRegistry: () => CommandJobRegistry;
   getCompactionConfig: () => CompactionConfig | null;
   getModelInfo: () => ModelInfo | null;
   getToolCompactCache: () => ToolCompactCache;
@@ -75,6 +80,11 @@ export interface AgentRunDeps {
   config: Readonly<ManagedAgentConfig>;
   /** Immutable after construction. */
   parentId: string | undefined;
+  /**
+   * Workspace env for this run's tools/consumers — the owning runtime's resolved env, or the
+   * ambient env for legacy single-instance hosts. Resolved once here (the composition point).
+   */
+  coreEnv: ResolvedCoreEnv;
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
@@ -116,6 +126,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
+    getCommandJobRegistry: () => managed.getCommandJobRegistry(),
     getCompactionConfig: () => managed.getCompactionConfig(),
     getModelInfo: () => managed.getModelInfo(),
     getToolCompactCache: () => managed.getToolCompactCache(),
@@ -125,6 +136,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getUIChannel: () => managed.getUI() ?? null,
     config: managed.config,
     parentId: managed.parentId,
+    coreEnv: resolveCoreEnv(managed.runtime?.env ?? getEnv()),
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),

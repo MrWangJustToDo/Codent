@@ -5,17 +5,17 @@
  *  1. CoreEnv plane: local workspace fs/shell (`createNodeEnv`, `SANDBOX_ENV`).
  *  2. Provider plane: `.agents/config/models.json` (via `loadModels`) or `.env`
  *     (MODEL / MODEL_STYLE / BASE_URL / API_KEY), then `registerModelProvider`.
- *  3. Session plane: `createLocalAgentSessionHost({ manager: agentManager })`.
+ *  3. Session plane: a `CodentAgent` runtime (own env + provider + manager + host).
  *
  * `cwd` MUST be the workspace root: our CoreEnv root is process-global, so an ACP
  * client should spawn `codent acp` inside the workspace it wants the agent to see.
  */
 
 import {
-  agentManager,
   buildDefaultSystemPrompt,
+  CodentAgent,
   createDirectModelProvider,
-  createLocalAgentSessionHost,
+  getModelProvider,
   loadModels,
   registerCoreEnv,
   registerModelProvider,
@@ -26,7 +26,7 @@ import {
 import { createNodeEnv } from "@codent/node";
 
 import type { AcpAgentDefaults, AcpAgentOptions } from "./agent.js";
-import type { AgentSessionHost, ModelStyle } from "@codent/core";
+import type { AgentSessionHost, ModelProvider, ModelStyle } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
@@ -44,8 +44,10 @@ export async function bootstrapLocalAcp(
 ): Promise<LocalAcpBootstrap> {
   const rootPath = options.cwd ?? process.cwd();
   const sandboxMode = options.sandbox ?? (process.env.SANDBOX_ENV === "native" ? "native" : "local");
-  registerCoreEnv(createNodeEnv({ rootPath, sandbox: sandboxMode !== "native" }));
+  const env = createNodeEnv({ rootPath, sandbox: sandboxMode !== "native" });
+  registerCoreEnv(env);
 
+  let provider: ModelProvider | undefined;
   let model: string | undefined;
   let style: ModelStyle | undefined;
   let baseURL: string | undefined;
@@ -59,7 +61,8 @@ export async function bootstrapLocalAcp(
       const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
       if (entry && activeModel) {
         await registerModelProviderForEntry(loaded);
-        const fromProvider = await resolveModelConfigFromProvider({});
+        provider = getModelProvider();
+        const fromProvider = await resolveModelConfigFromProvider({}, provider);
         model = fromProvider.connection.model;
         style = fromProvider.connection.style;
         baseURL = fromProvider.connection.baseURL;
@@ -83,14 +86,13 @@ export async function bootstrapLocalAcp(
         "ACP host requires a model — set `.agents/config/models.json` or MODEL (plus BASE_URL / API_KEY) in .env."
       );
     }
-    registerModelProvider(
-      createDirectModelProvider({
-        model: connection.model,
-        style: connection.style,
-        baseURL: connection.baseURL,
-        apiKey: connection.apiKey,
-      })
-    );
+    provider = createDirectModelProvider({
+      model: connection.model,
+      style: connection.style,
+      baseURL: connection.baseURL,
+      apiKey: connection.apiKey,
+    });
+    registerModelProvider(provider);
     model = connection.model;
     style = connection.style;
     baseURL = connection.baseURL;
@@ -98,8 +100,10 @@ export async function bootstrapLocalAcp(
     modelInfo = undefined;
   }
 
+  const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
+
   return {
-    host: createLocalAgentSessionHost({ manager: agentManager }),
+    host: agent.host,
     rootPath,
     defaults: {
       model,

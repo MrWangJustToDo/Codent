@@ -3,6 +3,7 @@ import { generateDiffFile } from "@git-diff-view/file";
 import { Box, Text } from "ink";
 import { forwardRef, useEffect, useMemo, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { COLORS } from "../theme/colors.js";
 import { MIN_SPLIT_DIFF_WIDTH } from "../utils/diff-layout.js";
 import { isLikelyBinaryPath } from "../utils/file-icons.js";
@@ -26,6 +27,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
   { rootPath, filePath, width, height, onScrollChange },
   ref
 ) {
+  const env = useCoreEnv();
   const [state, setState] = useState<DiffPreviewState>({ status: "loading" });
   const [scrollState, setScrollState] = useState<ScrollState | null>(null);
   const [diffPayload, setDiffPayload] = useState<Awaited<ReturnType<typeof fetchWorkspaceFileDiff>> | null>(null);
@@ -42,7 +44,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
       return;
     }
 
-    fetchWorkspaceFileDiff(rootPath, filePath)
+    fetchWorkspaceFileDiff(env, rootPath, filePath)
       .then((payload) => {
         if (cancelled) return;
         setDiffPayload(payload);
@@ -62,7 +64,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
     return () => {
       cancelled = true;
     };
-  }, [filePath, rootPath]);
+  }, [env, filePath, rootPath]);
 
   const diffFile = useMemo(() => {
     if (!diffPayload) return null;

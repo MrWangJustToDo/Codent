@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { useSize } from "../hooks/use-size.js";
 import { useWorkspaceGit } from "../hooks/use-workspace-git.js";
 import { useWorkspaceView } from "../hooks/use-workspace-view.js";
@@ -39,6 +40,7 @@ const PREVIEW_SCROLL_STEP = 3;
 // ============================================================================
 
 export const WorkspaceFileMode = () => {
+  const env = useCoreEnv();
   const paneFocus = useWorkspaceView((s) => s.paneFocus);
   const mode = useWorkspaceView((s) => s.mode);
   const selectedPath = useWorkspaceView((s) => s.selectedPath);
@@ -104,7 +106,7 @@ export const WorkspaceFileMode = () => {
   const items = isDiffMode ? diffItems : fullItems;
   const handleToggleDir = isDiffMode ? toggleDiffDir : toggleDir;
 
-  const dirStatuses = useMemo(() => computeDirStatuses(gitStatus, rootPath), [gitStatus, rootPath]);
+  const dirStatuses = useMemo(() => computeDirStatuses(env, gitStatus, rootPath), [env, gitStatus, rootPath]);
 
   const scrollActivePane = useCallback(
     (direction: "up" | "down" | "top") => {
@@ -138,7 +140,7 @@ export const WorkspaceFileMode = () => {
   // diff pane needs the keys.
   const jumpToChanged = useCallback(
     (direction: 1 | -1) => {
-      const jump = changedFileJumpTarget(gitStatus, rootPath, selectedPath, direction);
+      const jump = changedFileJumpTarget(env, gitStatus, rootPath, selectedPath, direction);
       if (!jump) {
         // A silent no-op reads as a dead key. Say why: no changed files at all
         // (the git status may predate the edit the user is looking for — `r`
@@ -149,7 +151,7 @@ export const WorkspaceFileMode = () => {
       if (isDiffMode) revealDiffDirs(jump.revealKeys);
       selectFile(jump.target);
     },
-    [gitStatus, rootPath, selectedPath, selectFile, isDiffMode, revealDiffDirs]
+    [env, gitStatus, rootPath, selectedPath, selectFile, isDiffMode, revealDiffDirs]
   );
 
   useEffect(() => {
@@ -159,8 +161,8 @@ export const WorkspaceFileMode = () => {
   }, [jumpNotice]);
 
   useEffect(() => {
-    import("@codent/core").then(({ getEnv }) => setRootPath(getEnv().rootPath)).catch(() => {});
-  }, []);
+    setRootPath(env.rootPath);
+  }, [env]);
 
   useEffect(() => {
     setCursorIndex((prev) => Math.min(prev, Math.max(0, items.length - 1)));

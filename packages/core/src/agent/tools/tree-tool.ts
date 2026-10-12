@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { getEnv } from "../../env.js";
+import { getEnv, type CoreEnvFs } from "../../env";
 import { toPosixPath, toPosixPathKey } from "../../utils/posix-path.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -10,8 +10,6 @@ import { isCommandNotFound, quoteForShell } from "./util/search-command.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
-
-import type { CoreEnvFs } from "../../env.js";
 
 /** Maximum characters for tree output */
 const MAX_TREE_CHARS = OUTPUT_LIMITS.MAX_CONTENT_CHARS;
@@ -147,7 +145,7 @@ export const createTreeTool = () => {
       durationMs: z.number().describe("Execution duration in milliseconds."),
       ...toolOutputBaseSchema.shape,
     }),
-    execute: async ({ path, maxDepth, showHidden, dirsOnly, pattern, ignore }, { toolCallId }) => {
+    execute: async ({ path, maxDepth, showHidden, dirsOnly, pattern, ignore }, { toolCallId, coreEnv }) => {
       return withDuration(async () => {
         const rootPath = path ?? ".";
         const depth = maxDepth ?? 3;
@@ -179,8 +177,8 @@ export const createTreeTool = () => {
         // only, and `tree` exits non-zero in normal operation (see the comment there), so a
         // status field here would be write-only.
         let result: { stdout: string; stderr: string; missing: boolean; killed: boolean };
-        if (canExecArgs()) {
-          const argsResult = await execArgs("tree", treeArgs);
+        if (canExecArgs(coreEnv)) {
+          const argsResult = await execArgs(coreEnv, "tree", treeArgs);
           result = {
             stdout: argsResult.stdout,
             stderr: argsResult.stderr,
@@ -188,8 +186,7 @@ export const createTreeTool = () => {
             killed: argsResult.killed,
           };
         } else {
-          const env = getEnv();
-          const envResult = await env.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`);
+          const envResult = await coreEnv.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`);
           // The string path has no kill signal of its own; a shell reports a killed child as a
           // non-zero status, so there is nothing extra to distinguish here.
           result = {
@@ -220,6 +217,7 @@ export const createTreeTool = () => {
           // this tool runs on. `env.fs.readdir` is the same primitive the skill loader already
           // uses, and it removes an external dependency rather than adding a platform branch.
           const paths = await walkTree(rootPath, {
+            fs: coreEnv.fs,
             maxDepth: depth,
             dirsOnly: dirsOnly ?? false,
             showHidden: showHidden ?? false,
@@ -228,7 +226,7 @@ export const createTreeTool = () => {
           });
           const rawTree = formatAsTree(paths, rootPath);
 
-          const cached = await maybeCacheOutput(rawTree, `${toolCallId}-tree`);
+          const cached = await maybeCacheOutput(coreEnv, rawTree, `${toolCallId}-tree`);
           let tree: string;
           let truncated: boolean;
           if (cached.cachedOutputPath) {
@@ -250,7 +248,7 @@ export const createTreeTool = () => {
 
         const lines = result.stdout.split("\n").filter((l) => l.trim());
 
-        const cached = await maybeCacheOutput(result.stdout, `${toolCallId}-tree`);
+        const cached = await maybeCacheOutput(coreEnv, result.stdout, `${toolCallId}-tree`);
         let truncatedTree: string;
         let truncated: boolean;
         if (cached.cachedOutputPath) {

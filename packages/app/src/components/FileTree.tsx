@@ -2,13 +2,14 @@ import { toPosixPath } from "@codent/core";
 import { Box, Text } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatFolderGlyph, formatIconGlyph, getFileIconStyle, getFolderIconStyle } from "../utils/file-icons.js";
 import { buildDiffTreeItems, type FlatTreeItem } from "../utils/workspace-diff-tree.js";
 import { joinWorkspacePath, workspaceRelativePath } from "../utils/workspace-path.js";
 
 import type { WorkspaceFileDiffStat } from "../utils/workspace-diff-stats.js";
-import type { FileEntry } from "@codent/core";
+import type { CoreEnv, FileEntry } from "@codent/core";
 
 // ============================================================================
 // Dir Cache
@@ -79,7 +80,11 @@ interface DirStatusSummary {
  * Compute aggregated git status for all directories by walking the git status map.
  * A directory's status is the summary of all files under it (recursively).
  */
-export function computeDirStatuses(gitStatus: Map<string, string>, rootPath: string): Map<string, DirStatusSummary> {
+export function computeDirStatuses(
+  env: CoreEnv,
+  gitStatus: Map<string, string>,
+  rootPath: string
+): Map<string, DirStatusSummary> {
   const dirStatuses = new Map<string, DirStatusSummary>();
 
   const ensureDir = (dir: string): DirStatusSummary => {
@@ -94,7 +99,7 @@ export function computeDirStatuses(gitStatus: Map<string, string>, rootPath: str
     // Accumulate status into every ancestor directory, using absolute paths
     for (let i = 1; i < parts.length; i++) {
       const relativeDir = parts.slice(0, i).join("/");
-      const dir = joinWorkspacePath(rootPath, relativeDir);
+      const dir = joinWorkspacePath(env, rootPath, relativeDir);
       const summary = ensureDir(dir);
       const s = status.trim();
       if (s.startsWith("M") || s.endsWith("M")) summary.modified++;
@@ -134,7 +139,7 @@ function formatDirStatus(summary: DirStatusSummary | undefined): string | null {
  * Excludes the file itself: expanding a tree means expanding its directories.
  * Returns `[]` for the root or a path outside the workspace.
  */
-function ancestorDirs(rootPath: string, path: string): string[] {
+function ancestorDirs(env: CoreEnv, rootPath: string, path: string): string[] {
   if (!rootPath) return [];
   const rel = workspaceRelativePath(rootPath, path);
   if (!rel || rel === ".") return [];
@@ -142,7 +147,7 @@ function ancestorDirs(rootPath: string, path: string): string[] {
   const dirs: string[] = [rootPath];
   let cur = rootPath;
   for (let i = 0; i < parts.length - 1; i++) {
-    cur = joinWorkspacePath(cur, parts[i]!);
+    cur = joinWorkspacePath(env, cur, parts[i]!);
     dirs.push(cur);
   }
   return dirs;
@@ -162,6 +167,7 @@ export function useFileTree(
   pendingReveal: string | null;
   consumePendingReveal: (path: string) => void;
 } {
+  const env = useCoreEnv();
   const [dirData, setDirData] = useState<Map<string, FileEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -170,21 +176,23 @@ export function useFileTree(
   /** Last `statusVersion` this hook has already reconciled `dirData` against. */
   const reconciledVersionRef = useRef(statusVersion);
 
-  const loadDir = useCallback(async (path: string, options?: { force?: boolean }): Promise<void> => {
-    if (!options?.force && dirCache.has(path)) {
-      setDirData((prev) => new Map(prev).set(path, dirCache.get(path)!));
-      return;
-    }
-    try {
-      const { getEnv } = await import("@codent/core");
-      const entries = sortEntries(await getEnv().fs.readdir(path));
-      dirCache.set(path, entries);
-      setDirData((prev) => new Map(prev).set(path, entries));
-    } catch {
-      dirCache.set(path, []);
-      setDirData((prev) => new Map(prev).set(path, []));
-    }
-  }, []);
+  const loadDir = useCallback(
+    async (path: string, options?: { force?: boolean }): Promise<void> => {
+      if (!options?.force && dirCache.has(path)) {
+        setDirData((prev) => new Map(prev).set(path, dirCache.get(path)!));
+        return;
+      }
+      try {
+        const entries = sortEntries(await env.fs.readdir(path));
+        dirCache.set(path, entries);
+        setDirData((prev) => new Map(prev).set(path, entries));
+      } catch {
+        dirCache.set(path, []);
+        setDirData((prev) => new Map(prev).set(path, []));
+      }
+    },
+    [env]
+  );
 
   /**
    * Re-list every directory whose entries are already in hand (`dirCache`), keeping `expanded`.
@@ -239,12 +247,12 @@ export function useFileTree(
    */
   const revealPath = useCallback(
     async (path: string): Promise<void> => {
-      const dirs = ancestorDirs(rootPath, path);
+      const dirs = ancestorDirs(env, rootPath, path);
       if (dirs.length === 0) return;
       await Promise.all(dirs.map((dir) => loadDir(dir)));
       setPendingReveal(path);
     },
-    [rootPath, loadDir]
+    [env, rootPath, loadDir]
   );
 
   /**
@@ -257,7 +265,7 @@ export function useFileTree(
    */
   const consumePendingReveal = useCallback(
     (path: string): void => {
-      const dirs = ancestorDirs(rootPath, path);
+      const dirs = ancestorDirs(env, rootPath, path);
       setExpanded((prev) => {
         if (dirs.length === 0 || dirs.every((dir) => prev.has(dir))) return prev;
         const next = new Set(prev);
@@ -266,7 +274,7 @@ export function useFileTree(
       });
       setPendingReveal(null);
     },
-    [rootPath]
+    [env, rootPath]
   );
 
   useEffect(() => {
@@ -301,7 +309,7 @@ export function useFileTree(
       const entries = dirData.get(dirPath);
       if (!entries) return;
       for (const entry of entries) {
-        const fullPath = joinWorkspacePath(dirPath, entry.name);
+        const fullPath = joinWorkspacePath(env, dirPath, entry.name);
         if (entry.type === "directory") {
           const isExpanded = expanded.has(fullPath);
           result.push({ path: fullPath, name: entry.name, indent, type: "directory", expanded: isExpanded });
@@ -317,7 +325,7 @@ export function useFileTree(
     }
 
     return result;
-  }, [dirData, expanded, rootPath]);
+  }, [env, dirData, expanded, rootPath]);
 
   return { items, loading, toggleDir, reload, revealPath, pendingReveal, consumePendingReveal };
 }
@@ -341,9 +349,13 @@ export function useDiffFileTree(
   revealDiffDirs: (keys: readonly string[]) => void;
   resetDiffCollapsed: () => void;
 } {
+  const env = useCoreEnv();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const items = useMemo(() => buildDiffTreeItems(gitStatus, rootPath, collapsed), [gitStatus, rootPath, collapsed]);
+  const items = useMemo(
+    () => buildDiffTreeItems(env, gitStatus, rootPath, collapsed),
+    [env, gitStatus, rootPath, collapsed]
+  );
 
   const toggleDir = useCallback(
     (path: string) => {

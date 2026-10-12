@@ -1,4 +1,4 @@
-import { AdapterProvider, App, configureEnv, initConfig, initHighlighter } from "@codent/app";
+import { AdapterProvider, App, CoreEnvProvider, configureEnv, initConfig, initHighlighter } from "@codent/app";
 import {
   clearCoreEnv,
   clearModelProvider,
@@ -16,6 +16,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useServerConfig } from "@/hooks/useServerConfig";
 
 import type { AgentAdapter } from "@codent/app";
+import type { CoreEnv, ModelProvider } from "@codent/core";
 
 configureEnv({ allowNonBrowserUpdates: true });
 
@@ -27,6 +28,7 @@ const AgentBootstrap = () => {
   const apiKey = useServerConfig((s) => s.apiKey);
 
   const [adapter, setAdapter] = useState<AgentAdapter | null>(null);
+  const [coreEnv, setCoreEnv] = useState<CoreEnv | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const adapterRef = useRef<AgentAdapter | null>(null);
@@ -44,6 +46,7 @@ const AgentBootstrap = () => {
         adapterRef.current = null;
         setAdapter(null);
       }
+      setCoreEnv(null);
 
       clearModelProvider();
       clearCoreEnv();
@@ -51,13 +54,13 @@ const AgentBootstrap = () => {
       const env = await createRemoteEnv(url);
       if (currentInitId !== initIdRef.current) return;
       registerCoreEnv(env);
+      setCoreEnv(env);
 
       // Provider plane: local keys when apiKey is set; otherwise remote provider on the same host.
-      if (apiKey.trim()) {
-        registerModelProvider(createDirectModelProvider({ model, style, baseURL, apiKey }));
-      } else {
-        registerModelProvider(await createRemoteProvider(url));
-      }
+      const provider: ModelProvider = apiKey.trim()
+        ? createDirectModelProvider({ model, style, baseURL, apiKey })
+        : await createRemoteProvider(url);
+      registerModelProvider(provider);
       if (currentInitId !== initIdRef.current) return;
 
       await initConfig({
@@ -72,7 +75,7 @@ const AgentBootstrap = () => {
       await initHighlighter();
       if (currentInitId !== initIdRef.current) return;
 
-      const ext = new ExtensionAgentAdapter();
+      const ext = new ExtensionAgentAdapter({ env, provider });
 
       adapterRef.current = ext;
       setAdapter(ext);
@@ -134,7 +137,7 @@ const AgentBootstrap = () => {
     );
   }
 
-  if (loading || !adapter) {
+  if (loading || !adapter || !coreEnv) {
     return (
       <div className="flex h-full items-center justify-center gap-2.5 bg-[#1e1e1e] text-sm text-[#888]">
         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[#444] border-t-[#888]" />
@@ -145,9 +148,11 @@ const AgentBootstrap = () => {
 
   return (
     <InkTerminalBox style={{ height: "100%" }} inkRenderOptions={{ exitOnCtrlC: false }}>
-      <AdapterProvider value={adapter}>
-        <App />
-      </AdapterProvider>
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <App />
+        </AdapterProvider>
+      </CoreEnvProvider>
     </InkTerminalBox>
   );
 };

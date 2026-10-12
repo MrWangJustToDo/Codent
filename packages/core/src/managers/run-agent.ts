@@ -156,6 +156,7 @@ export function buildAgentRunner(
       agentId: deps.agentId,
       manager: deps.manager,
       getCompactionConfig: deps.getCompactionConfig,
+      getCoreEnv: () => deps.coreEnv,
       // Read live so late-arriving ModelInfo (models.dev lookup) stays in sync
       // with ManagedAgent.getMessagesForLLM's keep-policy resolution.
       getContextWindow: () => deps.getModelInfo()?.contextWindow,
@@ -240,6 +241,7 @@ export function buildAgentRunner(
     createBackgroundNotificationMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      getCommandJobRegistry: () => deps.getCommandJobRegistry(),
     }),
     createPromptCacheMiddleware({
       getModelStyle: () => config.modelStyle,
@@ -262,6 +264,8 @@ export function buildAgentRunner(
     reasoningEffort: config.reasoningEffort ?? deps.getModelInfo()?.reasoningConfig?.defaultEffort,
     modelStyle: config.modelStyle,
     lazyToolsConfig: config.lazyToolsConfig,
+    // The owning runtime's env reaches tools via the run context; ambient otherwise.
+    coreEnv: deps.coreEnv,
   });
 }
 

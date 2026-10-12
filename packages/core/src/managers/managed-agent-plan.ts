@@ -5,6 +5,7 @@
 import { listPlanFiles, loadPlanFile, savePlanFile } from "../agent/plan/plan-store.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
+import type { ResolvedCoreEnv } from "../env";
 import type { AgentStatus } from "./agent-types.js";
 import type { AgentChatController } from "./controllers/agent-chat-controller.js";
 import type {
@@ -17,6 +18,8 @@ export interface PlanApiHost {
   planMode: PlanModeController;
   getStatus: () => AgentStatus;
   getChatController: () => AgentChatController | undefined;
+  /** Owning runtime's env, so plan files land under the runtime root. */
+  getCoreEnv: () => ResolvedCoreEnv;
 }
 
 export function enablePlanMode(host: PlanApiHost): void {
@@ -60,9 +63,14 @@ export async function savePlanToWorkspace(
     return { ok: false, error: `Cannot save plan from phase "${phase}"` };
   }
   try {
-    const { path } = await savePlanFile(planMarkdown, nameHint, {
-      existingRelativePath: nameHint?.trim() ? undefined : (planFilePath ?? undefined),
-    });
+    const { path } = await savePlanFile(
+      planMarkdown,
+      nameHint,
+      {
+        existingRelativePath: nameHint?.trim() ? undefined : (planFilePath ?? undefined),
+      },
+      host.getCoreEnv()
+    );
     host.planMode.setPlanFilePath(path);
     return { ok: true, path };
   } catch (error) {
@@ -76,7 +84,7 @@ export async function loadPlanFromWorkspace(
   name: string
 ): Promise<{ ok: boolean; path?: string; error?: string; stepCount?: number }> {
   try {
-    const { path, markdown } = await loadPlanFile(name);
+    const { path, markdown } = await loadPlanFile(name, host.getCoreEnv());
     const result = await host.planMode.loadPlanMarkdown(markdown, { relativePath: path });
     if (!result.ok) return { ok: false, error: result.error, path };
     return { ok: true, path, stepCount: result.stepCount };
@@ -90,6 +98,6 @@ export function completePlan(host: PlanApiHost): { ok: boolean; error?: string }
   return host.planMode.complete();
 }
 
-export async function listWorkspacePlans(): Promise<string[]> {
-  return listPlanFiles();
+export async function listWorkspacePlans(host: PlanApiHost): Promise<string[]> {
+  return listPlanFiles(host.getCoreEnv());
 }

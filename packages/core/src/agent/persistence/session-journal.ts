@@ -15,7 +15,7 @@ import { isToolCallPart } from "../stream/message-parts.js";
 import { SESSION_DIR, SESSION_LOG_MESSAGE, SESSION_LOG_SUFFIX } from "./types.js";
 
 import type { PersistedToolCallPart, PersistedUIMessage, SessionLogLine, SessionStateFields } from "./types.js";
-import type { CoreEnvFs } from "../../env.js";
+import type { CoreEnvFs } from "../../env";
 import type { UIMessage } from "@tanstack/ai";
 
 export function getJournalPath(id: string): string {

@@ -1,7 +1,7 @@
 import { useThinkingLine } from "../hooks/use-thinking-line.js";
 import { getActiveSession } from "../utils/session-resolve.js";
 
-import { registerCommand } from "./utils/registry.js";
+import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { ReasoningEffort } from "@codent/core";
 
@@ -27,10 +27,7 @@ function getCurrentEffort(): ReasoningEffort | undefined {
   return session?.getSnapshot()?.reasoningEffort ?? undefined;
 }
 
-registerCommand({
-  name: "effort",
-  description: "Configure reasoning effort for the current model (thinking depth)",
-  usage: "/effort [low|medium|high|...|off] | /effort display [on|off]",
+registerBuiltinCommand("effort", {
   immediate: false,
   getOptions: () => {
     const display = useThinkingLine.getActions().getEnabled();

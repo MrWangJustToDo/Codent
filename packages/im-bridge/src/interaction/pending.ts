@@ -7,6 +7,8 @@
  * mirroring chat-bot approval conventions (60s default).
  */
 
+import { BUILTIN_TOOL_NAMES } from "@codent/core";
+
 import type { Button, ButtonPayload, ChatTarget, PendingInteraction } from "../types.js";
 
 export interface PendingRecord {
@@ -100,7 +102,7 @@ export class PendingInteractionStore {
 
   /** Flip a multi-select option's checked state (no resolution). */
   toggleOption(record: PendingRecord, index: number | undefined): void {
-    if (index === undefined || record.pending.kind !== "ask_user") return;
+    if (index === undefined || record.pending.kind !== BUILTIN_TOOL_NAMES.askUser) return;
     if (index < 0 || index >= record.pending.options.length) return;
     if (record.selected.has(index)) record.selected.delete(index);
     else record.selected.add(index);
@@ -109,7 +111,7 @@ export class PendingInteractionStore {
   /** Selected option labels for a multi-select record, in option order. */
   selectedOptions(record: PendingRecord): string[] {
     const { pending } = record;
-    if (pending.kind !== "ask_user") return [];
+    if (pending.kind !== BUILTIN_TOOL_NAMES.askUser) return [];
     return [...record.selected].sort((a, b) => a - b).map((index) => pending.options[index] as string);
   }
 
@@ -200,7 +202,7 @@ export class PendingInteractionStore {
    */
   findPendingAskUser(chatKey: string): PendingRecord | undefined {
     for (const record of this.records.values()) {
-      if (record.chatKey === chatKey && record.pending.kind === "ask_user") return record;
+      if (record.chatKey === chatKey && record.pending.kind === BUILTIN_TOOL_NAMES.askUser) return record;
     }
     return undefined;
   }
