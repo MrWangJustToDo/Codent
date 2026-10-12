@@ -56,6 +56,11 @@ export {
 
 export { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "./provider/remote-model-provider.js";
 
+export {
+  resolveModelConfigFromProvider,
+  type ResolvedModelConfigFromProvider,
+} from "./provider/resolve-from-provider.js";
+
 // ============================================================================
 // Runtime — agent manager (host bootstrap; Session-only UI must not import ManagedAgent)
 // ============================================================================
@@ -183,7 +188,6 @@ export {
   readModelsConfigFile,
   registerModelProviderForEntry,
   resolveModelConfig,
-  resolveModelConfigFromProvider,
   resolveModelConnection,
   resolveModelInfoFromModelsDev,
   resolveModelsConfig,
@@ -221,7 +225,6 @@ export type {
   ReasoningEffort,
   RemoteProviderConfigEntry,
   ResolvedModelConfig,
-  ResolvedModelConfigFromProvider,
 } from "./models";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";

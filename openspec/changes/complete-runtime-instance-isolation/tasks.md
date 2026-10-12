@@ -8,10 +8,10 @@
 
 ## 2. Structure
 
-- [ ] 2.1 Break the `models ↔ provider` cycle: make the config↔provider edge one-directional; delete the cross-layer provider re-export in `models/index.ts`; update `validate-layer-boundaries.mjs` (drop the dead `models → runtime` edge, make `managers → runtime` / `runtime → models` / `runtime → agent` / `agent-session → runtime` `type-only` where they are, correct reasons).
-- [ ] 2.2 Add `provider` + `runtime` to `validate-module-organization.mjs` `CORE_TOP_LEVEL`; prune the stale `ROOT_FILE_LAYERS` entries in `validate-layer-boundaries.mjs`.
-- [ ] 2.3 Fix the AGENTS.md file-structure map (add `runtime/`, remove the dead `agent/run-helpers/`), `ARCHITECTURE.md` §1.4 (add `CodentAgent`), and stale path comments.
-- [ ] 2.4 Build core + run the full `validate:*` set + `tsc`.
+- [x] 2.1 Structure: declare the `models ↔ provider` coupling accurately with narrowed edges (`onlySources`/`onlyTargets` + a reason stating the config↔provider cycle) instead of a blanket edge; delete the dead cross-layer provider re-exports in `models/index.ts` (and re-point `src/index.ts` to `./provider`); update `validate-layer-boundaries.mjs` (drop the dead `models → runtime` edge; make `managers → runtime` / `runtime → models` / `runtime → agent` / `agent-session → runtime` `type-only`; correct reasons/paths). The deep config↔provider untangle is deliberately deferred (documented as a known bounded cycle) to avoid a risky move of central model-resolution code.
+- [x] 2.2 Add `provider` + `runtime` to `validate-module-organization.mjs` `CORE_TOP_LEVEL`; prune the stale `ROOT_FILE_LAYERS` entries in `validate-layer-boundaries.mjs`.
+- [x] 2.3 Fix the AGENTS.md file-structure map (add `runtime/`, remove the dead `agent/run-helpers/`), `ARCHITECTURE.md` §1.4 (add `CodentAgent`), and stale path comments (`synthetic-injection`, `command-job-registry`, `env/lsp`, `validate-plan-tools`).
+- [x] 2.4 Build core + run the full `validate:*` set + `tsc`.
 
 ## 3. Docs, tooling, and the multi-runtime managed-run validator
 

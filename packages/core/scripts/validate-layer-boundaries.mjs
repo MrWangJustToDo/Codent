@@ -37,11 +37,11 @@ const srcRoot = join(scriptDir, "../src");
 
 /**
  * Top-level directory (or single file) → layer name. Files at the `src/` root are
- * layers too: `env.ts` is the bottom of the stack, and a `src/env.ts → src/agent/`
- * import is the same kind of inversion as any directory-to-directory one.
+ * layers too: a root file that is a layer on its own bounds the stack the same way a
+ * directory does, and an import out of it is the same kind of inversion.
  *
  * Three root files are not layers in their own right:
- * - `env.ts` / `env-types.ts` — together they are the `env` layer;
+ * - `env.ts` (the `env` layer's barrel; the layer itself now lives under `src/env/`);
  * - `dev.ts` — the dev-only barrel;
  * - `index.ts` — the public barrel.
  * `.d.ts` files are declarations, not modules with edges.
@@ -54,10 +54,8 @@ function stripModuleExtension(name) {
 }
 
 const ROOT_FILE_LAYERS = {
+  // `env` resolves from a bare directory import (`from "../env"` → `src/env`).
   env: "env",
-  "env-types": "env",
-  "env-lsp": "env",
-  "env-teardown": "env",
   dev: "dev",
   index: "index",
 };
@@ -145,7 +143,7 @@ const ALLOWED_EDGES = {
   },
   "runtime-types → agent": {
     mode: "type-only",
-    reason: "hosts.ts exposes the AgentUIChannel port (`agent/ui-channel.ts` implements it).",
+    reason: "hosts.ts exposes the AgentUIChannel port (`agent/ui/ui-channel.ts` implements it).",
     onlySources: ["hosts"],
   },
   "runtime-types → models": {
@@ -174,31 +172,40 @@ const ALLOWED_EDGES = {
   "agent-session → runtime-types": { mode: "allow", reason: "session payload types" },
   "agent-session → utils": { mode: "allow", reason: "ids, emitters" },
   "agent-session → env": { mode: "allow", reason: "CoreEnv access" },
-  "agent-session → runtime": { mode: "allow", reason: "local host reads its manager's runtime env" },
+  "agent-session → runtime": { mode: "type-only", reason: "the local host names its manager's `AgentRuntime` type" },
   "agent-session → provider": {
     mode: "type-only",
     reason:
-      "host-types declares the optional getModelProvider() on AgentSessionHost so app-side model resolution uses the runtime's provider, not the ambient registry.",
+      "host-types declares the optional getModelProvider()/getEnv() on AgentSessionHost so a host-bound consumer uses the runtime's provider/env, not the ambient registry.",
     onlySources: ["host-types"],
   },
 
   // runtime composes an env + model provider + AgentManager + AgentSessionHost into one
   // instantiable instance (the top of the managers stack); lower layers reference its types.
   "runtime → env": { mode: "allow", reason: "owns the workspace CoreEnv" },
-  "runtime → models": { mode: "allow", reason: "owns the ModelProvider" },
+  "runtime → models": { mode: "type-only", reason: "CodentAgentOptions carries a ModelStyle" },
   "runtime → managers": { mode: "allow", reason: "owns the AgentManager" },
   "runtime → agent-session": { mode: "allow", reason: "owns / creates the AgentSessionHost" },
-  "runtime → agent": { mode: "allow", reason: "tool-config type for session defaults" },
+  "runtime → agent": { mode: "type-only", reason: "AgentToolConfig type for session defaults" },
   "runtime → utils": { mode: "allow", reason: "ids" },
-  "managers → runtime": { mode: "allow", reason: "ManagedAgent / manager carry the owning runtime (type-only)" },
-  "models → runtime": { mode: "allow", reason: "ambient model-provider registry" },
+  "managers → runtime": { mode: "type-only", reason: "ManagedAgent / manager name the owning AgentRuntime" },
 
-  // provider is the LLM plane, orthogonal to CoreEnv: the ModelProvider abstraction,
-  // its factories/registry, and models.dev metadata lookup.
-  "provider → models": { mode: "allow", reason: "model config + metadata types" },
+  // models (config + metadata) and provider (the LLM connection plane) are a coupled pair:
+  // `provider→models` resolves a connection from config + models.dev types, and
+  // `models→provider` lists an entry's provider / registers it. The dependency is a known,
+  // bounded cycle, not a DAG; both edges are narrowed so it cannot widen into a blanket.
+  "provider → models": {
+    mode: "allow",
+    reason: "resolveModelConnection/resolveModelConfig + models.dev metadata types",
+    onlyTargets: ["config/model-config", "types"],
+  },
   "provider → env": { mode: "allow", reason: "CoreEnv.fetch for models.dev lookup" },
   "provider → utils": { mode: "allow", reason: "ids" },
-  "models → provider": { mode: "allow", reason: "model config re-exports / builds providers" },
+  "models → provider": {
+    mode: "allow",
+    reason: "an entry lists/registers its ModelProvider (provider construction + models.dev lookup)",
+    onlySources: ["config/models-config", "config/model-config", "index"],
+  },
   "runtime → provider": { mode: "allow", reason: "runtime owns the ModelProvider" },
 };
 

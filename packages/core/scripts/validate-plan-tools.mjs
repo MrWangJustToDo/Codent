@@ -82,14 +82,14 @@ assert.ok(/not the same as the work being right/i.test(retro), "retro must state
 const md = formatStructuredPlanMarkdown({
   goal: "Add worktree support",
   steps: ["Survey CoreEnv rootPath", "Design API", "Implement"],
-  keyFiles: ["packages/core/src/env.ts"],
+  keyFiles: ["packages/core/src/env/index.ts"],
   risks: "Path confusion",
   verification: "pnpm build:core",
 });
 assert.ok(md.includes("## Plan"));
 assert.ok(md.includes("**Goal:**"));
 assert.ok(md.includes("1. Survey"));
-assert.ok(md.includes("`packages/core/src/env.ts`"));
+assert.ok(md.includes("`packages/core/src/env/index.ts`"));
 
 const deduped = formatStructuredPlanMarkdown({
   goal: "Dedup numbers",

@@ -231,7 +231,18 @@ function documentationFiles() {
  * `src/…` is likewise treated as a claim: every such reference in this repo means a
  * file under a package's `src/`.
  */
-const CORE_TOP_LEVEL = ["agent", "agent-session", "dev", "env", "managers", "models", "runtime-types", "utils"];
+const CORE_TOP_LEVEL = [
+  "agent",
+  "agent-session",
+  "dev",
+  "env",
+  "managers",
+  "models",
+  "provider",
+  "runtime",
+  "runtime-types",
+  "utils",
+];
 const DOC_PATH = new RegExp(
   "`((?:packages/|src/)[A-Za-z0-9_\\-./]+|(?:" + CORE_TOP_LEVEL.join("|") + ")/[A-Za-z0-9_\\-./]+\\.ts)`",
   "g"

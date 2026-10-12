@@ -1124,7 +1124,6 @@ packages/
 │   │   ├── memory/                    # Memory management + built-in Memory extension
 │   │   ├── plan/                      # Plan domain + plan tool factories
 │   │   ├── persistence/               # Disk session persistence (SessionStore)
-│   │   ├── run-helpers/               # Chat/run helpers (tool-phase, empty-stream, pending queue)
 │   │   ├── run/                       # runAgentOnce / consumeAgentStream (run skeleton)
 │   │   ├── runner/                    # AgentRunner + run context
 │   │   ├── skills/                    # Skill loading + built-in Skills extension
@@ -1143,6 +1142,7 @@ packages/
 │   │   └── telemetry/                  # Usage tracking + telemetry emit helpers (bus lives in agent/agent-event-bus)
 │   ├── models/                        # Model config (model-config.ts), adapters, cache
 │   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata
+│   ├── runtime/                       # Instantiable runtime: AgentRuntime + CodentAgent facade
 │   ├── runtime-types/                 # Shared status / event / usage types (no manager deps)
 │   ├── utils/                         # Cross-cutting helpers (Emitter, generateId)
 │   ├── index.ts                       # Curated public API exports (hosts / adapters)

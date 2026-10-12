@@ -96,7 +96,8 @@ packages/app/src/adapter/create-agent.ts
 
 | Symbol                                                            | Exported from `@codent/core`?                                                     |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `agentManager`, `AgentManager`                                    | Yes — bootstrap / CLI; **UI hosts must use AgentSession**                           |
+| `CodentAgent`, `CodentAgentOptions`                               | Yes — **preferred runtime entry** (`CodentAgent.create({ env, provider | direct, host? })`); `AgentRuntime` is internal (`dev.ts`) |
+| `agentManager`, `AgentManager`                                    | Yes — **deprecated ambient fallback**; UI hosts must use AgentSession              |
 | `ManagedAgent`, `ManagedAgentConfig`                              | Yes — bootstrap only; app forbids importing ManagedAgent                            |
 | `AgentChatController`                                             | **No** — package-internal (`dev.ts` / validate); reached via ManagedAgent bootstrap |
 | `ManagedAgent.initChat`                                           | Yes (bootstrap helper)                                                              |

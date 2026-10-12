@@ -15,7 +15,7 @@ import type { CommandJobLogWriter } from "./command-output-log.js";
 import type { ResolvedCoreEnv } from "../../../env";
 
 /**
- * Mirrors `CoreEnv`'s `CommandJobStatus` (`env-types.ts`), which is the one the host contract and
+ * Mirrors `CoreEnv`'s `CommandJobStatus` (`env/types.ts`), which is the one the host contract and
  * the published surface use. Declared structurally rather than imported so this module stays
  * dependency-free — but keep the union in sync if the CoreEnv contract grows a state.
  */
