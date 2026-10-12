@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import {
   AgentRuntime,
@@ -185,7 +185,10 @@ const fakeEnv = (root) => ({
 // ---------------------------------------------------------------------------
 {
   const realEnv = (root) => {
-    const abs = (p) => (p.startsWith("/") ? p : join(root, p));
+    // `isAbsolute` (node:path), not `startsWith("/")`: on Windows `root` is `C:\...`,
+    // so a POSIX-only check would treat core's already-absolute memory/log paths as
+    // relative and re-join the root onto itself.
+    const abs = (p) => (isAbsolute(p) ? p : join(root, p));
     return {
       rootPath: root,
       path: {

@@ -13,7 +13,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -73,7 +73,10 @@ for (const rel of SCAN_DIRS) {
     continue;
   }
   for (const file of files) {
-    const relPath = relative(SRC, file);
+    // Normalize to POSIX separators: `relative()` yields `\` on Windows, but the
+    // allowlist keys use `/`, so an unnormalized path would false-positive every
+    // allowlisted file there.
+    const relPath = relative(SRC, file).split(sep).join("/");
     const allowReason = ALLOWLIST.get(relPath);
     const lines = readFileSync(file, "utf8").split("\n");
     lines.forEach((line, i) => {
