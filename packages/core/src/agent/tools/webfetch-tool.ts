@@ -16,10 +16,12 @@ import { isAbortError } from "../../runtime-types/abort.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { createTimeoutAbort } from "./util/abort-timeout.js";
+import { extractPdfText } from "./util/extract-pdf-text.js";
+import { decodeBytes } from "./util/text-decoding.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
-import { convertHTMLToMarkdown, extractTextFromHTML } from "./util/webfetch-html.js";
+import { convertHTMLToMarkdown, extractHtmlTitle, extractTextFromHTML } from "./util/webfetch-html.js";
 
 import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
@@ -55,6 +57,10 @@ function buildAcceptHeader(format: string): string {
 export const webfetchOutputSchema = z.object({
   /** The URL that was fetched */
   url: z.string().describe("The URL that was fetched"),
+  /** The URL actually fetched after redirects */
+  finalUrl: z.string().describe("The final URL after following redirects (equals url when no redirect happened)"),
+  /** Document title when the content was HTML */
+  title: z.string().describe("The page's <title> when the content was HTML, otherwise empty"),
   /** Content type of the response */
   contentType: z.string().describe("The Content-Type header of the response"),
   /** The fetched content in the requested format */
@@ -106,8 +112,10 @@ Use this tool when you need to:
 
 Features:
 - Converts HTML to Markdown by default (cleaner for reading)
-- Can return raw HTML or plain text
+- Returns the page title and the final URL after redirects
+- Extracts text from PDFs
 - Handles images by returning base64-encoded data
+- Honors the page's declared charset (non-UTF-8 pages decode correctly)
 - Follows redirects automatically
 - Has a 5MB size limit
 
@@ -199,13 +207,18 @@ Usage notes:
 
           const contentType = response.headers.get("content-type") || "text/plain";
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || "text/plain";
+          // fetch() follows redirects; response.url is where we actually landed.
+          const finalUrl = response.url || url;
+          const bytes = new Uint8Array(arrayBuffer);
 
           // Handle images
           const isImage = mime.startsWith("image/") && mime !== "image/svg+xml";
           if (isImage) {
-            const base64Content = coreEnv.base64Encode(new Uint8Array(arrayBuffer));
+            const base64Content = coreEnv.base64Encode(bytes);
             return {
               url,
+              finalUrl,
+              title: "",
               contentType,
               content: `data:${mime};base64,${base64Content}`,
               contentLength: base64Content.length,
@@ -215,32 +228,33 @@ Usage notes:
             };
           }
 
-          // Decode text content
-          const rawContent = new TextDecoder().decode(arrayBuffer);
+          // Decode honoring the declared charset (charset → BOM → <meta> → UTF-8).
+          const rawContent = decodeBytes(bytes, { contentType });
+          const htmlLike = mime === "text/html" || mime === "application/xhtml+xml" || contentType.includes("html");
+          const title = htmlLike ? extractHtmlTitle(rawContent) : "";
 
           // Convert content based on requested format
           let content: string;
-          switch (format) {
-            case "markdown":
-              if (contentType.includes("text/html")) {
-                content = convertHTMLToMarkdown(rawContent);
-              } else {
-                content = rawContent;
-              }
-              break;
+          if (mime === "application/pdf") {
+            // A PDF's bytes have no text form without extraction — decoding them as UTF-8
+            // yields mojibake. Use the shared unpdf extractor (same one read_file uses).
+            const pdf = await extractPdfText(bytes);
+            content = pdf ? pdf.text : `[PDF content could not be extracted (${arrayBuffer.byteLength} bytes).]`;
+          } else {
+            switch (format) {
+              case "markdown":
+                content = htmlLike ? convertHTMLToMarkdown(rawContent) : rawContent;
+                break;
 
-            case "text":
-              if (contentType.includes("text/html")) {
-                content = extractTextFromHTML(rawContent);
-              } else {
-                content = rawContent;
-              }
-              break;
+              case "text":
+                content = htmlLike ? extractTextFromHTML(rawContent) : rawContent;
+                break;
 
-            case "html":
-            default:
-              content = rawContent;
-              break;
+              case "html":
+              default:
+                content = rawContent;
+                break;
+            }
           }
 
           // Cache large content to disk instead of inline truncation
@@ -257,6 +271,8 @@ Usage notes:
 
           return {
             url,
+            finalUrl,
+            title,
             contentType,
             content,
             contentLength: originalLength,
@@ -271,6 +287,8 @@ Usage notes:
           if (!isAbortError(err, abortSignal)) throw err;
           return {
             url,
+            finalUrl: url,
+            title: "",
             contentType: "text/plain",
             content: "",
             contentLength: 0,
@@ -287,7 +305,7 @@ Usage notes:
         }
       });
     },
-    // Only send url + content (or multimodal image parts) to the LLM —
+    // Only send url/finalUrl/title + content (or multimodal image parts) to the LLM —
     // contentType/contentLength/isImage/truncated/cachedOutputPath are UI metadata.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: z.infer<typeof webfetchOutputSchema> }) {
       // A cancelled fetch has no content; without this the model reads an empty successful
@@ -299,7 +317,7 @@ Usage notes:
         const parsed = parseDataUrl(output.content);
         if (parsed) {
           return [
-            { type: "text" as const, content: `Fetched image: ${output.url}` },
+            { type: "text" as const, content: `Fetched image: ${output.finalUrl}` },
             {
               type: "image" as const,
               source: { type: "data" as const, value: parsed.base64, mimeType: parsed.mimeType },
@@ -307,9 +325,10 @@ Usage notes:
           ];
         }
         // Fallback: keep prior text behavior if content is not a data URL
-        return [{ type: "text" as const, content: `Fetched image: ${output.url}\n\n${output.content}` }];
+        return [{ type: "text" as const, content: `Fetched image: ${output.finalUrl}\n\n${output.content}` }];
       }
-      return [{ type: "text" as const, content: `Fetched ${output.url}\n\n${output.content}` }];
+      const header = output.title ? `Fetched ${output.finalUrl}\nTitle: ${output.title}` : `Fetched ${output.finalUrl}`;
+      return [{ type: "text" as const, content: `${header}\n\n${output.content}` }];
     },
   });
 };

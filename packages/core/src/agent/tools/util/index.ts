@@ -6,4 +6,5 @@ export * from "./tool-result.js";
 export * from "./types.js";
 export * from "./search-command.js";
 export * from "./tool-output-cache.js";
+export * from "./text-decoding.js";
 export * from "./webfetch-html.js";

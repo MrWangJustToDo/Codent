@@ -22,6 +22,27 @@ export function convertHTMLToMarkdown(html: string): string {
 }
 
 /**
+ * Extract the document `<title>` text (entity-decoded), or "" when absent.
+ */
+export function extractHtmlTitle(html: string): string {
+  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  if (!match?.[1]) return "";
+  return decodeHtmlEntities(match[1].replace(/\s+/g, " ").trim());
+}
+
+/** Decode the handful of HTML entities that show up in titles/headings. */
+export function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
+}
+
+/**
  * Extract plain text from HTML using htmlparser2.
  *
  * - Strips script/style/noscript/iframe/object/embed/svg/canvas/math
