@@ -1,4 +1,4 @@
-import { isCancelledOutputMarker } from "../../../runtime-types/abort.js";
+import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import { inlineSummaryForOutput } from "./inline-summary.js";
@@ -51,7 +51,10 @@ export function computeToolDisplay(name: string, output: unknown, input?: unknow
   if (isErrorOutput(output)) return undefined;
 
   const present = getToolPresentation(name);
-  const text = isCancelledOutputMarker(output) ? TOOL_CANCELLED_MESSAGE : safe(() => present?.text?.(output));
+  // Only the SYNTHETIC framework payload is replaced wholesale: it carries no output at all (the
+  // tool never returned). A tool that caught its own abort DOES have output, and its own `text`
+  // renderer is what renders it — see {@link isSyntheticCancelOutput}.
+  const text = isSyntheticCancelOutput(output) ? TOOL_CANCELLED_MESSAGE : safe(() => present?.text?.(output));
   const summary =
     safe(() => present?.summary?.(output)) ?? safe(() => inlineSummaryForOutput(output, name)) ?? undefined;
   const label = safe(() => present?.label?.(input)) ?? undefined;

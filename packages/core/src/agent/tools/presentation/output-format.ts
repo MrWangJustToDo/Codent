@@ -1,4 +1,4 @@
-import { isCancelledOutputMarker } from "../../../runtime-types/abort.js";
+import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../runtime-types/token-usage.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
@@ -290,8 +290,7 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
   // Only the SYNTHETIC one is short-circuited. A tool that caught its own abort returns a full
   // output with `cancelled: true` and whatever it had produced — that is a real result, and its
   // formatter renders it (minus the exit code the tool synthesizes).
-  // if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;
-  if (isCancelledOutputMarker(output)) return TOOL_CANCELLED_MESSAGE;
+  if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;
 
   if (toolName) {
     const uiRenderer = getToolPresentation(toolName)?.text;

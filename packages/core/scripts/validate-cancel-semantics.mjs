@@ -15,7 +15,9 @@
  *
  *   1. the marker tables — both markers, both read from `output` alone
  *   2. the framework fallback's real output — every tool gets a readable cancel, opted in or not
- *   3. both markers readable off a persisted part, the way a host reads them after a resume
+ *   3. both markers readable off a persisted part, the way a host reads them after a resume —
+ *      and each SHAPE rendering as itself (the bare message for the synthetic payload, its own
+ *      output for a tool that caught its own abort)
  *   4. "could Esc cut this tool short?" answered at every tool definition site, enforced
  *      against the source so a new tool cannot quietly skip the question
  *   5. the model-facing projection carries the flag (it is not a UI-only concern)
@@ -171,18 +173,31 @@ assert.ok(
   assert.equal(isCancelledToolCall(taskPart), true, "the task tool's own marker is readable off the part");
   assert.equal(getInlineSummary(taskPart, "task"), "cancelled", "a cancelled task reads as cancelled on the row");
   const body = formatToolOutput(taskPart.output, "task");
-  // TEMPORARILY DISABLED — these two assertions fail while `formatToolOutput` short-circuits
-  // on `isCancelledOutputMarker` instead of `isSyntheticCancelOutput` (see
-  // output-format.ts). With that guard a cancel carrying real output — a `task`'s summary or a
-  // `run_command`'s partial stdout — collapses to the bare `TOOL_CANCELLED_MESSAGE`, so the
-  // `[Task cancelled by user.]` notice never reaches the detailed block.
-  //
-  // Re-enable both when the guard is settled: they are the assertions that tell the two cancel
-  // shapes apart ("we have no output" vs "we have partial output"), and they were passing
-  // before the guard changed.
-  // assert.ok(body.includes("cancelled"), `the detailed block words it as cancelled (${body})`);
-  // assert.ok(body.includes("[Task cancelled by user.]"), "and the cancel notice survives into the body");
+  // A cancel that CARRIES output renders it. `formatToolOutput` short-circuits only the framework's
+  // synthetic payload (section 2); reaching the tool's own formatter here is what keeps the cancel
+  // notice in the detailed block instead of collapsing both shapes into the bare message.
+  assert.ok(body.includes("cancelled"), `the detailed block words it as cancelled (${body})`);
+  assert.ok(body.includes("[Task cancelled by user.]"), "and the cancel notice survives into the body");
   assert.ok(!body.includes("stalled"), "and it is never worded as a stall");
+
+  // The other half of that shape: `run_command`'s own catch keeps the stdout the command had already
+  // printed, alongside a synthesized `exitCode: -1` that must NOT be rendered as a result.
+  const runCommandBody = formatToolOutput(
+    {
+      command: "sleep 10",
+      stdout: "partial line one\npartial line two",
+      stderr: "",
+      exitCode: -1,
+      success: false,
+      cancelled: true,
+    },
+    "run_command"
+  );
+  assert.ok(
+    runCommandBody.includes("partial line one"),
+    `a cancelled run_command keeps the stdout it already produced (${runCommandBody})`
+  );
+  assert.ok(!/Exit code/.test(runCommandBody), "…and prints no exit code for a stopped command");
 
   // ...while a normal task result stays a normal result.
   const cleanPart = { ...taskPart, output: { ...taskPart.output, aborted: false, summary: "found it" } };
