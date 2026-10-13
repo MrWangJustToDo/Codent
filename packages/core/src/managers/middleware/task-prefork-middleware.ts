@@ -18,8 +18,21 @@
  * attempt is actually over: the run boundaries (`onFinish` / `onAbort` / `onError`) and the
  * restart-style recovery path, where the tool phase that would have joined them can no
  * longer arrive.
+ *
+ * Pause hygiene — the second generation of the same mistake. A run boundary is not the end of a
+ * `chat()` INVOCATION: an approval or client-tool wait ends the invocation (TanStack ends the stream
+ * on that interrupt), and `AgentChatController` re-pumps once the answer arrives, so `onFinish` fires
+ * while the run has only paused. Discarding there threw away pre-forks the next pump's tool phase
+ * would have joined; the tool phase then found nothing registered (`join` returns null) and spawned a
+ * SECOND subagent for the same call id, while the predecessor stayed in the subagent catalog — which
+ * is why one `task` call showed two rows. So `onFinish` discards only when no joining tool phase is
+ * still pending (`hasPendingRunContinuation`), the stream's abandonment hooks (`onAbort`/`onError`)
+ * discard unconditionally, and the AGENT's abandonment seats do too — `abort()` (which a paused
+ * session switch reaches through `stopIfActive`'s guard) and `reset()`. Those seats are what covers a
+ * run abandoned while PAUSED, because a wait has already ended the invocation `onAbort` would need.
  */
 
+import { hasPendingRunContinuation } from "../../agent/stream/tool-phase-utils.js";
 import { runSubagent, subagentResultToTaskOutput } from "../../agent/subagent/run-subagent.js";
 import {
   discardRegisteredPrefork,
@@ -121,8 +134,26 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
     onFinish: async () => {
       const managed = deps.getManagedAgent();
       pendingCalls = new Map();
-      if (managed) discardRegistered(managed, "run-finish");
+      if (!managed) return;
+      // `onFinish` ends this `chat()` INVOCATION, which a wait also produces — so the discard has to
+      // ask whether a joining tool phase is still coming (see the header). Read the channel that
+      // actually carries approval state: `ChatMiddlewareContext.messages` is the ModelMessage wire
+      // and has none, and `onFinish`'s info is only finishReason/duration/content/usage. The chat
+      // controller's chain is the same object as the agent's UI channel
+      // (`AgentChatController` calls `setUIChannel(this.channel)`); reading the controller first is
+      // the convention this repo uses for "the live chain" (see `ManagedAgent.getMessagesForLLM`).
+      //
+      // No channel at all is read as "not over": a stranded run can still be reached by an abort,
+      // while a run discarded on a guess cannot be recovered.
+      const messages =
+        managed.getChatController()?.getMessages() ??
+        managed.getUI()?.getMessages() ??
+        deps.getUIChannel?.()?.getMessages();
+      if (!messages || hasPendingRunContinuation(messages)) return;
+      discardRegistered(managed, "run-finish");
     },
+    // Abandonment boundaries discard UNCONDITIONALLY: an abort or an error means the pump that would
+    // have joined these pre-forks is not coming, whatever the message state happens to say.
     onAbort: async () => {
       const managed = deps.getManagedAgent();
       pendingCalls = new Map();
@@ -216,13 +247,32 @@ async function runPreForked(
   controller: AbortController,
   cleanup: () => void
 ): ReturnType<typeof runSubagent> {
+  // The parent's own `ManagedAgent` — also the handle on the run's abort surface below.
+  const managed = deps.getManagedAgent?.();
   try {
     // Pre-allocate the id so the coordinator can record it before the run starts: a spawn
     // that is discarded while queued never reaches `runSubagent`, and one discarded right
     // after starting must still be reportable as an orphan.
     const subagentId = generateId("subagent", { exists: (id) => deps.manager.getAgent(id) != null });
-    const managed = deps.getManagedAgent?.();
     if (managed) getTaskPreforkCoordinator(managed).recordSpawn(toolCallId, subagentId);
+
+    // Register with the RUN's abort surface, not only with the signal captured at spawn time.
+    //
+    // A pre-fork that outlives the invocation it was born in is no longer covered by its
+    // `parentSignal` listener: each pump installs a fresh `RunCoordinator.currentAbortController`
+    // (`setupAbortController`) and merely DETACHES the previous one's listeners, so that signal
+    // never fires. `addPendingAbortController` is the surface that does survive a pump boundary —
+    // `RunCoordinator.abort()` and the host-supplied `abortSignal` both drain it.
+    //
+    // Belt and braces with `ManagedAgent.cascadeAbortToChildren`, which reaches an active child by
+    // lookup even through a stale signal (which is why a user stop already worked); what this adds
+    // is the run-level abort that does not cascade to children at all.
+    //
+    // Registered here, at ADMISSION, rather than at spawn: a pre-fork discarded while still queued
+    // never reaches this function, and would otherwise register a controller nothing ever
+    // deregisters.
+    managed?.addPendingAbortController(controller);
+
     const result = await runSubagent(
       {
         subagentId,
@@ -244,6 +294,8 @@ async function runPreForked(
     }
     return result;
   } finally {
+    // A no-op for a controller that was never registered (a throw before the registration).
+    managed?.removePendingAbortController(controller);
     cleanup();
   }
 }

@@ -12,10 +12,14 @@ import { fileURLToPath } from "node:url";
 import {
   AgentConfigSchema,
   createExtensionsMiddleware,
+  createTaskPreforkMiddleware,
   getTaskPreforkCoordinator,
+  hasPendingRunContinuation,
   MAX_ACTIVE_TASK_PREFORKS,
   peekTaskPreforkCoordinator,
   resolveMaxConcurrentTasks,
+  RunCoordinator,
+  shouldContinueAgentPump,
   TaskPreforkCoordinator,
 } from "../dist/dev.mjs";
 
@@ -220,6 +224,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 //
 // Asserted as source because the bug was a CALL SITE (a middleware hook discarding at an
 // event that does not mean what it was assumed to mean), and no value assertion can see one.
+// The call site's BEHAVIOUR is driven for real further down; these assertions exist so that a
+// refactor cannot drop the call, or drop the guard around it, without failing here first.
 {
   const src = readFileSync(join(SRC, "managers/middleware/task-prefork-middleware.ts"), "utf8");
   // The per-iteration boundary must NOT discard registered runs.
@@ -230,18 +236,295 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     "RUN_STARTED drops iteration bookkeeping only — it must not discard registered pre-forks " +
       "(it fires once per iteration, so that aborted runs the next tool phase was about to join)"
   );
-  // Every per-run terminal boundary DOES discard.
-  for (const hook of ["onFinish", "onAbort", "onError"]) {
+
+  // `onFinish` ends an INVOCATION, which a wait also ends — so it discards, but only once the run is
+  // really over. Both halves are load-bearing: dropping the call leaks a stranded run, dropping the
+  // guard orphans a healthy one (the tool phase then spawns a second subagent for the same call id).
+  const finish = /onFinish: async \(\) => \{([\s\S]*?)\n\s{4}\}/.exec(src);
+  assert.ok(finish, "onFinish is declared");
+  const guard = /if \(!messages \|\| hasPendingRunContinuation\(messages\)\) return;/.exec(finish[1]);
+  assert.ok(
+    guard,
+    "onFinish asks hasPendingRunContinuation before discarding — an approval / client-tool wait ends " +
+      "the invocation while the run continues, so the joining tool phase is still coming"
+  );
+  const finishDiscard = /discardRegistered\(managed, "run-finish"\)/.exec(finish[1]);
+  assert.ok(finishDiscard, 'onFinish still discards a run that really ended ("run-finish")');
+  assert.ok(guard.index < finishDiscard.index, "the guard returns BEFORE the discard, not after it");
+
+  // An abandonment boundary needs no guard: there is no later pump to join the registered runs.
+  for (const [hook, cause] of [
+    ["onAbort", "run-abort"],
+    ["onError", "run-error"],
+  ]) {
     const body = new RegExp(`${hook}: async \\(\\) => \\{([\\s\\S]*?)\\n\\s{4}\\}`).exec(src);
     assert.ok(body, `${hook} is declared`);
-    assert.ok(/discardRegistered\(managed, "run-/.test(body[1]), `${hook} discards the attempt's pre-forks`);
+    assert.ok(
+      new RegExp(`discardRegistered\\(managed, "${cause}"\\)`).test(body[1]),
+      `${hook} discards the attempt's pre-forks`
+    );
+    assert.ok(
+      !/hasPendingRunContinuation/.test(body[1]),
+      `${hook} discards unconditionally — an abort/error means nothing is coming to join. (A run ` +
+        "abandoned while PAUSED reaches neither hook: a session switch / `/clear` there is covered " +
+        "by `ManagedAgent`'s abandonment seats — see validate:run-abort-ownership.)"
+    );
   }
+
   // …and the restart path discards too — the place a restart is actually known.
   const recovery = readFileSync(join(SRC, "managers/run-stream-recovery.ts"), "utf8");
   assert.ok(
     /discardRegisteredPrefork\(options\.managed, "run-start"/.test(recovery),
     "a restart-style retry discards the dead attempt's pre-forks"
   );
+}
+
+// --- the pause predicate: "a tool phase is still coming" ≠ "the run is over" ---
+//
+// This is the rule the middleware must not hand-roll a second version of. `AgentChatController`
+// breaks out of its pump on the same waits and re-pumps after them, so the predicate is literally
+// "will a later pump run the tool phase that joins my registered runs".
+{
+  const toolCall = (over = {}) => ({
+    type: "tool-call",
+    id: "call-1",
+    name: "run_command",
+    arguments: "{}",
+    ...over,
+  });
+  const conversation = (parts) => [
+    { id: "u1", role: "user", parts: [{ type: "text", content: "go" }] },
+    { id: "a1", role: "assistant", parts },
+  ];
+
+  const cases = [
+    [
+      "an approval the user has not decided",
+      toolCall({ state: "input-complete", approval: { id: "ap1", needsApproval: true } }),
+      true,
+    ],
+    ["a client tool awaiting an answer", toolCall({ name: "ask_user", state: "input-complete" }), true],
+    [
+      "an ANSWERED approval whose tool has not executed yet",
+      toolCall({ state: "input-complete", approval: { id: "ap1", needsApproval: true, approved: true } }),
+      true,
+    ],
+    ["a server tool deferred by batch gating", toolCall({ state: "input-complete" }), true],
+    ["only completed tools", toolCall({ state: "complete", output: { ok: true } }), false],
+  ];
+  for (const [label, part, expected] of cases) {
+    assert.equal(
+      hasPendingRunContinuation(conversation([part])),
+      expected,
+      `hasPendingRunContinuation must treat ${label} as ${expected ? "'still coming'" : "'over'"}`
+    );
+  }
+
+  // The distinction that makes this NOT `shouldContinueAgentPump`: a turn whose tools already ran and
+  // whose only remainder is the model's reply has nothing left to join, so it must not hold a run.
+  const terminal = toolCall({ state: "complete", output: { ok: true } });
+  assert.equal(shouldContinueAgentPump(conversation([terminal])), true, "the controller pumps for the reply text");
+  assert.equal(hasPendingRunContinuation(conversation([terminal])), false, "…but no tool phase is pending");
+  console.log("ok  the pause predicate separates 'waiting for input' from 'run is over'");
+}
+
+// --- the discard call site, driven: a pausing invocation keeps its pre-forks ---
+//
+// Value-level, through the middleware the pipeline actually runs. `getChunk`/`trySpawn` are not
+// involved: a registered pre-fork is seeded directly, which is the state `onFinish` finds.
+{
+  const toolCall = (over = {}) => ({
+    type: "tool-call",
+    id: "call-1",
+    name: "run_command",
+    arguments: "{}",
+    ...over,
+  });
+  const conversation = (parts) => [
+    { id: "u1", role: "user", parts: [{ type: "text", content: "go" }] },
+    { id: "a1", role: "assistant", parts },
+  ];
+  const APPROVAL_PENDING = toolCall({ state: "input-complete", approval: { id: "ap1", needsApproval: true } });
+  const ALL_DONE = toolCall({ state: "complete", output: { ok: true } });
+
+  /** A fake parent: the middleware reads the message chain and the abort surface, nothing else. */
+  const fakeParent = (messages, { noChannel = false } = {}) => ({
+    id: "parent-1",
+    config: {},
+    getChatController: noChannel ? () => undefined : () => ({ getMessages: () => messages }),
+    getUI: noChannel ? () => undefined : () => ({ getMessages: () => messages }),
+    addPendingAbortController: () => {},
+    removePendingAbortController: () => {},
+  });
+
+  const middlewareFor = (managed, reported = []) =>
+    createTaskPreforkMiddleware({
+      getManagedAgent: () => managed,
+      manager: { getAgent: () => undefined },
+      emitEvent: (type, payload) => {
+        if (type === "subagent:prefork-discarded") reported.push(payload);
+      },
+    });
+
+  /** Seed a registered pre-fork for `managed`, as the eager start would have left it. */
+  const seed = (managed, toolCallId) => {
+    let cancelled = 0;
+    const coordinator = getTaskPreforkCoordinator(managed);
+    coordinator.start(
+      toolCallId,
+      () => {
+        cancelled += 1;
+      },
+      () => new Promise(() => {})
+    );
+    coordinator.recordSpawn(toolCallId, "sub-unjoined");
+    return { coordinator, cancelled: () => cancelled };
+  };
+
+  // (a) An approval wait: the next pump's tool phase joins the run, so nothing may be discarded.
+  {
+    const managed = fakeParent(conversation([APPROVAL_PENDING]));
+    const { coordinator, cancelled } = seed(managed, "call-waiting");
+    await middlewareFor(managed).onFinish();
+    assert.equal(coordinator.size, 1, "a pausing invocation keeps the registered pre-fork");
+    assert.equal(cancelled(), 0, "…and does not abort it — the joining tool phase is still coming");
+  }
+
+  // (b) A run that really ended: discard, and report what was orphaned.
+  {
+    const managed = fakeParent(conversation([ALL_DONE]));
+    const reported = [];
+    const { coordinator, cancelled } = seed(managed, "call-finished");
+    await middlewareFor(managed, reported).onFinish();
+    assert.equal(coordinator.size, 0, "an invocation with nothing pending discards");
+    assert.equal(cancelled(), 1, "…and cancels the run");
+    assert.deepEqual(
+      reported,
+      [{ toolCallId: "call-finished", cause: "run-finish", subagentIds: ["sub-unjoined"] }],
+      "the discard is reported with cause + the orphan it names"
+    );
+  }
+
+  // (c) No channel to read: an unknown state must not be read as "the run is over" — a stranded run
+  // can still be reached by an abort, a discarded one cannot be recovered.
+  {
+    const managed = fakeParent([], { noChannel: true });
+    const { coordinator, cancelled } = seed(managed, "call-unknown");
+    await middlewareFor(managed).onFinish();
+    assert.equal(coordinator.size, 1, "an unreadable channel keeps the run");
+    assert.equal(cancelled(), 0);
+  }
+
+  // (d) Abandonment is unconditional: a wait being pending changes nothing there.
+  for (const hook of ["onAbort", "onError"]) {
+    const managed = fakeParent(conversation([APPROVAL_PENDING]));
+    const { coordinator, cancelled } = seed(managed, `call-${hook}`);
+    await middlewareFor(managed)[hook]();
+    assert.equal(coordinator.size, 0, `${hook} discards even with a wait pending`);
+    assert.equal(cancelled(), 1, `${hook} cancels the run`);
+  }
+
+  // (e) The pause must not disturb the cap/queue contract: a queued run still rolls forward when a
+  // slot frees, and the cap still holds across the kept pause.
+  {
+    const managed = fakeParent(conversation([APPROVAL_PENDING]));
+    managed.config = { maxConcurrentTasks: 1 };
+    const middleware = middlewareFor(managed);
+    const coordinator = getTaskPreforkCoordinator(managed);
+    const starts = [];
+    let releaseFirst;
+    coordinator.start(
+      "call-a",
+      () => {},
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = resolve;
+        }),
+      () => starts.push("a")
+    );
+    coordinator.start(
+      "call-b",
+      () => {},
+      () => Promise.resolve({ subagentId: "sub-b", output: "done" }),
+      () => starts.push("b")
+    );
+    await sleep(5);
+    assert.deepEqual(starts, ["a"], "cap 1 admits the first run and queues the second");
+
+    await middleware.onFinish();
+    assert.equal(coordinator.size, 2, "the pause keeps the admitted run and the queued one");
+
+    releaseFirst({ subagentId: "sub-a", output: "done" });
+    await coordinator.join("call-a");
+    await sleep(5);
+    assert.deepEqual(starts, ["a", "b"], "the queued run still starts when the slot frees");
+    assert.equal(coordinator.activeCount, 0, "no slot stays held once the runs are done");
+    assert.equal(coordinator.size, 1, "…and the rolled-forward run is left for the tool phase to join");
+  }
+
+  console.log("ok  the discard call site keeps a pausing invocation's pre-forks");
+}
+
+// --- the middleware reads the chain the wait was detected on ---
+//
+// The value cases above pass fixtures in, so on their own they would also pass with a middleware that
+// reads a channel nothing ever writes approval state to. The identity is the point: the status
+// controller flips to `waiting` from `this.channel.getMessages()`, and `AgentChatController` wires
+// that very channel onto the agent — which is the chain `onFinish` asks.
+{
+  const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  assert.ok(
+    /setUIChannel\(this\.channel\)/.test(controller),
+    "the agent's UI channel IS the chat controller's chain, so `managed.getChatController().getMessages()` " +
+      "is the same array the approval wait was detected in"
+  );
+  const src = readFileSync(join(SRC, "managers/middleware/task-prefork-middleware.ts"), "utf8");
+  assert.ok(/managed\.getChatController\(\)\?\.getMessages\(\)/.test(src), "…and onFinish reads exactly that");
+  console.log("ok  the pause test reads the chain the wait was detected on");
+}
+
+// --- a pre-fork that outlives its invocation stays reachable by a run-level abort ---
+//
+// Keeping the run across a pause is only safe if the run can still stop it. The `parentSignal` a
+// pre-fork captures at spawn is replaced at the next pump (`setupAbortController` installs a fresh
+// `currentAbortController` and merely DETACHES the old listeners), so the run's pending-abort list
+// is what has to cover it. Source half first: the registration exists, and is removed when the run
+// finishes so it cannot accumulate.
+{
+  const src = readFileSync(join(SRC, "managers/middleware/task-prefork-middleware.ts"), "utf8");
+  const fn = /async function runPreForked\(([\s\S]*?)\n\}/.exec(src);
+  assert.ok(fn, "runPreForked is present");
+  assert.ok(
+    /managed\?\.addPendingAbortController\(controller\)/.test(fn[1]),
+    "the pre-fork registers its controller on the RUN's abort surface (a pump boundary replaces the " +
+      "signal it captured at spawn)"
+  );
+  assert.ok(
+    /managed\?\.removePendingAbortController\(controller\)/.test(fn[1]),
+    "…and deregisters it when the run finishes, so a settled controller cannot accumulate"
+  );
+}
+{
+  // …and the surface itself drains what it holds, on both abort paths.
+  const run = new RunCoordinator();
+  const preFork = new AbortController();
+  run.addPendingAbortController(preFork);
+  run.abort("user-cancelled");
+  assert.equal(preFork.signal.aborted, true, "RunCoordinator.abort() drains the pending list");
+  assert.equal(preFork.signal.reason, "user-cancelled", "…carrying the run's reason (the stop taxonomy reads it)");
+
+  const hosted = new RunCoordinator();
+  const hostAbort = new AbortController();
+  hosted.setupAbortController(hostAbort.signal, { onAborted: () => {} });
+  const preFork2 = new AbortController();
+  hosted.addPendingAbortController(preFork2);
+  hostAbort.abort("host-abort");
+  assert.equal(
+    preFork2.signal.aborted,
+    true,
+    "a host-supplied abortSignal drains it too — the run-level abort that does NOT cascade to children"
+  );
+  console.log("ok  a surviving pre-fork stays reachable by a run-level abort");
 }
 
 // --- abortAll(cause) reports what it discarded, with the spawned subagents ---

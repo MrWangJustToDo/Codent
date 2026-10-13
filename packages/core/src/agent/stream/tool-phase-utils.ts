@@ -130,6 +130,32 @@ export function shouldContinueAgentPump(messages: UIMessage[]): boolean {
   return needsToolPhaseContinue(messages) || needsAgentResponseAfterTools(messages);
 }
 
+/**
+ * Whether the run still has a TOOL PHASE coming — the half of "will the controller pump again?" that
+ * means a `chat()` invocation ending does not end the run.
+ *
+ * Three shapes count, and each contributes something the others miss:
+ *
+ * - an approval the user has not decided (`hasPendingToolApprovals`) — skipped both by
+ *   `hasDeferredToolExecution` and by `hasApprovalRespondedToolsPendingExecution`, which each ignore
+ *   un-answered parts;
+ * - a client tool without an answer (`hasPendingAskUser`) — excluded from `hasDeferredToolExecution`
+ *   by `CLIENT_TOOL_NAMES`;
+ * - a tool phase that has not executed yet: an ANSWERED approval, or a server tool still deferred by
+ *   batch gating (`needsToolPhaseContinue`).
+ *
+ * Deliberately not `needsAgentResponseAfterTools`, which is why this is not `shouldContinueAgentPump`:
+ * that term covers a turn whose tools already ran and whose only remainder is the model's reply text.
+ * Nothing is left to join there, so counting it would keep runs the tool phase is already done with.
+ *
+ * One spelling on purpose. `AgentChatController.pumpToolPhases` breaks out on the same wait checks
+ * and re-pumps after them, so a boundary that reads this cannot disagree with the pump loop about
+ * whether the run is over — the disagreement is the bug this exists to prevent.
+ */
+export function hasPendingRunContinuation(messages: UIMessage[]): boolean {
+  return hasPendingToolApprovals(messages) || hasPendingAskUser(messages) || needsToolPhaseContinue(messages);
+}
+
 export function hasPendingToolApprovals(messages: UIMessage[]): boolean {
   return countPendingToolApprovals(messages) > 0;
 }

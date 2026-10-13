@@ -69,6 +69,7 @@ import { AGENT_LOG_DIR, type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan-prompts.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
+import { discardRegisteredPrefork, peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
 import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
@@ -1657,6 +1658,16 @@ export class ManagedAgent {
   abort(reason?: string): void {
     abortManagedAgentRun(this, reason);
     this.cascadeAbortToChildren(reason);
+    // Drop the pre-forked `task` runs this agent started, HERE and not only at the stream's terminal
+    // hooks — a run can be abandoned while `chat()` is not running at all.
+    //
+    // TanStack's `onAbort` fires from inside a `chat()` invocation (its run loop's `finally`), and a
+    // wait ENDS that invocation: a run abandoned while paused for an approval or a client tool
+    // reaches no terminal hook, so middleware-only discarding leaves the eager runs registered —
+    // streaming on until some later run discards them and reports them as its own orphans. See
+    // {@link discardRegisteredPreforkRuns} for the other seats that abandon a run this way.
+    // `cascadeAbortToChildren` above is the precedent for touching child bookkeeping from here.
+    this.discardRegisteredPreforkRuns();
   }
 
   /**
@@ -1680,6 +1691,36 @@ export class ManagedAgent {
         // Never let a cascade failure break the parent's own abort path.
       }
     }
+  }
+
+  /**
+   * Throw away the eager `task` runs this agent started, reporting what each discard orphaned.
+   *
+   * For the seats that abandon a run without reaching a stream terminal hook. A run left behind is
+   * not idle: it keeps streaming into whatever transcript comes next, and is later reported as an
+   * orphan of a run that never spawned it.
+   *
+   * - `abort()` — the funnel for every run abort (Esc / force-submit via `interruptCurrentRun`, the
+   *   local-session dispatch stop, `AgentManager.destroyAgent`). A session switch reaches it too when
+   *   the run is PAUSED: `stopIfActive` treats a registered pre-fork as "still active" and
+   *   interrupts, because those subagents can still be writing into the channel being replaced;
+   * - `reset()` — `/clear` and a new session rewind the run state through
+   *   `RunCoordinator.resetRunState` without an agent abort, so neither a stream hook nor `abort()`
+   *   runs. (`resetRunState` does abort the eager run's controller, which stops the subagent, but the
+   *   registry record survives and is misreported by a later run.)
+   *
+   * Non-creating: an agent that never pre-forked anything allocates nothing and reports nothing.
+   */
+  private discardRegisteredPreforkRuns(): void {
+    const coordinator = peekTaskPreforkCoordinator(this);
+    if (!coordinator || coordinator.size === 0) return;
+    discardRegisteredPrefork(this, "run-abort", (discard) => {
+      this.emitEvent("subagent:prefork-discarded", {
+        toolCallId: discard.toolCallId,
+        cause: discard.cause,
+        subagentIds: discard.subagentIds,
+      });
+    });
   }
 
   isAbortError(err: unknown): boolean {
@@ -1837,8 +1878,11 @@ export class ManagedAgent {
   }
 
   /**
-   * Stop the in-flight run if one exists (session switch). Idle hosts are a
-   * no-op, so resuming a session does not fire a spurious abort.
+   * Stop the in-flight run if one exists (session switch).
+   *
+   * Safe when idle: `stopIfActive` is a no-op unless a pump is live or an eager `task` run is still
+   * registered — a PAUSED run's subagents can still be writing into the channel being replaced — so
+   * a plain resume fires no spurious abort.
    */
   stopActiveRun(reason = "session-switch"): void {
     this.chatController?.stopIfActive(reason);
@@ -1855,6 +1899,10 @@ export class ManagedAgent {
     this.setAutoModeEnabled(false);
     this.approvals.clear();
     this.run.resetRunState();
+    // `resetRunState` stops the run's controllers — the eager runs included, through the run's
+    // pending-abort surface — but not their registry records, which would be reported later as some
+    // other run's orphans. Same reason as `abort()`: a PAUSED run reaches no stream terminal hook.
+    this.discardRegisteredPreforkRuns();
     this.compaction.resetReactiveCompactRetries();
     this.statusController.resetToIdle();
     this.setError("");

@@ -8,7 +8,7 @@
  * | Reason | What happened | Summary notice |
  * |---|---|---|
  * | `user` | the user cancelled (Esc) | `[Task cancelled by user.]` |
- * | `parent-run` | the parent's run was discarded (stream restart) or ended while the subagent streamed — e.g. the approval pause that also restarts the run | `[Task stopped with its parent run.]` |
+ * | `parent-run` | the parent's run moved on: a stream restart / force-submit discarded it, or the `chat()` invocation the subagent was streaming under ended while it streamed — an approval or client-tool wait ends the invocation that way, and the run then continues as a new pump | `[Task stopped with its parent run.]` |
  * | `parent-stop` | the parent agent was aborted or destroyed, taking its children with it | `[Task stopped with its parent agent.]` |
  * | `unknown` | aborted, but nothing recorded why | `[Task cancelled.]` |
  *

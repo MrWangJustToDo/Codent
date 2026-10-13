@@ -315,15 +315,30 @@ export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPre
 /**
  * Discard every registered pre-fork, and report each one to the log bridge.
  *
- * The one place registered runs may be thrown away, so both producers of a discard go
- * through it: the run boundaries (`onFinish`/`onAbort`/`onError`, which end the possibility
- * that a tool phase arrives to join) and the restart-style recovery path (which ends the
- * attempt that spawned them — see `prepareRestartStyleRetry`).
+ * The one place registered runs may be thrown away, so every producer of a discard goes through it.
+ * The seats are listed here as one inventory because they do not share a call path:
  *
- * `RUN_STARTED` deliberately does NOT: it fires once per model **iteration**, so a healthy
- * pre-fork started on iteration N and joined right after it would be aborted by iteration
- * N+1's boundary before anything could join it. That is the orphan this contract exists to
- * prevent, and it was introduced by treating the per-iteration event as a per-run one.
+ * - the stream boundaries `onFinish` (only when nothing is pending) / `onAbort` / `onError`;
+ * - `ManagedAgent.abort()` — every run abort funnels through it (Esc, force-submit, a host stop,
+ *   destroy), and a session switch reaches it too while PAUSED, via `stopIfActive`'s guard;
+ * - `ManagedAgent.reset()` — `/clear` and a new session rewind the run state without an agent abort;
+ * - the restart-style recovery path (which ends the attempt that spawned them — see
+ *   `prepareRestartStyleRetry`).
+ *
+ * The agent-level seats exist because PAUSED is the state a stream hook cannot describe: a wait ends
+ * the `chat()` invocation, so `onAbort` never fires for a run abandoned in that window.
+ *
+ * Two ways this has been called too eagerly. Both orphan a HEALTHY run — the aborted subagent stays
+ * in the catalog while the tool phase, finding nothing registered, spawns a second one for the same
+ * call id:
+ *
+ * - on `RUN_STARTED`, which fires once per model **iteration**: iteration N+1's boundary aborted a
+ *   pre-fork that iteration N's tool phase was about to join;
+ * - on an `onFinish` that merely ends a PAUSING invocation. An approval or client-tool wait ends the
+ *   `chat()` invocation and the controller re-pumps after it, so the joining tool phase is still
+ *   coming. The caller must therefore ask `hasPendingRunContinuation` first and reach this function
+ *   only when nothing is pending. The abandonment boundaries (`onAbort`/`onError`) need no such
+ *   check: there the pump is genuinely not coming.
  */
 export function discardRegisteredPrefork(
   managed: ManagedAgent,

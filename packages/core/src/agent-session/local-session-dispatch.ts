@@ -71,7 +71,8 @@ export async function dispatchLocalAgentSessionCommand(
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
         // Stop first: a live pump would keep streaming chunks into the channel we
         // are about to empty (and re-persist the transcript the user just cleared).
-        // No-op when idle.
+        // Also true without a pump: a paused run's eager `task` subagents are still writing, which
+        // `stopIfActive` treats as "still active" (see its guard).
         chat.stopIfActive?.("clear");
         chat.clearMessages();
         return { ok: true };

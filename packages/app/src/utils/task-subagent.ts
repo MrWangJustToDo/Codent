@@ -1,12 +1,21 @@
 /**
  * Which subagent row a `task` tool call should render.
  *
- * The root cause of the orphan (a pre-fork aborted at a model-iteration boundary, then a
- * second subagent spawned for the same call id) is fixed in core. This is the read-side
- * half of the defence: resolving a call id to "the first row with this binding" is a trap
- * that outlives its cause. `snapshot.subagents` is built from `childIds`, which is spawn
- * order, so an orphan always precedes the run that replaced it — the first match is exactly
- * the wrong one when both exist.
+ * Read-side defence-in-depth for orphans — a pre-fork that was aborted while a SECOND subagent was
+ * spawned for the same call id. Resolving a call id to "the first row with this binding" is a trap
+ * that outlives any single cause of it: `snapshot.subagents` is built from `childIds`, which is spawn
+ * order, so an orphan always precedes the run that replaced it, and the first match is exactly the
+ * wrong one when both exist.
+ *
+ * It has outlived two generations of that cause, which is the argument for keeping it. First,
+ * discarding on `RUN_STARTED` — a per-iteration event, so a healthy pre-fork died at the next
+ * iteration's boundary. Then, discarding on an `onFinish` that merely ended a *pausing* invocation
+ * (an approval / client-tool wait ends the `chat()` invocation while the run continues). Both are
+ * fixed in core, and a third is not implausible.
+ *
+ * What it does NOT cover is the surface the orphan is most visible on: the task panel renders
+ * `snapshot.subagents` directly, so a stranded row lists there even while this resolution correctly
+ * picks the live one for the transcript row.
  *
  * Two properties make the resolution robust rather than merely reordered:
  *

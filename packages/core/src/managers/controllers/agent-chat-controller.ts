@@ -21,6 +21,7 @@ import {
   needsToolPhaseContinue,
   shouldContinueAgentPump,
 } from "../../agent/stream/tool-phase-utils.js";
+import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
 import { analyzeCommand, createAnalysisContext } from "../../agent/tools/command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "../../agent/tools/command-safety/command-approval-policy.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
@@ -109,16 +110,17 @@ export class AgentChatController {
   }
 
   /**
-   * Stop the in-flight pump only when one is actually running.
+   * Stop the in-flight run when any part of it is still running.
    *
-   * The transcript is about to be replaced (session switch); an interrupted
-   * pump would otherwise keep writing chunks into the new session's channel and
-   * persist the interleaved result. Unlike {@link stop} this is a no-op when
-   * idle, so a plain resume does not emit a spurious abort/finalize or cancel
-   * tool calls that merely *look* incomplete in a restored transcript.
+   * `pumpDepth` is not the whole question. A run PAUSED for an approval or a client tool has no live
+   * pump, yet it can still have eagerly started `task` subagents streaming into the channel this is
+   * about to replace — nothing else will join them, and this is their only stop, so a registered
+   * pre-fork is reason enough to stop the run. With neither a pump nor a pre-fork it stays a no-op,
+   * so a plain resume fires no spurious abort/finalize.
    */
   stopIfActive(reason = "session-switch"): void {
-    if (this.pumpDepth <= 0) return;
+    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
+    if (this.pumpDepth <= 0 && registeredPrefork === 0) return;
     this.interruptCurrentRun(reason);
   }
 

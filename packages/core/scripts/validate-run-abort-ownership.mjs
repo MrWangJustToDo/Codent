@@ -14,7 +14,14 @@
 
 import assert from "node:assert/strict";
 
-import { AgentRunner, AgentUIChannel, ManagedAgent, RunCoordinator } from "../dist/dev.mjs";
+import {
+  AgentRunner,
+  AgentUIChannel,
+  getTaskPreforkCoordinator,
+  ManagedAgent,
+  peekTaskPreforkCoordinator,
+  RunCoordinator,
+} from "../dist/dev.mjs";
 
 // ---------------------------------------------------------------------------
 // 1. RunToken lifecycle
@@ -133,7 +140,7 @@ function createManaged(id) {
         setUIMessages: () => {},
         getMessagesForLLM: () => [],
       },
-      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, agent: () => {}, clear: () => {} },
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, agent: () => {}, clear: () => {}, setRun: () => {} },
       tools: {},
       getTodoManager: () => null,
     }
@@ -170,6 +177,75 @@ function createManaged(id) {
   idle.setStatus("idle");
   parent.abort("user-cancelled-2");
   assert.equal(idle.getStatus(), "idle", "idle child must not be aborted");
+}
+
+// ---------------------------------------------------------------------------
+// 5. A registered pre-fork is reclaimed by EVERY way a run is abandoned
+// ---------------------------------------------------------------------------
+//
+// The regression this locks: TanStack's `onAbort` fires from inside a `chat()` invocation (its run
+// loop's `finally`), and a WAIT ends that invocation. A run abandoned while paused therefore reaches
+// no terminal hook at all, and a middleware-only discard left the eager subagent registered — still
+// streaming, for the session-switch seat, into the transcript replacing its own.
+//
+// Four seats, because they do not share a path. `abort()` is the run-abort funnel. `reset()` rewinds
+// the run state through `RunCoordinator.resetRunState` without an agent abort (`resetRunState` does
+// abort the eager run's controller, which stops the subagent, but the registry record would survive
+// to be misreported by a later run). A session switch goes through `stopIfActive`, whose guard has to
+// treat a registered pre-fork as "still active": `pumpDepth` alone calls a PAUSED run idle, and
+// nothing else would stop those subagents.
+{
+  /** A real agent with a chat controller, a seeded pre-fork, and its emitted discards captured. */
+  const abandonedRun = () => {
+    const managed = createManaged("prefork-parent");
+    managed.initChat({ getAgent: () => undefined, on: () => {} }, []);
+    const reported = [];
+    managed.emitEvent = (type, data) => {
+      if (type === "subagent:prefork-discarded") reported.push(data);
+    };
+    const controller = new AbortController();
+    let cancelled = 0;
+    const coordinator = getTaskPreforkCoordinator(managed);
+    coordinator.start(
+      "call-paused",
+      () => {
+        cancelled += 1;
+        controller.abort("discarded");
+      },
+      () => new Promise(() => {})
+    );
+    coordinator.recordSpawn("call-paused", "subagent-paused");
+    // What a real pre-fork does at admission (see `task-prefork-middleware`): the run's controller
+    // must be able to stop it whether or not the discard runs.
+    managed.addPendingAbortController(controller);
+    return {
+      managed,
+      reported,
+      controller,
+      size: () => peekTaskPreforkCoordinator(managed)?.size ?? 0,
+      cancelled: () => cancelled,
+    };
+  };
+
+  const seats = [
+    ["ManagedAgent.abort()", (s) => s.managed.abort("user-cancelled")],
+    ["ManagedAgent.reset()", (s) => s.managed.reset()],
+    ["ManagedAgent.stopActiveRun() while paused", (s) => s.managed.stopActiveRun("session-switch")],
+    ["chat.stopIfActive() while paused", (s) => s.managed.getChatController().stopIfActive("clear")],
+  ];
+  for (const [label, act] of seats) {
+    const seat = abandonedRun();
+    assert.equal(seat.size(), 1, `${label}: the eager run starts registered`);
+    act(seat);
+    assert.equal(seat.size(), 0, `${label}: the registered pre-fork is reclaimed`);
+    assert.equal(seat.cancelled(), 1, `${label}: …its run is cancelled`);
+    assert.equal(seat.controller.signal.aborted, true, `${label}: …and its controller stops streaming`);
+    assert.deepEqual(
+      seat.reported,
+      [{ toolCallId: "call-paused", cause: "run-abort", subagentIds: ["subagent-paused"] }],
+      `${label}: …and the orphan is reported with the abort cause`
+    );
+  }
 }
 
 console.log("run-abort-ownership validation passed");
