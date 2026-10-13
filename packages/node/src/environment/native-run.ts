@@ -17,6 +17,37 @@ import type { RunCommandOptions, CommandResult, StartCommandHandle, StartCommand
 type ResolvePath = (inputPath: string) => string;
 
 /**
+ * Map a failed `spawnCommand` to a `CommandResult`, or rethrow the typed abort/timeout errors.
+ *
+ * A safety kill (the last-resort guard for a process that never exits) is not a command failure:
+ * the command's own stderr is preserved and the guard's reason is appended ALONGSIDE it — never
+ * `stderr || reason`, which silently drops one of the two — and the exit code is `-1` (the schema's
+ * "not finished" value), not a fabricated `1`. A generic spawn error keeps the previous `1`.
+ *
+ * Exported so the contract is directly testable: the guard bound is a process-wide constant, so
+ * driving it end-to-end would need a 30s command.
+ */
+export function resolveRunFailure(params: {
+  error: unknown;
+  stdout: string;
+  stderr: string;
+  /** Caller timeout in milliseconds, for the timeout message. */
+  timeoutMs?: number;
+}): { stdout: string; stderr: string; exitCode: number } {
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  if (message === "aborted") {
+    throw new ExecutionError("aborted", "Command aborted");
+  }
+  if (message.startsWith("timeout:")) {
+    throw new ExecutionError("timeout", `Command timed out after ${params.timeoutMs ?? 0}ms`);
+  }
+  const safetyKill = message.startsWith("safety-timeout:");
+  const reason = safetyKill ? message.slice("safety-timeout:".length) : `Error: ${message}`;
+  const stderr = params.stderr.trim() ? `${params.stderr}\n\n${reason}` : reason;
+  return { stdout: params.stdout, stderr, exitCode: safetyKill ? -1 : 1 };
+}
+
+/**
  * Execute a command in the workspace with native bash, optionally OS-sandboxed.
  */
 export async function runNativeCommand(
@@ -76,26 +107,16 @@ export async function runNativeCommand(
       durationMs: Date.now() - startTime,
     };
   } catch (err) {
-    const stdout = stdoutChunks.join("");
-    let stderr = stderrChunks.join("");
-
-    if (err instanceof Error) {
-      if (err.message === "aborted") {
-        throw new ExecutionError("aborted", "Command aborted");
-      }
-      if (err.message.startsWith("timeout:")) {
-        throw new ExecutionError("timeout", `Command timed out after ${options?.timeout ?? 0}ms`);
-      }
-    }
-
-    if (osSandbox) {
-      stderr = annotateOsSandboxStderr(command, stderr || String(err));
-    }
+    const mapped = resolveRunFailure({
+      error: err,
+      stdout: stdoutChunks.join(""),
+      stderr: stderrChunks.join(""),
+      timeoutMs: options?.timeout,
+    });
 
     return {
-      stdout,
-      stderr: stderr || String(err),
-      exitCode: 1,
+      ...mapped,
+      stderr: osSandbox ? annotateOsSandboxStderr(command, mapped.stderr) : mapped.stderr,
       durationMs: Date.now() - startTime,
     };
   } finally {

@@ -388,10 +388,9 @@ export async function spawnCommand(command: string, options: SpawnShellStringOpt
       }
     }
 
-    // Wait for the process to finish (waitForChildProcess handles spawn errors via child.on("error"))
-    // Pass the caller timeout so the internal safety timeout only acts as a
-    // hang guard for the detached-stdio edge case, never racing legitimate
-    // long-running commands (see waitForChildProcess docs).
+    // Wait for the process to finish (waitForChildProcess handles spawn errors via child.on("error")).
+    // Pass the caller timeout so the internal safety guard, a last resort for a process that never
+    // exits, is scaled past the caller's own deadline and cannot race it (see waitForChildProcess).
     const safetyTimeoutMs =
       options.timeout !== undefined && options.timeout > 0
         ? Math.max(MIN_SAFETY_TIMEOUT_MS, options.timeout * 1000 + SAFETY_TIMEOUT_MARGIN_MS)
@@ -439,11 +438,12 @@ export async function spawnCommand(command: string, options: SpawnShellStringOpt
 /**
  * Minimum safety timeout (ms) used when no caller timeout is provided.
  *
- * This is a defense-in-depth hang guard for the edge case where a detached
- * process exits but keeps inherited stdio handles open, preventing `close`
- * from firing. It must NOT be reached by legitimate commands; long-running
- * commands should pass a caller `timeout` so the safety timeout scales with
- * them instead of racing completion.
+ * This is the last-resort guard for a process that has not **exited** (`waitForChildProcess` judges
+ * completion on the child's `exit` event; the "a descendant keeps `close` open after exit" case is
+ * handled by the drain grace, not here). It must not be reached by a legitimate command: `run_command`
+ * supplies a default deadline of its own, and a caller with a known deadline passes
+ * `max(MIN_SAFETY_TIMEOUT_MS, callerTimeoutMs + SAFETY_TIMEOUT_MARGIN_MS)` so the guard scales with
+ * the deadline instead of racing it.
  */
 const MIN_SAFETY_TIMEOUT_MS = 30_000;
 
@@ -451,53 +451,100 @@ const MIN_SAFETY_TIMEOUT_MS = 30_000;
 const SAFETY_TIMEOUT_MARGIN_MS = 10_000;
 
 /**
- * Wait for a child process to exit without hanging on inherited stdio
- * handles held open by detached descendants.
+ * Bounded grace used in two places, both about not waiting forever on stdio:
  *
- * This handles the case where a detached child process inherits the parent's
- * stdio handles, which can prevent the parent from detecting child exit.
+ * - after the process **exits**: give `close` a short window to drain the tail, then settle with the
+ *   real exit code (a descendant holding the stdout pipe open after exit must not turn a finished
+ *   command into a false "did not exit");
+ * - after the safety guard **kills** a still-running process: give the streams a short window to
+ *   deliver in-flight output before rejecting, so a caller joining the captured chunks afterwards
+ *   has the complete partial output.
+ */
+const DRAIN_GRACE_MS = 2_000;
+
+/**
+ * Wait for a child process to exit, tolerating stdio handles a detached descendant keeps open.
  *
- * The `safetyTimeoutMs` parameter (defaults to {@link MIN_SAFETY_TIMEOUT_MS})
- * is the last-resort hang guard. When a caller timeout is known, pass
- * `max(MIN_SAFETY_TIMEOUT_MS, callerTimeoutMs + SAFETY_TIMEOUT_MARGIN_MS)`
- * so the safety guard cannot race a legitimate long-running command. If the
- * safety guard ever fires, it rejects (rather than silently resolving `null`)
- * so the caller can surface a real error instead of a bogus exit code.
+ * Completion is judged on the child's **exit** event. `close` (process gone AND streams drained) is
+ * preferred, but a descendant that inherits the stdout pipe keeps `close` open after exit, so a
+ * bounded {@link DRAIN_GRACE_MS} after exit settles with the REAL exit code — not a fabricated
+ * failure. Resolving on `exit` alone would truncate the tail; the grace is what keeps trailing bytes.
+ *
+ * The `safetyTimeoutMs` parameter (defaults to {@link MIN_SAFETY_TIMEOUT_MS}) is the last-resort hang
+ * guard for a process that never exits at all. It fires only while the process is still running
+ * (never while draining after exit), kills the whole process tree, and rejects with a reason naming
+ * the bound. When a caller deadline is known, pass
+ * `max(MIN_SAFETY_TIMEOUT_MS, callerTimeoutMs + SAFETY_TIMEOUT_MARGIN_MS)` so the guard cannot race a
+ * legitimate long command; `run_command` also supplies a default deadline of its own.
  */
 export function waitForChildProcess(child: ChildProcess, safetyTimeoutMs?: number): Promise<number | null> {
+  const bound = safetyTimeoutMs ?? MIN_SAFETY_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     // Close stdin immediately since we don't write to it
     child.stdin?.destroy();
 
-    let resolved = false;
+    let settled = false;
+    let exited = false;
+    let exitCode: number | null = null;
+    let guardError: Error | undefined;
+    const timers: { safety?: NodeJS.Timeout; drain?: NodeJS.Timeout } = {};
 
+    const cleanup = () => {
+      if (timers.safety) clearTimeout(timers.safety);
+      if (timers.drain) clearTimeout(timers.drain);
+      child.off("exit", onExit);
+      child.off("close", onClose);
+      child.off("error", onError);
+    };
+    const settle = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(code);
+    };
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onExit = (code: number | null) => {
+      // After a guard kill the outcome is a rejection, owned by the guard's drain — do not resolve.
+      if (guardError) return;
+      exited = true;
+      exitCode = code;
+      // The process is done; give the pipes a short, bounded grace to flush the tail. A descendant
+      // holding them open must not push this into the safety guard's "did not exit".
+      timers.drain = setTimeout(() => settle(exitCode), DRAIN_GRACE_MS);
+    };
     const onClose = (code: number | null) => {
-      if (!resolved) {
-        resolved = true;
-        resolve(code);
+      if (guardError) {
+        fail(guardError);
+        return;
       }
+      // Process gone AND streams drained — the ideal settle. Prefer the real exit code if seen.
+      settle(exited ? exitCode : code);
     };
+    const onError = (err: Error) => fail(err);
 
-    const onError = (err: Error) => {
-      if (!resolved) {
-        resolved = true;
-        reject(err);
-      }
-    };
+    timers.safety = setTimeout(() => {
+      // Only a process that has NOT exited is a hang. If it exited and we are merely draining the
+      // pipes, the drain timer owns settling.
+      if (settled || exited) return;
+      guardError = new Error(
+        `safety-timeout:command did not exit within ${bound}ms (still running); process tree killed`
+      );
+      if (child.pid) void killProcessTree(child.pid, "SIGKILL");
+      // `kill` closes the pipes; give the streams a bounded window to deliver in-flight output before
+      // rejecting, so a caller joining the captured chunks afterwards has the full partial output.
+      timers.drain = setTimeout(() => {
+        if (guardError) fail(guardError);
+      }, DRAIN_GRACE_MS);
+    }, bound);
 
+    child.on("exit", onExit);
     child.on("close", onClose);
     child.on("error", onError);
-
-    // Safety timeout: if neither close nor error fires in time, force-kill and
-    // reject. Previously this resolved `null`, which downstream code (via
-    // `exitCode ?? 1`) silently turned into a fake "exit code 1" failure for
-    // any command longer than 30s.
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        child.kill("SIGKILL");
-        reject(new Error("child process did not exit (stdio handles held open by detached descendant)"));
-      }
-    }, safetyTimeoutMs ?? MIN_SAFETY_TIMEOUT_MS);
   });
 }

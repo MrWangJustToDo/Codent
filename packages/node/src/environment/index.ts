@@ -28,7 +28,7 @@ export { commandFileCandidates, pathDirs, scanPathForCommand } from "./command-l
 export { createNativeFilesystem, type NativeFilesystemHandle } from "./native-fs.js";
 
 // Native command runner
-export { runNativeCommand } from "./native-run.js";
+export { runNativeCommand, resolveRunFailure } from "./native-run.js";
 
 // OS sandbox utilities
 export { resetOsSandbox, ensureOsSandbox, buildOsSandboxConfig } from "./os-sandbox.js";
