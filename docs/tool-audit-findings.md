@@ -22,10 +22,10 @@
 
 > **复审状态（2026-10-14）**：对「中 / 低」全部条目**逐条对照当前源码**复核了一遍（不是重读原文；三组并行复核 + 关键项自查），结论就地标在每条前面：`【未修】` / `【已修 · <commit>】` / `【部分修】` / `【不成立】`。口径：只看当前源码是否仍有该行为，行号一律重新定位。
 >
-> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
+> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **29 条未修**（另 2 条 `【部分修】`、6 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **27 条未修**（另 2 条 `【部分修】`、8 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -112,7 +112,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【未修】 `tools/find-edit-match.ts`：模糊分支**忽略 `startLine`**（取第一个命中）；`newString` 在只有 `oldString` 被过度转义时也被 `unescapeCommonEscapes`（会改写字面 `\n`/`\t`）。
 - 【未修】 CRLF 文件：多行 `oldString`（LF）匹配 `\r\n` 失败；`read_file` 渲染带不可见 `\r`；匹配路径无 CRLF 归一化。
 - 【未修】 `tools/delete-file-tool.ts` **绕过** `withFileMutationQueue`（与 edit/write 并行时可能"复活"已删文件）。
-- 【部分修】 `tools/util/file-mutation-queue.ts`：key 用 POSIX `pathe`（Windows 下 `src\a` vs `src/a` 不同 key → 不串行）；Map 永不回收（长进程泄漏）。
+- 【部分修 · `5b3df3fe`】 `tools/util/file-mutation-queue.ts`：key 用 POSIX `pathe`（Windows 下 `src\a` vs `src/a` 不同 key → 不串行；Node 宿主已改为提供平台 `path`，POSIX `pathe` 只是 fallback 默认，**这一半仍未修**）；~~Map 永不回收~~ —— **已修**：链尾自己摘除条目（按身份校验，避免删掉后面排队者等待的 promise），`validate:file-mutation-queue` 断言 60 个文件后归零。
 - 【已修 · `b9dad0cf` / `050bd6a1`】 `packages/node/src/environment/native-fs.ts:28-43` 工作区约束是**词法**的、不 `realpath` → 指向外部的工作区内软链接可逃逸（读 **和** 写）。
 - 【未修】 `write-file-tool.ts`：parent 目录判断用 `lastIndexOf("/")`（POSIX-only，漏 Windows 分隔符）；`bytesWritten: content.length` 是 UTF-16 码元不是字节；无 temp+rename（`CoreEnvFs.rename` 已提供该 seam，`session-journal` 已用）。
 
@@ -140,7 +140,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 
 ### subagent / session
 - 【已修 · `8b244a0e`】 `subagent/task-tool.ts:142-146` 对父模型说 subagent"**没有 `run_command`**"，但 `subagent-tools.ts:23-34` 注册了 `run_command:subagentSafe` → 两个面向模型的表述矛盾（`explore-prompt.ts` 也列了 `run_command`）。→ 描述改为按实际工具集陈述，`validate:subagent-prompt` 逐名断言。
-- 【未修】 `subagent/task-prefork.ts:181` `start()` **永远返回 `true`** → middleware 里"重复 toolCallId 就摘掉父信号监听"的清理是**死代码**（重复 `TOOL_CALL_END` 泄漏一个监听 + AbortController）；被丢弃的 queued 项 `finally` 清理也不跑。
+- 【已修 · `5b3df3fe`】 `subagent/task-prefork.ts:181` `start()` **永远返回 `true`** → middleware 里「重复 toolCallId 就摘掉父信号监听」的清理是**死代码**（重复 `TOOL_CALL_END` 泄漏一个监听 + AbortController）。已修：重复注册返回 `false`，middleware 的 disarm 分支生效（`validate:task-prefork` 覆盖）；**被丢弃的 queued 项 `finally` 不跑**那半仍未修（队列项从不进入 `runPreForked`）。
 - 【已修 · `78835b24` + `8b244a0e`】 `session-read-tool.ts:109` 无文件大小上限（`session_search` 有 `MAX_SESSION_FILE_BYTES`），大日志 O(file)×页数，每页整读整 fold；其描述里的分页建议（`offset += limit`）在内容上限截断时会**跳过消息**。→ 两半都已修：体积闸门 + 描述改为指向渲染尾部的真实 offset（`validate:session-search` 用 9 条长消息 / `limit: 10` / 实返 7 条覆盖）。
 - 【未修】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。
 - 【未修】 丢弃的 pre-fork subagent 只 abort 未 `destroyAgent`（流重启/结束时累积）；
@@ -150,7 +150,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 
 ### plan / lsp / code-mode
 - 【未修】 LSP 请求**无超时**（各 tool 裸 `await sendRequest`，transport 也无）：server 挂住会永久阻塞该次运行，Esc 也解不开（未透传 abort）。
-- 【未修】 `lsp-manager.ts:494-527` 崩溃重启的 `setTimeout`（最长 30s）**未被 `shutdownAll` 清理**，`shuttingDown` 复位后会话关闭还会重启一个 server；重启计数/退避也未复位。
+- 【已修 · `5b3df3fe`】 `lsp-manager.ts:494-527` 崩溃重启的 `setTimeout`（最长 30s）**未被 `shutdownAll` 清理**，`shuttingDown` 复位后会话关闭还会重启一个 server；重启计数/退避也未复位。→ manager 按语言持有 timer 句柄（顺带解决「两条崩溃通知叠两个重启」）、`shutdownAll` 取消并复位计数/退避；`validate:lsp-restart-cleanup` 注入假连接，无需真 server。
 - 【未修】 plan-mode "只读" 可被内置 `code_rewrite`（`category:"edits"`，`dry_run=false` 就地写）绕过 —— `PLAN_MODE_EXCLUDED_TOOL_NAMES` 只硬编码了 4 个名字。
 - 【未修】 `code-mode/extension.ts:95-142` 的 `console` 补丁**不可重入**（并行 `execute_typescript` 会互相恢复 / 泄漏），`console.warn` 未补。
 - 【未修】 `memory-manager.ts:368-372` `MEMORY.md` 的"字节"上限用 `slice` 按**码元**截（CJK 可超 ~3×）；`lsp/tools/tool-shared.ts:23-32` `truncateHead` 的 `maxBytes` 同样是字符比较的启发式。
@@ -224,7 +224,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 
 0. ~~**先收「假绿」**：⑧ 的 cancel guard~~ —— **已完成**（`fce0eb7f`：guard 与两条断言一起恢复，并补了 `run_command` 那半）。
 1. **模型可见的正确性**（都是小改动、各能配 validator）：~~`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard~~（已完成 · `de771a4f`，实际覆盖 24 个声明站点）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
-2. **资源与泄漏**：运行中的 job 无上限 · `file-mutation-queue` 的 Map 不回收 · 被丢弃的 pre-fork 只 abort 未 `destroyAgent` · `lsp-manager` 的重启 timer 不随 `shutdownAll` 清理 · `task-prefork.start()` 恒 `true` 导致的监听/controller 泄漏。
+2. **资源与泄漏**：运行中的 job 无上限 · 被丢弃的 pre-fork 只 abort 未 `destroyAgent` · ~~`file-mutation-queue` 的 Map 不回收~~ · ~~`lsp-manager` 的重启 timer 不随 `shutdownAll` 清理~~ · ~~`task-prefork.start()` 恒 `true` 导致的 listener/controller 泄漏~~（后三项已完成 · `5b3df3fe`）。
 3. **契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时（server 挂住会永久阻塞该次运行，Esc 也解不开）· plan-mode 的「只读」可被内置 `code_rewrite` 绕过（应改为按 tool 的 `present.category` 派生，而不是硬编码 4 个名字）。
 4. **其余中 / 低**：写 / 编辑一致性（`preview-edit` 与 `edit_file` 共用同一套匹配、CRLF 归一化、`delete_file` 入队、`write_file` 的 temp+rename 与真实字节数）· `run_command` 缓存全文（`cachedOutputPath` 头部不可恢复）· `command-job-registry` 的状态判定与 `kill_command` 的 `logPath` · web 的域回退与超时叠加 · code-mode 的 console 补丁重入 · memory / skills 的字节与转义 · 低项收尾（展示换行、行数统计、`todo` 回传原值等）。
 
