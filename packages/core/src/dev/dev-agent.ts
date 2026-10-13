@@ -272,12 +272,14 @@ export { createSessionReadTool, sessionReadOutputSchema } from "../agent/tools/s
 export {
   DEFAULT_SEARCH_ROLES,
   MAX_MATCHES_COLLECTED,
+  MAX_SESSION_FILE_BYTES,
   listSessionIds,
   makeSnippet,
   messageText,
   readSessionMessages,
   searchHistory,
   sessionExists,
+  sessionLogSize,
 } from "../agent/tools/session-search/session-reader.js";
 export {
   DEFAULT_REFRESH_MESSAGE_THRESHOLD,

@@ -247,6 +247,24 @@ export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: strin
   }
 }
 
+/**
+ * Size in bytes of one session's log, or `null` when it is absent or unstathable.
+ *
+ * `readSessionMessages` folds the WHOLE log — rendering needs every message, so it cannot window
+ * the read the way `session_read` windows the result — which means a log larger than
+ * {@link MAX_SESSION_FILE_BYTES} would be materialized in full. `searchHistory` already skips an
+ * oversized log while scanning; a direct `session_read` had no equivalent gate, the same OOM class
+ * `read_file` guards with its pre-read `stat.size` check. This is that gate's input. A host without
+ * `fs.stat` (or a missing log) yields `null`, and the caller proceeds as before.
+ */
+export async function sessionLogSize(env: ResolvedCoreEnv, sessionId: string): Promise<number | null> {
+  try {
+    return (await env.fs.stat(getJournalPath(sessionId))).size;
+  } catch {
+    return null;
+  }
+}
+
 /** Whether a session log exists on disk. */
 export async function sessionExists(env: ResolvedCoreEnv, sessionId: string): Promise<boolean> {
   try {

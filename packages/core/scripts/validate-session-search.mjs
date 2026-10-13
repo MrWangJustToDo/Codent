@@ -9,7 +9,8 @@
  *   2. the current session is excluded by default and re-included by an explicit sessionId
  *   3. the role filter narrows results
  *   4. results are bounded (a limit withholds the rest, and says so)
- *   5. `session_read` renders a session, paginates, and fails clearly on an unknown id
+ *   5. `session_read` renders a session, paginates, refuses an oversized log before folding it, and
+ *      fails clearly on an unknown id
  *   6. the tools are read-only and root-only (absent from the subagent tool set)
  *   7. the retrieval guidance no longer describes the stale single-line `.session.json` format
  *
@@ -32,6 +33,7 @@ import {
   clearCoreEnv,
   searchHistory,
   sessionExists,
+  MAX_SESSION_FILE_BYTES,
 } from "../dist/dev.mjs";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -43,6 +45,9 @@ const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 const line = (message) => JSON.stringify({ t: "message", message, state: {} });
 const text = (content) => ({ type: "text", content });
 const toolCall = (name, args) => ({ type: "tool-call", name, arguments: args });
+
+/** Path of the (logically) oversized log — its reported `stat.size` is forced below. */
+const OVERSIZE_LOG = ".agents/sessions/ses_oversize.session.jsonl";
 
 const FILES = {
   ".agents/sessions/ses_old.session.jsonl": [
@@ -86,6 +91,10 @@ const FILES = {
     }),
     line({ id: "p3", role: "user", parts: [text("SURFACE_PROBE recent note")], updatedAt: 3000 }),
   ].join("\n"),
+  // An oversized log. The contents are SMALL on purpose: only `stat` reports it over the limit, so
+  // the read gate is pinned without allocating megabytes — and the marker text proves the file was
+  // never folded.
+  [OVERSIZE_LOG]: [line({ id: "xo1", role: "user", parts: [text("SHOULD_NEVER_BE_FOLDED")] })].join("\n"),
 };
 
 function readdirOf(dir) {
@@ -113,7 +122,8 @@ registerCoreEnv({
     stat: async (path) => ({
       isDirectory: readdirOf(path).length > 0,
       isFile: path in FILES,
-      size: path in FILES ? FILES[path].length : 0,
+      // `OVERSIZE_LOG` reports over the read limit despite its small contents — see FILES.
+      size: path === OVERSIZE_LOG ? MAX_SESSION_FILE_BYTES + 1 : path in FILES ? FILES[path].length : 0,
       mtime: new Date(0),
     }),
     readFile: async (path) => {
@@ -143,7 +153,7 @@ try {
     const ids = await listSessionIds(getEnv());
     assert.deepEqual(
       ids.sort(),
-      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other"],
+      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other", "ses_oversize"],
       "all session logs enumerated"
     );
 
@@ -294,6 +304,18 @@ try {
       (error) => error.name === "FileError" && /nope/.test(error.message),
       "an unknown session id fails with a clear error"
     );
+
+    // The READ is gated, not only the rendered page: `session_read` folds the whole log, so an
+    // oversized one is refused before it is materialized (the same pre-read `stat.size` gate
+    // `read_file` uses), and the message names the alternative. Search skips it rather than failing,
+    // so the session is not lost.
+    await assert.rejects(
+      () => readTool.execute({ sessionId: "ses_oversize" }, { toolCallId: "r4" }),
+      (error) => /too large to read/.test(error.message) && /session_search/.test(error.message),
+      "an oversized session log is refused before it is folded, naming the alternative"
+    );
+    const skipped = await searchHistory(getEnv(), { query: "SHOULD_NEVER_BE_FOLDED", limit: 10 });
+    assert.equal(skipped.matches.length, 0, "search skips an oversized log instead of failing");
   }
 
   // ==========================================================================

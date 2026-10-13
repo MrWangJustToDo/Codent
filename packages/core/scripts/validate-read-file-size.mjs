@@ -72,7 +72,10 @@ const tool = createReadFileTool();
   const { env, log, totalReads } = makeEnv({ size: MAX_TEXT_SIZE + 1, content: "x".repeat(16) });
   await assert.rejects(
     () => tool.execute({ path: "huge.txt" }, { toolCallId: "t", context: { coreEnv: env } }),
-    /File too large to read/
+    (error) =>
+      // The gate must not be a dead end: it names a way to read the file in pieces.
+      /File too large to read/.test(error.message) && /grep/.test(error.message) && /run_command/.test(error.message),
+    "oversized text is rejected with a usable alternative"
   );
   assert.equal(totalReads(), 0, "oversized text: no read attempted");
   assert.equal(log.bytesRequested, 0, "oversized text: no bytes requested");

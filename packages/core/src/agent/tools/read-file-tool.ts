@@ -333,7 +333,9 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         // `isBinaryContent`, so a huge binary is never scanned end to end.
         if (stat && stat.size > MAX_TEXT_SIZE) {
           throw new Error(
-            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_TEXT_SIZE / 1024 / 1024}MB)`
+            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_TEXT_SIZE / 1024 / 1024}MB). ` +
+              `Read it in pieces instead — grep for the lines you need, or stream a slice with run_command ` +
+              `(e.g. \`sed -n '1,200p' <path>\` or \`head\`).`
           );
         }
 

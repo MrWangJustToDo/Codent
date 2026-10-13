@@ -12,12 +12,18 @@ import { z } from "zod";
 import { FileError } from "../../env/types";
 
 import { defineServerTool } from "./runtime/define-tool.js";
-import { readSessionMessages, sessionExists, type SessionMessage } from "./session-search/session-reader.js";
+import {
+  MAX_SESSION_FILE_BYTES,
+  readSessionMessages,
+  sessionExists,
+  sessionLogSize,
+} from "./session-search/session-reader.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
+import type { SessionMessage } from "./session-search/session-reader.js";
 import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 /** Default number of messages rendered per page. */
@@ -105,6 +111,19 @@ Use after \`session_search\` returns a \`sessionId\` you want to read in full. O
       return withDuration(async () => {
         const start = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
+
+        // Bound the READ, not only the rendered page. Folding a session is inherently whole-file
+        // (`readSessionMessages`), so an oversized log would be materialized in full before any of
+        // the page/text caps apply — the same OOM class `read_file` rejects with a pre-read
+        // `stat.size` check, and the same bound `session_search` already applies while scanning.
+        // `session_search` can still find the session; the message names that alternative.
+        const logSize = await sessionLogSize(coreEnv, sessionId);
+        if (logSize !== null && logSize > MAX_SESSION_FILE_BYTES) {
+          throw new Error(
+            `Session log too large to read: ${Math.round(logSize / 1024 / 1024)}MB ` +
+              `(max ${MAX_SESSION_FILE_BYTES / 1024 / 1024}MB). Use session_search to locate a specific message.`
+          );
+        }
 
         const all = await readSessionMessages(coreEnv, sessionId);
         if (all.length === 0 && !(await sessionExists(coreEnv, sessionId))) {
