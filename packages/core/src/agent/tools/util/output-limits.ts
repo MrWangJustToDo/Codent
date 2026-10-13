@@ -1,13 +1,25 @@
-/** Default limits for tool output truncation. */
+/** Default limits for tool output truncation and file materialisation. */
 export const OUTPUT_LIMITS = {
-  /** Maximum characters for text content (roughly 12.5k tokens) */
+  /**
+   * Ceiling on content ACCUMULATED across one result's items — grep matches, a tree, a
+   * session-read page. Several items share this budget, so it is the smaller content ceiling.
+   */
   MAX_CONTENT_CHARS: 50000,
+  /**
+   * Ceiling on the rendered content of ONE result — a `read_file` page, a `webfetch` extract.
+   * These turn over a single body rather than sharing a budget, so they carry more.
+   */
+  MAX_RESULT_CONTENT_CHARS: 100000,
   /** Maximum items in arrays (files, entries, matches, etc.) */
   MAX_ARRAY_ITEMS: 500,
   /** Maximum characters per line */
   MAX_LINE_CHARS: 2000,
-  /** Maximum bytes for binary content */
-  MAX_BINARY_BYTES: 10 * 1024 * 1024,
+  /**
+   * Ceiling on the bytes a file-read tool will materialise, whatever the file kind (text, PDF,
+   * image). A whole-file read is inherent to line accounting, so this is a MEMORY bound, not an
+   * output-length one — kept here so the read tools share one "too large to read" boundary.
+   */
+  MAX_FILE_READ_BYTES: 10 * 1024 * 1024,
 } as const;
 
 /** Truncate a string from the end (or the start) with an indicator of what was dropped. */

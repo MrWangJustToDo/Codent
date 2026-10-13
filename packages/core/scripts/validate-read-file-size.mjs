@@ -10,6 +10,8 @@
  *   3. the PDF branch rejects `stat.size > MAX_BINARY_SIZE` before reading, and a normal PDF is
  *      still read once.
  *   4. the bounded head probe still rejects a file whose head is non-text.
+ *   5. the image branch takes the same pre-read gate (it used to materialise the whole image
+ *      before the vision-token budget was consulted).
  *
  * Run: pnpm --filter @codent/core run validate:read-file-size
  */
@@ -21,9 +23,9 @@ import { createReadFileTool, defaultPath } from "../dist/dev.mjs";
 const MB = 1024 * 1024;
 
 // The tool's own caps are module-private; mirror them here so moving a cap is a deliberate test
-// edit rather than a silent pass.
-const MAX_BINARY_SIZE = 10 * MB;
-const MAX_TEXT_SIZE = 10 * MB;
+// edit rather than a silent pass. Every read is bounded by one shared value, whatever the file
+// kind (text, PDF, image).
+const MAX_FILE_READ_BYTES = 10 * MB;
 
 /** UTF-8 byte length without a `TextEncoder` global (not in the scripts' lint globals). */
 const byteLen = (text) => Buffer.byteLength(text, "utf8");
@@ -69,7 +71,7 @@ const tool = createReadFileTool();
 // (a) An oversized text file is rejected on stat.size, before any read
 // ---------------------------------------------------------------------------
 {
-  const { env, log, totalReads } = makeEnv({ size: MAX_TEXT_SIZE + 1, content: "x".repeat(16) });
+  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, content: "x".repeat(16) });
   await assert.rejects(
     () => tool.execute({ path: "huge.txt" }, { toolCallId: "t", context: { coreEnv: env } }),
     (error) =>
@@ -121,7 +123,7 @@ const tool = createReadFileTool();
 //     is still read once
 // ---------------------------------------------------------------------------
 {
-  const { env, log, totalReads } = makeEnv({ size: MAX_BINARY_SIZE + 1, mimeType: "application/pdf" });
+  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "application/pdf" });
   await assert.rejects(
     () => tool.execute({ path: "huge.pdf" }, { toolCallId: "t", context: { coreEnv: env } }),
     /PDF file too large/
@@ -154,6 +156,21 @@ const tool = createReadFileTool();
     /appears to be binary/
   );
   console.log("ok  bounded head probe still rejects binary content");
+}
+
+// ---------------------------------------------------------------------------
+// (e) An oversized IMAGE is rejected on stat.size before reading
+//     (the whole image was materialised before the vision-token budget was consulted)
+// ---------------------------------------------------------------------------
+{
+  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "image/png" });
+  await assert.rejects(
+    () => tool.execute({ path: "huge.png" }, { toolCallId: "t", context: { coreEnv: env } }),
+    /Image too large to read/
+  );
+  assert.equal(totalReads(), 0, "oversized image: no read attempted");
+  assert.equal(log.bytesRequested, 0, "oversized image: no bytes requested");
+  console.log("ok  oversized image rejected on stat.size, without a read");
 }
 
 console.log("read-file-size validation passed");

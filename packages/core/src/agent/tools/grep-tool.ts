@@ -18,7 +18,7 @@ import type { CoreEnv } from "../../env";
 import type { GrepOutput } from "./util/types.js";
 
 /** Maximum characters per matching line content (to prevent context overflow) */
-const MAX_CONTENT_LENGTH = 500;
+const MAX_MATCH_LINE_CHARS = 500;
 
 /** Maximum total characters for all match content combined */
 const MAX_TOTAL_CONTENT = OUTPUT_LIMITS.MAX_CONTENT_CHARS;
@@ -483,8 +483,8 @@ export const createGrepTool = () => {
             const parsed = parseGrepLine(line, searchPathIsFile ? searchPath : undefined);
             if (!parsed) continue;
 
-            if (parsed.content.length > MAX_CONTENT_LENGTH) {
-              parsed.content = truncateContent(parsed.content, MAX_CONTENT_LENGTH);
+            if (parsed.content.length > MAX_MATCH_LINE_CHARS) {
+              parsed.content = truncateContent(parsed.content, MAX_MATCH_LINE_CHARS);
             }
 
             totalContentLength += parsed.content.length;

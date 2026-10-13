@@ -5,6 +5,7 @@ import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/e
 import { defineServerTool } from "./runtime/define-tool.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
 import { formatReadFileToolResult } from "./util/format-read-file-result.js";
+import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { detectReadFileType, headProbeSample, isBinaryContent } from "./util/read-file-detect.js";
 import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -16,27 +17,17 @@ import type { UsageTracker } from "../../runtime-types/hosts.js";
 // Constants
 // ============================================================================
 
-/** Maximum characters for text file content (to prevent context overflow) */
-const MAX_CONTENT_LENGTH = 100000; // ~100KB, roughly 25k tokens
-
-/** Maximum bytes for binary files (PDFs) */
-const MAX_BINARY_SIZE = 10 * 1024 * 1024; // 10MB
-
 /**
- * Maximum bytes for a text file before it is rejected outright.
- *
- * The read is a single whole-file read (line accounting needs the whole file), so this is the
- * actual memory ceiling: without it a multi-GB file would be read into a string before the
- * output-length caps (`MAX_CONTENT_LENGTH`) ever apply. Kept equal to {@link MAX_BINARY_SIZE}
- * so the tool has one "too large to read" boundary rather than two.
+ * The shared caps (see `util/output-limits`): the per-result content ceiling, the per-line
+ * truncation width, and the byte ceiling this tool will actually read from disk. They live in one
+ * place so a `read_file` page and a `webfetch` extract cannot drift apart, and so the MEMORY bound
+ * (`MAX_FILE_READ_BYTES`, the whole-file read a text/PDF/image needs) stays visibly distinct from
+ * the OUTPUT bound.
  */
-const MAX_TEXT_SIZE = 10 * 1024 * 1024; // 10MB
+const { MAX_RESULT_CONTENT_CHARS, MAX_LINE_CHARS, MAX_FILE_READ_BYTES } = OUTPUT_LIMITS;
 
 /** Default line limit when not specified */
 const DEFAULT_LINE_LIMIT = 2000;
-
-/** Maximum characters per line before truncation */
-const MAX_LINE_LENGTH = 2000;
 
 /** Characters per token for budget estimation */
 const CHARS_PER_TOKEN = 4;
@@ -237,6 +228,15 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
             );
           }
 
+          // Same pre-read gate as the text and PDF branches: the whole image is materialised
+          // before the vision-token budget is consulted, so an oversized one must be refused on
+          // its stat'd size or it OOMs first.
+          if (stat && stat.size > MAX_FILE_READ_BYTES) {
+            throw new Error(
+              `Image too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
+            );
+          }
+
           const buffer = await fsys.readFile(filePath, "buffer");
 
           // Budget against vision-token estimate (not base64-as-text).
@@ -286,24 +286,25 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // once the whole file is already in memory, so on its own it cannot stop an oversized
           // PDF from OOMing the process; it is kept as the fallback for hosts whose `stat` is
           // unavailable (the `:182` try/catch) and as a defence against a stale size.
-          if (stat && stat.size > MAX_BINARY_SIZE) {
+          if (stat && stat.size > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `PDF file too large: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_BINARY_SIZE / 1024 / 1024}MB)`
+              `PDF file too large: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
             );
           }
 
           const buffer = await fsys.readFile(filePath, "buffer");
 
-          if (buffer.length > MAX_BINARY_SIZE) {
+          if (buffer.length > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `PDF file too large: ${Math.round(buffer.length / 1024 / 1024)}MB (max ${MAX_BINARY_SIZE / 1024 / 1024}MB)`
+              `PDF file too large: ${Math.round(buffer.length / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
             );
           }
 
           const extracted = await extractPdfText(buffer);
           let extractedText = extracted?.text;
-          if (extractedText && extractedText.length > MAX_CONTENT_LENGTH) {
-            extractedText = extractedText.slice(0, MAX_CONTENT_LENGTH) + "\n...[PDF text truncated for context limit]";
+          if (extractedText && extractedText.length > MAX_RESULT_CONTENT_CHARS) {
+            extractedText =
+              extractedText.slice(0, MAX_RESULT_CONTENT_CHARS) + "\n...[PDF text truncated for context limit]";
           }
           if (extractedText) {
             const remainingTokens = getRemainingTokenBudget();
@@ -331,9 +332,9 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         // primitive when the host provides it (the whole range, anchored at the size already
         // stat'd), otherwise through a single buffer read. Only a bounded head is handed to
         // `isBinaryContent`, so a huge binary is never scanned end to end.
-        if (stat && stat.size > MAX_TEXT_SIZE) {
+        if (stat && stat.size > MAX_FILE_READ_BYTES) {
           throw new Error(
-            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_TEXT_SIZE / 1024 / 1024}MB). ` +
+            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB). ` +
               `Read it in pieces instead — grep for the lines you need, or stream a slice with run_command ` +
               `(e.g. \`sed -n '1,200p' <path>\` or \`head\`).`
           );
@@ -383,9 +384,9 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         let truncatedByLength = false;
         const numberedLines = selectedLines.map((line, idx) => {
           const lineNum = startIdx + idx + 1;
-          if (line.length > MAX_LINE_LENGTH) {
+          if (line.length > MAX_LINE_CHARS) {
             truncatedByLength = true;
-            return `${lineNum}: ${line.slice(0, MAX_LINE_LENGTH)}... (line truncated)`;
+            return `${lineNum}: ${line.slice(0, MAX_LINE_CHARS)}... (line truncated)`;
           }
           return `${lineNum}: ${line}`;
         });
@@ -394,8 +395,9 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
 
         // Truncate total content if too large (static cap)
         let contentTruncated = false;
-        if (selectedContent.length > MAX_CONTENT_LENGTH) {
-          selectedContent = selectedContent.slice(0, MAX_CONTENT_LENGTH) + "\n...[content truncated for context limit]";
+        if (selectedContent.length > MAX_RESULT_CONTENT_CHARS) {
+          selectedContent =
+            selectedContent.slice(0, MAX_RESULT_CONTENT_CHARS) + "\n...[content truncated for context limit]";
           contentTruncated = true;
         }
 

@@ -18,6 +18,7 @@ import { defineServerTool } from "./runtime/define-tool.js";
 import { createTimeoutAbort } from "./util/abort-timeout.js";
 import { readBodyBounded } from "./util/bounded-body.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
+import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { decodeBytes } from "./util/text-decoding.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
@@ -30,8 +31,8 @@ import type { ManagedAgent } from "../../runtime-types/hosts.js";
 // Constants
 // ============================================================================
 
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB
-const MAX_CONTENT_CHARS = 100000; // ~100KB, roughly 25k tokens
+const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB (the network cap; distinct from the content cap)
+const MAX_CONTENT_CHARS = OUTPUT_LIMITS.MAX_RESULT_CONTENT_CHARS;
 const DEFAULT_TIMEOUT = 30; // 30 seconds
 const MAX_TIMEOUT = 120; // 2 minutes
 
