@@ -90,6 +90,28 @@ check("hidden entries are excluded by default", !all.some((p) => p.includes(".hi
 check("ignored entries are excluded by name", !all.some((p) => p.startsWith("node_modules")), JSON.stringify(all));
 check("a hidden directory is pruned with its subtree", !all.some((p) => p.startsWith(".git")), JSON.stringify(all));
 
+// `-I` semantics: the binary is handed `ignore.join("|")` as ONE pattern, so the walk has to read it
+// the same way — a basename glob with `|` separating alternatives. It used to require an exact name,
+// so a wildcard pruned nothing here while the binary pruned it: the same call produced two trees.
+const globIgnore = await walk({ ignore: ["*.js"] });
+check("an ignore glob prunes by basename", !globIgnore.some((p) => p.endsWith(".js")), JSON.stringify(globIgnore));
+check("…and leaves everything else", globIgnore.includes("src/a.ts"), JSON.stringify(globIgnore));
+
+const alternation = await walk({ ignore: ["node_modules|README.md"] });
+check(
+  "`|` separates alternatives, as `tree -I` reads it",
+  !alternation.some((p) => p.startsWith("node_modules") || p === "README.md"),
+  JSON.stringify(alternation)
+);
+check("…without over-pruning the rest", alternation.includes("src/b.js"), JSON.stringify(alternation));
+
+const notMatching = await walk({ ignore: ["*.nope"] });
+check(
+  "an ignore that matches nothing keeps the tree",
+  notMatching.includes("src/b.js") && notMatching.includes("README.md"),
+  JSON.stringify(notMatching)
+);
+
 const hidden = await walk({ showHidden: true });
 check("showHidden includes dot entries", hidden.includes("src/.hidden.ts"), JSON.stringify(hidden));
 // `.git` is still in this case's `ignore` list, so it stays pruned even with showHidden — the two

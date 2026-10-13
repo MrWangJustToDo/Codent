@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { buildExploreSystemPrompt } from "../dist/dev.mjs";
+import { buildExploreSystemPrompt, createSubagentTools, createTaskTool } from "../dist/dev.mjs";
 
 {
   const prompt = buildExploreSystemPrompt(5);
@@ -34,6 +34,28 @@ import { buildExploreSystemPrompt } from "../dist/dev.mjs";
 
   // Length cap guard.
   assert.ok(prompt.length <= 3000, `explore prompt too long: ${prompt.length} chars (cap 3000)`);
+}
+
+// ============================================================================
+// The parent-facing contract: the task description matches the tool set
+// ============================================================================
+//
+// The description listed seven read-only tools and said the subagent "cannot run shell commands",
+// while `subagent-tools.ts` registered `run_command` (read-only variant) and the explore prompt
+// documented its denials. Each half was true of a different file, so nothing failed — but a parent
+// reading the description does not delegate a command the subagent could have run.
+
+{
+  const description = createTaskTool({ parentAgentId: "a", manager: { getAgent: () => undefined } }).description;
+  // `begin_summary` is the subagent's own completion marker, not a capability the parent delegates.
+  const registered = Object.keys(createSubagentTools()).filter((name) => name !== "begin_summary");
+
+  assert.ok(registered.length >= 8, `expected the subagent tool set, found ${registered.join(", ")}`);
+  for (const name of registered) {
+    assert.ok(description.includes(name), `the task description must name \`${name}\`, which the subagent does get`);
+  }
+  assert.ok(!/cannot .*run shell commands/i.test(description), "…and must not deny the shell access it has");
+  assert.match(description, /read-only, project-internal commands/, "it states which commands are allowed");
 }
 
 console.log("subagent-prompt validation passed");

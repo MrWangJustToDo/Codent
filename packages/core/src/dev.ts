@@ -28,6 +28,7 @@ export { createKillCommandTool } from "./agent/tools/kill-command-tool.js";
 export { createWriteFileTool } from "./agent/tools/write-file-tool.js";
 export { createEditFileTool } from "./agent/tools/edit-file-tool.js";
 export { createBeginSummaryTool } from "./agent/subagent/begin-summary-tool.js";
+export { createSubagentTools } from "./agent/subagent/subagent-tools.js";
 export { isProjectedModelContent } from "./agent/tools/runtime/projected-model-content.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";

@@ -15,6 +15,8 @@
  * installed. It asserts the FALLBACK produces results, which is the behaviour users depend on.
  */
 
+import { readFileSync } from "node:fs";
+
 import { createGlobTool, createGrepTool, clearCoreEnv, execArgsCapture, registerCoreEnv } from "../dist/dev.mjs";
 
 let failures = 0;
@@ -101,6 +103,72 @@ check(
   "grep falls back to grep when rg is absent",
   grepResult.matches.length > 0,
   `matches=${JSON.stringify(grepResult.matches)}`
+);
+
+// ---------------------------------------------------------------------------
+// count mode: `path:count` for a directory, a BARE count for a single file
+// ---------------------------------------------------------------------------
+//
+// grep omits the path when the search is a single file, exactly as it does for content lines (which
+// pass the searched path down as `defaultFile` for the same reason). Parsing only `path:count` read
+// the bare number as a FILE named "5" reporting zero matches — `grep -c` saying 5 came back as 0.
+
+// The description has to name the schema's key. It said `output_mode`, which the input schema does
+// not declare — unknown keys are stripped by the validator, so a model asking for counts silently
+// got a content search. (That mismatch is what surfaced the bare-number case below: the first probe
+// of `output_mode` never reached `parseCountLine` at all.)
+{
+  const grepSource = readFileSync(new URL("../src/agent/tools/grep-tool.ts", import.meta.url), "utf8");
+  check(
+    "the grep description names the schema key `outputMode`, not `output_mode`",
+    !/output_mode/.test(grepSource),
+    "an unknown input key is stripped, so the described mode is not the mode that runs"
+  );
+  check("…and the schema still declares `outputMode`", /outputMode: z/.test(grepSource));
+}
+
+/** An env whose `grep` returns `stdout` verbatim; every other binary keeps its stub behaviour (so
+ *  `rg` still reports ENOENT rather than a successful empty search, which would suppress the
+ *  fallback this file exists to exercise). */
+const envWithGrepStdout = (stdout) => {
+  const base = envWithoutRipgrep();
+  return {
+    ...base,
+    execFile: async (file, args) => (file === "grep" ? { stdout, stderr: "", code: 0 } : base.execFile(file, args)),
+  };
+};
+
+clearCoreEnv();
+registerCoreEnv(envWithGrepStdout("5\n"));
+const singleFileCount = await createGrepTool().execute(
+  { pattern: "const x", path: "src/a.ts", outputMode: "count" },
+  { toolCallId: "t-count-one" }
+);
+check(
+  "count mode reads grep's bare number for a single file",
+  singleFileCount.matches[0]?.content === "Count: 5",
+  JSON.stringify(singleFileCount.matches)
+);
+check(
+  "…and attributes it to the file that was searched",
+  singleFileCount.matches[0]?.file === "src/a.ts",
+  JSON.stringify(singleFileCount.matches)
+);
+
+clearCoreEnv();
+registerCoreEnv(envWithGrepStdout("src/a.ts:3\nsrc/b.ts:2\n"));
+const perFileCount = await createGrepTool().execute(
+  { pattern: "const x", path: "src", outputMode: "count" },
+  { toolCallId: "t-count-many" }
+);
+check(
+  "count mode still reads one `path:count` line per file",
+  JSON.stringify(perFileCount.matches.map((m) => [m.file, m.content])) ===
+    JSON.stringify([
+      ["src/a.ts", "Count: 3"],
+      ["src/b.ts", "Count: 2"],
+    ]),
+  JSON.stringify(perFileCount.matches)
 );
 
 // ---------------------------------------------------------------------------

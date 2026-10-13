@@ -141,8 +141,10 @@ Only sequence tasks when one depends on another's findings.
 
 The subagent:
 - Starts with fresh context (doesn't see your conversation history)
-- Has read-only tools: read_file, glob, grep, list_file, tree, websearch, webfetch
-- Cannot modify files, run shell commands, or spawn additional subagents
+- Has read-only tools: read_file, glob, grep, list_file, tree, websearch, webfetch, plus
+  run_command restricted to read-only, project-internal commands (ls, cat, git status/log/diff) —
+  writes, paths outside the project, and any command the safety policy cannot classify are denied
+- Cannot modify files or spawn additional subagents
 - Returns a summary plus status flags (reachedLimit, incomplete, aborted, truncated)
 
 How to use the result:

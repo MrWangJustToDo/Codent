@@ -76,6 +76,11 @@ const FILES = {
     line({ id: "b2", role: "assistant", parts: [text("B".repeat(6000))] }),
     line({ id: "b3", role: "assistant", parts: [text("C".repeat(6000))] }),
   ].join("\n"),
+  // A session whose page must stop EARLY: nine long messages against a 50k text ceiling, so a
+  // `limit: 10` page returns fewer than ten. This is the shape `offset += limit` jumps over.
+  ".agents/sessions/ses_spill.session.jsonl": Array.from({ length: 9 }, (_, i) =>
+    line({ id: `sp${i}`, role: "user", parts: [text(`M${i} ${"A".repeat(19000)}`)] })
+  ).join("\n"),
   // A compact archive that duplicates session-log content — it must NOT be searched (the log is
   // the complete source; the archive is a derived, lower-fidelity copy).
   ".agents/transcripts/ses_old/compact-1.md": ["# Compaction", "ARCHIVE_ONLY_TOKEN blue-green."].join("\n"),
@@ -153,7 +158,7 @@ try {
     const ids = await listSessionIds(getEnv());
     assert.deepEqual(
       ids.sort(),
-      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other", "ses_oversize"],
+      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other", "ses_oversize", "ses_spill"],
       "all session logs enumerated"
     );
 
@@ -298,6 +303,35 @@ try {
     assert.equal(typeof big.cachedOutputPath, "string", "a large page spills to a cache file");
     assert.match(big.cachedOutputPath, /\.agents\/cache\/tool-output\//);
     assert.match(big.content, /Full output saved to:/, "the model gets a preview naming the cached file");
+
+    // A page can stop EARLY — the text ceiling is reached before `limit` messages are collected — so
+    // the next offset is `start + returned`, not `start + limit`. The rendered tail is what tells the
+    // model which to use, and the description points at it rather than promising arithmetic the page
+    // does not follow.
+    const spilled = await readTool.execute({ sessionId: "ses_spill", offset: 0, limit: 10 }, { toolCallId: "r5" });
+    assert.ok(spilled.returned < 10, `the page stops at the content ceiling (returned=${spilled.returned})`);
+    assert.equal(spilled.hasMore, true, "the fixture has messages left for a later page");
+    assert.match(
+      spilled.content,
+      new RegExp(`offset=${spilled.returned}(?!\\d)`),
+      "the tail names the real next offset"
+    );
+    const resumed = await readTool.execute(
+      { sessionId: "ses_spill", offset: spilled.returned, limit: 10 },
+      { toolCallId: "r6" }
+    );
+    assert.equal(resumed.messages[0].index, spilled.returned, "…and resuming there continues without a gap");
+
+    const readSource = readFileSync(`${SRC}/agent/tools/session-read-tool.ts`, "utf8");
+    assert.ok(
+      !/advanced by/.test(readSource),
+      "the description must not tell the model to advance by `limit` — the page can stop early"
+    );
+    assert.match(
+      readSource,
+      /offset=\$\{start \+ page\.length\}/,
+      "the tail the description points at is computed from what was actually returned"
+    );
 
     await assert.rejects(
       () => readTool.execute({ sessionId: "nope" }, { toolCallId: "r3" }),

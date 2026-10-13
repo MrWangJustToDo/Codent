@@ -89,7 +89,9 @@ export const createSessionReadTool = (_options: { managed?: ManagedAgent } = {})
     present: { category: "reads" },
     description: `Read a past session's messages as text, one window at a time.
 
-Use after \`session_search\` returns a \`sessionId\` you want to read in full. Output is bounded to a page; when \`hasMore\` is true, call again with \`offset\` advanced by \`limit\`.`,
+Use after \`session_search\` returns a \`sessionId\` you want to read in full. A page is bounded by
+message count AND by total size, so it can hold fewer messages than \`limit\`; when more remain the
+text ends with the exact \`offset\` to call again — use that number, do not advance by \`limit\`.`,
     inputSchema: z.object({
       sessionId: z.string().describe("Session id to read (as returned by `session_search`)."),
       offset: z

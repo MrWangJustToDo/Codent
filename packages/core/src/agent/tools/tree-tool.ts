@@ -73,7 +73,15 @@ export async function walkTree(rootPath: string, options: WalkTreeOptions): Prom
       // removed *with its subtree*. This is what makes them different from the two filters
       // below, which only decide whether to report an entry.
       if (!options.showHidden && entry.name.startsWith(".")) continue;
-      if (options.ignore.some((ig) => entry.name === ig)) continue;
+      // The same names `tree -I` would prune: a basename glob, with `|` separating alternatives —
+      // the binary is handed `ignore.join("|")` as ONE pattern, so the fallback must read it the
+      // same way or a tree would differ depending on which path produced it (`*.log` pruned by the
+      // binary, kept by the fallback, which used to require an exact name).
+      if (
+        options.ignore.some((ig) => ig.split("|").some((alternative) => matchesGlobPattern(entry.name, alternative)))
+      ) {
+        continue;
+      }
 
       // Report filters. These MUST NOT skip the recursion: `find -name '*.ts'` descends into
       // every directory and matches at any depth, so a directory whose own name does not match
@@ -134,7 +142,12 @@ export const createTreeTool = () => {
         .string()
         .optional()
         .describe("Only show files matching this pattern, relative to `path` (e.g. '*.ts', '*.js')."),
-      ignore: z.array(z.string()).optional().describe("Patterns to ignore (e.g., ['node_modules', '.git', 'dist'])."),
+      ignore: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Patterns to ignore (basename globs; `|` separates alternatives, e.g. ['node_modules', '.git', '*.log'])."
+        ),
     }),
     outputSchema: z.object({
       path: z.string().describe("The root directory that was displayed."),
@@ -208,9 +221,10 @@ export const createTreeTool = () => {
         // (the manpage notes that `-I`/`-P`/`--filelimit` pruning "will lead to incorrect
         // file/directory count reports", and it also warns on unreadable directories), and
         // its stdout is still the tree the user asked for. Falling back there would replace
-        // it with `walkTree`, whose `-I`-equivalent ignore only matches exact names — a
-        // different tree with a different meaning. An empty stdout is an answer too: a bare
-        // directory legitimately produces none.
+        // it with `walkTree`'s own walk — which agrees with `-I`/`-P` on ignore/pattern
+        // semantics but not on unreadable directories, ordering, or the counts `tree` itself
+        // reports as unreliable. An empty stdout is an answer too: a bare directory
+        // legitimately produces none.
         if (result.missing || result.killed) {
           // The fallback walks the filesystem directly instead of spawning `find`.
           //

@@ -339,16 +339,24 @@ function parseGrepLine(
   return null;
 }
 
-/** Parse `rg --count` / `grep -c` output: `path:count` (count is the trailing `:digits`). */
-function parseCountLine(line: string): { file: string; lineNumber: number; content: string } {
+/**
+ * Parse `rg --count` / `grep -c` output.
+ *
+ * Two shapes, matching {@link parseGrepLine}: `path:count` for a search over a directory (or several
+ * files), and a BARE count when the search was a single file — grep omits the path there, so
+ * `defaultFile` supplies it. Without that case the number was read as a file NAME with a count of
+ * `0`: `grep -c` reporting 5 matches came back as "5: Count: 0".
+ */
+function parseCountLine(line: string, defaultFile?: string): { file: string; lineNumber: number; content: string } {
   const countMatch = line.match(/:(\d+)$/);
-  if (!countMatch) {
+  const bareCount = defaultFile !== undefined ? line.match(/^(\d+)$/) : null;
+  if (!countMatch && !bareCount) {
     return { file: line, lineNumber: 0, content: "Count: 0" };
   }
-  const count = parseLineNumber(countMatch[1]) ?? 0;
-  const file = line.slice(0, -countMatch[0].length);
+  const counted = countMatch ?? bareCount!;
+  const count = parseLineNumber(counted[1]!) ?? 0;
   return {
-    file,
+    file: countMatch ? line.slice(0, -countMatch[0].length) : defaultFile!,
     lineNumber: 0,
     content: `Count: ${count}`,
   };
@@ -361,8 +369,8 @@ export const createGrepTool = () => {
     description:
       "Searches file contents using regular expressions. Returns file paths and line numbers with matching content. " +
       "Uses ripgrep (rg) when available, falls back to grep. " +
-      'Use output_mode="files_with_matches" for broad searches (just file paths). ' +
-      'Use output_mode="count" to get match counts per file. ' +
+      'Use outputMode="files_with_matches" for broad searches (just file paths). ' +
+      'Use outputMode="count" to get match counts per file. ' +
       "Supports pagination with offset/limit, context lines, and case-insensitive search.",
     inputSchema: z.object({
       pattern: z.string().describe("The regex pattern to search for in file contents."),
@@ -405,7 +413,7 @@ export const createGrepTool = () => {
         .min(0, { message: "context: must be >= 0" })
         .max(20, { message: "context: must be <= 20" })
         .optional()
-        .describe("Lines of surrounding context per match (only with output_mode 'content'). Defaults to 0."),
+        .describe("Lines of surrounding context per match (only with outputMode 'content'). Defaults to 0."),
     }),
     outputSchema: grepOutputSchema,
     execute: async (
@@ -478,7 +486,7 @@ export const createGrepTool = () => {
             content: "",
           }));
         } else if (mode === "count") {
-          allMatches = lines.map((line) => parseCountLine(line));
+          allMatches = lines.map((line) => parseCountLine(line, searchPathIsFile ? searchPath : undefined));
         } else {
           for (const line of lines) {
             // When searching a single file, grep outputs `line:content` (no path).
