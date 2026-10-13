@@ -50,7 +50,7 @@ export interface TextWindowResult {
  * `maxWindowChars`. Lines outside the window are counted but not retained.
  */
 export async function scanTextWindow(
-  pieces: AsyncIterable<string>,
+  pieces: AsyncIterable<string> | Iterable<string>,
   request: TextWindowRequest
 ): Promise<TextWindowResult> {
   const rendered: string[] = [];

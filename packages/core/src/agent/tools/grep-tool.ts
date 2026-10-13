@@ -6,6 +6,7 @@ import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import {
   DEFAULT_EXCLUDE_DIRS,
   isCommandNotFound,
+  quoteForShell,
   resolveSearchPath,
   SEARCH_COMMAND_TIMEOUT,
   truncateLines,
@@ -26,7 +27,14 @@ const MAX_TOTAL_CONTENT = OUTPUT_LIMITS.MAX_CONTENT_CHARS;
 /** Default number of matches per page */
 const DEFAULT_LIMIT = 100;
 
-function truncateContent(content: string, maxLength: number): string {
+/**
+ * Cut one matched LINE to `maxLength`, marking the cut inline.
+ *
+ * Deliberately not `OUTPUT_LIMITS.truncateString`: that one inserts a newline before its marker,
+ * which is fine for a block of text but would split a single match line in two — and this result is
+ * parsed line-by-line, so the cut has to stay on one line.
+ */
+function truncateMatchLine(content: string, maxLength: number): string {
   if (content.length <= maxLength) {
     return content;
   }
@@ -212,11 +220,6 @@ function buildGrepArgs(
  * assumption the previous implementation already made — but no `pipefail` prefix, no stderr
  * redirection, and no `head` pipeline: truncation stays in JS on both paths.
  */
-function quoteForShell(arg: string): string {
-  if (/^[A-Za-z0-9_\-./=*?[\]]+$/.test(arg)) return arg;
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * Parse a positive integer line number; rejects NaN (JSON.stringify(NaN) → null).
  */
@@ -484,7 +487,7 @@ export const createGrepTool = () => {
             if (!parsed) continue;
 
             if (parsed.content.length > MAX_MATCH_LINE_CHARS) {
-              parsed.content = truncateContent(parsed.content, MAX_MATCH_LINE_CHARS);
+              parsed.content = truncateMatchLine(parsed.content, MAX_MATCH_LINE_CHARS);
             }
 
             totalContentLength += parsed.content.length;

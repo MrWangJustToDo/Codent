@@ -1,3 +1,5 @@
+import { utf8ByteLength } from "../../utils/bytes.js";
+
 import { DEFAULT_EVENT_LOG_RULES, type EventLogRule } from "./event-log-rules.js";
 
 import type { AgentEvent, AgentEventBus, AgentEventType } from "../agent-event-bus";
@@ -26,10 +28,6 @@ const PREVIEW_MAX_CHARS = 200;
 const KEEP_STRING_MAX_CHARS = 120;
 const KEEP_STRING_HARD_MAX_CHARS = 500;
 
-function byteLengthOf(text: string): number {
-  return new TextEncoder().encode(text).length;
-}
-
 function asText(value: unknown): string {
   if (typeof value === "string") return value;
   try {
@@ -42,7 +40,7 @@ function asText(value: unknown): string {
 /** Summarize any value into `<key>Bytes` + `<key>Preview` (≤200 chars). */
 function summarizeEntry(out: Record<string, unknown>, key: string, value: unknown): void {
   const text = asText(value);
-  out[`${key}Bytes`] = byteLengthOf(text);
+  out[`${key}Bytes`] = utf8ByteLength(text);
   out[`${key}Preview`] = text.length > PREVIEW_MAX_CHARS ? text.slice(0, PREVIEW_MAX_CHARS) : text;
 }
 

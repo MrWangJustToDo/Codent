@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
+import { utf8ByteLength } from "../../utils/bytes.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
@@ -101,9 +102,6 @@ export type ReadFileOutput = z.infer<typeof readFileOutputSchema>;
  */
 const READ_CHUNK_BYTES = 64 * 1024;
 
-/** Byte length of a UTF-8 string — `TextEncoder` is a global in every runtime core targets. */
-const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
-
 /**
  * Read a text file as decoded, line-aligned pieces: each window is a byte range, but only the part
  * through its last newline is yielded — the rest is re-read in the next window.
@@ -120,7 +118,7 @@ async function* readTextPieces(fsys: CoreEnvFs, filePath: string): AsyncGenerato
   let from = 0;
   for (;;) {
     const window = await fsys.readFileRange!(filePath, from, from + READ_CHUNK_BYTES);
-    if (utf8Bytes(window) < READ_CHUNK_BYTES) {
+    if (utf8ByteLength(window) < READ_CHUNK_BYTES) {
       // A short read is EOF.
       yield window;
       return;
@@ -133,7 +131,7 @@ async function* readTextPieces(fsys: CoreEnvFs, filePath: string): AsyncGenerato
     }
     const consumed = window.slice(0, lastNewline + 1);
     yield consumed;
-    from += utf8Bytes(consumed);
+    from += utf8ByteLength(consumed);
   }
 }
 
@@ -145,11 +143,6 @@ async function* withHead(head: IteratorResult<string>, rest: AsyncIterator<strin
     if (next.done) return;
     yield next.value;
   }
-}
-
-/** One already-decoded piece, as the piece source the scan expects. */
-async function* asPiece(text: string): AsyncGenerator<string> {
-  yield text;
 }
 
 // ============================================================================
@@ -444,7 +437,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           }
 
           const content = textContent ?? new TextDecoder("utf-8", { ignoreBOM: true }).decode(rawBuffer!);
-          scanned = await scanTextWindow(asPiece(content), {
+          scanned = await scanTextWindow([content], {
             offset: startLine,
             limit: effectiveLimit,
             maxLineChars: MAX_LINE_CHARS,

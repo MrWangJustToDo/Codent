@@ -9,6 +9,8 @@
  * instead of Node.js Buffer.
  */
 
+import { utf8ByteLength } from "../../../utils/bytes.js";
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -47,10 +49,6 @@ export interface OutputSnapshot {
 // Helpers
 // ============================================================================
 
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).byteLength;
-}
-
 function splitLinesForCounting(content: string): string[] {
   if (content.length === 0) {
     return [];
@@ -73,7 +71,7 @@ function truncateTail(
   outputLines: number;
   outputBytes: number;
 } {
-  const totalBytes = byteLength(content);
+  const totalBytes = utf8ByteLength(content);
   const lines = splitLinesForCounting(content);
   const totalLines = lines.length;
 
@@ -93,7 +91,7 @@ function truncateTail(
 
   for (let i = lines.length - 1; i >= 0 && outputLinesArr.length < maxLines; i--) {
     const line = lines[i];
-    const lineBytes = byteLength(line) + (outputLinesArr.length > 0 ? 1 : 0);
+    const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0);
 
     if (outputBytesCount + lineBytes > maxBytes) {
       truncatedBy = "bytes";
@@ -113,7 +111,7 @@ function truncateTail(
     truncated: true,
     truncatedBy,
     outputLines: outputLinesArr.length,
-    outputBytes: byteLength(outputLinesArr.join("\n")),
+    outputBytes: utf8ByteLength(outputLinesArr.join("\n")),
   };
 }
 
@@ -216,7 +214,7 @@ export class OutputAccumulator {
       return;
     }
 
-    const bytes = byteLength(text);
+    const bytes = utf8ByteLength(text);
     this.totalDecodedBytes += bytes;
     this.tailText += text;
     this.tailBytes += bytes;
@@ -236,7 +234,7 @@ export class OutputAccumulator {
     } else {
       this.completedLines += newlines;
       const tail = text.slice(lastNewline + 1);
-      this.currentLineBytes = byteLength(tail);
+      this.currentLineBytes = utf8ByteLength(tail);
       this.hasOpenLine = tail.length > 0;
     }
     this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
@@ -256,7 +254,7 @@ export class OutputAccumulator {
 
     this.tailStartsAtLineBoundary = start === 0 ? this.tailStartsAtLineBoundary : encoded[start - 1] === 0x0a;
     this.tailText = new TextDecoder().decode(encoded.subarray(start));
-    this.tailBytes = byteLength(this.tailText);
+    this.tailBytes = utf8ByteLength(this.tailText);
   }
 
   private getSnapshotText(): string {

@@ -16,6 +16,8 @@
 
 import * as pathe from "pathe";
 
+import { utf8ByteLength } from "../utils/bytes.js";
+
 import { runEnvTeardownHooks } from "./teardown.js";
 
 import type { LspServerConfig, LspConnection } from "./lsp.js";
@@ -67,7 +69,7 @@ export const defaultPath: CoreEnvPath = {
 
 /** Byte length of a UTF-8 string using TextEncoder. */
 export function defaultByteLength(str: string, _encoding?: string): number {
-  return new TextEncoder().encode(str).length;
+  return utf8ByteLength(str);
 }
 
 /** Encode Uint8Array to base64 string. Works in all modern JS runtimes. */

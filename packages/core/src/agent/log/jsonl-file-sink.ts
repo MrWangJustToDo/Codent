@@ -19,6 +19,7 @@
  */
 
 import { getEnv } from "../../env";
+import { utf8ByteLength } from "../../utils/bytes.js";
 
 import { logEntrySchema } from "./schemas.js";
 
@@ -116,7 +117,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         }
       }
       const content = lines.join("\n") + "\n";
-      const contentBytes = new TextEncoder().encode(content).length;
+      const contentBytes = utf8ByteLength(content);
       // Rotate when the active file already meets maxBytes, or when the pending batch would push
       // it past the limit — so a large batch never leaves the active file over budget. Size comes
       // from stat (restart-safe).

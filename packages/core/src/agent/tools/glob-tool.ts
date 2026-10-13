@@ -7,6 +7,7 @@ import {
   DEFAULT_EXCLUDE_DIRS,
   SEARCH_COMMAND_TIMEOUT,
   isCommandNotFound,
+  quoteForShell,
   resolveSearchPath,
   truncateLines,
 } from "./util/search-command.js";
@@ -98,11 +99,6 @@ function buildFindArgs(
  * reintroduce a `pipefail` prefix, stderr redirection, or a `head` pipeline: truncation
  * stays in JS on both paths so the shell is never responsible for correctness.
  */
-function quoteForShell(arg: string): string {
-  if (/^[A-Za-z0-9_\-./=*?[\]]+$/.test(arg)) return arg;
-  return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * Run the glob search, preferring `fd` and falling back to `find`.
  *
