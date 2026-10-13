@@ -104,6 +104,16 @@ export class LspManager {
   private shuttingDown = false;
   private restartAttempts = new Map<string, number>();
   private restartBackoff = new Map<string, number>();
+  /**
+   * Pending auto-restart timers, one per language.
+   *
+   * Owned by the manager (not fire-and-forget) for two reasons: a second crash notification while a
+   * restart is already scheduled must not stack a second `startServer` on the same language, and
+   * {@link shutdownAll} has to be able to cancel a restart — its callback's own `shuttingDown` check
+   * is not enough, because that method clears the flag when it finishes, so a timer that fires
+   * afterwards starts a server into a session that has already ended.
+   */
+  private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private _lombokJarPath: string | null = null;
   private path: LspPathHelpers;
   private fs: LspFsHelpers;
@@ -491,7 +501,13 @@ export class LspManager {
 
     this.callbacks.onServerCrash?.(languageId, true, attempts + 1);
 
-    setTimeout(() => {
+    // One pending restart per language: a second crash notification (the same server exiting twice,
+    // or a crash while a restart is already scheduled) must not stack another `startServer` on it.
+    const pendingRestart = this.restartTimers.get(languageId);
+    if (pendingRestart !== undefined) clearTimeout(pendingRestart);
+
+    const timer = setTimeout(() => {
+      this.restartTimers.delete(languageId);
       if (this.shuttingDown) return;
       const config = this.serverConfigs.get(languageId);
       if (!config) return;
@@ -505,11 +521,18 @@ export class LspManager {
         this.handleUnexpectedExit(languageId, null);
       });
     }, backoff);
+    this.restartTimers.set(languageId, timer);
   }
 
   /** Shut down all clients AND any servers still mid-startup. */
   async shutdownAll(): Promise<void> {
     this.shuttingDown = true;
+
+    // Cancel scheduled restarts FIRST. Their callbacks check `shuttingDown`, but this method clears
+    // it before returning, so a timer that fires afterwards would spawn a server into a session the
+    // host has already put away.
+    for (const timer of this.restartTimers.values()) clearTimeout(timer);
+    this.restartTimers.clear();
 
     // Shut down fully-registered clients.
     const shutdowns = [...this.clients.values()].map((client) => client.connection.shutdown().catch(() => {}));
@@ -523,6 +546,11 @@ export class LspManager {
     await Promise.all([...shutdowns, ...startingPromises]);
     this.clients.clear();
     this.startingServers.clear();
+    // A full shutdown ends this manager's crash history: a server that crashed twice before must get
+    // its whole restart budget back if the host starts it again, and the backoff must not resume at
+    // whatever it had grown to.
+    this.restartAttempts.clear();
+    this.restartBackoff.clear();
     this.shuttingDown = false;
   }
 

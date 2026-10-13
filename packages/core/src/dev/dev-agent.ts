@@ -450,7 +450,11 @@ export { findLombokJar } from "../agent/lsp/lombok.js";
 export { applyDiagnosticsToToolAfterPayload } from "../agent/lsp/shared/apply-tool-diagnostics.js";
 export { extractToolPath, parseToolCallArgs } from "../agent/lsp/shared/parse-tool-args.js";
 export { insertDot, shouldSyntheticTrigger, syntheticDotLocks } from "../agent/lsp/shared/synthetic-dot.js";
-export { DIAGNOSTIC_SETTLE_DELAY_MS, SYNTHETIC_DOT_SETTLE_DELAY_MS } from "../agent/lsp/shared/timing.js";
+export {
+  DIAGNOSTIC_SETTLE_DELAY_MS,
+  RESTART_INITIAL_BACKOFF_MS,
+  SYNTHETIC_DOT_SETTLE_DELAY_MS,
+} from "../agent/lsp/shared/timing.js";
 export { lspTextToModelOutput } from "../agent/lsp/shared/tool-output.js";
 export { createMemoryExtension, type MemoryExtensionConfig, type CreateMemoryExtensionOptions } from "../agent/memory";
 export {

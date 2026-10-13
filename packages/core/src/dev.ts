@@ -30,6 +30,9 @@ export { createEditFileTool } from "./agent/tools/edit-file-tool.js";
 export { createBeginSummaryTool } from "./agent/subagent/begin-summary-tool.js";
 export { createSubagentTools } from "./agent/subagent/subagent-tools.js";
 export { isProjectedModelContent } from "./agent/tools/runtime/projected-model-content.js";
+// The per-file mutation queue leaks if it never drains: `validate:file-mutation-queue` reads its
+// size to assert it does, which needs the module (not a replica of it).
+export { fileMutationQueueSize, withFileMutationQueue } from "./agent/tools/util/file-mutation-queue.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";
 export {

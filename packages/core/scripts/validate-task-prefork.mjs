@@ -44,14 +44,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert.equal(ok, true);
   assert.equal(coordinator.has("call-1"), true);
 
-  // Double-start for same id is idempotent.
+  // Double-start for same id registers nothing, and says so: the `false` is the caller's only signal
+  // that the run it thinks it started is not the one that will be joined (the middleware uses it to
+  // disarm the parent-abort listener it attached for a spawn that never happened).
   assert.equal(
     coordinator.start(
       "call-1",
       () => {},
       async () => ({})
     ),
-    true
+    false
   );
   assert.equal(coordinator.size, 1);
 
@@ -805,6 +807,66 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   );
   const stripped = AgentConfigSchema.parse({ model: "m", someUnknownExtra: 1 });
   assert.equal("someUnknownExtra" in stripped, false, "unknown agent extras are still stripped");
+}
+
+// --- a duplicate TOOL_CALL_END for a registered pre-fork disarms its own spawn ---
+//
+// `start` returns false when a run for that call id is already registered — the spawn it was called
+// for registered nothing. The middleware reads that as "my parent-signal listener has no run to
+// stop" and removes it. While `start` always returned true, that branch was dead code and every
+// duplicated `TOOL_CALL_END` left a listener (and an AbortController) attached to the parent signal.
+
+{
+  const parentController = new AbortController();
+  const parentSignal = parentController.signal;
+  let removals = 0;
+  const realRemove = parentSignal.removeEventListener.bind(parentSignal);
+  parentSignal.removeEventListener = (...args) => {
+    removals += 1;
+    return realRemove(...args);
+  };
+
+  const managed = {
+    id: "parent-dup",
+    addPendingAbortController: () => {},
+    removePendingAbortController: () => {},
+  };
+  const middleware = createTaskPreforkMiddleware({
+    getManagedAgent: () => managed,
+    // The middleware ties the pre-fork to the parent's current run through this lookup.
+    manager: { getAgent: () => ({ run: { currentAbortController: parentController } }) },
+  });
+
+  // A run is already registered for this call id — the state a first `TOOL_CALL_END` leaves behind.
+  let factoryRuns = 0;
+  const coordinator = getTaskPreforkCoordinator(managed);
+  const firstStarted = coordinator.start(
+    "call-dup",
+    () => {},
+    async () => {
+      factoryRuns += 1;
+      return { aborted: false, summary: "…", reachedLimit: false, incomplete: false, truncated: false };
+    }
+  );
+  assert.equal(firstStarted, true, "the first registration for a call id reports that it registered");
+  assert.equal(
+    coordinator.start(
+      "call-dup",
+      () => {},
+      async () => ({})
+    ),
+    false,
+    "a duplicate reports that it did not"
+  );
+
+  // Now the duplicate arrives the way the engine produces one: start chunk → end chunk.
+  await middleware.onChunk({}, { type: "TOOL_CALL_START", toolCallId: "call-dup", toolName: "task" });
+  await middleware.onChunk({}, { type: "TOOL_CALL_END", toolCallId: "call-dup", input: { prompt: "again" } });
+
+  assert.equal(removals, 1, "the duplicate spawn removes the parent-abort listener it attached");
+  assert.equal(coordinator.size, 1, "…and registers nothing: the first run is still the one to be joined");
+  await sleep(5);
+  assert.equal(factoryRuns, 1, "the duplicate did not run a second subagent");
 }
 
 console.log("task-prefork validation passed");

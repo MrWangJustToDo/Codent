@@ -72,5 +72,26 @@ export async function withFileMutationQueue<T>(
   } finally {
     // Signal the next queued operation to proceed.
     releaseNext();
+    // ...and drop our entry once we are the tail of the chain.
+    //
+    // A chain nobody is waiting on has nothing to serialize against: the next operation on this file
+    // creates its own. Keeping it would grow the map for the life of the process — one stale promise
+    // (and its closure) per distinct file ever mutated — for a session that edits thousands of files.
+    //
+    // The identity check is what makes this safe: if another operation queued behind us, the map now
+    // holds ITS promise, and this is not ours to remove.
+    if (fileMutationQueues.get(key) === next) {
+      fileMutationQueues.delete(key);
+    }
   }
+}
+
+/**
+ * How many files currently hold a queue entry.
+ *
+ * Exists so `validate:file-mutation-queue` can assert the map drains instead of growing with every
+ * file a session touches; not used by production paths.
+ */
+export function fileMutationQueueSize(): number {
+  return fileMutationQueues.size;
 }

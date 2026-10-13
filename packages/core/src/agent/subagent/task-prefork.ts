@@ -166,9 +166,13 @@ export class TaskPreforkCoordinator {
   }
 
   /**
-   * Register a background run. Duplicate ids are ignored (returns true);
-   * beyond the concurrency cap runs queue FIFO and roll forward as slots free.
+   * Register a background run. Beyond the concurrency cap runs queue FIFO and roll forward as slots
+   * free.
    *
+   * @returns `false` when this call registered NOTHING because a run for `toolCallId` is already
+   * registered. The caller's spawn is then a no-op, and it has to disarm whatever it built for it
+   * (its parent-signal listener and controller) — this return value is the only thing that tells it
+   * the run it believes it started is not the one that will be joined.
    * @param abortHandle cancels the run (controller) — safe in any state.
    * @param onRunStart fires when the run actually acquires a slot (not while queued).
    */
@@ -178,7 +182,7 @@ export class TaskPreforkCoordinator {
     factory: () => Promise<SubagentResult>,
     onRunStart?: () => void
   ): boolean {
-    if (this.entries.has(toolCallId)) return true;
+    if (this.entries.has(toolCallId)) return false;
 
     let openGate!: () => void;
     const gate = new Promise<void>((resolve) => {
