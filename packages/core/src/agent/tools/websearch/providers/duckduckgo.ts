@@ -7,6 +7,7 @@
 
 import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
+import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../util/bounded-body.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 
 import type { SearchProvider, SearchResult, SearchOptions } from "../types.js";
@@ -170,7 +171,7 @@ export const duckduckgoProvider: SearchProvider = {
         throw new Error(`DuckDuckGo search failed with status: ${response.status}`);
       }
 
-      const html = await response.text();
+      const html = await readBodyTextBounded(response, DEFAULT_MAX_BODY_BYTES);
       let results = parseDuckDuckGoResults(html);
       results = filterResultsByDomain(results, options?.allowedDomains, options?.blockedDomains);
 

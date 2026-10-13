@@ -33,6 +33,18 @@ export function isAbortError(err: unknown, signal?: AbortSignal | null): boolean
 }
 
 /**
+ * Is this error a deadline expiry rather than a user abort or a plain failure?
+ *
+ * The counterpart to {@link isAbortError}, kept beside it because they answer the same question
+ * twice: "the run stopped" is either the user (abort) or a deadline (timeout), and neither is a
+ * tool failure. Structural on `code` for the same reason — a remote CoreEnv rebuilds the error
+ * from `{ name, code, message }`, so `instanceof` does not survive the wire.
+ */
+export function isTimeoutError(err: unknown): boolean {
+  return (err as { code?: unknown } | null | undefined)?.code === "timeout";
+}
+
+/**
  * A settled-tool output carrying the user-cancel marker, for either of the two shapes the
  * codebase writes: `cancelled` (what a tool sets when it caught its own abort) and `aborted`
  * (what the `task` tool sets, because its subagent cancels instead of throwing).

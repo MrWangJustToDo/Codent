@@ -5,7 +5,7 @@
  *
  *   1. `resolveDefaultCommandTimeout` yields the default, honours `RUN_COMMAND_TIMEOUT_MS`, and
  *      clamps a sub-1000ms / non-numeric / unreadable value back to the default.
- *   2. `isCommandTimeoutError` classifies a typed timeout (local OR remote-reconstructed).
+ *   2. `isTimeoutError` classifies a typed timeout (local OR remote-reconstructed).
  *   3. `buildTimedOutCommandResult` keeps partial stdout/stderr and reports `-1` / `timedOut` /
  *      `timeoutMs` / `success:false`, leaving `stderr` as the command's own output.
  *   4. end-to-end: the tool INJECTS the effective deadline into `coreEnv.runCommand` when the caller
@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import {
   buildTimedOutCommandResult,
   createRunCommandTool,
-  isCommandTimeoutError,
+  isTimeoutError,
   resolveDefaultCommandTimeout,
 } from "../dist/dev.mjs";
 import { ExecutionError, formatToolOutput } from "../dist/index.mjs";
@@ -67,15 +67,11 @@ const envWith = (vars) => ({ getEnv: async () => vars });
 // 2. Timeout classification
 // ============================================================================
 {
-  assert.equal(isCommandTimeoutError(new ExecutionError("timeout", "Command timed out after 1ms")), true);
-  assert.equal(isCommandTimeoutError({ code: "timeout" }), true, "remote-reconstructed shape");
-  assert.equal(
-    isCommandTimeoutError(new ExecutionError("aborted", "Command aborted")),
-    false,
-    "abort is not a timeout"
-  );
-  assert.equal(isCommandTimeoutError(new Error("boom")), false);
-  assert.equal(isCommandTimeoutError(undefined), false);
+  assert.equal(isTimeoutError(new ExecutionError("timeout", "Command timed out after 1ms")), true);
+  assert.equal(isTimeoutError({ code: "timeout" }), true, "remote-reconstructed shape");
+  assert.equal(isTimeoutError(new ExecutionError("aborted", "Command aborted")), false, "abort is not a timeout");
+  assert.equal(isTimeoutError(new Error("boom")), false);
+  assert.equal(isTimeoutError(undefined), false);
   console.log("ok  timeout classification (typed, remote shape, negatives)");
 }
 

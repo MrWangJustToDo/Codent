@@ -66,7 +66,6 @@ export { createTaskTool, taskOutputSchema } from "../agent/subagent/task-tool.js
 // through their real factories (their `toModelOutput` must tell the model, not only the UI).
 export {
   createRunCommandTool,
-  isCommandTimeoutError,
   buildTimedOutCommandResult,
   commandTimeoutNotice,
   resolveDefaultCommandTimeout,

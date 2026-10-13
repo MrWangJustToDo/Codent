@@ -1,7 +1,7 @@
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
-import { isAbortError } from "../../runtime-types/abort.js";
+import { isAbortError, isTimeoutError } from "../../runtime-types/abort.js";
 
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "./command-safety/command-approval-policy.js";
@@ -40,18 +40,6 @@ export async function resolveDefaultCommandTimeout(env: {
   return DEFAULT_RUN_COMMAND_TIMEOUT_MS;
 }
 
-/**
- * True when a CoreEnv run failed because its deadline elapsed — NOT a user cancel.
- *
- * Structural, like `isAbortError`: a remote CoreEnv rebuilds the error from `{ name, code, message }`,
- * so match `code` rather than `instanceof`. The tool must handle a timeout itself and return a normal
- * result carrying the partial output, because `ExecutionError` deliberately has no output fields.
- */
-export function isCommandTimeoutError(err: unknown): boolean {
-  return (err as { code?: unknown } | null | undefined)?.code === "timeout";
-}
-
-/** Notice appended to the stderr of a command terminated at its deadline. */
 /**
  * Human-readable reason for a deadline kill, rendered by the presenters (the UI, the model, the
  * compact summary) from the structured `timedOut` / `timeoutMs` fields.
@@ -279,7 +267,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         // produced output before it was killed. `ExecutionError` carries no output fields (by
         // design), so the tool catches the typed timeout and returns a normal result carrying the
         // partial output — symmetric with the cancel branch above.
-        if (isCommandTimeoutError(err)) {
+        if (isTimeoutError(err)) {
           stdoutAccumulator.finish();
           stderrAccumulator.finish();
           const stdoutResult = await maybeCacheOutput(

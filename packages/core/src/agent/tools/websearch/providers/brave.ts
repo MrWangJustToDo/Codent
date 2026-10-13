@@ -12,6 +12,7 @@
 
 import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
+import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../util/bounded-body.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 import { getProviderManager } from "../provider.js";
 
@@ -90,7 +91,9 @@ export const braveProvider: SearchProvider = {
         throw new Error(`Brave Search API failed with status: ${response.status}`);
       }
 
-      const data = (await response.json()) as BraveSearchResponse;
+      // `JSON.parse` over a BOUNDED body, not `response.json()`: the latter materialises whatever
+      // the endpoint sends before parsing it (see `readBodyBounded`).
+      const data = JSON.parse(await readBodyTextBounded(response, DEFAULT_MAX_BODY_BYTES)) as BraveSearchResponse;
       const rawResults = data.web?.results ?? [];
 
       let results: SearchResult[] = rawResults

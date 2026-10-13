@@ -20,7 +20,7 @@
 - [x] 3.2 Assert the guard contract: a child still running past a short bound is killed with a reason naming the bound and no unverified cause; a child that **exits** while a descendant holds the pipe is NOT a safety kill (settles by the drain grace with its real code); a safety kill keeps partial stdout, reports `-1`, and keeps the reason alongside the command's own stderr; no guard timer remains pending after a normal completion.
 - [x] 3.3 Factor the `native-run` guard mapping into the exported `resolveRunFailure` so it is directly testable (a 30s end-to-end command would be needed otherwise).
 - [x] 3.4 Confirm the glob-discovered runner picks it up (`node scripts/run-all-validators.mjs --dir packages/node` → 5/0).
-- [x] 3.5 Add `validate:command-deadline` (core): the default deadline is injected into `runCommand` when the caller omits `timeout`; `RUN_COMMAND_TIMEOUT_MS` overrides it and a sub-1000 / non-numeric / unreadable value clamps to the default; `isCommandTimeoutError` classifies a typed timeout (local + remote shape); and a deadline-killed command returns its partial output instead of throwing it away.
+- [x] 3.5 Add `validate:command-deadline` (core): the default deadline is injected into `runCommand` when the caller omits `timeout`; `RUN_COMMAND_TIMEOUT_MS` overrides it and a sub-1000 / non-numeric / unreadable value clamps to the default; `isTimeoutError` classifies a typed timeout (local + remote shape); and a deadline-killed command returns its partial output instead of throwing it away.
 
 ## 4. Verification
 

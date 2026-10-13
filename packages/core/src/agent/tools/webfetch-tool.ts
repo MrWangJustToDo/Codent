@@ -16,6 +16,7 @@ import { isAbortError } from "../../runtime-types/abort.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { createTimeoutAbort } from "./util/abort-timeout.js";
+import { readBodyBounded } from "./util/bounded-body.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
 import { decodeBytes } from "./util/text-decoding.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
@@ -48,64 +49,6 @@ function buildAcceptHeader(format: string): string {
     default:
       return "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8";
   }
-}
-
-// ============================================================================
-// Bounded body read
-// ============================================================================
-
-/**
- * Read a `Response` body into one `Uint8Array`, refusing to buffer more than `maxBytes`.
- *
- * `content-length` is only a hint, and the tool already rejects early on it — but it is the
- * WIRE (compressed) length, so it cannot bound a gzip/deflate bomb, a `Transfer-Encoding:
- * chunked` body (no header at all), or a header that simply lies. Materialising the body first
- * (`response.arrayBuffer()`) is the actual risk this guards: a hostile or broken URL — including
- * one a prompt injection points at — could OOM the process before the size check ever ran, and
- * under `--remote-env` / remote-session the fetch runs SERVER-side, so one bomb would take every
- * session down. So read chunk-by-chunk and abort the moment the running total exceeds the limit.
- *
- * Falls back to the buffered path on hosts whose `Response` exposes no streaming body; the bound
- * still applies there, just after the allocation.
- */
-async function readBodyBounded(response: Response, maxBytes: number): Promise<Uint8Array> {
-  const body = response.body;
-  if (!body) {
-    const arrayBuffer = await response.arrayBuffer();
-    if (arrayBuffer.byteLength > maxBytes) {
-      throw new Error(`Response too large: ${arrayBuffer.byteLength} bytes (limit: ${maxBytes})`);
-    }
-    return new Uint8Array(arrayBuffer);
-  }
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        // Stop pulling and release the connection, best-effort: a cancel failure must not mask
-        // the size verdict the caller needs.
-        await reader.cancel().catch(() => {});
-        throw new Error(`Response too large: ${total} bytes (limit: ${maxBytes})`);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 // ============================================================================

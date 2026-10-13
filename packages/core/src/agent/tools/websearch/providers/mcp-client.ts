@@ -12,6 +12,7 @@
 
 import { getEnv, type ResolvedCoreEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
+import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../util/bounded-body.js";
 
 /** One MCP `tools/call`, returning the first text content block. */
 export async function callMcpTool(options: {
@@ -49,7 +50,7 @@ export async function callMcpTool(options: {
       throw new Error(`MCP search failed with status: ${response.status}`);
     }
 
-    const body = await response.text();
+    const body = await readBodyTextBounded(response, DEFAULT_MAX_BODY_BYTES);
     const text = parseMcpResponse(body);
     if (text === undefined) {
       throw new Error("MCP search returned no content");

@@ -11,6 +11,7 @@
 
 import { getEnv } from "../../../../env";
 import { createTimeoutAbort } from "../../util/abort-timeout.js";
+import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../util/bounded-body.js";
 import { filterResultsByDomain } from "../domain-filter.js";
 import { getProviderManager } from "../provider.js";
 
@@ -82,7 +83,8 @@ export const tavilyProvider: SearchProvider = {
         throw new Error(`Tavily Search API failed with status: ${response.status}`);
       }
 
-      const data = (await response.json()) as TavilySearchResponse;
+      // `JSON.parse` over a BOUNDED body, not `response.json()` (see `readBodyBounded`).
+      const data = JSON.parse(await readBodyTextBounded(response, DEFAULT_MAX_BODY_BYTES)) as TavilySearchResponse;
       let results: SearchResult[] = (data.results ?? [])
         .map((r) => ({
           title: r.title?.trim() || r.url || "",
