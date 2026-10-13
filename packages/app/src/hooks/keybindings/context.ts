@@ -7,6 +7,7 @@
  */
 
 import { useConfigEditor } from "../use-config-editor.js";
+import { useConfig } from "../use-config.js";
 import { useExtensionPanel } from "../use-extension-panel.js";
 import { useSubagentPanel } from "../use-subagent-panel.js";
 import { useWorkspaceView } from "../use-workspace-view.js";
@@ -57,16 +58,23 @@ export interface KeybindingContext {
 }
 
 /**
- * Any overlay panel (workspace browser / task / extensions) is open. While a
- * panel is up, its own `useInput` owns the keyboard — central handlers must
- * early-return or panel navigation leaks into chat input / approvals
- * (arrows mutating history, Enter submitting, `y` approving a tool, …).
+ * Any full-screen swap (workspace browser / task / extensions / config editor / resume picker)
+ * is open. While one is up, its own `useInput` owns the keyboard — central handlers must
+ * early-return or panel navigation leaks into chat input / approvals (arrows mutating history or
+ * scrolling an invisible list, typed characters filling the hidden prompt, `y` approving a tool,
+ * …).
+ *
+ * A new overlay is not gated by default: the resume picker returned `false` here for a while,
+ * which is exactly how its arrows also drove prompt history underneath.
  */
 export function isAnyPanelOpen(): boolean {
   return (
     useConfigEditor.getReadonlyState().view === "open" ||
     useWorkspaceView.getReadonlyState().view === "workspace" ||
     useSubagentPanel.getReadonlyState().view !== "closed" ||
-    useExtensionPanel.getReadonlyState().view !== "closed"
+    useExtensionPanel.getReadonlyState().view !== "closed" ||
+    // `--resume` with no id, and `/resume` with none: `Agent` swaps to `SessionResumePicker`.
+    // The sentinel itself is the signal — see `packages/cli/src/args.ts`.
+    useConfig.getReadonlyState().config.resumeSession === "__picker__"
   );
 }

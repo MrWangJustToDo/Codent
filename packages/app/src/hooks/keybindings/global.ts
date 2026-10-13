@@ -7,6 +7,7 @@ import { exitWithSummary } from "../../utils/exit-with-summary.js";
 import { getActiveHost } from "../../utils/session-resolve.js";
 import { useAutocomplete } from "../use-autocomplete.js";
 import { useCommandOutput } from "../use-command-output.js";
+import { useConfig } from "../use-config.js";
 import { useExtensionPanel, CLOSE_DEBOUNCE_MS as EXTENSION_CLOSE_DEBOUNCE_MS } from "../use-extension-panel.js";
 import { usePlanPreview } from "../use-plan-preview.js";
 import { useSubagentPanel, CLOSE_DEBOUNCE_MS as SUBAGENT_CLOSE_DEBOUNCE_MS } from "../use-subagent-panel.js";
@@ -91,6 +92,9 @@ export function useGlobalKeybindings(ctx: KeybindingContext): void {
     if (inputKey.escape && ctx.mode !== "freeform" && ctx.mode !== "select") {
       // Workspace panel open: let WorkspacePanel handle Esc
       if (useWorkspaceView.getReadonlyState().view === "workspace") return;
+      // Resume picker open: let it handle Esc (it cancels). Without this the picker owns the
+      // keyboard (`isAnyPanelOpen`) but no handler would answer Esc, so it would read as dead.
+      if (useConfig.getReadonlyState().config.resumeSession === "__picker__") return;
       const panel = useSubagentPanel.getReadonlyState();
       if (panel.view !== "closed") {
         return;
