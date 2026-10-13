@@ -21,6 +21,14 @@ export { createGlobTool } from "./agent/tools/glob-tool.js";
 export { createGrepTool } from "./agent/tools/grep-tool.js";
 export { createReadFileTool } from "./agent/tools/read-file-tool.js";
 export { createTreeTool } from "./agent/tools/tree-tool.js";
+// The remaining projection-declaring factories: `validate:model-output-idempotency` drives every
+// registered projection, and it can only cover the ones this surface can create.
+export { createGetCommandOutputTool } from "./agent/tools/get-command-output-tool.js";
+export { createKillCommandTool } from "./agent/tools/kill-command-tool.js";
+export { createWriteFileTool } from "./agent/tools/write-file-tool.js";
+export { createEditFileTool } from "./agent/tools/edit-file-tool.js";
+export { createBeginSummaryTool } from "./agent/subagent/begin-summary-tool.js";
+export { isProjectedModelContent } from "./agent/tools/runtime/projected-model-content.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";
 export {

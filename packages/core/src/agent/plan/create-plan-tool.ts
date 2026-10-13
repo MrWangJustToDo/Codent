@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "../tools/runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 import { withDuration } from "../tools/util/tool-result.js";
 import { toolOutputBaseSchema } from "../tools/util/types.js";
 
@@ -96,6 +96,7 @@ function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: Crea
       });
     },
     toModelOutput({ output }) {
+      if (isProjectedModelContent(output)) return output;
       if (!output.ok) {
         return [{ type: "text" as const, content: `Plan tool error: ${output.error ?? output.message}` }];
       }
@@ -180,6 +181,7 @@ export const createCompletePlanTool = (deps: CreatePlanToolDeps) => {
       });
     },
     toModelOutput({ output }) {
+      if (isProjectedModelContent(output)) return output;
       return [{ type: "text" as const, content: output.message }];
     },
   });

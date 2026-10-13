@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 
-import { defineServerTool } from "../tools/runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 
 /** Tool name used to unlock task-tool summary streaming in the parent UI. */
 export const BEGIN_SUMMARY_TOOL_NAME = "begin_summary";
@@ -26,6 +26,9 @@ After calling begin_summary, write your complete answer as plain text in the sam
 
     execute: async () => ({ ready: true as const }),
 
-    toModelOutput: () => [{ type: "text" as const, content: "Proceed with your final summary for the parent agent." }],
+    toModelOutput: ({ output }) =>
+      isProjectedModelContent(output)
+        ? output
+        : [{ type: "text" as const, content: "Proceed with your final summary for the parent agent." }],
   });
 };

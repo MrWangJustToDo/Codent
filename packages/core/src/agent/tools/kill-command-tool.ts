@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { commandJobRegistry } from "./util/command-job-registry.js";
 import { killCommandOutputSchema } from "./util/types.js";
 
@@ -37,6 +37,7 @@ export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = 
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: KillCommandOutput }) {
+      if (isProjectedModelContent(output)) return output;
       return [
         {
           type: "text" as const,

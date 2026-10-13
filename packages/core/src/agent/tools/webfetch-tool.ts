@@ -14,7 +14,7 @@ import { z } from "zod";
 
 import { isAbortError } from "../../runtime-types/abort.js";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { createTimeoutAbort } from "./util/abort-timeout.js";
 import { readBodyBounded } from "./util/bounded-body.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
@@ -310,6 +310,7 @@ Usage notes:
     // Only send url/finalUrl/title + content (or multimodal image parts) to the LLM —
     // contentType/contentLength/isImage/truncated/cachedOutputPath are UI metadata.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: z.infer<typeof webfetchOutputSchema> }) {
+      if (isProjectedModelContent(output)) return output;
       // A cancelled fetch has no content; without this the model reads an empty successful
       // fetch of the URL. Same contract as the task tool's cancel notice.
       if (output.cancelled) {

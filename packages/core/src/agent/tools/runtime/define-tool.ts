@@ -46,6 +46,7 @@ export interface ToolExecuteCtx {
 
 export type { ModelToolContent, ToModelOutputContext };
 export { toModelOutputRegistry };
+export { isProjectedModelContent } from "./projected-model-content.js";
 
 // ============================================================================
 // Factories

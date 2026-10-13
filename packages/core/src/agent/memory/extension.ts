@@ -21,6 +21,8 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
+
 import type { MemoryManager } from "./memory-manager.js";
 import type { ExtensionAPI, ExtensionContext } from "../extension/types.js";
 
@@ -118,6 +120,7 @@ This is a lazy tool: discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
       },
       // Only send the readable summary to the LLM — filename is derived, avoid extra tokens.
       toModelOutput({ output }) {
+        if (isProjectedModelContent(output)) return output;
         const list = output as { memories?: Array<{ name: string; type: string; description: string }> };
         const lines = list?.memories?.map((m) => `- [${m.type}] ${m.name}: ${m.description}`) ?? [];
         return lines.length > 0 ? `Available memories:\n${lines.join("\n")}` : "No memories stored.";
@@ -159,6 +162,7 @@ memory. Returns the memory wrapped in <memory> tags.`,
       },
       // Only send content to the LLM — name is echoed in the input.
       toModelOutput({ output }) {
+        if (isProjectedModelContent(output)) return output;
         return (output as { content: string }).content;
       },
     });
@@ -197,6 +201,7 @@ creating a duplicate (check memory_list first).`,
         return { filename, ok: true };
       },
       toModelOutput({ output }) {
+        if (isProjectedModelContent(output)) return output;
         return `Memory saved to ${(output as { filename: string }).filename}.`;
       },
     });

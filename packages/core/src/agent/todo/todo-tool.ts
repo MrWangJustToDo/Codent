@@ -1,4 +1,4 @@
-import { defineServerTool } from "../tools/runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 import { withDuration } from "../tools/util/tool-result.js";
 import { todoOutputSchema } from "../tools/util/types.js";
 
@@ -57,6 +57,7 @@ IMPORTANT RULES:
     },
     // Send title + source + items so the model can see the current list and its ownership.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: TodoOutput }) {
+      if (isProjectedModelContent(output)) return output;
       const lines = output.items?.map?.((item) => {
         const icon = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[>]" : "[ ]";
         return `${icon} ${item.content}`;

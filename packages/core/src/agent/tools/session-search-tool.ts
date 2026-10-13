@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { DEFAULT_SEARCH_ROLES, searchHistory } from "./session-search/session-reader.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -127,6 +127,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
       });
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: SessionSearchOutput }) {
+      if (isProjectedModelContent(output)) return output;
       if (output.matches.length === 0) {
         const note = output.truncated ? " (scan was bounded, so this is not guaranteed complete)" : "";
         return [{ type: "text" as const, content: `session search "${output.query}": no matches${note}.` }];

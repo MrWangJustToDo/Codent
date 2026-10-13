@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getEnv, type CoreEnvFs } from "../../env";
 import { toPosixPath, toPosixPathKey } from "../../utils/posix-path.js";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { canExecArgs, execArgs } from "./util/exec-args.js";
 import { OUTPUT_LIMITS, truncateString } from "./util/output-limits.js";
 import { isCommandNotFound, quoteForShell, resolveSearchPath } from "./util/search-command.js";
@@ -273,6 +273,7 @@ export const createTreeTool = () => {
     // Only send the tree text to the LLM — path/maxDepth are echoed in the
     // input, totalEntries/truncated/cachedOutputPath are UI metadata.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: { tree: string } }) {
+      if (isProjectedModelContent(output)) return output;
       return [{ type: "text" as const, content: output.tree }];
     },
   });

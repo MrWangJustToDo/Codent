@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import {
@@ -522,6 +522,7 @@ export const createGrepTool = () => {
     // Only send matches to the LLM — search params are echoed in the input,
     // pagination/truncation/cache metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GrepOutput }) {
+      if (isProjectedModelContent(output)) return output;
       const lines = output.matches?.map?.((m) => `${m.file}:${m.lineNumber}: ${m.content}`);
       return [
         {

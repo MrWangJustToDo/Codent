@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { withDuration } from "./util/tool-result.js";
 import { listFileOutputSchema } from "./util/types.js";
@@ -66,6 +66,7 @@ export const createListFileTool = () => {
     // Only send entries to the LLM — path is echoed in the input,
     // pagination metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: ListFileOutput }) {
+      if (isProjectedModelContent(output)) return output;
       const lines = output.entries?.map?.((e) => `${e.name}${e.type === "directory" ? "/" : ""}`);
       return [
         {

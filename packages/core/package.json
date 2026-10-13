@@ -235,7 +235,8 @@
     "validate:command-safety-readonly": "pnpm run build && node scripts/validate-command-safety-readonly.mjs",
     "validate:read-file-size": "pnpm run build && node scripts/validate-read-file-size.mjs",
     "validate:webfetch-size": "pnpm run build && node scripts/validate-webfetch-size.mjs",
-    "validate:memory-merge-selfdelete": "pnpm run build && node scripts/validate-memory-merge-selfdelete.mjs"
+    "validate:memory-merge-selfdelete": "pnpm run build && node scripts/validate-memory-merge-selfdelete.mjs",
+    "validate:model-output-idempotency": "pnpm run build && node scripts/validate-model-output-idempotency.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.68.0",

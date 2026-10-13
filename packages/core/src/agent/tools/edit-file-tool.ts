@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { applyResolvedEdit, isErrorResult, resolveEditMatch } from "./util/find-edit-match.js";
 import { normalizeForFuzzyMatch } from "./util/fuzzy-match.js";
@@ -138,6 +138,7 @@ export const createEditFileTool = () => {
       );
     },
     toModelOutput: ({ output }: { toolCallId: string; input: unknown; output: EditFileOutput }) => {
+      if (isProjectedModelContent(output)) return output;
       return [
         {
           type: "text" as const,

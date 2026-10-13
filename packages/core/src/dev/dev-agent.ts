@@ -108,12 +108,9 @@ export {
   resolveMaxConcurrentTasks,
   TaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
-// The middleware factory itself, so `validate:task-prefork` can drive the discard call site
-// (a fake `ManagedAgent` + a seeded coordinator) instead of asserting on its source alone.
-export { createTaskPreforkMiddleware } from "../managers/middleware/task-prefork-middleware.js";
-// The run's abort surface: the pre-fork registers its controller there so a pre-fork that outlives
-// the invocation it was spawned in is still stopped by a run-level abort.
-export { RunCoordinator } from "../managers/run-coordinator.js";
+// `createTaskPreforkMiddleware` and `RunCoordinator` (the middleware factory, and the run's abort
+// surface the pre-fork registers its controller on) already reach validators through the
+// `dev-managers` re-export — do not add a second export of either here.
 export {
   beginTaskRun,
   clearTaskRuns,

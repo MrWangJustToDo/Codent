@@ -5,7 +5,7 @@ import { isAbortError, isTimeoutError } from "../../runtime-types/abort.js";
 
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "./command-safety/command-approval-policy.js";
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { commandJobRegistry } from "./util/command-job-registry.js";
 import { OutputAccumulator } from "./util/output-accumulator.js";
 import { emitStreamingChunk } from "./util/streaming-callback.js";
@@ -317,6 +317,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: RunCommandOutput }) {
+      if (isProjectedModelContent(output)) return output;
       if (output.runInBackground && output.jobId) {
         return [
           {

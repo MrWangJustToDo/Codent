@@ -20,7 +20,7 @@
 import { z } from "zod";
 
 import { generateId } from "../../utils/generate-id.js";
-import { defineServerTool } from "../tools/runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 import { maybeCacheOutput } from "../tools/util/tool-output-cache.js";
 import { withDuration } from "../tools/util/tool-result.js";
 import { toolOutputBaseSchema } from "../tools/util/types.js";
@@ -246,6 +246,7 @@ Example use cases:
     // the ceiling, while a bare count says nothing without one — so the pair is host-only,
     // persisted on the output for a restored `used/budget` readout.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: TaskOutput }) {
+      if (isProjectedModelContent(output)) return output;
       const status = [
         `reachedLimit=${output.reachedLimit}`,
         `incomplete=${output.incomplete}`,

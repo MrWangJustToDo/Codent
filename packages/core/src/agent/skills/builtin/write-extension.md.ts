@@ -167,7 +167,7 @@ extension unregisters everything it added.
 | \`execute(input, opts)\` | yes | \`opts\` carries \`toolCallId\`, \`abortSignal\`, and \`agentId\`. Must return an object. |
 | \`outputSchema\` | no | Schema for the returned value. |
 | \`present\` | no | How the call is displayed — see "Tool display" below. |
-| \`toModelOutput(ctx)\` | no | Transform what the model sees (e.g. drop fields the UI needs but the model does not). |
+| \`toModelOutput(ctx)\` | no | Transform what the model sees (e.g. drop fields the UI needs but the model does not). Must be **idempotent**: open it with \`if (isProjectedModelContent(output)) return output;\` — a re-projection can be handed the projection's own output, and reading its fields off that puts \`undefined\` on the wire (\`validate:model-output-idempotency\`). |
 | \`lazy\` | no | \`true\` hides it from the initial request; the model discovers it by name. Saves per-turn tokens for rarely-used tools. |
 
 Honour \`abortSignal\` in long-running work so Esc cancels promptly.

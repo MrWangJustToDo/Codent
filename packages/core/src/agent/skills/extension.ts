@@ -19,6 +19,8 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
+
 import type { SkillRegistry } from "./skill-registry.js";
 import type { ExtensionAPI, ExtensionContext } from "../extension/types.js";
 
@@ -115,6 +117,7 @@ This is a lazy tool: discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
       },
       // Only send skills to the LLM — count is derived, avoid extra tokens.
       toModelOutput({ output }) {
+        if (isProjectedModelContent(output)) return output;
         const { skills } = output as { skills?: Array<{ name: string; description: string; source: string }> };
         const lines = skills?.map((s) => `- ${s.name} (${s.source}): ${s.description}`) ?? [];
         return `Available skills:\n${lines.join("\n")}`;
@@ -152,6 +155,7 @@ that help you complete specific types of tasks.`,
       },
       // Only send content to the LLM — name is echoed in the input.
       toModelOutput({ output }) {
+        if (isProjectedModelContent(output)) return output;
         return (output as { content: string }).content;
       },
     });

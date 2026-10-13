@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { withDuration } from "./util/tool-result.js";
 import { writeFileOutputSchema } from "./util/types.js";
@@ -63,6 +63,7 @@ export const createWriteFileTool = () => {
       );
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: WriteFileOutput }) {
+      if (isProjectedModelContent(output)) return output;
       return [
         {
           type: "text" as const,

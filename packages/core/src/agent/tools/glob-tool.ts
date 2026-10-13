@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import {
@@ -243,6 +243,7 @@ export const createGlobTool = () => {
     // Only send the file list to the LLM — pattern/path are echoed in the
     // input, pagination/truncation/cache metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GlobOutput }) {
+      if (isProjectedModelContent(output)) return output;
       return [
         {
           type: "text" as const,

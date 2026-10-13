@@ -1,4 +1,4 @@
-import { isContentPartArray } from "@tanstack/ai";
+import { isProjectedModelContent } from "../runtime/projected-model-content.js";
 
 import type { ReadFileOutput } from "../read-file-tool.js";
 import type { ModelToolContent } from "../runtime/to-model-output-registry.js";
@@ -12,12 +12,11 @@ import type { ModelToolContent } from "../runtime/to-model-output-registry.js";
  * Anthropic / other providers with native multimodal tool results.
  */
 export function formatReadFileToolResult(output: ReadFileOutput): ModelToolContent {
-  // Idempotency: on re-runs (resume / later turns) `toModelOutput` is fed the
-  // already-formatted ContentPart[] that the UI channel/session persists as a
-  // JSON string — not the raw ReadFileOutput. Detect it and pass through;
-  // the branches below would otherwise fall into `JSON.stringify(output)` and
-  // flatten image base64 back to plain text (breaking the image_url lift).
-  if (isContentPartArray(output)) return output;
+  // Idempotency: on a re-run (resume / later turn) this is fed the already-formatted content rather
+  // than the raw `ReadFileOutput` (see {@link isProjectedModelContent}). Without the guard the
+  // branches below fall into `JSON.stringify(output)` and flatten image base64 back to plain text,
+  // breaking the `image_url` lift.
+  if (isProjectedModelContent(output)) return output;
 
   if (output.type === "image") {
     return [

@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { FileError } from "../../env/types";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import {
   MAX_SESSION_FILE_BYTES,
   readSessionMessages,
@@ -163,6 +163,7 @@ Use after \`session_search\` returns a \`sessionId\` you want to read in full. O
       });
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: SessionReadOutput }) {
+      if (isProjectedModelContent(output)) return output;
       return [{ type: "text" as const, content: output.content }];
     },
   });

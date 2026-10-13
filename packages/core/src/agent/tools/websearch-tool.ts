@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { isAbortError } from "../../runtime-types/abort.js";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 import { createConfiguredProviderManager, filterResultsByDomain } from "./websearch";
@@ -193,6 +193,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
       });
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: z.infer<typeof websearchOutputSchema> }) {
+      if (isProjectedModelContent(output)) return output;
       // A cancelled search returns no results; without this the model reads "no results" as
       // a real (empty) outcome instead of a stopped run.
       if (output.cancelled) {

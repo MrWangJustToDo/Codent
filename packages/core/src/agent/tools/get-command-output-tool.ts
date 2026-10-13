@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { defineServerTool } from "./runtime/define-tool.js";
+import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { commandJobRegistry } from "./util/command-job-registry.js";
 import { getCommandOutputSchema } from "./util/types.js";
 
@@ -36,6 +36,7 @@ export const createGetCommandOutputTool = ({ managed }: { managed?: ManagedAgent
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GetCommandOutput }) {
+      if (isProjectedModelContent(output)) return output;
       const parts = [
         `jobId: ${output.jobId}`,
         `status: ${output.status}`,
