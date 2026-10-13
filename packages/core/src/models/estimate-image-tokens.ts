@@ -43,9 +43,17 @@ export function estimateImageInputTokens(byteLength: number, dimensions?: ImageD
   return estimateImageTokensFromByteLength(byteLength);
 }
 
-/** Parse PNG IHDR or JPEG SOF for width/height; returns null when unknown. */
+/** Parse PNG IHDR, JPEG SOF or GIF screen descriptor for width/height; returns null when unknown. */
 export function tryReadImageDimensions(buffer: Uint8Array): ImageDimensions | null {
   if (buffer.length < 24) return null;
+
+  // GIF: "GIF87a"/"GIF89a", then the logical-screen width/height as little-endian uint16.
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    const width = buffer[6]! | (buffer[7]! << 8);
+    const height = buffer[8]! | (buffer[9]! << 8);
+    if (width > 0 && height > 0) return { width, height };
+    return null;
+  }
 
   // PNG: 8-byte signature + IHDR length(4) + type(4) + width(4) + height(4)
   if (

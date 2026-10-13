@@ -20,6 +20,17 @@ export const OUTPUT_LIMITS = {
    * output-length one — kept here so the read tools share one "too large to read" boundary.
    */
   MAX_FILE_READ_BYTES: 10 * 1024 * 1024,
+  /**
+   * Ceiling on the pixels an image may DECLARE before anything decodes it.
+   *
+   * A file's byte size says nothing about what decoding it costs: a 1 KB PNG can declare
+   * 50000x50000, i.e. 2.5 gigapixels and ~10 GB once expanded. `MAX_FILE_READ_BYTES` therefore
+   * cannot bound an image, so the declared dimensions are checked first. Above any photograph that
+   * fits the byte ceiling (a 50 MP camera JPEG is ~8192x6144), far below a bomb.
+   */
+  MAX_IMAGE_PIXELS: 50_000_000,
+  /** Ceiling on one image SIDE, which also catches a degenerate 1xN declaration. */
+  MAX_IMAGE_DIMENSION: 16_384,
 } as const;
 
 /** Truncate a string from the end (or the start) with an indicator of what was dropped. */

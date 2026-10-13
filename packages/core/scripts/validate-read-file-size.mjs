@@ -48,7 +48,7 @@ const CHUNK = 64 * 1024;
 function makeEnv({ content = "", size, mimeType = false, withRange = true }) {
   const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
   const reportedSize = size ?? bytes.length;
-  const log = { readFileCalls: 0, rangeCalls: 0, rangeRequests: [], bytesServed: 0 };
+  const log = { readFileCalls: 0, rangeCalls: 0, rangeRequests: [], bytesServed: 0, resizeCalls: 0 };
 
   const fs = {
     exists: async () => true,
@@ -78,6 +78,11 @@ function makeEnv({ content = "", size, mimeType = false, withRange = true }) {
     fs,
     getMimeType: async () => mimeType,
     base64Encode: (data) => Buffer.from(data).toString("base64"),
+    /** A decode, which is exactly what the pixel gate must prevent for an oversized image. */
+    resizeImage: async () => {
+      log.resizeCalls++;
+      return null;
+    },
   };
   return { env, log, bytes };
 }
@@ -280,6 +285,67 @@ const read = (env, input) => tool.execute(input, { toolCallId: "t", context: { c
   const { env } = makeEnv({ content: "\u0000binary-ish" });
   await assert.rejects(() => read(env, { path: "blob.txt" }), /appears to be binary/);
   console.log("ok  the bounded head probe still rejects binary content");
+}
+
+// ---------------------------------------------------------------------------
+// (10) An image that DECLARES an enormous size is refused before anything decodes
+// ---------------------------------------------------------------------------
+{
+  /** Minimal PNG (signature + IHDR) declaring the given size — a decompression bomb. */
+  const pngHeader = (width, height) => {
+    const bytes = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+    bytes.writeUInt32BE(13, 8); // IHDR length
+    bytes.write("IHDR", 12, "ascii");
+    bytes.writeUInt32BE(width, 16);
+    bytes.writeUInt32BE(height, 20);
+    return bytes;
+  };
+  /** Minimal GIF logical screen descriptor. */
+  const gifHeader = (width, height) => {
+    const bytes = Buffer.alloc(24);
+    bytes.write("GIF89a", 0, "ascii");
+    bytes.writeUInt16LE(width, 6);
+    bytes.writeUInt16LE(height, 8);
+    return bytes;
+  };
+
+  // 50000x50000 = 2.5 gigapixels in ~33 bytes: the byte ceiling cannot see this.
+  {
+    const { env, log } = makeEnv({ content: pngHeader(50000, 50000), mimeType: "image/png" });
+    await assert.rejects(
+      () => read(env, { path: "bomb.png" }),
+      /Image too large to decode: 50000x50000/,
+      "a declared 2.5-gigapixel PNG is refused"
+    );
+    assert.equal(log.resizeCalls, 0, "nothing decodes the bomb (no resize attempt)");
+  }
+  // A degenerate single side is caught by the per-side cap even under the pixel ceiling.
+  {
+    const { env, log } = makeEnv({ content: pngHeader(1, 20000), mimeType: "image/png" });
+    await assert.rejects(() => read(env, { path: "tall.png" }), /Image too large to decode/);
+    assert.equal(log.resizeCalls, 0);
+  }
+  // GIF declares its size little-endian; 65535^2 is ~4.3 gigapixels.
+  {
+    const { env, log } = makeEnv({ content: gifHeader(65535, 65535), mimeType: "image/gif" });
+    await assert.rejects(
+      () => read(env, { path: "bomb.gif" }),
+      /Image too large to decode: 65535x65535/,
+      "the GIF screen descriptor is read too"
+    );
+    assert.equal(log.resizeCalls, 0);
+  }
+  // ...and a normal image still reads.
+  {
+    const content = pngHeader(1024, 768);
+    const { env, log } = makeEnv({ content, mimeType: "image/png" });
+    const out = await read(env, { path: "photo.png" });
+    assert.equal(out.type, "image");
+    assert.equal(out.size, content.length);
+    assert.equal(log.resizeCalls, 0, "an image within budget is not resized");
+  }
+  console.log("ok  oversized declared image dimensions are refused before any decode");
 }
 
 console.log("read-file-size validation passed");

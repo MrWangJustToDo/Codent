@@ -28,7 +28,8 @@ import type { UsageTracker } from "../../runtime-types/hosts.js";
  * (`MAX_FILE_READ_BYTES`, the whole-file read a text/PDF/image needs) stays visibly distinct from
  * the OUTPUT bound.
  */
-const { MAX_RESULT_CONTENT_CHARS, MAX_LINE_CHARS, MAX_FILE_READ_BYTES } = OUTPUT_LIMITS;
+const { MAX_RESULT_CONTENT_CHARS, MAX_LINE_CHARS, MAX_FILE_READ_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGE_DIMENSION } =
+  OUTPUT_LIMITS;
 
 /** Default line limit when not specified */
 const DEFAULT_LINE_LIMIT = 2000;
@@ -303,6 +304,23 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           let data = buffer;
           let mimeType = fileTypeInfo.mimeType || "image/png";
           let dimensions = tryReadImageDimensions(data);
+
+          // The byte ceiling above says nothing about what DECODING costs: a 1 KB PNG can declare
+          // 50000x50000, i.e. ~10 GB once expanded, and both `resizeImage` and the model's own
+          // decoder would allocate it. Reject a declared size no decode should attempt, before
+          // anything decodes. A format whose dimensions are unreadable (WebP/AVIF) is left with the
+          // byte ceiling as its only bound.
+          if (dimensions) {
+            const side = Math.max(dimensions.width, dimensions.height);
+            const pixels = dimensions.width * dimensions.height;
+            if (side > MAX_IMAGE_DIMENSION || pixels > MAX_IMAGE_PIXELS) {
+              throw new Error(
+                `Image too large to decode: ${dimensions.width}x${dimensions.height} ` +
+                  `(max ${MAX_IMAGE_DIMENSION}px per side, ${MAX_IMAGE_PIXELS / 1_000_000} megapixels). ` +
+                  `Downscale the image and read the smaller copy.`
+              );
+            }
+          }
           let estimatedTokens = estimateImageInputTokens(data.length, dimensions);
           const remainingTokens = getRemainingTokenBudget();
 
