@@ -42,10 +42,13 @@ import { awaitStableMarker } from "./await-stable-marker.mjs";
 import { checks as budgetChecks } from "./budget-fixtures.mjs";
 import { ExitSummary } from "./dist/components/ExitSummary.mjs";
 import { MessageList, selectVisibleRows, MAX_STATIC_LINES } from "./dist/components/MessageList.mjs";
+import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
 import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
 import { StaticContext } from "./dist/context/static-context.mjs";
+import { isAnyPanelOpen } from "./dist/hooks/keybindings/context.mjs";
 import { useAgentStatus } from "./dist/hooks/use-agent-status.mjs";
 import { useAgent } from "./dist/hooks/use-agent.mjs";
+import { useConfig } from "./dist/hooks/use-config.mjs";
 import { useDiffRenderer } from "./dist/hooks/use-diff-renderer.mjs";
 import { useDynamic } from "./dist/hooks/use-dynamic.mjs";
 import { useFlattenCacheCleanup } from "./dist/hooks/use-flatten-cache-cleanup.mjs";
@@ -1347,6 +1350,172 @@ console.error = realConsoleError;
   listInstance.unmount();
   useSubagentPanel.getActions().close();
   useAgent.getActions().setSession(null);
+}
+
+// ── resume picker: the cursor must stay on screen, and it must own the keyboard ──
+// Two independent defects lived in this one component, and neither is visible in a static
+// render:
+//
+//   1. it rendered `sessions.slice(0, 10)` unconditionally, so past row 10 the `❯` cursor kept
+//      moving through a set that was no longer drawn — arrows appeared dead because a repaint
+//      with identical rows paints nothing.
+//   2. it did not register in `isAnyPanelOpen()`, so the chat keybindings underneath stayed
+//      live: ↓ both moved the cursor AND walked prompt history, and typed characters accumulated
+//      into the hidden prompt. The config editor hit exactly this and is why the gate exists.
+{
+  const sessions = Array.from({ length: 12 }, (_, i) => ({
+    id: `ses-${i}`,
+    name: `session-${String(i).padStart(2, "0")}`,
+    model: "test-model",
+    updatedAt: Date.now() - i * 1000,
+  }));
+
+  const pickerStdout = new FakeStdout();
+  const pickerStdin = fakeStdin();
+  const pickerInstance = render(createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} }), {
+    stdout: pickerStdout,
+    stdin: pickerStdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  const press = async (seq, wait = 80) => {
+    pickerStdin.push(seq);
+    await settle(wait);
+  };
+  // The cursor row is the one carrying `❯`; its session name is the identity we track.
+  const cursorName = () =>
+    frameLines(pickerStdout)
+      .find((l) => l.includes("❯"))
+      ?.match(/session-\d\d/)?.[0] ?? null;
+  const renderedNames = () =>
+    frameLines(pickerStdout)
+      .map((l) => l.match(/session-\d\d/)?.[0])
+      .filter(Boolean);
+
+  record("the resume picker renders only a slice of a long list", renderedNames().length === MAX_VISIBLE_SESSIONS, {
+    rows: renderedNames(),
+  });
+  record("the resume picker starts on the first row", cursorName() === "session-00", { cursor: cursorName() });
+
+  for (let i = 0; i < 10; i++) await press("\u001B[B"); // ↓ × 10 → row 10, off the first page
+  record(
+    "the cursor row is still drawn after scrolling past the first page",
+    cursorName() !== null && renderedNames().includes(cursorName()),
+    { cursor: cursorName(), rows: renderedNames() }
+  );
+  record("scrolling moved the window instead of dropping the cursor", cursorName() === "session-10", {
+    cursor: cursorName(),
+    rows: renderedNames(),
+  });
+
+  await press("\u001B[B"); // ↓ → last row
+  record("the cursor reaches the last row", cursorName() === "session-11", {
+    cursor: cursorName(),
+    rows: renderedNames(),
+  });
+  record("the last page shows the tail of the list", renderedNames().includes("session-11"), {
+    rows: renderedNames(),
+  });
+
+  pickerInstance.unmount();
+
+  // The gate: while the picker is up, the central keybindings must early-return.
+  record("the resume picker is not a panel by default", !isAnyPanelOpen(), { open: isAnyPanelOpen() });
+  useConfig.getActions().setConfig("resumeSession", "__picker__");
+  record("an open resume picker owns the keyboard", isAnyPanelOpen(), { open: isAnyPanelOpen() });
+  useConfig.getActions().setConfig("resumeSession", "");
+  record("closing the resume picker releases the keyboard", !isAnyPanelOpen(), { open: isAnyPanelOpen() });
+}
+
+// ── resume picker: a long title must not wrap the row ────────────────────────
+// The row is `title ··· meta`, and BOTH halves have to stay on one line: a title that wraps
+// pushed the meta down (at width 60 a single session spent three rows and cut the date
+// mid-token), which made the list unreadable and its height unpredictable. `useSize` is what
+// the width split reads, and the real app only initialises it inside `Agent`, so the mount
+// below mirrors that — without it `screenWidth` is 0 and every column collapses to `…`.
+{
+  const LONG_TITLE = "Refactor the runtime so a host can own several live agent instances at once";
+  const sessions = [
+    { id: "long", name: LONG_TITLE, model: "anthropic/claude-sonnet-4", updatedAt: Date.now() },
+    { id: "short", name: "Add Parallel and Tavily websearch providers", model: "openai/gpt-5", updatedAt: Date.now() },
+  ];
+  const Screen = () => {
+    useSize.getActions().useInitTerminalSize();
+    return createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} });
+  };
+
+  const titleStdout = new FakeStdout();
+  const titleInstance = render(createElement(Screen), {
+    stdout: titleStdout,
+    stdin: fakeStdin(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  /** Body rows: everything but the title/hint header and `ScrollableList`'s `──` rails. */
+  const bodyRows = () => frameLines(titleStdout).filter((l) => !/Resume Session/.test(l) && !/^[─ ]+$/.test(l));
+
+  for (const cols of [60, 80, 120]) {
+    titleStdout.columns = cols;
+    titleStdout.emit("resize");
+    await settle(250);
+    const rows = bodyRows();
+
+    record(`a long session title stays on one row at width ${cols}`, rows.length === sessions.length, {
+      cols,
+      rowCount: rows.length,
+      rows,
+    });
+    // The meta is the half that must survive: a title is recognisable from its opening words, a
+    // cut model name is not.
+    record(
+      `the model/date meta survives on every row at width ${cols}`,
+      rows.every((l) => /\(.+/.test(l)),
+      {
+        cols,
+        rows,
+      }
+    );
+    // Nothing may bleed past the terminal — the overflow case either wraps (a lost row) or is
+    // silently clipped by the terminal (content the user never sees).
+    record(
+      `no row overflows the terminal at width ${cols}`,
+      rows.every((l) => l.length <= cols),
+      {
+        cols,
+        widths: rows.map((l) => l.length),
+      }
+    );
+  }
+
+  // The ellipsis itself: at 60 columns the long title must actually be cut, and cut with `…`
+  // rather than trimmed at a fixed column with no indication.
+  titleStdout.columns = 60;
+  titleStdout.emit("resize");
+  await settle(250);
+  const narrow = bodyRows();
+  record("an over-long title is ellipsised instead of clipped", narrow[0]?.includes("…") === true, {
+    row: narrow[0],
+  });
+
+  // The converse, at a width with room for the short row: a row that FITS must not be
+  // ellipsised, or the truncation would be unconditional rather than driven by the width.
+  // It has to be measured per row — at 120 the long title still needs cutting (72 chars into a
+  // 53-wide column), so "every row is clean" would be asserting the wrong thing.
+  titleStdout.columns = 120;
+  titleStdout.emit("resize");
+  await settle(250);
+  const wide = bodyRows();
+  record("a row that fits is not ellipsised at all", wide[1]?.includes("…") !== true, {
+    rows: wide,
+  });
+
+  titleInstance.unmount();
 }
 
 const pass = results.every((r) => r.pass);

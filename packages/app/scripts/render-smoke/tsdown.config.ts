@@ -34,6 +34,14 @@ export default defineConfig({
     `${src}/components/ExitSummary.tsx`,
     // Mounted to pin the task list's cursor memory across a list↔detail round-trip.
     `${src}/components/SubagentPanel.tsx`,
+    // Mounted to pin that the resume picker scrolls its window to follow the cursor instead of
+    // slicing the first N rows and letting the cursor walk off the rendered set.
+    `${src}/components/SessionPicker.tsx`,
+    // The central keybindings' panel gate, so the smoke can assert that an open overlay really
+    // does own the keyboard (`isAnyPanelOpen()`), which is what stops arrows/characters from
+    // reaching the chat handlers underneath. It reads config state, hence the store entry too.
+    `${src}/hooks/keybindings/context.ts`,
+    `${src}/hooks/use-config.ts`,
     `${src}/hooks/use-subagent-panel.ts`,
     // The smoke wraps the compact-summary fixture in this provider, so the view it mounts is
     // the finished checkpoint rather than the live summary `MessageViewWithCompact` injects.
