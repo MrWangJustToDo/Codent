@@ -143,6 +143,12 @@ export function deriveSubagentRunStats(
   // why `iterations` above has to be that same count and not a tool-batch tally.
   const hitStepBudget =
     input.maxIterations > 0 &&
+    // Not for a cancelled run. A user cancel lands mid-tool-loop, so `finishReason` is `tool_calls`
+    // and the count can sit at the ceiling — the run was stopped, not cut off, and reporting both
+    // `aborted` and `reachedLimit` puts a "limit reached" label on a run nobody let finish. The
+    // gates downstream already read it that way (`incomplete` is only evaluated when NOT aborted,
+    // which is why the fallback never fired for these); this is the same rule in the flag itself.
+    !input.aborted &&
     (finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations));
   const reachedLimit = hitStepBudget;
 

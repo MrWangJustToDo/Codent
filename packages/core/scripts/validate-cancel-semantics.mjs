@@ -432,12 +432,16 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
   const stats = deriveSubagentRunStats({
     messages: [{ id: "a1", role: "assistant", parts: [{ type: "text", content: "Working…" }] }],
     maxIterations: 50,
-    finishReason: null,
+    // The shape a real cancel produces: the user stops mid-tool-loop, so the engine's last reason is
+    // `tool_calls` and the iteration count sits at the ceiling. `finishReason: null` used to make
+    // both assertions below pass for the wrong reason — the flag is the only thing that can rule
+    // this out, and it does not read the reason.
+    finishReason: "tool_calls",
     output: "(no summary)",
     aborted: true,
   });
   assert.equal(stats.incomplete, false, "an aborted run is not `incomplete` — consumers read that as `stalled`");
-  assert.notEqual(stats.reachedLimit, true, "and it is not a budget cutoff");
+  assert.notEqual(stats.reachedLimit, true, "and it is not a budget cutoff, even stopped at the ceiling");
 
   // The stub the pre-fork coordinator settles a never-started run with must obey the same
   // invariant: the consumer reads `incomplete` without consulting `aborted`.
