@@ -1,17 +1,23 @@
 /**
- * Validation: `read_file` gates oversized files on `stat.size` BEFORE allocating, and reads a
- * text file once instead of twice. Pins the fix for audit finding ③:
+ * Validation: `read_file`'s read path.
  *
- *   1. an oversized text file (stat.size above the cap) is rejected with the "File too large"
- *      error and NO read is attempted — a multi-GB file must never be pulled into memory.
- *   2. a normal text file is read exactly once: the binary probe runs on a bounded head sample
- *      of the SAME read (`readFileRange` is preferred when the host provides it, otherwise a
- *      single buffer read) — not a whole-file probe followed by a second content read.
- *   3. the PDF branch rejects `stat.size > MAX_BINARY_SIZE` before reading, and a normal PDF is
- *      still read once.
- *   4. the bounded head probe still rejects a file whose head is non-text.
- *   5. the image branch takes the same pre-read gate (it used to materialise the whole image
- *      before the vision-token budget was consulted).
+ * The text branch reads a file in bounded BYTE WINDOWS and keeps only the requested line window, so
+ * memory is bounded by the output caps at any file size instead of by a "file too large" gate. This
+ * pins:
+ *
+ *   1. a streamed read uses bounded windows (no request asks for the whole file), reads the head
+ *      once for the binary probe, and never calls the whole-file `readFile`;
+ *   2. the window is exactly what the old whole-file slice produced: line numbers, offset/limit,
+ *      `totalLines` (the `split("\n")` rule), per-line truncation, and the static window cap with
+ *      its notice;
+ *   3. a multi-byte character straddling a window boundary survives — windows are line-aligned, so
+ *      a character is never decoded from two half-ranges;
+ *   4. a single line LONGER than a window cannot grow memory, and is truncated like any over-long
+ *      line;
+ *   5. a host without `readFileRange` (the fallback) still gates on `stat.size` before
+ *      materialising the file;
+ *   6. the PDF and image branches gate on `stat.size` before reading;
+ *   7. the bounded head probe still rejects non-text content.
  *
  * Run: pnpm --filter @codent/core run validate:read-file-size
  */
@@ -26,35 +32,46 @@ const MB = 1024 * 1024;
 // edit rather than a silent pass. Every read is bounded by one shared value, whatever the file
 // kind (text, PDF, image).
 const MAX_FILE_READ_BYTES = 10 * MB;
-
-/** UTF-8 byte length without a `TextEncoder` global (not in the scripts' lint globals). */
-const byteLen = (text) => Buffer.byteLength(text, "utf8");
+const MAX_LINE_CHARS = 2000;
+const MAX_RESULT_CONTENT_CHARS = 100000;
+/** The streaming window size (`READ_CHUNK_BYTES`). */
+const CHUNK = 64 * 1024;
 
 /**
- * A stubbed CoreEnv for the tool. `fs.stat` reports `size`; the read primitives record how many
- * bytes they were asked for and how many times they were called, so a test can assert a rejected
- * file was never read.
+ * A stubbed CoreEnv for the tool.
+ *
+ * `fs.readFileRange` mimics the real host exactly: a BYTE window, decoded independently — so a
+ * range whose edge lands inside a multi-byte character yields a replacement character, which is the
+ * failure the line-aligned chunker exists to avoid. `fs.stat` reports `size`; both read primitives
+ * record what they were asked for, so a test can assert the read shape (not just the output).
  */
-function makeEnv({ size, content = "", mimeType = false, withRange = true }) {
-  const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : content;
-  const log = { readFileCalls: 0, readFileRangeCalls: 0, bytesRequested: 0 };
+function makeEnv({ content = "", size, mimeType = false, withRange = true }) {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
+  const reportedSize = size ?? bytes.length;
+  const log = { readFileCalls: 0, rangeCalls: 0, rangeRequests: [], bytesServed: 0 };
+
   const fs = {
     exists: async () => true,
-    stat: async () => ({ isDirectory: false, isFile: true, size, mtime: new Date(0) }),
+    stat: async () => ({ isDirectory: false, isFile: true, size: reportedSize, mtime: new Date(0) }),
     readdir: async () => [],
     readFile: async (_path, encoding) => {
       log.readFileCalls++;
-      log.bytesRequested += bytes.length;
-      return encoding === "buffer" ? bytes : content;
+      log.bytesServed += bytes.length;
+      return encoding === "buffer" ? bytes : bytes.toString("utf8");
     },
   };
   if (withRange) {
     fs.readFileRange = async (_path, start, end) => {
-      log.readFileRangeCalls++;
-      log.bytesRequested += Math.max(0, end - start);
-      return content.slice(start, end);
+      log.rangeCalls++;
+      log.rangeRequests.push(Math.max(0, Math.floor(end) - Math.floor(start)));
+      const from = Math.max(0, Math.floor(start));
+      const to = Math.min(bytes.length, Math.floor(end));
+      const served = Math.max(0, to - from);
+      log.bytesServed += served;
+      return bytes.subarray(from, to).toString("utf8");
     };
   }
+
   const env = {
     rootPath: "/workspace",
     path: defaultPath,
@@ -62,115 +79,207 @@ function makeEnv({ size, content = "", mimeType = false, withRange = true }) {
     getMimeType: async () => mimeType,
     base64Encode: (data) => Buffer.from(data).toString("base64"),
   };
-  return { env, log, totalReads: () => log.readFileCalls + log.readFileRangeCalls };
+  return { env, log, bytes };
 }
 
 const tool = createReadFileTool();
+const read = (env, input) => tool.execute(input, { toolCallId: "t", context: { coreEnv: env } });
 
 // ---------------------------------------------------------------------------
-// (a) An oversized text file is rejected on stat.size, before any read
-// ---------------------------------------------------------------------------
-{
-  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, content: "x".repeat(16) });
-  await assert.rejects(
-    () => tool.execute({ path: "huge.txt" }, { toolCallId: "t", context: { coreEnv: env } }),
-    (error) =>
-      // The gate must not be a dead end: it names a way to read the file in pieces.
-      /File too large to read/.test(error.message) && /grep/.test(error.message) && /run_command/.test(error.message),
-    "oversized text is rejected with a usable alternative"
-  );
-  assert.equal(totalReads(), 0, "oversized text: no read attempted");
-  assert.equal(log.bytesRequested, 0, "oversized text: no bytes requested");
-  console.log("ok  oversized text rejected on stat.size, without a read");
-}
-
-// ---------------------------------------------------------------------------
-// (b) A normal text file is read exactly once — readFileRange preferred
+// (1) A small text file is one window, and never the whole-file read
 // ---------------------------------------------------------------------------
 {
   const text = "line one\nline two\nline three";
-  const { env, log, totalReads } = makeEnv({ size: byteLen(text), content: text });
-  const out = await tool.execute({ path: "notes.txt" }, { toolCallId: "t", context: { coreEnv: env } });
+  const { env, log } = makeEnv({ content: text });
+  const out = await read(env, { path: "notes.txt" });
   assert.equal(out.type, "text");
-  assert.match(out.content, /2: line two/, "the decoded content is the file's");
-  assert.equal(log.readFileRangeCalls, 1, "readFileRange preferred when the host provides it");
-  assert.equal(log.readFileCalls, 0, "no second (buffer) read");
-  assert.equal(totalReads(), 1, "text file read once");
-  console.log("ok  normal text read once via readFileRange");
+  assert.match(out.content, /1: line one\n2: line two\n3: line three/);
+  assert.equal(out.totalLines, 3);
+  assert.equal(out.startLine, 1);
+  assert.equal(out.endLine, 3);
+  assert.equal(out.truncated, false);
+  assert.equal(log.rangeCalls, 1, "a small file is a single window");
+  assert.equal(log.readFileCalls, 0, "the whole-file read is not used when the host can window");
+  console.log("ok  small text file read in one bounded window");
 }
 
 // ---------------------------------------------------------------------------
-// (b') Same, on a host without readFileRange: exactly one buffer read
+// (2) A file larger than a window is streamed, not refused, and never asks for
+//     the whole file in one call
+// ---------------------------------------------------------------------------
+{
+  const line = (i) => `L${String(i).padStart(4, "0")} ${"x".repeat(100)}`;
+  const text = `${Array.from({ length: 4000 }, (_, i) => line(i + 1)).join("\n")}\n`;
+  const { env, log } = makeEnv({ content: text });
+  const out = await read(env, { path: "big.txt" });
+  assert.equal(out.type, "text");
+  assert.equal(out.totalLines, 4001, "the exact line count survives the streamed scan");
+  assert.ok(
+    log.rangeRequests.length >= 6,
+    `a multi-window file must be read in several calls (got ${log.rangeRequests.length})`
+  );
+  assert.equal(Math.max(...log.rangeRequests), CHUNK, "no request asks for more than one window");
+  assert.equal(log.readFileCalls, 0, "no whole-file read");
+  assert.ok(
+    out.content.length <= MAX_RESULT_CONTENT_CHARS + 60,
+    `the window is capped (got ${out.content.length} chars)`
+  );
+  assert.match(out.content, /\[content truncated for context limit\]/, "the cut window says so");
+  assert.equal(out.truncated, true);
+  console.log(`ok  multi-window file streamed in ${log.rangeRequests.length} bounded reads`);
+}
+
+// ---------------------------------------------------------------------------
+// (2') A stat larger than the byte ceiling is no longer a reason to refuse the
+//      streamed path (the ceiling is the fallback's bound)
+// ---------------------------------------------------------------------------
+{
+  const { env, log } = makeEnv({ content: "a\nb\n", size: MAX_FILE_READ_BYTES + 1 });
+  const out = await read(env, { path: "huge.txt" });
+  assert.equal(out.type, "text");
+  assert.equal(out.totalLines, 3);
+  assert.equal(log.readFileCalls, 0);
+  console.log("ok  an oversized stat does not refuse a host that can stream");
+}
+
+// ---------------------------------------------------------------------------
+// (3) A multi-byte character straddling a window boundary survives
+// ---------------------------------------------------------------------------
+{
+  // 65535 bytes of ASCII ending in a newline, so the next window would start on byte 65535 —
+  // inside the 3-byte `中` that follows. Only a line-aligned window keeps it whole.
+  const ascii = `${"x".repeat(65534)}\n`;
+  const text = `${ascii}中\n尾\n`;
+  assert.equal(Buffer.byteLength(ascii, "utf8"), 65535, "the CJK character straddles the boundary");
+  const { env, log } = makeEnv({ content: text });
+  const out = await read(env, { path: "cjk.txt" });
+  assert.match(out.content, /2: 中/, "the character on the window boundary is intact");
+  assert.ok(!out.content.includes("\uFFFD"), "no replacement character leaks from a window edge");
+  assert.match(out.content, /3: 尾/);
+  assert.equal(out.totalLines, 4, "the trailing newline starts one more line, as split('\\n') does");
+  assert.ok(log.rangeRequests.length >= 2, "the boundary was crossed by a second window");
+  console.log("ok  a multi-byte character on a window boundary is not corrupted");
+}
+
+// ---------------------------------------------------------------------------
+// (4) A single line longer than a window cannot grow memory
+// ---------------------------------------------------------------------------
+{
+  const text = `${"y".repeat(200000)}\nz\n`;
+  const { env, log } = makeEnv({ content: text });
+  const out = await read(env, { path: "one-line.txt" });
+  assert.match(out.content, new RegExp(`^1: ${"y".repeat(MAX_LINE_CHARS)}\\.\\.\\. \\(line truncated\\)`));
+  assert.equal(out.totalLines, 3);
+  assert.equal(out.truncated, true);
+  assert.ok(
+    log.rangeRequests.every((request) => request <= CHUNK),
+    "the giant line is read in windows"
+  );
+  console.log("ok  a line longer than a window is truncated and read in bounded windows");
+}
+
+// ---------------------------------------------------------------------------
+// (5) Paging: offset/limit, and the offset-out-of-range error
+// ---------------------------------------------------------------------------
+{
+  const text = "a\nb\nc\nd\ne";
+  const { env } = makeEnv({ content: text });
+  const out = await read(env, { path: "five.txt", offset: 3, limit: 2 });
+  assert.equal(out.content, "3: c\n4: d");
+  assert.equal(out.startLine, 3);
+  assert.equal(out.endLine, 4);
+  assert.equal(out.totalLines, 5);
+  assert.equal(out.truncated, true, "later lines remain");
+}
+{
+  const { env } = makeEnv({ content: "a\nb\nc\nd\ne" });
+  await assert.rejects(
+    () => read(env, { path: "five.txt", offset: 6 }),
+    /Offset 6 is out of range for this file \(5 lines\)/
+  );
+  console.log("ok  offset/limit paging and the out-of-range error are unchanged");
+}
+
+// ---------------------------------------------------------------------------
+// (6) The window is capped and a long line is truncated with its suffix
+// ---------------------------------------------------------------------------
+{
+  const long = "z".repeat(MAX_LINE_CHARS + 500);
+  const { env } = makeEnv({ content: `${long}\nshort\n` });
+  const out = await read(env, { path: "long.txt" });
+  assert.ok(
+    out.content.startsWith(`1: ${"z".repeat(MAX_LINE_CHARS)}... (line truncated)`),
+    "an over-long line is cut with the suffix"
+  );
+  assert.match(out.content, /2: short/);
+  assert.equal(out.truncated, true);
+  console.log("ok  an over-long line is truncated with its suffix");
+}
+
+// ---------------------------------------------------------------------------
+// (7) Without `readFileRange` the byte ceiling is the fallback's bound
 // ---------------------------------------------------------------------------
 {
   const text = "alpha\nbeta";
-  const { env, log, totalReads } = makeEnv({
-    size: byteLen(text),
-    content: text,
-    withRange: false,
-  });
-  const out = await tool.execute({ path: "notes.txt" }, { toolCallId: "t", context: { coreEnv: env } });
+  const { env, log } = makeEnv({ content: text, withRange: false });
+  const out = await read(env, { path: "notes.txt" });
   assert.equal(out.type, "text");
-  assert.match(out.content, /1: alpha/);
+  assert.match(out.content, /1: alpha\n2: beta/);
   assert.equal(log.readFileCalls, 1, "a single buffer read");
-  assert.equal(log.readFileRangeCalls, 0);
-  assert.equal(totalReads(), 1, "text file read once");
-  console.log("ok  normal text read once via a single buffer read");
-}
-
-// ---------------------------------------------------------------------------
-// (c) An oversized PDF is rejected on stat.size before reading; a normal PDF
-//     is still read once
-// ---------------------------------------------------------------------------
-{
-  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "application/pdf" });
-  await assert.rejects(
-    () => tool.execute({ path: "huge.pdf" }, { toolCallId: "t", context: { coreEnv: env } }),
-    /PDF file too large/
-  );
-  assert.equal(totalReads(), 0, "oversized PDF: no read attempted");
-  assert.equal(log.bytesRequested, 0, "oversized PDF: no bytes requested");
-  console.log("ok  oversized PDF rejected on stat.size, without a read");
+  assert.equal(log.rangeCalls, 0);
+  console.log("ok  fallback host reads once via the buffer");
 }
 {
   const { env, log } = makeEnv({
+    content: "x".repeat(16),
+    size: MAX_FILE_READ_BYTES + 1,
+    withRange: false,
+  });
+  await assert.rejects(
+    () => read(env, { path: "huge.txt" }),
+    (error) =>
+      // The gate must not be a dead end: it names a way to read the file in pieces.
+      /File too large to read/.test(error.message) && /grep/.test(error.message) && /run_command/.test(error.message),
+    "oversized fallback text is rejected with a usable alternative"
+  );
+  assert.equal(log.readFileCalls, 0, "oversized fallback text: no read attempted");
+  assert.equal(log.bytesServed, 0, "oversized fallback text: no bytes requested");
+  console.log("ok  oversized text on a fallback host is rejected before any read");
+}
+
+// ---------------------------------------------------------------------------
+// (8) The PDF and image branches gate on stat.size before reading
+// ---------------------------------------------------------------------------
+{
+  const { env, log } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "application/pdf" });
+  await assert.rejects(() => read(env, { path: "huge.pdf" }), /PDF file too large/);
+  assert.equal(log.readFileCalls, 0, "oversized PDF: no read attempted");
+}
+{
+  const { env, log } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "image/png" });
+  await assert.rejects(() => read(env, { path: "huge.png" }), /Image too large to read/);
+  assert.equal(log.readFileCalls, 0, "oversized image: no read attempted");
+  console.log("ok  oversized PDF and image are rejected on stat.size, without a read");
+}
+{
+  const { env, log } = makeEnv({
+    content: Buffer.from([0x25, 0x50, 0x44, 0x46]), // "%PDF"
     size: 4,
-    content: new Uint8Array([0x25, 0x50, 0x44, 0x46]), // "%PDF"
     mimeType: "application/pdf",
   });
-  const out = await tool.execute({ path: "doc.pdf" }, { toolCallId: "t", context: { coreEnv: env } });
+  const out = await read(env, { path: "doc.pdf" });
   assert.equal(out.type, "pdf");
-  assert.equal(log.readFileCalls, 1, "normal PDF read once");
-  assert.equal(log.readFileCalls + log.readFileRangeCalls, 1);
-  console.log("ok  normal PDF read once");
+  assert.equal(log.readFileCalls, 1, "a normal PDF is read once");
+  console.log("ok  a normal PDF is read once");
 }
 
 // ---------------------------------------------------------------------------
-// (d) The bounded head probe still rejects non-text content
+// (9) The bounded head probe still rejects non-text content
 // ---------------------------------------------------------------------------
 {
-  const content = "\u0000binary-ish";
-  const { env } = makeEnv({ size: byteLen(content), content });
-  await assert.rejects(
-    () => tool.execute({ path: "blob.txt" }, { toolCallId: "t", context: { coreEnv: env } }),
-    /appears to be binary/
-  );
-  console.log("ok  bounded head probe still rejects binary content");
-}
-
-// ---------------------------------------------------------------------------
-// (e) An oversized IMAGE is rejected on stat.size before reading
-//     (the whole image was materialised before the vision-token budget was consulted)
-// ---------------------------------------------------------------------------
-{
-  const { env, log, totalReads } = makeEnv({ size: MAX_FILE_READ_BYTES + 1, mimeType: "image/png" });
-  await assert.rejects(
-    () => tool.execute({ path: "huge.png" }, { toolCallId: "t", context: { coreEnv: env } }),
-    /Image too large to read/
-  );
-  assert.equal(totalReads(), 0, "oversized image: no read attempted");
-  assert.equal(log.bytesRequested, 0, "oversized image: no bytes requested");
-  console.log("ok  oversized image rejected on stat.size, without a read");
+  const { env } = makeEnv({ content: "\u0000binary-ish" });
+  await assert.rejects(() => read(env, { path: "blob.txt" }), /appears to be binary/);
+  console.log("ok  the bounded head probe still rejects binary content");
 }
 
 console.log("read-file-size validation passed");

@@ -7,9 +7,12 @@ import { extractPdfText } from "./util/extract-pdf-text.js";
 import { formatReadFileToolResult } from "./util/format-read-file-result.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { detectReadFileType, headProbeSample, isBinaryContent } from "./util/read-file-detect.js";
+import { scanTextWindow } from "./util/read-file-window.js";
 import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
+import type { TextWindowResult } from "./util/read-file-window.js";
+import type { CoreEnvFs } from "../../env";
 import type { FileStat } from "../../env/types";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
 
@@ -84,6 +87,70 @@ export const readFileOutputSchema = z.discriminatedUnion("type", [
 ]);
 
 export type ReadFileOutput = z.infer<typeof readFileOutputSchema>;
+
+// ============================================================================
+// Streamed text reading
+// ============================================================================
+
+/**
+ * Window size for a streamed text read, in bytes.
+ *
+ * Only decides how often we ask the host for more: the retained memory is the output caps (see
+ * `read-file-window`), not this. Big enough that a normal source file is one read, small enough
+ * that the transient buffer is irrelevant next to the model's output budget.
+ */
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/** Byte length of a UTF-8 string — `TextEncoder` is a global in every runtime core targets. */
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * Read a text file as decoded, line-aligned pieces: each window is a byte range, but only the part
+ * through its last newline is yielded — the rest is re-read in the next window.
+ *
+ * The alignment is load-bearing, not cosmetic. `readFileRange` decodes each range independently, so
+ * a window boundary landing inside a multi-byte character turns it into U+FFFD, which is
+ * unrecoverable — and a 64 KB boundary inside non-ASCII text is routine. A newline is a single
+ * byte, so the consumed prefix always ends on a character boundary, and advancing by its BYTE
+ * length keeps the next window aligned. A full window with no newline at all is a single line
+ * longer than the window: every line cap is already behind such a line, so it is yielded and the
+ * scan discards it.
+ */
+async function* readTextPieces(fsys: CoreEnvFs, filePath: string): AsyncGenerator<string> {
+  let from = 0;
+  for (;;) {
+    const window = await fsys.readFileRange!(filePath, from, from + READ_CHUNK_BYTES);
+    if (utf8Bytes(window) < READ_CHUNK_BYTES) {
+      // A short read is EOF.
+      yield window;
+      return;
+    }
+    const lastNewline = window.lastIndexOf("\n");
+    if (lastNewline === -1) {
+      yield window;
+      from += READ_CHUNK_BYTES;
+      continue;
+    }
+    const consumed = window.slice(0, lastNewline + 1);
+    yield consumed;
+    from += utf8Bytes(consumed);
+  }
+}
+
+/** Re-yield the head already consumed for the binary probe, then the rest of the read. */
+async function* withHead(head: IteratorResult<string>, rest: AsyncIterator<string>): AsyncGenerator<string> {
+  if (!head.done) yield head.value;
+  for (;;) {
+    const next = await rest.next();
+    if (next.done) return;
+    yield next.value;
+  }
+}
+
+/** One already-decoded piece, as the piece source the scan expects. */
+async function* asPiece(text: string): AsyncGenerator<string> {
+  yield text;
+}
 
 // ============================================================================
 // Tool Factory
@@ -325,83 +392,81 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           };
         }
 
-        // Handle text files — gate on size, then read ONCE and probe a bounded head sample.
+        // Handle text files.
         //
-        // The old path read the whole file as a buffer just to probe it, then read it AGAIN for
-        // the text (two full allocations). Here the file is read once: through the byte-window
-        // primitive when the host provides it (the whole range, anchored at the size already
-        // stat'd), otherwise through a single buffer read. Only a bounded head is handed to
-        // `isBinaryContent`, so a huge binary is never scanned end to end.
-        if (stat && stat.size > MAX_FILE_READ_BYTES) {
-          throw new Error(
-            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB). ` +
-              `Read it in pieces instead — grep for the lines you need, or stream a slice with run_command ` +
-              `(e.g. \`sed -n '1,200p' <path>\` or \`head\`).`
-          );
-        }
+        // Streamed scan when the host can read a byte window: the file is read in pieces and only
+        // the requested window is retained, so memory is bounded by the OUTPUT caps at any file
+        // size — which is what demotes the byte ceiling below to a fallback rather than the primary
+        // bound (and why an oversized file is no longer refused here). Only the head is handed to
+        // `isBinaryContent`, as before.
+        const startLine = offset ?? 1;
+        const startIdx = startLine - 1;
+        const effectiveLimit = limit ?? DEFAULT_LINE_LIMIT;
 
-        let textContent: string | undefined;
-        let rawBuffer: Uint8Array | undefined;
-        if (stat && fsys.readFileRange) {
-          textContent = await fsys.readFileRange(filePath, 0, stat.size);
+        let scanned: TextWindowResult;
+        // (A host without a byte-window read falls through to the whole-file path below.)
+        if (fsys.readFileRange) {
+          const pieces = readTextPieces(fsys, filePath);
+          const head = await pieces.next();
+          if (!head.done && isBinaryContent(headProbeSample(head.value))) {
+            throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
+          }
+          scanned = await scanTextWindow(withHead(head, pieces), {
+            offset: startLine,
+            limit: effectiveLimit,
+            maxLineChars: MAX_LINE_CHARS,
+            maxWindowChars: MAX_RESULT_CONTENT_CHARS,
+          });
         } else {
+          // Fallback for a host that cannot stream. The whole file must be materialised, so this
+          // byte ceiling is the only thing between a multi-GB file and an OOM.
+          if (stat && stat.size > MAX_FILE_READ_BYTES) {
+            throw new Error(
+              `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB). ` +
+                `Read it in pieces instead — grep for the lines you need, or stream a slice with run_command ` +
+                `(e.g. \`sed -n '1,200p' <path>\` or \`head\`).`
+            );
+          }
+
+          let textContent: string | undefined;
+          let rawBuffer: Uint8Array | undefined;
           try {
             rawBuffer = await fsys.readFile(filePath, "buffer");
           } catch {
-            // A host that cannot return bytes degrades to a plain text read, exactly as before —
-            // there is then simply no buffer to probe.
+            // A host that cannot return bytes degrades to a plain text read — there is then simply
+            // no buffer to probe.
             textContent = await getFile(coreEnv, filePath);
           }
+
+          const probeSource = rawBuffer ?? textContent;
+          if (probeSource !== undefined && isBinaryContent(headProbeSample(probeSource))) {
+            throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
+          }
+
+          const content = textContent ?? new TextDecoder("utf-8", { ignoreBOM: true }).decode(rawBuffer!);
+          scanned = await scanTextWindow(asPiece(content), {
+            offset: startLine,
+            limit: effectiveLimit,
+            maxLineChars: MAX_LINE_CHARS,
+            maxWindowChars: MAX_RESULT_CONTENT_CHARS,
+          });
         }
 
-        // Bounded binary probe over the head of the single read (never the whole file).
-        const probeSource = rawBuffer ?? textContent;
-        if (probeSource !== undefined && isBinaryContent(headProbeSample(probeSource))) {
-          throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
-        }
+        const totalLines = scanned.totalLines;
 
-        // Decode the SAME read: a range read already yielded text; a buffer read yields it now.
-        const content = textContent ?? new TextDecoder("utf-8", { ignoreBOM: true }).decode(rawBuffer!);
-
-        const lines = content.split("\n");
-        const totalLines = lines.length;
-
-        // Use 1-indexed offset (default to 1)
-        const startLine = offset ?? 1;
-        const startIdx = startLine - 1;
-
-        // Validate offset
+        // Validate offset. Needs the exact total, so it happens after the scan on both paths.
         if (startIdx >= totalLines && totalLines > 0) {
           throw new Error(`Offset ${startLine} is out of range for this file (${totalLines} lines)`);
         }
 
-        // Apply line limit
-        const effectiveLimit = limit ?? DEFAULT_LINE_LIMIT;
         const endIdx = Math.min(startIdx + effectiveLimit, totalLines);
-        const selectedLines = lines.slice(startIdx, endIdx);
+        let selectedContent = scanned.content;
+        let contentTruncated = scanned.truncatedByChars;
+        // The scan stops the window AT the cap, so the notice is what tells the model there is more
+        // — otherwise a cut window is indistinguishable from a short file.
+        if (scanned.truncatedByChars) selectedContent += "\n...[content truncated for context limit]";
 
-        // Truncate long lines and add line numbers
-        let truncatedByLength = false;
-        const numberedLines = selectedLines.map((line, idx) => {
-          const lineNum = startIdx + idx + 1;
-          if (line.length > MAX_LINE_CHARS) {
-            truncatedByLength = true;
-            return `${lineNum}: ${line.slice(0, MAX_LINE_CHARS)}... (line truncated)`;
-          }
-          return `${lineNum}: ${line}`;
-        });
-
-        let selectedContent = numberedLines.join("\n");
-
-        // Truncate total content if too large (static cap)
-        let contentTruncated = false;
-        if (selectedContent.length > MAX_RESULT_CONTENT_CHARS) {
-          selectedContent =
-            selectedContent.slice(0, MAX_RESULT_CONTENT_CHARS) + "\n...[content truncated for context limit]";
-          contentTruncated = true;
-        }
-
-        // Also truncate based on remaining context budget
+        // The static window cap is already applied by the scan; this is the per-turn context budget.
         const remainingTokens = getRemainingTokenBudget();
         const remainingChars = remainingTokens * CHARS_PER_TOKEN;
         if (remainingChars <= 0) {
@@ -416,7 +481,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         }
 
         const hasMore = endIdx < totalLines;
-        const endLine = startIdx + selectedLines.length;
+        const endLine = startIdx + Math.max(0, endIdx - startIdx);
 
         return {
           type: "text" as const,
@@ -425,7 +490,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           totalLines,
           startLine,
           endLine,
-          truncated: contentTruncated || truncatedByLength || hasMore,
+          truncated: contentTruncated || scanned.truncatedByLength || hasMore,
         };
       });
 
