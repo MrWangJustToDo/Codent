@@ -22,6 +22,8 @@
  * are proven without spawning anything.
  */
 
+import { win32 as winPath } from "node:path";
+
 import { canExecArgs, createGlobTool, createGrepTool, createTreeTool, execArgsCapture } from "../dist/dev.mjs";
 
 let failures = 0;
@@ -303,9 +305,22 @@ for (const escape of ESCAPES) {
 // Windows-shaped regression tests that run on Linux.
 // ============================================================================
 
+const winPathApi = {
+  join: (...p) => winPath.join(...p),
+  dirname: (p) => winPath.dirname(p),
+  basename: (p, ext) => winPath.basename(p, ext),
+  extname: (p) => winPath.extname(p),
+  resolve: (...p) => winPath.resolve(...p),
+  normalize: (p) => winPath.normalize(p),
+  isAbsolute: (p) => winPath.isAbsolute(p),
+  getSep: () => winPath.sep,
+  parse: (p) => winPath.parse(p),
+};
+
 const winEnv = (records) => ({
   ...makeEnv(records),
   rootPath: "C:\\repo",
+  path: winPathApi,
   getPlatform: async () => "win32",
   homedir: async () => "C:\\Users\\dev",
 });
@@ -326,9 +341,19 @@ const winEnv = (records) => ({
     absolute.length > 0 && absolute.every((r) => r.cwd === "C:\\repo") && absolute[0]?.args?.includes("C:\\repo\\src"),
     `records=${json(absolute)}`
   );
+
+  // Windows compares paths case-insensitively, so a case-only difference from the root is the same
+  // place — the guard folds case there and must not read it as an escape.
+  const cased = [];
+  await run(createGlobTool(), { pattern: "**/*.ts", path: "C:\\REPO\\SRC" }, winEnv(cased));
+  check(
+    "win32: a case-variant path is accepted (case-insensitive host)",
+    cased.length > 0 && cased.every((r) => r.cwd === "C:\\repo"),
+    `records=${json(cased)}`
+  );
 }
 
-for (const escape of ["..\\..", "C:\\other", "D:\\repo", "C:\\repo-sibling"]) {
+for (const escape of ["..\\..", "C:\\other", "D:\\repo", "C:\\repo-sibling", "C:\\REPO-SIBLING"]) {
   const records = [];
   await expectRejected(
     `win32: rejects escaping path ${json(escape)}`,

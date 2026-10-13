@@ -20,10 +20,37 @@ export interface NativeFilesystemHandle {
  */
 export function createNativeFilesystem(
   rootPath: string,
-  options?: { extraReadRoots?: string[] }
+  options?: { extraReadRoots?: string[]; caseInsensitive?: boolean }
 ): NativeFilesystemHandle {
   const resolvedRoot = path.resolve(rootPath);
   const extraRoots = (options?.extraReadRoots ?? []).map((p) => path.resolve(p));
+
+  /**
+   * Whether the host filesystem compares paths case-insensitively, so the lexical prefix test
+   * below folds case.
+   *
+   * Windows always does, and macOS's default APFS does too. Folding is safe in the permissive
+   * direction: it can only make the lexical gate agree with the OS (a case-variant path is the
+   * same place there), while the real-path gate — which matches the on-disk case — and the OS
+   * itself are what actually decide access, so a genuinely case-sensitive volume merely yields
+   * ENOENT for a wrong-case path. Detected from the platform; a case-insensitive mount on a
+   * case-sensitive host (or a case-sensitive Windows volume) can be named explicitly.
+   */
+  const caseInsensitive = options?.caseInsensitive ?? (process.platform === "win32" || process.platform === "darwin");
+  const foldCase = (p: string): string => (caseInsensitive ? p.toLowerCase() : p);
+
+  /**
+   * Containment in the host's own comparison rules: equal to `root`, or under it followed by a
+   * separator. The separator is appended only when the root does not already carry one, so `C:\`
+   * is not turned into `C:\\`. Case is folded for the comparison only — the value handed back to
+   * the caller (and to the OS) is never rewritten.
+   */
+  const withinRoot = (candidate: string, root: string): boolean => {
+    const c = foldCase(candidate);
+    const r = foldCase(root);
+    if (c === r) return true;
+    return c.startsWith(r.endsWith(path.sep) ? r : r + path.sep);
+  };
 
   /**
    * Resolve the real path of `target`, tolerating a target that does not exist yet.
@@ -89,7 +116,7 @@ export function createNativeFilesystem(
   const assertRealContained = (resolved: string, inputPath: string): string => {
     const real = realpathAllowMissing(resolved);
     for (const realRoot of realRoots) {
-      if (real === realRoot || real.startsWith(realRoot + path.sep)) {
+      if (withinRoot(real, realRoot)) {
         return resolved;
       }
     }
@@ -103,9 +130,7 @@ export function createNativeFilesystem(
   const resolvePath = (inputPath: string): string => {
     const resolved = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(resolvedRoot, inputPath);
     const lexicallyContained =
-      resolved === resolvedRoot ||
-      resolved.startsWith(resolvedRoot + path.sep) ||
-      extraRoots.some((extra) => resolved === extra || resolved.startsWith(extra + path.sep));
+      withinRoot(resolved, resolvedRoot) || extraRoots.some((extra) => withinRoot(resolved, extra));
     if (!lexicallyContained) {
       throw new FileError(
         "permission_denied",

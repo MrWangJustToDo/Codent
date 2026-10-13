@@ -114,8 +114,14 @@ export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefine
   const path = coreEnv.path ?? defaultPath;
   const raw = inputPath ?? ".";
   const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(coreEnv.rootPath, raw);
-  const rootKey = toPosixPathKey(path.normalize(coreEnv.rootPath));
-  const resolvedKey = toPosixPathKey(resolved);
+  // A Windows host compares paths case-insensitively, so a case-only difference from the root is
+  // the same place rather than an escape. The separator is the one synchronous platform signal a
+  // `CoreEnvPath` exposes (`pathe`/POSIX report "/"), and it mirrors the fold in `@codent/node`'s
+  // fs gate. Folding is permissive only for this guard: the value returned — and searched — stays
+  // the caller's own string.
+  const foldCase = path.getSep() === "\\" ? (p: string) => p.toLowerCase() : (p: string) => p;
+  const rootKey = foldCase(toPosixPathKey(path.normalize(coreEnv.rootPath)));
+  const resolvedKey = foldCase(toPosixPathKey(resolved));
 
   if (resolvedKey === rootKey || resolvedKey.startsWith(`${rootKey}/`)) {
     return raw;

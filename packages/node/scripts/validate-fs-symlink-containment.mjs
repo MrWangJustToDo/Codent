@@ -52,6 +52,37 @@ try {
   await writeFs(path.join(root, "in-root.txt"), "in-root-content", "utf-8");
   await writeFs(path.join(outside, "secret.txt"), "outside-secret", "utf-8");
 
+  // The lexical gate folds case on a case-insensitive host (Windows, or the default macOS APFS),
+  // so a case-only difference from the root is the same place rather than an escape. Forced
+  // explicitly on both sides here so the branch is exercisable on any platform.
+  {
+    const upperRoot = path.join(base, "ROOT", "in-root.txt");
+
+    const { filesystem: strictFs } = createNativeFilesystem(root, { caseInsensitive: false });
+    await denied("case-variant root prefix is rejected when folding is off", () => strictFs.readFile(upperRoot));
+
+    const { filesystem: foldedFs } = createNativeFilesystem(root, { caseInsensitive: true });
+    // May still fail (ENOENT on this case-sensitive host, where `ROOT/` is a different directory),
+    // but it must NOT be the traversal gate rejecting it.
+    let gateRejected = false;
+    try {
+      await foldedFs.readFile(upperRoot);
+    } catch (err) {
+      gateRejected = err?.code === "permission_denied";
+    }
+    assert.equal(
+      gateRejected,
+      false,
+      "a case-insensitive host must not reject a case-variant root prefix as a traversal"
+    );
+
+    // ...and folding must not widen the gate for something genuinely outside the root.
+    await denied("case-insensitive host still blocks a real escape", () =>
+      foldedFs.readFile(path.join(base, "OUTSIDE", "secret.txt"))
+    );
+    console.log("ok  case fold applies only when enabled, and never widens an escape");
+  }
+
   // In-root symlinks that point OUTSIDE the workspace: to an existing file, an existing directory,
   // and a target that does not exist yet (dangling). Creating a FILE symlink needs a privilege that
   // Windows runners may not grant; when it is unavailable the symlink half of the contract cannot
