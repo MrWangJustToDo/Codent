@@ -93,6 +93,8 @@ export const runCommandOutputSchema = z.object({
     .boolean()
     .optional()
     .describe("True when the command was terminated at its deadline (partial output preserved)."),
+  /** The deadline (ms) that elapsed — present with `timedOut`; the UI/compact presenters name it. */
+  timeoutMs: z.number().optional().describe("The elapsed deadline in ms — present with `timedOut`."),
   ...toolOutputBaseSchema.shape,
 });
 

@@ -6,10 +6,14 @@
  *   1. `resolveDefaultCommandTimeout` yields the default, honours `RUN_COMMAND_TIMEOUT_MS`, and
  *      clamps a sub-1000ms / non-numeric / unreadable value back to the default.
  *   2. `isCommandTimeoutError` classifies a typed timeout (local OR remote-reconstructed).
- *   3. `buildTimedOutCommandResult` keeps partial stdout/stderr, reports `-1`/`timedOut`/`success:false`.
+ *   3. `buildTimedOutCommandResult` keeps partial stdout/stderr and reports `-1` / `timedOut` /
+ *      `timeoutMs` / `success:false`, leaving `stderr` as the command's own output.
  *   4. end-to-end: the tool INJECTS the effective deadline into `coreEnv.runCommand` when the caller
  *      omits `timeout` (default, then `RUN_COMMAND_TIMEOUT_MS`), and a deadline-killed command
  *      returns a NORMAL result carrying its partial output instead of throwing it away.
+ *   5. the PRESENTERS name the deadline: the UI's `formatToolOutput` renders `Command timed out
+ *      after Nms` instead of the crash-looking `Exit code: -1` — and the model output carries the
+ *      same reason (the `toModelOutput` shape is asserted through `commandTimeoutNotice`).
  *
  * Run: pnpm --filter @codent/core run validate:command-deadline
  */
@@ -22,7 +26,7 @@ import {
   isCommandTimeoutError,
   resolveDefaultCommandTimeout,
 } from "../dist/dev.mjs";
-import { ExecutionError } from "../dist/index.mjs";
+import { ExecutionError, formatToolOutput } from "../dist/index.mjs";
 
 const DEFAULT = 300_000;
 const envWith = (vars) => ({ getEnv: async () => vars });
@@ -90,21 +94,40 @@ const envWith = (vars) => ({ getEnv: async () => vars });
   assert.equal(withStderr.exitCode, -1, "-1 is the 'not finished' value");
   assert.equal(withStderr.success, false);
   assert.equal(withStderr.timedOut, true);
+  assert.equal(withStderr.timeoutMs, 5_000, "the deadline travels structurally");
   assert.equal(withStderr.stdout, "out", "partial stdout is preserved");
-  assert.match(withStderr.stderr, /cmd-err/, "the command's own stderr is preserved");
-  assert.match(withStderr.stderr, /timed out after 5000ms/, "the timeout reason is present alongside it");
-
-  const noStderr = buildTimedOutCommandResult({
-    command: "x",
-    stdout: "",
-    stderr: "   ",
-    timeoutMs: 5_000,
-    durationMs: 1,
-    cachedOutputPath: "/c.txt",
-  });
-  assert.match(noStderr.stderr, /timed out after 5000ms/, "with no stderr, the reason is the stderr");
-  assert.equal(noStderr.cachedOutputPath, "/c.txt");
+  assert.equal(withStderr.stderr, "cmd-err", "stderr stays the command's own output — the reason is structural");
+  assert.equal(withStderr.cachedOutputPath, null);
   console.log("ok  timed-out result shape keeps partial output");
+}
+
+// ============================================================================
+// 3b. The UI presenter NAMES the deadline instead of the crash-looking `Exit code: -1`
+// ============================================================================
+{
+  const output = buildTimedOutCommandResult({
+    command: "sleep 999",
+    stdout: "partial-line",
+    stderr: "real-err",
+    timeoutMs: 300_000,
+    durationMs: 300_000,
+    cachedOutputPath: null,
+  });
+  const rendered = formatToolOutput(output, "run_command");
+  assert.ok(!/Exit code/.test(rendered), `a deadline kill has no exit code to report, got: ${rendered}`);
+  assert.match(rendered, /Command timed out after 300000ms/, "the presenter names the bound");
+  assert.match(rendered, /partial-line/, "and keeps the partial output");
+  assert.match(rendered, /real-err/, "and the command's own stderr");
+  assert.ok(!/timed out/.test(String(output.stderr)), "the reason is not duplicated into stderr");
+
+  // A genuine failure is untouched — no reason may be invented for it.
+  const failed = formatToolOutput(
+    { command: "false", stdout: "", stderr: "boom", exitCode: 1, durationMs: 5, success: false },
+    "run_command"
+  );
+  assert.match(failed, /Exit code: 1/, "a real failure still reports its code");
+  assert.ok(!/timed out/.test(failed), "and is not relabelled as a timeout");
+  console.log("ok  UI presenter names the deadline (no `Exit code: -1`)");
 }
 
 // ============================================================================
@@ -136,7 +159,8 @@ const envWith = (vars) => ({ getEnv: async () => vars });
   assert.equal(def.out.exitCode, -1);
   assert.equal(def.out.success, false);
   assert.equal(def.out.stdout, "partial-line\n", "partial stdout survives to the result");
-  assert.match(def.out.stderr, /timed out/, "the result names the timeout");
+  assert.equal(def.out.timeoutMs, DEFAULT, "the elapsed deadline travels on the result");
+  assert.match(formatToolOutput(def.out, "run_command"), /timed out/, "and the presenter names it");
 
   const override = await run({ RUN_COMMAND_TIMEOUT_MS: "60000" });
   assert.equal(override.seenTimeout, 60_000, "RUN_COMMAND_TIMEOUT_MS is injected into runCommand");

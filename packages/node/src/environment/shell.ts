@@ -463,7 +463,8 @@ const SAFETY_TIMEOUT_MARGIN_MS = 10_000;
 const DRAIN_GRACE_MS = 2_000;
 
 /**
- * Wait for a child process to exit, tolerating stdio handles a detached descendant keeps open.
+ * Wait for a child process to exit. The "a detached descendant keeps the stdio pipes open" case is
+ * handled by the drain grace below, not by waiting here.
  *
  * Completion is judged on the child's **exit** event. `close` (process gone AND streams drained) is
  * preferred, but a descendant that inherits the stdout pipe keeps `close` open after exit, so a

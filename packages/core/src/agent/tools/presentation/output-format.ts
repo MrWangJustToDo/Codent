@@ -74,17 +74,21 @@ function formatRunCommandOutput(output: RunCommandOutput): string {
     return `Background job ${output.jobId} (${output.status ?? "running"}): ${output.command}`;
   }
 
-  const { stdout, stderr, exitCode, success, cancelled } = output;
+  const { stdout, stderr, exitCode, success, cancelled, timedOut, timeoutMs } = output;
   const lines: string[] = [];
 
-  // `formatToolOutput` already short-circuits the framework's synthetic cancel payload before it
-  // reaches a tool's formatter. This branch is for the OTHER cancel shape: the tool's own catch
-  // returns a full run_command output with `cancelled: true` and a synthesized `exitCode: -1`.
-  // Only these two differ, and only for a moment — the synthetic one is what you see the instant
-  // you press Esc, and it is replaced by the full one on the next pass (the same row read
-  // `undefined` then `-1`). Neither number is a result, so print neither; the ⚠ glyph and the
-  // inline summary already carry the cancelled state.
-  if (!success && !cancelled) {
+  // A deadline kill (`timedOut`) and a user cancel (`cancelled`) both carry a synthesized
+  // `exitCode: -1` — the schema's "not finished" value, NOT a result — so neither prints an exit
+  // code. A timeout instead NAMES its cause: the bare `Exit code: -1` is exactly the "reads like a
+  // crash" the model-facing output avoids, and it would sit above the partial output the tool
+  // deliberately kept (still rendered below).
+  //
+  // For a cancel, `formatToolOutput` already short-circuits the framework's synthetic payload
+  // before a formatter is reached; this covers the OTHER cancel shape, where the tool's own catch
+  // returns a full output with `cancelled: true` and `exitCode: -1`.
+  if (timedOut) {
+    lines.push(typeof timeoutMs === "number" ? `Command timed out after ${timeoutMs}ms` : "Command timed out");
+  } else if (!success && !cancelled) {
     lines.push(`Exit code: ${exitCode}`);
   }
 

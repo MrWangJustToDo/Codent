@@ -1,6 +1,7 @@
 /**
- * Validates that a tool call cut short by an abort is visible as cancelled, and that the
- * app's streaming buffers cannot grow without bound across command calls.
+ * Validates that a tool call cut short by an abort is visible as cancelled, that a command
+ * killed at its deadline is a failure which NAMES the deadline (never a bare `Exit code: -1`),
+ * and that the app's streaming buffers cannot grow without bound across command calls.
  *
  * Run: node --test test/abort-and-streaming-bounds.test.mjs
  */
@@ -272,6 +273,72 @@ const part = (name, output) => ({
   assert.ok(
     cancelledGuarded && /isCancelledToolCall\s*\(/.test(outView),
     "the output block must not paint a cancelled run in the failure color"
+  );
+}
+
+// ============================================================================
+// A deadline kill is a FAILURE, not a success — and its body names the deadline
+//
+// `run_command` catches its own typed timeout and returns a NORMAL result with the partial
+// output, which invites the assumption that the part settles as `output-available` and wears
+// the success check. It does not: `getUiToolState` maps ANY `success: false` — exactly the
+// cancelled-run_command shape — to `output-error`, so the row is a failure everywhere (header,
+// glyph, body). The one thing that WAS wrong is the body: it printed the synthesized
+// `Exit code: -1`, which reads like a crash and hides the cause, even though the tool
+// deliberately kept the partial output.
+// ============================================================================
+{
+  const { formatToolOutput, getUiToolState, isCancelledToolCall } = await import("@codent/core");
+  const { getToolStatusGlyph } = await import("../dist/index.mjs");
+
+  const timedOut = part("run_command", {
+    command: "sleep 999",
+    stdout: "partial-line",
+    stderr: "real-err",
+    exitCode: -1,
+    durationMs: 300_000,
+    success: false,
+    timedOut: true,
+    timeoutMs: 300_000,
+    cachedOutputPath: null,
+  });
+
+  // `success: false` is what the row reads, so a deadline kill is a failure — never a ✓.
+  assert.equal(getUiToolState(timedOut), "output-error", "a deadline kill settles as a failure, not output-available");
+  assert.equal(
+    getToolStatusGlyph(getUiToolState(timedOut)),
+    "✗",
+    "its icon is the failure cross, not the success check"
+  );
+
+  const rendered = formatToolOutput(timedOut.output, "run_command");
+  assert.ok(!/Exit code/.test(rendered), `a deadline kill has no exit code to report, got: ${rendered}`);
+  assert.match(rendered, /Command timed out after 300000ms/, "the body names the bound");
+  assert.ok(rendered.includes("partial-line"), "and keeps the partial output the tool preserved");
+  assert.ok(rendered.includes("real-err"), "alongside the command's own stderr");
+
+  // A genuine failure keeps its code and is not relabelled.
+  const failed = part("run_command", {
+    command: "false",
+    stdout: "",
+    stderr: "boom",
+    exitCode: 1,
+    durationMs: 5,
+    success: false,
+  });
+  const failedBody = formatToolOutput(failed.output, "run_command");
+  assert.match(failedBody, /Exit code: 1/, "a real failure still reports its code");
+  assert.ok(!/timed out/.test(failedBody), "and is not relabelled as a timeout");
+
+  // The two `success: false` shapes stay distinct: a cancel is neutral (⚠) while a deadline is
+  // a failure (✗) — `timedOut` must not be folded into the cancel predicate.
+  const cancelled = part("run_command", { success: false, cancelled: true });
+  assert.equal(isCancelledToolCall(timedOut), false, "a deadline is not a cancel");
+  assert.equal(getToolStatusGlyph(getUiToolState(cancelled), false, true), "⚠", "a cancel keeps its warning glyph");
+  assert.equal(
+    getToolStatusGlyph(getUiToolState(timedOut), false, false),
+    "✗",
+    "a deadline is not turned into a cancel"
   );
 }
 

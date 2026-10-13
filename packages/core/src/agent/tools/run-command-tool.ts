@@ -52,16 +52,26 @@ export function isCommandTimeoutError(err: unknown): boolean {
 }
 
 /** Notice appended to the stderr of a command terminated at its deadline. */
-export function commandTimeoutNotice(timeoutMs: number): string {
-  return `[Command timed out after ${timeoutMs}ms — the output above is partial.]`;
+/**
+ * Human-readable reason for a deadline kill, rendered by the presenters (the UI, the model, the
+ * compact summary) from the structured `timedOut` / `timeoutMs` fields.
+ *
+ * It is deliberately NOT smeared into `stderr`: that field stays the command's own output, and a
+ * synthetic line there would render twice (once as `stderr:`, once as the presenter's line) and
+ * misattribute our text to the program.
+ */
+export function commandTimeoutNotice(timeoutMs?: number): string {
+  const bound = typeof timeoutMs === "number" ? ` after ${timeoutMs}ms` : "";
+  return `[Command timed out${bound} — the output above is partial.]`;
 }
 
 /**
  * Build the normal `run_command` result for a command terminated at its deadline.
  *
- * Preserves the partial stdout/stderr (the point of not throwing), reports `-1` (the schema's "not
- * finished" value, matching the cancel branch) and `success: false`, and appends the timeout notice
- * to stderr so the reason survives ALONGSIDE the command's own stderr.
+ * Preserves the partial stdout/stderr (the point of not throwing) and reports `-1` (the schema's
+ * "not finished" value, matching the cancel branch) with `success: false`. The REASON travels
+ * structurally as `timedOut` + `timeoutMs` and every presenter names it (see
+ * {@link commandTimeoutNotice}); `stderr` is left exactly as the command wrote it.
  */
 export function buildTimedOutCommandResult(params: {
   command: string;
@@ -71,15 +81,15 @@ export function buildTimedOutCommandResult(params: {
   durationMs: number;
   cachedOutputPath: string | null;
 }): RunCommandOutput {
-  const notice = commandTimeoutNotice(params.timeoutMs);
   return {
     command: params.command,
     stdout: params.stdout,
-    stderr: params.stderr.trim() ? `${params.stderr}\n\n${notice}` : notice,
+    stderr: params.stderr,
     exitCode: -1,
     durationMs: params.durationMs,
     success: false,
     timedOut: true,
+    timeoutMs: params.timeoutMs,
     cachedOutputPath: params.cachedOutputPath,
   };
 }
@@ -356,7 +366,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       // user watched being produced).
       if (output.timedOut) {
         return [
-          { type: "text" as const, content: "[Command timed out — the output below is partial.]" },
+          { type: "text" as const, content: commandTimeoutNotice(output.timeoutMs) },
           ...(output.stderr?.trim?.() ? [{ type: "text" as const, content: `stderr:\n${output.stderr}` }] : []),
           { type: "text" as const, content: output.stdout },
         ];
