@@ -292,6 +292,51 @@ for (const escape of ESCAPES) {
   );
 }
 
+// ============================================================================
+// Windows-shaped input is judged in canonical form, not by POSIX luck
+//
+// `CoreEnv.path` is the HOST's path implementation (node's `path` on a Node host, so a Windows
+// host hands us `C:\repo` and `path.sep === "\"`). Containment therefore folds both sides to a
+// forward-slash key (`toPosixPathKey`, whose own worked example is `C:\repo\` -> `C:/repo`)
+// before comparing, and must not depend on the host being POSIX. Exercised with a Windows-shaped
+// root through `defaultPath` (pathe folds `\`) — the same reason `posix-path.ts` keeps
+// Windows-shaped regression tests that run on Linux.
+// ============================================================================
+
+const winEnv = (records) => ({
+  ...makeEnv(records),
+  rootPath: "C:\\repo",
+  getPlatform: async () => "win32",
+  homedir: async () => "C:\\Users\\dev",
+});
+
+{
+  const records = [];
+  await run(createGlobTool(), { pattern: "**/*.ts", path: "src" }, winEnv(records));
+  check(
+    "win32: an in-root relative path is accepted, cwd = the Windows root",
+    records.length > 0 && records.every((r) => r.cwd === "C:\\repo"),
+    `records=${json(records)}`
+  );
+
+  const absolute = [];
+  await run(createGlobTool(), { pattern: "**/*.ts", path: "C:\\repo\\src" }, winEnv(absolute));
+  check(
+    "win32: an absolute in-root drive path is accepted",
+    absolute.length > 0 && absolute.every((r) => r.cwd === "C:\\repo") && absolute[0]?.args?.includes("C:\\repo\\src"),
+    `records=${json(absolute)}`
+  );
+}
+
+for (const escape of ["..\\..", "C:\\other", "D:\\repo", "C:\\repo-sibling"]) {
+  const records = [];
+  await expectRejected(
+    `win32: rejects escaping path ${json(escape)}`,
+    () => run(createGlobTool(), { pattern: "**/*.ts", path: escape }, winEnv(records)),
+    records
+  );
+}
+
 console.log(
   failures === 0
     ? "\nvalidate-search-path-containment: ok"
