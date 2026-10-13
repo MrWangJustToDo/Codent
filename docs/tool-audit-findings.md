@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **26 条未修**（另 2 条 `【部分修】`、8 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **25 条未修**（另 2 条 `【部分修】`、9 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -144,7 +144,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `78835b24` + `8b244a0e`】 `session-read-tool.ts:109` 无文件大小上限（`session_search` 有 `MAX_SESSION_FILE_BYTES`），大日志 O(file)×页数，每页整读整 fold；其描述里的分页建议（`offset += limit`）在内容上限截断时会**跳过消息**。→ 两半都已修：体积闸门 + 描述改为指向渲染尾部的真实 offset（`validate:session-search` 用 9 条长消息 / `limit: 10` / 实返 7 条覆盖）。
 - 【未修】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。
 - 【不修 · 有意为之（用户决定）】 丢弃的 pre-fork subagent 只 abort 未 `destroyAgent`（流重启/结束时累积）—— **不修**：`destroyAgent` 会把 subagent 从 catalog 移除，Ctrl+T 的 task 列表（及其预览 / 摘要流）就看不到了，而 `task-tool.ts:204` 本来就用 `autoDestroy: false` 保留它。代价（长会话里 catalog 缓慢增长）是明确接受的。若将来真要回收，方向是「保留最近 N 个已结束的」而不是立刻销毁。
-- 【未修】 `run-stats.ts:144-147` `hitStepBudget` 未加 `!aborted` → 用户取消也可能报 `reachedLimit=true`。
+- 【已修 · `4079ee5c`】 `run-stats.ts:144-147` `hitStepBudget` 未加 `!aborted` → 用户取消也可能报 `reachedLimit=true`。→ 取消落在 tool loop 中段，`finishReason` 正是 `tool_calls` 且计数已达顶，于是 task 输出同时带 `aborted: true` + `reachedLimit: true`：transcript 行的状态词（`formatTaskOutput` 两个都推）、给父模型判断的 flag、以及 task 面板继承的 phase 都被污染。`validate:cancel-semantics` 原本就在断言这条不变量，但用的是 `finishReason: null`（取消不会产生这个形状），所以**没加 guard 也能过** —— 现已改用 `tool_calls`。
 - 【未修】 `hasSessionHistory`（`session-retrieval.ts:43-54`）把当前会话自己的日志也算作"有历史"。
 - 【未修】 `run-subagent.ts:506` 硬编码 `"begin_summary"`（应用 `BEGIN_SUMMARY_TOOL_NAME`）；`task-prefork-middleware.ts:98` 硬编码 `"task"`。
 
