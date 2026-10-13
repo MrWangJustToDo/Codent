@@ -279,12 +279,52 @@ const read = (env, input) => tool.execute(input, { toolCallId: "t", context: { c
 }
 
 // ---------------------------------------------------------------------------
-// (9) The bounded head probe still rejects non-text content
+// (9) The bounded head probe rejects non-text content — and only that
+//
+// The negative half is not decoration: `headProbeSample`'s string branch is what the STREAMED
+// path feeds (the decoded head window), and a probe that maps a decoded char to the low byte of
+// its code point reads `├` (U+251C) as `0x1C`, i.e. a control byte. These cases pin that legal
+// text whose code points merely *end* in a C0 byte (box-drawing, CJK) still reads, which is
+// exactly the false positive the true-positive-only case below could never catch.
 // ---------------------------------------------------------------------------
 {
   const { env } = makeEnv({ content: "\u0000binary-ish" });
   await assert.rejects(() => read(env, { path: "blob.txt" }), /appears to be binary/);
   console.log("ok  the bounded head probe still rejects binary content");
+}
+{
+  // NUL and raw control bytes are detectable in their own right — say so for both paths, so a
+  // probe that only works on one of them cannot pass by accident.
+  for (const withRange of [true, false]) {
+    const { env } = makeEnv({ content: "\u0000binary-ish", withRange });
+    await assert.rejects(
+      () => read(env, { path: "blob.txt" }),
+      /appears to be binary/,
+      `a NUL byte is binary on ${withRange ? "the streamed" : "the whole-file"} path`
+    );
+  }
+  console.log("ok  a NUL byte is rejected on both the streamed and whole-file paths");
+}
+{
+  // Legal multi-byte text must READ, not be misread as binary. Each of these has a code point
+  // whose low byte is a C0 control byte (`├` 0x251C, `─` 0x2500, `│` 0x2502, `是` 0x662F,
+  // `└` 0x2514) — so a byte-narrowing probe rejects every one of them.
+  const legalText = [
+    ["a box-drawing tree", "src/\n├── a.ts\n└── b.ts\n"],
+    ["CJK text", "这是一个中文文件\n第二行\n"],
+    ["a mixed tree + CJK listing", "├── 目录\n│   └── 文件.ts\n"],
+    ["accented latin and a dash", "café — résumé\n"],
+    ["an emoji", "hello 🎉 world\n"],
+  ];
+  for (const [label, content] of legalText) {
+    for (const withRange of [true, false]) {
+      const { env } = makeEnv({ content, withRange });
+      const out = await read(env, { path: "f.txt" });
+      assert.equal(out.type, "text", `${label} must read as text`);
+      assert.match(out.content, /1: /, `${label} must render its first line`);
+    }
+  }
+  console.log(`ok  ${legalText.length} multi-byte text shapes read on both paths (no false binary)`);
 }
 
 // ---------------------------------------------------------------------------

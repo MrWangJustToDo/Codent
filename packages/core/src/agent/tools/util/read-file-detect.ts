@@ -108,20 +108,23 @@ export const BINARY_PROBE_BYTES = 4096;
  *
  * Bounded on purpose: a multi-GB file must not be scanned end to end just to notice it is
  * binary — the caller reads the file once and probes only its head. A string source is
- * measured in UTF-16 code units and narrowed to bytes; the null byte and C0 control bytes
- * the heuristic keys on survive UTF-8 decoding as their own code points, while decoded
- * multibyte characters cannot be mistaken for control bytes.
+ * re-encoded to real UTF-8 bytes before the probe, so a decoded character can never be
+ * mistaken for a control byte.
+ *
+ * Re-encoding (rather than narrowing each UTF-16 code unit with `& 0xff`) is the whole point:
+ * a decoded char whose code point merely *ends* in a C0 byte — `─` U+2500, `│` U+2502,
+ * `├` U+251C, and much of the CJK range — would otherwise be probed as that control byte and
+ * reject perfectly good text as binary. Genuine control bytes and NUL still re-encode to
+ * themselves, so the heuristic keeps its true positives; a multibyte character split at the
+ * byte bound can only contribute a replacement character, never a false control byte.
  */
 export function headProbeSample(source: Uint8Array | string, maxBytes: number = BINARY_PROBE_BYTES): Uint8Array {
   if (typeof source !== "string") {
     return source.subarray(0, Math.min(maxBytes, source.length));
   }
-  const size = Math.min(maxBytes, source.length);
-  const sample = new Uint8Array(size);
-  for (let i = 0; i < size; i++) {
-    sample[i] = source.charCodeAt(i) & 0xff;
-  }
-  return sample;
+  // Encode the head, then keep the byte bound exactly: `slice` off UTF-16 units first only as an
+  // upper bound, since each unit is at most 3 UTF-8 bytes.
+  return new TextEncoder().encode(source.slice(0, maxBytes)).subarray(0, maxBytes);
 }
 
 /** True when the buffer looks like non-text binary (null bytes / high control-char ratio). */
