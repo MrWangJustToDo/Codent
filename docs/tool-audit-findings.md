@@ -24,8 +24,8 @@
 >
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
-> - **⚠️ 一项是「假绿」**：取消语义的 guard 未收口（`run_command` / `task` 取消后的 partial 输出被整体短接），拦住它的两条断言被注释掉了 —— 见 ⑧。这是唯一一个「代码违反自己文档、check 却仍然通过」的项。
-> - 余量：「中」37 条里 **33 条未修**（另 2 条 `【部分修】`、2 条已修）；「低」11 条里 **8 条未修**（另 2 条 `【部分修】`、1 条不成立）。剩余顺序见文末。
+> - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
+> - 余量：「中」37 条里 **33 条未修**（另 2 条 `【部分修】`、2 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -169,7 +169,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【未修】 `mcp-client.ts` 只认单行 `data:` 帧 / 只取首个 content block。
 - 【部分修 · `0c3142a3`】 `websearch`：`timeout` 每秒/每 provider 语义；`response.text()` 无上限。
 - 【未修】 cancel 分支：`run-command-tool` 取消时 `durationMs: 0`、只回一个 `cachedOutputPath`（另一个缓存文件成孤儿）。
-- 【未修 · 见 ⑧】 `presentation/output-format.ts:290` 对**任何**带 cancel 标记的输出都短路成 `TOOL_CANCELLED_MESSAGE`（注释说只该对 synthetic fallback），`run_command` 的 partial stdout 会被隐藏。
+- 【已修 · `fce0eb7f`（见 ⑧）】 `presentation/output-format.ts:290` 对**任何**带 cancel 标记的输出都短路成 `TOOL_CANCELLED_MESSAGE`（注释说只该对 synthetic fallback），`run_command` 的 partial stdout 会被隐藏。
 - 【不成立 · 早于审计】 `run-command-tool` 的 `RUN_COMMAND_TIMEOUT_MS` 每次前台调用都 `await coreEnv.getEnv()`（remote 时一次 HTTP）。
 
 ---
@@ -193,7 +193,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
   NUL 在两条路径上都必须被拒；「宿主不能返回字节」的**字符串分支**单独钉一条；「首段只有 2 字节、NUL 在其后」单独钉一条
   （该用例在修复前报 `Missing expected rejection`，非空断言）。
 
-### ⑧ `formatToolOutput` 把「任何 cancel 标记」当成「没有输出」 → 取消后的 partial 输出被隐藏 `[已核实 · 未修复 · 假绿]`
+### ⑧ `formatToolOutput` 把「任何 cancel 标记」当成「没有输出」 → 取消后的 partial 输出被隐藏 `[已核实 · 已修复（fce0eb7f）]`
 - 现状：`agent/tools/presentation/output-format.ts:293` 那行**正确**的短接被注释掉了 ——
   `// if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;` —— 实际生效的是 `:294`
   `if (isCancelledOutputMarker(output)) return TOOL_CANCELLED_MESSAGE;`；`presentation/compute-display.ts:54` 同样。
@@ -205,13 +205,13 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 来源：`0248ac36` 的 body 自己记着 —— 「this also carries a workspace change replacing `isSyntheticCancelOutput`
   with `isCancelledOutputMarker` at both presentation sites … it fails `validate:cancel-semantics` …
   Committed as-is by request; the validator is red until that guard is settled.」即当时把一个工作区改动一起扫进了提交。
-- 为什么现在看起来是绿的：`c8b11c29` 把 `validate:cancel-semantics` 里两条判别性断言注释掉了
+- 为什么当时看起来是绿的：`c8b11c29` 把 `validate:cancel-semantics` 里两条判别性断言注释掉了
   （`scripts/validate-cancel-semantics.mjs:174-184`，`TEMPORARILY DISABLED … Re-enable both when the guard is settled`），
-  于是全量 validator 报 187 passed / 0 failed / 2 skipped —— **绿是靠削弱 check 换来的**。它是本次复核里唯一一个「行为错了、check 却是绿的」的项：
+  于是全量 validator 报 187 passed / 0 failed / 2 skipped —— **绿是靠削弱 check 换来的**。它是那次复核里唯一一个「行为错了、check 却是绿的」的项：
   绿不是因为对了，而是因为唯一能判它的断言被拿掉了。
-- 修：恢复 293 行（删掉 294，或让两句并存：先判 synthetic 再判 marker）、`compute-display.ts:54` 同，
-  然后把那两条断言放回（`body.includes("cancelled")` + `body.includes("[Task cancelled by user.]")`），
-  确认 `validate:cancel-semantics` 仍绿、且 `validate:subagent-cancel-notice` 不受影响。
+- 修（`fce0eb7f`，已完成）：两个站点改回 `isSyntheticCancelOutput`；`c8b11c29` 注释掉的两条断言放回，
+  并补上它们没覆盖的另一半 —— 取消的 `run_command` 保留已产出的 partial stdout、且不渲染 stop 时合成的 `exitCode: -1`。
+  实测：未修版本下该 validator 在第一条断言即失败（`the detailed block words it as cancelled (Cancelled by user.)`）。
 - **不要一起改回**：`tool-state.ts:53` 的 `isCancelledToolCall` / `getInlineSummary` 用 `isCancelledOutputMarker` 是**对的**
   —— 它们只回答「这一行算不算取消」，与「有没有输出可渲染」是两个问题。
 
@@ -221,7 +221,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 
 > **2026-10-14 更新**：下面的第 1、2 批**已全部完成**（见「修复状态」与「复审状态」）。第 3、4 批仍然适用，只是范围缩小到标注为 `【未修】` 的条目。剩余项按这个顺序推进：
 
-0. **先收「假绿」**：⑧ 的 cancel guard。改动最小，且它是唯一一个「check 被削弱后才通过」的项 —— 留着它，后面任何一次取消语义的回归都看不出来。
+0. ~~**先收「假绿」**：⑧ 的 cancel guard~~ —— **已完成**（`fce0eb7f`：guard 与两条断言一起恢复，并补了 `run_command` 那半）。
 1. **模型可见的正确性**（都是小改动、各能配 validator）：`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard（恢复会话后 wire 上出现 `"undefined"`）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
 2. **资源与泄漏**：运行中的 job 无上限 · `file-mutation-queue` 的 Map 不回收 · 被丢弃的 pre-fork 只 abort 未 `destroyAgent` · `lsp-manager` 的重启 timer 不随 `shutdownAll` 清理 · `task-prefork.start()` 恒 `true` 导致的监听/controller 泄漏。
 3. **契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时（server 挂住会永久阻塞该次运行，Esc 也解不开）· plan-mode 的「只读」可被内置 `code_rewrite` 绕过（应改为按 tool 的 `present.category` 派生，而不是硬编码 4 个名字）。
