@@ -84,6 +84,15 @@ export const runCommandOutputSchema = z.object({
    * `aborted` flag) rather than as a tool failure.
    */
   cancelled: z.boolean().optional().describe("True when the user aborted the run while this command was executing."),
+  /**
+   * Present when the command was terminated because its deadline elapsed. `stdout`/`stderr` carry
+   * the partial output produced before the kill and `exitCode` is -1 ("not finished"). Distinct
+   * from `cancelled`, which is a USER abort.
+   */
+  timedOut: z
+    .boolean()
+    .optional()
+    .describe("True when the command was terminated at its deadline (partial output preserved)."),
   ...toolOutputBaseSchema.shape,
 });
 

@@ -17,9 +17,83 @@ import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 const COMMAND_CANCELLED_NOTICE = "[Command cancelled by user.]";
 
+/**
+ * Foreground deadline applied when the model omits `timeout` (ms).
+ *
+ * Without it, a no-timeout command ran with no caller deadline, so the CoreEnv safety guard's 30s
+ * floor became the de-facto limit — a legitimate build/test was killed and misreported as a
+ * detached-descendant failure. A default keeps the run bounded while letting normal long commands
+ * finish; the model can raise it per call, and `RUN_COMMAND_TIMEOUT_MS` overrides it for a workspace.
+ */
+const DEFAULT_RUN_COMMAND_TIMEOUT_MS = 300_000;
+
+/** Resolve the foreground deadline to use when the caller did not pass `timeout`. */
+export async function resolveDefaultCommandTimeout(env: {
+  getEnv(): Promise<Record<string, string | undefined>>;
+}): Promise<number> {
+  try {
+    const n = Number((await env.getEnv()).RUN_COMMAND_TIMEOUT_MS);
+    if (Number.isFinite(n) && n >= 1000) return n;
+  } catch {
+    // Env unavailable (degraded / remote failure) — the constant is the answer.
+  }
+  return DEFAULT_RUN_COMMAND_TIMEOUT_MS;
+}
+
+/**
+ * True when a CoreEnv run failed because its deadline elapsed — NOT a user cancel.
+ *
+ * Structural, like `isAbortError`: a remote CoreEnv rebuilds the error from `{ name, code, message }`,
+ * so match `code` rather than `instanceof`. The tool must handle a timeout itself and return a normal
+ * result carrying the partial output, because `ExecutionError` deliberately has no output fields.
+ */
+export function isCommandTimeoutError(err: unknown): boolean {
+  return (err as { code?: unknown } | null | undefined)?.code === "timeout";
+}
+
+/** Notice appended to the stderr of a command terminated at its deadline. */
+export function commandTimeoutNotice(timeoutMs: number): string {
+  return `[Command timed out after ${timeoutMs}ms — the output above is partial.]`;
+}
+
+/**
+ * Build the normal `run_command` result for a command terminated at its deadline.
+ *
+ * Preserves the partial stdout/stderr (the point of not throwing), reports `-1` (the schema's "not
+ * finished" value, matching the cancel branch) and `success: false`, and appends the timeout notice
+ * to stderr so the reason survives ALONGSIDE the command's own stderr.
+ */
+export function buildTimedOutCommandResult(params: {
+  command: string;
+  stdout: string;
+  stderr: string;
+  timeoutMs: number;
+  durationMs: number;
+  cachedOutputPath: string | null;
+}): RunCommandOutput {
+  const notice = commandTimeoutNotice(params.timeoutMs);
+  return {
+    command: params.command,
+    stdout: params.stdout,
+    stderr: params.stderr.trim() ? `${params.stderr}\n\n${notice}` : notice,
+    exitCode: -1,
+    durationMs: params.durationMs,
+    success: false,
+    timedOut: true,
+    cachedOutputPath: params.cachedOutputPath,
+  };
+}
+
 export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed?: ManagedAgent }) => {
   const registry = options?.managed?.getCommandJobRegistry() ?? commandJobRegistry;
   const subagentSafe = options?.subagentSafe ?? false;
+  // `RUN_COMMAND_TIMEOUT_MS` is resolved once per tool instance: the env is stable for the session,
+  // and under `--remote-env` `coreEnv.getEnv()` is an HTTP round-trip we should not pay per command.
+  let resolvedDefaultTimeout: number | undefined;
+  const getDefaultTimeout = async (env: { getEnv(): Promise<Record<string, string | undefined>> }): Promise<number> => {
+    if (resolvedDefaultTimeout === undefined) resolvedDefaultTimeout = await resolveDefaultCommandTimeout(env);
+    return resolvedDefaultTimeout;
+  };
   return defineServerTool({
     name: "run_command",
     present: {
@@ -28,6 +102,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
     },
     description:
       "Executes a shell command in the workspace environment. Returns stdout, stderr, exit code, and execution duration. " +
+      "Foreground commands have a default deadline (~5 min) when no timeout is given; pass timeout to change it. " +
       "Set run_in_background=true for long-lived processes (dev servers, watchers); then poll with get_command_output and stop with kill_command. " +
       `get_command_output and kill_command are lazy tools — discover them via ${DISCOVERY_TOOL_NAME} before calling. ` +
       "Background jobs also append their output to a durable log file (cachedOutputPath) that can be read with read_file. " +
@@ -50,7 +125,9 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         .int({ message: "timeout: must be an integer (milliseconds)" })
         .min(1000, { message: "timeout: must be >= 1000ms (use ms, not seconds)" })
         .optional()
-        .describe("Timeout in milliseconds (foreground only). If the command takes longer, it will be terminated."),
+        .describe(
+          "Foreground deadline in milliseconds. If omitted, a default (~5 min; overridable via RUN_COMMAND_TIMEOUT_MS) applies. The process tree is terminated when the deadline passes."
+        ),
       run_in_background: z
         .boolean()
         .optional()
@@ -135,20 +212,26 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       });
 
       const encoder = new TextEncoder();
+      const startTime = Date.now();
+
+      // Give every foreground command an effective deadline, so a long one takes the real timeout
+      // path (kill the process tree, settle as a typed timeout) instead of the safety guard's wall.
+      const effectiveTimeout = timeout ?? (await getDefaultTimeout(coreEnv));
 
       // The user aborting the run is not a tool failure. CoreEnv surfaces it as an
       // ExecutionError("aborted") (native) or an equivalent throw (remote), which TanStack
       // would otherwise settle as `output-error` — a red cross on a row the USER stopped,
       // and no `cancelled` marker for the UI to read. Catch it and return a normal result
       // carrying `cancelled: true`, the same contract as the `task` tool's `aborted` flag;
-      // `getInlineSummary` / `isCancelledToolCall` render both shapes as "cancelled".
-      // Everything else still throws, so genuine failures keep their error row.
+      // `getInlineSummary` / `isCancelledToolCall` render both shapes as "cancelled". A deadline
+      // expiry is handled below the same way (a typed timeout returns a normal result carrying the
+      // partial output, since ExecutionError cannot); everything else still throws.
       let result;
       try {
         result = await coreEnv.runCommand(command, {
           cwd,
           env,
-          timeout,
+          timeout: effectiveTimeout,
           signal: abortSignal,
           onStdout: (chunk) => {
             stdoutAccumulator.append(encoder.encode(chunk));
@@ -160,26 +243,56 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
           },
         });
       } catch (err) {
-        if (!isAbortError(err, abortSignal)) throw err;
+        // A user abort is not a failure — return a normal "cancelled" result (see the comment above).
+        if (isAbortError(err, abortSignal)) {
+          stdoutAccumulator.finish();
+          stderrAccumulator.finish();
+          const stdoutRaw = stdoutAccumulator.snapshot().content;
+          const stderrRaw = stderrAccumulator.snapshot().content;
+          const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
+          const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
+          return {
+            command,
+            stdout: stdoutResult.content,
+            stderr: stderrResult.content + "\n\n" + COMMAND_CANCELLED_NOTICE,
+            // No exit code exists for a killed process; -1 is the schema's "not finished"
+            // value and `success: false` keeps the run from reading as a clean exit.
+            exitCode: -1,
+            durationMs: 0,
+            success: false,
+            cancelled: true,
+            cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,
+          };
+        }
 
-        stdoutAccumulator.finish();
-        stderrAccumulator.finish();
-        const stdoutRaw = stdoutAccumulator.snapshot().content;
-        const stderrRaw = stderrAccumulator.snapshot().content;
-        const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
-        const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
-        return {
-          command,
-          stdout: stdoutResult.content,
-          stderr: stderrResult.content + "\n\n" + COMMAND_CANCELLED_NOTICE,
-          // No exit code exists for a killed process; -1 is the schema's "not finished"
-          // value and `success: false` keeps the run from reading as a clean exit.
-          exitCode: -1,
-          durationMs: 0,
-          success: false,
-          cancelled: true,
-          cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,
-        };
+        // A deadline is a failure, but not a reason to discard the work: the command may have
+        // produced output before it was killed. `ExecutionError` carries no output fields (by
+        // design), so the tool catches the typed timeout and returns a normal result carrying the
+        // partial output — symmetric with the cancel branch above.
+        if (isCommandTimeoutError(err)) {
+          stdoutAccumulator.finish();
+          stderrAccumulator.finish();
+          const stdoutResult = await maybeCacheOutput(
+            coreEnv,
+            stdoutAccumulator.snapshot().content,
+            `${toolCallId}-stdout`
+          );
+          const stderrResult = await maybeCacheOutput(
+            coreEnv,
+            stderrAccumulator.snapshot().content,
+            `${toolCallId}-stderr`
+          );
+          return buildTimedOutCommandResult({
+            command,
+            stdout: stdoutResult.content,
+            stderr: stderrResult.content,
+            timeoutMs: effectiveTimeout,
+            durationMs: Date.now() - startTime,
+            cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,
+          });
+        }
+
+        throw err;
       }
 
       stdoutAccumulator.finish();
@@ -236,6 +349,16 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
               (output.stderr?.trim?.() ? `stderr:\n${output.stderr}\n` : "") +
               (output.stdout ?? ""),
           },
+        ];
+      }
+      // A deadline is a failure with partial output: say so and show what the command produced,
+      // rather than a bare `Exit code: -1` that reads like a crash (and would hide the output the
+      // user watched being produced).
+      if (output.timedOut) {
+        return [
+          { type: "text" as const, content: "[Command timed out — the output below is partial.]" },
+          ...(output.stderr?.trim?.() ? [{ type: "text" as const, content: `stderr:\n${output.stderr}` }] : []),
+          { type: "text" as const, content: output.stdout },
         ];
       }
       return [

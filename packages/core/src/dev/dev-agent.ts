@@ -64,7 +64,13 @@ export { countSubagentIterations, deriveSubagentRunStats, hasBeginSummaryCall } 
 export { createTaskTool, taskOutputSchema } from "../agent/subagent/task-tool.js";
 // The three tools that settle their own abort, so the cancellation contract can be driven
 // through their real factories (their `toModelOutput` must tell the model, not only the UI).
-export { createRunCommandTool } from "../agent/tools/run-command-tool.js";
+export {
+  createRunCommandTool,
+  isCommandTimeoutError,
+  buildTimedOutCommandResult,
+  commandTimeoutNotice,
+  resolveDefaultCommandTimeout,
+} from "../agent/tools/run-command-tool.js";
 export { createWebfetchTool } from "../agent/tools/webfetch-tool.js";
 export { createWebsearchTool } from "../agent/tools/websearch-tool.js";
 export { applySubagentStopNotice, truncateSummary } from "../agent/subagent/subagent-output.js";
