@@ -215,6 +215,16 @@ const TipsRow = ({ tier, innerWidth }: { tier: WelcomeTier; innerWidth: number }
 // WelcomePanel
 // ============================================================================
 
+/**
+ * Copy for the `loading` variant — what the user is waiting for during `initLoading`.
+ *
+ * Exported so the smoke can assert on it and so the label has exactly one home. It must name
+ * what startup actually does (the workspace git probe + `adapter.initialize`); the OS sandbox is
+ * NOT on the startup path — `ensureOsSandbox()` runs on the first `run_command` — so "Initializing
+ * sandbox…" described a subsystem this screen never touches.
+ */
+export const LOADING_STATUS_TEXT = "Starting agent…";
+
 export interface WelcomePanelProps {
   /**
    * `loading` shows a spinner, `ready` shows meta + tips, `error` shows a
@@ -227,7 +237,7 @@ export interface WelcomePanelProps {
   workspacePath?: string;
   /** Active remote planes, shown as a badge under the tagline (ready only). */
   remotePlanes?: string[];
-  /** Status line for the `loading` variant. */
+  /** Status line for the `loading` variant. Defaults to {@link LOADING_STATUS_TEXT}. */
   loadingText?: string;
   /** Message shown by the `error` variant. */
   errorMessage?: string;
@@ -244,7 +254,7 @@ export const WelcomePanel = ({
   git = null,
   workspacePath = "",
   remotePlanes = [],
-  loadingText = "Initializing sandbox…",
+  loadingText = LOADING_STATUS_TEXT,
   errorMessage,
 }: WelcomePanelProps) => {
   const tier = welcomeTierForWidth(screenWidth);

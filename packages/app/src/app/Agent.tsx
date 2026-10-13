@@ -115,7 +115,10 @@ export const Agent = () => {
   }
 
   if (initLoading) {
-    return <WelcomePanel variant="loading" screenWidth={screenWidth} loadingText="Initializing sandbox…" />;
+    // The splash copy lives in `WelcomePanel`'s `loadingText` default — one place, so the label
+    // and the default cannot drift. (A second literal here was how "Initializing sandbox…"
+    // survived: the caller's explicit string shadowed the component's default.)
+    return <WelcomePanel variant="loading" screenWidth={screenWidth} />;
   }
 
   if (showResumePicker && activeSession) {

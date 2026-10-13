@@ -61,6 +61,7 @@ import { useTranscriptDisplay } from "./dist/hooks/use-transcript-display.mjs";
 import { useWorkspaceInfo } from "./dist/hooks/use-workspace-info.mjs";
 import { Content } from "./dist/layout/Content.mjs";
 import { Header } from "./dist/layout/Header.mjs";
+import { WelcomePanel, LOADING_STATUS_TEXT } from "./dist/layout/WelcomePanel.mjs";
 import { CompactionSummaryView } from "./dist/messages/CompactionSummaryView.mjs";
 import { getMessages } from "./dist/utils/get-messages.mjs";
 import { flattenNamespaceFor, getStaticFlattenSnapshot } from "./dist/utils/message-flat-cache.mjs";
@@ -238,6 +239,38 @@ function rawFrameLines(stdout) {
     .replace(ANSI, "")
     .split("\n")
     .map((l) => l.replace(/\s+$/, ""));
+}
+
+/**
+ * Resize the fake terminal and wait until the PAINTED frame reflects it.
+ *
+ * `settle(ms)` is not a layout checkpoint: the renderer coalesces repaints, so a frame read right
+ * after `emit("resize")` can still be the PREVIOUS width's — or a transient where the new width
+ * has not been applied yet. Asserting there makes width-sensitive checks flap with no source
+ * change (observed: the `60/80/120` row-layout assertions failed ~3 runs in 25, each time
+ * reporting the neighbouring width's rows).
+ *
+ * Waiting on the painted frame is NOT enough, and reading it as "the frame changed" produces a
+ * false pass: ink reflows to the fake stdout's new `columns` immediately, so the frame changes
+ * while our own layout constants lag — `useTerminalSize` debounces the resize event by 200ms, so
+ * `screenWidth` (what `titleWidth`/`metaWidth` are derived from) still holds the OLD value. The
+ * checkpoint therefore keys on the store, which is the signal the layout actually reads.
+ */
+async function resizeAndPaint(stdout, cols, { timeoutMs = 4000 } = {}) {
+  stdout.columns = cols;
+  stdout.emit("resize");
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await settle(50);
+    if (useSize.getReadonlyState().state.screenWidth === cols) {
+      // The store is current; give the paint that consumes it one quiet beat to land.
+      await settle(150);
+      return frameLines(stdout).join("\n");
+    }
+  }
+  console.error(`[resizeAndPaint] screenWidth never reached ${cols} within ${timeoutMs}ms`);
+  return frameLines(stdout).join("\n");
 }
 
 const results = [];
@@ -1461,9 +1494,7 @@ console.error = realConsoleError;
   const bodyRows = () => frameLines(titleStdout).filter((l) => !/Resume Session/.test(l) && !/^[─ ]+$/.test(l));
 
   for (const cols of [60, 80, 120]) {
-    titleStdout.columns = cols;
-    titleStdout.emit("resize");
-    await settle(250);
+    await resizeAndPaint(titleStdout, cols);
     const rows = bodyRows();
 
     record(`a long session title stays on one row at width ${cols}`, rows.length === sessions.length, {
@@ -1495,9 +1526,7 @@ console.error = realConsoleError;
 
   // The ellipsis itself: at 60 columns the long title must actually be cut, and cut with `…`
   // rather than trimmed at a fixed column with no indication.
-  titleStdout.columns = 60;
-  titleStdout.emit("resize");
-  await settle(250);
+  await resizeAndPaint(titleStdout, 60);
   const narrow = bodyRows();
   record("an over-long title is ellipsised instead of clipped", narrow[0]?.includes("…") === true, {
     row: narrow[0],
@@ -1507,15 +1536,53 @@ console.error = realConsoleError;
   // ellipsised, or the truncation would be unconditional rather than driven by the width.
   // It has to be measured per row — at 120 the long title still needs cutting (72 chars into a
   // 53-wide column), so "every row is clean" would be asserting the wrong thing.
-  titleStdout.columns = 120;
-  titleStdout.emit("resize");
-  await settle(250);
+  await resizeAndPaint(titleStdout, 120);
   const wide = bodyRows();
   record("a row that fits is not ellipsised at all", wide[1]?.includes("…") !== true, {
     rows: wide,
   });
 
   titleInstance.unmount();
+}
+
+// ── the loading splash names startup, not the sandbox ────────────────────────
+// The `loading` variant is what covers `initLoading`, and its copy is a claim about what the
+// user is waiting for. It used to read "Initializing sandbox…", but the OS sandbox is not on
+// the startup path at all: `ensureOsSandbox()` runs on the FIRST `run_command` (~5ms, and it
+// degrades gracefully when bubblewrap/socat/rg are missing). The phase really awaits the
+// workspace git probe plus `adapter.initialize`, so the label has to describe that instead of
+// naming a subsystem the startup never touches. The check binds the component's DEFAULT (no
+// `loadingText` prop), because that default is the one place the label is written — `Agent`
+// renders the loading variant bare.
+{
+  const splashStdout = new FakeStdout();
+  splashStdout.columns = 100;
+  // No `loadingText` prop: the assertion has to bind the component's DEFAULT, because that
+  // default is the single source of the label `Agent` renders. Passing the string here would
+  // make the check tautological — it would pass even after the default regressed.
+  const splashInstance = render(createElement(WelcomePanel, { variant: "loading", screenWidth: 100 }), {
+    stdout: splashStdout,
+    stdin: fakeStdin(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+  const splashFrame = frameLines(splashStdout).join("\n");
+
+  // Wiring: the splash actually paints the exported label. This is NOT the regression guard —
+  // reverting the constant to the old copy keeps it passing, because it only checks that the
+  // component renders whatever the label is. That division is the point: one check proves the
+  // label is wired up, the other proves the label is CORRECT.
+  record("the loading splash paints the exported status label", splashFrame.includes(LOADING_STATUS_TEXT), {
+    frame: frameLines(splashStdout),
+  });
+  // The regression guard: the sandbox is NOT initialised during startup, so the splash must not
+  // claim it is. Reverting the copy to "Initializing sandbox…" fails THIS one and nothing else.
+  record("the loading splash does not claim to initialise the sandbox", !/sandbox/i.test(splashFrame), {
+    frame: frameLines(splashStdout),
+  });
+  splashInstance.unmount();
 }
 
 const pass = results.every((r) => r.pass);
