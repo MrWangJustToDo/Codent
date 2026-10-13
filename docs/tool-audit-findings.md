@@ -12,6 +12,9 @@
 
 > ⚠️ 高优先级里有 3 个是**安全**问题（①、②、软链接逃逸），建议最先处理。
 
+> **修复状态（2026-10-13）**：高 6 项已全部修复，并各配 validator（安全两项另开 OpenSpec change `harden-tool-safety-boundaries`）。中 / 低未处理。
+> 已落地：① 搜索路径包含 + `cwd`（`validate:search-path-containment`）· ② 只读白名单收窄（`validate:command-safety-readonly`）· 软链接 `realpath` 约束（`validate:fs-symlink-containment`）· ③ `read_file` 先判大小（`validate:read-file-size`）· ④ `webfetch` 流式限长（`validate:webfetch-size`）· ⑤ `complete_plan` 空白项闸门（`validate:plan-verification`）· ⑥ 记忆合并误删（`validate:memory-merge-selfdelete`）。
+
 ---
 
 ## 高（已核实源码）

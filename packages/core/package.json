@@ -230,7 +230,12 @@
     "validate:extension-order": "pnpm run build && node scripts/validate-extension-order.mjs",
     "validate:tool-timeout-contract": "pnpm run build && node scripts/validate-tool-timeout-contract.mjs",
     "validate:session-search": "pnpm run build && node scripts/validate-session-search.mjs",
-    "validate:session-branching": "pnpm run build && node scripts/validate-session-branching.mjs"
+    "validate:session-branching": "pnpm run build && node scripts/validate-session-branching.mjs",
+    "validate:search-path-containment": "pnpm run build && node scripts/validate-search-path-containment.mjs",
+    "validate:command-safety-readonly": "pnpm run build && node scripts/validate-command-safety-readonly.mjs",
+    "validate:read-file-size": "pnpm run build && node scripts/validate-read-file-size.mjs",
+    "validate:webfetch-size": "pnpm run build && node scripts/validate-webfetch-size.mjs",
+    "validate:memory-merge-selfdelete": "pnpm run build && node scripts/validate-memory-merge-selfdelete.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.68.0",
