@@ -5,7 +5,7 @@ import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/e
 import { defineServerTool } from "./runtime/define-tool.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
 import { formatReadFileToolResult } from "./util/format-read-file-result.js";
-import { detectReadFileType, isBinaryContent } from "./util/read-file-detect.js";
+import { detectReadFileType, headProbeSample, isBinaryContent } from "./util/read-file-detect.js";
 import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
@@ -21,6 +21,16 @@ const MAX_CONTENT_LENGTH = 100000; // ~100KB, roughly 25k tokens
 
 /** Maximum bytes for binary files (PDFs) */
 const MAX_BINARY_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * Maximum bytes for a text file before it is rejected outright.
+ *
+ * The read is a single whole-file read (line accounting needs the whole file), so this is the
+ * actual memory ceiling: without it a multi-GB file would be read into a string before the
+ * output-length caps (`MAX_CONTENT_LENGTH`) ever apply. Kept equal to {@link MAX_BINARY_SIZE}
+ * so the tool has one "too large to read" boundary rather than two.
+ */
+const MAX_TEXT_SIZE = 10 * 1024 * 1024; // 10MB
 
 /** Default line limit when not specified */
 const DEFAULT_LINE_LIMIT = 2000;
@@ -271,6 +281,17 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         if (fileTypeInfo.type === "pdf") {
           // Completions cannot embed PDF binaries on the wire; we extract text for those
           // models. Anthropic (and similar) also receive the `document` part via toModelOutput.
+          //
+          // Gate on `stat.size` BEFORE reading. The `buffer.length` guard below can only fire
+          // once the whole file is already in memory, so on its own it cannot stop an oversized
+          // PDF from OOMing the process; it is kept as the fallback for hosts whose `stat` is
+          // unavailable (the `:182` try/catch) and as a defence against a stale size.
+          if (stat && stat.size > MAX_BINARY_SIZE) {
+            throw new Error(
+              `PDF file too large: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_BINARY_SIZE / 1024 / 1024}MB)`
+            );
+          }
+
           const buffer = await fsys.readFile(filePath, "buffer");
 
           if (buffer.length > MAX_BINARY_SIZE) {
@@ -303,19 +324,41 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           };
         }
 
-        // Handle text files — probe for binary content before UTF-8 read
-        try {
-          const buffer = await fsys.readFile(filePath, "buffer");
-          if (isBinaryContent(buffer)) {
-            throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
-          }
-        } catch (err) {
-          if (err instanceof Error && err.message.includes("appears to be binary")) throw err;
-          // If buffer read fails, try text read anyway
+        // Handle text files — gate on size, then read ONCE and probe a bounded head sample.
+        //
+        // The old path read the whole file as a buffer just to probe it, then read it AGAIN for
+        // the text (two full allocations). Here the file is read once: through the byte-window
+        // primitive when the host provides it (the whole range, anchored at the size already
+        // stat'd), otherwise through a single buffer read. Only a bounded head is handed to
+        // `isBinaryContent`, so a huge binary is never scanned end to end.
+        if (stat && stat.size > MAX_TEXT_SIZE) {
+          throw new Error(
+            `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_TEXT_SIZE / 1024 / 1024}MB)`
+          );
         }
 
-        // Read text file
-        const content = await getFile(coreEnv, filePath);
+        let textContent: string | undefined;
+        let rawBuffer: Uint8Array | undefined;
+        if (stat && fsys.readFileRange) {
+          textContent = await fsys.readFileRange(filePath, 0, stat.size);
+        } else {
+          try {
+            rawBuffer = await fsys.readFile(filePath, "buffer");
+          } catch {
+            // A host that cannot return bytes degrades to a plain text read, exactly as before —
+            // there is then simply no buffer to probe.
+            textContent = await getFile(coreEnv, filePath);
+          }
+        }
+
+        // Bounded binary probe over the head of the single read (never the whole file).
+        const probeSource = rawBuffer ?? textContent;
+        if (probeSource !== undefined && isBinaryContent(headProbeSample(probeSource))) {
+          throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
+        }
+
+        // Decode the SAME read: a range read already yielded text; a buffer read yields it now.
+        const content = textContent ?? new TextDecoder("utf-8", { ignoreBOM: true }).decode(rawBuffer!);
 
         const lines = content.split("\n");
         const totalLines = lines.length;

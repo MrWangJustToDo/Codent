@@ -51,6 +51,64 @@ function buildAcceptHeader(format: string): string {
 }
 
 // ============================================================================
+// Bounded body read
+// ============================================================================
+
+/**
+ * Read a `Response` body into one `Uint8Array`, refusing to buffer more than `maxBytes`.
+ *
+ * `content-length` is only a hint, and the tool already rejects early on it — but it is the
+ * WIRE (compressed) length, so it cannot bound a gzip/deflate bomb, a `Transfer-Encoding:
+ * chunked` body (no header at all), or a header that simply lies. Materialising the body first
+ * (`response.arrayBuffer()`) is the actual risk this guards: a hostile or broken URL — including
+ * one a prompt injection points at — could OOM the process before the size check ever ran, and
+ * under `--remote-env` / remote-session the fetch runs SERVER-side, so one bomb would take every
+ * session down. So read chunk-by-chunk and abort the moment the running total exceeds the limit.
+ *
+ * Falls back to the buffered path on hosts whose `Response` exposes no streaming body; the bound
+ * still applies there, just after the allocation.
+ */
+async function readBodyBounded(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const body = response.body;
+  if (!body) {
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength > maxBytes) {
+      throw new Error(`Response too large: ${arrayBuffer.byteLength} bytes (limit: ${maxBytes})`);
+    }
+    return new Uint8Array(arrayBuffer);
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // Stop pulling and release the connection, best-effort: a cancel failure must not mask
+        // the size verdict the caller needs.
+        await reader.cancel().catch(() => {});
+        throw new Error(`Response too large: ${total} bytes (limit: ${maxBytes})`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+// ============================================================================
 // Output Schema
 // ============================================================================
 
@@ -194,22 +252,22 @@ Usage notes:
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
 
-          // Check content length
+          // `content-length` is a cheap EARLY reject, not a real bound — it is the WIRE
+          // (compressed) length, so it misses a gzip/deflate bomb, a chunked body (no header),
+          // and a header that lies.
           const contentLengthHeader = response.headers.get("content-length");
           if (contentLengthHeader && parseInt(contentLengthHeader) > MAX_RESPONSE_SIZE) {
             throw new Error(`Response too large: ${contentLengthHeader} bytes (limit: ${MAX_RESPONSE_SIZE})`);
           }
 
-          const arrayBuffer = await response.arrayBuffer();
-          if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
-            throw new Error(`Response too large: ${arrayBuffer.byteLength} bytes (limit: ${MAX_RESPONSE_SIZE})`);
-          }
+          // The real bound: stream the body and stop the moment it exceeds the limit, instead of
+          // materialising it first (see readBodyBounded).
+          const bytes = await readBodyBounded(response, MAX_RESPONSE_SIZE);
 
           const contentType = response.headers.get("content-type") || "text/plain";
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || "text/plain";
           // fetch() follows redirects; response.url is where we actually landed.
           const finalUrl = response.url || url;
-          const bytes = new Uint8Array(arrayBuffer);
 
           // Handle images
           const isImage = mime.startsWith("image/") && mime !== "image/svg+xml";
@@ -239,7 +297,7 @@ Usage notes:
             // A PDF's bytes have no text form without extraction — decoding them as UTF-8
             // yields mojibake. Use the shared unpdf extractor (same one read_file uses).
             const pdf = await extractPdfText(bytes);
-            content = pdf ? pdf.text : `[PDF content could not be extracted (${arrayBuffer.byteLength} bytes).]`;
+            content = pdf ? pdf.text : `[PDF content could not be extracted (${bytes.byteLength} bytes).]`;
           } else {
             switch (format) {
               case "markdown":

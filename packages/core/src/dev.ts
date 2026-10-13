@@ -18,6 +18,7 @@ export { walkTree, formatAsTree } from "./agent/tools/tree-tool.js";
 // regex-based shell-ism check stayed green.
 export { createGlobTool } from "./agent/tools/glob-tool.js";
 export { createGrepTool } from "./agent/tools/grep-tool.js";
+export { createReadFileTool } from "./agent/tools/read-file-tool.js";
 export { createTreeTool } from "./agent/tools/tree-tool.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";

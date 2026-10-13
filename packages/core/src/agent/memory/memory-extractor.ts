@@ -405,6 +405,38 @@ export async function consolidateMemories(
 }
 
 /**
+ * Pure deletion decision for one consolidation pass.
+ *
+ * Returns the filenames that must be removed: every `replaces` / `deleted` entry that
+ * existed in the PRE-merge snapshot (`memories`) and was NOT written by this same pass
+ * (`writtenFilenames`).
+ *
+ * Skipping this pass's own writes is the point. Merged memories are written first, and
+ * the delete step consults `memories` — the pre-merge snapshot — so a merge naturally
+ * named after one of its sources (`alpha-note` + `beta-note` → `alpha-note`) carries
+ * `replaces: ["alpha-note.md"]`, the snapshot still lists it, and an unguarded delete
+ * removes the merged file written a moment earlier (observed: the store ends up empty).
+ * Returning the decision instead of performing I/O keeps that rule testable in isolation.
+ */
+export function applyConsolidationDecisions(
+  memories: ReadonlyArray<{ filename: string }>,
+  decisions: {
+    merged: ReadonlyArray<{ replaces: ReadonlyArray<string> }>;
+    deleted: ReadonlyArray<string>;
+  },
+  writtenFilenames: Iterable<string>
+): string[] {
+  const written = new Set(writtenFilenames);
+  const candidates = new Set<string>();
+  for (const merge of decisions.merged) {
+    for (const filename of merge.replaces) candidates.add(filename);
+  }
+  for (const filename of decisions.deleted) candidates.add(filename);
+
+  return [...candidates].filter((filename) => !written.has(filename) && memories.some((m) => m.filename === filename));
+}
+
+/**
  * Phase 1: LLM-driven consolidation using a lightweight frontmatter-only catalog.
  *
  * Returns true if any files were written or deleted. A failure (transport or
@@ -450,33 +482,27 @@ async function llmConsolidate(
   // is a failure, not "nothing to do" — there is no empty-array default here.
   const { merged, deleted } = decisions;
   let changed = false;
-  const allReplaced = new Set<string>();
-  const allDeleted = new Set<string>();
 
-  // Write merged memories
+  // Write merged memories first, tracking the filename each write actually produced
+  // (`writeMemory` derives it from a slug, so the recorded name — not `merge.name` — is
+  // what the delete step below must compare against).
+  const writtenFilenames = new Set<string>();
   for (const merge of merged) {
-    await memoryManager.writeMemory(merge.name, merge.type, merge.description, merge.body, {
+    const filename = await memoryManager.writeMemory(merge.name, merge.type, merge.description, merge.body, {
       importance: merge.importance,
       expiresAt: merge.expiresAt,
     });
-    for (const f of merge.replaces) {
-      allReplaced.add(f);
-    }
+    writtenFilenames.add(filename);
     changed = true;
   }
 
-  // Collect deletions
-  for (const f of deleted) {
-    allDeleted.add(f);
-  }
-
-  // Delete replaced and explicitly-deleted files
-  for (const filename of [...allReplaced, ...allDeleted]) {
-    const exists = memories.some((m) => m.filename === filename);
-    if (exists) {
-      await memoryManager.deleteMemory(filename);
-      changed = true;
-    }
+  // Delete replaced and explicitly-deleted files, but never one THIS pass just wrote.
+  // The delete decision consults `memories` (the pre-merge snapshot), which still lists a
+  // source the merge overwrote in place — so a merge named after one of its sources would
+  // otherwise delete its own output.
+  for (const filename of applyConsolidationDecisions(memories, { merged, deleted }, writtenFilenames)) {
+    await memoryManager.deleteMemory(filename);
+    changed = true;
   }
 
   return changed;

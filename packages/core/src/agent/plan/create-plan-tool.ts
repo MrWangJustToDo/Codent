@@ -112,7 +112,16 @@ export const createCreatePlanTool = (deps: CreatePlanToolDeps) => createPlanAuth
 export const createUpdatePlanTool = (deps: CreatePlanToolDeps) => createPlanAuthoringTool("update_plan", deps);
 
 const verificationResultSchema = z.object({
-  item: z.string().min(1).describe("Checklist item text (match the plan Verification line)"),
+  // `min(1)` alone accepts whitespace; a blank item normalizes to "" and `includes("")` is always
+  // true, which used to satisfy the whole checklist (the retro gate). Require real text here so a
+  // blank item is rejected at the schema boundary, not only by the gate.
+  item: z
+    .string()
+    .min(1)
+    .refine((value) => value.trim().length >= 3, {
+      message: "item must be at least 3 non-space characters of checklist text",
+    })
+    .describe("Checklist item text (match the plan Verification line)"),
   passed: z.boolean().describe("Whether this item passed"),
   evidence: z.string().min(1).describe("Evidence: command name, validate script, file path, or observed behavior"),
 });

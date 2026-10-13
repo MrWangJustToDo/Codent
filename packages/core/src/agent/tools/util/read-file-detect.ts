@@ -99,6 +99,31 @@ export async function detectReadFileType(
   return { type: "text", mimeType };
 }
 
+/** Bytes taken from a file's head to decide whether it is binary (see {@link headProbeSample}). */
+export const BINARY_PROBE_BYTES = 4096;
+
+/**
+ * Build a bounded head sample for {@link isBinaryContent} from either raw bytes (a
+ * `readFile(…, "buffer")` result) or a decoded string (the `readFileRange` path).
+ *
+ * Bounded on purpose: a multi-GB file must not be scanned end to end just to notice it is
+ * binary — the caller reads the file once and probes only its head. A string source is
+ * measured in UTF-16 code units and narrowed to bytes; the null byte and C0 control bytes
+ * the heuristic keys on survive UTF-8 decoding as their own code points, while decoded
+ * multibyte characters cannot be mistaken for control bytes.
+ */
+export function headProbeSample(source: Uint8Array | string, maxBytes: number = BINARY_PROBE_BYTES): Uint8Array {
+  if (typeof source !== "string") {
+    return source.subarray(0, Math.min(maxBytes, source.length));
+  }
+  const size = Math.min(maxBytes, source.length);
+  const sample = new Uint8Array(size);
+  for (let i = 0; i < size; i++) {
+    sample[i] = source.charCodeAt(i) & 0xff;
+  }
+  return sample;
+}
+
 /** True when the buffer looks like non-text binary (null bytes / high control-char ratio). */
 export function isBinaryContent(buffer: Uint8Array): boolean {
   if (buffer.length === 0) return false;

@@ -62,6 +62,51 @@ const okGate = gateCompletePlanVerification(md, [
 ]);
 assert.equal(okGate.ok, true);
 
+// ---------------------------------------------------------------------------
+// Blank / too-short items cannot satisfy the checklist
+// ---------------------------------------------------------------------------
+//
+// `normalizeVerificationItem(" ")` is `""` and `String.prototype.includes("")` is always
+// true, so a single `{ item: " " }` used to satisfy the whole checklist — the only
+// enforced gate in the plan lifecycle.
+
+const blankItem = gateCompletePlanVerification(md, [{ item: " ", passed: true, evidence: "x" }]);
+assert.equal(blankItem.ok, false, 'a blank item (" ") must not satisfy a real checklist');
+assert.match(blankItem.error, /item/i, "the blank-item error names the offending field");
+
+const shortItem = gateCompletePlanVerification(md, [{ item: "a", passed: true, evidence: "x" }]);
+assert.equal(shortItem.ok, false, "a one-character item must not satisfy a real checklist");
+
+// A too-short EXPECTED line is never matched: a plan whose only Verification line is
+// unusable yields no checklist (and the caller falls back to the legacy N/A path).
+assert.deepEqual(
+  parseVerificationItemsFromPlanMarkdown("## Plan\n\n**Verification:**\n- a\n"),
+  [],
+  "a sub-3-character checklist line is not an expected item"
+);
+assert.deepEqual(parseVerificationItemsFromText("-  \n- b\n"), [], "blank/short lines parse to nothing");
+
+// A genuine result still passes.
+const genuine = gateCompletePlanVerification(md, [
+  { item: "resume shows images", passed: true, evidence: "ui ok" },
+  { item: "run validate:media-store", passed: true, evidence: "passed" },
+]);
+assert.equal(genuine.ok, true, "genuine results still pass");
+
+// Slight wording drift is still tolerated (bounded token overlap, not substring).
+const drift = gateCompletePlanVerification(md, [
+  { item: "resume shows images correctly", passed: true, evidence: "ui ok" },
+  { item: "run validate:media-store", passed: true, evidence: "passed" },
+]);
+assert.equal(drift.ok, true, "a reworded result that overlaps the checklist item still matches");
+
+// A single overlapping token is not enough to satisfy a multi-token checklist item.
+const weak = gateCompletePlanVerification(md, [
+  { item: "images", passed: true, evidence: "x" },
+  { item: "run validate:media-store", passed: true, evidence: "passed" },
+]);
+assert.equal(weak.ok, false, "one shared token must not satisfy a multi-token checklist item");
+
 const legacy = gateCompletePlanVerification("## Plan\n\n**Goal:** old\n", [
   { item: "N/A — smoke validate", passed: true, evidence: "pnpm build:core" },
 ]);
