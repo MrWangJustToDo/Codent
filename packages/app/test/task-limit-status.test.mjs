@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { getToolStatusGlyph, isBudgetCutoffTaskPhase } from "../dist/index.mjs";
+import { getToolStatusGlyph, isBudgetCutoffTaskPhase, resolveSubagentRowDisplay } from "../dist/index.mjs";
 
 // --- phase -> cutoff decision ---
 
@@ -31,5 +31,44 @@ assert.equal(getToolStatusGlyph("output-error", true), "⚠", "cutoff styling is
 assert.equal(getToolStatusGlyph("output-denied"), "✗");
 assert.equal(getToolStatusGlyph("approval-requested"), "?", "lifecycle states carry their own glyph");
 assert.equal(getToolStatusGlyph("input-streaming"), "", "streaming renders a spinner, not a glyph");
+
+// ============================================================================
+// panel rows: a phase may only describe the subagent it belongs to
+// ============================================================================
+//
+// The phase is keyed by TASK CALL while a row is a SUBAGENT, and one call can own more than one:
+// a pre-fork discarded at a run boundary (or by a stream restart) is respawned under the same call
+// id, and both keep their catalog entry on purpose (Ctrl+T is how a discard is observable). Reading
+// the phase unconditionally made the discarded generation render "limit reached" — the outcome of
+// the generation that replaced it — while the detail view, which reads that subagent's own snapshot,
+// still said "aborted".
+
+{
+  const cutoff = resolveSubagentRowDisplay("completed", "limit");
+  assert.equal(cutoff.label, "limit reached", "a clean finish under a limit phase is a cutoff");
+  assert.equal(cutoff.icon, "⚠");
+  assert.equal(cutoff.stoppedByLimit, true);
+
+  const aborted = resolveSubagentRowDisplay("aborted", "limit");
+  assert.equal(aborted.label, "aborted", "an aborted subagent keeps its own verdict, not the call's phase");
+  assert.equal(aborted.icon, "⊘");
+  assert.equal(aborted.stoppedByLimit, false);
+
+  const errored = resolveSubagentRowDisplay("error", "limit");
+  assert.equal(errored.label, "error", "…and so does a failed one");
+  assert.equal(errored.stoppedByLimit, false);
+
+  const live = resolveSubagentRowDisplay("running", "limit");
+  assert.equal(live.label, "running", "a still-running row is not a cutoff");
+  assert.equal(live.stoppedByLimit, false);
+
+  for (const phase of ["summary", "running", undefined]) {
+    assert.equal(
+      resolveSubagentRowDisplay("completed", phase).label,
+      "completed",
+      `only the limit phase restyles a finish (phase=${phase})`
+    );
+  }
+}
 
 console.log("task-limit-status validation passed");

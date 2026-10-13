@@ -5,7 +5,7 @@ import { useSubagentPanel } from "../hooks/use-subagent-panel.js";
 import { COLORS } from "../theme/colors.js";
 import { listNavHint, pressEscToReturnHint } from "../utils/keyboard-labels.js";
 import { resolveAgentSession } from "../utils/session-resolve.js";
-import { getStatusColor, getStatusIcon, getTaskLabel, isSubagentActiveStatus } from "../utils/subagent-status.js";
+import { getTaskLabel, isSubagentActiveStatus, resolveSubagentRowDisplay } from "../utils/subagent-status.js";
 
 import type { AgentSessionSubagentSummary } from "@codent/core";
 
@@ -35,22 +35,21 @@ const SubagentTaskRow = ({ task }: { task: AgentSessionSubagentSummary }) => {
 
   // A budget cutoff leaves the subagent's own status at `completed` (the run did
   // not error or get cancelled), so the row label has to carry the distinction or
-  // it reads as a clean finish. `taskPhase` is authoritative and already on the
-  // summary the parent handed down.
+  // it reads as a clean finish. The phase is per task CALL though, and one call can
+  // own several subagents (a discarded pre-fork and its respawn), so only the row
+  // whose own status is that ambiguous `completed` may take its label from it —
+  // see `resolveSubagentRowDisplay`.
   const status = childSession?.getSnapshot().status ?? task.status;
-  const stoppedByLimit = task.taskPhase === "limit" && !isSubagentActiveStatus(status);
-  const label = stoppedByLimit ? "limit reached" : status;
-  const icon = stoppedByLimit ? "⚠" : getStatusIcon(status);
-  const iconColor = stoppedByLimit ? COLORS.warning : getStatusColor(status);
+  const row = resolveSubagentRowDisplay(status, task.taskPhase);
 
   return (
     <>
-      <Text color={iconColor} bold={isSubagentActiveStatus(status)}>
-        {icon} {getTaskLabel(task)}
+      <Text color={row.color} bold={isSubagentActiveStatus(status)}>
+        {row.icon} {getTaskLabel(task)}
       </Text>
       <Text color={COLORS.muted} dimColor>
         {" "}
-        ({label})
+        ({row.label})
       </Text>
     </>
   );
