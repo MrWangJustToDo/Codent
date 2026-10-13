@@ -116,6 +116,8 @@
     "validate:core-public-exports": "pnpm run build && node scripts/validate-core-public-exports.mjs",
     "validate:resolve-from-provider": "pnpm run build && node scripts/validate-resolve-from-provider.mjs",
     "validate:provider-model-list": "pnpm run build && node scripts/validate-provider-model-list.mjs",
+    "validate:models-dev-cache": "pnpm run build && node scripts/validate-models-dev-cache.mjs",
+    "validate:session-tail-read": "pnpm run build && node scripts/validate-session-tail-read.mjs",
     "validate:assert-async-iterable": "pnpm run build && node scripts/validate-assert-async-iterable.mjs",
     "validate:reasoning-echo": "pnpm run build && node scripts/validate-reasoning-echo.mjs",
     "validate:status-middleware": "pnpm run build && node scripts/validate-status-middleware.mjs",

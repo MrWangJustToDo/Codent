@@ -107,6 +107,24 @@ export interface CoreEnvFs {
   /** Read file as binary bytes. */
   readFile(path: string, encoding: "buffer"): Promise<Uint8Array>;
   readFile(path: string, encoding?: string): Promise<string | Uint8Array>;
+  /**
+   * Read the byte window at `[start, end)` as UTF-8 text. Optional.
+   *
+   * Exists for tail-anchored reads of append-only files whose beginning is irrelevant —
+   * `.agents/sessions/<id>.session.jsonl` is the motivating case, where `list()` needs only the
+   * newest line's `state` snapshot but the log can be tens of MB. Without a range primitive the
+   * only way to reach the last line is to read the whole file, so listing 217 MB of logs cost
+   * ~500ms per call.
+   *
+   * Semantics: a half-open byte range. A range that starts or ends mid-character is decoded
+   * leniently — the caller is expected to anchor on newlines and discard the partial edges, so
+   * slicing the text rather than throwing on invalid UTF-8 is what keeps a tail read usable when
+   * a multi-byte character straddles the boundary. Implementations clamp to the file bounds.
+   *
+   * Hosts may omit it; callers must degrade to a full {@link readFile}. The remote plane adds a
+   * round-trip cost, so a host that has it should use it precisely to avoid shipping 44 MB.
+   */
+  readFileRange?(path: string, start: number, end: number): Promise<string>;
   /** Get file/directory stats */
   stat(path: string): Promise<CoreEnvFsStat>;
   /** List direct children of a directory */

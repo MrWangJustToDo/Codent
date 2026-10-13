@@ -51,6 +51,35 @@ export function createNativeFilesystem(
       return fs.readFile(fullPath, "utf-8");
     }) as CoreEnvFs["readFile"],
 
+    /**
+     * Byte-window read, so a tail-anchored consumer never pulls the whole file.
+     *
+     * A single `read()` is not guaranteed to fill the buffer (the kernel may return short), so
+     * this loops until the window is satisfied or EOF. Decoding is lenient on purpose: the edges
+     * of a range can split a multi-byte character, and the caller discards partial lines anyway.
+     */
+    readFileRange: async (filePath: string, start: number, end: number) => {
+      const fullPath = resolvePath(filePath);
+      const from = Math.max(0, Math.floor(start));
+      const length = Math.max(0, Math.floor(end) - from);
+      if (length === 0) return "";
+
+      let handle: fsSync.promises.FileHandle | null = null;
+      try {
+        handle = await fs.open(fullPath, "r");
+        const buffer = Buffer.allocUnsafe(length);
+        let filled = 0;
+        while (filled < length) {
+          const { bytesRead } = await handle.read(buffer, filled, length - filled, from + filled);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        return buffer.subarray(0, filled).toString("utf-8");
+      } finally {
+        await handle?.close().catch(() => undefined);
+      }
+    },
+
     stat: async (filePath: string) => {
       const fullPath = resolvePath(filePath);
       const stats = await fs.stat(fullPath);

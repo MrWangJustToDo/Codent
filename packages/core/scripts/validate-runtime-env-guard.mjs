@@ -25,6 +25,7 @@ const SCAN_DIRS = [
   "agent/persistence",
   "agent/mcp",
   "managers",
+  "provider",
   "agent/prompt",
   "agent/turn-context",
   "agent/plan",
@@ -49,6 +50,10 @@ const ALLOWLIST = new Map([
   [
     "agent/extension/runner.ts",
     "resolveCoreEnv()'s final fallback: injected getCoreEnv wins, then a hasCoreEnv()-guarded ambient read, then a non-throwing stub for standalone runners",
+  ],
+  [
+    "provider/models-dev.ts",
+    "process-global models.dev metadata (identical across workspaces; the in-memory memo is global by design) and no runtime is in scope. The disk cache path is workspace-scoped, so it follows the AMBIENT root — the multi-runtime caveat is documented in models-dev.ts and the design inventory.",
   ],
 ]);
 
@@ -91,8 +96,9 @@ for (const rel of SCAN_DIRS) {
         // reported — the blind spot that hid the unmigrated call sites.
         const isFallback = /\?\?\s*$/.test(before) || /:[\s\w.<>[\],|]+\s*=\s*$/.test(before);
         if (isFallback) continue;
-        // A method *named* `getEnv` (e.g. `getEnv(): ResolvedCoreEnv {`) is not the registry call.
-        if (/^getEnv\s*\(\s*\)\s*:/.test(line.slice(m.index))) continue;
+        // A method *named* `getEnv` / `getModelProvider` (e.g. `getEnv(): ResolvedCoreEnv {`,
+        // the registry's own `getModelProvider(): ModelProvider {`) is not a registry call.
+        if (/^get(?:Env|ModelProvider)\s*\(\s*\)\s*:/.test(line.slice(m.index))) continue;
         if (allowReason) continue;
         offenders.push(`${relPath}:${i + 1}  ${line.trim()}`);
       }

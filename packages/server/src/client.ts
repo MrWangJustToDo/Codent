@@ -102,6 +102,19 @@ function createRemoteFs(client: Client): CoreEnvFs {
       return data.content;
     }) as CoreEnvFs["readFile"],
 
+    /**
+     * Byte-window read over the wire, so a tail-anchored consumer does not download the file.
+     *
+     * This is the difference between `/resume` costing a few KB and costing every session log
+     * whole (217 MB in this workspace): `list()` only needs each log's last line, and without
+     * this the client had no way to ask for less than all of it.
+     */
+    readFileRange: async (path: string, start: number, end: number) => {
+      const res = await client.fs.readFile.$post({ json: { path, start, end } });
+      const data = await unwrap<{ content: string }>(res);
+      return data.content;
+    },
+
     stat: async (path: string): Promise<CoreEnvFsStat> => {
       const res = await client.fs.stat.$post({ json: { path } });
       const data = await unwrap<{ isDirectory: boolean; isFile: boolean; size: number; mtime: string }>(res);

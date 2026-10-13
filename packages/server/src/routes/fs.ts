@@ -44,15 +44,35 @@ export const fsRoutes = new Hono()
         path: z.string(),
         /** `"base64"` / `"buffer"` → binary as base64 string; otherwise UTF-8 text. */
         encoding: z.enum(["utf8", "base64", "buffer"]).optional(),
+        /**
+         * Optional byte window `[start, end)` — mirrors the optional `CoreEnvFs.readFileRange`.
+         *
+         * Without this a remote `list()` has to ship every session log whole (217 MB in this
+         * workspace's own `.agents/sessions/`) just to find each file's last line. Both bounds
+         * must be present together; text encoding only, since a byte window on a binary payload
+         * has no consumer.
+         */
+        start: z.number().int().nonnegative().optional(),
+        end: z.number().int().nonnegative().optional(),
       })
     ),
     async (c) => {
       try {
-        const { path, encoding } = c.req.valid("json");
+        const { path, encoding, start, end } = c.req.valid("json");
         const env = getServerEnv();
         if (encoding === "base64" || encoding === "buffer") {
           const bytes = await env.fs.readFile(path, "buffer");
           return c.json({ content: env.base64Encode(bytes), encoding: "base64" as const });
+        }
+        if (start !== undefined && end !== undefined) {
+          // Prefer a real range read; on a server env without it (a remote env chained through
+          // this server) fall back to slicing a full read. Slice BYTES (a buffer), not UTF-16
+          // code units of a string, or a multi-byte character before `start` shifts the window.
+          if (env.fs.readFileRange) {
+            return c.json({ content: await env.fs.readFileRange(path, start, end) });
+          }
+          const bytes = await env.fs.readFile(path, "buffer");
+          return c.json({ content: new TextDecoder().decode(bytes.subarray(start, end)) });
         }
         const content = await env.fs.readFile(path);
         return c.json({ content });

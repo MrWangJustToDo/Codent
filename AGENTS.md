@@ -93,7 +93,7 @@ interface CoreEnv {
   exec(cmd, opts?): Promise<CoreEnvExecResult>;
   fetch(input, init?): Promise<Response>;
   destroy?(): Promise<void>;       // Lifecycle cleanup
-  // Optional: byteLength, base64Encode/Decode, getMimeType, createMCPStdioTransport,
+  // Optional: byteLength, base64Encode/Decode, getMimeType, readFileRange, createMCPStdioTransport,
   //           createLspConnection, createIsolateDriver (code-mode TS sandbox backend)
 }
 ```
@@ -117,6 +117,8 @@ hasCoreEnv();           // Check if registered
 ### ModelProvider — LLM plane (orthogonal to CoreEnv)
 
 LLM credentials are **not** part of CoreEnv. Hosts register a `ModelProvider` separately so local/remote workspace and local/remote keys combine freely. The provider is carried on the runtime: pass it to `CodentAgent.create({ provider })` (or `{ direct }`), and model resolution reads it back through the runtime — `resolveModelConfigFromProvider(input, provider?)` takes the runtime's provider and only falls back to the ambient registry when none is passed. `CodentAgent.getModelProvider()` exposes the runtime's provider (surfaced to the app as the `AgentRuntimePort` it consumes) so `createAgentSessionFromConfig` resolves per runtime (remote-session runtimes omit it).
+
+**models.dev is the one documented ambient-env exception on the run path.** `provider/models-dev.ts` reads `getEnv()` (not a runtime-injected env): the dataset is identical across workspaces, so the in-memory memo is process-global and there is no runtime in scope. It is **allowlisted** in `validate:runtime-env-guard` (which now scans `provider/`), so the exception is a recorded decision, not a blind spot. Consequence: its disk cache (`<root>/.agents/cache/models-dev.json`) is workspace-scoped and follows the **ambient** root — harmless for the single-runtime hosts (CLI / ACP / im-bridge), and the one place a second runtime in a process would bind to the last-registered env. The cache lives on the CoreEnv plane and is orthogonal to the provider plane: with `--remote-provider` and a local workspace, models.dev is fetched/cached **locally**; the provider server's `/api/provider/info` carries only the connection (`mode`/`style`/`model`/`basePath`), no metadata. The lookup is best-effort (`resolveModelConfig` catches it), so a models.dev failure just leaves `modelInfo` unset.
 
 ```typescript
 import { CodentAgent, createDirectModelProvider } from "@codent/core";

@@ -25,6 +25,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   MODEL_CAPABILITIES,
@@ -180,7 +181,14 @@ check("no capability is granted twice", () => {
 // 3. Corpus checks against the real cached metadata (skipped when absent)
 // ============================================================================
 
-const cachePath = path.resolve(process.cwd(), "../../.agents/cache/models-dev.json");
+// Resolved from THIS file, not `process.cwd()`: the previous `../../.agents/...` was only correct
+// when cwd happened to be `packages/core`. Under `pnpm --filter @codent/core run …` (cwd =
+// packages/core) it resolved to `/home/.agents/...` — a path that never exists — so the corpus
+// checks silently reported "skipped" while the file was right there in the workspace. A validator
+// that skips itself is worse than one that fails: the only failure mode it had left was the
+// hardcoded count, which is why that count was the only thing anyone ever saw break.
+const cachePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.agents/cache/models-dev.json");
+console.log(`  corpus source: ${cachePath} (exists=${fs.existsSync(cachePath)})`);
 
 if (!fs.existsSync(cachePath)) {
   console.log("  skip corpus checks (no .agents/cache/models-dev.json — run the CLI once to populate)");
@@ -327,7 +335,14 @@ if (!fs.existsSync(cachePath)) {
       if (resolved !== expected) wrong.push(`${model.id}: got ${resolved}, expected ${expected}`);
     }
     assert.deepEqual(wrong.slice(0, 5), [], `${wrong.length} entr(ies) resolved the wrong echo field`);
-    assert.equal(details, 15, "the corpus is expected to name reasoning_details for exactly 15 entries");
+    // Non-vacuity WITHOUT pinning the count: entries naming `reasoning_details` are upstream data
+    // that grows over time (this file's copy has gone 15 → 57), so an exact total rots the
+    // validator on a data refresh rather than on a code change. The invariant is the mapping
+    // (`wrong` above); all this needs to prove is that the branch was actually exercised.
+    assert.ok(
+      details > 0,
+      "the corpus must contain at least one entry naming reasoning_details, or this check is vacuous"
+    );
   });
 }
 

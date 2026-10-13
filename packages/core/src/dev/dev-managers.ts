@@ -76,7 +76,13 @@ export { createPromptCacheMiddleware } from "../managers/middleware/prompt-cache
 export { buildAgentRunner } from "../managers/run-agent.js";
 
 export { deriveCapabilities, MODELS_DEV_COST_FIELDS, MODELS_DEV_MODEL_FIELDS } from "../provider/models-dev.js";
-export { lookupModelFromModelsDev, parseModelsDevModel, resolveReasoningEchoField, shouldEchoReasoning } from "../provider/models-dev.js";
+export {
+  fetchModelsDev,
+  lookupModelFromModelsDev,
+  parseModelsDevModel,
+  resolveReasoningEchoField,
+  shouldEchoReasoning,
+} from "../provider/models-dev.js";
 export { MODEL_CAPABILITIES } from "../models/types.js";
 
 // Drives `validate:capability-unknown-vs-none`: the `undefined` (unknown) vs `[]` (declared

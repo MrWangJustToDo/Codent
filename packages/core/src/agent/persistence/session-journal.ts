@@ -63,16 +63,85 @@ export async function readLog(fs: CoreEnvFs, path: string): Promise<SessionLogLi
 }
 
 /**
+ * How far back from the end to look for the newest `state` line when a range read is available.
+ *
+ * A log line carries one message plus a full state snapshot, so the newest line is large but
+ * bounded — this window covers it with a wide margin (the largest observed line here is well
+ * under 1 MB). Failing to find a state line inside it is not an error: {@link readLastState} falls
+ * back to the full read, so the cost of a too-small window is one wasted read, never a wrong
+ * answer.
+ */
+const STATE_TAIL_WINDOW_BYTES = 512 * 1024;
+
+/**
  * Read only the newest line's `state` snapshot.
  *
- * The file has to be read in full (the env fs has no seek/partial read) and the
- * lines split, but only the newest line is JSON-parsed: the scan walks backwards
- * and returns at the first parseable line, skipping a torn trailing line. Used by
- * `list()` so listing long sessions never folds (or parses) their message bodies.
+ * Only the newest line is JSON-parsed: the scan walks backwards and returns at the first parseable
+ * line, so a torn trailing line (crash mid-append) is skipped rather than aborting the read.
+ *
+ * Two paths, and the fast one exists because the slow one is on `list()`'s hot path:
+ *
+ *   - RANGE READ (when the env fs provides `readFileRange`): read a window off the END of the file
+ *     and scan it backwards. Two questions decide whether the window is authoritative:
+ *       (a) is the window free of fragments? Either it reaches byte 0 (nothing before it), or its
+ *           first line is complete (a newline is present). A window with NO newline may be a
+ *           fragment of one huge line, so the full read covers it.
+ *       (b) did the window actually contain a state line? A whole first line proves (a), NOT this
+ *           — a log can carry message lines after its last state line. A window that yields no
+ *           state falls through to the full read. Returning null there is the wrong answer that
+ *           matters: `list()` would silently drop that session.
+ *   - FULL READ (fallback): the original behaviour. Always correct, and the only option for hosts
+ *     without `readFileRange` (WebContainer, remote), and the recovery path whenever (a) or (b)
+ *     fails above.
+ *
+ * The fallback is load-bearing, not decorative: `list()`'s contract is "every session", so a tail
+ * read that missed a state line would silently DROP a session from the picker. Correctness is
+ * carried by `scanBackwardsForState` being the single interpretation of both paths — the fast path
+ * and the slow path cannot disagree about what the last state is, because they run the same
+ * scanner. Validator case 5 proves the fallback is reachable and necessary: dropping it (returning
+ * the window's verdict regardless) makes the read report ZERO sessions.
  */
 export async function readLastState(fs: CoreEnvFs, path: string): Promise<SessionStateFields | null> {
   if (!(await fs.exists(path))) return null;
+
+  if (fs.readFileRange) {
+    try {
+      const stat = await fs.stat(path);
+      const size = stat?.size ?? 0;
+      if (size > 0) {
+        const start = Math.max(0, size - STATE_TAIL_WINDOW_BYTES);
+        const tail = await fs.readFileRange(path, start, size);
+        // `start === 0` means the window IS the whole file, so its verdict is final.
+        if (start === 0) return scanBackwardsForState(tail);
+        // Otherwise the window is usable only when its first line is whole (there is a newline in
+        // it). The state line is normally the newest one, so a hit here is the common case.
+        if (tail.includes("\n")) {
+          const found = scanBackwardsForState(tail);
+          if (found) return found;
+          // Nothing in the window. A whole first line proves the window is not a fragment, but it
+          // does NOT prove the state line is inside it — logs whose last state line is followed by
+          // more message lines exist. Returning null here would silently DROP the session from
+          // `list()`, so fall through to the full read instead.
+        }
+      }
+    } catch {
+      // A range read can fail for reasons that say nothing about the file (a host that advertises
+      // the primitive but not for this path, a partial window). The full read below is the answer.
+    }
+  }
+
   const content = await fs.readFile(path);
+  return scanBackwardsForState(content);
+}
+
+/**
+ * Walk lines backwards, newest first, returning the first line that yields a `state` snapshot.
+ *
+ * A leading partial line is harmless: the walk starts at the END, so the only line it can return
+ * is one it fully sees (the final line's terminator is the end of the input). Shared by both paths
+ * in {@link readLastState} so the fast and slow reads cannot drift.
+ */
+function scanBackwardsForState(content: string): SessionStateFields | null {
   const rawLines = content.split("\n");
   for (let i = rawLines.length - 1; i >= 0; i--) {
     const parsed = parseLine(rawLines[i]!);
@@ -123,24 +192,77 @@ export interface FoldedSessionLog {
 }
 
 /**
+ * How far from the START to read when hunting the first user message.
+ *
+ * The opposite anchor from {@link readLastState}'s tail window, for the opposite reason: messages
+ * are appended in order, so the first user message is near the TOP. Task logs get huge (44 MB here)
+ * while the answer almost always lands in the opening lines, so the whole-file read was paying tens
+ * of MB for a few KB of relevance.
+ *
+ * Hitting the window's end without a verdict is NOT "no user message" — it only means the answer is
+ * further in — so that case falls back to the full read. The bias is deliberate: a false "empty"
+ * would let `getLatestEmpty()` reuse a session that has history.
+ */
+const USER_MESSAGE_HEAD_WINDOW_BYTES = 256 * 1024;
+
+/**
  * Whether the log contains any user message, parsed from the START and stopping at
  * the first hit: the messages are appended in order, so the first user message is
  * near the top and the common (non-empty) case parses a single line. A session with
  * no user message must have its (short) log walked entirely. Used by
  * `getLatestEmpty()` so it does not fold every message of every candidate.
  *
+ * A head window keeps that promise on a large log: with `readFileRange` available the opening
+ * chunk is read instead of the whole file, and only a window that reaches the end of the file
+ * without a verdict is trusted. Everything else — no range primitive, the file larger than the
+ * window, a window ending mid-line — falls back to the full read rather than guessing.
+ *
  * Returns `null` when the log is missing or holds no parseable line.
  */
 export async function hasUserMessage(fs: CoreEnvFs, path: string): Promise<boolean | null> {
   if (!(await fs.exists(path))) return null;
+
+  if (fs.readFileRange) {
+    try {
+      const stat = await fs.stat(path);
+      const size = stat?.size ?? 0;
+      if (size > 0) {
+        const end = Math.min(size, USER_MESSAGE_HEAD_WINDOW_BYTES);
+        const head = await fs.readFileRange(path, 0, end);
+        // A hit is final. A window that reaches EOF and shows no user message is ALSO final
+        // (there is no more file to look at), which is what keeps a short empty session cheap.
+        const verdict = scanForwardForUserMessage(head, { complete: end >= size });
+        if (verdict !== null) return verdict;
+      }
+    } catch {
+      // Range read unavailable for this path; the full read below is the answer.
+    }
+  }
+
   const content = await fs.readFile(path);
+  return scanForwardForUserMessage(content, { complete: true });
+}
+
+/**
+ * Walk lines from the START for a user message, returning as soon as one is found.
+ *
+ * @param opts.complete Whether `content` reaches the end of the file. When it does not, the final
+ *   entry may be a truncated line, so it is not parsed — and reaching the end without a hit is
+ *   `null` ("not determinable here") rather than `false` ("no user message"), which is what sends
+ *   the caller to the full read instead of reporting a false empty.
+ */
+function scanForwardForUserMessage(content: string, { complete }: { complete: boolean }): boolean | null {
+  const rawLines = content.split("\n");
+  const limit = complete ? rawLines.length : rawLines.length - 1;
   let sawLine = false;
-  for (const raw of content.split("\n")) {
-    const parsed = parseLine(raw);
+  for (let i = 0; i < limit; i++) {
+    const parsed = parseLine(rawLines[i]!);
     if (!parsed) continue;
     sawLine = true;
     if (parsed.message?.role === "user") return true;
   }
+  // An incomplete tail that has not produced a verdict yet is inconclusive.
+  if (!complete) return null;
   return sawLine ? false : null;
 }
 
