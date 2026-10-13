@@ -45,7 +45,7 @@ const CHUNK = 64 * 1024;
  * failure the line-aligned chunker exists to avoid. `fs.stat` reports `size`; both read primitives
  * record what they were asked for, so a test can assert the read shape (not just the output).
  */
-function makeEnv({ content = "", size, mimeType = false, withRange = true }) {
+function makeEnv({ content = "", size, mimeType = false, withRange = true, bytesUnavailable = false }) {
   const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content), "utf8");
   const reportedSize = size ?? bytes.length;
   const log = { readFileCalls: 0, rangeCalls: 0, rangeRequests: [], bytesServed: 0, resizeCalls: 0 };
@@ -56,6 +56,10 @@ function makeEnv({ content = "", size, mimeType = false, withRange = true }) {
     readdir: async () => [],
     readFile: async (_path, encoding) => {
       log.readFileCalls++;
+      // A text-only host cannot hand back bytes. The tool catches that and re-reads through
+      // `getFile` (no encoding), which is the only way the STRING probe branch is reached on the
+      // fallback path — so the option exists to pin that branch, not to model a real host shape.
+      if (encoding === "buffer" && bytesUnavailable) throw new Error("bytes unavailable");
       log.bytesServed += bytes.length;
       return encoding === "buffer" ? bytes : bytes.toString("utf8");
     },
@@ -325,6 +329,51 @@ const read = (env, input) => tool.execute(input, { toolCallId: "t", context: { c
     }
   }
   console.log(`ok  ${legalText.length} multi-byte text shapes read on both paths (no false binary)`);
+}
+
+// ---------------------------------------------------------------------------
+// (9b) The string probe branch is reached on the FALLBACK path too
+//
+// The cases above exercise it through the streamed head window; the other way in is a host that
+// cannot return bytes (`readFile(…, "buffer")` throws → `getFile` → a decoded string). Same
+// branch, different source, so a regression on one is invisible to the other.
+// ---------------------------------------------------------------------------
+{
+  const { env, log } = makeEnv({
+    content: "src/\n├── a.ts\n└── b.ts\n",
+    withRange: false,
+    bytesUnavailable: true,
+  });
+  const out = await read(env, { path: "tree.txt" });
+  assert.equal(out.type, "text", "multi-byte text on a bytes-less host must still read as text");
+  assert.equal(log.rangeCalls, 0, "a host without range reads takes the whole-file fallback");
+  assert.equal(log.readFileCalls, 2, "the failed byte read is followed by the text read");
+
+  const { env: nulEnv } = makeEnv({ content: "\u0000bin", withRange: false, bytesUnavailable: true });
+  await assert.rejects(() => read(nulEnv, { path: "blob.txt" }), /appears to be binary/);
+  console.log("ok  a bytes-less host reads multi-byte text and still rejects a NUL");
+}
+
+// ---------------------------------------------------------------------------
+// (9c) The probe reaches past a short first piece
+//
+// The first window's LAST newline is at byte 1, so the first line-aligned piece is 2 bytes and no
+// newline follows it. Probing only that piece inspects 2 bytes and lets the NULs a little further
+// into the same window pass as text; the probe must cover `BINARY_PROBE_BYTES` regardless of where
+// the piece boundary fell.
+// ---------------------------------------------------------------------------
+{
+  const content = Buffer.alloc(65536, 0x41); // 'A' — a full window with no newline after byte 1
+  content.write("a\n", 0, "utf8");
+  content.fill(0x00, 100, 200);
+  const { env, log } = makeEnv({ content });
+  await assert.rejects(
+    () => read(env, { path: "sneaky.txt" }),
+    /appears to be binary/,
+    "a NUL past a 2-byte first piece is still found"
+  );
+  assert.equal(log.rangeCalls, 2, "the short piece is followed by a second window before probing");
+  console.log("ok  the binary probe reaches past a short first piece");
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { defineServerTool } from "./runtime/define-tool.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
 import { formatReadFileToolResult } from "./util/format-read-file-result.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
-import { detectReadFileType, headProbeSample, isBinaryContent } from "./util/read-file-detect.js";
+import { BINARY_PROBE_BYTES, detectReadFileType, headProbeSample, isBinaryContent } from "./util/read-file-detect.js";
 import { scanTextWindow } from "./util/read-file-window.js";
 import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -136,9 +136,9 @@ async function* readTextPieces(fsys: CoreEnvFs, filePath: string): AsyncGenerato
   }
 }
 
-/** Re-yield the head already consumed for the binary probe, then the rest of the read. */
-async function* withHead(head: IteratorResult<string>, rest: AsyncIterator<string>): AsyncGenerator<string> {
-  if (!head.done) yield head.value;
+/** Re-yield the pieces already consumed for the binary probe, then the rest of the read. */
+async function* withPrefix(consumed: string[], rest: AsyncIterator<string>): AsyncGenerator<string> {
+  for (const piece of consumed) yield piece;
   for (;;) {
     const next = await rest.next();
     if (next.done) return;
@@ -418,11 +418,24 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
         // (A host without a byte-window read falls through to the whole-file path below.)
         if (fsys.readFileRange) {
           const pieces = readTextPieces(fsys, filePath);
-          const head = await pieces.next();
-          if (!head.done && isBinaryContent(headProbeSample(head.value))) {
+          // Probe the file's first `BINARY_PROBE_BYTES` BYTES, exactly as the whole-file path does:
+          // where a piece happens to end must not decide how much of the head is inspected. A
+          // line-aligned piece normally IS the whole first window (any window whose last newline is
+          // late), but a window whose last newline sits early yields a short piece — and the bytes
+          // just past it would otherwise go unexamined. The loop is bounded in practice: a window
+          // with no newline at all yields all `READ_CHUNK_BYTES`, and EOF ends it.
+          const probed: string[] = [];
+          let probePrefix = "";
+          while (utf8ByteLength(probePrefix) < BINARY_PROBE_BYTES) {
+            const next = await pieces.next();
+            if (next.done) break;
+            probed.push(next.value);
+            probePrefix += next.value;
+          }
+          if (isBinaryContent(headProbeSample(probePrefix))) {
             throw new Error(`File appears to be binary: ${filePath}. Cannot read binary file content.`);
           }
-          scanned = await scanTextWindow(withHead(head, pieces), {
+          scanned = await scanTextWindow(withPrefix(probed, pieces), {
             offset: startLine,
             limit: effectiveLimit,
             maxLineChars: MAX_LINE_CHARS,

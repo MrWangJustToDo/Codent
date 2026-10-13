@@ -15,6 +15,11 @@
 > **修复状态（2026-10-13）**：高 6 项已全部修复，并各配 validator（安全两项另开 OpenSpec change `harden-tool-safety-boundaries`）。中 / 低未处理。
 > 已落地：① 搜索路径包含 + `cwd`（`validate:search-path-containment`）· ② 只读白名单收窄（`validate:command-safety-readonly`）· 软链接 `realpath` 约束（`validate:fs-symlink-containment`）· ③ `read_file` 先判大小（`validate:read-file-size`）· ④ `webfetch` 流式限长（`validate:webfetch-size`）· ⑤ `complete_plan` 空白项闸门（`validate:plan-verification`）· ⑥ 记忆合并误删（`validate:memory-merge-selfdelete`）。
 
+> **后续波次（同日）**：③ 的修复进一步收紧 —— `read_file` 文本分支改为**流式字节窗口**（超限文本不再报错，属行为变更，output schema 不变，
+> `validate:read-file-size`）；图片分支在**解码前**按声明尺寸拦截（新增 `MAX_IMAGE_PIXELS` / `MAX_IMAGE_DIMENSION`，并补上 GIF 尺寸解析）；
+> 体积上限统一收进 `tools/util/output-limits.ts`，重复 helper 归并（`utils/bytes.ts`、`tools/util/bounded-body.ts`、`isTimeoutError` 移入 `runtime-types/abort.ts`）。
+> 复审这批判修复时发现并已修掉一个回归，见文末「复审发现的回归」。
+
 ---
 
 ## 高（已核实源码）
@@ -159,6 +164,27 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - cancel 分支：`run-command-tool` 取消时 `durationMs: 0`、只回一个 `cachedOutputPath`（另一个缓存文件成孤儿）。
 - `presentation/output-format.ts:290` 对**任何**带 cancel 标记的输出都短路成 `TOOL_CANCELLED_MESSAGE`（注释说只该对 synthetic fallback），`run_command` 的 partial stdout 会被隐藏。
 - `run-command-tool` 的 `RUN_COMMAND_TIMEOUT_MS` 每次前台调用都 `await coreEnv.getEnv()`（remote 时一次 HTTP）。
+
+---
+
+## 复审发现的回归（修复过程中引入）
+
+### ⑦ `read_file` 流式化把「已解码文本」喂给字节探针 → 多字节文本被判成 binary `[已核实 · 已修复]`
+- 链路：`tools/util/read-file-detect.ts` 的 `headProbeSample` **字符串分支**用 `charCodeAt(i) & 0xff` 逐个窄化码元（③ 的修复 `7568c385` 引入）；
+  `27422970` 让**流式文本路径**把 `readTextPieces` 的第一段（**已解码**字符串，`read-file-tool.ts:422`）交给它 ——
+  于是原本只在"宿主不能返回字节"降级路径上可达的 bug 变成了正常路径：每次流式读都走它。
+- 影响：`& 0xff` 之后落进 C0 的码点被当成控制字节，其中两个直接是 **NUL** —— `─` U+2500 → `0x00`、`一` U+4E00 → `0x00`，
+  而 `isBinaryContent` 见到第一个 NUL 就 `return true`。任何含 `─` 或 `一` 的文本（树形图、中文文档、本仓库自己的文档与日志）
+  都会被拒成 `File appears to be binary`，即**流式读对这类文件全线不可用**。
+- 修：字符串分支改为**真实 UTF-8 重编码**（`TextEncoder`），不再窄化。启发式实际只看两类信号（NUL / C0 占比，
+  `byte < 9 || (byte > 13 && byte < 32)`），二者在"解码 → 重编码"下精确往返（U+0000 → 0x00、U+0001..U+001F → 原字节；≥ 0x20 从不参与判定），
+  所以真阳性不受影响；重编码后样本也正好是文件前 `BINARY_PROBE_BYTES` **字节**（旧代码按 UTF-16 码元计数）。
+- 同批修掉的相邻缺陷：探针原先只看**第一段**，而段尾切在窗口最后一个换行处 —— 首段很短时只看几十字节，
+  4096 字节之后的 NUL 会被放过（旧的整文件路径探的是前 4096 字节）。现改为**按字节累积到 `BINARY_PROBE_BYTES` 再探**
+  （循环有界：整窗无换行会一次给满 64 KB，EOF 结束），并把 `withHead` 泛化为 `withPrefix` 以回放已消费的段。
+- 验证：`validate:read-file-size` 新增 —— 5 种多字节文本（框线树 / 中文 / 树+中文 / 重音与破折号 / emoji）在**两条读路径**上都必须读成 `text`；
+  NUL 在两条路径上都必须被拒；「宿主不能返回字节」的**字符串分支**单独钉一条；「首段只有 2 字节、NUL 在其后」单独钉一条
+  （该用例在修复前报 `Missing expected rejection`，非空断言）。
 
 ---
 
