@@ -22,10 +22,10 @@
 
 > **复审状态（2026-10-14）**：对「中 / 低」全部条目**逐条对照当前源码**复核了一遍（不是重读原文；三组并行复核 + 关键项自查），结论就地标在每条前面：`【未修】` / `【已修 · <commit>】` / `【部分修】` / `【不成立】`。口径：只看当前源码是否仍有该行为，行号一律重新定位。
 >
-> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）。
+> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **33 条未修**（另 2 条 `【部分修】`、2 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **32 条未修**（另 2 条 `【部分修】`、3 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -118,7 +118,8 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 
 ### 搜索 / 展示
 - 【未修】 `grep-tool.ts`：`--max-count` 是**每文件**上限，`-C context` 的上下文行不计入，`truncateLines(stdout, fetchCount)` 会只留上下文行、丢掉真正匹配；`output_mode:"count"` 单文件（裸数字无 `path:`）解析成 `0`；搜索工具**忽略 abort 信号**（`exec-args.ts` 无 `signal`）。
-- 【未修】 `list/glob/grep/tree` 的 `toModelOutput` 缺 `read_file` 的 `ContentPart[]` 幂等 guard（`format-read-file-result.ts:20` 有）→ 会话恢复 / 重跑后对数组输出取 `.matches/.tree/.entries` 得 `undefined`，wire 上出现 `"undefined"`。
+- 【已修 · `de771a4f`】 `list/glob/grep/tree` 的 `toModelOutput` 缺 `read_file` 的 `ContentPart[]` 幂等 guard（`format-read-file-result.ts:20` 有）→ 会话恢复 / 重跑后对数组输出取 `.matches/.tree/.entries` 得 `undefined`，wire 上出现 `"undefined"`。
+  **复核修正**：实际是全部 **24 个声明站点**都缺（含 `run_command` / `webfetch` / `websearch` / `session_read` / `task` / `todo` / plan / skills / memory），其中 `session_search` 会直接**抛异常**、`load_skill`/`memory_read` 返回 `undefined`。触发路径的成文依据在 `mcp/prefer-multimodal-content.ts:101-109`（TanStack 把**数组**结果 `JSON.stringify` 成 `ContentPart[]` 文本后交给投影）。
 - 【未修】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。
 
 ### shell
@@ -222,7 +223,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 > **2026-10-14 更新**：下面的第 1、2 批**已全部完成**（见「修复状态」与「复审状态」）。第 3、4 批仍然适用，只是范围缩小到标注为 `【未修】` 的条目。剩余项按这个顺序推进：
 
 0. ~~**先收「假绿」**：⑧ 的 cancel guard~~ —— **已完成**（`fce0eb7f`：guard 与两条断言一起恢复，并补了 `run_command` 那半）。
-1. **模型可见的正确性**（都是小改动、各能配 validator）：`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard（恢复会话后 wire 上出现 `"undefined"`）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
+1. **模型可见的正确性**（都是小改动、各能配 validator）：~~`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard~~（已完成 · `de771a4f`，实际覆盖 24 个声明站点）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
 2. **资源与泄漏**：运行中的 job 无上限 · `file-mutation-queue` 的 Map 不回收 · 被丢弃的 pre-fork 只 abort 未 `destroyAgent` · `lsp-manager` 的重启 timer 不随 `shutdownAll` 清理 · `task-prefork.start()` 恒 `true` 导致的监听/controller 泄漏。
 3. **契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时（server 挂住会永久阻塞该次运行，Esc 也解不开）· plan-mode 的「只读」可被内置 `code_rewrite` 绕过（应改为按 tool 的 `present.category` 派生，而不是硬编码 4 个名字）。
 4. **其余中 / 低**：写 / 编辑一致性（`preview-edit` 与 `edit_file` 共用同一套匹配、CRLF 归一化、`delete_file` 入队、`write_file` 的 temp+rename 与真实字节数）· `run_command` 缓存全文（`cachedOutputPath` 头部不可恢复）· `command-job-registry` 的状态判定与 `kill_command` 的 `logPath` · web 的域回退与超时叠加 · code-mode 的 console 补丁重入 · memory / skills 的字节与转义 · 低项收尾（展示换行、行数统计、`todo` 回传原值等）。
