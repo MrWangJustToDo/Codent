@@ -22,10 +22,10 @@
 
 > **复审状态（2026-10-14）**：对「中 / 低」全部条目**逐条对照当前源码**复核了一遍（不是重读原文；三组并行复核 + 关键项自查），结论就地标在每条前面：`【未修】` / `【已修 · <commit>】` / `【部分修】` / `【不成立】`。口径：只看当前源码是否仍有该行为，行号一律重新定位。
 >
-> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）。
+> - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **32 条未修**（另 2 条 `【部分修】`、3 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **29 条未修**（另 2 条 `【部分修】`、6 条已修）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -117,10 +117,10 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【未修】 `write-file-tool.ts`：parent 目录判断用 `lastIndexOf("/")`（POSIX-only，漏 Windows 分隔符）；`bytesWritten: content.length` 是 UTF-16 码元不是字节；无 temp+rename（`CoreEnvFs.rename` 已提供该 seam，`session-journal` 已用）。
 
 ### 搜索 / 展示
-- 【未修】 `grep-tool.ts`：`--max-count` 是**每文件**上限，`-C context` 的上下文行不计入，`truncateLines(stdout, fetchCount)` 会只留上下文行、丢掉真正匹配；`output_mode:"count"` 单文件（裸数字无 `path:`）解析成 `0`；搜索工具**忽略 abort 信号**（`exec-args.ts` 无 `signal`）。
+- 【部分修 · `8b244a0e`】 `grep-tool.ts`：`--max-count` 是**每文件**上限，`-C context` 的上下文行不计入，`truncateLines(stdout, fetchCount)` 会只留上下文行、丢掉真正匹配；~~`output_mode:"count"` 单文件（裸数字无 `path:`）解析成 `0`~~（已修：单文件裸数字按 `defaultFile` 归属，实测还原调用点即 `[{"file":"5","content":"Count: 0"}]`；**顺带发现**描述写的是 `output_mode` 而 schema 键是 `outputMode`，未知键被静默丢弃 → 「要 count」实际跑 content，同一处修掉）；搜索工具**忽略 abort 信号**（`exec-args.ts` 无 `signal`）仍未修。
 - 【已修 · `de771a4f`】 `list/glob/grep/tree` 的 `toModelOutput` 缺 `read_file` 的 `ContentPart[]` 幂等 guard（`format-read-file-result.ts:20` 有）→ 会话恢复 / 重跑后对数组输出取 `.matches/.tree/.entries` 得 `undefined`，wire 上出现 `"undefined"`。
   **复核修正**：实际是全部 **24 个声明站点**都缺（含 `run_command` / `webfetch` / `websearch` / `session_read` / `task` / `todo` / plan / skills / memory），其中 `session_search` 会直接**抛异常**、`load_skill`/`memory_read` 返回 `undefined`。触发路径的成文依据在 `mcp/prefer-multimodal-content.ts:101-109`（TanStack 把**数组**结果 `JSON.stringify` 成 `ContentPart[]` 文本后交给投影）。
-- 【未修】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。
+- 【已修 · `8b244a0e`】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。→ fallback 改为同一契约（basename glob + `|` 备选），`validate:tree-walk` 覆盖。
 
 ### shell
 - 【未修】 `run-command-tool.ts:220-224` 送进 `maybeCacheOutput` 的是 `output-accumulator` 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**（`native-run` 的 `result.stdout` 本有全文）。`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 是死代码。
@@ -139,9 +139,9 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `0c3142a3`】 provider 的 `response.text()` 无大小上限（同 ④ 类问题，端点相对可信）。
 
 ### subagent / session
-- 【未修】 `subagent/task-tool.ts:142-146` 对父模型说 subagent"**没有 `run_command`**"，但 `subagent-tools.ts:23-34` 注册了 `run_command:subagentSafe` → 两个面向模型的表述矛盾（`explore-prompt.ts` 也列了 `run_command`）。
+- 【已修 · `8b244a0e`】 `subagent/task-tool.ts:142-146` 对父模型说 subagent"**没有 `run_command`**"，但 `subagent-tools.ts:23-34` 注册了 `run_command:subagentSafe` → 两个面向模型的表述矛盾（`explore-prompt.ts` 也列了 `run_command`）。→ 描述改为按实际工具集陈述，`validate:subagent-prompt` 逐名断言。
 - 【未修】 `subagent/task-prefork.ts:181` `start()` **永远返回 `true`** → middleware 里"重复 toolCallId 就摘掉父信号监听"的清理是**死代码**（重复 `TOOL_CALL_END` 泄漏一个监听 + AbortController）；被丢弃的 queued 项 `finally` 清理也不跑。
-- 【部分修 · `78835b24`】 `session-read-tool.ts:109` 无文件大小上限（`session_search` 有 `MAX_SESSION_FILE_BYTES`），大日志 O(file)×页数，每页整读整 fold；其描述里的分页建议（`offset += limit`）在内容上限截断时会**跳过消息**。
+- 【已修 · `78835b24` + `8b244a0e`】 `session-read-tool.ts:109` 无文件大小上限（`session_search` 有 `MAX_SESSION_FILE_BYTES`），大日志 O(file)×页数，每页整读整 fold；其描述里的分页建议（`offset += limit`）在内容上限截断时会**跳过消息**。→ 两半都已修：体积闸门 + 描述改为指向渲染尾部的真实 offset（`validate:session-search` 用 9 条长消息 / `limit: 10` / 实返 7 条覆盖）。
 - 【未修】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。
 - 【未修】 丢弃的 pre-fork subagent 只 abort 未 `destroyAgent`（流重启/结束时累积）；
 - 【未修】 `run-stats.ts:144-147` `hitStepBudget` 未加 `!aborted` → 用户取消也可能报 `reachedLimit=true`。
