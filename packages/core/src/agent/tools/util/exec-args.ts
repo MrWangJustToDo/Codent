@@ -2,6 +2,18 @@ import { SEARCH_COMMAND_TIMEOUT, SEARCH_OUTPUT_BYTE_LIMIT, looksLikeMissingBinar
 
 import type { CoreEnv } from "../../../env";
 
+/** Options shared by {@link execArgs} and {@link execArgsCapture}. */
+export interface ExecArgsOptions {
+  /**
+   * Working directory for the child process. Omitted means the host's own default, which is the
+   * wrong tree for a search tool unless the process cwd happens to equal the workspace root —
+   * callers pass {@link CoreEnv.rootPath} so resolution is anchored there.
+   */
+  cwd?: string;
+  /** Milliseconds before the child is killed. Defaults to {@link SEARCH_COMMAND_TIMEOUT}. */
+  timeout?: number;
+}
+
 /** Outcome of an argv-based external command. */
 export interface ExecArgsResult {
   stdout: string;
@@ -42,7 +54,7 @@ export async function execArgs(
   env: CoreEnv,
   file: string,
   args: string[],
-  timeout = SEARCH_COMMAND_TIMEOUT
+  options: ExecArgsOptions = {}
 ): Promise<ExecArgsResult> {
   // Feature-detect: hosts without argument-vector execution (a remote environment on an
   // older server, or a runtime with no process API) must degrade rather than fail. The
@@ -52,7 +64,10 @@ export async function execArgs(
     return { stdout: "", stderr: "", code: null, missing: true, killed: false };
   }
 
-  const result = await env.execFile(file, args, { timeout });
+  const result = await env.execFile(file, args, {
+    timeout: options.timeout ?? SEARCH_COMMAND_TIMEOUT,
+    cwd: options.cwd,
+  });
   if (!result) {
     return { stdout: "", stderr: "", code: null, missing: true, killed: false };
   }
@@ -98,9 +113,9 @@ export async function execArgsCapture(
   env: CoreEnv,
   file: string,
   args: string[],
-  timeout = SEARCH_COMMAND_TIMEOUT
+  options: ExecArgsOptions = {}
 ): Promise<string | undefined> {
-  const result = await execArgs(env, file, args, timeout);
+  const result = await execArgs(env, file, args, options);
   if (result.missing || result.killed) return undefined;
   return truncateToBytes(result.stdout, SEARCH_OUTPUT_BYTE_LIMIT);
 }

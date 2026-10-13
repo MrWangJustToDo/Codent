@@ -6,6 +6,7 @@ import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import {
   DEFAULT_EXCLUDE_DIRS,
   isCommandNotFound,
+  resolveSearchPath,
   SEARCH_COMMAND_TIMEOUT,
   truncateLines,
 } from "./util/search-command.js";
@@ -243,9 +244,13 @@ async function runGrepSearch(
   }
 ): Promise<string> {
   if (canExecArgs(env)) {
-    const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options));
+    const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options), {
+      cwd: env.rootPath,
+    });
     if (rgStdout !== undefined) return truncateLines(rgStdout, options.fetchCount);
-    const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options));
+    const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options), {
+      cwd: env.rootPath,
+    });
     if (grepStdout !== undefined) return truncateLines(grepStdout, options.fetchCount);
     // Neither binary is available — an empty result is the honest answer.
     return "";
@@ -255,10 +260,10 @@ async function runGrepSearch(
   // joined and quoted, with truncation still in JS.
   const timeout = SEARCH_COMMAND_TIMEOUT;
   const rgArgv = buildRgArgs(pattern, searchPath, options).map(quoteForShell);
-  const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, { timeout });
+  const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, { timeout, cwd: env.rootPath });
   if (!isCommandNotFound(rgResult.exitCode)) return truncateLines(rgResult.stdout, options.fetchCount);
   const grepArgv = buildGrepArgs(pattern, searchPath, options).map(quoteForShell);
-  const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, { timeout });
+  const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, { timeout, cwd: env.rootPath });
   return truncateLines(grepResult.stdout, options.fetchCount);
 }
 
@@ -411,7 +416,7 @@ export const createGrepTool = () => {
         const normalized = stripOuterQuotes(pattern);
         const searchPattern = normalized.pattern;
 
-        const searchPath = path ?? ".";
+        const searchPath = resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
         const mode = outputMode ?? "content";

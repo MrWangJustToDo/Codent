@@ -1,3 +1,9 @@
+import { defaultPath } from "../../../env";
+import { FileError } from "../../../env/types";
+import { toPosixPathKey } from "../../../utils/posix-path.js";
+
+import type { CoreEnv } from "../../../env";
+
 /** Default command timeout in ms */
 export const SEARCH_COMMAND_TIMEOUT = 30_000;
 
@@ -81,4 +87,39 @@ export function truncateLines(output: string, count: number): string {
 export function quoteForShell(arg: string): string {
   if (/^[A-Za-z0-9_\-./=*?[\]]+$/.test(arg)) return arg;
   return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Resolve a search tool's caller-supplied `path` against the workspace root and reject escapes.
+ *
+ * The search tools spawn external binaries (`fd`/`find`, `rg`/`grep`, `tree`) that read the
+ * filesystem directly, so they never pass through `CoreEnv.fs` and its traversal guard
+ * (`resolvePath` in the Node adapter). Without a check here, `grep { path: "/etc" }` or
+ * `path: "../../.."` reads outside the workspace with no approval — these are auto-approved
+ * read-only tools. This restates the same rule the fs layer already enforces, for the one
+ * path that bypasses it.
+ *
+ * Resolution is anchored to {@link CoreEnv.rootPath}, never `process.cwd()`: on a host whose
+ * cwd differs from the workspace root (server `ROOT_PATH`, `codent acp --cwd`, a remote env) a
+ * default `"."` must mean the workspace root, not wherever the process happens to be. The
+ * comparison folds to a canonical forward-slash key ({@link toPosixPathKey}) so a Windows
+ * separator cannot produce a false verdict — the same rule `containsPath` uses.
+ *
+ * Returns the caller's original path string (relative stays relative), so the binary's output
+ * paths remain root-relative exactly as before; only the `cwd` handed to the spawn anchors
+ * resolution to the root. Throws the fs layer's own traversal error
+ * ({@link FileError} `permission_denied`) on an escape, so callers surface one error shape.
+ */
+export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefined): string {
+  const path = coreEnv.path ?? defaultPath;
+  const raw = inputPath ?? ".";
+  const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(coreEnv.rootPath, raw);
+  const rootKey = toPosixPathKey(path.normalize(coreEnv.rootPath));
+  const resolvedKey = toPosixPathKey(resolved);
+
+  if (resolvedKey === rootKey || resolvedKey.startsWith(`${rootKey}/`)) {
+    return raw;
+  }
+
+  throw new FileError("permission_denied", `Path traversal blocked: "${raw}" resolves outside workspace root`, raw);
 }

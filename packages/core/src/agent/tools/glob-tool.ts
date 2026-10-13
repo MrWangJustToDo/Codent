@@ -7,6 +7,7 @@ import {
   DEFAULT_EXCLUDE_DIRS,
   SEARCH_COMMAND_TIMEOUT,
   isCommandNotFound,
+  resolveSearchPath,
   truncateLines,
 } from "./util/search-command.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
@@ -124,10 +125,14 @@ async function runGlobSearch(
 ): Promise<string> {
   if (canExecArgs(env)) {
     for (const binary of FD_BINARIES) {
-      const stdout = await execArgsCapture(env, binary, buildFdArgs(pattern, searchPath, options));
+      const stdout = await execArgsCapture(env, binary, buildFdArgs(pattern, searchPath, options), {
+        cwd: env.rootPath,
+      });
       if (stdout !== undefined) return truncateLines(stdout, options.fetchCount);
     }
-    const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options));
+    const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options), {
+      cwd: env.rootPath,
+    });
     if (findStdout !== undefined) return truncateLines(findStdout, options.fetchCount);
     // Both binaries are absent — an empty result is the honest answer. Falling through to
     // the shell path would only re-attempt the same missing binaries.
@@ -138,11 +143,17 @@ async function runGlobSearch(
   // joined and quoted, with truncation still in JS.
   for (const binary of FD_BINARIES) {
     const argv = buildFdArgs(pattern, searchPath, options).map(quoteForShell);
-    const result = await env.runCommand(`${binary} ${argv.join(" ")}`, { timeout: SEARCH_COMMAND_TIMEOUT });
+    const result = await env.runCommand(`${binary} ${argv.join(" ")}`, {
+      timeout: SEARCH_COMMAND_TIMEOUT,
+      cwd: env.rootPath,
+    });
     if (!isCommandNotFound(result.exitCode)) return truncateLines(result.stdout, options.fetchCount);
   }
   const findArgv = buildFindArgs(pattern, searchPath, options).map(quoteForShell);
-  const findResult = await env.runCommand(`find ${findArgv.join(" ")}`, { timeout: SEARCH_COMMAND_TIMEOUT });
+  const findResult = await env.runCommand(`find ${findArgv.join(" ")}`, {
+    timeout: SEARCH_COMMAND_TIMEOUT,
+    cwd: env.rootPath,
+  });
   return truncateLines(findResult.stdout, options.fetchCount);
 }
 
@@ -184,7 +195,7 @@ export const createGlobTool = () => {
     outputSchema: globOutputSchema,
     execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId, coreEnv }) => {
       return withDuration(async () => {
-        const searchPath = path ?? ".";
+        const searchPath = resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
         const fileType = type ?? "file";

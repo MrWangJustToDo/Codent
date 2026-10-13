@@ -6,7 +6,7 @@ import { toPosixPath, toPosixPathKey } from "../../utils/posix-path.js";
 import { defineServerTool } from "./runtime/define-tool.js";
 import { canExecArgs, execArgs } from "./util/exec-args.js";
 import { OUTPUT_LIMITS, truncateString } from "./util/output-limits.js";
-import { isCommandNotFound, quoteForShell } from "./util/search-command.js";
+import { isCommandNotFound, quoteForShell, resolveSearchPath } from "./util/search-command.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
@@ -147,7 +147,7 @@ export const createTreeTool = () => {
     }),
     execute: async ({ path, maxDepth, showHidden, dirsOnly, pattern, ignore }, { toolCallId, coreEnv }) => {
       return withDuration(async () => {
-        const rootPath = path ?? ".";
+        const rootPath = resolveSearchPath(coreEnv, path);
         const depth = maxDepth ?? 3;
 
         // Build `tree` arguments. argv, not a command string — the previous version
@@ -178,7 +178,7 @@ export const createTreeTool = () => {
         // status field here would be write-only.
         let result: { stdout: string; stderr: string; missing: boolean; killed: boolean };
         if (canExecArgs(coreEnv)) {
-          const argsResult = await execArgs(coreEnv, "tree", treeArgs);
+          const argsResult = await execArgs(coreEnv, "tree", treeArgs, { cwd: coreEnv.rootPath });
           result = {
             stdout: argsResult.stdout,
             stderr: argsResult.stderr,
@@ -186,7 +186,9 @@ export const createTreeTool = () => {
             killed: argsResult.killed,
           };
         } else {
-          const envResult = await coreEnv.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`);
+          const envResult = await coreEnv.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`, {
+            cwd: coreEnv.rootPath,
+          });
           // The string path has no kill signal of its own; a shell reports a killed child as a
           // non-zero status, so there is nothing extra to distinguish here.
           result = {

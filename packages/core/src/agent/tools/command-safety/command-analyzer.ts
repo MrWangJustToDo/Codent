@@ -140,14 +140,12 @@ const READONLY_PREFIXES = new Set([
   "head",
   "tail",
   "grep",
-  "find",
   "pwd",
   "echo",
   "printf",
   "wc",
   "which",
   "uname",
-  "env",
   "dirname",
   "basename",
   "ps",
@@ -155,6 +153,11 @@ const READONLY_PREFIXES = new Set([
   // here: each has a write mode (`-i` / `-o` / `system()`), so they are classified separately by
   // {@link classifyReadOnly}. Listing `sort` alongside `cat` auto-approved `sort -o`, i.e. a file
   // write wearing a filter's name; `sed -i` was likewise one `sed` entry away from the same hole.
+  // `env` and `find` are absent for the same reason: both are write-capable through their
+  // *arguments*, not surfaced by a flag. `env rm -rf x` / `env -i sh -c …` launch another
+  // program, and `find . -delete` / `find . -exec rm {} ;` mutate — a name-only entry
+  // auto-approved all of them. Both are now classified from their tokens by
+  // {@link classifyReadOnly}.
   "cut",
   "uniq",
   "test",
@@ -329,24 +332,193 @@ const MUTATING_FILTER_FLAGS: Record<string, (token: string) => boolean> = {
   awk: (token) => /system\s*\(/.test(token),
 };
 
-/** True when a would-be read-only filter carries a flag that makes it write. */
+/**
+ * `find` predicates that write or execute.
+ *
+ * `find` is a read-only traversal on its own (`find . -name "*.ts"`), so its *predicate* — not
+ * its name — decides. `-delete` removes matches; `-exec` / `-execdir` / `-ok` / `-okdir` run an
+ * arbitrary command per match; `-fprint` / `-fprint0` / `-fprintf` / `-fls` write their listing
+ * to a file. Any one of them makes the whole invocation a write, so a name-only read-only entry
+ * would have auto-approved `find . -delete` and `find . -exec rm -rf {} ;`.
+ */
+const FIND_WRITE_PREDICATES = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls",
+]);
+
+/** Index of the `delim` closing the field starting at `start`, honouring escapes; `-1` if absent. */
+function skipDelimited(script: string, start: number, delim: string): number {
+  let i = start;
+  while (i < script.length) {
+    if (script[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (script[i] === delim) return i;
+    i += 1;
+  }
+  return -1;
+}
+
+/**
+ * Index just past a single sed address at `i` (`$`, `N`, `N~M`, `/re/`, `\crec`, `+N`), or `i`
+ * unchanged when no address starts here.
+ */
+function skipSedAddress(script: string, i: number): number {
+  const c = script[i];
+  if (c === "$") return i + 1;
+  if (c === "+") {
+    let j = i + 1;
+    while (j < script.length && script[j] >= "0" && script[j] <= "9") j += 1;
+    return j;
+  }
+  if (c >= "0" && c <= "9") {
+    let j = i;
+    while (j < script.length && script[j] >= "0" && script[j] <= "9") j += 1;
+    if (script[j] === "~") {
+      j += 1;
+      while (j < script.length && script[j] >= "0" && script[j] <= "9") j += 1;
+    }
+    return j;
+  }
+  if (c === "/") {
+    const end = skipDelimited(script, i + 1, "/");
+    return end < 0 ? script.length : end + 1;
+  }
+  if (c === "\\") {
+    if (i + 1 >= script.length) return script.length;
+    const end = skipDelimited(script, i + 2, script[i + 1]);
+    return end < 0 ? script.length : end + 1;
+  }
+  return i;
+}
+
+/** Skip an optional `addr` / `addr1,addr2` prefix, returning the index of the command character. */
+function skipSedAddresses(script: string, i: number): number {
+  let j = skipSedAddress(script, i);
+  if (j === i) return i;
+  while (j < script.length && /\s/.test(script[j])) j += 1;
+  if (script[j] === ",") {
+    j += 1;
+    while (j < script.length && /\s/.test(script[j])) j += 1;
+    const after = skipSedAddress(script, j);
+    if (after > j) j = after;
+  }
+  return j;
+}
+
+/**
+ * Whether a sed script writes or executes.
+ *
+ * A bare scan for the letters `w` / `e` would flag `s/world/earth/`, because those letters sit
+ * inside the pattern and replacement. Sed commands are addressed (`1,20p`, `/foo/w file`) and the
+ * `s` / `y` commands carry a delimited pattern/replacement, so this walks each command instead:
+ * skip the address prefix, read the command character, and for `s` / `y` skip both delimited
+ * fields before reading flags. `w` / `W` (write to a file), `r` / `R` (read a file into the
+ * stream) and `e` (execute a command) are mutating wherever they appear — as the command itself
+ * or as an `s` flag. A malformed delimited command is treated as mutating (conservative).
+ */
+function sedScriptMutates(script: string): boolean {
+  let i = 0;
+  const n = script.length;
+  while (i < n) {
+    while (i < n && /[\s;]/.test(script[i])) i += 1;
+    if (i >= n) break;
+    i = skipSedAddresses(script, i);
+    while (i < n && /\s/.test(script[i])) i += 1;
+    if (i >= n) break;
+    const cmd = script[i];
+    if (cmd === "w" || cmd === "W" || cmd === "r" || cmd === "R" || cmd === "e") return true;
+    if (cmd === "s" || cmd === "y") {
+      if (i + 1 >= n) return true; // malformed — conservative
+      const delim = script[i + 1];
+      const patternEnd = skipDelimited(script, i + 2, delim);
+      if (patternEnd < 0) return true;
+      const replacementEnd = skipDelimited(script, patternEnd + 1, delim);
+      if (replacementEnd < 0) return true;
+      if (cmd === "s") {
+        // Trailing flags: only `w` / `W` / `e` write or execute.
+        let j = replacementEnd + 1;
+        while (j < n && !/[\s;]/.test(script[j])) {
+          const flag = script[j];
+          if (flag === "w" || flag === "W" || flag === "e") return true;
+          j += 1;
+        }
+        i = j;
+        continue;
+      }
+      i = replacementEnd + 1;
+      continue;
+    }
+    i += 1;
+  }
+  return false;
+}
+
+/**
+ * The script argument(s) of a `sed` command's tokens.
+ *
+ * Sed takes its script either from `-e` / `--expression` (repeatable) or, when neither is present,
+ * from the first non-flag argument (`sed 's/a/b/' file`). Both spellings must be inspected.
+ */
+function sedScriptArgs(tokens: string[]): string[] {
+  const args = tokens.slice(1);
+  const explicit: string[] = [];
+  let hasExpression = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "-e" || arg === "--expression") {
+      hasExpression = true;
+      if (i + 1 < args.length) explicit.push(args[i + 1]);
+      i += 1;
+    } else if (arg.startsWith("--expression=")) {
+      hasExpression = true;
+      explicit.push(arg.slice("--expression=".length));
+    } else if (arg.startsWith("-e") && arg.length > 2) {
+      hasExpression = true;
+      explicit.push(arg.slice(2));
+    }
+  }
+  if (hasExpression) return explicit;
+  const script = args.find((arg) => !arg.startsWith("-"));
+  return script === undefined ? [] : [script];
+}
+
+/** True when a would-be read-only filter carries a flag or script that makes it write. */
 function usesMutatingFilterFlag(name: string, tokens: string[]): boolean {
   const probe = MUTATING_FILTER_FLAGS[name];
-  return probe ? tokens.slice(1).some(probe) : false;
+  if (!probe) return false;
+  if (tokens.slice(1).some(probe)) return true;
+  // `sed` additionally mutates when its *script* contains a write/exec command — a whole class
+  // the flag probe above cannot see, since `sed 'w /tmp/pwn' f` carries no flag at all.
+  return name === "sed" && sedScriptArgs(tokens).some(sedScriptMutates);
 }
 
 /**
  * Whether a single command is read-only, given it already carries no write op, no write
  * redirection, and no background marker.
  *
- * Three cases, all conservative:
+ * Cases, all conservative:
  *
- * - {@link READONLY_PREFIXES} — the command is read-only by name (`cat`, `ls`, `git status`).
  * - `cd` — read-only by nature: it changes only the shell's working directory, and it is the
  *   one command whose path argument must be checked here instead of via the generic file-arg
  *   scan. That check is what keeps `cd /etc` (an *absolute* path outside the project) asking;
  *   a bare `cd` or an in-root relative one is not a write by any reading.
- * - {@link MUTATING_FILTER_FLAGS} names — read-only *unless* the write flag is present.
+ * - `env` — read-only only as a pure assignment list (`env FOO=1`); any option or trailing
+ *   command (`env -i sh -c …`, `env rm -rf x`) makes it a launcher for another program.
+ * - `find` — read-only unless a write/exec predicate (`-delete`, `-exec`, `-fprint`, …) is
+ *   present; the predicate, not the command name, is what mutates.
+ * - `git … --output…` — `git diff` / `log` / `show` are otherwise read-only but `--output[=]`
+ *   writes a file, so it is excluded (the `--output-indicator-*` options are not writes).
+ * - {@link MUTATING_FILTER_FLAGS} names — read-only *unless* the write flag/script is present.
+ * - {@link READONLY_PREFIXES} — the command is read-only by name (`cat`, `ls`, `git status`).
  *
  * The `cd` case exists because it is in every chained inspection command (`cd repo && grep …`)
  * but in neither READONLY_PREFIXES nor — as a path argument — `FILE_COMMANDS`, so an entire
@@ -367,6 +539,25 @@ function classifyReadOnly(
     if (isDynamicArg(target) || expanded.includes("$") || expanded === "" || globbed === undefined) return false;
     const resolved = ctx.path.isAbsolute(globbed) ? ctx.path.normalize(globbed) : ctx.path.resolve(ctx.cwd, globbed);
     return containsPath(ctx.rootPath, resolved, ctx.path);
+  }
+
+  if (name === "env") {
+    // `env` is read-only only as a pure assignment list: `env`, `env FOO=1`, `env A=1 B=2`.
+    // Any option or command word (`env -i sh -c …`, `env rm -rf x`, `env -u FOO cmd`) turns it
+    // into a launcher for another program — that program, not `env`, decides what runs.
+    return tokens.slice(1).every((token) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(token));
+  }
+
+  if (name === "find") {
+    return !tokens.slice(1).some((token) => FIND_WRITE_PREDICATES.has(token));
+  }
+
+  // `git diff` / `log` / `show` can write a file directly with `--output` / `--output=…`, which
+  // their read-only prefixes would otherwise wave through. `--output-indicator-*` is a display
+  // option, not a write, so only the exact/`=` forms count.
+  if (normalized.startsWith("git ")) {
+    const writesOutput = tokens.slice(1).some((token) => token === "--output" || token.startsWith("--output="));
+    if (writesOutput) return false;
   }
 
   if (normalized in MUTATING_FILTER_FLAGS) return !usesMutatingFilterFlag(normalized, tokens);
