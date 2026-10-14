@@ -70,6 +70,13 @@ export interface ExecArgsResult {
  * "try the next binary" and end at "no matches" — the one verdict that is certainly wrong for a
  * search that never finished. Callers catch it with the signal they passed (see
  * `isAbortError`) and report the run as cancelled.
+ *
+ * SCOPE: the signal reaches the host only where the host takes one. A local Node host kills the child
+ * (`execFile`/`runCommand` accept a signal). Over a remote CoreEnv it does NOT: the command routes declare
+ * no signal field and the client sends only `{ cwd, timeout, env }`, so a remote search runs to its own
+ * deadline and this check fires only once it returns. That is the remote half of the search-abort item in
+ * docs/tool-audit-findings.md, and it needs the HTTP contract to change (an OpenSpec change), not a
+ * caller.
  */
 export async function execArgs(
   env: CoreEnv,

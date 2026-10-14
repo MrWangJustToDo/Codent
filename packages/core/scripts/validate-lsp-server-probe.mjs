@@ -231,10 +231,125 @@ assert.equal(enoentError.kind, "command_missing", "…and so is an ENOENT from t
   assert.equal(crashes.filter((c) => c.restarting).length, 1, "one restart is scheduled for the shared server");
 
   // A record that differs is its own server: the grouping is the config, not the language family.
-  sharingManager.setServerConfig("javascript", { command: "typescript-language-server", args: ["--stdio", "--log-level", "4"] });
+  sharingManager.setServerConfig("javascript", {
+    command: "typescript-language-server",
+    args: ["--stdio", "--log-level", "4"],
+  });
   // `getClientForLanguage` kicks the start off in the background, so wait for readiness before counting.
   await sharingManager.waitForClient("javascript", 1000);
   assert.equal(connections.length, 2, "a differing record gets its own server");
+}
+
+// 9. Reconfiguring one sharing id must invalidate what the OLD record gave it — the alias, and the
+// per-key lifecycle state. Regression: `setServerConfig` cleared the key memo but not `clients`, so the id
+// kept resolving the old process (its status showed the new command with `running: true`), and a settled
+// `startingServers` entry under the abandoned key made `isServerStarting` report a dead start forever.
+{
+  const connections = [];
+  const reconfigManager = new LspManager(
+    "/repo",
+    () => {
+      const connection = {
+        languageId: "typescript",
+        initialized: false,
+        disposed: false,
+        start: async () => {
+          connection.initialized = true;
+        },
+        sendRequest: async () => undefined,
+        sendNotification: () => {},
+        didOpen: () => {},
+        didChange: () => {},
+        onUnexpectedExit: () => {},
+        onPublishDiagnostics: () => {},
+        shutdown: async () => {
+          connection.disposed = true;
+        },
+        kill: () => {},
+      };
+      connections.push(connection);
+      return connection;
+    },
+    path,
+    fs,
+    undefined,
+    {},
+    undefined,
+    async () => true
+  );
+  reconfigManager.setServerConfig("typescript", { command: "tsc-ls", args: ["--stdio"] });
+  reconfigManager.setServerConfig("javascript", { command: "tsc-ls", args: ["--stdio"] });
+  reconfigManager.startEagerly(["typescript", "javascript"]);
+  await reconfigManager.waitForClient("typescript", 1000);
+  assert.equal(connections.length, 1, "the two ids share one server");
+
+  const shared = reconfigManager.getRunningClient("typescript");
+  reconfigManager.setServerConfig("javascript", { command: "deno", args: ["lsp"] });
+
+  assert.equal(
+    reconfigManager.getRunningClient("javascript"),
+    null,
+    "the reconfigured id no longer resolves the old record's client"
+  );
+  assert.equal(
+    reconfigManager.getRunningClient("typescript"),
+    shared,
+    "…while the sibling that still matches the old record keeps it"
+  );
+  assert.equal(reconfigManager.isServerStarting("javascript"), false, "the abandoned key's start entry is gone");
+
+  await reconfigManager.waitForClient("javascript", 1000);
+  assert.equal(connections.length, 2, "the reconfigured id starts its own server");
+  assert.equal(
+    reconfigManager.getStatus().find((s) => s.languageId === "javascript").command,
+    "deno",
+    "the status reports the new command against the new process"
+  );
+}
+
+// 10. A failed start is reported exactly ONCE, with the kind the start knows. Regression: the eager
+// wrapper re-reported every rejected start as a generic `start_failed`, so a missing binary produced two
+// notices — and the wrapper text (`Auto-start failed: … ENOENT`) missed the not-found fallback, so the
+// predictable degrade came out as an error as well.
+{
+  const reports = [];
+  const missingBinary = new LspManager(
+    "/repo",
+    () => {
+      throw new Error("should not be reached: the probe rejects the command");
+    },
+    path,
+    fs,
+    undefined,
+    { onServerError: (languageId, error, kind) => reports.push({ languageId, error, kind }) },
+    undefined,
+    async () => false
+  );
+  missingBinary.setServerConfig("go", { command: "gopls", args: ["serve"] });
+  missingBinary.startEagerly(["go"]);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(reports.length, 1, "an eager start of a missing binary reports once (the wrapper must not add one)");
+  assert.equal(reports[0].kind, "command_missing", "…and as the degrade it is, not an error");
+}
+{
+  const reports = [];
+  const failingFactory = new LspManager(
+    "/repo",
+    () => {
+      throw new Error("spawn failed: EACCES");
+    },
+    path,
+    fs,
+    undefined,
+    { onServerError: (languageId, error, kind) => reports.push({ languageId, error, kind }) },
+    undefined,
+    async () => true
+  );
+  failingFactory.setServerConfig("go", { command: "gopls", args: ["serve"] });
+  failingFactory.startEagerly(["go"]);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(reports.length, 1, "a failure BEFORE the connection exists is reported too — and once");
+  assert.equal(reports[0].kind, "start_failed", "…as a start failure");
 }
 
 console.log("lsp-server-probe validation passed");

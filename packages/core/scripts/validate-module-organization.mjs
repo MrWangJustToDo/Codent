@@ -168,6 +168,12 @@ const SINGLE_DEFINITION_SYMBOLS = [
   "isBinaryMediaPartType",
   "isExpiredMemory",
   "slugifyName",
+  // The line-window family (`utils/line-window.ts`): a second definition of a display window is exactly
+  // the divergence this list is for, and the `validate-no-inline-*` guards cannot see a re-declaration.
+  "takeLatestLines",
+  "padLatestLines",
+  "hiddenLinesIndicator",
+  "buildLineWindow",
 ];
 
 function countDefinitions(symbol) {

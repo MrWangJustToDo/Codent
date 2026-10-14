@@ -1,6 +1,12 @@
 # lsp-server-sharing Specification
 
 ## Purpose
+
+Which language ids share one LSP server process, and what that sharing means for lifecycle. A server is
+identified by its config record rather than by a language id — so the default table's `typescript`,
+`javascript`, `typescriptreact` and `javascriptreact`, four ids with one identical record, run a single
+`typescript-language-server` — and a crash, restart or shutdown acts on that process rather than on one of
+the ids pointing at it.
 TBD - created by archiving change share-lsp-server-per-config. Update Purpose after archive.
 ## Requirements
 ### Requirement: One server process per identical config record

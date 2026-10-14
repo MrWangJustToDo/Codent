@@ -1,5 +1,6 @@
 /**
- * LSP Manager — manages LSP server connections, one per language.
+ * LSP Manager — manages LSP server connections, one per config record (see {@link LspFailureKind}'s
+ * neighbour `serverKeyOf`): language ids that resolve to the same record share one process.
  *
  * Lazily starts servers on first use. Auto-detects language from file extension.
  * Connections are created via the host-provided `CoreEnv.createLspConnection`
@@ -44,7 +45,6 @@ export interface LspServerConfigRecord {
   settings?: Record<string, unknown>;
 }
 
-/** Lifecycle callbacks for UI notifications. */
 /**
  * Why a server did not become ready.
  *
@@ -56,6 +56,24 @@ export interface LspServerConfigRecord {
  */
 export type LspFailureKind = "command_missing" | "start_abandoned" | "restart_pending" | "start_failed";
 
+/**
+ * `JSON.stringify` with object keys sorted, so two equal values in a different field order serialize
+ * identically. Records are built by three different paths (the default table, `.lsp.json` via
+ * `JSON.parse`, `/lsp-config`), which do not agree on field order.
+ */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, val: unknown) => {
+    if (val === null || typeof val !== "object" || Array.isArray(val)) return val;
+    const record = val as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .map((k) => [k, record[k]])
+    );
+  });
+}
+
+/** Lifecycle callbacks for UI notifications. */
 export interface LspManagerCallbacks {
   onServerStart?: (languageId: string, command: string) => void;
   onServerReady?: (languageId: string) => void;
@@ -111,15 +129,23 @@ export class LspManager {
   private clients = new Map<string, LspClient>();
   private serverConfigs: Map<string, LspServerConfigRecord>;
   private rootDir: string;
-  private startingServers = new Map<string, Promise<void>>();
+  /**
+   * In-flight starts, keyed by server. The value is the start's OUTCOME: `startServer` reports its own
+   * failures and returns whether the server came up, so a caller that needs to know (the restart timer)
+   * reads it instead of catching a rejection that would arrive after the failure was already reported.
+   */
+  private startingServers = new Map<string, Promise<boolean>>();
   /**
    * Memo of `languageId → server key`, cleared whenever the config map changes.
    *
-   * The key is the whole config record: two ids with the identical record share ONE server process
-   * (the default `typescript` / `javascript` / `typescriptreact` / `javascriptreact` quartet is the
-   * case that matters), and a record differing in any field — settings, initializationOptions — gets
-   * its own. `JSON.stringify` is sound here because both sides of a comparison come from the same
-   * construction path (the default table or one `.lsp.json` record), so key order does not vary.
+   * The key is the whole config record: two ids with the identical record share ONE server process (the
+   * default `typescript` / `javascript` / `typescriptreact` / `javascriptreact` quartet is the case that
+   * matters), and a record differing in any field — settings, initializationOptions — gets its own.
+   *
+   * Canonical, because equal records do NOT necessarily serialize equally: `.lsp.json` keeps the text's
+   * field order while `/lsp-config` builds `{ command, args }` and `loadProjectConfig` adds `env`. Field
+   * order must not decide whether a process is shared — a mismatch would only cost an extra server, but it
+   * would cost it silently.
    */
   private serverKeys = new Map<string, string>();
   private callbacks: LspManagerCallbacks;
@@ -128,7 +154,7 @@ export class LspManager {
   private restartAttempts = new Map<string, number>();
   private restartBackoff = new Map<string, number>();
   /**
-   * Pending auto-restart timers, one per language.
+   * Pending auto-restart timers, one per SERVER (they were keyed by language when a server served one).
    *
    * Owned by the manager (not fire-and-forget) for two reasons: a second crash notification while a
    * restart is already scheduled must not stack a second `startServer` on the same language, and
@@ -179,11 +205,40 @@ export class LspManager {
 
   /** Update or add a server configuration. */
   setServerConfig(languageId: string, config: LspServerConfigRecord): void {
+    const previousKey = this.serverKeyOf(languageId);
     this.serverConfigs.set(languageId, config);
     // Invalidate any cached probe for this config's command.
     this.commandProbeCache.delete(config.command);
     // …and every cached server key: which ids share a process is derived from these records.
     this.serverKeys.clear();
+    // A shared client is no longer THIS id's server: without this, `/lsp status` reports the new command
+    // with `running: true` against the old process, `getRunningClient` hands back the old connection, and
+    // `getClientForLanguage` never starts the new config. The other ids still sharing the old record keep
+    // it — the process is theirs, just not this id's any more.
+    this.clients.delete(languageId);
+    this.dropOrphanedServerState(previousKey);
+  }
+
+  /**
+   * Drop the per-server lifecycle state of a key that no language maps to any more.
+   *
+   * Required because that state is keyed by the config, not the id: an in-flight start or a scheduled
+   * restart under a record nobody references would never be cleaned up (its own cleanup deletes the key it
+   * captured, which no longer exists), and a settled `startingServers` entry is read as "starting" by
+   * `isServerStarting` — whose contract is "do not block, return null so the tool shows starting" — so the
+   * id would never get a client on a path with no timeout behind it.
+   */
+  private dropOrphanedServerState(key: string | null): void {
+    if (key === null) return;
+    if ([...this.serverConfigs.keys()].some((id) => this.serverKeyOf(id) === key)) return;
+    this.startingServers.delete(key);
+    this.restartAttempts.delete(key);
+    this.restartBackoff.delete(key);
+    const timer = this.restartTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.restartTimers.delete(key);
+    }
   }
 
   /**
@@ -233,7 +288,7 @@ export class LspManager {
     const cached = this.serverKeys.get(languageId);
     if (cached !== undefined) return cached === "" ? null : cached;
     const config = this.serverConfigs.get(languageId);
-    const key = config ? JSON.stringify(config) : "";
+    const key = config ? canonicalJson(config) : "";
     this.serverKeys.set(languageId, key);
     return key === "" ? null : key;
   }
@@ -349,10 +404,11 @@ export class LspManager {
     // Kick off server start in the background.
     const startPromise = this.startServer(languageId, config);
     if (key !== null) this.startingServers.set(key, startPromise);
+    // `startServer` reports its own failures and returns their outcome; this catch only sees an
+    // UNEXPECTED throw, which nothing else would report.
     startPromise.catch((err) => {
       if (key !== null) this.startingServers.delete(key);
-      const message = errorMessage(err);
-      this.callbacks.onServerError?.(languageId, message, "start_failed");
+      this.callbacks.onServerError?.(languageId, errorMessage(err), "start_failed");
     });
 
     return null; // Server not ready yet
@@ -371,12 +427,11 @@ export class LspManager {
       const key = this.serverKeyOf(languageId);
       const startPromise = this.startServer(languageId, config);
       if (key !== null) this.startingServers.set(key, startPromise);
+      // Only an UNEXPECTED throw lands here — `startServer` reports expected failures itself and returns
+      // their outcome, so wrapping it must not add a second notice for the same failure.
       startPromise.catch((err) => {
         if (key !== null) this.startingServers.delete(key);
-        const message = errorMessage(err);
-        // A wrapper: the inner `startServer` already reported the real reason, so this is only
-        // useful for the kind — the text stays for callers that log it.
-        this.callbacks.onServerError?.(languageId, `Auto-start failed: ${message}`, "start_failed");
+        this.callbacks.onServerError?.(languageId, `Auto-start failed: ${errorMessage(err)}`, "start_failed");
       });
     }
   }
@@ -419,42 +474,51 @@ export class LspManager {
     });
   }
 
-  private async startServer(languageId: string, config: LspServerConfigRecord): Promise<void> {
-    // Probe-before-spawn: skip starting when the binary is missing so we fail
-    // fast with a clear reason instead of an ENOENT after spawn. No-op when the
-    // host provides no probe (browser/WebContainer hosts degrade gracefully).
+  /**
+   * Start the server for a language and report its outcome EXACTLY ONCE.
+   *
+   * Returns whether the server is ready. It deliberately does not reject for an expected failure: the
+   * callers used to re-report every rejected start with their own wrapper text, so one failure produced two
+   * notices — and the wrapper's `Auto-start failed: spawn … ENOENT` text does not match the not-found
+   * pattern the notice classification keys on, turning a predictable degrade into an error as well.
+   */
+  private async startServer(languageId: string, config: LspServerConfigRecord): Promise<boolean> {
     const key = this.serverKeyOf(languageId);
     const clearStarting = () => {
       if (key !== null) this.startingServers.delete(key);
     };
 
-    const available = await this.probeCommand(config.command);
-    if (available === false) {
-      clearStarting();
-      const reason = `LSP server '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`;
-      this.callbacks.onServerError?.(languageId, reason, "command_missing");
-      return;
-    }
-
-    const connConfig = await this.buildConnectionConfig(languageId, config);
-    const onUnexpectedExit = (code: number | null) => this.handleUnexpectedExit(languageId, code);
-
-    this.callbacks.onServerStart?.(languageId, config.command);
-
-    const connection = this.getConnection(connConfig);
-    connection.onUnexpectedExit(onUnexpectedExit);
-    connection.onPublishDiagnostics((uri, diagnostics) => {
-      const client = this.clients.get(languageId);
-      if (client) {
-        client.diagnostics.set(uri, diagnostics);
-      }
-      // Bump outside the client check: a publish means the server finished
-      // analyzing the current document version, even when it reports no
-      // problems (empty list). Waiters rely on this signal for clean files.
-      this.diagnosticsRevision.set(uri, (this.diagnosticsRevision.get(uri) ?? 0) + 1);
-    });
-
+    let connection: LspConnection | null = null;
     try {
+      // Probe-before-spawn: skip starting when the binary is missing so we fail fast with a clear reason
+      // instead of an ENOENT after spawn. No-op when the host provides no probe (browser hosts degrade
+      // gracefully).
+      if ((await this.probeCommand(config.command)) === false) {
+        clearStarting();
+        this.callbacks.onServerError?.(
+          languageId,
+          `LSP server '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`,
+          "command_missing"
+        );
+        return false;
+      }
+
+      const connConfig = await this.buildConnectionConfig(languageId, config);
+      this.callbacks.onServerStart?.(languageId, config.command);
+
+      connection = this.getConnection(connConfig);
+      connection.onUnexpectedExit((code) => this.handleUnexpectedExit(languageId, code));
+      connection.onPublishDiagnostics((uri, diagnostics) => {
+        const client = this.clients.get(languageId);
+        if (client) {
+          client.diagnostics.set(uri, diagnostics);
+        }
+        // Bump outside the client check: a publish means the server finished
+        // analyzing the current document version, even when it reports no
+        // problems (empty list). Waiters rely on this signal for clean files.
+        this.diagnosticsRevision.set(uri, (this.diagnosticsRevision.get(uri) ?? 0) + 1);
+      });
+
       await connection.start();
       const client: LspClient = {
         connection,
@@ -474,7 +538,7 @@ export class LspManager {
           `LSP server for ${languageId} shut down during startup`,
           "start_abandoned"
         );
-        return;
+        return false;
       }
       // Register the client under EVERY language id this server serves, so a per-language lookup
       // (`clients.get(id)`, a tool call, `/lsp` status) keeps working for an id that did not start it.
@@ -488,13 +552,16 @@ export class LspManager {
         this.restartBackoff.delete(key);
       }
       this.triggerPostInit(languageId, client);
+      return true;
     } catch (err) {
       clearStarting();
-      // A start can fail *after* the child was spawned (bad handshake, init error,
-      // timeout). Dispose the connection so the process cannot outlive the attempt:
-      // nothing else keeps a reference to it once the start promise is dropped.
-      await connection.shutdown().catch(() => {});
-      connection.kill();
+      // A start can fail *after* the child was spawned (bad handshake, init error, timeout) or before one
+      // exists (the connection factory, the config build). Dispose whatever was created so a process
+      // cannot outlive the attempt, then report ONCE — this method is the only reporter.
+      if (connection) {
+        await connection.shutdown().catch(() => {});
+        connection.kill();
+      }
       const message = errorMessage(err);
       // Spawn ENOENT means the server binary isn't on PATH — translate to a
       // clear, actionable hint instead of a raw "spawn ... ENOENT" error.
@@ -503,7 +570,7 @@ export class LspManager {
         ? `Failed to start LSP server for ${languageId}: command '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`
         : `Failed to start LSP server for ${languageId} (${config.command}): ${message}`;
       this.callbacks.onServerError?.(languageId, reason, notFound ? "command_missing" : "start_failed");
-      throw err instanceof Error ? err : new Error(message);
+      return false;
     }
   }
 
@@ -591,14 +658,18 @@ export class LspManager {
       const config = this.serverConfigs.get(languageId);
       if (!config) return;
 
+      // The key is re-derived here, not carried in: the config may have changed while the backoff ran, and
+      // the entry must belong to the record this attempt actually starts.
+      const attemptKey = this.serverKeyOf(languageId);
       const startPromise = this.startServer(languageId, config);
-      if (key !== null) this.startingServers.set(key, startPromise);
-      startPromise.catch((err) => {
-        if (key !== null) this.startingServers.delete(key);
-        const message = errorMessage(err);
+      if (attemptKey !== null) this.startingServers.set(attemptKey, startPromise);
+      void startPromise.then((ready) => {
+        if (ready) return;
+        // The attempt reported its own failure (with the real kind); this adds only the retry's status —
+        // which is not terminal while another attempt is still scheduled, so it is log-only upstream.
         this.callbacks.onServerError?.(
           languageId,
-          `Auto-restart failed for ${languageId}: ${message}`,
+          `Auto-restart failed for ${languageId} — another attempt is scheduled`,
           "restart_pending"
         );
         this.handleUnexpectedExit(languageId, null);
