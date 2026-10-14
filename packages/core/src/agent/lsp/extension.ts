@@ -17,12 +17,13 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
 import { defaultPath } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
+import { truncateText } from "../../utils/text-truncation.js";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
 import { FileSync } from "./file-sync.js";
 import { EXT_TO_LANGUAGE, getLanguageIdFromPath } from "./language-map.js";
-import { LspManager, type LspServerConfigRecord } from "./lsp-manager.js";
+import { LspManager, type LspFailureKind, type LspServerConfigRecord } from "./lsp-manager.js";
 import { applyDiagnosticsToToolAfterPayload } from "./shared/apply-tool-diagnostics.js";
 import { MAX_AUTO_DIAGNOSTIC_LINES } from "./shared/constants.js";
 import { extractToolPath } from "./shared/parse-tool-args.js";
@@ -99,26 +100,82 @@ const NOT_FOUND_ON_PATH = /not found on PATH/i;
  * predictable degrade (falls back to tree-sitter), so it is reported as `info`
  * rather than `error`.
  */
+/**
+ * One line for a notice, collapsed to a single line; the full reason goes to the log.
+ *
+ * Truncation itself is `truncateText` (the shared helper) — a hand-rolled `slice` here is what
+ * `validate:no-inline-char-truncation` exists to catch.
+ */
+function shortReason(error: string | undefined, max = 120): string {
+  const text = (error ?? "unknown error").replace(/\s+/g, " ").trim();
+  return truncateText(text, max);
+}
+
+/** What to show for a server that did not become ready. */
+export interface ServerFailureDisplay {
+  /** `silent` = log only: the state is not terminal, so nothing belongs in the UI. */
+  level: "info" | "error" | "silent";
+  text: string;
+}
+
+/**
+ * Decide how a non-ready server is surfaced, from the manager's failure KIND.
+ *
+ * Pure and exported so the rule is assertable without standing up a server. Three of the four kinds are
+ * not failures of the server — a missing binary is a documented degrade (tree-sitter takes over), a
+ * withdrawn startup is a race with session shutdown, and an attempt with a retry still scheduled is work
+ * in progress — so reporting them as errors is what makes a startup that then succeeds read as
+ * "failed, then ready". `restart_pending` is log-only for the same reason the "starting" stages are
+ * silent: the UI is for terminal states.
+ *
+ * The message fallback for the missing binary stays: a spawn that reports ENOENT is the same degrade
+ * even when it arrives wrapped by the eager-auto-start path.
+ */
+export function classifyServerFailure(error: string | undefined, kind: LspFailureKind): ServerFailureDisplay {
+  if (kind === "restart_pending") return { level: "silent", text: "" };
+  if (kind === "command_missing" || (error !== undefined && NOT_FOUND_ON_PATH.test(error))) {
+    return { level: "info", text: "unavailable (command not found)" };
+  }
+  if (kind === "start_abandoned") return { level: "info", text: "start withdrawn (the session was closing)" };
+  return { level: "error", text: `failed: ${shortReason(error)}` };
+}
+
+function notifyServerFailure(
+  ui: ExtensionUI,
+  logger: ExtensionContext["logger"],
+  languageId: string,
+  error: string | undefined,
+  kind: LspFailureKind
+): void {
+  const display = classifyServerFailure(error, kind);
+  const detail = error ? ` — ${error}` : "";
+  if (display.level === "silent") {
+    logger.warn(`LSP: ${languageId} restart attempt failed, another is scheduled${detail}`);
+    return;
+  }
+  logger[display.level === "error" ? "warn" : "info"](`LSP: ${languageId} ${display.text}${detail}`);
+  ui.notify(`LSP: ${languageId} ${display.text}`, display.level);
+}
+
 function notifyServerLifecycle(
   ui: ExtensionUI,
+  logger: ExtensionContext["logger"],
   languageId: string,
   status: "ready" | "failed" | "crashed",
-  error?: string
+  error?: string,
+  kind: LspFailureKind = "start_failed"
 ): void {
   switch (status) {
     case "ready":
+      logger.info(`LSP: ${languageId} ready`);
       ui.notify(`LSP: ${languageId} ready`, "success");
       break;
     case "crashed":
+      logger.warn(`LSP: ${languageId} crashed`);
       ui.notify(`LSP: ${languageId} crashed`, "error");
       break;
     case "failed":
-      // command not on PATH → degrade to tree-sitter, informational only.
-      if (error && NOT_FOUND_ON_PATH.test(error)) {
-        ui.notify(`LSP: ${languageId} unavailable (command not found)`, "info");
-      } else {
-        ui.notify(`LSP: ${languageId} failed`, "error");
-      }
+      notifyServerFailure(ui, logger, languageId, error, kind);
       break;
   }
 }
@@ -266,13 +323,14 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
       // starting / restarting stages stay silent so the input feedback is not
       // serialized into an error→loading→success flicker.
       onServerReady: (languageId) => {
-        notifyServerLifecycle(ctx.ui, languageId, "ready");
+        notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "ready");
         // A write that landed while this server was starting had its sync
         // deferred — send it now so its diagnostics reach the next tool call.
         void fileSync.flushPendingSync(languageId).catch(() => {});
       },
-      onServerError: (languageId, error) => notifyServerLifecycle(ctx.ui, languageId, "failed", error),
-      onServerCrash: (languageId) => notifyServerLifecycle(ctx.ui, languageId, "crashed"),
+      onServerError: (languageId, error, kind) =>
+        notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "failed", error, kind),
+      onServerCrash: (languageId) => notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "crashed"),
     },
     getEnvVar,
     env.commandExists
@@ -638,12 +696,12 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
       undefined,
       {
         onServerReady: (l) => {
-          notifyServerLifecycle(ctx.ui, l, "ready");
+          notifyServerLifecycle(ctx.ui, ctx.logger, l, "ready");
           // Deferred syncs belong to whichever manager is active now.
           void fileSync.flushPendingSync(l).catch(() => {});
         },
-        onServerError: (l, error) => notifyServerLifecycle(ctx.ui, l, "failed", error),
-        onServerCrash: (l) => notifyServerLifecycle(ctx.ui, l, "crashed"),
+        onServerError: (l, error, kind) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "failed", error, kind),
+        onServerCrash: (l) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "crashed"),
       },
       getEnvVar,
       env.commandExists

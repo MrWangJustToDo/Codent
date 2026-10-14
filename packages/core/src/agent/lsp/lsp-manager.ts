@@ -45,10 +45,25 @@ export interface LspServerConfigRecord {
 }
 
 /** Lifecycle callbacks for UI notifications. */
+/**
+ * Why a server did not become ready.
+ *
+ * Data, not a message to match on. Only `start_failed` is a failure of the server; the other three are
+ * a documented degrade (`command_missing` — tree-sitter takes over), a race (`start_abandoned` — the
+ * session closed while the handshake was in flight), and work in progress (`restart_pending` — an
+ * attempt failed while a retry is still scheduled). A caller left to guess from the text reports all
+ * four the same way, which is how a startup that then succeeds reads as "failed, then ready".
+ */
+export type LspFailureKind =
+  | "command_missing"
+  | "start_abandoned"
+  | "restart_pending"
+  | "start_failed";
+
 export interface LspManagerCallbacks {
   onServerStart?: (languageId: string, command: string) => void;
   onServerReady?: (languageId: string) => void;
-  onServerError?: (languageId: string, error: string) => void;
+  onServerError?: (languageId: string, error: string, kind: LspFailureKind) => void;
   onServerCrash?: (languageId: string, restarting: boolean, attempt: number) => void;
 }
 
@@ -303,7 +318,7 @@ export class LspManager {
     startPromise.catch((err) => {
       this.startingServers.delete(languageId);
       const message = errorMessage(err);
-      this.callbacks.onServerError?.(languageId, message);
+      this.callbacks.onServerError?.(languageId, message, "start_failed");
     });
 
     return null; // Server not ready yet
@@ -324,7 +339,9 @@ export class LspManager {
       startPromise.catch((err) => {
         this.startingServers.delete(languageId);
         const message = errorMessage(err);
-        this.callbacks.onServerError?.(languageId, `Auto-start failed: ${message}`);
+        // A wrapper: the inner `startServer` already reported the real reason, so this is only
+        // useful for the kind — the text stays for callers that log it.
+        this.callbacks.onServerError?.(languageId, `Auto-start failed: ${message}`, "start_failed");
       });
     }
   }
@@ -375,7 +392,7 @@ export class LspManager {
     if (available === false) {
       this.startingServers.delete(languageId);
       const reason = `LSP server '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`;
-      this.callbacks.onServerError?.(languageId, reason);
+      this.callbacks.onServerError?.(languageId, reason, "command_missing");
       return;
     }
 
@@ -412,7 +429,11 @@ export class LspManager {
       if (this.shuttingDown) {
         connection.shutdown().catch(() => {});
         this.startingServers.delete(languageId);
-        this.callbacks.onServerError?.(languageId, `LSP server for ${languageId} shut down during startup`);
+        this.callbacks.onServerError?.(
+          languageId,
+          `LSP server for ${languageId} shut down during startup`,
+          "start_abandoned"
+        );
         return;
       }
       this.clients.set(languageId, client);
@@ -431,10 +452,11 @@ export class LspManager {
       const message = errorMessage(err);
       // Spawn ENOENT means the server binary isn't on PATH — translate to a
       // clear, actionable hint instead of a raw "spawn ... ENOENT" error.
-      const reason = /ENOENT|not found|No such file/i.test(message)
+      const notFound = /ENOENT|not found|No such file/i.test(message);
+      const reason = notFound
         ? `Failed to start LSP server for ${languageId}: command '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`
         : `Failed to start LSP server for ${languageId} (${config.command}): ${message}`;
-      this.callbacks.onServerError?.(languageId, reason);
+      this.callbacks.onServerError?.(languageId, reason, notFound ? "command_missing" : "start_failed");
       throw err instanceof Error ? err : new Error(message);
     }
   }
@@ -492,7 +514,7 @@ export class LspManager {
       this.callbacks.onServerError?.(
         languageId,
         `LSP server for ${languageId} crashed ${attempts} times — giving up auto-restart`
-      );
+      , "start_failed");
       this.callbacks.onServerCrash?.(languageId, false, attempts);
       return;
     }
@@ -519,7 +541,11 @@ export class LspManager {
       startPromise.catch((err) => {
         this.startingServers.delete(languageId);
         const message = errorMessage(err);
-        this.callbacks.onServerError?.(languageId, `Auto-restart failed for ${languageId}: ${message}`);
+        this.callbacks.onServerError?.(
+          languageId,
+          `Auto-restart failed for ${languageId}: ${message}`,
+          "restart_pending"
+        );
         this.handleUnexpectedExit(languageId, null);
       });
     }, backoff);

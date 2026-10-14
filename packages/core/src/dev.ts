@@ -38,6 +38,7 @@ export { fileMutationQueueSize, withFileMutationQueue } from "./agent/tools/util
 // the declared categories (the definition sites are pinned to it by `validate:tool-presentation`).
 export { BUILTIN_PRESENTATION } from "./agent/tools/presentation/builtin-table.js";
 export { formatToolOutput } from "./agent/tools/presentation/output-format.js";
+export { classifyServerFailure } from "./agent/lsp/extension.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";
 export {
