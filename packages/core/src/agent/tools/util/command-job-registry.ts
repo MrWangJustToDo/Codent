@@ -155,7 +155,11 @@ export class CommandJobRegistry {
   markExited(jobId: string, exitCode: number | null): void {
     const job = this.jobs.get(jobId);
     if (!job || job.status !== "running") return;
-    job.status = exitCode === 0 || exitCode === null ? "exited" : "exited";
+    // The ternary here read `… ? "exited" : "exited"`, so a job that FAILED was recorded as a clean
+    // finish — and the completion notification maps `exited` to "completed", so the model was told a
+    // failing command had completed. A `null` code (the child was signalled, so there is no status) is
+    // not success either, and `exitCode` below keeps the non-zero value that says so.
+    job.status = exitCode === 0 ? "exited" : "failed";
     job.exitCode = exitCode ?? 1;
     job.endedAt = Date.now();
     this.afterFinished(job);
@@ -289,16 +293,24 @@ export class CommandJobRegistry {
     };
   }
 
+  /**
+   * Kill a job. Returns whether this call actually stopped a running job.
+   *
+   * `false` covers both "no such job" and "it was not running" — the caller's message is the same
+   * ("was not running"), and returning `true` for a finished job made `kill_command` claim it had
+   * killed something that had already ended.
+   */
   async kill(jobId: string): Promise<boolean> {
     const job = this.jobs.get(jobId);
     if (!job) return false;
-    if (job.status === "running" && job.kill) {
+    const wasRunning = job.status === "running";
+    if (wasRunning && job.kill) {
       await job.kill();
     }
-    if (job.status === "running") {
+    if (wasRunning) {
       this.markKilled(jobId);
     }
-    return true;
+    return wasRunning;
   }
 
   /**

@@ -33,7 +33,9 @@ export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = 
         jobId,
         status: after?.status ?? "killed",
         killed,
-        cachedOutputPath: null,
+        // The job's durable log. Killing stops the stream; it does not erase what the job produced, and
+        // this is the same field the background `run_command` hands back for that file.
+        cachedOutputPath: after?.logPath ?? null,
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: KillCommandOutput }) {

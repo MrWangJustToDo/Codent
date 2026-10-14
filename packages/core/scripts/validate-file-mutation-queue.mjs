@@ -15,10 +15,28 @@
 
 import assert from "node:assert/strict";
 
-import { fileMutationQueueSize, withFileMutationQueue } from "../dist/dev.mjs";
+import { createDeleteFileTool, fileMutationQueueSize, withFileMutationQueue } from "../dist/dev.mjs";
 
-/** Only `rootPath` and `path.resolve` are read by the queue. */
-const env = (rootPath = "/ws") => ({ rootPath, path: { resolve: (p) => p } });
+/**
+ * The queue reads `rootPath` + `path.resolve`; `delete_file` also needs `fs.remove`, and both are
+ * recorded so a test can see the ORDER operations actually ran in.
+ */
+const makeHost = (rootPath = "/ws") => {
+  const ops = [];
+  return {
+    ops,
+    env: {
+      rootPath,
+      path: { resolve: (p) => p },
+      fs: {
+        remove: async (p) => {
+          ops.push(`remove:${p}`);
+        },
+      },
+    },
+  };
+};
+const env = (rootPath = "/ws") => makeHost(rootPath).env;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ============================================================================
@@ -161,6 +179,39 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await Promise.all([a, b]);
   assert.deepEqual(order, ["a-start", "b-start", "b-end", "a-end"], `roots do not share a queue (${order.join(",")})`);
   assert.equal(fileMutationQueueSize(), 0);
+}
+
+// ============================================================================
+// 7. `delete_file` waits on the same per-path queue as an edit or a write
+// ============================================================================
+//
+// It used to run outside the queue, so a delete racing an edit of the same path could remove the file
+// the edit had just re-created (or the edit could resurrect the one just deleted) — whichever promise
+// happened to resolve last won.
+
+{
+  const { env: host, ops } = makeHost();
+  const hold = withFileMutationQueue(host, "src/a.ts", async () => {
+    await sleep(150);
+    ops.push("mutator-done");
+  });
+  await sleep(20);
+
+  const removed = createDeleteFileTool().execute(
+    { path: "src/a.ts" },
+    { toolCallId: "call-del", context: { coreEnv: host } }
+  );
+  await Promise.all([hold, removed]);
+
+  const mutatorDone = ops.indexOf("mutator-done");
+  const removeAt = ops.findIndex((op) => op.startsWith("remove:"));
+  assert.ok(mutatorDone !== -1, `the mutator ran (${JSON.stringify(ops)})`);
+  assert.ok(removeAt !== -1, `the delete ran (${JSON.stringify(ops)})`);
+  assert.ok(
+    removeAt > mutatorDone,
+    `the delete must wait for the in-flight mutation of the same path (${JSON.stringify(ops)})`
+  );
+  assert.equal(fileMutationQueueSize(), 0, "…and the queue drains afterwards");
 }
 
 console.log("file-mutation-queue validation passed");

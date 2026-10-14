@@ -16,6 +16,7 @@ import {
   MAX_JOB_LOG_AGE_MS,
   clearCoreEnv,
   commandJobRegistry,
+  createKillCommandTool,
   registerCoreEnv,
   sweepStaleJobLogs,
 } from "../dist/dev.mjs";
@@ -322,7 +323,9 @@ console.log("teardown log deletion OK");
   assert.equal(registry.poll(failing.id).logPath, null, "poll stops advertising the path");
   assert.doesNotThrow(() => registry.appendStderr(failing.id, "more\n"));
   assert.doesNotThrow(() => registry.markExited(failing.id, 1));
-  assert.equal(registry.poll(failing.id).status, "exited", "job stays queryable after a logging failure");
+  // A non-zero exit is `failed` now (this call exits 1). The assertion's point is the query, which must
+  // keep working when logging degraded — the status is the honest one for the exit it was given.
+  assert.equal(registry.poll(failing.id).status, "failed", "job stays queryable after a logging failure");
   console.log("runtime log failure OK (path cleared, command unaffected)");
 
   clearCoreEnv();
@@ -346,6 +349,48 @@ console.log("teardown log deletion OK");
   assert.equal(await logExists(staleRel), false, "stale log removed");
   assert.equal(await logExists(freshRel), true, "fresh log kept");
   console.log("stale sweep OK");
+}
+
+// ---------------------------------------------------------------------------
+// 9. A failed exit is `failed`, and a kill of a finished job says so
+// ---------------------------------------------------------------------------
+//
+// `markExited`'s ternary read `… ? "exited" : "exited"`, so EVERY job that ended was recorded as a
+// clean finish — and the completion notification maps `exited` to "completed", so a background command
+// that failed was announced to the model as completed. `kill` returned `true` for a job that had
+// already finished, so `kill_command` claimed to have killed it and its "was not running" branch was
+// unreachable.
+
+{
+  const ok = registry.create("echo ok");
+  registry.markExited(ok.id, 0);
+  assert.equal(ok.status, "exited", "a zero exit is a clean finish");
+
+  const failed = registry.create("exit 7");
+  registry.markExited(failed.id, 7);
+  assert.equal(failed.status, "failed", "a non-zero exit is a failure, not a finish");
+  assert.equal(failed.exitCode, 7, "…and the real code is kept");
+
+  const signalled = registry.create("sleep 1");
+  registry.markExited(signalled.id, null);
+  assert.equal(signalled.status, "failed", "no exit status (the child was signalled) is not a success");
+  assert.equal(signalled.exitCode, 1, "…and it is reported with a non-zero code");
+
+  assert.equal(await registry.kill(ok.id), false, "killing a finished job reports that nothing was killed");
+  assert.equal(await registry.kill("nonexistent"), false, "…as does an unknown job");
+  const running = registry.create("sleep 30");
+  registry.setKill(running.id, async () => {});
+  assert.equal(await registry.kill(running.id), true, "killing a running job reports that it killed it");
+
+  // `kill_command` hands back the job's durable log: killing stops the stream, it does not erase what
+  // the job produced, and that file is the one the background `run_command` advertises.
+  const tool = createKillCommandTool();
+  const logged = registry.create("echo logged");
+  registry.appendStdout(logged.id, "some output\n");
+  registry.markExited(logged.id, 0); // finished: killing it stops nothing
+  const result = await tool.execute({ jobId: logged.id }, {});
+  assert.equal(result.killed, false, "a finished job is reported as not running");
+  assert.equal(result.cachedOutputPath, logged.logPath, "…and its log path is returned, not null");
 }
 
 await registry.destroyAll();

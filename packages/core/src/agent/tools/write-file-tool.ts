@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { utf8ByteLength } from "../../utils/bytes.js";
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { withDuration } from "./util/tool-result.js";
@@ -43,20 +44,38 @@ export const createWriteFileTool = () => {
             );
           }
 
-          const lastSlashIndex = path.lastIndexOf("/");
-          if (lastSlashIndex > 0 && (createDirectories ?? true)) {
-            const dirPath = path.substring(0, lastSlashIndex);
+          // `path.dirname`, not `lastIndexOf("/")`: the workspace path helper knows the host's
+          // separator, so a Windows-shaped path creates its parent instead of silently skipping it.
+          const dirPath = coreEnv.path.dirname(path);
+          if (dirPath && dirPath !== "." && dirPath !== path && (createDirectories ?? true)) {
             const dirExists = await fs.exists(dirPath);
             if (!dirExists) {
               await fs.mkdir(dirPath);
             }
           }
 
-          await fs.writeFile(path, content);
+          // Replace through a temp file when the host offers `rename` (its documented purpose is to
+          // "write a temp file, then rename it into place"), so an interrupted write leaves the
+          // previous content intact instead of a half-written file. A host without it writes directly,
+          // which is what every host did before.
+          if (fs.rename) {
+            const tempPath = `${path}.tmp-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+            await fs.writeFile(tempPath, content);
+            try {
+              await fs.rename(tempPath, path);
+            } catch (error) {
+              await fs.remove(tempPath).catch(() => {});
+              throw error;
+            }
+          } else {
+            await fs.writeFile(path, content);
+          }
 
           return {
             path,
-            bytesWritten: content.length,
+            // Bytes, not UTF-16 code units: the field says "Number of bytes written", and a CJK
+            // character is three of them for one code unit.
+            bytesWritten: utf8ByteLength(content),
             created: !fileExisted,
           };
         })

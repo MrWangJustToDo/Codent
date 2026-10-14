@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { defineServerTool } from "./runtime/define-tool.js";
+import { withFileMutationQueue } from "./util/file-mutation-queue.js";
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
@@ -19,10 +20,15 @@ export const createDeleteFileTool = () => {
     }),
     needsApproval: true,
     execute: async ({ path }, { coreEnv }) => {
-      return withDuration(async () => {
-        await coreEnv.fs.remove(path);
-        return { path };
-      });
+      // Through the same per-path queue as `write_file` / `edit_file`: without it a delete racing an
+      // edit on the same path could remove the file the edit had just re-created (or the edit could
+      // resurrect the deleted one), because the two ran concurrently.
+      return withFileMutationQueue(coreEnv, path, async () =>
+        withDuration(async () => {
+          await coreEnv.fs.remove(path);
+          return { path };
+        })
+      );
     },
   });
 };
