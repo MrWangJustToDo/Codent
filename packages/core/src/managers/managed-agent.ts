@@ -168,6 +168,7 @@ import type { AgentEventPayloadMap } from "../runtime-types/agent-event-payloads
 import type { AgentEventType } from "../runtime-types/agent-events.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type {
+  QueuedMessageContent,
   AgentIterationState,
   AgentL1State,
   AgentMode,
@@ -1932,6 +1933,11 @@ export class ManagedAgent {
   /** Drop steer/follow-up queues without clearing the transcript. */
   clearQueuedMessages(): void {
     this.chatController?.clearQueuedMessages();
+  }
+
+  /** Take back the last queued message (see `AgentChatController.popQueuedMessage`). */
+  popQueuedMessage(): { kind: "steer" | "followUp"; content: QueuedMessageContent } | null {
+    return this.chatController?.popQueuedMessage() ?? null;
   }
 
   /**

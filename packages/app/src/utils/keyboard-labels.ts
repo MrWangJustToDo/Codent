@@ -68,6 +68,7 @@ export const KeyLabel = {
   ctrlJ: "Ctrl+J",
   ctrlO: "Ctrl+O",
   ctrlP: "Ctrl+P",
+  ctrlQ: "Ctrl+Q",
   ctrlT: "Ctrl+T",
   ctrlU: "Ctrl+U",
   ctrlV: "Ctrl+V",
@@ -201,8 +202,12 @@ export function busyQueueHint(steerCount: number, followUpCount: number, nextPre
   const queued = steerCount + followUpCount;
   // One count, stated once: it leads the line, and the abort warning refers back to it rather than
   // repeating the number (the first version said it three times, in ~110 columns).
-  const parts = [`${KeyLabel.enter} queue`, `${modifiedEnterLabel()} force submit`];
-  parts.push(queued > 0 ? `${KeyLabel.esc} abort (drops them)` : `${KeyLabel.esc} abort`);
+  // With a queue, the useful facts change: "Enter queues" is how you got here, and taking one back is what
+  // you cannot guess. Swapping the two keeps the line the same width.
+  const parts =
+    queued > 0
+      ? [`${KeyLabel.ctrlQ} recall`, `${modifiedEnterLabel()} force submit`, `${KeyLabel.esc} abort (drops them)`]
+      : [`${KeyLabel.enter} queue`, `${modifiedEnterLabel()} force submit`, `${KeyLabel.esc} abort`];
   if (queued > 0) {
     parts.unshift(nextPreview ? `Queued (${queued}): "${nextPreview}"` : `Queued (${queued})`);
   }

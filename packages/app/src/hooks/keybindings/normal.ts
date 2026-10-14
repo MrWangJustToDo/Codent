@@ -21,6 +21,7 @@ export function useNormalModeKeybindings(ctx: KeybindingContext): void {
     getSession,
     acceptAutocomplete,
     handleNormalSubmit,
+    handleRecallQueued,
   } = ctx;
 
   useInput(
@@ -92,6 +93,12 @@ export function useNormalModeKeybindings(ctx: KeybindingContext): void {
         if (isLoading) {
           // When loading, accept autocomplete first if visible.
           if (acceptAutocomplete(true)) return;
+          // Ctrl+Q takes the last queued message back into the input. Both spellings are accepted: the
+          // control character or the letter with the ctrl flag, depending on the terminal.
+          if (inputKey.ctrl && (inputChar === "q" || inputChar === "\u0011")) {
+            handleRecallQueued();
+            return;
+          }
           if (isModifiedEnter(inputChar, inputKey)) {
             // Option+Enter: force-submit — abort current run, inject message, start new pump.
             handleNormalSubmit("forceSubmit");

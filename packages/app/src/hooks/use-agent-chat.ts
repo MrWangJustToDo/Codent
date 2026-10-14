@@ -50,6 +50,11 @@ export interface UseAgentChatReturn {
   followUp: (content: string | SendMessageContent) => void;
   /** Force-submit: abort current run, inject message, start new pump. */
   forceSubmit: (content: string | SendMessageContent) => void;
+  /**
+   * Take the last queued message back, or `null` when nothing is queued. The queue is otherwise a
+   * one-way door: wait for delivery, or drop the whole queue with `Esc`.
+   */
+  recallQueuedMessage: () => Promise<{ kind: "steer" | "followUp"; content: string | ContentPart[] } | null>;
   queuedMessages: QueuedMessagesSnapshot;
   status: AgentStatus;
   isLoading: boolean;
@@ -402,6 +407,13 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     [session]
   );
 
+  const recallQueuedMessage = useCallback(async () => {
+    if (!session) return null;
+    const result = await session.dispatch({ type: "queue.pop" });
+    if (!result.ok) return null;
+    return (result.data as { kind: "steer" | "followUp"; content: string | ContentPart[] } | null) ?? null;
+  }, [session]);
+
   const forceSubmit = useCallback(
     (content: string | SendMessageContent) => {
       if (!session) return;
@@ -472,6 +484,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     steer,
     followUp,
     forceSubmit,
+    recallQueuedMessage,
     queuedMessages,
     allPendingApproval,
     allPendingAskUser,

@@ -176,6 +176,27 @@ export class AgentChatController {
     };
   }
 
+  /**
+   * Take back the most recently queued message, or null when nothing is queued.
+   *
+   * The queue is otherwise a one-way door: a queued message can only be waited for or dropped with the
+   * whole queue (`Esc`). Follow-up first, because that is the queue Enter fills and its tail is the last
+   * message written; steer is only enqueued programmatically on the CLI, so it is the fallback.
+   */
+  popQueuedMessage(): { kind: "steer" | "followUp"; content: QueuedMessageContent } | null {
+    const followUp = this.followUpQueue.popLast();
+    if (followUp !== undefined) {
+      this.notifyQueueListeners();
+      return { kind: "followUp", content: followUp };
+    }
+    const steer = this.steeringQueue.popLast();
+    if (steer !== undefined) {
+      this.notifyQueueListeners();
+      return { kind: "steer", content: steer };
+    }
+    return null;
+  }
+
   clearQueuedMessages(): QueuedMessagesSnapshot {
     const snapshot = {
       steer: this.steeringQueue.clear(),

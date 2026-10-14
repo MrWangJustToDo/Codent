@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { dispatchCommand } from "../commands";
 import { exitWithSummary } from "../utils/exit-with-summary.js";
+import { queuedTailIsText } from "../utils/queue-preview.js";
 import { getActiveHost, getActiveSession } from "../utils/session-resolve.js";
 
 import { useAgentKeybindings } from "./use-agent-keybindings.js";
@@ -29,6 +30,7 @@ interface UseAgentInputControlsOptions {
   steer: UseAgentChatReturn["steer"];
   followUp: UseAgentChatReturn["followUp"];
   forceSubmit: UseAgentChatReturn["forceSubmit"];
+  recallQueuedMessage: UseAgentChatReturn["recallQueuedMessage"];
   queuedMessages: UseAgentChatReturn["queuedMessages"];
   stop: UseAgentChatReturn["stop"];
   addToolApprovalResponse: UseAgentChatReturn["addToolApprovalResponse"];
@@ -51,7 +53,8 @@ export function useAgentInputControls({
   steer,
   followUp,
   forceSubmit,
-  queuedMessages: _queuedMessages,
+  recallQueuedMessage,
+  queuedMessages,
   stop,
   addToolApprovalResponse,
   addToolOutput,
@@ -196,6 +199,30 @@ export function useAgentInputControls({
     return true;
   };
 
+  /**
+   * Ctrl+Q: take the last queued message back into the input.
+   *
+   * Checked before popping: a message whose content is attachments cannot be put back (the input's
+   * attachment state is not a `ContentPart[]`), and popping it anyway would leave it nowhere.
+   */
+  const handleRecallQueued = async () => {
+    if (!queuedTailIsText(queuedMessages)) {
+      inputActions.setInputFeedback(
+        queuedMessages && (queuedMessages.steer.length > 0 || queuedMessages.followUp.length > 0)
+          ? "That message carries attachments — Esc drops the queue"
+          : "Nothing queued to recall",
+        "info"
+      );
+      return;
+    }
+    const popped = await recallQueuedMessage();
+    if (!popped || typeof popped.content !== "string") {
+      inputActions.setInputFeedback("Nothing queued to recall", "info");
+      return;
+    }
+    inputActions.setValue(popped.content);
+  };
+
   const handleNormalSubmit = async (behavior: "send" | "steer" | "followUp" | "forceSubmit" = "send") => {
     commandOutputActions.dismiss();
     const { text: prompt, attachments } = inputActions.submit();
@@ -255,6 +282,7 @@ export function useAgentInputControls({
     stop,
     acceptAutocomplete,
     handleNormalSubmit,
+    handleRecallQueued,
     submitAskUserAnswer,
     addToolApprovalResponse,
   });

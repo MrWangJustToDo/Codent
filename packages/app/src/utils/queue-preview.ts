@@ -23,6 +23,18 @@ function textOf(content: QueuedMessageContent): string {
   return attachments > 0 ? `[${attachments} attachment${attachments === 1 ? "" : "s"}]` : "";
 }
 
+/**
+ * Whether the tail — what {@link module:queue.pop} takes back — can go into the input box.
+ *
+ * The queue holds `string | ContentPart[]`; the input holds text plus its own attachment state, and the
+ * two are not the same shape. Callers check this BEFORE popping, so a message that cannot be restored is
+ * never left in limbo.
+ */
+export function queuedTailIsText(queued: QueuedMessagesSnapshot | undefined): boolean {
+  const tail = queued?.followUp.at(-1) ?? queued?.steer.at(-1);
+  return typeof tail === "string";
+}
+
 /** Everything queued for delivery after the current run. */
 export function queuedTotal(queued: QueuedMessagesSnapshot | undefined): number {
   return (queued?.steer.length ?? 0) + (queued?.followUp.length ?? 0);

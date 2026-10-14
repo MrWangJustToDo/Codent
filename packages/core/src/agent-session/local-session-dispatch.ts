@@ -54,6 +54,10 @@ export async function dispatchLocalAgentSessionCommand(
         chat.followUp(command.content);
         return { ok: true };
       }
+      case "queue.pop": {
+        if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
+        return { ok: true, data: chat.popQueuedMessage() };
+      }
       case "forceSubmit": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
         chat.forceSubmit(command.content);

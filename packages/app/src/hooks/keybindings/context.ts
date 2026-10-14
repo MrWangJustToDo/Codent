@@ -46,6 +46,8 @@ export interface KeybindingContext {
   stop: UseAgentChatReturn["stop"];
   acceptAutocomplete: (triggerSubmit: boolean) => boolean;
   handleNormalSubmit: (behavior?: "send" | "steer" | "followUp" | "forceSubmit") => void;
+  /** Take the last queued message back into the input (Ctrl+Q while running). */
+  handleRecallQueued: () => void;
   /**
    * Submit an ask_user answer. `meta` carries structured multi-select info
    * (selected option labels + free-form draft) so the UI and the model-facing

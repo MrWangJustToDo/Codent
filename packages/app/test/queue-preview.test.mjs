@@ -74,6 +74,10 @@ const hint = busyQueueHint(1, 1, "fix the flaky test");
 assert.ok(hint.includes(`Queued (2): "fix the flaky test"`), hint);
 assert.ok(hint.includes("drops them"), `the abort entry refers back to the count it clears: ${hint}`);
 assert.ok(hint.includes("force submit"), hint);
+// With a queue, "Enter queues" (how you got here) gives way to the thing you cannot guess: taking one
+// back. The line stays the same width.
+assert.ok(hint.includes("Ctrl+Q recall"), hint);
+assert.ok(!hint.includes("Enter queue"), hint);
 // The count is stated exactly once: it appeared three times when the preview was added to a hint that
 // already counted follow-ups and repeated the total in the abort warning.
 assert.equal((hint.match(/\(2\)/g) ?? []).length, 1, `one count, not three: ${hint}`);
@@ -81,3 +85,5 @@ assert.equal((hint.match(/\(2\)/g) ?? []).length, 1, `one count, not three: ${hi
 const emptyHint = busyQueueHint(0, 0);
 assert.ok(!emptyHint.includes("drops"), `nothing queued → nothing to warn about: ${emptyHint}`);
 assert.ok(!emptyHint.includes("Queued"), emptyHint);
+assert.ok(emptyHint.includes("Enter queue"), emptyHint);
+assert.ok(!emptyHint.includes("recall"), emptyHint);

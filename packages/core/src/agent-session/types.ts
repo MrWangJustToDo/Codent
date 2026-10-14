@@ -183,6 +183,8 @@ export type AgentSessionCommand =
   | { type: "steer"; content: AgentSessionMessageContent }
   | { type: "followUp"; content: AgentSessionMessageContent }
   | { type: "forceSubmit"; content: AgentSessionMessageContent }
+  /** Take back the last queued message, so a queued message is not a one-way door. */
+  | { type: "queue.pop" }
   | { type: "stop" }
   /** Clear messages on the current agent. New agents use Host.create, not this command. */
   | { type: "clear" }

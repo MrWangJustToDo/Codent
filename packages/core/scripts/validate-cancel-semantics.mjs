@@ -608,4 +608,16 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
   );
 }
 
+// The queue is also not a one-way door: Ctrl+Q takes the last message back, which has to reach the queues
+// through a command that RETURNS it (the pop) rather than clearing them.
+{
+  const controllerSrc = readFileSync(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url), "utf8");
+  const dispatchSrc = readFileSync(new URL("../src/agent-session/local-session-dispatch.ts", import.meta.url), "utf8");
+  assert.ok(/popQueuedMessage\(\): \{ kind: "steer" \| "followUp"; content: QueuedMessageContent \} \| null/.test(controllerSrc),
+    "the controller can take the last queued message back");
+  assert.ok(/this\.followUpQueue\.popLast\(\)/.test(controllerSrc), "…from the queue Enter fills first");
+  assert.ok(/case "queue\.pop":/.test(dispatchSrc) && /data: chat\.popQueuedMessage\(\)/.test(dispatchSrc),
+    "…and the session command returns it to the caller");
+}
+
 console.log("cancel-semantics validation passed");

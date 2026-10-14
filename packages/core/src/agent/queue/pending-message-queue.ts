@@ -31,6 +31,11 @@ export class PendingMessageQueue<T> {
     return this.items;
   }
 
+  /** Remove and return the most recently enqueued item (the reverse of {@link enqueue}). */
+  popLast(): T | undefined {
+    return this.items.pop();
+  }
+
   drain(): T[] {
     if (this.mode === "all") {
       const drained = this.items.slice();
