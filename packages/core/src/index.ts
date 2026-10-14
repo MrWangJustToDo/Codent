@@ -251,6 +251,14 @@ export { computeToolDisplay } from "./agent/tools/presentation/compute-display.j
 export { formatDuration } from "./agent/tools/presentation/format.js";
 export { normalizeOutputNewlines, splitStreamingLines } from "./agent/tools/presentation/lines.js";
 export {
+  buildLineWindow,
+  hiddenLinesIndicator,
+  padLatestLines,
+  takeLatestLines,
+  type LineWindow,
+  type LineWindowOptions,
+} from "./utils/line-window.js";
+export {
   countToolActivity,
   collectOtherToolNames,
   emptyToolActivityCounts,

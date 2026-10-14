@@ -2,6 +2,8 @@
  * Line-buffer helpers for summary streams (producer snapshot + app display window).
  */
 
+import { hiddenLinesIndicator } from "../../utils/line-window.js";
+
 export interface SummaryLineBuffer {
   lines: string[];
   pendingLine: string;
@@ -104,6 +106,6 @@ export function renderSummaryDisplayRows(
   }
 
   const content = body.slice(-contentSlots);
-  const indicator = `… ${window.hidden} line${window.hidden !== 1 ? "s" : ""} hidden above`;
+  const indicator = hiddenLinesIndicator(window.hidden);
   return { rows: [indicator, ...content].slice(0, maxLines), hidden: window.hidden };
 }

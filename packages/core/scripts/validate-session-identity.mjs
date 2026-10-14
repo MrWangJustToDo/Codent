@@ -150,11 +150,7 @@ assert.equal(managed.name, "Resumed Target", "resume mirrors the restored displa
   const spawnedId = "subagent_probe_identity";
   const spawned = await managed.manager.spawnSubagent(managed.id, { name: "id-provenance" }, spawnedId);
   assert.equal(spawned.id, spawnedId, "a spawned subagent keeps the id core assigned");
-  assert.equal(
-    managed.manager.getAgent(spawnedId),
-    spawned,
-    "…and is registered under it, so nothing minted over it"
-  );
+  assert.equal(managed.manager.getAgent(spawnedId), spawned, "…and is registered under it, so nothing minted over it");
   await managed.manager.destroyAgent(spawnedId);
 }
 

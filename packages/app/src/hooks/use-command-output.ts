@@ -1,6 +1,5 @@
+import { splitStreamingLines } from "@codent/core";
 import { createState } from "reactivity-store";
-
-import { splitStreamingLines } from "../utils/streaming-output-lines.js";
 
 import type { ReactNode } from "react";
 

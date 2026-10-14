@@ -44,40 +44,6 @@ export const useStreamingStore = createState(
       },
 
       /**
-       * Append to stdout for a tool call.
-       */
-      appendStdout(toolCallId: string, chunk: string): void {
-        const existing = state.outputs[toolCallId] ?? {
-          stdout: "",
-          stderr: "",
-          timestamp: 0,
-        };
-
-        state.outputs[toolCallId] = {
-          ...existing,
-          stdout: existing.stdout + chunk,
-          timestamp: Date.now(),
-        };
-      },
-
-      /**
-       * Append to stderr for a tool call.
-       */
-      appendStderr(toolCallId: string, chunk: string): void {
-        const existing = state.outputs[toolCallId] ?? {
-          stdout: "",
-          stderr: "",
-          timestamp: 0,
-        };
-
-        state.outputs[toolCallId] = {
-          ...existing,
-          stderr: existing.stderr + chunk,
-          timestamp: Date.now(),
-        };
-      },
-
-      /**
        * Clear output for a tool call.
        */
       clear(toolCallId: string): void {

@@ -1,5 +1,5 @@
 /**
- * Subscribe to a keyed summary stream (task / compact) via AgentSession / Host.
+ * Subscribe to a keyed summary stream (task / compact) and render a bounded line window.
  */
 
 import {
@@ -9,13 +9,12 @@ import {
   renderSummaryDisplayRows,
   summaryStreamKey,
   type SummaryDisplayWindow,
-  type SummaryStreamEvent,
   type SummaryStreamSource,
 } from "@codent/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { resolveAgentSession } from "../utils/session-resolve.js";
-import { cancelSummaryBuffer, flushSummaryBuffer, scheduleSummaryFlush } from "../utils/summary-stream-throttle.js";
+import { subscribeSummaryStream } from "../utils/summary-stream-subscription.js";
 
 import { useAgent } from "./use-agent.js";
 
@@ -67,48 +66,26 @@ export function useSummaryStream(options: UseSummaryStreamOptions): UseSummarySt
       return;
     }
 
-    const applyEvent = (event: SummaryStreamEvent) => {
-      if (event.key !== key) return;
-      if (event.type === "reset") {
-        cancelSummaryBuffer(key);
+    return subscribeSummaryStream(session, key, {
+      onReset: () => {
         setWindowState(emptySummaryDisplayWindow());
         setStatus("active");
-        return;
-      }
-      if (event.type === "append") {
-        scheduleSummaryFlush(key, event.chunk, (accumulated) => {
-          setWindowState((prev) => applyAppendToDisplayWindow(prev, accumulated, contentSlots));
-          setStatus("active");
-        });
-      }
-      if (event.type === "end") {
-        flushSummaryBuffer(key, (accumulated) => {
-          setWindowState((prev) => applyAppendToDisplayWindow(prev, accumulated, contentSlots));
-        });
-        setStatus("ended");
-      }
-    };
-
-    const unsub = session.subscribe(
-      (evt) => {
-        if (evt.channel !== "summary") return;
-        applyEvent(evt.payload);
       },
-      { channels: ["summary"] }
-    );
-    const snap = session.getSummaryStreamSnapshot(key);
-    if (snap) {
-      setWindowState(displayWindowFromSnapshot(snap, contentSlots));
-      setStatus(snap.status === "idle" ? "missing" : snap.status);
-    } else {
-      setWindowState(emptySummaryDisplayWindow());
-      setStatus("missing");
-    }
-
-    return () => {
-      cancelSummaryBuffer(key);
-      unsub();
-    };
+      onAppend: (accumulated) => {
+        setWindowState((prev) => applyAppendToDisplayWindow(prev, accumulated, contentSlots));
+        setStatus("active");
+      },
+      onEnd: () => setStatus("ended"),
+      onSnapshot: (snap) => {
+        if (snap) {
+          setWindowState(displayWindowFromSnapshot(snap, contentSlots));
+          setStatus(snap.status === "idle" ? "missing" : snap.status);
+        } else {
+          setWindowState(emptySummaryDisplayWindow());
+          setStatus("missing");
+        }
+      },
+    });
   }, [enabled, agentId, key, contentSlots]);
 
   return useMemo(() => {

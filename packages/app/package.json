@@ -51,6 +51,7 @@
     "validate:all:app": "node ../../scripts/run-all-validators.mjs --dir packages/app",
     "validate:theme-palettes": "node ./scripts/validate-theme-palettes.mjs",
     "validate:core-imports": "node ./scripts/validate-core-imports.mjs",
+    "validate:no-duplicate-core-helpers": "node ./scripts/validate-no-duplicate-core-helpers.mjs",
     "validate:presentation-helpers": "node ./scripts/validate-presentation-helpers.mjs",
     "validate:session-only-smoke": "pnpm run build && pnpm --filter @codent/core build && pnpm --filter @codent/node build && node ./scripts/validate-session-only-smoke.mjs",
     "validate:models-config-edit": "node ./scripts/validate-models-config-edit.mjs",

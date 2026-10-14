@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES, getToolPresentation } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, getToolPresentation, splitStreamingLines } from "@codent/core";
 import { Box, Text } from "ink";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
@@ -6,7 +6,6 @@ import { useTranscriptDisplayMode } from "../context/transcript-display-context.
 import { useSize } from "../hooks";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatToolOutput } from "../utils/format";
-import { splitStreamingLines } from "../utils/streaming-output-lines.js";
 import { hasDetailedOutputBlock, keepsCompactRow } from "../utils/tool-display.js";
 import { isCancelledToolCall } from "../utils/tool-part.js";
 

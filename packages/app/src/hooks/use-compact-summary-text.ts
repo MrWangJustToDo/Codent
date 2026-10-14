@@ -5,11 +5,11 @@
  * missed while status is still catching up. Return "" unless `enabled`.
  */
 
-import { compactSummaryStreamId, summaryStreamKey, type SummaryStreamEvent } from "@codent/core";
+import { compactSummaryStreamId, summaryStreamKey } from "@codent/core";
 import { useEffect, useRef, useState } from "react";
 
 import { resolveAgentSession } from "../utils/session-resolve.js";
-import { cancelSummaryBuffer, flushSummaryBuffer, scheduleSummaryFlush } from "../utils/summary-stream-throttle.js";
+import { subscribeSummaryStream } from "../utils/summary-stream-subscription.js";
 
 import { useAgent } from "./use-agent.js";
 
@@ -46,49 +46,26 @@ export function useCompactSummaryText(options?: UseCompactSummaryTextOptions): C
 
     const key = summaryStreamKey("compact", compactSummaryStreamId(rootAgentId));
 
-    const handleEvent = (event: SummaryStreamEvent) => {
-      if (event.key !== key) return;
-      if (event.type === "reset") {
-        cancelSummaryBuffer(key);
+    return subscribeSummaryStream(session, key, {
+      onReset: (event) => {
         textRef.current = "";
         setText("");
         setLabel(event.label ?? "");
-        return;
-      }
-      if (event.type === "append") {
-        scheduleSummaryFlush(key, event.chunk, (accumulated) => {
-          textRef.current += accumulated;
-          setText(textRef.current);
-        });
-      }
-      if (event.type === "end") {
-        flushSummaryBuffer(key, (accumulated) => {
-          textRef.current += accumulated;
-          setText(textRef.current);
-        });
-      }
-    };
-
-    const unsub = session.subscribe(
-      (evt) => {
-        if (evt.channel !== "summary") return;
-        handleEvent(evt.payload);
       },
-      { channels: ["summary"] }
-    );
-
-    const snap = session.getSummaryStreamSnapshot(key);
-    if (snap && snap.status === "active") {
-      const raw = [...snap.lines, snap.pendingLine].filter(Boolean).join("");
-      textRef.current = raw;
-      setText(raw);
-      setLabel(snap.label ?? "");
-    }
-
-    return () => {
-      cancelSummaryBuffer(key);
-      unsub();
-    };
+      onAppend: (accumulated) => {
+        textRef.current += accumulated;
+        setText(textRef.current);
+      },
+      onEnd: () => {},
+      onSnapshot: (snap) => {
+        if (snap && snap.status === "active") {
+          const raw = [...snap.lines, snap.pendingLine].filter(Boolean).join("");
+          textRef.current = raw;
+          setText(raw);
+          setLabel(snap.label ?? "");
+        }
+      },
+    });
   }, [rootAgentId]);
 
   if (!enabled) return { text: "", label: "" };

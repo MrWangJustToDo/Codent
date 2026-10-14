@@ -16,6 +16,7 @@
 import { useStreamingStore } from "../hooks/use-streaming-store.js";
 
 import { isToolExecuting } from "./tool-part.js";
+import { createTrailingScheduler } from "./trailing-throttle.js";
 
 // ============================================================================
 // Constants
@@ -38,7 +39,6 @@ const MAX_RETAINED_CHARS = 64 * 1024;
 interface StreamBuffer {
   stdout: string;
   stderr: string;
-  flushTimer?: ReturnType<typeof setTimeout>;
 }
 
 // ============================================================================
@@ -47,6 +47,7 @@ interface StreamBuffer {
 
 const buffers = new Map<string, StreamBuffer>();
 const throttleMsByToolCallId = new Map<string, Set<number>>();
+const scheduler = createTrailingScheduler();
 
 /** Keep the tail of `text`, starting at a line boundary when one is available. */
 function tailOf(text: string): string {
@@ -66,10 +67,7 @@ function flushToStore(toolCallId: string): void {
   const buffer = buffers.get(toolCallId);
   if (!buffer) return;
 
-  if (buffer.flushTimer) {
-    clearTimeout(buffer.flushTimer);
-    buffer.flushTimer = undefined;
-  }
+  scheduler.cancel(toolCallId);
 
   useStreamingStore.getActions().update(toolCallId, {
     stdout: buffer.stdout,
@@ -78,21 +76,8 @@ function flushToStore(toolCallId: string): void {
 }
 
 function scheduleFlush(toolCallId: string): void {
-  const buffer = buffers.get(toolCallId);
-  if (!buffer) return;
-
-  const throttleMs = getEffectiveThrottleMs(toolCallId);
-  if (throttleMs <= 0) {
-    flushToStore(toolCallId);
-    return;
-  }
-
-  if (buffer.flushTimer) return;
-
-  buffer.flushTimer = setTimeout(() => {
-    buffer.flushTimer = undefined;
-    flushToStore(toolCallId);
-  }, throttleMs);
+  if (!buffers.has(toolCallId)) return;
+  scheduler.schedule(toolCallId, getEffectiveThrottleMs(toolCallId), () => flushToStore(toolCallId));
 }
 
 // ============================================================================
@@ -145,10 +130,7 @@ export function ingestStreamingChunk(toolCallId: string, type: "stdout" | "stder
  * retained output is never read again.
  */
 export function releaseFinishedTool(toolCallId: string): void {
-  const buffer = buffers.get(toolCallId);
-  if (buffer?.flushTimer) {
-    clearTimeout(buffer.flushTimer);
-  }
+  scheduler.cancel(toolCallId);
   buffers.delete(toolCallId);
   throttleMsByToolCallId.delete(toolCallId);
   useStreamingStore.getActions().clear(toolCallId);

@@ -3,14 +3,10 @@
  *
  * Run: node packages/app/test/streaming-output-lines.test.mjs
  */
+import { padLatestLines, splitStreamingLines, takeLatestLines } from "@codent/core";
 import assert from "node:assert/strict";
 
-import {
-  buildFixedStreamingWindow,
-  padLatestLines,
-  splitStreamingLines,
-  takeLatestLines,
-} from "../dist/utils/streaming-output-lines.mjs";
+import { buildFixedStreamingWindow } from "../dist/utils/streaming-output-lines.mjs";
 
 assert.deepEqual(splitStreamingLines(""), []);
 assert.deepEqual(splitStreamingLines("a\nb"), ["a", "b"]);
