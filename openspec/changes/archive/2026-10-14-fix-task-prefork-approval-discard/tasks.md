@@ -54,6 +54,14 @@
   active" (which closes every caller of a session switch at once, the controller method included).
   Covered by `validate:run-abort-ownership` §5 over four seats.
 
+- [x] 2.5 **Third review round (found while closing the change).** The deferral at `onFinish` had no
+  second half for a turn whose only pending call could not run: a `task` call whose arguments never
+  finished streaming is settled as `error` by `cancelIncompleteToolCalls`, so no tool phase joins its
+  pre-fork, and the turn-end boundary collected nothing — the eager subagent ran on unobserved (three
+  pre-forks, zero discards in the session that surfaced it). The pump's turn end now discards with
+  cause `run-finish` (skipped for a WAIT, which is the case that continues the run); the predicate was
+  deliberately NOT narrowed, because the pump needs that phantom continuation to settle the dead call
+  at its entry. Covered by `validate:run-abort-ownership` §5 (a fifth seat) and §6 (the call site).
 ## 3. Correct the documentation that now asserts the wrong thing
 
 - [x] 3.1 Rewrite the header of `packages/app/src/utils/task-subagent.ts`: the read-side resolver is
@@ -87,15 +95,14 @@
 - [x] 5.2 Full gates: `pnpm exec eslint <changed files>`, `node scripts/run-all-validators.mjs --dir
   packages/core`, `pnpm --filter @codent/app test` — lint + typecheck clean, core 187 passed / 0
   failed / 2 skipped, node 6/0, app 118/0.
-- [x] 2.5 **Third review round (found while closing the change).** The deferral at `onFinish` had no
-  second half for a turn whose only pending call could not run: a `task` call whose arguments never
-  finished streaming is settled as `error` by `cancelIncompleteToolCalls`, so no tool phase joins its
-  pre-fork, and the turn-end boundary collected nothing — the eager subagent ran on unobserved (three
-  pre-forks, zero discards in the session that surfaced it). The pump's turn end now discards with
-  cause `run-finish` (skipped for a WAIT, which is the case that continues the run); the predicate was
-  deliberately NOT narrowed, because the pump needs that phantom continuation to settle the dead call
-  at its entry. Covered by `validate:run-abort-ownership` §5 (a fifth seat) and §6 (the call site).
-- [ ] 5.3 Re-run the reported repro (one turn with two `task` calls plus an approval-requiring tool)
+- [ ] 5.3 **Not run by hand.** The reported repro (one turn with two `task` calls plus an
+  approval-requiring tool) was never re-run interactively — this item is what prompted the log
+  archaeology that found 2.5 instead, and the only post-fix session with pre-forks turned out to be
+  the *broken* shape (no tool phase ever joined them), not the fix's shape. What covers the behaviour
+  without it: `validate:task-prefork` drives the real middleware against a real message chain (a
+  pending approval keeps the runs; an invocation with nothing pending discards), `validate:run-abort-ownership`
+  drives all five abandonment seats, and 2.5 added the call-site assertion for the turn end. Left
+  unchecked on purpose: nothing here re-ran the interactive repro, and a tick would say otherwise.
   and confirm in `.agents/logs/<session>/agent.log`: no `subagent:prefork-discarded`, exactly one
   `Tool start: task (pre-fork)` + one `Tool start: task` per call id, and one subagent per call id in
   the session's task panel.
