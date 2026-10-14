@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **17 条未修**（另 16 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」38 条里 **17 条未修**（另 17 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -158,6 +158,10 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【未修】 `skills/extension.ts:150` 的 `<skill name="…">` 未转义（memory 侧有转义）；skill 目录顺序 `~/.agents/skills` 先于 `.agents/skills`（用户全局**遮蔽**项目，疑似与 Claude Code/opencode 相反）。
 
 ---
+
+### 命名 / 常量收敛（由用户提出，2026-10-14）
+
+- 【已修 · `2e5e978f`】 **多处以字面量书写内置 tool 名**（`tools/runtime/create-tool-sets.ts` 的三组集合为起点，同类还有 8 个模块：`file-ops-tracker` 的 READ/WRITE 集合、plan 模式的三组集合与 `run_command` 判定、LSP 扩展的禁用清单与 file-sync 分支、LSP text-output 名单、pump 的 client-tool 判定、extensions middleware 的 `task`/`todo` 判定、controller 的 `run_command` 判定）——**重命名一个内置工具会一直编译通过、却悄悄匹配不到**（例如 `new Set(["write_file", …])` 不再把改名后的工具算作写操作，且没有任何东西失败）。→ 全部改读 `BUILTIN_TOOL_NAMES.*`；`CLIENT_TOOL_NAMES` 原有**两份**定义（`create-tool-sets` 与 `tool-phase-utils`），已收敛到零依赖的 `tool-names.ts`。`validate:builtin-tool-names` 增加守卫：`agent/` 下不得以字面量出现在**身份位置**（比较 / `includes()` / 集合 / 数组项）；`case "<name>":` 派发表、`name: "<x>"` 定义点与 prompt 文案**有意排除**（switch 按工具穷举且 `default` 会退化），另有 5 个"因别的原因同名"的文件豁免并写明理由。守卫**首次运行即抓到 4 处漏网**（均已修），并已验证非空转。
 
 ## 低（`[报告]`，摘要） · 已逐条复核（2026-10-14）
 
