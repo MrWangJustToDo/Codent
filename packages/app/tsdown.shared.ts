@@ -124,6 +124,8 @@ export const ENTRIES = [
   "src/utils/file-icons.ts",
   "src/utils/tool-activity-summary.ts",
   "src/utils/project-transcript.ts",
+  "src/utils/queue-preview.ts",
+  "src/utils/keyboard-labels.ts",
   "src/utils/user-message-segments.ts",
   "src/utils/attachment-hash.ts",
   "src/utils/apply-app-config.ts",

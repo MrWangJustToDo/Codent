@@ -8,6 +8,7 @@ import { useInputMode } from "../hooks/use-input-mode.js";
 import { useSelect } from "../hooks/use-select.js";
 import { useThinkingLine } from "../hooks/use-thinking-line.js";
 import { BG, COLORS } from "../theme/colors.js";
+import { nextQueuedPreview } from "../utils/queue-preview.js";
 
 import { FooterContextBar } from "./FooterContextBar.js";
 import { FooterExtensionSurface } from "./FooterExtensionSurface.js";
@@ -56,6 +57,8 @@ export const Footer = ({
     displayStatus === "compacting";
   const steerCount = queuedMessages?.steer.length ?? 0;
   const followUpCount = queuedMessages?.followUp.length ?? 0;
+  // The snapshot carries the CONTENT; the counts alone cannot tell a user what they queued.
+  const queuePreview = nextQueuedPreview(queuedMessages);
 
   const thinkingEnabled = useThinkingLine((s) => s.enabled);
   const thinkingContent = useThinkingLine((s) => s.content);
@@ -92,6 +95,7 @@ export const Footer = ({
         isAgentBusy={isAgentBusy}
         steerCount={steerCount}
         followUpCount={followUpCount}
+        queuePreview={queuePreview}
         saveError={saveError}
       />
 

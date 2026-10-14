@@ -581,4 +581,31 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
   );
 }
 
+// ============================================================================
+// 6. Force-submit keeps the queue; a plain abort drops it
+//
+// `forceSubmit` interrupts the run to send a message NOW. It used to reach the interrupt through the same
+// path as a plain abort — which clears the queues, because an abort genuinely drops pending input (that
+// clearing IS the documented behavior of Esc, and the footer hint now names it) — so a queued message
+// vanished the instant the user force-submitted something else, while the docs promised only Esc clears.
+//
+// Asserted at the source, not behaviorally: driving the real thing needs a live run. A fresh agent has no
+// chat controller yet (`Chat controller not initialized`), and an agent past a run refuses to queue onto
+// its unwinding pump (`currentToken && !isCurrent`) — both correct, and both out of reach of a unit
+// validator without a stub provider.
+{
+  const controllerSrc = readFileSync(
+    new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url),
+    "utf8"
+  );
+  assert.ok(
+    /interruptCurrentRun\("force-submit", \{ keepQueue: true \}\)/.test(controllerSrc),
+    "forceSubmit interrupts the run WITHOUT clearing the queue"
+  );
+  assert.ok(
+    /if \(!options\.keepQueue\) this\.clearQueuedMessages\(\);/.test(controllerSrc),
+    "…and the plain-abort path still clears it (that is what the footer hint warns about)"
+  );
+}
+
 console.log("cancel-semantics validation passed");

@@ -34,9 +34,12 @@ export function sanitizeAnsi(text: string): string {
   out = out.replace(/\u001b\[([0-9;?]*)([A-Za-z])/g, (_match, params: string, final: string) =>
     final === "m" ? `\u001b[${params}m` : ""
   );
-  // Any remaining two-character escape (ESC 7, ESC c, …) is destructive too.
+  // Any remaining two-character escape (ESC 7, ESC c, …) is destructive too — but `[` is excluded
+  // here, because this pass runs over the SGR the line above just KEPT: `\u001b[33m` starts with
+  // `ESC[`, so matching it would leave the literal `33m` on screen and strip the color the
+  // sequence exists to apply. A real CSI always has its parameters, so it was consumed above.
   // eslint-disable-next-line no-control-regex -- ANSI escapes are control characters by definition.
-  out = out.replace(/\u001b[\s\S]/g, "");
+  out = out.replace(/\u001b(?!\[)[\s\S]/g, "");
   return out;
 }
 

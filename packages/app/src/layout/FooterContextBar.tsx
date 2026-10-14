@@ -30,6 +30,7 @@ export const FooterContextBar = ({
   isAgentBusy,
   steerCount,
   followUpCount,
+  queuePreview,
   saveError,
 }: {
   status: AgentStatus;
@@ -41,6 +42,8 @@ export const FooterContextBar = ({
   isAgentBusy: boolean;
   steerCount: number;
   followUpCount: number;
+  /** Head of the queue (see `utils/queue-preview`), or null when nothing is queued. */
+  queuePreview?: string | null;
   saveError?: string;
 }) => {
   // Prefer session snapshot for duration / error (no ManagedAgent).
@@ -136,14 +139,16 @@ export const FooterContextBar = ({
           {/* Contextual shortcuts */}
           {isAgentBusy && !isPendingApproval && !showFreeformInput && !showSelectList && (
             <Text color={COLORS.muted} dimColor>
-              {busyQueueHint(steerCount, followUpCount)}
+              {busyQueueHint(steerCount, followUpCount, queuePreview)}
             </Text>
           )}
           {(steerCount > 0 || followUpCount > 0) && !isAgentBusy && !isPendingApproval && (
             <Text color={COLORS.primary} dimColor>
-              Queued: {steerCount > 0 ? `${steerCount} steer` : ""}
-              {steerCount > 0 && followUpCount > 0 ? ", " : ""}
-              {followUpCount > 0 ? `${followUpCount} follow-up` : ""}
+              {queuePreview
+                ? `Queued (${steerCount + followUpCount}): "${queuePreview}"`
+                : `Queued: ${steerCount > 0 ? `${steerCount} steer` : ""}${
+                    steerCount > 0 && followUpCount > 0 ? ", " : ""
+                  }${followUpCount > 0 ? `${followUpCount} follow-up` : ""}`}
             </Text>
           )}
           {isPendingApproval && !showFreeformInput && (

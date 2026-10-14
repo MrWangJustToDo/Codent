@@ -130,8 +130,11 @@ export class AgentChatController {
    * Abort the in-flight pump, cancel incomplete tools, and finalize the aborted turn.
    * Invalidates the run token so the old pump exits without double-finalizing.
    */
-  private interruptCurrentRun(reason: string): void {
-    this.clearQueuedMessages();
+  private interruptCurrentRun(reason: string, options: { keepQueue?: boolean } = {}): void {
+    // A plain abort DROPS pending input (the footer hint says so); force-submit interrupts the run to send
+    // something NOW, which must not discard what the user queued before it — that is the `keepQueue` case,
+    // and the cleared snapshot would otherwise be thrown away.
+    if (!options.keepQueue) this.clearQueuedMessages();
     this.managed.statusController.onUserCancel();
     this.managed.abort(reason);
     // Single owner of token invalidation + depth reset. The stale pump's finally
@@ -228,10 +231,13 @@ export class AgentChatController {
    * aborted turn, inject the message, and start a new pump immediately.
    *
    * This is the Option/Ctrl+Enter keybinding while the agent is running.
+   *
+   * Anything already queued is KEPT and delivered after this message, in the order it was written — the
+   * interrupt stops the run, not the user's other input.
    */
   forceSubmit(content: string | ContentPart[]): void {
     assertNotCompactionSummaryInput(content);
-    this.interruptCurrentRun("force-submit");
+    this.interruptCurrentRun("force-submit", { keepQueue: true });
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
     this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");

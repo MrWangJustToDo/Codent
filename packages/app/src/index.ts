@@ -17,6 +17,7 @@ export { App } from "./app/App.js";
 export { Agent } from "./app/Agent.js";
 
 // Components
+export { ExtensionRenderSurface, sanitizeAnsi } from "./components/ExtensionRenderSurface.js";
 export { StreamingOutputView } from "./messages/StreamingOutputView.js";
 export {
   ConfigEditor,

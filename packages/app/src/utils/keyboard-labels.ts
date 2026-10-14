@@ -190,13 +190,21 @@ export function workspacePanelHint(): string {
   return `${KeyLabel.tab} preview/diff · ${KeyLabel.leftRight} focus · ${KeyLabel.upDown} scroll · ${KeyLabel.enter} open · [ ] files · ${KeyLabel.r} refresh · ${KeyLabel.ctrlP} find · ${KeyLabel.ctrlE}/${KeyLabel.esc} close`;
 }
 
-/** Busy-agent footer: follow-up / force-submit / abort. */
-export function busyQueueHint(steerCount: number, followUpCount: number): string {
+/**
+ * Busy-agent footer: what is queued, then follow-up / force-submit / abort.
+ *
+ * `nextPreview` is the head of the queue (see `utils/queue-preview`), which is what turns "2" into
+ * "that thing I typed". The abort entry names the queue it clears: dropping pending input is a real
+ * consequence of Esc, and the count is the only warning the user gets.
+ */
+export function busyQueueHint(steerCount: number, followUpCount: number, nextPreview?: string | null): string {
+  const queued = steerCount + followUpCount;
   const follow = `${KeyLabel.enter}: follow-up${followUpCount > 0 ? ` (${followUpCount})` : ""}`;
   const force = `${modifiedEnterLabel()}: force submit`;
-  const parts = [follow, force, `${KeyLabel.esc}: abort`];
-  if (steerCount > 0) {
-    parts.unshift(`steer queued (${steerCount})`);
+  const abort = queued > 0 ? `${KeyLabel.esc}: abort (drops ${queued} queued)` : `${KeyLabel.esc}: abort`;
+  const parts = [follow, force, abort];
+  if (queued > 0) {
+    parts.unshift(nextPreview ? `Queued (${queued}): "${nextPreview}"` : `queued: ${queued}`);
   }
   return parts.join(" | ");
 }
