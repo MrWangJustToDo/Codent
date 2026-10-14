@@ -5,6 +5,7 @@
  * Run: node packages/app/test/task-limit-status.test.mjs
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { getToolStatusGlyph, isBudgetCutoffTaskPhase, resolveSubagentRowDisplay } from "../dist/index.mjs";
 
@@ -69,6 +70,34 @@ assert.equal(getToolStatusGlyph("input-streaming"), "", "streaming renders a spi
       `only the limit phase restyles a finish (phase=${phase})`
     );
   }
+}
+
+// --- both panels render through that rule, so the two views cannot disagree ---
+//
+// The list row and the detail header used to derive the cutoff label (and the icon) independently,
+// which is how a discarded generation read "limit reached" in one view and "aborted" in the other.
+
+{
+  const panel = (file) => readFileSync(new URL(`../src/components/${file}`, import.meta.url), "utf8");
+  for (const file of ["SubagentListPanel.tsx", "SubagentDetailPanel.tsx"]) {
+    const source = panel(file);
+    assert.match(source, /resolveSubagentRowDisplay\(/, `${file} must render its status through the shared rule`);
+    assert.ok(
+      !source.includes("limit reached"),
+      `${file} must not spell the cutoff label — it comes from the rule, in one place`
+    );
+  }
+  assert.match(
+    readFileSync(new URL("../src/utils/subagent-status.ts", import.meta.url), "utf8"),
+    /limit reached/,
+    "the label lives in the shared rule"
+  );
+  // The detail view has no phase of its own (it resolves the child session), so the parent hands it one.
+  assert.match(
+    readFileSync(new URL("../src/components/SubagentPanel.tsx", import.meta.url), "utf8"),
+    /taskPhase=\{allTasks\.find\(/,
+    "the detail panel is given the owning task call's phase"
+  );
 }
 
 console.log("task-limit-status validation passed");

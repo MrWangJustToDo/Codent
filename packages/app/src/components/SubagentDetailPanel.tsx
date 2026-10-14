@@ -8,11 +8,26 @@ import { formatUsageBrief, resolvePromptTokens } from "../utils/format-usage.js"
 import { KeyLabel } from "../utils/keyboard-labels.js";
 import { formatRetryStatus } from "../utils/retry-status.js";
 import { resolveAgentSession } from "../utils/session-resolve.js";
-import { getStatusColor, getStatusIcon, isSubagentActiveStatus } from "../utils/subagent-status.js";
+import { isSubagentActiveStatus, resolveSubagentRowDisplay } from "../utils/subagent-status.js";
 
 import { Spinner } from "./Spinner.js";
 
-export const SubagentDetailPanel = ({ subagentId, onBack }: { subagentId: string; onBack: () => void }) => {
+export const SubagentDetailPanel = ({
+  subagentId,
+  taskPhase,
+  onBack,
+}: {
+  subagentId: string;
+  /**
+   * The owning `task` call's phase, from the parent's subagent summary.
+   *
+   * The live snapshot has the subagent's own status but not this — the phase is parent-owned state
+   * keyed by the task call. Taken as a prop rather than derived here so both panels route through
+   * `resolveSubagentRowDisplay` and a cutoff reads the same in either view.
+   */
+  taskPhase?: string;
+  onBack: () => void;
+}) => {
   const [tick, setTick] = useState(0);
 
   const childSession = useMemo(() => resolveAgentSession(subagentId), [subagentId]);
@@ -59,16 +74,16 @@ export const SubagentDetailPanel = ({ subagentId, onBack }: { subagentId: string
   // is nothing to render here that is not already on the row. See `formatTaskTurns`.
   const turns = isSubagentActiveStatus(status) ? formatTaskTurns(snap?.iteration) : null;
 
-  const statusIcon = getStatusIcon(status);
-
-  const statusColor = getStatusColor(status);
+  // Same rule as the list row: the phase may only describe a subagent whose own status is the
+  // ambiguous `completed` a budget cutoff leaves behind — see `resolveSubagentRowDisplay`.
+  const row = resolveSubagentRowDisplay(status, taskPhase);
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1} flexGrow={1}>
       <Box flexDirection="column" marginBottom={1} flexShrink={0}>
         <Box>
-          <Text color={statusColor} bold>
-            {statusIcon}{" "}
+          <Text color={row.color} bold>
+            {row.icon}{" "}
           </Text>
           <Text bold color={COLORS.primary} wrap="truncate">
             {displayTitle}
@@ -76,7 +91,7 @@ export const SubagentDetailPanel = ({ subagentId, onBack }: { subagentId: string
         </Box>
         <Box>
           <Text color={COLORS.muted} dimColor>
-            {status}
+            {row.label}
           </Text>
           {turns ? (
             <Text color={COLORS.muted} dimColor>

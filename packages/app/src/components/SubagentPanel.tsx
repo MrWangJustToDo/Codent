@@ -43,7 +43,11 @@ export const SubagentPanel = () => {
     // `resetKey={view}` re-clears when switching list↔detail inside the overlay.
     <PanelOverlay open={view !== "closed"} resetKey={view}>
       {view === "detail" && selectedSubagentId ? (
-        <SubagentDetailPanel subagentId={selectedSubagentId} onBack={backToList} />
+        <SubagentDetailPanel
+          subagentId={selectedSubagentId}
+          taskPhase={allTasks.find((t) => t.id === selectedSubagentId)?.taskPhase}
+          onBack={backToList}
+        />
       ) : (
         <SubagentListPanel tasks={allTasks} onSelect={openDetail} onClose={close} />
       )}
