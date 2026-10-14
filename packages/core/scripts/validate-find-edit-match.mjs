@@ -44,6 +44,23 @@ assert.ok(!("error" in exact));
 assert.equal(exact.mode, "exact");
 assert.equal(applyResolvedEdit("hello world\n", exact, false), "hi world\n");
 
+// A newString is written VERBATIM. `String.replace`/`replaceAll` expand `$$`, `$&`, `` $` ``, `$'`,
+// `$1` and `$<name>` inside a STRING replacement, so an edit whose newString contained one of them
+// landed rewritten in the file — `$$` arrived as a single `$`. The `replaceAll` branch was the
+// reachable one (the single-edit fast path splices with `slice`), and both were fixed together.
+{
+  for (const literal of ["$$", "$&", "$`", "$'", "$1", "$<name>"]) {
+    const content = "a 1 b 1\n";
+    const match = resolveEditMatch(content, "1", literal, { replaceAll: true });
+    assert.ok(!("error" in match), `resolving an edit to ${JSON.stringify(literal)}`);
+    assert.equal(
+      applyResolvedEdit(content, match, true),
+      `a ${literal} b ${literal}\n`,
+      `newString containing ${JSON.stringify(literal)} is written verbatim`
+    );
+  }
+}
+
 // Multiple matches need startLine or replaceAll
 const multi = resolveEditMatch("aa aa aa\n", "aa", "b");
 assert.ok("error" in multi);

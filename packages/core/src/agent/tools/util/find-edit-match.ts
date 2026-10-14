@@ -316,6 +316,11 @@ export function resolveEditMatch(
 
 /**
  * Apply a resolved match to `content`.
+ *
+ * The replacement is passed as a FUNCTION, never as the string. `String.replace`/`replaceAll` expand
+ * `$$`, `$&`, `` $` ``, `$'` and `$<name>` inside a string replacement, so a `newString` containing any
+ * of them was silently rewritten — `$$` arrived in the file as a single `$`. A tool must write exactly
+ * what it was asked to write. (The fuzzy path never had this: it splices with `substring`.)
  */
 export function applyResolvedEdit(
   content: string,
@@ -330,12 +335,12 @@ export function applyResolvedEdit(
   }
 
   if (replaceAll) {
-    return content.replaceAll(match.matchedOld, match.resolvedNew);
+    return content.replaceAll(match.matchedOld, () => match.resolvedNew);
   }
 
   const { matchedOld, resolvedNew, index } = match;
   if (content.slice(index, index + matchedOld.length) !== matchedOld) {
-    return content.replace(matchedOld, resolvedNew);
+    return content.replace(matchedOld, () => resolvedNew);
   }
   return content.slice(0, index) + resolvedNew + content.slice(index + matchedOld.length);
 }
