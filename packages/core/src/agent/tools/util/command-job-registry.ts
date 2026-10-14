@@ -54,6 +54,27 @@ export interface CommandJobPollResult {
   logPath: string | null;
 }
 
+/**
+ * Serializable per-job summary — everything a status surface needs and nothing more.
+ *
+ * Deliberately excludes `stdout` / `stderr` / `kill`: this shape is emitted on the
+ * unified bus and projected onto the session `jobs` channel, so it crosses process
+ * boundaries (remote session, server) and is replayed to late subscribers. Output
+ * stays reachable through `get_command_output` / the job's log file.
+ */
+export interface CommandJobSummary {
+  jobId: string;
+  command: string;
+  status: CommandJobStatus;
+  exitCode: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/** Listener invoked with the full job list whenever the registry's membership or a job's
+ * lifecycle state changes. Output appends do NOT notify (see the class doc). */
+export type CommandJobChangeListener = (jobs: CommandJobSummary[]) => void;
+
 /** A finished background job surfaced to the model as a completion notification. */
 /**
  * Max retained chars per stream once a job has finished (older output is
@@ -92,6 +113,43 @@ export class CommandJobRegistry {
   /** Job ids already surfaced to the model as completion notifications (dedupe). */
   private readonly notifiedJobIds = new Set<string>();
 
+  /** Optional status observer (see {@link setChangeListener}). */
+  private changeListener: CommandJobChangeListener | null = null;
+
+  /**
+   * Watch job membership and lifecycle changes. The listener receives the full,
+   * serializable {@link list} snapshot on every change — deliberately NOT on output
+   * appends, which are far too frequent to broadcast and carry nothing a status
+   * surface needs.
+   *
+   * Registered by the owning agent so job transitions reach the unified bus; the
+   * registry itself stays bus-free (it is also constructed ambient/standalone).
+   */
+  setChangeListener(listener: CommandJobChangeListener | null): void {
+    this.changeListener = listener;
+  }
+
+  /** Serializable status list (no output, no kill handles). */
+  list(): CommandJobSummary[] {
+    const out: CommandJobSummary[] = [];
+    for (const job of this.jobs.values()) {
+      out.push({
+        jobId: job.id,
+        command: job.command,
+        status: job.status,
+        exitCode: job.exitCode,
+        startedAt: job.startedAt,
+        endedAt: job.endedAt,
+      });
+    }
+    return out;
+  }
+
+  /** Broadcast the current status list. No-op without a listener. */
+  private notifyChange(): void {
+    this.changeListener?.(this.list());
+  }
+
   create(command: string): CommandJobRecord {
     const id = generateId("job");
     const startedAt = Date.now();
@@ -124,6 +182,7 @@ export class CommandJobRegistry {
       logPath: log?.path ?? null,
     };
     this.jobs.set(id, record);
+    this.notifyChange();
     return record;
   }
 
@@ -164,6 +223,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    this.notifyChange();
   }
 
   markFailed(jobId: string, message?: string): void {
@@ -178,6 +238,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    this.notifyChange();
   }
 
   markKilled(jobId: string): void {
@@ -187,6 +248,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    this.notifyChange();
   }
 
   /** Record the terminal status in the job log (no-op when logging is off). */
@@ -233,7 +295,12 @@ export class CommandJobRegistry {
     }
   }
 
-  /** Evict oldest finished jobs (already surfaced to the model) beyond the cap. */
+  /**
+   * Evict oldest finished jobs (already surfaced to the model) beyond the cap.
+   *
+   * Runs inside a terminal transition, whose caller broadcasts once afterwards — so
+   * an eviction never needs a notification of its own.
+   */
   private evictOldestFinished(): void {
     const finished: string[] = [];
     for (const [id, job] of this.jobs) {
@@ -354,6 +421,7 @@ export class CommandJobRegistry {
       this.notifiedJobIds.delete(id);
     }
     await Promise.all(ids.map((id) => this.disposeLog(id)));
+    if (ids.length > 0) this.notifyChange();
   }
 
   clear(): void {
@@ -363,6 +431,7 @@ export class CommandJobRegistry {
       this.notifiedJobIds.delete(id);
       void this.disposeLog(id);
     }
+    if (ids.length > 0) this.notifyChange();
   }
 }
 

@@ -77,6 +77,27 @@ export interface SessionInteractionsSnapshot {
   askUser: PendingAskUserInteraction[];
 }
 
+/**
+ * A background command job, as seen by a status surface.
+ *
+ * Deliberately summary-only (no output): the snapshot is projected onto the retained
+ * `jobs` channel, so it crosses process boundaries and is replayed to late subscribers.
+ * Output stays reachable via `get_command_output` / the job's log file.
+ */
+export interface SessionJobSummary {
+  jobId: string;
+  command: string;
+  status: "running" | "exited" | "killed" | "failed";
+  exitCode: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/** Background jobs started by this agent (mirrors the retained `jobs` channel). */
+export interface SessionJobsSnapshot {
+  jobs: SessionJobSummary[];
+}
+
 /** Content accepted by the steer / follow-up queues. */
 export type QueuedMessageContent = string | ContentPart[];
 

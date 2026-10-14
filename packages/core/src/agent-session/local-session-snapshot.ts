@@ -72,6 +72,7 @@ export function readLocalAgentSessionSnapshot(
     toolDescriptors: describeToolPresentations(),
     interactions: managed.readInteractions(),
     iteration: managed.readIteration(),
+    jobs: managed.readJobs(),
     subagents: buildSubagentSummaries(managed, manager),
   };
 }

@@ -70,6 +70,7 @@ function emptySnapshot(agentId: string): AgentSessionSnapshot {
     toolDescriptors: [],
     interactions: { approvals: [], askUser: [] },
     iteration: { current: 0, max: 0 },
+    jobs: { jobs: [] },
     subagents: [],
   } as unknown as AgentSessionSnapshot;
 }
@@ -289,6 +290,8 @@ function applyEvent(
       return { ...snapshot, interactions: event.payload };
     case "iteration":
       return { ...snapshot, iteration: event.payload };
+    case "jobs":
+      return { ...snapshot, jobs: event.payload };
     default:
       return snapshot;
   }

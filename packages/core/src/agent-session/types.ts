@@ -24,7 +24,11 @@ import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js
 import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
-import type { AgentIterationState, SessionInteractionsSnapshot } from "../runtime-types/session-payloads.js";
+import type {
+  AgentIterationState,
+  SessionInteractionsSnapshot,
+  SessionJobsSnapshot,
+} from "../runtime-types/session-payloads.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -52,6 +56,7 @@ export const AGENT_SESSION_CHANNELS = [
   "mode",
   "interaction",
   "iteration",
+  "jobs",
 ] as const;
 
 export type AgentSessionChannel = (typeof AGENT_SESSION_CHANNELS)[number];
@@ -71,6 +76,11 @@ export const DEFAULT_AGENT_SESSION_CHANNELS: readonly AgentSessionChannel[] = [
   "interaction",
   // Agent-loop progress for the current run (1-based iteration vs budget).
   "iteration",
+  // Background command jobs (retained). Subscribed by default on purpose: the
+  // channel is projected from `session:jobs`, and a remote client that had to
+  // opt in explicitly would never see it — the same reasoning recorded for `mcp`
+  // below. The payload is counts/summaries only, so the extra frame is cheap.
+  "jobs",
   // `mcp` is a retained projection (see `session:mcp`); it gets no explicit
   // `channels:[...]` opt-in from any host, so without this it is never delivered.
   "mcp",
@@ -155,6 +165,8 @@ export interface AgentSessionSnapshot {
   toolDescriptors: ToolPresentationInfo[];
   /** Pending approvals / ask_user, mirroring the retained `interaction` channel. */
   interactions: SessionInteractionsSnapshot;
+  /** Background command jobs started by this agent, mirroring the retained `jobs` channel. */
+  jobs: SessionJobsSnapshot;
   /** Agent-loop progress for the current run, mirroring the retained `iteration` channel. */
   iteration: AgentIterationState;
   subagents: AgentSessionSubagentSummary[];
@@ -272,7 +284,8 @@ export type AgentSessionEvent =
   | { channel: "mcp"; payload: AgentSessionMcpSummary; ts: number }
   | { channel: "mode"; payload: { mode: AgentMode; autoMode: boolean }; ts: number }
   | { channel: "interaction"; payload: SessionInteractionsSnapshot; ts: number }
-  | { channel: "iteration"; payload: AgentIterationState; ts: number };
+  | { channel: "iteration"; payload: AgentIterationState; ts: number }
+  | { channel: "jobs"; payload: SessionJobsSnapshot; ts: number };
 
 export type AgentSessionSubscriber = (event: AgentSessionEvent) => void;
 

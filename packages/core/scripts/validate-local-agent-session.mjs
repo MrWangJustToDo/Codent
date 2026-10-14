@@ -51,6 +51,7 @@ function createFake(id, parentId) {
     getExtensionRunner: () => null,
     readInteractions: () => ({ approvals: [], askUser: [] }),
     readIteration: () => ({ current: 0, max: 0 }),
+    readJobs: () => ({ jobs: [] }),
     planMode: {
       on: () => () => {},
       getState: () => ({

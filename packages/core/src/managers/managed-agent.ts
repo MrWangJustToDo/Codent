@@ -172,6 +172,7 @@ import type {
   AgentL1State,
   AgentMode,
   SessionInteractionsSnapshot,
+  SessionJobsSnapshot,
 } from "../runtime-types/session-payloads.js";
 
 // ============================================================================
@@ -769,6 +770,18 @@ export class ManagedAgent {
   }
 
   /**
+   * Background command jobs owned by this agent, summarized for a status surface.
+   * Projected onto the retained `jobs` channel so the built-in jobs extension (and
+   * remote clients) see the current list without polling the registry.
+   *
+   * Reads through the lazy registry, which would mint an empty one — so with no
+   * registry the answer is an explicit empty list instead.
+   */
+  readJobs(): SessionJobsSnapshot {
+    return { jobs: this.commandJobRegistry?.list() ?? [] };
+  }
+
+  /**
    * Record the agent-loop iteration progress for the current run and project it
    * onto the retained `iteration` channel. Called by the lifecycle middleware at
    * each model-iteration boundary.
@@ -819,6 +832,7 @@ export class ManagedAgent {
     bus.retain("session:mcp", () => ({ servers: this.getMcpManager()?.getServerStatuses() ?? [] }));
     bus.retain("session:interaction", () => this.readInteractions());
     bus.retain("agent:iteration", () => this.readIteration());
+    bus.retain("session:jobs", () => this.readJobs());
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
     this.dispatchEvent = (event) => {
@@ -1781,9 +1795,19 @@ export class ManagedAgent {
   /**
    * Per-agent background command-job registry. Each agent (hence each runtime) owns its
    * own map of `run_in_background` jobs, so job ids/state never leak across agents.
+   *
+   * The registry notifies on every membership/lifecycle change; this agent forwards those
+   * onto the retained `jobs` channel. Without that push a job's end would be invisible to
+   * surfaces that cannot reach the registry (extensions, remote clients).
    */
   getCommandJobRegistry(): CommandJobRegistry {
-    this.commandJobRegistry ??= new CommandJobRegistry(this.getCoreEnv());
+    if (!this.commandJobRegistry) {
+      const registry = new CommandJobRegistry(this.getCoreEnv());
+      registry.setChangeListener((jobs) => {
+        this.eventBus?.emit("session:jobs", { jobs });
+      });
+      this.commandJobRegistry = registry;
+    }
     return this.commandJobRegistry;
   }
 
@@ -1794,6 +1818,7 @@ export class ManagedAgent {
   destroyCommandJobRegistry(): Promise<void> {
     const registry = this.commandJobRegistry;
     this.commandJobRegistry = undefined;
+    registry?.setChangeListener(null);
     return registry ? registry.destroyAll() : Promise.resolve();
   }
   /**

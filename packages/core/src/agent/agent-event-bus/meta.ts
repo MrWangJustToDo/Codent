@@ -122,6 +122,11 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "session:tool-presentation": { mode: "emit", channel: "tool-presentation", retained: true },
   "session:interaction": { mode: "emit", channel: "interaction", retained: true },
   "agent:iteration": { mode: "emit", channel: "iteration", retained: true },
+  // Background command jobs. Retained so a late subscriber (the built-in jobs
+  // extension at startup, or a reconnecting remote client) sees the current list
+  // without waiting for the next transition. Deliberately NOT in
+  // DEFAULT_EVENT_LOG_RULES: a job start/stop is not worth a log line per event.
+  "session:jobs": { mode: "emit", channel: "jobs", retained: true },
   "extension:ui": { mode: "emit", channel: "extension-ui" },
   "tool:chunk": { mode: "emit", channel: "tool" },
   "tool:clear": { mode: "emit", channel: "tool" },

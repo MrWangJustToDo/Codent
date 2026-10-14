@@ -20,6 +20,7 @@ import type {
   AgentMode,
   QueuedMessagesSnapshot,
   SessionInteractionsSnapshot,
+  SessionJobsSnapshot,
   UsageChangeSnapshot,
 } from "../../runtime-types/session-payloads.js";
 import type { DispatchRank } from "../extension/dispatch-order.js";
@@ -76,6 +77,8 @@ export interface AgentEvents extends AgentEventPayloadMap {
   "session:interaction": SessionInteractionsSnapshot;
   /** Agent-loop progress for the current run (iteration vs budget). */
   "agent:iteration": AgentIterationState;
+  /** Background command jobs started by this agent (summary only — no output). */
+  "session:jobs": SessionJobsSnapshot;
   /** Extension UI notification. */
   "extension:ui": AgentExtensionUiEvent;
   /** Streaming tool output chunk. */
