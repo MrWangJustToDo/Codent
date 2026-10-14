@@ -37,14 +37,29 @@ function walk(dir) {
   });
 }
 
-/** Every tool name that declares `present` at its definition site. */
+/**
+ * Every tool name that declares `present` at its definition site.
+ *
+ * `name` and `present` are two keys of the same object literal, so what proves the pairing is that
+ * both appear in the same definition — NOT that one newline separates them. The previous pattern
+ * required `name:` + `,` + newline + `present:`, which a formatter is free to invalidate by writing
+ * `name: "x", present: { … }` on one line. When that happened the tool silently left the expectation
+ * set and the failure blamed `BUILTIN_TOOL_NAMES` (`lists tools core does not build`) — the registry —
+ * for a definition that was merely formatted differently. Looking for `present:` in the window right
+ * after the `name` key keeps the two keys of one object together without pinning their layout.
+ */
 function collectDeclared() {
   const declared = new Set();
-  const re = /\bname(?::\s*"([a-z_]+)"|),\s*\n\s*present:\s*\{/g;
+  const key = /\bname(?::\s*"([a-z_]+)")?\s*,/g;
   for (const file of walk(SRC)) {
     if (file === TABLE_FILE) continue;
-    for (const [, literalName] of readFileSync(file, "utf8").matchAll(re)) {
-      if (literalName) declared.add(literalName);
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(key)) {
+      // 240 chars: comfortably past a `name` line's own indentation and short enough that the next
+      // definition cannot reach into it.
+      if (!/\bpresent:\s*\{/.test(source.slice(match.index, match.index + 240))) continue;
+      // No literal means the factory takes its name as a parameter (`create_plan` / `update_plan`).
+      if (match[1]) declared.add(match[1]);
       else for (const name of FACTORY_NAMES) declared.add(name);
     }
   }
@@ -71,8 +86,24 @@ assert.equal(actualSet.size, actual.length, `BUILTIN_TOOL_NAMES has duplicate va
 const missing = [...expected].filter((name) => !actualSet.has(name));
 const extra = [...actualSet].filter((name) => !expected.has(name));
 
-assert.equal(missing.length, 0, `BUILTIN_TOOL_NAMES is missing built-in tools:\n  ${missing.join("\n  ")}`);
-assert.equal(extra.length, 0, `BUILTIN_TOOL_NAMES lists tools core does not build:\n  ${extra.join("\n  ")}`);
+// Both of the next two compare the SOURCES against the BUILT registry, so a stale `dist` fails them
+// while nothing is wrong with the code — and the message reads like a source bug. The runner executes
+// these `.mjs` files directly (not the `validate:*` npm scripts, which build first), so that state is
+// reachable by simply forgetting one command. Say so in the message rather than leaving the reader to
+// work out why a name they can see in `src` is "missing".
+const STALE_BUILD_HINT =
+  "\n  (this check compares `src/` with the built `dist/dev.mjs` — run `pnpm --filter @codent/core run build` if you have not)";
+
+assert.equal(
+  missing.length,
+  0,
+  `BUILTIN_TOOL_NAMES is missing built-in tools:\n  ${missing.join("\n  ")}${STALE_BUILD_HINT}`
+);
+assert.equal(
+  extra.length,
+  0,
+  `BUILTIN_TOOL_NAMES lists tools core does not build:\n  ${extra.join("\n  ")}${STALE_BUILD_HINT}`
+);
 
 // ============================================================================
 // No module writes a built-in name as a literal in an identity position
