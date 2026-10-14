@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量（由 `node scripts/audit-summary.mjs` 从本文件的标记生成，勿手改）：「中」40 条里 **16 条未修**（另 20 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
+> - 余量（由 `node scripts/audit-summary.mjs` 从本文件的标记生成，勿手改）：「中」41 条里 **16 条未修**（另 21 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -110,6 +110,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 ### 写 / 编辑
 - 【已修 · `d1f17c71`】 `tools/util/preview-edit.ts` 自己用 `includes/replace` 重实现匹配，与 `edit_file` 的 unescape / `startLine` / 唯一性逻辑不一致 → 审批时看到的 diff 可能**藏掉真实写入**或**显示并不发生的改动**；`PreviewEditInput` 甚至没有 `startLine` 字段。→ 改为走工具自己的 `resolveEditMatch`/`applyResolvedEdit`（三条漂移全部消除）；`startLine` 加进类型并透传（app 侧本来就在传，只是类型挡掉了）；**工具拒绝时**改为返回「原文件 + 原因」（`edit_file` 只要有一条 edit 解析失败就一个字都不写），审批视图把原因显示出来而不是给一个空 diff。`validate:edit-preview` 用同一份内存 fs 同时驱动**真工具**与预览并逐字节比对。
 - 【未修】 `tools/find-edit-match.ts`：模糊分支**忽略 `startLine`**（取第一个命中）；`newString` 在只有 `oldString` 被过度转义时也被 `unescapeCommonEscapes`（会改写字面 `\n`/`\t`）。
+- 【已修 · `329db6de`】**`newString` 被静默改写**：`tools/util/find-edit-match.ts` 的 `applyResolvedEdit` 用**字符串**充当替换串（`content.replaceAll(match.matchedOld, match.resolvedNew)`，以及 slice 校验失败回退的 `content.replace(matchedOld, resolvedNew)`），而 `String.replace/replaceAll` 会解析替换串里的 `$$` / `$&` / `` $` `` / `$'` / `$1` / `$<name>` ⇒ **`newString` 里的 `$$` 落盘成单个 `$`**（工具改写了用户要求写入的内容；单编辑快路径用 `slice`、模糊路径用 `substring`，所以可达的是 `replaceAll` 分支）。→ 两处改用 replacer **函数**（函数返回值原样写入），doc 写明理由；全 core 扫描确认**只有这两处**，其它同类调用早已是函数形式。`validate:find-edit-match` 新增六个字面量的断言（`$$`/`$&`/`` $` ``/`$'`/`$1`/`$<name>`），非空转：还原成字符串形式即失败。
 - 【未修】 CRLF 文件：多行 `oldString`（LF）匹配 `\r\n` 失败；`read_file` 渲染带不可见 `\r`；匹配路径无 CRLF 归一化。
 - 【已修 · `a011c64e`】 `tools/delete-file-tool.ts` **绕过** `withFileMutationQueue`（与 edit/write 并行时可能"复活"已删文件）。→ 入同一把按路径的队列；`validate:file-mutation-queue` 新增"删除必须等在同一路径上进行的变更"用例（按操作顺序断言）。
 - 【部分修 · `5b3df3fe`】 `tools/util/file-mutation-queue.ts`：key 用 POSIX `pathe`（Windows 下 `src\a` vs `src/a` 不同 key → 不串行；Node 宿主已改为提供平台 `path`，POSIX `pathe` 只是 fallback 默认，**这一半仍未修**）；~~Map 永不回收~~ —— **已修**：链尾自己摘除条目（按身份校验，避免删掉后面排队者等待的 promise），`validate:file-mutation-queue` 断言 60 个文件后归零。
