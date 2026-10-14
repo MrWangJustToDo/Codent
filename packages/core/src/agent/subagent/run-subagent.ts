@@ -9,6 +9,7 @@ import { formatAgentStreamError } from "../stream/assert-async-iterable.js";
 import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import { summaryStreamKey } from "../summary-stream";
 
+import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { isProgressSummaryEligible, summarizeProgress } from "./progress-summary.js";
 import { captureStreamFinishReason, deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";
@@ -503,7 +504,7 @@ async function* tapBeginSummary(
     return;
   }
   for await (const chunk of stream) {
-    if (chunk.type === "TOOL_CALL_START" && (chunk.toolName ?? chunk.toolCallName) === "begin_summary") {
+    if (chunk.type === "TOOL_CALL_START" && (chunk.toolName ?? chunk.toolCallName) === BEGIN_SUMMARY_TOOL_NAME) {
       onBeginSummary();
     }
     yield chunk;

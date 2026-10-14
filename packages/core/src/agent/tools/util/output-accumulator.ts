@@ -31,7 +31,6 @@ const MAX_ROLLING_BYTES_MULTIPLIER = 2;
 export interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
-  tempFilePrefix?: string;
 }
 
 export interface OutputSnapshot {
@@ -42,7 +41,6 @@ export interface OutputSnapshot {
   totalBytes: number;
   outputLines: number;
   outputBytes: number;
-  fullOutputPath?: string;
 }
 
 // ============================================================================
@@ -129,7 +127,6 @@ export class OutputAccumulator {
   private readonly maxLines: number;
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
-  private readonly tempFilePrefix: string;
   private readonly decoder = new TextDecoder();
   private readonly encoder = new TextEncoder();
 
@@ -143,13 +140,10 @@ export class OutputAccumulator {
   private hasOpenLine = false;
   private finished = false;
 
-  private tempFilePath: string | undefined;
-
   constructor(options: OutputAccumulatorOptions = {}) {
     this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxRollingBytes = Math.max(this.maxBytes * MAX_ROLLING_BYTES_MULTIPLIER, 1);
-    this.tempFilePrefix = options.tempFilePrefix ?? "agent-output";
   }
 
   /**
@@ -179,16 +173,12 @@ export class OutputAccumulator {
   /**
    * Get a snapshot of the current output.
    */
-  snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
+  snapshot(): OutputSnapshot {
     const tailTruncation = truncateTail(this.getSnapshotText(), this.maxLines, this.maxBytes);
     const truncated = this.totalLines > this.maxLines || this.totalDecodedBytes > this.maxBytes;
     const truncatedBy = truncated
       ? (tailTruncation.truncatedBy ?? (this.totalDecodedBytes > this.maxBytes ? "bytes" : "lines"))
       : null;
-
-    if (options.persistIfTruncated && truncated) {
-      this.tempFilePath = this.tempFilePath ?? `${this.tempFilePrefix}-${Date.now()}.log`;
-    }
 
     return {
       content: tailTruncation.content,
@@ -198,15 +188,7 @@ export class OutputAccumulator {
       totalBytes: this.totalDecodedBytes,
       outputLines: tailTruncation.outputLines,
       outputBytes: tailTruncation.outputBytes,
-      fullOutputPath: this.tempFilePath,
     };
-  }
-
-  /**
-   * Get the temp file path (if truncated content needs to be persisted).
-   */
-  getTempFilePath(): string | undefined {
-    return this.tempFilePath;
   }
 
   private appendDecodedText(text: string): void {

@@ -352,6 +352,17 @@ function walk(dir) {
   assert.ok(!/\bcancelled: true\b|\baborted: true\b/.test(planSrc), "plan authoring writes no cancel marker");
   const beginSummarySrc = readFileSync(join(SRC, "agent/subagent/begin-summary-tool.ts"), "utf8");
   assert.ok(/name: BEGIN_SUMMARY_TOOL_NAME/.test(beginSummarySrc), "begin_summary takes its name from a constant");
+  // …and the places that RECOGNIZE a built-in read that same name, so renaming one stays a core-only
+  // edit: a hardcoded literal keeps compiling while it quietly stops matching anything.
+  const preforkMiddlewareSrc = readFileSync(join(SRC, "managers/middleware/task-prefork-middleware.ts"), "utf8");
+  assert.ok(
+    /=== BUILTIN_TOOL_NAMES\.task/.test(preforkMiddlewareSrc) && !/=== "task"/.test(preforkMiddlewareSrc),
+    "the pre-fork middleware recognizes `task` through BUILTIN_TOOL_NAMES, not a literal"
+  );
+  assert.ok(
+    /=== BEGIN_SUMMARY_TOOL_NAME/.test(runSubagentSrc) && !/=== "begin_summary"/.test(runSubagentSrc),
+    "run-subagent recognizes the marker tool through BEGIN_SUMMARY_TOOL_NAME, not a literal"
+  );
   assert.ok(!/\bcancelled: true\b|\baborted: true\b/.test(beginSummarySrc), "begin_summary writes no cancel marker");
 }
 

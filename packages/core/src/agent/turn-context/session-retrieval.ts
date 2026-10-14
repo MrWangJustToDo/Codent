@@ -40,14 +40,25 @@ export type SessionRetrievalSection = string;
  * fresh clone, a project that never ran an agent) gets no section rather than
  * guidance pointing at a directory that does not exist.
  */
-export async function hasSessionHistory(env?: ResolvedCoreEnv): Promise<boolean> {
+export async function hasSessionHistory(
+  env?: ResolvedCoreEnv,
+  options?: {
+    /**
+     * The live session, which is NOT history: `session_search` excludes it by default (its content is
+     * the conversation already in context), so counting its file advertised retrieval for a
+     * conversation that had nothing else to find — every workspace's first session, and every resume.
+     */
+    excludeSessionId?: string;
+  }
+): Promise<boolean> {
   const resolvedEnv = env ?? getEnv();
 
   try {
     const sessionsDir = resolvedEnv.path.join(resolvedEnv.rootPath, SESSION_DIR);
     if (!(await resolvedEnv.fs.exists(sessionsDir))) return false;
     const entries = await resolvedEnv.fs.readdir(sessionsDir);
-    return entries.length > 0;
+    const excluded = options?.excludeSessionId ? `${options.excludeSessionId}.session.jsonl` : undefined;
+    return entries.some((entry) => entry.name !== excluded);
   } catch {
     return false;
   }

@@ -214,12 +214,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         };
       }
 
-      const stdoutAccumulator = new OutputAccumulator({
-        tempFilePrefix: `${toolCallId}-stdout`,
-      });
-      const stderrAccumulator = new OutputAccumulator({
-        tempFilePrefix: `${toolCallId}-stderr`,
-      });
+      const stdoutAccumulator = new OutputAccumulator();
+      const stderrAccumulator = new OutputAccumulator();
 
       const encoder = new TextEncoder();
       const startTime = Date.now();
@@ -257,10 +253,16 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         if (isAbortError(err, abortSignal)) {
           stdoutAccumulator.finish();
           stderrAccumulator.finish();
-          const stdoutRaw = stdoutAccumulator.snapshot().content;
-          const stderrRaw = stderrAccumulator.snapshot().content;
-          const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
-          const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
+          // A cancelled command's output is whatever the accumulator kept, so the note must say the
+          // file holds a tail rather than the whole run.
+          const stdoutSnapshot = stdoutAccumulator.snapshot();
+          const stderrSnapshot = stderrAccumulator.snapshot();
+          const stdoutResult = await maybeCacheOutput(coreEnv, stdoutSnapshot.content, `${toolCallId}-stdout`, {
+            truncated: stdoutSnapshot.truncated,
+          });
+          const stderrResult = await maybeCacheOutput(coreEnv, stderrSnapshot.content, `${toolCallId}-stderr`, {
+            truncated: stderrSnapshot.truncated,
+          });
           return {
             command,
             stdout: stdoutResult.content,
@@ -282,16 +284,15 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         if (isTimeoutError(err)) {
           stdoutAccumulator.finish();
           stderrAccumulator.finish();
-          const stdoutResult = await maybeCacheOutput(
-            coreEnv,
-            stdoutAccumulator.snapshot().content,
-            `${toolCallId}-stdout`
-          );
-          const stderrResult = await maybeCacheOutput(
-            coreEnv,
-            stderrAccumulator.snapshot().content,
-            `${toolCallId}-stderr`
-          );
+          // Same as the cancel branch: a deadline kill leaves the accumulator's own view of the output.
+          const stdoutSnapshot = stdoutAccumulator.snapshot();
+          const stderrSnapshot = stderrAccumulator.snapshot();
+          const stdoutResult = await maybeCacheOutput(coreEnv, stdoutSnapshot.content, `${toolCallId}-stdout`, {
+            truncated: stdoutSnapshot.truncated,
+          });
+          const stderrResult = await maybeCacheOutput(coreEnv, stderrSnapshot.content, `${toolCallId}-stderr`, {
+            truncated: stderrSnapshot.truncated,
+          });
           return buildTimedOutCommandResult({
             command,
             stdout: stdoutResult.content,
@@ -317,11 +318,18 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       // and the HTTP plane returns its buffers verbatim), so it is the full text; the accumulator keeps
       // only a bounded tail (50KB / 2000 lines) to cap the agent's memory, and is the fallback for a
       // host that streams its chunks but returns nothing.
-      const stdoutFull = result.stdout || stdoutAccumulator.snapshot().content;
-      const stderrFull = result.stderr || stderrAccumulator.snapshot().content;
+      const stdoutSnapshot = stdoutAccumulator.snapshot();
+      const stderrSnapshot = stderrAccumulator.snapshot();
+      const stdoutFull = result.stdout || stdoutSnapshot.content;
+      const stderrFull = result.stderr || stderrSnapshot.content;
 
-      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutFull, `${toolCallId}-stdout`);
-      const stderrResult = await maybeCacheOutput(coreEnv, stderrFull, `${toolCallId}-stderr`);
+      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutFull, `${toolCallId}-stdout`, {
+        // Only the accumulator's own text is a bounded view; the host's buffers are the whole output.
+        truncated: !result.stdout && stdoutSnapshot.truncated,
+      });
+      const stderrResult = await maybeCacheOutput(coreEnv, stderrFull, `${toolCallId}-stderr`, {
+        truncated: !result.stderr && stderrSnapshot.truncated,
+      });
 
       const cachedOutputPath = stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null;
 

@@ -79,12 +79,27 @@ export async function cacheToolOutput(env: ResolvedCoreEnv, content: string, id:
 }
 
 /**
+ * The line telling the model where the rest of the output is, and whether it is all of it.
+ */
+function noteLine(cachedPath: string, totalLines: number, chars: number, truncated: boolean): string {
+  const size = `${totalLines} lines, ${chars} chars`;
+  return truncated
+    ? `Output saved to: ${cachedPath} (${size} — this run kept only its tail, so earlier output is gone)`
+    : `Full output saved to: ${cachedPath} (${size})`;
+}
+
+/**
  * Build a preview string from large content with a reference to the cached file.
  */
 export function buildCachedPreview(
   content: string,
   cachedPath: string,
-  opts?: { headLines?: number; tailLines?: number }
+  /**
+   * `truncated` says the CALLER's content is already a bounded view (the command's own accumulator kept
+   * only a tail, which is all a cancelled or timed-out run can offer) — so the note must not promise a
+   * full copy the file does not hold.
+   */
+  opts?: { headLines?: number; tailLines?: number; truncated?: boolean }
 ): string {
   const headLines = opts?.headLines ?? DEFAULT_HEAD_LINES;
   const tailLines = opts?.tailLines ?? DEFAULT_TAIL_LINES;
@@ -110,7 +125,7 @@ export function buildCachedPreview(
       "",
       tail,
       "",
-      `Full output saved to: ${cachedPath} (${totalLines} lines, ${content.length} chars)`,
+      noteLine(cachedPath, totalLines, content.length, opts?.truncated === true),
       `Use read_file with path="${cachedPath}" and offset/limit to read specific sections.`,
     ].join("\n");
   }
@@ -124,7 +139,7 @@ export function buildCachedPreview(
   const head = content.slice(0, DEFAULT_HEAD_CHARS);
   const tail = content.slice(Math.max(DEFAULT_HEAD_CHARS, content.length - DEFAULT_TAIL_CHARS));
   const omitted = content.length - DEFAULT_HEAD_CHARS - DEFAULT_TAIL_CHARS;
-  const note = `Full output saved to: ${cachedPath} (${totalLines} lines, ${content.length} chars)`;
+  const note = noteLine(cachedPath, totalLines, content.length, opts?.truncated === true);
 
   if (omitted > 0) {
     return [
@@ -163,7 +178,7 @@ export async function maybeCacheOutput(
   env: ResolvedCoreEnv,
   content: string,
   id: string,
-  opts?: { headLines?: number; tailLines?: number }
+  opts?: { headLines?: number; tailLines?: number; truncated?: boolean }
 ): Promise<{ content: string; cachedOutputPath: string | null }> {
   if (!shouldCache(content)) {
     return { content, cachedOutputPath: null };

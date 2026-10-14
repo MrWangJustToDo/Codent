@@ -1216,7 +1216,9 @@ export class ManagedAgent {
    * agents (see `agent-factory`), matching `setAgentDocContent`.
    */
   async primeSessionHistoryGate(): Promise<void> {
-    this.sessionHistoryPresent = await hasSessionHistory(this.getCoreEnv());
+    this.sessionHistoryPresent = await hasSessionHistory(this.getCoreEnv(), {
+      excludeSessionId: this.getSessionData()?.id,
+    });
   }
 
   getAgentDocContent(): string {

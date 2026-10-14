@@ -40,6 +40,7 @@ import {
   type PreforkDiscardCause,
 } from "../../agent/subagent/task-prefork.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { generateId } from "../../utils/generate-id.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -108,7 +109,7 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
       }
 
       if (chunk.type === "TOOL_CALL_START") {
-        if ((chunk.toolName ?? chunk.toolCallName) === "task") {
+        if ((chunk.toolName ?? chunk.toolCallName) === BUILTIN_TOOL_NAMES.task) {
           pendingCalls.set(chunk.toolCallId, { argsText: "" });
         }
         return chunk;

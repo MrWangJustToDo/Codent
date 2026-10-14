@@ -15,6 +15,7 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { clearCoreEnv, createRunCommandTool, registerCoreEnv } from "../dist/dev.mjs";
 
@@ -102,6 +103,55 @@ function makeEnv() {
   assert.equal(result.cachedOutputPath, null, "a small output is not spilled");
   assert.equal(result.stdout, "ok\n", "…and is returned verbatim");
   assert.equal(files.size, 0, "…and nothing is written to the cache directory");
+}
+
+// ============================================================================
+// A cancelled command can only cache its tail, and says so
+// ============================================================================
+//
+// The main path caches the host's full buffers, so its note may promise a full copy. A cancel or a
+// deadline kill has no buffers to fall back on — the accumulator's own bounded view is all the run
+// kept — so the note has to say that instead of claiming the file holds everything.
+
+{
+  const { env } = makeEnv();
+  env.runCommand = async (_cmd, opts) => {
+    for (let i = 0; i < 40; i++) {
+      opts?.onStdout?.(`line ${i} ${"x".repeat(4000)}\n`);
+    }
+    const error = new Error("aborted");
+    error.name = "AbortError"; // what the host throws for a user cancel
+    throw error;
+  };
+  clearCoreEnv();
+  registerCoreEnv(env);
+
+  const result = await createRunCommandTool().execute(
+    { command: "produce-then-be-cancelled" },
+    { toolCallId: "call-cancel", coreEnv: env }
+  );
+
+  assert.equal(result.cancelled, true, "the run reports itself as cancelled");
+  assert.match(result.stdout, /Output saved to: /, "the note still points at the file");
+  assert.ok(
+    !result.stdout.includes("Full output saved to: "),
+    `…but does not promise a full copy the tail cannot hold (${result.stdout.slice(0, 120)})`
+  );
+  assert.match(result.stdout, /kept only its tail/, "…and says which part it is");
+}
+
+// ============================================================================
+// The accumulator's temp-file plumbing is gone
+// ============================================================================
+//
+// It set a path nothing ever wrote (`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()`), which
+// is how "the full output is on disk" came to look implemented while the cache wrote a truncated tail.
+
+{
+  const source = readFileSync(new URL("../src/agent/tools/util/output-accumulator.ts", import.meta.url), "utf8");
+  for (const gone of ["tempFilePath", "tempFilePrefix", "getTempFilePath", "persistIfTruncated", "fullOutputPath"]) {
+    assert.ok(!source.includes(gone), `the dead \`${gone}\` machinery is gone from the accumulator`);
+  }
 }
 
 console.log("command-output-cache validation passed");
