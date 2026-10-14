@@ -22,9 +22,10 @@ export {
   getPlanModeToolExcludeSet,
   isMcpToolName,
   isPlanModeForbiddenTool,
+  isWorkspaceEditingTool,
   PLAN_AUTHORING_TOOL_NAMES,
   PLAN_COMPLETION_TOOL_NAMES,
-  PLAN_MODE_EXCLUDED_TOOL_NAMES,
+  PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES,
 } from "./plan-tools.js";
 export {
   formatStructuredPlanMarkdown,

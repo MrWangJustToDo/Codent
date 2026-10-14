@@ -240,7 +240,8 @@
     "validate:file-mutation-queue": "pnpm run build && node scripts/validate-file-mutation-queue.mjs",
     "validate:lsp-restart-cleanup": "pnpm run build && node scripts/validate-lsp-restart-cleanup.mjs",
     "validate:edit-preview": "pnpm run build && node scripts/validate-edit-preview.mjs",
-    "validate:command-output-cache": "pnpm run build && node scripts/validate-command-output-cache.mjs"
+    "validate:command-output-cache": "pnpm run build && node scripts/validate-command-output-cache.mjs",
+    "validate:plan-tool-boundary": "pnpm run build && node scripts/validate-plan-tool-boundary.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.68.0",

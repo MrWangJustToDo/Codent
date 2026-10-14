@@ -13,6 +13,14 @@
  * payload is persisted with the session, so a non-deterministic value would corrupt
  * the durable chain as well as the prompt-cache prefix.
  */
+/**
+ * What a tool does, in one bucket.
+ *
+ * `edits` is **load-bearing beyond display**: plan mode withholds exactly the tools that declare it
+ * (`agent/plan/plan-tools.ts`), so moving a tool into `edits` restricts it while planning and moving
+ * one out makes it available there. `validate:plan-tool-boundary` asserts that boundary, so a change
+ * here is a boundary change rather than a display tweak.
+ */
 export type ToolActivityCategory = "reads" | "edits" | "searches" | "commands" | "tasks" | "other";
 
 export interface ToolPresentation {

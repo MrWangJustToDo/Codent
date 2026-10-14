@@ -8,24 +8,38 @@ import assert from "node:assert/strict";
 import {
   PLAN_AUTHORING_TOOL_NAMES,
   PLAN_COMPLETION_TOOL_NAMES,
-  PLAN_MODE_EXCLUDED_TOOL_NAMES,
+  PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES,
   PlanModeController,
   buildPlanModePlanningPrompt,
   buildPlanModeReadyPrompt,
   buildPlanModeRetroPrompt,
   createAgentEventBus,
+  createDeleteFileTool,
+  createEditFileTool,
+  createWriteFileTool,
   formatStructuredPlanMarkdown,
   isPlanModeForbiddenTool,
 } from "../dist/dev.mjs";
 
-assert.ok(!PLAN_MODE_EXCLUDED_TOOL_NAMES.has("task"), "task must remain available in plan mode");
-assert.ok(PLAN_MODE_EXCLUDED_TOOL_NAMES.has("write_file"));
-assert.ok(PLAN_MODE_EXCLUDED_TOOL_NAMES.has("edit_file"));
-assert.ok(PLAN_MODE_EXCLUDED_TOOL_NAMES.has("delete_file"));
-assert.ok(PLAN_MODE_EXCLUDED_TOOL_NAMES.has("kill_command"));
-assert.equal(isPlanModeForbiddenTool("task"), false);
-assert.equal(isPlanModeForbiddenTool("write_file"), true);
-assert.equal(isPlanModeForbiddenTool("mcp__foo"), true);
+// Plan mode withholds by DECLARATION now, and a declaration is registered when a tool is defined —
+// so the tools have to exist before the boundary can be read. `validate:plan-tool-boundary` drives the
+// derivation itself (including a tool that writes and is on no list).
+createDeleteFileTool();
+createEditFileTool();
+createWriteFileTool();
+
+assert.ok(!PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has("task"), "task must remain available in plan mode");
+assert.ok(
+  !PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has("write_file"),
+  "editing tools are derived from their declaration, not listed here"
+);
+assert.ok(PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has("kill_command"), "the non-editing exception stays named");
+for (const name of ["write_file", "edit_file", "delete_file"]) {
+  assert.equal(isPlanModeForbiddenTool(name), true, `${name} edits the workspace, so plan mode withholds it`);
+}
+assert.equal(isPlanModeForbiddenTool("task"), false, "subagents are already read-only");
+assert.equal(isPlanModeForbiddenTool("run_command"), false, "the command allowlist governs run_command, not this set");
+assert.equal(isPlanModeForbiddenTool("mcp__foo"), true, "an MCP tool's effects are unknown");
 assert.ok(PLAN_AUTHORING_TOOL_NAMES.has("create_plan"));
 assert.ok(PLAN_AUTHORING_TOOL_NAMES.has("update_plan"));
 assert.ok(PLAN_COMPLETION_TOOL_NAMES.has("complete_plan"));

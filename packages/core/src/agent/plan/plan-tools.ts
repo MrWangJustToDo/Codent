@@ -1,11 +1,34 @@
+import { getToolPresentation } from "../tools/presentation/registry.js";
+
 import type { PlanModeController } from "./plan-mode-controller.js";
 import type { ToolsRecord } from "../tools/runtime/tools-record.js";
 
 /**
- * Mutating tools hidden while planning or ready.
- * `task` stays available — subagents are already read-only (Claude/Cursor-style explore).
+ * Tools withheld while planning or ready that do NOT write the workspace, each with its reason.
+ *
+ * The workspace-mutating half is DERIVED from the tool's own declaration
+ * ({@link isWorkspaceEditingTool}, i.e. `present.category === "edits"`) rather than listed here, so an
+ * editing tool cannot become available in plan mode by arriving under a name nobody remembered to add:
+ * `code_rewrite` was exactly that — a built-in that edits in place with `dry_run: false` and appeared
+ * on no list. What remains below needs a different rule, and each entry says which:
+ *
+ * - `kill_command` — background-job control. It does not touch the workspace (it is a `commands`
+ *   tool like `run_command`); it is withheld because an unattended background job has no UI to control
+ *   it, the same reason `run_command`'s `run_in_background` is refused while planning.
+ *
+ * `task` stays available: subagents are already read-only (Claude/Cursor-style explore).
  */
-export const PLAN_MODE_EXCLUDED_TOOL_NAMES = new Set(["write_file", "edit_file", "delete_file", "kill_command"]);
+export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES = new Set(["kill_command"]);
+
+/**
+ * Whether a tool edits the workspace, by its own declaration.
+ *
+ * Read from the presentation registry, which is what makes this cover every source of tools —
+ * built-ins, the LSP extension's tools, and any future editing tool — without a second list.
+ */
+export function isWorkspaceEditingTool(toolName: string): boolean {
+  return getToolPresentation(toolName)?.category === "edits";
+}
 
 /** Plan authoring tools — only offered while planning/ready. */
 export const PLAN_AUTHORING_TOOL_NAMES = new Set(["create_plan", "update_plan"]);
@@ -19,15 +42,18 @@ export function isMcpToolName(name: string): boolean {
 
 /** Build exclude set for {@link resolveToolsRecord} during planning/ready. */
 export function getPlanModeToolExcludeSet(tools: ToolsRecord): Set<string> {
-  const exclude = new Set(PLAN_MODE_EXCLUDED_TOOL_NAMES);
+  const exclude = new Set(PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES);
   for (const name of Object.keys(tools)) {
-    if (isMcpToolName(name)) exclude.add(name);
+    if (isMcpToolName(name) || isWorkspaceEditingTool(name)) exclude.add(name);
   }
   return exclude;
 }
 
+/** Whether plan mode withholds `toolName` — every editing tool, the named exceptions, and MCP. */
 export function isPlanModeForbiddenTool(toolName: string): boolean {
-  return PLAN_MODE_EXCLUDED_TOOL_NAMES.has(toolName) || isMcpToolName(toolName);
+  return (
+    isWorkspaceEditingTool(toolName) || PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has(toolName) || isMcpToolName(toolName)
+  );
 }
 
 /**
