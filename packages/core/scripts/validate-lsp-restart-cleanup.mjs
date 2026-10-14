@@ -21,7 +21,9 @@ import assert from "node:assert/strict";
 import { LspManager, RESTART_INITIAL_BACKOFF_MS } from "../dist/dev.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const BACKOFF_SLACK_MS = 1000;
+// Generous on purpose: these assertions wait for a real timer on a shared CI runner, and a late
+// timer under load must not read as "the restart did not happen".
+const BACKOFF_SLACK_MS = 2000;
 
 /**
  * A manager whose connections are fakes this test can crash on demand.

@@ -34,9 +34,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       timeline.push(`end-${label}`);
     });
 
-  const first = run("1", 40);
-  await sleep(5);
-  const second = run("2", 5);
+  const first = run("1", 300);
+  await sleep(20);
+  const second = run("2", 20);
   assert.equal(fileMutationQueueSize(), 1, "one entry per file, not per queued operation");
 
   await Promise.all([first, second]);
@@ -56,12 +56,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const order = [];
   const slow = withFileMutationQueue(env(), "a.ts", async () => {
     order.push("a-start");
-    await sleep(40);
+    await sleep(300);
     order.push("a-end");
   });
   const fast = withFileMutationQueue(env(), "b.ts", async () => {
     order.push("b-start");
-    await sleep(5);
+    await sleep(20);
     order.push("b-end");
   });
   await Promise.all([slow, fast]);
@@ -111,8 +111,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await Promise.all(files.map((file, i) => withFileMutationQueue(env(), file, async () => sleep(i % 3))));
   assert.equal(fileMutationQueueSize(), 0, "60 files touched, 0 entries left");
 
+  // Margins here are for a loaded CI runner, not for this machine: the operations must still be in
+  // flight when the size is read, so their duration is an order of magnitude above the read.
   const overlapping = Promise.all(
-    Array.from({ length: 10 }, (_, i) => withFileMutationQueue(env(), `x-${i}.ts`, async () => sleep(20)))
+    Array.from({ length: 10 }, (_, i) => withFileMutationQueue(env(), `x-${i}.ts`, async () => sleep(400)))
   );
   await sleep(5);
   assert.equal(fileMutationQueueSize(), 10, "…while 10 files in flight hold exactly 10 entries");
