@@ -291,7 +291,11 @@ export class UsageTracker {
 
   getTokenLimitPercent(): number {
     if (this.tokenLimit <= 0) return 0;
-    return Math.min(100, (this.getContextFillTokens() / this.tokenLimit) * 100);
+    // Deliberately NOT clamped to 100. `tokenLimit` is the compaction BUDGET (min(window, 400k) by
+    // default) and the auto-compact trigger sits below it (80% by default), so a reading above 100 is
+    // the signature of "the trigger did not fire" — the only thing this number can report that the
+    // fill alone cannot. A display that wants a 0..100 bar clamps for itself.
+    return (this.getContextFillTokens() / this.tokenLimit) * 100;
   }
 
   resetWindow(): void {

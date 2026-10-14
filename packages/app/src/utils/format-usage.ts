@@ -2,17 +2,18 @@
  * Compact token/usage formatting for footers and task headers.
  */
 
+/** Two decimals at most, and no trailing zeros: `400k`, `43.15M`, `1.5k`, `357.21k`. */
+function trimmed(n: number): string {
+  return n.toFixed(2).replace(/\.?0+$/, "");
+}
+
 export function formatCompactNumber(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
   if (n < 1000) return String(Math.round(n));
   if (n < 1_000_000) {
-    const thousands = n / 1000;
-    const rounded = Math.round(thousands * 100) / 100;
-    return `${rounded.toFixed(2)}k`;
+    return `${trimmed(Math.round((n / 1000) * 100) / 100)}k`;
   }
-  const millions = n / 1_000_000;
-  const rounded = Math.round(millions * 100) / 100;
-  return `${rounded.toFixed(2)}M`;
+  return `${trimmed(Math.round((n / 1_000_000) * 100) / 100)}M`;
 }
 
 /**
@@ -54,8 +55,15 @@ export function formatUsageBrief(usage: {
  * Context-window fill for the footer (Pi-style), separate from lifetime totals.
  *
  * - When limit unknown: empty string (caller hides the segment)
- * - When window usage is 0 after compact / before first response: `?/1M`
- * - Otherwise: `35%/1M`
+ * - When window usage is 0 after compact / before first response: `?/400k`
+ * - Otherwise: `22% of 400k`
+ *
+ * The percentage is NOT clamped to 100: the limit here is the compaction BUDGET, and the trigger sits
+ * at `compactAtPercent` (80 by default) of it — so a reading above 100 means the trigger did not fire,
+ * which is exactly the one thing this segment can tell you. Clamping it hid that.
+ *
+ * ` of ` rather than `/`: the number is the budget, not the model's context window (a 1M-window model
+ * shows `400k` here), and a slash next to the percentage reads as a fraction of the window.
  */
 export function formatContextUsage(options: {
   contextFillTokens: number;
@@ -70,6 +78,6 @@ export function formatContextUsage(options: {
     return `?/${limitLabel}`;
   }
 
-  const pct = Math.min(100, Math.max(0, percent));
-  return `${pct.toFixed(0)}%/${limitLabel}`;
+  const pct = Math.max(0, percent);
+  return `${pct.toFixed(0)}% of ${limitLabel}`;
 }

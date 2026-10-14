@@ -524,9 +524,14 @@ export interface ExtensionUiModel {
 
 /** Token / cost usage exposed to extensions. */
 export interface ExtensionUiUsage {
-  /** Context window used, 0-100. */
+  /**
+   * Fill against the compaction budget, 0 upward — NOT clamped at 100: the budget is
+   * `min(contextWindow, 400k)` and the auto-compact trigger sits at `compactAtPercent` of it (80 by
+   * default), so a value above 100 means the trigger did not fire. A renderer that wants a 0-100 bar
+   * clamps for itself.
+   */
   percent: number;
-  /** Context window token limit. */
+  /** The compaction budget the percentage is against (`min(contextWindow, 400k)`), not the model's window. */
   tokenLimit: number;
   /** Tokens currently occupying the context window. */
   windowTokens: number;

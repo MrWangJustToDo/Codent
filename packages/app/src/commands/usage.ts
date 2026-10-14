@@ -190,9 +190,7 @@ registerBuiltinCommand("usage", {
     if (contextInput > 0) {
       const contextCacheRead = currentUsage.cacheReadTokens ?? 0;
       const pctText =
-        tokenLimit > 0
-          ? ` (${Math.min(100, (contextInput / tokenLimit) * 100).toFixed(0)}% of ${fmt(tokenLimit)})`
-          : "";
+        tokenLimit > 0 ? ` (${((contextInput / tokenLimit) * 100).toFixed(0)}% of ${fmt(tokenLimit)})` : "";
       lines.push("");
       lines.push(`  ── Current Context ──`);
       lines.push(`  Context:      ${fmt(contextInput)} tokens${pctText}`);

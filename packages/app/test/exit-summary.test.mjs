@@ -86,12 +86,12 @@ assert.ok(text.includes("$0.12"), "cost is rendered");
 assert.ok(text.includes("11m 07s") === false, "control: duration comes from the process clock, not the fixture");
 
 // The token line must be the billed prompt, never `inputTokens`.
-// Asserted as a whole line: `251.20k` *contains* `1.20k`, so a substring check for the
+// Asserted as a whole line: `251.2k` *contains* `1.2k`, so a substring check for the
 // cache-miss figure would pass against the correct output too. Lines are unindented —
 // horizontal placement belongs to the component that frames them.
 const tokensLine = lines.find((line) => line.includes("Tokens:"));
-assert.equal(tokensLine, "Tokens:    251.20k in / 4.00k out", "the token line uses the billed prompt");
-assert.ok(text.includes("250.00k cache read"), "cache read is broken out when present");
+assert.equal(tokensLine, "Tokens:    251.2k in / 4k out", "the token line uses the billed prompt");
+assert.ok(text.includes("250k cache read"), "cache read is broken out when present");
 assert.ok(!text.includes("cache write"), "a zero cache write is omitted rather than printed as 0");
 assert.ok(text.includes("2/3 completed"), "todo progress is summarized");
 
@@ -165,7 +165,7 @@ assert.ok(adapterExited, "the host is told to exit after the summary is captured
 const captured = useAgent.getState().exitSummaryLines;
 assert.ok(captured && captured.length > 0, "the summary must be captured from the live session");
 assert.ok(
-  captured.some((line) => line.includes("251.20k")),
+  captured.some((line) => line.includes("251.2k")),
   "the captured lines are the live reading, not the post-destroy empty one"
 );
 
