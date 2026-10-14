@@ -35,18 +35,55 @@
  * the pipeline behaves exactly as if the middleware did not exist.
  */
 
-import { stripMultimodalFromChatMessages } from "../../models/adapter/capability-message-utils.js";
+import { parseStringifiedMultimodalContent } from "../../agent/media/repair-stringified-multimodal.js";
+import {
+  stripMultimodalContentParts,
+  stripMultimodalFromChatMessages,
+} from "../../models/adapter/capability-message-utils.js";
 import { CONTINUATION_PROMPT } from "../stream-recovery/max-tokens-continue.js";
 
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { RunCoordinator } from "../run-coordinator.js";
-import type { ChatMiddleware, ModelMessage } from "@tanstack/ai";
+import type { ContentPart, ChatMiddleware, ModelMessage } from "@tanstack/ai";
+import type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
 
 export interface WireRecoveryMiddlewareDeps {
   /** Per-run override state (survives retries within one run). */
   getRun: () => RunCoordinator | undefined;
+}
+
+/**
+ * Rewrite string-content tool results that carry media the model cannot take.
+ *
+ * Chat Completions accepts only string `tool` content, so TanStack persists an array result with
+ * `JSON.stringify` — and in that form the media is not a content part at all until something
+ * re-parses it. The two readers that do are the tool-output projection (skipped when the tool has no
+ * registered `toModelOutput`, and never run for a subagent) and the adapter's
+ * `liftToolMediaForChatCompletions`, which runs after every middleware and does not consult the drop
+ * set. So this seam has to handle the string form itself, or a model without vision is sent the tool's
+ * image anyway — on the one path where the widened retry cannot help, because the same string comes
+ * back on every call.
+ *
+ * The recognition lives here, not in the strip module: the parser is `agent/media/`'s and `models/`
+ * must not import upward (`validate:layer-boundaries`). What a dropped part becomes stays with the
+ * drop set, in {@link stripMultimodalContentParts}. Narrowed to `role: "tool"` — that is the encoding
+ * that needs it, and a user message is the user's text even when it happens to parse as parts.
+ */
+function stripStringifiedToolMedia(messages: ModelMessage[], drop: Set<MultimodalPartType>): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "tool" || typeof message.content !== "string") return message;
+
+    const parts = parseStringifiedMultimodalContent(message.content);
+    if (!parts) return message;
+
+    const asParts = parts as ContentPart[];
+    const stripped = stripMultimodalContentParts(asParts, drop);
+    if (stripped === asParts) return message;
+    // Stays a string: string `tool` content is the only thing this wire format accepts.
+    return { ...message, content: JSON.stringify(stripped) } as ModelMessage;
+  });
 }
 
 export function createWireRecoveryMiddleware(deps: WireRecoveryMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -64,6 +101,7 @@ export function createWireRecoveryMiddleware(deps: WireRecoveryMiddlewareDeps): 
 
       if (drop?.size) {
         messages = stripMultimodalFromChatMessages(messages, drop);
+        messages = stripStringifiedToolMedia(messages, drop);
       }
 
       if (armed) {

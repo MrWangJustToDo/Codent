@@ -175,6 +175,8 @@ export function buildAgentRunner(
       agentId: deps.agentId,
       getExtensionRunner: deps.getExtensionRunner,
       getUsage: () => usage,
+      // Read live, not captured: a rejection can widen the run's drop set mid-run.
+      getWireDropPartTypes: () => run.getWireDropPartTypes(),
       getAbortSignal: () => run.currentAbortController?.signal,
     }),
     createToolCompactMiddleware({

@@ -45,6 +45,15 @@ export interface MessageTransformMiddlewareDeps {
   getExtensionRunner: () => ExtensionRunner | null;
   /** Capability probe, same source as the pre-send multimodal stripping. */
   getUsage: () => UsageTracker;
+  /**
+   * The run's effective drop set, when one is armed.
+   *
+   * The probe above describes what the model DECLARED; a multimodal API rejection widens this run's
+   * strip to every part type. An extension deciding "can this model see the image?" has to know
+   * that — otherwise it is told the model can see it, leaves the media in place, and the strip
+   * (running later on the same wire) drops it anyway.
+   */
+  getWireDropPartTypes?: () => ReadonlySet<MultimodalPartType> | null;
   /** Abort signal of the owning run, forwarded to transformers. */
   getAbortSignal?: () => AbortSignal | undefined;
 }
@@ -58,6 +67,11 @@ function resolveTransformPhase(phase: ChatMiddlewarePhase): MessageTransformPhas
  * Capability context for a transformer, from the same probe that gates pre-send
  * stripping, so an extension never re-derives model ability from host config.
  *
+ * `unsupportedPartTypes` is the run's EFFECTIVE drop set: the probe's, unless a rejection
+ * widened it (see {@link MessageTransformMiddlewareDeps.getWireDropPartTypes}). The declared
+ * flags and `capabilities` stay the probe's, because they describe the model — a retry decision
+ * made for one run does not change what the model declares.
+ *
  * Safe to read per call: capabilities are written only at bootstrap and on model
  * switch (never mid-run), so this stays correct across a model change.
  *
@@ -66,12 +80,16 @@ function resolveTransformPhase(phase: ChatMiddlewarePhase): MessageTransformPhas
  * a capability added to `models/types.ts` fails compilation there until it is named, rather
  * than silently missing a flag here.
  */
-function buildTransformCapabilities(usage: UsageTracker): {
+function buildTransformCapabilities(
+  deps: MessageTransformMiddlewareDeps,
+  usage: UsageTracker
+): {
   unsupportedPartTypes: ReadonlySet<MultimodalPartType>;
   capabilities: ReadonlySet<ModelCapability> | null;
 } & ModelCapabilityFlags {
+  const runDrop = deps.getWireDropPartTypes?.();
   return {
-    unsupportedPartTypes: unsupportedMultimodalPartTypes(usage),
+    unsupportedPartTypes: runDrop && runDrop.size > 0 ? runDrop : unsupportedMultimodalPartTypes(usage),
     capabilities: usage.getCapabilities(),
     ...buildModelCapabilityFlags((cap) => usage.hasCapability(cap)),
   };
@@ -100,7 +118,7 @@ export function createMessageTransformMiddleware(deps: MessageTransformMiddlewar
         agentId: deps.agentId,
         phase: resolveTransformPhase(ctx.phase),
         messages: config.messages as ModelMessage[],
-        ...buildTransformCapabilities(deps.getUsage()),
+        ...buildTransformCapabilities(deps, deps.getUsage()),
         abortSignal: deps.getAbortSignal?.(),
       });
 

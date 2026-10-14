@@ -118,7 +118,17 @@ export function chatMessagesHaveMultimodal(
   return false;
 }
 
-function stripContentParts(content: ContentPart[], drop: Set<MultimodalPartType>): ContentPart[] {
+/**
+ * Drop the parts the model cannot take, appending the placeholder so the model is told why content
+ * is missing. Returns the SAME array when nothing was dropped, which is what lets callers treat
+ * "unchanged" as a no-op without comparing contents.
+ *
+ * Exported for the seam that has to reach a tool result in its string form
+ * (`wire-recovery-middleware`): Chat Completions accepts only string `tool` content, and the parser
+ * that recognises that form is `agent/media/`'s, which this layer must not import
+ * (`validate-layer-boundaries`). The rule stays here; only the recognition lives one layer up.
+ */
+export function stripMultimodalContentParts(content: ContentPart[], drop: Set<MultimodalPartType>): ContentPart[] {
   let removed = 0;
   const kept: ContentPart[] = [];
   for (const part of content) {
@@ -164,7 +174,7 @@ export function stripMultimodalFromChatMessages<T extends UIMessage | ModelMessa
     }
 
     if ("content" in message && Array.isArray(message.content)) {
-      const content = stripContentParts(message.content as ContentPart[], drop);
+      const content = stripMultimodalContentParts(message.content as ContentPart[], drop);
       if (content === message.content) return message;
       return { ...message, content } as T;
     }

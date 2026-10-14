@@ -244,14 +244,15 @@ function makeCompactionDeps(channel, cache = new WireProjectionCache()) {
  * assembles them, and the order the seam depends on (a tool result only becomes a real
  * content part at `tool-compact`, so a strip placed earlier cannot see its media).
  */
-function makeRunner(channel, run) {
+function makeRunner(channel, run, { parentId } = {}) {
   const { adapter, calls } = makeCapturingAdapter();
   const middleware = sortMiddlewaresByPhase([
     createCompactionMiddleware(makeCompactionDeps(channel)),
     createToolCompactMiddleware({
       getCompactionConfig: () => ({}),
       getToolCompactCache: () => new ToolCompactCache(),
-      getManagedAgent: () => ({ parentId: undefined }),
+      // A subagent skips the tool-output projection, so its tool result stays JSON text.
+      getManagedAgent: () => ({ parentId }),
     }),
     createWireRecoveryMiddleware({ getRun: () => run }),
   ]);
@@ -378,8 +379,22 @@ function rawImageReadOutput() {
  */
 createReadFileTool();
 
-/** A channel with one user turn plus a `read_file` tool turn that returned an image. */
-function makeToolMediaChannel() {
+/** The projected form of that same result, as text — what a string `tool` content looks like. */
+function stringifiedPartsImage() {
+  return JSON.stringify([
+    { type: "text", content: "Image read: shot.png (4 B)" },
+    { type: "image", source: { type: "data", value: "AAAA", mimeType: "image/png" } },
+  ]);
+}
+
+/**
+ * A channel with one user turn plus a `read_file` tool turn that returned an image.
+ *
+ * `content` defaults to the raw result object (what the projection consumes). Pass
+ * {@link stringifiedPartsImage} for the string form — the one that survives to the wire when
+ * nothing re-parses it, which is the only form whose media the strip has to reach itself.
+ */
+function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
   const channel = new AgentUIChannel();
   channel.addUserMessage("read the screenshot");
   channel.setMessages([
@@ -399,7 +414,7 @@ function makeToolMediaChannel() {
         {
           type: "tool-result",
           toolCallId: "call-img",
-          content: JSON.stringify(rawImageReadOutput()),
+          content,
           state: "complete",
         },
       ],
@@ -447,6 +462,60 @@ function makeToolMediaChannel() {
     wireHasImage(calls[0]),
     true,
     "a capable model must still receive a tool result's image part"
+  );
+}
+
+// ============================================================================
+// 1c. ...and when the tool result arrives as STRING content
+// ============================================================================
+//
+// Chat Completions accepts only string `tool` content, so TanStack stringifies an array result —
+// and that string is what the adapter's lift re-parses, after every middleware, without consulting
+// the drop set. The fixture drives the no-projection half (`parentId` set) so the string survives to
+// the seam unchanged: that is the form whose media only the strip can reach, because nothing
+// upstream turns it into a part. (A subagent's raw result object, by contrast, is NOT a parts array
+// and carries no media part at all — the lift ignores it, and base64-as-text is accepted.) The
+// rewrite must stay a STRING: that is the only thing this wire format accepts.
+
+{
+  const channel = makeToolMediaChannel(stringifiedPartsImage());
+  const run = new TestRun();
+  run.setWireDropPartTypes(new Set(["image"]));
+
+  const { runner, calls } = makeRunner(channel, run, { parentId: "parent-agent" });
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  const wire = calls[0];
+  assert.equal(wireHasImage(wire), false, "a subagent's tool image must not reach a model without vision");
+  assert.ok(
+    JSON.stringify(wire).includes(MULTIMODAL_OMITTED_PLACEHOLDER),
+    "the stringified tool result must be rewritten with the placeholder, not passed through"
+  );
+  assert.ok(
+    !JSON.stringify(wire).includes("AAAA"),
+    "the base64 must be gone from the wire, not merely ignored by the lift"
+  );
+  const toolMessage = wire.find((message) => message.role === "tool");
+  assert.equal(
+    typeof toolMessage?.content,
+    "string",
+    "Chat Completions accepts only string tool content, so the rewrite must re-serialize"
+  );
+}
+
+// The capable-model half again: with nothing armed the stringified result is untouched, so the
+// adapter's lift can still revive it.
+{
+  const channel = makeToolMediaChannel(stringifiedPartsImage());
+  const run = new TestRun();
+
+  const { runner, calls } = makeRunner(channel, run, { parentId: "parent-agent" });
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  assert.equal(
+    JSON.stringify(calls[0]).includes("AAAA"),
+    true,
+    "a capable model's tool result must keep its media for the lift to revive"
   );
 }
 

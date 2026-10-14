@@ -575,6 +575,49 @@ await runCase("capability context is forwarded from the usage probe", async () =
   assert.equal(seen[1].vision, true, "unknown capabilities report vision available");
 });
 
+await runCase("capability context reflects the run's widened drop set", async () => {
+  const bus = createAgentEventBus();
+  const runner = makeRunner(bus);
+  const seen = [];
+  await runner.loadExtension(
+    extension("w", (ctx) => {
+      ctx.registerMessageTransformer((c) => {
+        seen.push({ unsupported: [...c.unsupportedPartTypes].sort(), vision: c.modelHasVision });
+        return undefined;
+      });
+    })
+  );
+
+  // The probe says this model takes everything (unknown capabilities stay permissive), but a
+  // multimodal API rejection widened THIS run's strip to all four types. An extension deciding "can
+  // this model see the image?" has to see that, or it leaves media in place that the strip — running
+  // later on the same wire — removes anyway.
+  const widened = createMessageTransformMiddleware({
+    agentId: "x",
+    getExtensionRunner: () => runner,
+    getUsage: () => makeUsage({}),
+    getWireDropPartTypes: () => new Set(["image", "audio", "video", "document"]),
+  });
+  await widened.onConfig({ phase: "init" }, { messages: wire("user") });
+
+  assert.deepEqual(
+    seen[0].unsupported,
+    ["audio", "document", "image", "video"],
+    "the run's widened set wins over the permissive probe"
+  );
+  assert.equal(seen[0].vision, true, "…while the declared flags still describe the model");
+
+  // Armed but empty (the probe found nothing to drop) must not read as "everything unsupported".
+  const empty = createMessageTransformMiddleware({
+    agentId: "x",
+    getExtensionRunner: () => runner,
+    getUsage: () => makeUsage({}),
+    getWireDropPartTypes: () => new Set(),
+  });
+  await empty.onConfig({ phase: "init" }, { messages: wire("user") });
+  assert.deepEqual(seen[1].unsupported, [], "an empty armed set stays permissive");
+});
+
 /**
  * Capability → exposed flag, read from the source table rather than duplicated here.
  *
