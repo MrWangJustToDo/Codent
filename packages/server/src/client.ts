@@ -289,7 +289,14 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
     fs: createRemoteFs(client),
 
     runCommand: async (command: string, options?: RunCommandOptions): Promise<CommandResult> => {
-      const res = await client.command.run.$post({ json: { command, options: serializeRunOptions(options) } });
+      // The signal goes on the REQUEST, not in the body: aborting it (Esc) closes the connection, which is
+      // what the server turns into a kill for its child process. Without this a remote search kept running
+      // to its own deadline after the user had stopped looking at it.
+      const res = await client.command.run.$post(
+        { json: { command, options: serializeRunOptions(options) } },
+        // `init` is Hono's RequestInit passthrough — only `signal` here, so nothing Hono sets is overridden.
+        { init: { signal: options?.signal } }
+      );
       const result = await unwrap<CommandResult>(res);
       // HTTP `/run` is request/response only — no chunk streaming. Deliver the full
       // buffers once so callers that accumulate via onStdout/onStderr (run_command tool)
@@ -311,9 +318,13 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
     // throw the way it did when the function always existed.
     execFile: supportsExecFile
       ? ((async (file: string, args: string[], options?): Promise<CoreEnvExecResult | null> => {
-          const res = await client.command["exec-file"].$post({
-            json: { file, args, options: { cwd: options?.cwd, timeout: options?.timeout, env: options?.env } },
-          });
+          const res = await client.command["exec-file"].$post(
+            {
+              json: { file, args, options: { cwd: options?.cwd, timeout: options?.timeout, env: options?.env } },
+            },
+            // See the sibling above: the request's abort is what reaches the server's child process.
+            { init: { signal: options?.signal } }
+          );
           if (!res.ok) {
             // The capability was probed at construction, so an `unsupported` answer here is a
             // server that changed underneath us. Returning null keeps the tools' existing

@@ -7,6 +7,24 @@ import { getServerEnv } from "../server-runtime.js";
 
 import type { CommandJobStatus, StartCommandHandle } from "@codent/core";
 
+/**
+ * The options a command route forwards, plus the CLIENT's abort signal.
+ *
+ * An `AbortSignal` cannot travel in a JSON body — and it does not need to: when the caller's request is
+ * aborted (Esc in the CLI), this handler's `c.req.raw.signal` fires, and the host kills the child with it.
+ * That is the same channel `/api/fetch/proxy` uses, and it is what makes Esc on a `--remote-env` search
+ * stop the server-side `rg` instead of leaving it to run out its own deadline.
+ *
+ * `exec` (the simple-command primitive) is deliberately not wired: neither `CoreEnvExecOptions` nor the
+ * Node implementation carries a signal, and nothing on the agent tool path calls it.
+ */
+function withClientAbort<T extends Record<string, unknown> | undefined>(
+  options: T,
+  signal: AbortSignal
+): T & { signal: AbortSignal } {
+  return { ...options, signal } as T & { signal: AbortSignal };
+}
+
 const runCommandSchema = z.object({
   command: z.string(),
   options: z
@@ -93,7 +111,7 @@ export const commandRoutes = new Hono()
   .post("/run", zValidator("json", runCommandSchema), async (c) => {
     try {
       const { command, options } = c.req.valid("json");
-      const result = await getServerEnv().runCommand(command, options);
+      const result = await getServerEnv().runCommand(command, withClientAbort(options, c.req.raw.signal));
       return c.json(result);
     } catch (err) {
       const { body, status } = handleCommandError(err);
@@ -127,11 +145,7 @@ export const commandRoutes = new Hono()
           400
         );
       }
-      const result = await coreEnv.execFile(file, args, {
-        cwd: options?.cwd,
-        timeout: options?.timeout,
-        env: options?.env,
-      });
+      const result = await coreEnv.execFile(file, args, withClientAbort(options, c.req.raw.signal));
       return c.json(result);
     } catch (err) {
       const { body, status } = handleCommandError(err);

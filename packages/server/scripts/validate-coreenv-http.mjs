@@ -8,7 +8,7 @@
  */
 /* eslint-disable no-undef */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +145,42 @@ if (env.createMCPStdioTransport) {
   assert.ok(startError, "MCP init for a missing binary must fail");
 } else {
   assert.fail("remote env must expose createMCPStdioTransport");
+}
+
+// ── 11b. Aborting the request kills the SERVER-side child ──
+//
+// The gap this closes: an AbortSignal cannot travel in a JSON body, so the only channel is the request
+// itself closing — and the command routes did not read `c.req.raw.signal`, nor did the client send one.
+// Esc on a `--remote-env` search therefore left the server's `rg` running to its own deadline, while the
+// local plane killed the child immediately.
+//
+// The marker file is the proof: the child writes it only if it survives, and a control run shows the same
+// command does write it when nothing aborts.
+{
+  const marker = join(ws, "abort-marker.txt");
+  const script = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(marker)}, "survived"), 1500)`;
+
+  const controller = new AbortController();
+  const pending = env.execFile(process.execPath, ["-e", script], {
+    signal: controller.signal,
+    timeout: 30_000,
+  });
+  setTimeout(() => controller.abort(), 200);
+
+  let rejected = false;
+  await pending.then(
+    () => {},
+    () => {
+      rejected = true;
+    }
+  );
+  assert.equal(rejected, true, "an aborted request rejects on the client");
+
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  assert.equal(existsSync(marker), false, "the server-side child was killed — it never wrote its marker");
+
+  await env.execFile(process.execPath, ["-e", script], { timeout: 30_000 });
+  assert.ok(existsSync(marker), "control: the same command does write the marker without an abort");
 }
 
 // ── 12. cleanup ──
