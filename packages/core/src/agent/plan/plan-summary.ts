@@ -2,6 +2,8 @@
  * Bounded static plan summary for transcript / model output (no scroll panel).
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import type { PlanStep } from "./extract-plan.js";
 
 const DEFAULT_MAX_STEPS = 12;
@@ -26,8 +28,7 @@ export function extractGoalFromPlanMarkdown(markdown: string): string {
 
 function truncateStep(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= MAX_STEP_CHARS) return oneLine;
-  return `${oneLine.slice(0, MAX_STEP_CHARS - 1)}…`;
+  return truncateText(oneLine, MAX_STEP_CHARS);
 }
 
 /**

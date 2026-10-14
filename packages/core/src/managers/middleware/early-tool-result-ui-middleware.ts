@@ -8,6 +8,7 @@
  */
 
 import { computeToolDisplay } from "../../agent/tools/presentation/compute-display.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -38,7 +39,7 @@ export function createEarlyToolResultUiMiddleware(
         return;
       }
 
-      const message = info.error instanceof Error ? info.error.message : String(info.error ?? "Tool execution failed");
+      const message = errorMessage(info.error ?? "Tool execution failed");
       const failure = { error: message };
       channel.addToolResult(toolCallId, failure, message);
       attachToolDisplay(channel, info, toolCallId, failure);

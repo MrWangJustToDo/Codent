@@ -28,6 +28,7 @@
  */
 
 import { getEnv } from "../env";
+import { errorMessage } from "../utils/errors.js";
 
 import type { ModelCapability, ModelInfo, ModelStyle, ReasoningEchoField, ReasoningEffort } from "../models/types.js";
 
@@ -295,7 +296,7 @@ async function fetchModelsDevFromNetwork(): Promise<boolean> {
     await writeDiskCache(data);
     return true;
   } catch (err) {
-    lastNetworkError = err instanceof Error ? err.message : String(err);
+    lastNetworkError = errorMessage(err);
     return false;
   }
 }

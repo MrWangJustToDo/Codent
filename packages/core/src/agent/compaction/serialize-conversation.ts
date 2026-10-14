@@ -11,6 +11,8 @@
  *   [Tool result from name]: ...
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import { buildToolCallNameMap, extractTextFromContent, serializeToolMessageContent } from "./message-utils.js";
 
 import type { ModelMessage } from "@tanstack/ai";
@@ -22,7 +24,7 @@ export const TOOL_RESULT_MAX_CHARS = 2000;
 export const TOOL_ARGS_MAX_CHARS = 200;
 
 function truncateToolArgs(args: string): string {
-  return args.length > TOOL_ARGS_MAX_CHARS ? args.slice(0, TOOL_ARGS_MAX_CHARS) + "..." : args;
+  return truncateText(args, TOOL_ARGS_MAX_CHARS);
 }
 
 function truncateToolResult(text: string): string {

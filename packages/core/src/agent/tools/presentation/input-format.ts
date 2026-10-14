@@ -1,4 +1,7 @@
+import { truncateText } from "../../../utils/text-truncation.js";
 import { BUILTIN_TOOL_NAMES } from "../tool-names.js";
+
+import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
 
 function formatFilePathInput(input: Record<string, unknown>, toolName?: string): string {
   const path = input.path as string | undefined;
@@ -26,8 +29,7 @@ function formatRunCommandInput(input: Record<string, unknown>, compact = false):
   const command = input.command as string | undefined;
   if (compact) {
     const cmd = command ?? "";
-    const short = cmd.length > 56 ? `${cmd.slice(0, 55)}…` : cmd;
-    return `$ ${short}`;
+    return `$ ${truncateText(cmd, 56)}`;
   }
   let res = "$";
   res += ` ${command ?? ""}`;
@@ -65,7 +67,7 @@ function formatTaskInput(input: Record<string, unknown>): string {
   const prompt = input.prompt as string | undefined;
   if (description) return description;
   if (prompt) {
-    return prompt.length > 60 ? prompt.slice(0, 60) + "..." : prompt;
+    return truncateText(prompt, 60);
   }
   return "";
 }
@@ -100,7 +102,7 @@ function formatLoadSkillInput(input: Record<string, unknown>): string {
 
 function formatGenericInput(input: unknown): string {
   if (input === undefined || input === null) return "";
-  if (typeof input === "string") return input.length > 50 ? input.slice(0, 50) + "..." : input;
+  if (typeof input === "string") return truncateText(input, ENTRY_VALUE_MAX_CHARS);
 
   const obj = input as Record<string, unknown>;
   const entries = Object.entries(obj);
@@ -110,8 +112,7 @@ function formatGenericInput(input: unknown): string {
     .slice(0, 2)
     .map(([key, value]) => {
       const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      const truncated = strValue.length > 30 ? strValue.slice(0, 30) + "..." : strValue;
-      return `${key}=${truncated}`;
+      return `${key}=${truncateText(strValue, ENTRY_VALUE_MAX_CHARS)}`;
     })
     .join(", ");
 
@@ -127,7 +128,7 @@ function formatCreatePlanInput(input: Record<string, unknown>): string {
   const goal = typeof input.goal === "string" ? input.goal : "";
   const steps = Array.isArray(input.steps) ? input.steps.length : 0;
   if (!goal) return steps > 0 ? `${steps} steps` : "";
-  const short = goal.length > 60 ? `${goal.slice(0, 57)}...` : goal;
+  const short = truncateText(goal, 60);
   return steps > 0 ? `${short} (${steps} steps)` : short;
 }
 
@@ -203,8 +204,8 @@ export function formatToolInput(
     formatted = formatGenericInput(input);
   }
 
-  if (maxLen != null && formatted.length > maxLen) {
-    return `${formatted.slice(0, maxLen - 1)}…`;
+  if (maxLen != null) {
+    return truncateText(formatted, maxLen);
   }
   return formatted;
 }

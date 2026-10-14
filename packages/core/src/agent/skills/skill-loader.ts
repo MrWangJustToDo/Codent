@@ -17,6 +17,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { errorMessage } from "../../utils/errors.js";
 
 import { skillMetadataSchema } from "./types.js";
 
@@ -171,7 +172,7 @@ export class SkillLoader {
       return {
         metadata: null,
         body: text.trim(),
-        error: `YAML parse error: ${error instanceof Error ? error.message : String(error)}`,
+        error: `YAML parse error: ${errorMessage(error)}`,
       };
     }
   }

@@ -8,6 +8,8 @@ import {
   resolveKeepPolicy,
 } from "../../agent/compaction";
 import { projectWireFromChannel } from "../../agent/compaction/wire-projection.js";
+import { isAbortError } from "../../runtime-types/abort.js";
+import { toError } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -121,8 +123,8 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
         } catch (err) {
           // A user cancel is not a compaction failure — stay silent.
-          if (!(err instanceof Error && err.name === "AbortError")) {
-            const error = err instanceof Error ? err : new Error(String(err));
+          if (!isAbortError(err)) {
+            const error = toError(err);
             deps.emitEvent?.("compaction:auto-error", { error: error.message });
           }
         } finally {

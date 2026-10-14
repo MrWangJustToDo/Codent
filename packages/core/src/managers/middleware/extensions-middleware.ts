@@ -1,5 +1,6 @@
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -108,7 +109,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
         deps.emitEvent?.("agent:tool-error", {
           tool_name: info.toolName,
           tool_call_id: info.toolCallId,
-          error: info.error instanceof Error ? info.error.message : String(info.error),
+          error: errorMessage(info.error),
           // A user abort reaches here as a throw, indistinguishable from a fault unless we
           // ask the run's signal. Consumers counting failures must not count cancels, and
           // the log bridge must not report one as an error.
@@ -146,7 +147,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           payload: {
             toolName: info.toolName,
             args: info.toolCall.function.arguments,
-            error: info.error instanceof Error ? info.error.message : String(info.error),
+            error: errorMessage(info.error),
           },
           defaultReturn: undefined,
         });

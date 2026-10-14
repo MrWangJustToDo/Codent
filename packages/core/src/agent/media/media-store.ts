@@ -15,6 +15,8 @@
  * ```
  */
 
+import { buildDataUrl, stripDataUrlPrefix } from "../../utils/data-url.js";
+
 import { MEDIA_DIR, mimeToExtension } from "./types.js";
 
 import type { MediaRef } from "./types.js";
@@ -49,20 +51,13 @@ export async function sha256Stable(data: string): Promise<string> {
  * - Raw base64 (no prefix) → returned as-is
  */
 export function extractBase64Content(value: string): string {
-  const base64Match = value.match(/^data:[^;]+;base64,(.+)$/s);
-  if (base64Match) {
-    return base64Match[1];
-  }
-  // Already raw base64 — return as-is
-  return value;
+  return stripDataUrlPrefix(value);
 }
 
 /**
  * Build a data URL from a MIME type and raw base64 content.
  */
-export function buildDataUrl(mimeType: string, base64: string): string {
-  return `data:${mimeType};base64,${base64}`;
-}
+export { buildDataUrl };
 
 // ============================================================================
 // MediaStore

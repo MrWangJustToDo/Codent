@@ -1,6 +1,7 @@
 import { createMCPClient } from "@tanstack/ai-mcp";
 
 import { getEnv } from "../../env";
+import { toError } from "../../utils/errors.js";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
 import { resolveMcpModelOutput, wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
@@ -167,7 +168,7 @@ export class McpManager {
             url: serverConfig.transport !== "stdio" ? serverConfig.url : undefined,
           });
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
+          const error = toError(err);
 
           this.serverStatuses.set(name, {
             name,

@@ -2,6 +2,8 @@
  * lsp_hover — type info and docs at a position.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
+
 import { resolvePosition, withResolved } from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
@@ -77,7 +79,7 @@ export function createHoverTool(deps: HoverToolDeps) {
           }
           return { text: withResolved(resolvedFrom, formatHoverContent(hover)), hasResult: true };
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           return { text: `LSP hover request failed: ${msg}`, hasResult: false };
         }
       }

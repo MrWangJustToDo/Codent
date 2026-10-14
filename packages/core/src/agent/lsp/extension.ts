@@ -16,6 +16,7 @@
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
 import { defaultPath } from "../../env";
+import { errorMessage } from "../../utils/errors.js";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
@@ -470,7 +471,7 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
         await getManager().restartServer(languageId);
         return `${languageId} server restarted successfully.`;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return `Failed to restart ${languageId}: ${msg}`;
       }
     },

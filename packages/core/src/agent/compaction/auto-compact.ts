@@ -15,6 +15,8 @@
  * - No retry on empty (the prompt is explicit about output format)
  */
 
+import { isAbortError } from "../../runtime-types/abort.js";
+import { errorMessage } from "../../utils/errors.js";
 import { generateId } from "../../utils/generate-id.js";
 import { runSubagent } from "../subagent/run-subagent.js";
 import { compactSummaryStreamId } from "../summary-stream/types.js";
@@ -498,17 +500,17 @@ export async function autoCompact(
   } catch (error) {
     // User cancel: leave the conversation untouched and report no error (the run
     // is ending anyway — callers must not surface a compaction failure).
-    if (error instanceof Error && error.name === "AbortError") {
+    if (isAbortError(error)) {
       return { compacted: false, tokensBefore, tokensAfter: tokensBefore, type: "auto" };
     }
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const failureText = errorMessage(error);
 
     return {
       compacted: false,
       tokensBefore,
       tokensAfter: tokensBefore,
       type: "auto",
-      error: `Compaction failed: ${errorMessage}. Original messages preserved.`,
+      error: `Compaction failed: ${failureText}. Original messages preserved.`,
     };
   }
 }

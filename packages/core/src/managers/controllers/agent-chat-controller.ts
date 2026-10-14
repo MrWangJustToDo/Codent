@@ -26,6 +26,7 @@ import { analyzeCommand, createAnalysisContext } from "../../agent/tools/command
 import { evaluateCommandApproval } from "../../agent/tools/command-safety/command-approval-policy.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import { toError } from "../../utils/errors.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
@@ -562,7 +563,7 @@ export class AgentChatController {
         this.applyCancelledIncompleteTools(true);
         return;
       }
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       const message = formatAgentStreamError(error).message;
       if (this.managed.isAbortError(err)) {
         this.managed.statusController.onExternalError(message, true);

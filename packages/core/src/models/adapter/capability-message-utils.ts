@@ -1,3 +1,4 @@
+import { errorMessage } from "../../utils/errors.js";
 /**
  * Capability-gated chat message sanitization for the model wire format.
  *
@@ -29,11 +30,6 @@ export const MULTIMODAL_OMITTED_PLACEHOLDER =
 
 export interface CapabilityProbe {
   hasCapability(cap: ModelCapability): boolean;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 function isMultimodalPartType(type: string | undefined): type is MultimodalPartType {

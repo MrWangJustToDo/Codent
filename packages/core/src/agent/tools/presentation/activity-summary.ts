@@ -1,3 +1,5 @@
+import { truncateText } from "../../../utils/text-truncation.js";
+
 import { formatDuration } from "./format.js";
 import { DURATION_THRESHOLD_MS, getDurationMs } from "./inline-summary.js";
 import { getToolPresentation } from "./registry.js";
@@ -171,7 +173,7 @@ function basenameLabel(path: string): string {
 function shortenLabel(raw: string, max = 28): string {
   const text = raw.trim();
   if (!text) return "";
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return truncateText(text, max);
 }
 
 /** Quality tiers for activity labels (lower = more specific / useful). */

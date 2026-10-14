@@ -7,6 +7,7 @@ import { extractTextFromContent } from "../../agent/compaction/message-utils.js"
 import { extractMemories, consolidateMemories } from "../../agent/memory/memory-extractor.js";
 import { findRelevantMemories, formatRelevantMemories } from "../../agent/memory/memory-retrieval.js";
 import { defaultByteLength } from "../../env";
+import { errorMessage } from "../../utils/errors.js";
 
 import type { AgentLog } from "../../agent/agent-log";
 import type { MemoryManager } from "../../agent/memory/memory-manager.js";
@@ -138,7 +139,7 @@ export class MemoryService {
         emitEvent?.("memory:prefetch", { status: "empty" });
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = errorMessage(err);
       this.relevantContent = "";
       this.pendingSurfacedFilenames = [];
       emitEvent?.("memory:prefetch", { status: "error", error: errorMsg });
@@ -202,7 +203,7 @@ export class MemoryService {
           }
         }
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
+        const errorMsg = errorMessage(err);
         emitEvent?.("memory:extract", { status: "error", error: errorMsg });
       } finally {
         this.extractionInProgress = false;

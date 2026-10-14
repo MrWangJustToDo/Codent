@@ -2,6 +2,8 @@
  * Default event → AgentLog mapping for {@link bridgeTelemetryToAgentLog}.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 import type { AgentEvent, AgentEventType } from "../agent-event-bus";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
@@ -130,7 +132,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     category: "chat",
     formatMessage: (event) => {
       const prompt = p(event).prompt as string | undefined;
-      const preview = prompt ? (prompt.length > 80 ? prompt.slice(0, 80) + "..." : prompt) : "";
+      const preview = prompt ? truncateText(prompt, 80) : "";
       const msgCount = p(event).contextMessageCount ?? "?";
       return `Prompt: ${preview}  (${msgCount} context messages)`;
     },

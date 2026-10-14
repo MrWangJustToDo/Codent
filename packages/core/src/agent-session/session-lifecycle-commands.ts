@@ -8,6 +8,7 @@ import { partTextContent } from "../agent/stream/message-parts.js";
 import { isContextUIMessage } from "../agent/turn-context";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
+import { toError } from "../utils/errors.js";
 
 import { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
 
@@ -63,7 +64,7 @@ export async function generateAndApplySessionTitle(
     managed.getLog()?.info("chat", "Title generated", { text: generated });
     return { ok: true, name: generated };
   } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = toError(error);
     return { ok: false, error: `Title generation failed: ${err.message}` };
   }
 }
@@ -113,7 +114,7 @@ export async function generateSessionSummary(
     managed.getLog()?.info("chat", "PR-style summary generated", { summaryLength: summary.length });
     return { ok: true, summary };
   } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = toError(error);
     return { ok: false, error: `Summary generation failed: ${err.message}` };
   }
 }

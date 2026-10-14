@@ -4,6 +4,7 @@
 
 import { listPlanFiles, loadPlanFile, savePlanFile } from "../agent/plan/plan-store.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
+import { toError } from "../utils/errors.js";
 
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentStatus } from "./agent-types.js";
@@ -74,7 +75,7 @@ export async function savePlanToWorkspace(
     host.planMode.setPlanFilePath(path);
     return { ok: true, path };
   } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = toError(error);
     return { ok: false, error: err.message };
   }
 }
@@ -89,7 +90,7 @@ export async function loadPlanFromWorkspace(
     if (!result.ok) return { ok: false, error: result.error, path };
     return { ok: true, path, stepCount: result.stepCount };
   } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = toError(error);
     return { ok: false, error: err.message };
   }
 }

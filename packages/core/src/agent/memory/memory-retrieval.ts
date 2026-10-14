@@ -24,6 +24,9 @@ import { z } from "zod";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
+import { truncateToUtf8Bytes } from "../../utils/bytes.js";
+import { splitDisplayLines } from "../../utils/display-lines.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import {
   DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
@@ -208,30 +211,18 @@ function truncateBody(
   maxBytes: number = DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
   env?: ResolvedCoreEnv
 ): string {
-  let result = body;
+  const byteLength = (value: string) => (env ?? getEnv()).byteLength(value, "utf-8");
 
-  const lines = result.split("\n");
-  if (lines.length > maxLines) {
-    result = lines.slice(0, maxLines).join("\n") + "\n[truncated: exceeded line limit]";
-  }
+  // Raw line count: CRLF is not folded and a final newline keeps its trailing empty segment,
+  // matching the previous `split("\n")` exactly.
+  const lines = splitDisplayLines(body, { normalizeCrlf: false, dropTrailingEmpty: false });
+  const lineCapped =
+    lines.length > maxLines ? lines.slice(0, maxLines).join("\n") + "\n[truncated: exceeded line limit]" : body;
 
-  const e = env ?? getEnv();
-  const bytes = e.byteLength(result, "utf-8");
-  if (bytes > maxBytes) {
-    let lo = 0;
-    let hi = result.length;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (e.byteLength(result.slice(0, mid), "utf-8") <= maxBytes - 30) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    result = result.slice(0, lo) + "\n[truncated: exceeded byte limit]";
-  }
+  if (byteLength(lineCapped) <= maxBytes) return lineCapped;
 
-  return result;
+  // Reserve ~30 bytes for the trailing byte-limit notice inside the budget.
+  return truncateToUtf8Bytes(lineCapped, maxBytes - 30, { byteLength }).text + "\n[truncated: exceeded byte limit]";
 }
 
 // ============================================================================
@@ -404,7 +395,7 @@ export async function findRelevantMemories(
     } catch (err) {
       // The port has already recorded the reason under `side-query`; this entry
       // records only the decision made here, so one failure is not filed twice.
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = errorMessage(err);
       logger?.info("memory", `Fell back to keyword memory selection (${reason})`);
       selectedFilenames = selectWithKeywords(query, candidates, maxItems);
       selectionMethod = "keyword-fallback";

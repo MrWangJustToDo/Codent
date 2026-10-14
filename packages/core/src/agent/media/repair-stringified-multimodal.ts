@@ -18,9 +18,9 @@
  * legacy session stores are migrated.
  */
 
-import type { StreamChunk, UIMessage } from "@tanstack/ai";
+import { isBinaryMediaPartType } from "./types.js";
 
-const MULTIMODAL_PART_TYPES = new Set(["image", "audio", "video", "document"]);
+import type { StreamChunk, UIMessage } from "@tanstack/ai";
 
 type LoosePart = {
   type?: string;
@@ -44,7 +44,7 @@ export function isStringifiedMultimodalContentParts(value: unknown): value is Lo
       if (typeof part.content !== "string" && typeof part.text !== "string") return false;
       continue;
     }
-    if (MULTIMODAL_PART_TYPES.has(part.type)) {
+    if (isBinaryMediaPartType(part.type)) {
       if (!isRecord(part.source)) return false;
       sawMultimodal = true;
       continue;

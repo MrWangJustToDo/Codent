@@ -5,6 +5,7 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
+import { toError } from "../../utils/errors.js";
 import { cleanupOrphanedToolCache } from "../tools/util/tool-output-cache.js";
 import { appendChannelMessages } from "../ui/channel-write.js";
 
@@ -58,7 +59,7 @@ export function applyCompactionResult(
   const orphanCut = firstOrphanToolIndex(chronologic, visibleToolIds);
   if (orphanCut > 0) {
     cleanupOrphanedToolCache(env, chronologic, orphanCut).catch((err) => {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       options?.onCacheCleanupError?.(error);
     });
   }

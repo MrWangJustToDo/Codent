@@ -1,5 +1,6 @@
 import { defaultPath } from "../../../env";
 import { FileError } from "../../../env/types";
+import { splitDisplayLines } from "../../../utils/display-lines.js";
 import { toPosixPathKey } from "../../../utils/posix-path.js";
 
 import type { CoreEnv } from "../../../env";
@@ -70,9 +71,7 @@ export function looksLikeMissingBinary(exitCode: number | null | undefined, stde
  */
 export function truncateLines(output: string, count: number): string {
   if (count <= 0) return "";
-  const lines = output.split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines.slice(0, count).join("\n");
+  return splitDisplayLines(output, { normalizeCrlf: false, dropTrailingEmpty: true }).slice(0, count).join("\n");
 }
 
 /**

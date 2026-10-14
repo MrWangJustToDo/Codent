@@ -5,6 +5,7 @@ import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 import { ACTIVE_STATUSES } from "../runtime-types/agent-status.js";
+import { errorMessage } from "../utils/errors.js";
 
 import { buildManagedAgent } from "./agent-factory.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
@@ -96,7 +97,7 @@ export class AgentManager {
    * tool failure (see `DefaultAgentEventBus.intercept`).
    */
   private readonly rootEventBus = createAgentEventBus("root", ({ pattern, event, scopeId, error }) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     // Log on the agent that owns the scope the interceptor was registered on, so
     // the failure lands next to the run it affected. Falls back to any agent with
     // a log (root-scoped interceptors belong to no single agent).

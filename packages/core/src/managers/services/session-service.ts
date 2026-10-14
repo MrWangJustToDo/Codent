@@ -8,6 +8,7 @@
 import { getFirstUserInput } from "../../agent/compaction/message-utils.js";
 import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from "../../agent/media/media-utils.js";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import type { AgentLog } from "../../agent/agent-log";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
@@ -146,7 +147,7 @@ export class SessionService {
       // observable instead of being a bare swallow. Filed under `side-query` —
       // the category the port itself uses — so one filter shows the health of
       // every internal one-shot call.
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = errorMessage(error);
       log?.warn("side-query", `Session title generation failed: ${reason}`);
       return userMessage.slice(0, 50);
     }
@@ -168,7 +169,7 @@ export class SessionService {
       await this.store.save(this.data);
       return true;
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = errorMessage(err);
       emitEvent?.("session:save-error", { target, error: errorMsg });
       return false;
     }
@@ -268,7 +269,7 @@ export class SessionService {
             messagesPersisted = false;
             emitEvent?.("session:save-error", {
               target: "session+uiMessages",
-              error: err instanceof Error ? err.message : String(err),
+              error: errorMessage(err),
             });
           }
         }

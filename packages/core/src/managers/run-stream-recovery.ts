@@ -1,6 +1,7 @@
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
 import { attachRunErrorCode, extractRunErrorMessage } from "../agent/stream/stream-errors.js";
 import { discardRegisteredPrefork } from "../agent/subagent/task-prefork.js";
+import { toError } from "../utils/errors.js";
 
 import { armCapabilityStrip, tryCapabilitySanitizeRetry } from "./stream-recovery/capability-sanitize.js";
 import {
@@ -57,7 +58,7 @@ const MAX_RECOVERY_ATTEMPTS = 3;
 // ============================================================================
 
 function errorFromUnknown(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+  return toError(error);
 }
 
 /**

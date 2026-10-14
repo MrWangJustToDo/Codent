@@ -24,6 +24,8 @@
  */
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
+import { errorMessage } from "../../utils/errors.js";
+
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
 
 import type { ExtensionAPI, ExtensionContext, ExtensionToolDefinition, ToolCallResult } from "../extension/types.js";
@@ -167,9 +169,7 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
       try {
         driver = await ctx.coreEnv.createIsolateDriver?.();
       } catch (err) {
-        ctx.logger.warn(
-          `Code Mode disabled: createIsolateDriver failed — ${err instanceof Error ? err.message : String(err)}`
-        );
+        ctx.logger.warn(`Code Mode disabled: createIsolateDriver failed — ${errorMessage(err)}`);
         return;
       }
 

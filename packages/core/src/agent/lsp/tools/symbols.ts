@@ -2,6 +2,7 @@
  * lsp_symbols — list symbols in a file or search workspace symbols.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
 import { fileUriToPath } from "../shared/format.js";
 
 import { truncateHead } from "./tool-shared.js";
@@ -112,7 +113,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
             if (trunc.truncated) text += `\n\n[Truncated: showing ${trunc.outputLines} of ${trunc.totalLines} lines]`;
             return { text, count: lines.length };
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg = errorMessage(err);
             return { text: `LSP document symbols request failed: ${msg}`, count: 0 };
           }
         }
@@ -152,7 +153,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
             if (trunc.truncated) text += `\n\n[Truncated: showing ${trunc.outputLines} of ${trunc.totalLines} lines]`;
             return { text, count: result.length };
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg = errorMessage(err);
             return { text: `LSP workspace symbols request failed: ${msg}`, count: 0 };
           }
         }

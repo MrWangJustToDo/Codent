@@ -25,6 +25,7 @@
 
 import { convertMessagesToModelMessages, type ModelMessage, type UIMessage } from "@tanstack/ai";
 
+import { errorMessage } from "../../utils/errors.js";
 import { serializeConversation } from "../compaction/serialize-conversation.js";
 import { resolveSummarizationInputBudget, splitMessagesByTokenBudget } from "../compaction/summarization-budget.js";
 
@@ -223,8 +224,8 @@ export async function summarizeProgress(
   } catch (err) {
     // Fallback stays silent for callers (return null never changes the original
     // subagent failure behavior), but surface an error event for observability.
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    emitError?.(errorMessage);
+    const failureText = errorMessage(err);
+    emitError?.(failureText);
     return null;
   }
 }

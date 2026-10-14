@@ -1,7 +1,10 @@
 import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../runtime-types/token-usage.js";
+import { formatByteSize } from "../../../utils/byte-size.js";
+import { truncateText } from "../../../utils/text-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
+import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
 import { splitStreamingLines } from "./lines.js";
 import { getToolPresentation } from "./registry.js";
 
@@ -63,10 +66,7 @@ const MAX_LINE_WIDTH = 400;
 function truncateLine(line: string, maxWidth: number = MAX_LINE_WIDTH): string {
   // Defense: strip any leftover CR before measuring / rendering in Ink.
   const cleaned = line.replace(/\r/g, "");
-  if (cleaned.length > maxWidth) {
-    return cleaned.slice(0, maxWidth - 3) + "...";
-  }
-  return cleaned;
+  return truncateText(cleaned, maxWidth);
 }
 
 function formatRunCommandOutput(output: RunCommandOutput): string {
@@ -149,10 +149,10 @@ function formatReadFileOutput(output: ReadFileOutput): string {
     return `Listed ${output.path} (${output.entries.length}/${output.totalEntries} entries)`;
   }
   if (output.type === "image") {
-    return `Image: ${output.path} (${Math.round(output.size / 1024)}KB)`;
+    return `Image: ${output.path} (${formatByteSize(output.size)})`;
   }
   if (output.type === "pdf") {
-    return `PDF: ${output.path} (${Math.round(output.size / 1024)}KB)`;
+    return `PDF: ${output.path} (${formatByteSize(output.size)})`;
   }
   return "";
 }
@@ -354,7 +354,7 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
       case "webfetch": {
         const url = typeof out.url === "string" ? out.url : "";
         const content = typeof out.content === "string" ? out.content : "";
-        const preview = content.length > 400 ? `${content.slice(0, 400)}...` : content;
+        const preview = truncateText(content, 400);
         return url ? `${url}\n${preview}` : preview;
       }
       case "ask_user":
@@ -376,13 +376,13 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
   }
 
   const str = typeof output === "string" ? output : JSON.stringify(output, null, 2);
-  return str.length > 200 ? str.slice(0, 200) + "..." : str;
+  return truncateText(str, 200);
 }
 
 /** Format tool arguments for detailed display. */
 export function formatToolArgs(args: unknown): string {
   if (args === undefined || args === null) return "No arguments";
-  if (typeof args === "string") return args.length > 50 ? args.slice(0, 50) + "..." : args;
+  if (typeof args === "string") return truncateText(args, ENTRY_VALUE_MAX_CHARS);
 
   const obj = args as Record<string, unknown>;
   const entries = Object.entries(obj);
@@ -391,8 +391,7 @@ export function formatToolArgs(args: unknown): string {
   return entries
     .map(([key, value]) => {
       const strValue = typeof value === "string" ? value : JSON.stringify(value);
-      const truncated = strValue.length > 50 ? strValue.slice(0, 50) + "..." : strValue;
-      return `  ${key}: ${truncated}`;
+      return `  ${key}: ${truncateText(strValue, ENTRY_VALUE_MAX_CHARS)}`;
     })
     .join("\n");
 }

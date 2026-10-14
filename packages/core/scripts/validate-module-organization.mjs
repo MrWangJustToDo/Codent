@@ -151,7 +151,24 @@ check("every barrel is imported as a directory (no dead barrels)", () => {
  * counts *definitions*, so `export { x } from "./y.js"` is transparent and only real
  * `export function x` / `export type x = …` bodies count.
  */
-const SINGLE_DEFINITION_SYMBOLS = ["isToolCallPart", "TaskRunPhase"];
+const SINGLE_DEFINITION_SYMBOLS = [
+  "isToolCallPart",
+  "TaskRunPhase",
+  // Cross-cutting utility primitives — one definition each (see `converge-core-utility-logic`).
+  // A second `export function` body for any of these is the divergence the dedicated
+  // `validate-no-inline-*` guards cannot see (they catch re-derivations, not re-declarations).
+  "utf8ByteLength",
+  "truncateToUtf8Bytes",
+  "truncateText",
+  "formatByteSize",
+  "splitDisplayLines",
+  "normalizeOutputNewlines",
+  "toError",
+  "errorMessage",
+  "isBinaryMediaPartType",
+  "isExpiredMemory",
+  "slugifyName",
+];
 
 function countDefinitions(symbol) {
   const defining = [

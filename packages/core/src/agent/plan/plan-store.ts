@@ -5,18 +5,14 @@
 import { join } from "pathe";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { slugifyName } from "../../utils/slug.js";
 
 import { extractPlan } from "./extract-plan.js";
 
 export const PLAN_STORE_DIR = ".agents/plans";
 
 export function slugifyPlanName(input: string): string {
-  const slug = input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug || `plan-${Date.now().toString(36)}`;
+  return slugifyName(input, { unicode: false, maxLength: 48, fallbackPrefix: "plan" });
 }
 
 export function planFilePath(name: string): string {

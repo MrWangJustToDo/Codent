@@ -2,6 +2,7 @@
  * lsp_definition — go to the definition of a symbol.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
 import { formatLocation, formatLocationLink } from "../shared/format.js";
 import { findDefinition, getNodeAtPosition } from "../tree-sitter/symbol-extractor.js";
 
@@ -145,7 +146,7 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
               : `Definitions:\n${locations.map((l) => `  ${l}`).join("\n")}`;
           return { text: withResolved(resolvedFrom, text), count: locations.length };
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           return { text: `LSP definition request failed: ${msg}`, count: 0 };
         }
       }

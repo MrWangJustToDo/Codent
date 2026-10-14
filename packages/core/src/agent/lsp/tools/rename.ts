@@ -2,6 +2,7 @@
  * lsp_rename — preview a rename refactoring (returns planned edits, does not apply).
  */
 
+import { errorMessage } from "../../../utils/errors.js";
 import { fileUriToPath } from "../shared/format.js";
 
 import { resolvePosition, truncateHead, withResolved } from "./tool-shared.js";
@@ -120,7 +121,7 @@ export function createRenameTool(deps: RenameToolDeps) {
 
         return { text, fileCount, editCount };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `LSP rename request failed: ${msg}`, fileCount: 0, editCount: 0 };
       }
     },

@@ -14,6 +14,22 @@
 /** Directory relative to workspace root where media files are stored. */
 export const MEDIA_DIR = ".agents/media";
 
+/**
+ * UIMessage part types that carry inline binary media.
+ *
+ * The single membership set for the media module: the dehydrate/hydrate walk and the nested
+ * tool-result rewrite both test against this, so the four types cannot be listed twice and drift.
+ */
+export const BINARY_MEDIA_PART_TYPES = ["image", "audio", "video", "document"] as const;
+
+/** One of the binary media part types. */
+export type BinaryMediaPartType = (typeof BINARY_MEDIA_PART_TYPES)[number];
+
+/** Whether a part type carries inline binary media. */
+export function isBinaryMediaPartType(type: string | undefined): type is BinaryMediaPartType {
+  return typeof type === "string" && (BINARY_MEDIA_PART_TYPES as readonly string[]).includes(type);
+}
+
 /** Protocol prefix used in dehydrated source.value to reference a media file. */
 export const MEDIA_PROTOCOL = "media://";
 
@@ -71,6 +87,22 @@ const MIME_TO_EXT: Record<string, string> = {
  */
 export function mimeToExtension(mimeType: string): string {
   return MIME_TO_EXT[mimeType] ?? "bin";
+}
+
+/**
+ * Reverse of {@link MIME_TO_EXT}: the MIME type a stored extension implies.
+ *
+ * `jpeg` is an accepted alias for the canonical `jpg` extension so a legacy
+ * `media://<hash>.jpeg` reference still resolves its MIME type.
+ */
+const EXT_TO_MIME: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(MIME_TO_EXT).map(([mime, ext]) => [ext, mime])),
+  jpeg: "image/jpeg",
+};
+
+/** Get the MIME type for a stored file extension, or `undefined` when unknown. */
+export function extensionToMime(ext: string): string | undefined {
+  return EXT_TO_MIME[ext];
 }
 
 /**

@@ -3,6 +3,8 @@ import { chat } from "@tanstack/ai";
 import { extractRunErrorMessage } from "../../agent/stream/stream-errors.js";
 import { sharedUsageHistory } from "../../agent/usage/usage-history-service.js";
 import { calculateCost, extractTanStackUsage, type TokenUsage } from "../../runtime-types/token-usage.js";
+import { errorMessage } from "../../utils/errors.js";
+import { truncateText } from "../../utils/text-truncation.js";
 import { maxTokensOption } from "../max-tokens-option.js";
 import { applySideQueryOutputFloor } from "../side-query-budget.js";
 
@@ -178,7 +180,7 @@ async function runStructuredQuery<TSchema extends SchemaInput>(
 }
 
 function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return errorMessage(error);
 }
 
 // ============================================================================
@@ -571,5 +573,5 @@ function recordUsage(textAdapter: TextAdapterConfig, usage: TokenUsage | undefin
 
 function excerpt(raw: string): string {
   const trimmed = raw.trim();
-  return trimmed.length <= RAW_EXCERPT_LIMIT ? trimmed : `${trimmed.slice(0, RAW_EXCERPT_LIMIT)}…`;
+  return truncateText(trimmed, RAW_EXCERPT_LIMIT);
 }

@@ -2,6 +2,8 @@
  * Shared helpers for position-based LSP tools.
  */
 
+import { truncateToUtf8Bytes, utf8ByteLength } from "../../../utils/bytes.js";
+import { splitDisplayLines } from "../../../utils/display-lines.js";
 import { resolveSymbolPosition, getSymbolNames } from "../shared/resolve-position.js";
 
 import type { LspRequestOptions } from "../../../env/lsp.js";
@@ -22,12 +24,14 @@ export interface TruncatedLines {
  * `lsp_symbols`).
  */
 export function truncateHead(text: string, maxLines = 200, maxBytes?: number): TruncatedLines {
-  const lines = text.split("\n");
+  // Raw line count: CRLF is not folded and a final newline keeps its trailing empty segment.
+  const lines = splitDisplayLines(text, { normalizeCrlf: false, dropTrailingEmpty: false });
   const totalLines = lines.length;
   let out = lines.slice(0, maxLines).join("\n");
-  if (maxBytes !== undefined && out.length * 2 > maxBytes) {
-    // Approximate byte length (UTF-16 chars * 2 covers ASCII+; fine for truncation)
-    out = out.slice(0, maxBytes);
+  if (maxBytes !== undefined && utf8ByteLength(out) > maxBytes) {
+    // True UTF-8 accounting (not `length * 2`) and a character-boundary cut, so a multi-byte
+    // character is never split.
+    out = truncateToUtf8Bytes(out, maxBytes).text;
   }
   const truncated = totalLines > maxLines || out !== lines.join("\n");
   return { content: out, truncated, totalLines, outputLines: Math.min(totalLines, maxLines) };

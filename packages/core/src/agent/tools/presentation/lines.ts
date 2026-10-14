@@ -1,13 +1,12 @@
-export function normalizeOutputNewlines(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
+import { splitDisplayLines } from "../../../utils/display-lines.js";
 
-/** Split text into display lines, dropping a trailing empty segment from a final newline. */
+export { normalizeOutputNewlines } from "../../../utils/display-lines.js";
+
+/**
+ * Split text into display lines, folding CRLF and dropping a trailing empty
+ * segment from a final newline. The algorithm lives in `utils/display-lines.ts`;
+ * this wrapper names the streaming default the presentation layer expects.
+ */
 export function splitStreamingLines(text: string): string[] {
-  if (!text) return [];
-  const lines = normalizeOutputNewlines(text).split("\n");
-  if (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
-  return lines;
+  return splitDisplayLines(text, { normalizeCrlf: true, dropTrailingEmpty: true });
 }

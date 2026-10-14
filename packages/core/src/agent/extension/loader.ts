@@ -3,6 +3,7 @@
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { toError } from "../../utils/errors.js";
 
 import { isExtensionModuleFile, pathToFileUrl, resolveExtensionDir } from "./paths.js";
 
@@ -98,7 +99,7 @@ export class ExtensionLoader {
         const api = await factory.create();
         loaded.push(api);
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         errors.push(error);
       }
     }
@@ -149,7 +150,7 @@ export class ExtensionLoader {
           files.push({ id, absPath: env.path.join(absDir, entry.name) });
         }
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         errors.push(new Error(`Skip extension dir "${absDir}": ${error.message}`));
       }
     }
@@ -175,7 +176,7 @@ export class ExtensionLoader {
         const api = await normalizeExtensionExport(mod, file.id);
         loaded.push(api);
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         const hint = file.absPath.toLowerCase().endsWith(".ts")
           ? " (TypeScript extensions require a TS loader such as tsx: node --import tsx …)"
           : "";

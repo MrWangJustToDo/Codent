@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
+import { formatByteSize } from "../../utils/byte-size.js";
 import { utf8ByteLength } from "../../utils/bytes.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
@@ -294,7 +295,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // its stat'd size or it OOMs first.
           if (stat && stat.size > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `Image too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
+              `Image too large to read: ${formatByteSize(stat.size)} (max ${formatByteSize(MAX_FILE_READ_BYTES)})`
             );
           }
 
@@ -340,7 +341,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           if (estimatedTokens > remainingTokens) {
             const dimLabel = dimensions ? `${dimensions.width}x${dimensions.height}` : "unknown size";
             throw new Error(
-              `Skipping image to avoid context overflow: ${Math.round(buffer.length / 1024)}KB image (${dimLabel}) would use ~${estimatedTokens} vision tokens, but only ~${remainingTokens} tokens remain in budget. Try reading fewer images per turn.`
+              `Skipping image to avoid context overflow: ${formatByteSize(buffer.length)} image (${dimLabel}) would use ~${estimatedTokens} vision tokens, but only ~${remainingTokens} tokens remain in budget. Try reading fewer images per turn.`
             );
           }
 
@@ -366,7 +367,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // unavailable (the `:182` try/catch) and as a defence against a stale size.
           if (stat && stat.size > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `PDF file too large: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
+              `PDF file too large: ${formatByteSize(stat.size)} (max ${formatByteSize(MAX_FILE_READ_BYTES)})`
             );
           }
 
@@ -374,7 +375,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
 
           if (buffer.length > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `PDF file too large: ${Math.round(buffer.length / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB)`
+              `PDF file too large: ${formatByteSize(buffer.length)} (max ${formatByteSize(MAX_FILE_READ_BYTES)})`
             );
           }
 
@@ -446,7 +447,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // byte ceiling is the only thing between a multi-GB file and an OOM.
           if (stat && stat.size > MAX_FILE_READ_BYTES) {
             throw new Error(
-              `File too large to read: ${Math.round(stat.size / 1024 / 1024)}MB (max ${MAX_FILE_READ_BYTES / 1024 / 1024}MB). ` +
+              `File too large to read: ${formatByteSize(stat.size)} (max ${formatByteSize(MAX_FILE_READ_BYTES)}). ` +
                 `Read it in pieces instead — grep for the lines you need, or stream a slice with run_command ` +
                 `(e.g. \`sed -n '1,200p' <path>\` or \`head\`).`
             );

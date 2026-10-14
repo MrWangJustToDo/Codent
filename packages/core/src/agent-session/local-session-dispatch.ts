@@ -3,6 +3,7 @@
  */
 
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { errorMessage } from "../utils/errors.js";
 
 import type { AgentSessionCommand, AgentSessionCommandResult } from "./types.js";
 import type { ManagedAgent } from "../managers/managed-agent.js";
@@ -310,7 +311,7 @@ export async function dispatchLocalAgentSessionCommand(
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     return { ok: false, code: "failed", error: message };
   }
 }

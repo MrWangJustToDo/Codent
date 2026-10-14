@@ -11,6 +11,8 @@
  * {@link START_LINE_TOLERANCE} of the chosen hit.
  */
 
+import { truncateText } from "../../../utils/text-truncation.js";
+
 import {
   fuzzyCount,
   fuzzyIncludes,
@@ -206,7 +208,7 @@ export function formatNotFoundHint(content: string, oldString: string): string {
     return " Re-read the file and copy oldString exactly from the numbered read_file output (widen the snippet for uniqueness).";
   }
 
-  const preview = lines[bestIdx]!.length > 120 ? `${lines[bestIdx]!.slice(0, 117)}...` : lines[bestIdx]!;
+  const preview = truncateText(lines[bestIdx]!, 120);
   return ` Nearest similar line ${bestIdx + 1}: "${preview}". Re-read around that line and widen oldString so it is unique.`;
 }
 

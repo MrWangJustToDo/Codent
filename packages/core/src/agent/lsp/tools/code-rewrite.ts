@@ -5,6 +5,8 @@
  * template that can reference captured metavariables. Supports dry-run preview.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
+import { truncateText } from "../../../utils/text-truncation.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
 import { computeRewrites, applyRewrites } from "../tree-sitter/rewrite-engine.js";
 import { searchFiles } from "../tree-sitter/search-engine.js";
@@ -56,7 +58,7 @@ export function createCodeRewriteTool(deps: CodeRewriteToolDeps) {
       try {
         compiled = await compilePattern(params.pattern ?? "", params.language ?? "", deps.treeSitter);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `Error: ${msg}`, matchCount: 0, filesModified: 0, dryRun: isDryRun };
       }
 
@@ -141,8 +143,8 @@ export function createCodeRewriteTool(deps: CodeRewriteToolDeps) {
       );
 
       for (const c of result.changes) {
-        const beforeShort = c.before.length > 80 ? c.before.slice(0, 80) + "..." : c.before;
-        const afterShort = c.after.length > 80 ? c.after.slice(0, 80) + "..." : c.after;
+        const beforeShort = truncateText(c.before, 80);
+        const afterShort = truncateText(c.after, 80);
         lines.push(`${rel(c.file)}:${c.line} — ${beforeShort} → ${afterShort}`);
       }
 

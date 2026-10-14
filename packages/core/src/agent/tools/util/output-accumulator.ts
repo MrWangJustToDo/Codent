@@ -10,6 +10,7 @@
  */
 
 import { utf8ByteLength } from "../../../utils/bytes.js";
+import { splitDisplayLines } from "../../../utils/display-lines.js";
 
 // ============================================================================
 // Constants
@@ -47,17 +48,6 @@ export interface OutputSnapshot {
 // Helpers
 // ============================================================================
 
-function splitLinesForCounting(content: string): string[] {
-  if (content.length === 0) {
-    return [];
-  }
-  const lines = content.split("\n");
-  if (content.endsWith("\n")) {
-    lines.pop();
-  }
-  return lines;
-}
-
 function truncateTail(
   content: string,
   maxLines: number,
@@ -70,7 +60,7 @@ function truncateTail(
   outputBytes: number;
 } {
   const totalBytes = utf8ByteLength(content);
-  const lines = splitLinesForCounting(content);
+  const lines = splitDisplayLines(content, { normalizeCrlf: false, dropTrailingEmpty: true });
   const totalLines = lines.length;
 
   if (totalLines <= maxLines && totalBytes <= maxBytes) {

@@ -1,4 +1,5 @@
 import { utf8ByteLength } from "../../utils/bytes.js";
+import { truncateText } from "../../utils/text-truncation.js";
 
 import { DEFAULT_EVENT_LOG_RULES, type EventLogRule } from "./event-log-rules.js";
 
@@ -70,7 +71,7 @@ export function summarizePayload(payload: Record<string, unknown>): Record<strin
 
     if (typeof value === "string") {
       if (value.length <= KEEP_STRING_MAX_CHARS || KEEP_FIELD_RE.test(key)) {
-        out[key] = value.length > KEEP_STRING_HARD_MAX_CHARS ? value.slice(0, KEEP_STRING_HARD_MAX_CHARS) + "…" : value;
+        out[key] = truncateText(value, KEEP_STRING_HARD_MAX_CHARS);
       } else {
         summarizeEntry(out, key, value);
       }

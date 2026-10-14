@@ -20,6 +20,7 @@
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { toPosixPathKey } from "../../utils/posix-path.js";
 
 // ============================================================================
@@ -191,24 +192,11 @@ export function truncateToBudget(
   env?: ResolvedCoreEnv
 ): { content: string; truncated: boolean } {
   const e = env ?? getEnv();
-  if (e.byteLength(content, "utf-8") <= maxBytes) {
-    return { content, truncated: false };
-  }
-
-  // Byte length is >= character length, so `maxBytes` characters is an upper bound.
-  let low = 0;
-  let high = Math.min(maxBytes, content.length);
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    if (e.byteLength(content.slice(0, mid), "utf-8") <= maxBytes) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  const lineBreak = content.lastIndexOf("\n", low);
-  return { content: content.slice(0, lineBreak > 0 ? lineBreak : low), truncated: true };
+  const { text, truncated } = truncateToUtf8Bytes(content, maxBytes, {
+    byteLength: (value) => e.byteLength(value, "utf-8"),
+    lineBoundary: true,
+  });
+  return { content: text, truncated };
 }
 
 // ============================================================================

@@ -1,3 +1,4 @@
+import { toError } from "../../utils/errors.js";
 // ============================================================================
 // Agent Log Lifecycle Guards
 // ============================================================================
@@ -114,7 +115,7 @@ export function installAgentLogProcessGuards(): void {
   const handleFatal = (kind: string, reason: unknown): void => {
     if (handlingFatal) return;
     handlingFatal = true;
-    const error = reason instanceof Error ? reason : new Error(String(reason));
+    const error = toError(reason);
     try {
       // Listeners replace Node's default fatal print, so reproduce it here.
       console.error(`[agent] fatal ${kind}:`);

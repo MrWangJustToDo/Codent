@@ -2,6 +2,8 @@
  * Extract structured plan markdown and numbered steps from assistant text.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 export interface PlanStep {
   step: number;
   text: string;
@@ -29,7 +31,7 @@ export function cleanStepText(text: string): string {
     cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
   if (cleaned.length > 80) {
-    cleaned = `${cleaned.slice(0, 77)}...`;
+    cleaned = truncateText(cleaned, 80);
   }
   return cleaned;
 }

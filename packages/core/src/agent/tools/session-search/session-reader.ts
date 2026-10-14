@@ -14,6 +14,7 @@
  * count, and collected matches — so a large history cannot blow the model context or the turn.
  */
 
+import { truncateText } from "../../../utils/text-truncation.js";
 import { isCompactionSummaryUIMessage } from "../../compaction/compaction-summary.js";
 import { foldLog, getJournalPath, readLog } from "../../persistence/session-journal.js";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../../persistence/types.js";
@@ -139,7 +140,7 @@ export function messageToolSummary(message: PersistedUIMessage): string | null {
     if (!isToolCallPart(part)) continue;
     const name = typeof part.name === "string" ? part.name : "tool";
     const rawArgs = typeof part.arguments === "string" ? part.arguments : "";
-    const args = rawArgs.length > 100 ? `${rawArgs.slice(0, 100)}…` : rawArgs;
+    const args = truncateText(rawArgs, 100);
     calls.push(args ? `${name}(${args})` : `${name}()`);
   }
   return calls.length > 0 ? calls.join(" ") : null;
@@ -284,7 +285,7 @@ export function makeSnippet(text: string, query: string, max = MAX_SNIPPET_CHARS
   if (flat.length <= max) return flat;
 
   const at = flat.toLowerCase().indexOf(query.toLowerCase());
-  if (at < 0) return `${flat.slice(0, max)}…`;
+  if (at < 0) return truncateText(flat, max);
 
   const start = Math.max(0, at - SNIPPET_LEAD);
   const end = Math.min(flat.length, start + max);

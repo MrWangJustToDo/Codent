@@ -2,6 +2,7 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
 import { isAbortError, isTimeoutError } from "../../runtime-types/abort.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "./command-safety/command-approval-policy.js";
@@ -195,7 +196,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
           });
           registry.setKill(job.id, handle.kill);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           registry.markFailed(job.id, message);
           throw err;
         }

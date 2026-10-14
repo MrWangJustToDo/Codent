@@ -5,6 +5,8 @@
  * Supports `$NAME` for single-node wildcards and `$$$NAME` for variadic.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
+import { truncateText } from "../../../utils/text-truncation.js";
 import { compilePattern } from "../tree-sitter/pattern-compiler.js";
 import { searchFiles } from "../tree-sitter/search-engine.js";
 
@@ -48,7 +50,7 @@ export function createCodeSearchTool(deps: CodeSearchToolDeps) {
       try {
         compiled = await compilePattern(params.pattern ?? "", params.language ?? "", deps.treeSitter);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `Error: ${msg}`, matchCount: 0, filesSearched: 0 };
       }
 
@@ -79,7 +81,7 @@ export function createCodeSearchTool(deps: CodeSearchToolDeps) {
         const relPath = m.file.startsWith(rootDir)
           ? m.file.slice(rootDir.length).replace(/^[/\\]/, "") || m.file
           : m.file;
-        const matchText = m.matchedText.length > 200 ? m.matchedText.slice(0, 200) + "..." : m.matchedText;
+        const matchText = truncateText(m.matchedText, 200);
 
         lines.push(`${relPath}:${m.line}:${m.column}`);
         lines.push(`  ${matchText.replace(/\n/g, "\n  ")}`);
@@ -87,7 +89,7 @@ export function createCodeSearchTool(deps: CodeSearchToolDeps) {
         const captureEntries = Object.entries(m.captures);
         if (captureEntries.length > 0) {
           for (const [name, value] of captureEntries) {
-            const displayValue = value.length > 100 ? value.slice(0, 100) + "..." : value;
+            const displayValue = truncateText(value, 100);
             lines.push(`  $${name} = ${displayValue}`);
           }
         }

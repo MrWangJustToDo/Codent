@@ -29,12 +29,20 @@
  * the session file (a single screenshot is ~100 KB, a read_file image >1 MB).
  */
 
+import { isBase64Source, parseDataUrl } from "../../utils/data-url.js";
+
 import { MediaStore } from "./media-store.js";
 import {
   parseStringifiedMultimodalContent,
   repairStringifiedMultimodalUIMessages,
 } from "./repair-stringified-multimodal.js";
-import { MEDIA_PROTOCOL, buildMediaRefPath, parseMediaRefPath } from "./types.js";
+import {
+  MEDIA_PROTOCOL,
+  buildMediaRefPath,
+  extensionToMime,
+  isBinaryMediaPartType,
+  parseMediaRefPath,
+} from "./types.js";
 
 import type { MediaRef } from "./types.js";
 import type { ResolvedCoreEnv } from "../../env";
@@ -59,7 +67,7 @@ type BinaryMediaPart =
   | DocumentPart<SessionMediaMetadata>;
 
 function isBinaryMediaPart(part: UIMessage["parts"][number]): part is BinaryMediaPart {
-  return part.type === "image" || part.type === "audio" || part.type === "video" || part.type === "document";
+  return isBinaryMediaPartType(part.type);
 }
 
 function ensureMetadata(part: BinaryMediaPart): SessionMediaMetadata {
@@ -69,24 +77,9 @@ function ensureMetadata(part: BinaryMediaPart): SessionMediaMetadata {
   return part.metadata;
 }
 
-/**
- * Check if a source value contains base64-encoded data.
- */
-function isBase64Source(value: string): boolean {
-  // Data URL with base64: data:{mimeType};base64,...
-  if (/^data:[^;]+;base64,/s.test(value)) return true;
-  // Raw base64 — must be non-empty and reasonably long (at least 20 chars to
-  // avoid false positives on short metadata strings, and only base64 chars).
-  if (value.length < 20) return false;
-  return /^[A-Za-z0-9+/=]+$/.test(value);
-}
-
 // ============================================================================
 // Stringified tool results (tool-result.content)
 // ============================================================================
-
-/** Binary part types that can appear inside a stringified tool result. */
-const NESTED_MEDIA_PART_TYPES = new Set(["image", "audio", "video", "document"]);
 
 interface NestedMediaPart {
   type?: string;
@@ -109,7 +102,7 @@ async function mapNestedMediaPart(
   part: NestedMediaPart,
   rewrite: (source: NonNullable<NestedMediaPart["source"]>, metadata: Record<string, unknown>) => Promise<boolean>
 ): Promise<boolean> {
-  if (typeof part.type !== "string" || !NESTED_MEDIA_PART_TYPES.has(part.type)) return false;
+  if (typeof part.type !== "string" || !isBinaryMediaPartType(part.type)) return false;
   const source = part.source;
   if (!source || typeof source.value !== "string" || source.value.length === 0) return false;
 
@@ -389,46 +382,27 @@ export async function hydrateUIMessages(
 // Helpers (MIME type only — ext/parse live in types.ts)
 // ============================================================================
 
+/** Fallback MIME per part kind, used when a data URL or media ref carries none. */
+const PART_TYPE_DEFAULT_MIME: Record<string, string> = {
+  image: "image/png",
+  audio: "audio/mpeg",
+  video: "video/mp4",
+  document: "application/pdf",
+};
+
 /** Guess MIME type from a data URL or raw base64 content. */
 function guessMimeType(value: string, partType: string): string {
-  const match = value.match(/^data:([^;]+);base64,/);
-  if (match) return match[1];
-
-  const mimeDefaults: Record<string, string> = {
-    image: "image/png",
-    audio: "audio/mpeg",
-    video: "video/mp4",
-    document: "application/pdf",
-  };
-  return mimeDefaults[partType] ?? "application/octet-stream";
+  const parsed = parseDataUrl(value);
+  if (parsed?.mimeType) return parsed.mimeType;
+  return PART_TYPE_DEFAULT_MIME[partType] ?? "application/octet-stream";
 }
 
 /** Guess MIME type from a media:// ref string. */
 function guessMimeTypeFromRef(ref: string, partType: string): string {
   const parsed = parseMediaRefPath(ref);
   if (parsed) {
-    const extMap: Record<string, string> = {
-      png: "image/png",
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      gif: "image/gif",
-      webp: "image/webp",
-      svg: "image/svg+xml",
-      bmp: "image/bmp",
-      mp3: "audio/mpeg",
-      wav: "audio/wav",
-      ogg: "audio/ogg",
-      pdf: "application/pdf",
-      mp4: "video/mp4",
-      webm: "video/webm",
-    };
-    if (extMap[parsed.ext]) return extMap[parsed.ext];
+    const mime = extensionToMime(parsed.ext);
+    if (mime) return mime;
   }
-  const mimeDefaults: Record<string, string> = {
-    image: "image/png",
-    audio: "audio/mpeg",
-    video: "video/mp4",
-    document: "application/pdf",
-  };
-  return mimeDefaults[partType] ?? "application/octet-stream";
+  return PART_TYPE_DEFAULT_MIME[partType] ?? "application/octet-stream";
 }

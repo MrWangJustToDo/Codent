@@ -10,6 +10,8 @@ import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compact
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
 import { isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
 import { estimateTokens } from "../agent/compaction/token-estimator.js";
+import { isAbortError } from "../runtime-types/abort.js";
+import { toError } from "../utils/errors.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ResolvedCoreEnv } from "../env";
@@ -103,10 +105,10 @@ export async function handleManagedReactiveCompact(
   } catch (err) {
     host.statusController.endCompaction();
     // A user cancel is not a reactive-compaction failure — stay silent.
-    if (err instanceof Error && err.name === "AbortError") {
+    if (isAbortError(err)) {
       return false;
     }
-    const compactError = err instanceof Error ? err : new Error(String(err));
+    const compactError = toError(err);
     host.emitEvent("compaction:reactive-error", { error: compactError.message });
     // Restore the status after beginCompaction above — otherwise the agent would
     // stay stuck in "compacting" (onRecoveryRetry only unwinds "error"), blocking
@@ -233,10 +235,10 @@ export async function runManualCompact(
       tokensAfter,
     };
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (isAbortError(error)) {
       return { ok: false, error: "Compaction aborted" };
     }
-    const err = error instanceof Error ? error : new Error(String(error));
+    const err = toError(error);
     return { ok: false, error: `Compaction failed: ${err.message}` };
   } finally {
     if (previousStatus === "compacting") {

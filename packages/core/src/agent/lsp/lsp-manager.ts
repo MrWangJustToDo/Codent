@@ -6,6 +6,8 @@
  * factory (Node only); when absent, LSP tools degrade gracefully.
  */
 
+import { errorMessage } from "../../utils/errors.js";
+
 import { getLanguageIdFromPath } from "./language-map.js";
 import { findLombokJar } from "./lombok.js";
 import { pathToFileUri } from "./shared/format.js";
@@ -300,7 +302,7 @@ export class LspManager {
     this.startingServers.set(languageId, startPromise);
     startPromise.catch((err) => {
       this.startingServers.delete(languageId);
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.callbacks.onServerError?.(languageId, message);
     });
 
@@ -321,7 +323,7 @@ export class LspManager {
       this.startingServers.set(languageId, startPromise);
       startPromise.catch((err) => {
         this.startingServers.delete(languageId);
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         this.callbacks.onServerError?.(languageId, `Auto-start failed: ${message}`);
       });
     }
@@ -426,7 +428,7 @@ export class LspManager {
       // nothing else keeps a reference to it once the start promise is dropped.
       await connection.shutdown().catch(() => {});
       connection.kill();
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       // Spawn ENOENT means the server binary isn't on PATH — translate to a
       // clear, actionable hint instead of a raw "spawn ... ENOENT" error.
       const reason = /ENOENT|not found|No such file/i.test(message)
@@ -516,7 +518,7 @@ export class LspManager {
       this.startingServers.set(languageId, startPromise);
       startPromise.catch((err) => {
         this.startingServers.delete(languageId);
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         this.callbacks.onServerError?.(languageId, `Auto-restart failed for ${languageId}: ${message}`);
         this.handleUnexpectedExit(languageId, null);
       });

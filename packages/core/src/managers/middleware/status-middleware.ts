@@ -6,6 +6,8 @@
  * directly via {@link createCompactionMiddleware}.
  */
 
+import { errorMessage } from "../../utils/errors.js";
+
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
@@ -35,7 +37,7 @@ export function createStatusMiddleware(deps: StatusMiddlewareDeps): ChatMiddlewa
       deps.status.onRunAbort();
     },
     onError: (_ctx, info) => {
-      const message = info.error instanceof Error ? info.error.message : String(info.error);
+      const message = errorMessage(info.error);
       deps.status.onRunError(message);
     },
     onToolPhaseComplete: async (_ctx, info) => {

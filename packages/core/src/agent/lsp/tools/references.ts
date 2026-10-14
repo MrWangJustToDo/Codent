@@ -2,6 +2,7 @@
  * lsp_references — find all references to a symbol.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
 import { formatLocation } from "../shared/format.js";
 
 import { resolvePosition, truncateHead, withResolved } from "./tool-shared.js";
@@ -80,7 +81,7 @@ export function createReferencesTool(deps: ReferencesToolDeps) {
         }
         return { text: withResolved(resolvedFrom, resultText), count: locations.length };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `LSP references request failed: ${msg}`, count: 0 };
       }
     },

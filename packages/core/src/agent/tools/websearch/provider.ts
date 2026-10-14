@@ -2,6 +2,8 @@
  * ProviderManager — Manages search providers, auto-detection, spreading, and fallback.
  */
 
+import { toError } from "../../../utils/errors.js";
+
 import { PROVIDER_KEY_FIELDS } from "./key-fields.js";
 
 import type { WebsearchToolConfig } from "../tool-config.js";
@@ -181,7 +183,7 @@ export class ProviderManager {
       const results = await primary.search(query, scopedOptions);
       return { results, provider: primary.name };
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = toError(err);
 
       // A user abort is not a provider failure: do not fall back to another provider, and do not
       // mask the abort behind an "all providers failed" message. The abort must survive to the
@@ -197,7 +199,7 @@ export class ProviderManager {
           const results = await provider.search(query, scopedOptions);
           return { results, provider: provider.name };
         } catch (fallbackErr) {
-          lastError = fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+          lastError = toError(fallbackErr);
           if (options?.signal?.aborted) throw lastError;
         }
       }

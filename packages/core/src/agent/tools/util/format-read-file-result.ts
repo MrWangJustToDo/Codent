@@ -1,3 +1,4 @@
+import { formatByteSize } from "../../../utils/byte-size.js";
 import { isProjectedModelContent } from "../runtime/projected-model-content.js";
 
 import type { ReadFileOutput } from "../read-file-tool.js";
@@ -20,7 +21,7 @@ export function formatReadFileToolResult(output: ReadFileOutput): ModelToolConte
 
   if (output.type === "image") {
     return [
-      { type: "text", content: `Image read: ${output.path} (${Math.round(output.size / 1024)}KB)` },
+      { type: "text", content: `Image read: ${output.path} (${formatByteSize(output.size)})` },
       {
         type: "image",
         source: { type: "data", value: output.base64, mimeType: output.mimeType },
@@ -29,7 +30,7 @@ export function formatReadFileToolResult(output: ReadFileOutput): ModelToolConte
   }
 
   if (output.type === "pdf") {
-    const header = `PDF read: ${output.path} (${Math.round(output.size / 1024)}KB${
+    const header = `PDF read: ${output.path} (${formatByteSize(output.size)}${
       output.pageCount != null ? `, ${output.pageCount} pages` : ""
     })`;
     const body =

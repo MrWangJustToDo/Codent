@@ -13,6 +13,9 @@
  * Max retries: 1 (configurable). After that, the error propagates.
  */
 
+import { isAbortError } from "../../runtime-types/abort.js";
+import { errorMessage } from "../../utils/errors.js";
+
 import { createCompactedMessages, summarizeConversation } from "./auto-compact.js";
 import { findCutPointByBudget } from "./cut-point.js";
 import { deriveKeepRecentTokens } from "./keep-policy.js";
@@ -39,7 +42,7 @@ const DEFAULT_REACTIVE_KEEP_TOKENS = 16_000;
  */
 export function isPromptTooLongError(error: unknown): boolean {
   if (!error) return false;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   const lower = message.toLowerCase();
   return (
     lower.includes("prompt_too_long") ||
@@ -154,7 +157,7 @@ export async function reactiveCompact(
   } catch (error) {
     // A cancelled run must not fall back to a placeholder compaction checkpoint
     // (that would still mutate the channel after the user aborted).
-    if (config.abortSignal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+    if (isAbortError(error, config.abortSignal)) {
       throw error;
     }
     // If summarization fails, use a simple fallback so the session isn't lost

@@ -90,6 +90,7 @@ import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
+import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
@@ -1175,7 +1176,7 @@ export class ManagedAgent {
    * process would crash. Surface it as `session:save-error` instead.
    */
   private reportBackgroundPersistError(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     this.log.warn("system", "background session persist failed", { error: message });
     this.emitEvent("session:save-error", { target: "session+uiMessages", error: message });
   }
@@ -1492,7 +1493,7 @@ export class ManagedAgent {
       const loaded = await loadLatestInstructionContent(this.getCoreEnv());
       return formatInstructionContextSection(loaded);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.log?.warn("agent", "Instruction-context detection failed", { error: message });
       return undefined;
     }

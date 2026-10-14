@@ -358,6 +358,20 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   components (status APIs, widget vocabularies, confirm dialogs, color helpers) — that vocabulary
   was deliberately removed; payloads must stay JSON-serializable for remote hosts.
 
+**Shared helpers**
+
+- A cross-cutting helper has **one definition**. UTF-8 byte length / byte-bounded truncation,
+  character truncation with an omission marker, human-readable byte sizes, display line splitting,
+  data-URL parsing + MIME mapping, error normalization, abort classification, memory expiry, name
+  slugification, and binary-media part membership each live once — under `src/utils/`, or in the
+  owning domain for a domain-specific classifier (`agent/memory/memory-expiry.ts`,
+  `agent/media/types.ts`).
+- Import a shared helper by deep path; do not add an `index.ts` barrel under `utils/` (the
+  directory is not consumed as a unit, so a barrel there would be dead weight).
+- Re-deriving one inline fails a `validate:no-inline-*` guard, and a second `export function` body
+  for a watched symbol fails `validate:module-organization`'s single-definition list. See
+  `openspec/specs/core-shared-helpers/spec.md`.
+
 **Exports**
 
 - Built-in extension factories: exactly one canonical export `createXxxExtension`. No bare-name aliases, no default exports.
@@ -1159,7 +1173,7 @@ packages/
 │   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata
 │   ├── runtime/                       # Instantiable runtime: AgentRuntime + CodentAgent facade
 │   ├── runtime-types/                 # Shared status / event / usage types (no manager deps)
-│   ├── utils/                         # Cross-cutting helpers (Emitter, generateId)
+│   ├── utils/                         # Cross-cutting single-definition helpers (bytes, text-truncation, errors, display-lines)
 │   ├── index.ts                       # Curated public API exports (hosts / adapters)
 │   └── dev*.ts                        # Internal-only re-exports for `pnpm validate:*` scripts
 │

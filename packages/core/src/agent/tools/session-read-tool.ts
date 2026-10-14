@@ -10,6 +10,7 @@
 import { z } from "zod";
 
 import { FileError } from "../../env/types";
+import { formatByteSize } from "../../utils/byte-size.js";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import {
@@ -122,8 +123,8 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
         const logSize = await sessionLogSize(coreEnv, sessionId);
         if (logSize !== null && logSize > MAX_SESSION_FILE_BYTES) {
           throw new Error(
-            `Session log too large to read: ${Math.round(logSize / 1024 / 1024)}MB ` +
-              `(max ${MAX_SESSION_FILE_BYTES / 1024 / 1024}MB). Use session_search to locate a specific message.`
+            `Session log too large to read: ${formatByteSize(logSize)} ` +
+              `(max ${formatByteSize(MAX_SESSION_FILE_BYTES)}). Use session_search to locate a specific message.`
           );
         }
 

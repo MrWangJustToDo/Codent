@@ -457,6 +457,7 @@ export {
   SYNTHETIC_DOT_SETTLE_DELAY_MS,
 } from "../agent/lsp/shared/timing.js";
 export { lspTextToModelOutput } from "../agent/lsp/shared/tool-output.js";
+export { truncateHead } from "../agent/lsp/tools/tool-shared.js";
 export { createMemoryExtension, type MemoryExtensionConfig, type CreateMemoryExtensionOptions } from "../agent/memory";
 export {
   SkillRegistry,

@@ -1,3 +1,5 @@
+import { errorMessage } from "../../utils/errors.js";
+
 import { mcpConfigSchema } from "./types.js";
 
 import type { McpConfig } from "./types.js";
@@ -56,7 +58,7 @@ export async function loadMcpConfig(env: CoreEnv, configPath?: string): Promise<
       const result = mcpConfigSchema.parse(parsed);
       return { config: result, sourcePath: path, loadErrors: errors.length > 0 ? errors : undefined };
     } catch (e) {
-      errors.push(`Load mcp config failed: ${path} — ${e instanceof Error ? e.message : String(e)}`);
+      errors.push(`Load mcp config failed: ${path} — ${errorMessage(e)}`);
       // Continue to next fallback
     }
   }
@@ -83,7 +85,7 @@ async function loadSingleConfig(fs: CoreEnvFs, path: string, errors: string[]): 
       loadErrors: errors.length > 0 ? errors : undefined,
     };
   } catch (e) {
-    errors.push(`Load mcp config failed: ${path} — ${e instanceof Error ? e.message : String(e)}`);
+    errors.push(`Load mcp config failed: ${path} — ${errorMessage(e)}`);
     return null;
   }
 }

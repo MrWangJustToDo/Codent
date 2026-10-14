@@ -24,6 +24,7 @@ import { z } from "zod";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { extractTextFromContent } from "../compaction/message-utils.js";
 
+import { isExpiredMemory } from "./memory-expiry.js";
 import { DEFAULT_HARD_MAX_MEMORIES, memoryTypeSchema } from "./types.js";
 
 import type { MemoryManager } from "./memory-manager.js";
@@ -522,16 +523,11 @@ async function evictOldest(memories: Memory[], memoryManager: MemoryManager): Pr
   if (memories.length <= DEFAULT_HARD_MAX_MEMORIES) return 0;
 
   const now = Date.now();
-  const isExpired = (m: Memory): boolean => {
-    if (!m.expiresAt) return false;
-    const t = Date.parse(m.expiresAt);
-    return !Number.isNaN(t) && t <= now;
-  };
 
   // Sort: expired first, then by importance (ascending, unset treated as 0.5), then oldest.
   const sorted = [...memories].sort((a, b) => {
-    const aExpired = isExpired(a) ? 1 : 0;
-    const bExpired = isExpired(b) ? 1 : 0;
+    const aExpired = isExpiredMemory(a, now) ? 1 : 0;
+    const bExpired = isExpiredMemory(b, now) ? 1 : 0;
     if (aExpired !== bExpired) return bExpired - aExpired;
 
     const ia = typeof a.importance === "number" ? a.importance : 0.5;

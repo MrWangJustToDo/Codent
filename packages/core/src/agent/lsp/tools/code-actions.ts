@@ -2,6 +2,8 @@
  * lsp_code_actions — get available code actions (quick fixes, refactorings) at a position.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
+import { truncateText } from "../../../utils/text-truncation.js";
 import { fileUriToPath } from "../shared/format.js";
 
 import { resolvePosition, withResolved } from "./tool-shared.js";
@@ -32,7 +34,7 @@ function formatEditSummary(edit: WorkspaceEdit, rootDir: string): string[] {
       const col = textEdit.range.start.character + 1;
       const endLn = textEdit.range.end.line + 1;
       const endCol = textEdit.range.end.character + 1;
-      const newText = textEdit.newText.length > 60 ? textEdit.newText.slice(0, 57) + "..." : textEdit.newText;
+      const newText = truncateText(textEdit.newText, 60);
       if (
         textEdit.range.start.line === textEdit.range.end.line &&
         textEdit.range.start.character === textEdit.range.end.character
@@ -200,7 +202,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
 
         return { text, count: totalCount, preferredCount };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `LSP code action request failed: ${msg}`, count: 0, preferredCount: 0 };
       }
     },

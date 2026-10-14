@@ -1,6 +1,7 @@
 import { getEnv, hasCoreEnv } from "../../env";
 // The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
 // it on the same two hooks (fatal handler + `exit`) that already land the active logs.
+import { errorMessage, toError } from "../../utils/errors.js";
 import { createAgentEventBus } from "../agent-event-bus";
 import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
 
@@ -180,7 +181,7 @@ export class ExtensionRunner {
   }
 
   private reportTransformerFailure(extensionId: string, err: unknown): void {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     this.writeExtensionLog("warn", extensionId, `message transformer failed (messages kept as last valid): ${message}`);
     this.rawBus.emit("agent:extension-error", {
       extensionId,
@@ -275,7 +276,7 @@ export class ExtensionRunner {
   }
 
   private reportObserverFailure(extensionId: string, err: unknown): void {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     this.writeExtensionLog("warn", extensionId, `event observer failed: ${message}`);
     this.rawBus.emit("agent:extension-error", {
       extensionId,
@@ -362,7 +363,7 @@ export class ExtensionRunner {
         const value = await provider.content?.();
         if (value?.trim()) turnContextSections.push({ id, content: value.trim() });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         // Converge into the agent log via the existing `agent:extension-error`
         // rule (error/system) rather than a bare console write; console stays
         // as a fallback for standalone runners without an injected bus.
@@ -420,7 +421,7 @@ export class ExtensionRunner {
       await api.activate(ctx);
       instance.state = "active";
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       // Roll back any artifacts registered before the failure so a later re-enable
       // starts clean (no duplicate registrations).
       this.unregisterInstanceArtifacts(instance);
@@ -448,7 +449,7 @@ export class ExtensionRunner {
         await instance.api.deactivate();
       } catch (err) {
         // Do not swallow: surface deactivation failures for observability.
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         this.rawBus.emit("agent:extension-error", {
           extensionId: instance.api.id,
           phase: "deactivate",
@@ -474,7 +475,7 @@ export class ExtensionRunner {
     try {
       await flush();
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       this.rawBus.emit("agent:extension-error", {
         extensionId: instance.api.id,
         phase: "flush",
@@ -558,7 +559,7 @@ export class ExtensionRunner {
         this.disabledExtensionNotices.delete(instance.api.id);
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         // Roll back any artifacts registered before the failure.
         this.unregisterInstanceArtifacts(instance);
         instance.state = "error";

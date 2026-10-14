@@ -13,6 +13,7 @@
 import { z } from "zod";
 
 import { isAbortError } from "../../runtime-types/abort.js";
+import { buildDataUrl, parseDataUrl } from "../../utils/data-url.js";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { createTimeoutAbort } from "./util/abort-timeout.js";
@@ -222,7 +223,7 @@ Usage notes:
               finalUrl,
               title: "",
               contentType,
-              content: `data:${mime};base64,${base64Content}`,
+              content: buildDataUrl(mime, base64Content),
               contentLength: base64Content.length,
               isImage: true,
               truncated: false,
@@ -318,7 +319,7 @@ Usage notes:
       }
       if (output.isImage) {
         const parsed = parseDataUrl(output.content);
-        if (parsed) {
+        if (parsed && parsed.mimeType && parsed.base64) {
           return [
             { type: "text" as const, content: `Fetched image: ${output.finalUrl}` },
             {
@@ -335,12 +336,3 @@ Usage notes:
     },
   });
 };
-
-function parseDataUrl(content: string): { mimeType: string; base64: string } | null {
-  const match = /^data:([^;,]+);base64,(.+)$/s.exec(content);
-  if (!match) return null;
-  const mimeType = match[1]?.trim();
-  const base64 = match[2];
-  if (!mimeType || !base64) return null;
-  return { mimeType, base64 };
-}

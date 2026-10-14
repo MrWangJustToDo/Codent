@@ -20,7 +20,9 @@
 import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { slugifyName } from "../../utils/slug.js";
 
+import { isExpiredMemory } from "./memory-expiry.js";
 import {
   DEFAULT_CONSOLIDATE_THRESHOLD,
   DEFAULT_MAX_INDEX_BYTES,
@@ -44,37 +46,12 @@ export interface WriteMemoryOptions {
   expiresAt?: string;
 }
 
-/**
- * Unicode-safe slugify: keeps CJK characters, latin alphanumerics, and hyphens.
- * Falls back to a timestamp-based slug if the result would be empty.
- */
-function slugify(name: string): string {
-  const slug = name
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^\p{L}\p{N}-]/gu, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-|-$/g, "");
-
-  if (!slug) {
-    return `memory-${Date.now().toString(36)}`;
-  }
-  return slug;
-}
-
 /** Quote a YAML scalar value to prevent injection from colons, newlines, etc. */
 function yamlQuote(value: string): string {
   if (/[\n\r:#"'{}[\],&*!|>%@`]/.test(value) || value.startsWith(" ") || value.endsWith(" ")) {
     return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
   }
   return value;
-}
-
-/** True when the memory has an `expiresAt` in the past (or unparseable). */
-function isExpired(mem: Memory): boolean {
-  if (!mem.expiresAt) return false;
-  const t = Date.parse(mem.expiresAt);
-  return Number.isNaN(t) || t <= Date.now();
 }
 
 // ============================================================================
@@ -233,7 +210,7 @@ export class MemoryManager {
     body: string,
     options: WriteMemoryOptions = {}
   ): Promise<string> {
-    const slug = slugify(name);
+    const slug = slugifyName(name, { unicode: true, fallbackPrefix: "memory" });
     const filename = `${slug}.md`;
     const filePath = this.env.path.join(this.memoryPath, filename);
 
@@ -355,7 +332,7 @@ export class MemoryManager {
    * Rebuild the MEMORY.md index from all memory files, then update the cache.
    */
   async refreshIndex(): Promise<void> {
-    const memories = (await this.listMemories()).filter((m) => !isExpired(m));
+    const memories = (await this.listMemories()).filter((m) => !isExpiredMemory(m));
     const lines: string[] = [];
 
     for (const mem of memories) {

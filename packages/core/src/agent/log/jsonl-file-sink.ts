@@ -20,6 +20,7 @@
 
 import { getEnv } from "../../env";
 import { utf8ByteLength } from "../../utils/bytes.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { logEntrySchema } from "./schemas.js";
 
@@ -166,10 +167,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     try {
       buffer.push(JSON.stringify(entry));
     } catch (error) {
-      console.error(
-        `[agent] log entry is not serializable (${entry.level}/${entry.category}):`,
-        error instanceof Error ? error.message : String(error)
-      );
+      console.error(`[agent] log entry is not serializable (${entry.level}/${entry.category}):`, errorMessage(error));
       return;
     }
     schedule();

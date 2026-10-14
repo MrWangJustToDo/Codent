@@ -2,6 +2,8 @@
  * lsp_completions — get completion suggestions at a position.
  */
 
+import { errorMessage } from "../../../utils/errors.js";
+import { truncateText } from "../../../utils/text-truncation.js";
 import { resolveSymbolPosition } from "../shared/resolve-position.js";
 import { insertDot, shouldSyntheticTrigger, syntheticDotLocks } from "../shared/synthetic-dot.js";
 import { SYNTHETIC_DOT_SETTLE_DELAY_MS } from "../shared/timing.js";
@@ -54,7 +56,7 @@ function docSummary(doc?: string | MarkupContent): string | undefined {
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
   const summary = lines.slice(0, 2).join(" ");
-  return summary.length > 120 ? summary.slice(0, 117) + "..." : summary;
+  return truncateText(summary, 120);
 }
 
 function formatItem(item: CompletionItem): string {
@@ -257,7 +259,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
 
         return { text, count: resolvedItems.length, total };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { text: `LSP completion request failed: ${msg}`, count: 0, total: 0 };
       }
     },

@@ -1,6 +1,8 @@
 import { OpenAIBaseChatCompletionsTextAdapter } from "@tanstack/openai-base";
 import OpenAI from "openai";
 
+import { stripDataUrlPrefix } from "../../utils/data-url.js";
+
 import { liftToolMediaForChatCompletions } from "./lift-tool-media-for-chat-completions.js";
 
 import type { ContentPart, TextOptions } from "@tanstack/ai";
@@ -47,9 +49,7 @@ export class ChatCompletionsTextAdapter extends OpenAIBaseChatCompletionsTextAda
 
   protected override convertContentPart(part: ContentPart): ChatCompletionContentPart | null {
     if (part.type === "audio") {
-      const data = part.source.value.startsWith("data:")
-        ? part.source.value.replace(/^data:[^;]+;base64,/, "")
-        : part.source.value;
+      const data = stripDataUrlPrefix(part.source.value);
       return {
         type: "input_audio",
         input_audio: { data, format: audioFormatForMime(part.source.mimeType) },
