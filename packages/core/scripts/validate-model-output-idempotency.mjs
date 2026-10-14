@@ -43,6 +43,7 @@ import {
   createWriteFileTool,
   isProjectedModelContent,
   toModelOutputRegistry,
+  toPosixPath,
 } from "../dist/dev.mjs";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -201,18 +202,35 @@ const DELEGATES = [
       return statSync(path).isDirectory() ? walk(path) : path.endsWith(".ts") ? [path] : [];
     });
 
-  const delegatingFiles = new Set(DELEGATES.map((d) => d.file));
+  // The relative path must be POSIX-normalized before it is compared: `readdir` yields
+  // `agent\tools\read-file-tool.ts` on Windows while the allowlist is written for `/`. That mismatch
+  // is not hypothetical — it is what made CI red on Windows, where the delegating entry stopped
+  // matching and `read-file-tool.ts` was counted as an unguarded declaration site.
+  const delegatingFiles = new Set(DELEGATES.map((d) => toPosixPath(d.file)));
+  const isDelegating = (rel) => delegatingFiles.has(toPosixPath(rel));
+  const relOf = (file) => toPosixPath(file.replace(SRC, ""));
+
+  // Both spellings, asserted here so the rule is exercised on any platform (`toPosixPath`'s own
+  // contract: the Windows-shaped case is reachable and testable on Linux).
+  assert.equal(isDelegating("agent/tools/read-file-tool.ts"), true, "a POSIX checkout matches the delegating entry");
+  assert.equal(
+    isDelegating("agent\\tools\\read-file-tool.ts"),
+    true,
+    "so does a Windows checkout — the comparison must fold separators"
+  );
+
   let declarations = 0;
 
   for (const file of walk(join(SRC, "agent"))) {
-    const rel = file.replace(SRC, "");
+    const rel = relOf(file);
+    assert.ok(!rel.includes("\\"), `${rel}: the relative path must be POSIX-normalized before matching`);
     const src = readFileSync(file, "utf8");
     const sites =
       (src.match(/toModelOutput\(\{ output \}/g) ?? []).length + (src.match(/toModelOutput: \(/g) ?? []).length;
     const guards = (src.match(/isProjectedModelContent\(output\)/g) ?? []).length;
     declarations += sites;
 
-    if (delegatingFiles.has(rel)) {
+    if (isDelegating(rel)) {
       assert.equal(sites, 1, `${rel}: the delegating projection is still a single site`);
       continue;
     }
