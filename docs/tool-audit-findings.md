@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **22 条未修**（另 3 条 `【部分修】`、11 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **19 条未修**（另 3 条 `【部分修】`、14 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -111,10 +111,10 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `d1f17c71`】 `tools/util/preview-edit.ts` 自己用 `includes/replace` 重实现匹配，与 `edit_file` 的 unescape / `startLine` / 唯一性逻辑不一致 → 审批时看到的 diff 可能**藏掉真实写入**或**显示并不发生的改动**；`PreviewEditInput` 甚至没有 `startLine` 字段。→ 改为走工具自己的 `resolveEditMatch`/`applyResolvedEdit`（三条漂移全部消除）；`startLine` 加进类型并透传（app 侧本来就在传，只是类型挡掉了）；**工具拒绝时**改为返回「原文件 + 原因」（`edit_file` 只要有一条 edit 解析失败就一个字都不写），审批视图把原因显示出来而不是给一个空 diff。`validate:edit-preview` 用同一份内存 fs 同时驱动**真工具**与预览并逐字节比对。
 - 【未修】 `tools/find-edit-match.ts`：模糊分支**忽略 `startLine`**（取第一个命中）；`newString` 在只有 `oldString` 被过度转义时也被 `unescapeCommonEscapes`（会改写字面 `\n`/`\t`）。
 - 【未修】 CRLF 文件：多行 `oldString`（LF）匹配 `\r\n` 失败；`read_file` 渲染带不可见 `\r`；匹配路径无 CRLF 归一化。
-- 【未修】 `tools/delete-file-tool.ts` **绕过** `withFileMutationQueue`（与 edit/write 并行时可能"复活"已删文件）。
+- 【已修 · `a011c64e`】 `tools/delete-file-tool.ts` **绕过** `withFileMutationQueue`（与 edit/write 并行时可能"复活"已删文件）。→ 入同一把按路径的队列；`validate:file-mutation-queue` 新增"删除必须等在同一路径上进行的变更"用例（按操作顺序断言）。
 - 【部分修 · `5b3df3fe`】 `tools/util/file-mutation-queue.ts`：key 用 POSIX `pathe`（Windows 下 `src\a` vs `src/a` 不同 key → 不串行；Node 宿主已改为提供平台 `path`，POSIX `pathe` 只是 fallback 默认，**这一半仍未修**）；~~Map 永不回收~~ —— **已修**：链尾自己摘除条目（按身份校验，避免删掉后面排队者等待的 promise），`validate:file-mutation-queue` 断言 60 个文件后归零。
 - 【已修 · `b9dad0cf` / `050bd6a1`】 `packages/node/src/environment/native-fs.ts:28-43` 工作区约束是**词法**的、不 `realpath` → 指向外部的工作区内软链接可逃逸（读 **和** 写）。
-- 【未修】 `write-file-tool.ts`：parent 目录判断用 `lastIndexOf("/")`（POSIX-only，漏 Windows 分隔符）；`bytesWritten: content.length` 是 UTF-16 码元不是字节；无 temp+rename（`CoreEnvFs.rename` 已提供该 seam，`session-journal` 已用）。
+- 【已修 · `a011c64e`】 `write-file-tool.ts`：parent 目录判断用 `lastIndexOf("/")`（POSIX-only，漏 Windows 分隔符）；`bytesWritten: content.length` 是 UTF-16 码元不是字节；无 temp+rename（`CoreEnvFs.rename` 已提供该 seam，`session-journal` 已用）。→ 分别改为 `coreEnv.path.dirname`（宿主规则）、共享的 `utf8ByteLength`、`temp + rename`（宿主没有 `rename` 时退回直写）；新 `validate:file-write` 覆盖三处 + rename 失败清理 + 无 rename 的宿主 + overwrite 闸门。
 
 ### 搜索 / 展示
 - 【部分修 · `8b244a0e`】 `grep-tool.ts`：`--max-count` 是**每文件**上限，`-C context` 的上下文行不计入，`truncateLines(stdout, fetchCount)` 会只留上下文行、丢掉真正匹配；~~`output_mode:"count"` 单文件（裸数字无 `path:`）解析成 `0`~~（已修：单文件裸数字按 `defaultFile` 归属，实测还原调用点即 `[{"file":"5","content":"Count: 0"}]`；**顺带发现**描述写的是 `output_mode` 而 schema 键是 `outputMode`，未知键被静默丢弃 → 「要 count」实际跑 content，同一处修掉）；搜索工具**忽略 abort 信号**（`exec-args.ts` 无 `signal`）仍未修。
@@ -125,7 +125,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 ### shell
 - 【部分修 · `d1f17c71`】 `run-command-tool.ts:220-224` ~~送进 `maybeCacheOutput` 的是 accumulator 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**~~ —— **已修**：改为优先用宿主自己的全文缓冲（`result.stdout`/`stderr` 是**全部 chunk 的拼接**，本地宿主与 HTTP 平面都如此），accumulator 仅作「流式但返回空」宿主的 fallback；`validate:command-output-cache` 断言超限输出的**头部标记在文件里**。**仍未修**：`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 仍是死代码（取消/超时分支只有 accumulator 可缓存，那时文件仍是尾部 —— 有 `truncated` 信号可让措辞诚实，属可选的下一小步）。
 - 【未修】 `util/command-job-registry.ts`：`MAX_FINISHED_JOBS` 只限已结束 job，**运行中的 job 无上限**（各带一个日志 writer/文件）。
-- 【未修】 `command-job-registry.ts:158` `markExited` 三元 `… ? "exited" : "exited"` 恒为 `exited`（失败 job 后被报 `completed`）；`kill` 对已结束 job 也返回成功（`kill-command-tool` 里"未在运行"分支成死代码）；`kill_command` 返回 `cachedOutputPath: null`（丢了 `logPath`）。
+- 【已修 · `a011c64e`】 `command-job-registry.ts:158` `markExited` 三元 `… ? "exited" : "exited"` 恒为 `exited`（失败 job 后被报 `completed`）；`kill` 对已结束 job 也返回成功（`kill-command-tool` 里"未在运行"分支成死代码）；`kill_command` 返回 `cachedOutputPath: null`（丢了 `logPath`）。→ 零退出才是 `exited`，其余（含"被信号杀掉、无退出码"）是 `failed`（完成通知本来就把非 `exited` 原样透传，所以**用户可见**地从 "completed" 变成 "failed + 真实退出码"）；`kill` 改为返回"是否真的杀掉了"；`kill_command` 回传 job 的 `logPath` 作为 `cachedOutputPath`（杀掉不等于抹掉输出）。`validate:command-job-registry` 覆盖，且它原有的"日志失败后仍可查询"断言正好成了 `markExited` 的非空转见证。
 - 【未修】 `output-accumulator.ts:166,220` 对同一 chunk 重复计数（`totalDecodedBytes` 翻倍，`truncated` 误判）；无消费者，所以是潜伏问题。
 - 【未修】 `command-parser.ts:68`（`resolveShellKind`→`getEnv()`）/ `createTreeSitterEnv()` 走 **ambient env**：多 runtime 进程里 shell 种类 / 语法可能取自最后注册的 env（已在 guard allowlist 记为"host-level"，但多 runtime 下方向性风险值得注意）。
 - 【未修】 `run-command-tool.ts` 的 `timeout` 无 `.max` + `shell.ts` `setTimeout(timeout*1000)`：超大值会被 Node 钳到 ~1ms → 每个命令立刻超时（低概率）；`RUN_COMMAND_TIMEOUT_MS` 也被 `resolveDefaultCommandTimeout` 接受任意 ≥1000 的有限值。
