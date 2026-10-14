@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」38 条里 **17 条未修**（另 17 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」40 条里 **19 条未修**（另 17 条已修、2 条部分修、1 条不修、1 条不成立、19 条未修）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立、7 条未修）。剩余顺序见文末。
 
 ---
 
@@ -121,6 +121,9 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `de771a4f`】 `list/glob/grep/tree` 的 `toModelOutput` 缺 `read_file` 的 `ContentPart[]` 幂等 guard（`format-read-file-result.ts:20` 有）→ 会话恢复 / 重跑后对数组输出取 `.matches/.tree/.entries` 得 `undefined`，wire 上出现 `"undefined"`。
   **复核修正**：实际是全部 **24 个声明站点**都缺（含 `run_command` / `webfetch` / `websearch` / `session_read` / `task` / `todo` / plan / skills / memory），其中 `session_search` 会直接**抛异常**、`load_skill`/`memory_read` 返回 `undefined`。触发路径的成文依据在 `mcp/prefer-multimodal-content.ts:101-109`（TanStack 把**数组**结果 `JSON.stringify` 成 `ContentPart[]` 文本后交给投影）。
 - 【已修 · `8b244a0e`】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。→ fallback 改为同一契约（basename glob + `|` 备选），`validate:tree-walk` 覆盖。
+
+- 【未修】**新发现（`8c8752ee` 同类问题的另一半）** 搜索**被自己 deadline 杀掉**时，同样报成「无匹配」：`SEARCH_COMMAND_TIMEOUT`（30s）到点后宿主返回 `killed: true`，`execArgsCapture` 因 `killed` 返回 `undefined` → 调用方当作「换下一个候选」→ 全部候选都如此 → 返回 `""` → 模型读到「no matches」。与刚修的 abort 是同一个谎（工具回答了它没答完的问题），但成因是超时而非取消 —— 按仓库成文契约（`run-abort-ownership`：「本地超时不是用户取消」）**不能**复用 `cancelled`，应像 `run_command` 的 `timedOut` 一样单列一个字段（schema + 展示 + 模型文案三处，且要过 OpenSpec —— 输出字段是模型可见契约）。本次**只**锚定了「被杀但没 abort ⇒ 不是 cancelled」这一条不变量，没有顺手扩面。
+- 【未修】**新发现（`8c8752ee` 的远端平面）** `--remote-env` 下 `signal` 走不到服务端：`createRemoteEnv` 的 `execFile` **丢掉** `options.signal`（连自己那次 `fetch` 都没带），`/api/command/exec-file` 的 schema 里也没有该字段 —— 所以远端宿主上 Esc 之后服务端的 `rg` 仍跑到 deadline。修它要动 HTTP 契约（请求 schema + 客户端 `init.signal`，服务端再把它接到子进程），按约定**先开 OpenSpec change**。本地 Node 宿主这次已完整（`execFile` 本来就接受 `signal`）。
 
 ### shell
 - 【已修 · `d1f17c71` + `f7c51658`】 `run-command-tool.ts:220-224` ~~送进 `maybeCacheOutput` 的是 accumulator 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**~~ —— **已修**：改为优先用宿主自己的全文缓冲（`result.stdout`/`stderr` 是**全部 chunk 的拼接**，本地宿主与 HTTP 平面都如此），accumulator 仅作「流式但返回空」宿主的 fallback；`validate:command-output-cache` 断言超限输出的**头部标记在文件里**。**仍未修**：`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 仍是死代码（取消/超时分支只有 accumulator 可缓存，那时文件仍是尾部 —— 有 `truncated` 信号可让措辞诚实，属可选的下一小步）。→ **两处都已收口（`f7c51658`）**：死代码整体删除（新断言扫描源码确认这五个名字不再出现）；取消/超时分支把 accumulator 的 `truncated` 传进预览，措辞变成 `Output saved to: …（本次运行只保留了尾部）`，只有主路径（宿主给了全文缓冲）才说 `Full output saved to`。
