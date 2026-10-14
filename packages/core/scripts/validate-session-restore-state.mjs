@@ -26,6 +26,8 @@ import path from "node:path";
 import { SessionService, SessionStore, TodoManager, UsageTracker } from "../dist/dev.mjs";
 import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ============================================================================
 // Mock CoreEnv (real fs under a temp root)
 // ============================================================================
@@ -65,7 +67,7 @@ registerCoreEnv({
       const st = await fs.promises.stat(toAbs(p));
       return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
     },
-    remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+    remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
   },
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -318,5 +320,5 @@ let sessionId;
   assert.equal(managed3.isAutoModeEnabled(), false, "resumed agent is not in auto mode (mutually exclusive)");
 }
 
-await fs.promises.rm(rootPath, { recursive: true, force: true });
+await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 console.log("session-restore-state validation passed");

@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 
 import { registerCoreEnv, BUILTIN_SKILLS, SkillRegistry, createSkillsExtension, skillSchema } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 
 registerCoreEnv({
@@ -459,7 +461,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-await rm(fixtureRoot, { recursive: true, force: true });
+await rm(fixtureRoot, TEMP_RM_OPTIONS);
 
 console.log(
   `builtin-skills validation passed — ${BUILTIN_SKILLS.length} built-in skill(s): ${BUILTIN_SKILLS.map((s) => s.name).join(", ")}`

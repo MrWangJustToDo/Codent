@@ -18,6 +18,8 @@ import { basename, dirname, extname, isAbsolute, join, normalize, parse, resolve
 
 import { MemoryManager, findRelevantMemories, formatRelevantMemories, registerCoreEnv } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const root = await mkdtemp(join(tmpdir(), "codent-memory-lifecycle-"));
 
 // Minimal CoreEnv backed by the real filesystem, scoped to `root`.
@@ -62,7 +64,7 @@ registerCoreEnv({
       }
     },
     remove: async (p) => {
-      await rm(p, { recursive: true, force: true });
+      await rm(p, TEMP_RM_OPTIONS);
     },
   },
   runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
@@ -137,6 +139,6 @@ assert.ok(injected.includes("<relevant_memories>"), "injected text wraps in rele
 assert.ok(injected.includes("user-prefers-tabs"), "injected text contains memory");
 
 // Cleanup
-await rm(root, { recursive: true, force: true });
+await rm(root, TEMP_RM_OPTIONS);
 
 console.log("memory-lifecycle validation passed");

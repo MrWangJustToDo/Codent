@@ -31,6 +31,8 @@ import {
   renderStaticRetrievalBody,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ---------------------------------------------------------------------------
 // Disk-backed CoreEnv over a temp workspace
 // ---------------------------------------------------------------------------
@@ -58,7 +60,7 @@ registerCoreEnv({
     writeFile: async (p, c) => writeFileSync(p, String(c)),
     mkdir: async (p) => mkdirSync(p, { recursive: true }),
     exists: async (p) => (await import("node:fs")).existsSync(p),
-    remove: async (p) => (await import("node:fs")).rmSync(p, { recursive: true, force: true }),
+    remove: async (p) => (await import("node:fs")).rmSync(p, TEMP_RM_OPTIONS),
   },
   byteLength: (s) => Buffer.byteLength(s, "utf-8"),
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -67,7 +69,7 @@ registerCoreEnv({
 });
 
 function resetWorkspace() {
-  rmSync(rootPath, { recursive: true, force: true });
+  rmSync(rootPath, TEMP_RM_OPTIONS);
   mkdirSync(rootPath, { recursive: true });
   workspace = rootPath;
 }
@@ -190,6 +192,6 @@ await (async () => {
 })();
 
 resetWorkspace();
-rmSync(rootPath, { recursive: true, force: true });
+rmSync(rootPath, TEMP_RM_OPTIONS);
 
 console.log("session-retrieval validation passed");

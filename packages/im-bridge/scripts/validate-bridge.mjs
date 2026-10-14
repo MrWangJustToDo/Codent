@@ -20,6 +20,8 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 import {
   CHAT,
   RunRenderer,
@@ -803,7 +805,7 @@ for (const test of tests) {
 for (const bridge of startedBridges) {
   await bridge.stop().catch(() => {});
 }
-rmSync(tmpBase, { recursive: true, force: true });
+rmSync(tmpBase, TEMP_RM_OPTIONS);
 
 if (failed > 0) {
   console.error(`\n${failed}/${tests.length} validation(s) FAILED`);

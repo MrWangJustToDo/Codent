@@ -15,6 +15,7 @@ import path from "node:path";
 import { AgentLog, MAX_PENDING_LOG_ENTRIES, clearCoreEnv, registerCoreEnv } from "../dist/dev.mjs";
 
 import { waitFor } from "./helpers/log-capture.mjs";
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -41,7 +42,7 @@ function createEnv(rootPath, { withAppendFile }) {
       const st = await fs.promises.stat(p);
       return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
     },
-    remove: async (p) => fs.promises.rm(p, { recursive: true, force: true }),
+    remove: async (p) => fs.promises.rm(p, TEMP_RM_OPTIONS),
   };
   if (withAppendFile) {
     fsImpl.appendFile = async (p, content) => fs.promises.appendFile(p, content, "utf8");
@@ -262,7 +263,7 @@ assert.ok(afterMarker.includes("launch-2"), "new launch entries follow the divid
 detach2();
 console.log("reused-file divider OK");
 
-await fs.promises.rm(rootPath, { recursive: true, force: true });
+await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 // ----------------------------------------------------------------------------
 // 6. An entry the serializer cannot handle is contained.
 //    `handleEntry` runs *synchronously* from `AgentLog.log()`, on the agent's own execution path,

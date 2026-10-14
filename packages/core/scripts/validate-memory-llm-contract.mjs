@@ -37,6 +37,8 @@ import {
   runSideTextQuery,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const root = await mkdtemp(join(tmpdir(), "codent-memory-llm-contract-"));
 
 // Minimal CoreEnv backed by the real filesystem, scoped to `root`.
@@ -83,7 +85,7 @@ registerCoreEnv({
         return false;
       }
     },
-    remove: async (p) => rm(p, { recursive: true, force: true }),
+    remove: async (p) => rm(p, TEMP_RM_OPTIONS),
     rename: async (from, to) => {
       const { rename } = await import("node:fs/promises");
       await rename(from, to);
@@ -752,6 +754,6 @@ console.log("✓ structured requests project to a usable provider schema");
   console.log("✓ the selection schema absorbs only the single-key wrapper");
 }
 
-await rm(root, { recursive: true, force: true });
+await rm(root, TEMP_RM_OPTIONS);
 
 console.log("memory-llm-contract validation passed");

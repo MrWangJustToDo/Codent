@@ -26,6 +26,7 @@ import { mkdir, mkdtemp, readFile as readFs, rm, symlink, writeFile as writeFs }
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
 import { createNativeFilesystem } from "../dist/index.mjs";
 
 /** Reported distinctly from a pass — see the `validators-windows` CI job. */
@@ -90,7 +91,7 @@ try {
   try {
     await symlink(path.join(outside, "secret.txt"), path.join(root, "escape.txt"));
   } catch (err) {
-    await rm(base, { recursive: true, force: true });
+    await rm(base, TEMP_RM_OPTIONS);
     console.log(`${SKIP_MARKER} symlink creation unavailable on ${process.platform} (${err?.code ?? err}) — skipped`);
     process.exit(0);
   }
@@ -131,7 +132,7 @@ try {
   assert.equal(await readFs(path.join(root, "nested", "fresh.txt"), "utf-8"), "fresh-content");
   console.log("ok  a new in-root write target is still allowed");
 } finally {
-  await rm(base, { recursive: true, force: true });
+  await rm(base, TEMP_RM_OPTIONS);
 }
 
 console.log("fs symlink-containment validation passed");

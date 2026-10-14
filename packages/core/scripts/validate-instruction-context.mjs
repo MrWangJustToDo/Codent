@@ -24,6 +24,8 @@ import {
   registerCoreEnv,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ---------------------------------------------------------------------------
 // In-memory + disk-backed CoreEnv with a temp workspace
 // ---------------------------------------------------------------------------
@@ -360,5 +362,5 @@ setFile("CLAUDE.override.md", "# personal override\n");
   assert.equal(newest.key, "instruction_context");
 }
 
-rmSync(ws, { recursive: true, force: true });
+rmSync(ws, TEMP_RM_OPTIONS);
 console.log("validate:instruction-context PASSED");

@@ -31,6 +31,7 @@ import { DEFAULT_EXTENSION_DIR } from "../dist/dev.mjs";
 import { AgentManager, clearCoreEnv, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
 import { waitFor } from "./helpers/log-capture.mjs";
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,7 +71,7 @@ async function useEnv(prefix) {
         const st = await fs.promises.stat(toAbs(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
       // Sync primitives, exactly as `@codent/node`'s native fs exposes them.
       appendFileSync: (p, content) => fs.appendFileSync(toAbs(p), content, "utf8"),
       mkdirSync: (p) => fs.mkdirSync(toAbs(p), { recursive: true }),
@@ -214,5 +215,5 @@ console.log("subagent OK:", path.relative(rootPath, subFile));
   console.log("destroy-order flush OK (async shutdown interceptor entry durable at destroy())");
 }
 
-for (const dir of createdDirs) await fs.promises.rm(dir, { recursive: true, force: true });
+for (const dir of createdDirs) await fs.promises.rm(dir, TEMP_RM_OPTIONS);
 console.log("agent-log-host-sink validation passed");

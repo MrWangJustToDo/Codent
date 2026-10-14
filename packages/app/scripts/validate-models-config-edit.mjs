@@ -28,6 +28,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 const root = mkdtempSync(join(tmpdir(), "codent-config-edit-"));
 const configPath = join(root, ".agents", "config", "models.json");
 const write = (obj) => writeFileSync(configPath, JSON.stringify(obj, null, 2));
@@ -194,5 +196,5 @@ try {
   console.log("models-config-edit: ok");
 } finally {
   clearCoreEnv();
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, TEMP_RM_OPTIONS);
 }

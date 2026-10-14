@@ -22,6 +22,7 @@
 import { clearCoreEnv, registerCoreEnv } from "@codent/core";
 import { createServer } from "node:http";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
 import { createRemoteEnv } from "../dist/client.mjs";
 
 // The argv helper and the tool factory are internal, so they come from core's dev entry —
@@ -231,7 +232,7 @@ await (async () => {
     }
   } finally {
     server.close();
-    rmSync(tempRoot, { recursive: true, force: true });
+    rmSync(tempRoot, TEMP_RM_OPTIONS);
   }
 })();
 

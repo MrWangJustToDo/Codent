@@ -14,6 +14,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 process.env.ROOT_PATH = mkdtempSync(join(tmpdir(), "agent-session-http-"));
 process.env.SERVER_PORT = "0";
 process.env.SANDBOX_ENV = "native";
@@ -196,6 +198,6 @@ stateUnsub();
 // Windows (`!(handle->flags & UV_HANDLE_CLOSING)`) after the success line was already printed.
 server.closeAllConnections?.();
 await new Promise((resolve) => server.close(resolve));
-rmSync(process.env.ROOT_PATH, { recursive: true, force: true });
+rmSync(process.env.ROOT_PATH, TEMP_RM_OPTIONS);
 console.log("agent-session-http validation passed");
 process.exit(0);

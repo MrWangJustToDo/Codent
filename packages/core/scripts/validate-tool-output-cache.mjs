@@ -26,6 +26,8 @@ import {
   sweepStaleToolOutput,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ---------------------------------------------------------------------------
 // Mock CoreEnv backed by the real filesystem (relative paths resolve against
 // rootPath, like the Node adapter).
@@ -59,7 +61,7 @@ function createEnv(rootPath) {
         const st = await fs.promises.stat(resolve(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(resolve(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(resolve(p), TEMP_RM_OPTIONS),
     },
     runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
     exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -175,6 +177,6 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   console.log("degraded host OK (no throw, no removal)");
 }
 
-await fs.promises.rm(rootPath, { recursive: true, force: true });
+await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 
 console.log("tool-output-cache validation passed");

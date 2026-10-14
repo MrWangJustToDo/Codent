@@ -21,6 +21,8 @@ import {
   sweepStaleJobLogs,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const registry = commandJobRegistry;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MIB = 1024 * 1024;
@@ -54,7 +56,7 @@ function createEnv(rootPath, { withAppendFile = true } = {}) {
       const st = await fs.promises.stat(resolve(p));
       return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
     },
-    remove: async (p) => fs.promises.rm(resolve(p), { recursive: true, force: true }),
+    remove: async (p) => fs.promises.rm(resolve(p), TEMP_RM_OPTIONS),
   };
   if (withAppendFile === "throwing") {
     fsImpl.appendFile = async () => {

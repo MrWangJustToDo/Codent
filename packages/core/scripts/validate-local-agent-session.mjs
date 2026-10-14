@@ -21,6 +21,8 @@ import {
 } from "../dist/dev.mjs";
 import { AgentManager } from "../dist/index.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 function createFake(id, parentId) {
   const usage = new UsageTracker();
   const todoManager = new TodoManager();
@@ -307,7 +309,7 @@ assert.ok(withSubs.subagents[0].usage);
         const st = await fs.promises.stat(toAbs(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
     },
     runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
     exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -358,7 +360,7 @@ assert.ok(withSubs.subagents[0].usage);
 
   e2eManager.destroyAgent(sub.id);
   e2eManager.destroyAgent(parent.id);
-  await fs.promises.rm(rootPath, { recursive: true, force: true });
+  await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 }
 
 // ----------------------------------------------------------------------------
@@ -414,7 +416,7 @@ assert.ok(withSubs.subagents[0].usage);
         const st = await fs.promises.stat(toAbs(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
     },
     runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
     exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -471,7 +473,7 @@ assert.ok(withSubs.subagents[0].usage);
   builtinManager.destroyAgent(withBuiltins.id);
   shadowManager.destroyAgent(withShadow.id);
   offManager.destroyAgent(withoutBuiltins.id);
-  await fs.promises.rm(rootPath, { recursive: true, force: true });
+  await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 }
 
 console.log("local-agent-session validation passed");

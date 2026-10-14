@@ -13,6 +13,8 @@ import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 // Configure before importing dist/index.mjs (it reads env at module load).
 const ws = mkdtempSync(join(tmpdir(), "coreenv-http-"));
 process.env.ROOT_PATH = ws;
@@ -196,5 +198,5 @@ await env.destroy();
 // Windows (`!(handle->flags & UV_HANDLE_CLOSING)`) after the success line was already printed.
 server.closeAllConnections?.();
 await new Promise((resolve) => server.close(resolve));
-rmSync(ws, { recursive: true, force: true });
+rmSync(ws, TEMP_RM_OPTIONS);
 console.log("coreenv-http validation passed");

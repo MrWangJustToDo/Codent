@@ -17,6 +17,8 @@ import path from "node:path";
 
 import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ============================================================================
@@ -62,7 +64,7 @@ registerCoreEnv({
       const st = await fs.promises.stat(toAbs(p));
       return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
     },
-    remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+    remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
   },
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -143,5 +145,5 @@ const managed3 = manager3.getAgent(created3.session.getSnapshot().agentId);
 assert.equal(managed3.config.model, "provider-model", "remote-provider must keep its own model");
 assert.notEqual(managed3.getL1State().model, "switched-model");
 
-await fs.promises.rm(rootPath, { recursive: true, force: true });
+await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 console.log("session-model-persistence validation passed");

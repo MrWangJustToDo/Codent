@@ -20,6 +20,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 process.env.ROOT_PATH = mkdtempSync(join(tmpdir(), "agent-session-channels-"));
 process.env.SERVER_PORT = "0";
 process.env.SANDBOX_ENV = "native";
@@ -229,6 +231,6 @@ await host.destroy(session.getSnapshot().agentId);
 // Windows (`!(handle->flags & UV_HANDLE_CLOSING)`) after the success line was already printed.
 server.closeAllConnections?.();
 await new Promise((resolve) => server.close(resolve));
-rmSync(process.env.ROOT_PATH, { recursive: true, force: true });
+rmSync(process.env.ROOT_PATH, TEMP_RM_OPTIONS);
 console.log("agent-session-channels validation passed");
 process.exit(0);

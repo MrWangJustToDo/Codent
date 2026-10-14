@@ -17,6 +17,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 let failures = 0;
 function check(label, cond) {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
@@ -63,7 +65,7 @@ try {
   check("codeMode:false -> no discover_tools", !toolNames.includes("discover_tools"));
 } finally {
   clearCoreEnv();
-  rmSync(rootPath, { recursive: true, force: true });
+  rmSync(rootPath, TEMP_RM_OPTIONS);
 }
 
 console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILURE(S)`}`);

@@ -44,6 +44,8 @@ import {
   toModelOutputRegistry,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ============================================================================
 // CoreEnv — the extension reads it while activating
 // ============================================================================
@@ -105,7 +107,7 @@ registerCoreEnv({
         return false;
       }
     },
-    remove: async (p) => rm(join(root, p), { recursive: true, force: true }),
+    remove: async (p) => rm(join(root, p), TEMP_RM_OPTIONS),
   },
 });
 

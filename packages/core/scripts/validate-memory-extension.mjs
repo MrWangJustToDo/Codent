@@ -20,6 +20,8 @@ import { basename, dirname, extname, isAbsolute, join, normalize, parse, resolve
 
 import { registerCoreEnv, MemoryManager, createMemoryExtension } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const root = await mkdtemp(join(tmpdir(), "codent-memory-ext-"));
 
 // Minimal CoreEnv backed by the real filesystem, scoped to `root`.
@@ -64,7 +66,7 @@ registerCoreEnv({
       }
     },
     remove: async (p) => {
-      await rm(p, { recursive: true, force: true });
+      await rm(p, TEMP_RM_OPTIONS);
     },
   },
 });
@@ -251,6 +253,6 @@ assert.ok(
 );
 
 // Cleanup
-await rm(root, { recursive: true, force: true });
+await rm(root, TEMP_RM_OPTIONS);
 
 console.log("memory-extension validation passed");

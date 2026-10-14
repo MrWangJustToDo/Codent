@@ -33,6 +33,8 @@ import {
   resolveModelConfigFromProvider,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 /** Minimal CoreEnv stub: create() only reads `rootPath`; dispose reads `destroy?`. */
 const fakeEnv = (root) => ({
   rootPath: root,
@@ -173,8 +175,8 @@ const fakeEnv = (root) => ({
 
   await agentA.dispose();
   await agentB.dispose();
-  rmSync(rootA, { recursive: true, force: true });
-  rmSync(rootB, { recursive: true, force: true });
+  rmSync(rootA, TEMP_RM_OPTIONS);
+  rmSync(rootB, TEMP_RM_OPTIONS);
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +229,7 @@ const fakeEnv = (root) => ({
           writeFileSync(abs(p), content);
         },
         mkdir: async (p) => mkdirSync(abs(p), { recursive: true }),
-        remove: async (p) => rmSync(abs(p), { recursive: true, force: true }),
+        remove: async (p) => rmSync(abs(p), TEMP_RM_OPTIONS),
         appendFile: async (p, content) => {
           mkdirSync(dirname(abs(p)), { recursive: true });
           appendFileSync(abs(p), content);
@@ -269,8 +271,8 @@ const fakeEnv = (root) => ({
 
   await agentA.dispose();
   await agentB.dispose();
-  rmSync(rootA, { recursive: true, force: true });
-  rmSync(rootB, { recursive: true, force: true });
+  rmSync(rootA, TEMP_RM_OPTIONS);
+  rmSync(rootB, TEMP_RM_OPTIONS);
 }
 
 console.log("agent-runtime-instances validation passed");

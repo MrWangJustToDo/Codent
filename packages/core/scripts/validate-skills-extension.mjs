@@ -20,6 +20,8 @@ import { fileURLToPath } from "node:url";
 
 import { registerCoreEnv, SkillRegistry, createSkillsExtension } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 
 // SkillLoader uses the global CoreEnv (getEnv()) for fs/path/homedir — register a
@@ -242,6 +244,6 @@ assert.ok(
   "toolsDisabled still registers /skill command"
 );
 
-await rm(fixtureRoot, { recursive: true, force: true });
+await rm(fixtureRoot, TEMP_RM_OPTIONS);
 
 console.log("skills-extension validation passed");

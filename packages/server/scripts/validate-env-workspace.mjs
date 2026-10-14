@@ -14,6 +14,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
+
 const ws = mkdtempSync(join(tmpdir(), "env-workspace-git-"));
 execSync("git init -q", { cwd: ws, stdio: "ignore" });
 execSync("git -c user.name=test -c user.email=test@example.com commit -q --allow-empty -m init", {
@@ -60,7 +62,7 @@ console.log("workspace:", JSON.stringify(body));
 // Windows (`!(handle->flags & UV_HANDLE_CLOSING)`) after the success line was already printed.
 server.closeAllConnections?.();
 await new Promise((resolve) => server.close(resolve));
-rmSync(ws, { recursive: true, force: true });
+rmSync(ws, TEMP_RM_OPTIONS);
 console.log("env-workspace validation passed");
 
 // No `process.exit()`: forcing one while an async stdout/handle is closing trips libuv's

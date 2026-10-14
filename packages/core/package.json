@@ -84,6 +84,7 @@
     "validate:tool-shell-portability": "node scripts/validate-tool-shell-portability.mjs",
     "validate:command-safety-portability": "pnpm run build && node scripts/validate-command-safety-portability.mjs",
     "validate:search-fallback": "pnpm run build && node scripts/validate-search-fallback.mjs",
+    "validate:temp-cleanup": "node scripts/validate-temp-cleanup.mjs",
     "validate:search-abort": "pnpm run build && node scripts/validate-search-abort.mjs",
     "validate:tree-walk": "pnpm run build && node scripts/validate-tree-walk.mjs",
     "validate:path-portability": "pnpm run build && pnpm --filter @codent/node run build && node scripts/validate-path-portability.mjs",

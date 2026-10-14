@@ -13,6 +13,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
 import {
   REMOTE_PROVIDER_API_KEY,
   anthropicProxyBasePath,
@@ -198,7 +199,7 @@ assert.equal(info.basePath, "/api/provider/openai/v1");
     assert.ok(!JSON.stringify(advertised).includes(key), `websearch key ${key} must not leave the server`);
   }
 
-  rmSync(root, { recursive: true, force: true });
+  rmSync(root, TEMP_RM_OPTIONS);
 }
 
 upstream.close();

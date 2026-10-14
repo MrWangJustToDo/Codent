@@ -16,6 +16,8 @@ import path from "node:path";
 
 import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ============================================================================
 // Mock CoreEnv (real fs under a temp root, mirroring native-fs path handling)
 // ============================================================================
@@ -55,7 +57,7 @@ registerCoreEnv({
       const st = await fs.promises.stat(toAbs(p));
       return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
     },
-    remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+    remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
   },
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -213,7 +215,7 @@ assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and
 async function removeRoot(root, attempts = 10) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      await fs.promises.rm(root, { recursive: true, force: true });
+      await fs.promises.rm(root, TEMP_RM_OPTIONS);
       return;
     } catch (error) {
       // ENOTEMPTY means the directory is still being written to; retry after a

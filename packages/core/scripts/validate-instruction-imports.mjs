@@ -33,6 +33,8 @@ import {
   registerCoreEnv,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 // ---------------------------------------------------------------------------
 // Disk-backed CoreEnv over a temp workspace
 // ---------------------------------------------------------------------------
@@ -60,7 +62,7 @@ registerCoreEnv({
     writeFile: async (p, c) => writeFileSync(p, String(c)),
     mkdir: async (p) => mkdirSync(p, { recursive: true }),
     exists: async (p) => (await import("node:fs")).existsSync(p),
-    remove: async (p) => (await import("node:fs")).rmSync(p, { recursive: true, force: true }),
+    remove: async (p) => (await import("node:fs")).rmSync(p, TEMP_RM_OPTIONS),
   },
   byteLength: (s) => Buffer.byteLength(s, "utf-8"),
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -334,7 +336,7 @@ await (async () => {
   console.log("✓ discovery is first-wins with no implicit fallback");
 })();
 
-rmSync(ws, { recursive: true, force: true });
-rmSync(outside, { recursive: true, force: true });
+rmSync(ws, TEMP_RM_OPTIONS);
+rmSync(outside, TEMP_RM_OPTIONS);
 
 console.log("instruction-imports validation passed");

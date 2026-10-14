@@ -37,6 +37,8 @@ import {
   registerExtensionExitFlush,
 } from "../dist/dev.mjs";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Minimal real-fs CoreEnv: the sink needs appendFile (+ sync variants for the exit path). */
@@ -77,7 +79,7 @@ function createFsEnv(rootPath) {
         const st = await fs.promises.stat(toAbs(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
       readdir: async () => [],
     },
     runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -368,7 +370,7 @@ registerCoreEnv(createFsEnv(rootPath));
   assert.equal(registrySize(), 0, `destroying every agent must empty the sink registry, got ${registrySize()}`);
 
   // The regression's second half: with the sink released, the log directory can be removed.
-  await fs.promises.rm(cascadeRoot, { recursive: true, force: true });
+  await fs.promises.rm(cascadeRoot, TEMP_RM_OPTIONS);
   console.log("9. subagent destroy releases its sink: ok");
 }
 
