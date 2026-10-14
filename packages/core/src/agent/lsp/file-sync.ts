@@ -64,6 +64,19 @@ export class FileSync {
    * Wired to the manager's `onServerReady`, so a deferred cold-start sync is
    * never silently lost — the server learns about the file as soon as it can.
    */
+  /**
+   * Flush every language's deferred syncs.
+   *
+   * Called when a server becomes ready: one server can serve several language ids, so the id that
+   * reported ready is not necessarily the id whose write was deferred. Waiting for that id's own ready
+   * event would strand the write, because it does not come again.
+   */
+  async flushAllPendingSync(): Promise<void> {
+    for (const languageId of [...this.pendingSync.keys()]) {
+      await this.flushPendingSync(languageId).catch(() => {});
+    }
+  }
+
   async flushPendingSync(languageId: string): Promise<void> {
     const pending = this.pendingSync.get(languageId);
     if (!pending || pending.size === 0) return;

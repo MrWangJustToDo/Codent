@@ -54,11 +54,7 @@ export interface LspServerConfigRecord {
  * attempt failed while a retry is still scheduled). A caller left to guess from the text reports all
  * four the same way, which is how a startup that then succeeds reads as "failed, then ready".
  */
-export type LspFailureKind =
-  | "command_missing"
-  | "start_abandoned"
-  | "restart_pending"
-  | "start_failed";
+export type LspFailureKind = "command_missing" | "start_abandoned" | "restart_pending" | "start_failed";
 
 export interface LspManagerCallbacks {
   onServerStart?: (languageId: string, command: string) => void;
@@ -116,6 +112,16 @@ export class LspManager {
   private serverConfigs: Map<string, LspServerConfigRecord>;
   private rootDir: string;
   private startingServers = new Map<string, Promise<void>>();
+  /**
+   * Memo of `languageId → server key`, cleared whenever the config map changes.
+   *
+   * The key is the whole config record: two ids with the identical record share ONE server process
+   * (the default `typescript` / `javascript` / `typescriptreact` / `javascriptreact` quartet is the
+   * case that matters), and a record differing in any field — settings, initializationOptions — gets
+   * its own. `JSON.stringify` is sound here because both sides of a comparison come from the same
+   * construction path (the default table or one `.lsp.json` record), so key order does not vary.
+   */
+  private serverKeys = new Map<string, string>();
   private callbacks: LspManagerCallbacks;
   private getConnection: (config: LspServerConfig) => LspConnection;
   private shuttingDown = false;
@@ -176,6 +182,8 @@ export class LspManager {
     this.serverConfigs.set(languageId, config);
     // Invalidate any cached probe for this config's command.
     this.commandProbeCache.delete(config.command);
+    // …and every cached server key: which ids share a process is derived from these records.
+    this.serverKeys.clear();
   }
 
   /**
@@ -214,6 +222,29 @@ export class LspManager {
     return filePath;
   }
 
+  /**
+   * The identity of the server a language id resolves to, or `null` when it has no config.
+   *
+   * Everything that used to be keyed by language id and is really a property of the PROCESS — the
+   * in-flight start, the restart budget, the pending-restart timer — is keyed by this instead, which is
+   * what makes a second sharing id unable to start a duplicate and a crash charge the budget once.
+   */
+  private serverKeyOf(languageId: string): string | null {
+    const cached = this.serverKeys.get(languageId);
+    if (cached !== undefined) return cached === "" ? null : cached;
+    const config = this.serverConfigs.get(languageId);
+    const key = config ? JSON.stringify(config) : "";
+    this.serverKeys.set(languageId, key);
+    return key === "" ? null : key;
+  }
+
+  /** Every language id served by the same server as `languageId`, including it. */
+  private languagesForServer(languageId: string): string[] {
+    const key = this.serverKeyOf(languageId);
+    if (key === null) return [languageId];
+    return [...this.serverConfigs.keys()].filter((id) => this.serverKeyOf(id) === key);
+  }
+
   /** Get the client for a language ONLY if already running. */
   getRunningClient(languageId: string): LspClient | null {
     const existing = this.clients.get(languageId);
@@ -236,7 +267,7 @@ export class LspManager {
     if (ready) return ready;
 
     // Kick off startup if no server is starting yet.
-    if (!this.startingServers.has(languageId)) {
+    if (!this.isServerStarting(languageId)) {
       await this.getClientForLanguage(languageId).catch(() => null);
     }
 
@@ -245,7 +276,7 @@ export class LspManager {
       const client = this.getRunningClient(languageId);
       if (client) return client;
       // Startup finished but no client registered — failed or shut down.
-      if (!this.startingServers.has(languageId) && !this.clients.has(languageId)) return null;
+      if (!this.isServerStarting(languageId) && !this.clients.has(languageId)) return null;
       await new Promise((r) => setTimeout(r, 200));
     }
     return null;
@@ -265,7 +296,7 @@ export class LspManager {
       return `No LSP server configured for file type: ${filePath}`;
     }
     const waitHint = this.getExpectedStartTime(languageId);
-    if (this.startingServers.has(languageId)) {
+    if (this.isServerStarting(languageId)) {
       return `LSP server for ${languageId} is starting. ${waitHint} Retry shortly.`;
     }
     return `No LSP server available for: ${filePath}. If you just opened this project, call any LSP tool on a file to trigger server startup.`;
@@ -294,7 +325,8 @@ export class LspManager {
 
   /** Is a server currently starting up for a language? */
   isServerStarting(languageId: string): boolean {
-    return this.startingServers.has(languageId);
+    const key = this.serverKeyOf(languageId);
+    return key !== null && this.startingServers.has(key);
   }
 
   /** Get the client for a language, starting the server if needed. */
@@ -305,8 +337,10 @@ export class LspManager {
       return existing;
     }
 
-    // Already starting? Don't block — return null so tools show "starting" message.
-    const starting = this.startingServers.get(languageId);
+    // Already starting? Don't block — return null so tools show "starting" message. The lookup is by
+    // server, so a sharing id also reports "starting" instead of spawning a duplicate process.
+    const key = this.serverKeyOf(languageId);
+    const starting = key === null ? undefined : this.startingServers.get(key);
     if (starting) return null;
 
     const config = this.serverConfigs.get(languageId);
@@ -314,9 +348,9 @@ export class LspManager {
 
     // Kick off server start in the background.
     const startPromise = this.startServer(languageId, config);
-    this.startingServers.set(languageId, startPromise);
+    if (key !== null) this.startingServers.set(key, startPromise);
     startPromise.catch((err) => {
-      this.startingServers.delete(languageId);
+      if (key !== null) this.startingServers.delete(key);
       const message = errorMessage(err);
       this.callbacks.onServerError?.(languageId, message, "start_failed");
     });
@@ -329,15 +363,16 @@ export class LspManager {
     for (const languageId of languageIds) {
       const existing = this.clients.get(languageId);
       if (existing && existing.connection.initialized && !existing.connection.disposed) continue;
-      if (this.startingServers.has(languageId)) continue;
+      if (this.isServerStarting(languageId)) continue;
 
       const config = this.serverConfigs.get(languageId);
       if (!config) continue;
 
+      const key = this.serverKeyOf(languageId);
       const startPromise = this.startServer(languageId, config);
-      this.startingServers.set(languageId, startPromise);
+      if (key !== null) this.startingServers.set(key, startPromise);
       startPromise.catch((err) => {
-        this.startingServers.delete(languageId);
+        if (key !== null) this.startingServers.delete(key);
         const message = errorMessage(err);
         // A wrapper: the inner `startServer` already reported the real reason, so this is only
         // useful for the kind — the text stays for callers that log it.
@@ -388,9 +423,14 @@ export class LspManager {
     // Probe-before-spawn: skip starting when the binary is missing so we fail
     // fast with a clear reason instead of an ENOENT after spawn. No-op when the
     // host provides no probe (browser/WebContainer hosts degrade gracefully).
+    const key = this.serverKeyOf(languageId);
+    const clearStarting = () => {
+      if (key !== null) this.startingServers.delete(key);
+    };
+
     const available = await this.probeCommand(config.command);
     if (available === false) {
-      this.startingServers.delete(languageId);
+      clearStarting();
       const reason = `LSP server '${config.command}' was not found on PATH. Install it or configure a different command in .lsp.json (or /lsp-config).`;
       this.callbacks.onServerError?.(languageId, reason, "command_missing");
       return;
@@ -428,7 +468,7 @@ export class LspManager {
       // session:shutdown (which may never come).
       if (this.shuttingDown) {
         connection.shutdown().catch(() => {});
-        this.startingServers.delete(languageId);
+        clearStarting();
         this.callbacks.onServerError?.(
           languageId,
           `LSP server for ${languageId} shut down during startup`,
@@ -436,14 +476,20 @@ export class LspManager {
         );
         return;
       }
-      this.clients.set(languageId, client);
-      this.startingServers.delete(languageId);
+      // Register the client under EVERY language id this server serves, so a per-language lookup
+      // (`clients.get(id)`, a tool call, `/lsp` status) keeps working for an id that did not start it.
+      for (const shared of this.languagesForServer(languageId)) {
+        this.clients.set(shared, client);
+      }
+      clearStarting();
       this.callbacks.onServerReady?.(languageId);
-      this.restartAttempts.delete(languageId);
-      this.restartBackoff.delete(languageId);
+      if (key !== null) {
+        this.restartAttempts.delete(key);
+        this.restartBackoff.delete(key);
+      }
       this.triggerPostInit(languageId, client);
     } catch (err) {
-      this.startingServers.delete(languageId);
+      clearStarting();
       // A start can fail *after* the child was spawned (bad handshake, init error,
       // timeout). Dispose the connection so the process cannot outlive the attempt:
       // nothing else keeps a reference to it once the start promise is dropped.
@@ -506,40 +552,49 @@ export class LspManager {
   private handleUnexpectedExit(languageId: string, _code: number | null): void {
     if (this.shuttingDown) return;
 
-    this.clients.delete(languageId);
-    this.startingServers.delete(languageId);
+    // The process died for all of them: every alias must go, or the other ids keep handing back a
+    // client whose transport is gone.
+    const shared = this.languagesForServer(languageId);
+    for (const alias of shared) this.clients.delete(alias);
+    const key = this.serverKeyOf(languageId);
+    if (key !== null) this.startingServers.delete(key);
 
-    const attempts = this.restartAttempts.get(languageId) ?? 0;
+    const attempts = key === null ? 0 : (this.restartAttempts.get(key) ?? 0);
     if (attempts >= RESTART_MAX_ATTEMPTS) {
       this.callbacks.onServerError?.(
         languageId,
-        `LSP server for ${languageId} crashed ${attempts} times — giving up auto-restart`
-      , "start_failed");
+        `LSP server for ${languageId} crashed ${attempts} times — giving up auto-restart`,
+        "start_failed"
+      );
       this.callbacks.onServerCrash?.(languageId, false, attempts);
       return;
     }
 
-    const backoff = this.restartBackoff.get(languageId) ?? RESTART_INITIAL_BACKOFF_MS;
-    this.restartAttempts.set(languageId, attempts + 1);
-    this.restartBackoff.set(languageId, Math.min(backoff * 2, RESTART_MAX_BACKOFF_MS));
+    const backoff =
+      key === null ? RESTART_INITIAL_BACKOFF_MS : (this.restartBackoff.get(key) ?? RESTART_INITIAL_BACKOFF_MS);
+    if (key !== null) {
+      this.restartAttempts.set(key, attempts + 1);
+      this.restartBackoff.set(key, Math.min(backoff * 2, RESTART_MAX_BACKOFF_MS));
+    }
 
     this.callbacks.onServerCrash?.(languageId, true, attempts + 1);
 
-    // One pending restart per language: a second crash notification (the same server exiting twice,
-    // or a crash while a restart is already scheduled) must not stack another `startServer` on it.
-    const pendingRestart = this.restartTimers.get(languageId);
+    // One pending restart per SERVER: a second crash notification (the same process exiting twice, or a
+    // crash while a restart is already scheduled) must not stack another `startServer` on it — and since
+    // the aliases share the process, one restart serves all of them.
+    const pendingRestart = key === null ? undefined : this.restartTimers.get(key);
     if (pendingRestart !== undefined) clearTimeout(pendingRestart);
 
     const timer = setTimeout(() => {
-      this.restartTimers.delete(languageId);
+      if (key !== null) this.restartTimers.delete(key);
       if (this.shuttingDown) return;
       const config = this.serverConfigs.get(languageId);
       if (!config) return;
 
       const startPromise = this.startServer(languageId, config);
-      this.startingServers.set(languageId, startPromise);
+      if (key !== null) this.startingServers.set(key, startPromise);
       startPromise.catch((err) => {
-        this.startingServers.delete(languageId);
+        if (key !== null) this.startingServers.delete(key);
         const message = errorMessage(err);
         this.callbacks.onServerError?.(
           languageId,
@@ -549,7 +604,7 @@ export class LspManager {
         this.handleUnexpectedExit(languageId, null);
       });
     }, backoff);
-    this.restartTimers.set(languageId, timer);
+    if (key !== null) this.restartTimers.set(key, timer);
   }
 
   /** Shut down all clients AND any servers still mid-startup. */
@@ -562,8 +617,10 @@ export class LspManager {
     for (const timer of this.restartTimers.values()) clearTimeout(timer);
     this.restartTimers.clear();
 
-    // Shut down fully-registered clients.
-    const shutdowns = [...this.clients.values()].map((client) => client.connection.shutdown().catch(() => {}));
+    // Shut down fully-registered clients — deduped by CONNECTION, because a shared server is
+    // registered once per language id it serves and must not be shut down four times.
+    const connections = new Set([...this.clients.values()].map((client) => client.connection));
+    const shutdowns = [...connections].map((connection) => connection.shutdown().catch(() => {}));
 
     // Servers still in `startingServers` are not yet in `clients`; if a startup
     // was mid-handshake, `startServer` will detect `shuttingDown` once the
@@ -584,16 +641,21 @@ export class LspManager {
 
   /** Restart a specific language server. */
   async restartServer(languageId: string): Promise<void> {
+    // "Restart this language's server" — which, when the id shares a process, means restarting the
+    // process for all of them: tearing down only this alias would leave the others handing back a
+    // client whose transport is gone.
+    const key = this.serverKeyOf(languageId);
+    const aliases = this.languagesForServer(languageId);
     const existing = this.clients.get(languageId);
     if (existing) {
       await existing.connection.shutdown().catch(() => {});
-      this.clients.delete(languageId);
+      for (const alias of aliases) this.clients.delete(alias);
     }
 
-    const pending = this.startingServers.get(languageId);
+    const pending = key === null ? undefined : this.startingServers.get(key);
     if (pending) {
       await pending.catch(() => {});
-      this.startingServers.delete(languageId);
+      if (key !== null) this.startingServers.delete(key);
     }
 
     const config = this.serverConfigs.get(languageId);

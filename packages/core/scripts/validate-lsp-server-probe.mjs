@@ -154,10 +154,87 @@ assert.equal(enoentError.kind, "command_missing", "…and so is an ENOENT from t
   const { classifyServerFailure } = await import("../dist/dev.mjs");
   assert.equal(classifyServerFailure("not found on PATH", "start_failed").level, "info", "missing binary → info");
   assert.equal(classifyServerFailure("shutdown during startup", "start_abandoned").level, "info", "a race → info");
-  assert.equal(classifyServerFailure("handshake failed", "restart_pending").level, "silent", "a retry in flight → log only");
+  assert.equal(
+    classifyServerFailure("handshake failed", "restart_pending").level,
+    "silent",
+    "a retry in flight → log only"
+  );
   const terminal = classifyServerFailure("handshake timed out after 30000ms", "start_failed");
   assert.equal(terminal.level, "error", "a server that did not come up → error");
   assert.match(terminal.text, /handshake timed out/, "…and the notice carries the reason");
+}
+
+// 8. One server per identical config record — the headline invariant.
+//
+// The default table gives `typescript` / `javascript` / `typescriptreact` / `javascriptreact` the SAME
+// record, so auto-starting all four used to spawn four equivalent servers. One connection created is one
+// process spawned (the host builds a connection per start), so counting factory calls is the assertion.
+{
+  const connections = [];
+  let exits = [];
+  const crashes = [];
+  const sharingManager = new LspManager(
+    "/repo",
+    () => {
+      const exitHandlers = [];
+      exits.push(exitHandlers);
+      const connection = {
+        languageId: "typescript",
+        initialized: false,
+        disposed: false,
+        start: async () => {
+          connection.initialized = true;
+        },
+        sendRequest: async () => undefined,
+        sendNotification: () => {},
+        didOpen: () => {},
+        didChange: () => {},
+        onUnexpectedExit: (cb) => exitHandlers.push(cb),
+        onPublishDiagnostics: () => {},
+        shutdown: async () => {
+          connection.disposed = true;
+        },
+        kill: () => {},
+      };
+      connections.push(connection);
+      return connection;
+    },
+    path,
+    fs,
+    undefined,
+    { onServerCrash: (languageId, restarting, attempt) => crashes.push({ languageId, restarting, attempt }) },
+    undefined,
+    async () => true
+  );
+  for (const id of ["typescript", "javascript", "typescriptreact", "javascriptreact"]) {
+    sharingManager.setServerConfig(id, { command: "typescript-language-server", args: ["--stdio"] });
+  }
+
+  sharingManager.startEagerly(["typescript", "javascript", "typescriptreact", "javascriptreact"]);
+  await sharingManager.waitForClient("typescript", 1000);
+
+  assert.equal(connections.length, 1, "four ids with the same record spawn ONE server");
+  for (const id of ["typescript", "javascript", "typescriptreact", "javascriptreact"]) {
+    assert.ok(sharingManager.getRunningClient(id), `${id} resolves the shared client (alias registered)`);
+  }
+  assert.equal(
+    sharingManager.isServerStarting("javascriptreact"),
+    false,
+    "a sharing id is not seen as starting a second server of its own"
+  );
+
+  // The process dies → every alias must go, and the budget is charged once for the shared server.
+  exits[0][0](1);
+  for (const id of ["typescript", "javascript", "typescriptreact", "javascriptreact"]) {
+    assert.equal(sharingManager.getRunningClient(id), null, `${id} is cleared when the shared server dies`);
+  }
+  assert.equal(crashes.filter((c) => c.restarting).length, 1, "one restart is scheduled for the shared server");
+
+  // A record that differs is its own server: the grouping is the config, not the language family.
+  sharingManager.setServerConfig("javascript", { command: "typescript-language-server", args: ["--stdio", "--log-level", "4"] });
+  // `getClientForLanguage` kicks the start off in the background, so wait for readiness before counting.
+  await sharingManager.waitForClient("javascript", 1000);
+  assert.equal(connections.length, 2, "a differing record gets its own server");
 }
 
 console.log("lsp-server-probe validation passed");

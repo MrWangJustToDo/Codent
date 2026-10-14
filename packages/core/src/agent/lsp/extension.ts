@@ -324,9 +324,10 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
       // serialized into an error→loading→success flicker.
       onServerReady: (languageId) => {
         notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "ready");
-        // A write that landed while this server was starting had its sync
-        // deferred — send it now so its diagnostics reach the next tool call.
-        void fileSync.flushPendingSync(languageId).catch(() => {});
+        // A write that landed while a server was starting had its sync deferred — send it now so its
+        // diagnostics reach the next tool call. All of them: the server that just became ready may serve
+        // several language ids, and the deferred write may belong to one of the others.
+        void fileSync.flushAllPendingSync().catch(() => {});
       },
       onServerError: (languageId, error, kind) =>
         notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "failed", error, kind),
@@ -697,8 +698,9 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
       {
         onServerReady: (l) => {
           notifyServerLifecycle(ctx.ui, ctx.logger, l, "ready");
-          // Deferred syncs belong to whichever manager is active now.
-          void fileSync.flushPendingSync(l).catch(() => {});
+          // Deferred syncs belong to whichever manager is active now — and to every language id the
+          // server that just came up serves.
+          void fileSync.flushAllPendingSync().catch(() => {});
         },
         onServerError: (l, error, kind) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "failed", error, kind),
         onServerCrash: (l) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "crashed"),
