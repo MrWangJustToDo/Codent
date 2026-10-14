@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **25 条未修**（另 2 条 `【部分修】`、9 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **22 条未修**（另 3 条 `【部分修】`、11 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -108,7 +108,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 ## 中（`[报告]`，附位置） · 已逐条复核（2026-10-14）
 
 ### 写 / 编辑
-- 【未修】 `tools/util/preview-edit.ts` 自己用 `includes/replace` 重实现匹配，与 `edit_file` 的 unescape / `startLine` / 唯一性逻辑不一致 → 审批时看到的 diff 可能**藏掉真实写入**或**显示并不发生的改动**；`PreviewEditInput` 甚至没有 `startLine` 字段。
+- 【已修 · `d1f17c71`】 `tools/util/preview-edit.ts` 自己用 `includes/replace` 重实现匹配，与 `edit_file` 的 unescape / `startLine` / 唯一性逻辑不一致 → 审批时看到的 diff 可能**藏掉真实写入**或**显示并不发生的改动**；`PreviewEditInput` 甚至没有 `startLine` 字段。→ 改为走工具自己的 `resolveEditMatch`/`applyResolvedEdit`（三条漂移全部消除）；`startLine` 加进类型并透传（app 侧本来就在传，只是类型挡掉了）；**工具拒绝时**改为返回「原文件 + 原因」（`edit_file` 只要有一条 edit 解析失败就一个字都不写），审批视图把原因显示出来而不是给一个空 diff。`validate:edit-preview` 用同一份内存 fs 同时驱动**真工具**与预览并逐字节比对。
 - 【未修】 `tools/find-edit-match.ts`：模糊分支**忽略 `startLine`**（取第一个命中）；`newString` 在只有 `oldString` 被过度转义时也被 `unescapeCommonEscapes`（会改写字面 `\n`/`\t`）。
 - 【未修】 CRLF 文件：多行 `oldString`（LF）匹配 `\r\n` 失败；`read_file` 渲染带不可见 `\r`；匹配路径无 CRLF 归一化。
 - 【未修】 `tools/delete-file-tool.ts` **绕过** `withFileMutationQueue`（与 edit/write 并行时可能"复活"已删文件）。
@@ -123,7 +123,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `8b244a0e`】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。→ fallback 改为同一契约（basename glob + `|` 备选），`validate:tree-walk` 覆盖。
 
 ### shell
-- 【未修】 `run-command-tool.ts:220-224` 送进 `maybeCacheOutput` 的是 `output-accumulator` 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**（`native-run` 的 `result.stdout` 本有全文）。`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 是死代码。
+- 【部分修 · `d1f17c71`】 `run-command-tool.ts:220-224` ~~送进 `maybeCacheOutput` 的是 accumulator 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**~~ —— **已修**：改为优先用宿主自己的全文缓冲（`result.stdout`/`stderr` 是**全部 chunk 的拼接**，本地宿主与 HTTP 平面都如此），accumulator 仅作「流式但返回空」宿主的 fallback；`validate:command-output-cache` 断言超限输出的**头部标记在文件里**。**仍未修**：`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 仍是死代码（取消/超时分支只有 accumulator 可缓存，那时文件仍是尾部 —— 有 `truncated` 信号可让措辞诚实，属可选的下一小步）。
 - 【未修】 `util/command-job-registry.ts`：`MAX_FINISHED_JOBS` 只限已结束 job，**运行中的 job 无上限**（各带一个日志 writer/文件）。
 - 【未修】 `command-job-registry.ts:158` `markExited` 三元 `… ? "exited" : "exited"` 恒为 `exited`（失败 job 后被报 `completed`）；`kill` 对已结束 job 也返回成功（`kill-command-tool` 里"未在运行"分支成死代码）；`kill_command` 返回 `cachedOutputPath: null`（丢了 `logPath`）。
 - 【未修】 `output-accumulator.ts:166,220` 对同一 chunk 重复计数（`totalDecodedBytes` 翻倍，`truncated` 误判）；无消费者，所以是潜伏问题。
@@ -142,7 +142,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `8b244a0e`】 `subagent/task-tool.ts:142-146` 对父模型说 subagent"**没有 `run_command`**"，但 `subagent-tools.ts:23-34` 注册了 `run_command:subagentSafe` → 两个面向模型的表述矛盾（`explore-prompt.ts` 也列了 `run_command`）。→ 描述改为按实际工具集陈述，`validate:subagent-prompt` 逐名断言。
 - 【已修 · `5b3df3fe`】 `subagent/task-prefork.ts:181` `start()` **永远返回 `true`** → middleware 里「重复 toolCallId 就摘掉父信号监听」的清理是**死代码**（重复 `TOOL_CALL_END` 泄漏一个监听 + AbortController）。已修：重复注册返回 `false`，middleware 的 disarm 分支生效（`validate:task-prefork` 覆盖）；**被丢弃的 queued 项 `finally` 不跑**那半仍未修（队列项从不进入 `runPreForked`）。
 - 【已修 · `78835b24` + `8b244a0e`】 `session-read-tool.ts:109` 无文件大小上限（`session_search` 有 `MAX_SESSION_FILE_BYTES`），大日志 O(file)×页数，每页整读整 fold；其描述里的分页建议（`offset += limit`）在内容上限截断时会**跳过消息**。→ 两半都已修：体积闸门 + 描述改为指向渲染尾部的真实 offset（`validate:session-search` 用 9 条长消息 / `limit: 10` / 实返 7 条覆盖）。
-- 【未修】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。
+- 【已修 · `d1f17c71`】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。→ 在 `subagentSafe` 闸门里**先于 analyzer** 拒绝（"命令本身只读"不足以放行），`validate:safe-command` 断言只读+后台被拒、主 agent 仍可后台。
 - 【不修 · 有意为之（用户决定）】 丢弃的 pre-fork subagent 只 abort 未 `destroyAgent`（流重启/结束时累积）—— **不修**：`destroyAgent` 会把 subagent 从 catalog 移除，Ctrl+T 的 task 列表（及其预览 / 摘要流）就看不到了，而 `task-tool.ts:204` 本来就用 `autoDestroy: false` 保留它。代价（长会话里 catalog 缓慢增长）是明确接受的。若将来真要回收，方向是「保留最近 N 个已结束的」而不是立刻销毁。
 - 【已修 · `4079ee5c`】 `run-stats.ts:144-147` `hitStepBudget` 未加 `!aborted` → 用户取消也可能报 `reachedLimit=true`。→ 取消落在 tool loop 中段，`finishReason` 正是 `tool_calls` 且计数已达顶，于是 task 输出同时带 `aborted: true` + `reachedLimit: true`：transcript 行的状态词（`formatTaskOutput` 两个都推）、给父模型判断的 flag、以及 task 面板继承的 phase 都被污染。`validate:cancel-semantics` 原本就在断言这条不变量，但用的是 `finishReason: null`（取消不会产生这个形状），所以**没加 guard 也能过** —— 现已改用 `tool_calls`。
 - 【未修】 `hasSessionHistory`（`session-retrieval.ts:43-54`）把当前会话自己的日志也算作"有历史"。
@@ -226,6 +226,6 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 1. **模型可见的正确性**（都是小改动、各能配 validator）：~~`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard~~（已完成 · `de771a4f`，实际覆盖 24 个声明站点）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
 2. **资源与泄漏**：只剩 **运行中的 job 无上限**。其余四项已定案：被丢弃的 pre-fork 不 `destroyAgent` → **不修**（理由见「中」：会让 task 列表看不到）；`file-mutation-queue` 的 Map 回收、`lsp-manager` 的重启 timer 与计数、`task-prefork.start()` 的返回值 → 已完成（`5b3df3fe`）。
 3. **契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时（server 挂住会永久阻塞该次运行，Esc 也解不开）· plan-mode 的「只读」可被内置 `code_rewrite` 绕过（应改为按 tool 的 `present.category` 派生，而不是硬编码 4 个名字）。
-4. **其余中 / 低**：写 / 编辑一致性（`preview-edit` 与 `edit_file` 共用同一套匹配、CRLF 归一化、`delete_file` 入队、`write_file` 的 temp+rename 与真实字节数）· `run_command` 缓存全文（`cachedOutputPath` 头部不可恢复）· `command-job-registry` 的状态判定与 `kill_command` 的 `logPath` · web 的域回退与超时叠加 · code-mode 的 console 补丁重入 · memory / skills 的字节与转义 · 低项收尾（展示换行、行数统计、`todo` 回传原值等）。
+4. **其余中 / 低**：写 / 编辑一致性（~~`preview-edit` 与 `edit_file` 共用同一套匹配~~ 已完成 · `d1f17c71`；CRLF 归一化、`delete_file` 入队、`write_file` 的 temp+rename 与真实字节数仍未修）· ~~`run_command` 缓存全文~~（已完成 · `d1f17c71`；死代码清理仍可选）· ~~subagent 起后台 job~~（已完成 · `d1f17c71`）· `command-job-registry` 的状态判定与 `kill_command` 的 `logPath` · web 的域回退与超时叠加 · code-mode 的 console 补丁重入 · memory / skills 的字节与转义 · 低项收尾（展示换行、行数统计、`todo` 回传原值等）。
 
 > 高风险项已逐个核实源码；中 / 低为子代理报告，修复前先按当前源码复现一次（本次复核已发现两条报告项本身不成立）。修复时按仓库约定：契约/安全变更先开 OpenSpec change，功能修复配 validator。
