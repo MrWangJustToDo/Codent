@@ -69,7 +69,11 @@ import { AGENT_LOG_DIR, type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan-prompts.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
-import { discardRegisteredPrefork, peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
+import {
+  type PreforkDiscardCause,
+  discardRegisteredPrefork,
+  peekTaskPreforkCoordinator,
+} from "../agent/subagent/task-prefork.js";
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
 import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
@@ -1667,7 +1671,7 @@ export class ManagedAgent {
     // streaming on until some later run discards them and reports them as its own orphans. See
     // {@link discardRegisteredPreforkRuns} for the other seats that abandon a run this way.
     // `cascadeAbortToChildren` above is the precedent for touching child bookkeeping from here.
-    this.discardRegisteredPreforkRuns();
+    this.discardPreforkRuns();
   }
 
   /**
@@ -1696,9 +1700,11 @@ export class ManagedAgent {
   /**
    * Throw away the eager `task` runs this agent started, reporting what each discard orphaned.
    *
-   * For the seats that abandon a run without reaching a stream terminal hook. A run left behind is
-   * not idle: it keeps streaming into whatever transcript comes next, and is later reported as an
-   * orphan of a run that never spawned it.
+   * For the seats that abandon a run without reaching (or after deferring) a stream terminal hook. A
+   * run left behind is not idle: it keeps streaming into whatever transcript comes next, and is later
+   * reported as an orphan of a run that never spawned it.
+   *
+   * The seats are listed here as one inventory because they do not share a call path:
    *
    * - `abort()` — the funnel for every run abort (Esc / force-submit via `interruptCurrentRun`, the
    *   local-session dispatch stop, `AgentManager.destroyAgent`). A session switch reaches it too when
@@ -1708,13 +1714,21 @@ export class ManagedAgent {
    *   `RunCoordinator.resetRunState` without an agent abort, so neither a stream hook nor `abort()`
    *   runs. (`resetRunState` does abort the eager run's controller, which stops the subagent, but the
    *   registry record survives and is misreported by a later run.)
+   * - the pump finalizing a turn (`AgentChatController.pumpToolPhases`, cause `"run-finish"`) — the
+   *   one case the `onFinish` hook defers and nothing follows: the hook sees a pending tool call and
+   *   keeps the pre-forks for the tool phase that will join them, but a call that cannot run (truncated
+   *   arguments, cancelled by `cancelIncompleteToolCalls`) is never joined by anything, so the turn's
+   *   own end is what has to collect them.
    *
    * Non-creating: an agent that never pre-forked anything allocates nothing and reports nothing.
+   *
+   * @param cause why the run ended, recorded on each discard (`"run-abort"` for the abort/reset seats,
+   * `"run-finish"` for a turn that ended without joining them).
    */
-  private discardRegisteredPreforkRuns(): void {
+  discardPreforkRuns(cause: PreforkDiscardCause = "run-abort"): void {
     const coordinator = peekTaskPreforkCoordinator(this);
     if (!coordinator || coordinator.size === 0) return;
-    discardRegisteredPrefork(this, "run-abort", (discard) => {
+    discardRegisteredPrefork(this, cause, (discard) => {
       this.emitEvent("subagent:prefork-discarded", {
         toolCallId: discard.toolCallId,
         cause: discard.cause,
@@ -1902,7 +1916,7 @@ export class ManagedAgent {
     // `resetRunState` stops the run's controllers — the eager runs included, through the run's
     // pending-abort surface — but not their registry records, which would be reported later as some
     // other run's orphans. Same reason as `abort()`: a PAUSED run reaches no stream terminal hook.
-    this.discardRegisteredPreforkRuns();
+    this.discardPreforkRuns();
     this.compaction.resetReactiveCompactRetries();
     this.statusController.resetToIdle();
     this.setError("");

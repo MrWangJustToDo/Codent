@@ -238,10 +238,21 @@ Decisions:
   reach it unguarded).
 - **Seat inventory** (kept in one place so it can be re-derived): `abort()` — Esc / force-submit /
   host stop / destroy; `reset()` — `/clear`, new session; `stopIfActive` — session switch and
-  `/clear` in place; `prepareRestartStyleRetry` — stream restart (already had `run-start`); stream
+  `/clear` in place; the pump finalizing a turn with cause `run-finish` — the deferred
+  `onFinish`; `prepareRestartStyleRetry` — stream restart (already had `run-start`); stream
   `onFinish` / `onAbort` / `onError` — live-invocation boundaries.
 - A run that reaches **no** seat and no hook (a host that tears the process down) needs nothing: the
   coordinator is in-memory and per-agent, so it dies with the process.
+- **The list was one seat short, and the review that closed this change found it.** `onFinish` defers
+  the discard whenever a tool call is pending, on the assumption that the tool phase is about to join
+  the pre-forks. A call whose arguments never finished streaming cannot run — `cancelIncompleteToolCalls`
+  settles it as `error` — so nothing joins them and the turn simply ends: the deferred discard had no
+  second half, and the eager subagent kept running with nobody to collect it. Observed in a real
+  session (three pre-forks, zero discards, the subagents never reported an outcome), which is what made
+  "the seat list is hand-written and a new abandonment path will not be discovered on its own" concrete
+  rather than theoretical. `HasDeferredToolExecution` stays as it is: the pump needs the phantom
+  continuation to *settle* those dead calls at its entry, so the fix is the missing seat, not a narrower
+  predicate.
 
 Consequences: a paused run abandoned by any of those now discards deterministically with the cause a
 mid-stream abort already used (no vocabulary change), and the stream's `onAbort`, if it fires

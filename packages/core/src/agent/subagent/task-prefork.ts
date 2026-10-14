@@ -325,6 +325,8 @@ export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPre
  * - the stream boundaries `onFinish` (only when nothing is pending) / `onAbort` / `onError`;
  * - `ManagedAgent.abort()` — every run abort funnels through it (Esc, force-submit, a host stop,
  *   destroy), and a session switch reaches it too while PAUSED, via `stopIfActive`'s guard;
+ * - `ManagedAgent.discardPreforkRuns("run-finish")` — the pump finalizing a turn whose only pending
+ *   call could not run, i.e. the case `onFinish` deferred to a join that never came;
  * - `ManagedAgent.reset()` — `/clear` and a new session rewind the run state without an agent abort;
  * - the restart-style recovery path (which ends the attempt that spawned them — see
  *   `prepareRestartStyleRetry`).

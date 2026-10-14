@@ -13,6 +13,9 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   AgentRunner,
@@ -22,6 +25,8 @@ import {
   peekTaskPreforkCoordinator,
   RunCoordinator,
 } from "../dist/dev.mjs";
+
+const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
 // ---------------------------------------------------------------------------
 // 1. RunToken lifecycle
@@ -235,13 +240,19 @@ function createManaged(id) {
     };
   };
 
+  // `cause` is the vocabulary the discard is reported with, so each seat asserts the one it uses: the
+  // abort/reset seats are an abandoned run, the pump's turn-end seat is a run that finished around a
+  // call nothing could join.
   const seats = [
-    ["ManagedAgent.abort()", (s) => s.managed.abort("user-cancelled")],
-    ["ManagedAgent.reset()", (s) => s.managed.reset()],
-    ["ManagedAgent.stopActiveRun() while paused", (s) => s.managed.stopActiveRun("session-switch")],
-    ["chat.stopIfActive() while paused", (s) => s.managed.getChatController().stopIfActive("clear")],
+    ["ManagedAgent.abort()", (s) => s.managed.abort("user-cancelled"), "run-abort"],
+    ["ManagedAgent.reset()", (s) => s.managed.reset(), "run-abort"],
+    ["ManagedAgent.stopActiveRun() while paused", (s) => s.managed.stopActiveRun("session-switch"), "run-abort"],
+    ["chat.stopIfActive() while paused", (s) => s.managed.getChatController().stopIfActive("clear"), "run-abort"],
+    // The seat `AgentChatController.pumpToolPhases` uses when a turn ends without the tool phase that
+    // `onFinish` deferred to (a pending call whose arguments never finished, so nothing can join it).
+    ["ManagedAgent.discardPreforkRuns() at turn end", (s) => s.managed.discardPreforkRuns("run-finish"), "run-finish"],
   ];
-  for (const [label, act] of seats) {
+  for (const [label, act, cause] of seats) {
     const seat = abandonedRun();
     assert.equal(seat.size(), 1, `${label}: the eager run starts registered`);
     act(seat);
@@ -250,10 +261,39 @@ function createManaged(id) {
     assert.equal(seat.controller.signal.aborted, true, `${label}: …and its controller stops streaming`);
     assert.deepEqual(
       seat.reported,
-      [{ toolCallId: "call-paused", cause: "run-abort", subagentIds: ["subagent-paused"] }],
-      `${label}: …and the orphan is reported with the abort cause`
+      [{ toolCallId: "call-paused", cause, subagentIds: ["subagent-paused"] }],
+      `${label}: …and the orphan is reported with the "${cause}" cause`
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 6. The seat's CALL SITE: the pump's turn end collects what `onFinish` deferred
+// ---------------------------------------------------------------------------
+//
+// `onFinish` defers the discard when a tool call is still pending, on the assumption that the tool
+// phase will join the pre-forks. A call whose arguments never finished streaming cannot run — it is
+// settled as `error` by `cancelIncompleteToolCalls` — so for that shape nothing joins them and the run
+// just ends. The seat's effect is only reachable through a full pump, so the call site is asserted
+// here while section 5 drives the method itself.
+
+{
+  const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  assert.match(
+    controller,
+    /if \(!waitingForUser\) \{\s*this\.managed\.discardPreforkRuns\("run-finish"\);\s*\}/,
+    "the pump must collect the pre-forks a deferred `onFinish` left behind when the turn ends — " +
+      "guarded by `!waitingForUser`, since a WAIT is the case that continues the run"
+  );
+  assert.ok(
+    !/if \(waitingForUser\) \{\s*this\.managed\.discardPreforkRuns/.test(controller),
+    "the wait path must not discard: the pump that answers the wait is what joins them"
+  );
+  assert.match(
+    readFileSync(join(SRC, "managers/managed-agent.ts"), "utf8"),
+    /discardPreforkRuns\(cause: PreforkDiscardCause = "run-abort"\)/,
+    "the seat takes its cause as a parameter (`run-finish` at turn end, `run-abort` for abort/reset)"
+  );
 }
 
 console.log("run-abort-ownership validation passed");

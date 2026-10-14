@@ -471,6 +471,21 @@ export class AgentChatController {
           return;
         }
 
+        // The turn is over and no tool phase is coming: collect the eager `task` runs it left
+        // registered.
+        //
+        // `onFinish` defers exactly this discard when it sees a pending tool call, on the assumption
+        // that the tool phase is about to join them. That assumption is wrong for a call that cannot
+        // run — truncated arguments, which `cancelIncompleteToolCalls` settles as `error` — and no
+        // later boundary collects it either: the next turn's tool phase addresses different call ids,
+        // so a pre-fork kept past its own turn only runs on unobserved. This is that missing seat.
+        //
+        // Not for a WAIT (`waitingForUser`): the run is not over, and the pump that answers the wait is
+        // precisely what joins them.
+        if (!waitingForUser) {
+          this.managed.discardPreforkRuns("run-finish");
+        }
+
         this.managed.statusController.applyRunOutcome({
           kind: outcomeKind,
           messages,
