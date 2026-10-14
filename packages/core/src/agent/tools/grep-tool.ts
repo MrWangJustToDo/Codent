@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isAbortError } from "../../runtime-types/abort.js";
+
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
@@ -244,15 +246,18 @@ async function runGrepSearch(
     context: number;
     fetchCount: number;
     searchPathIsFile: boolean;
+    signal?: AbortSignal;
   }
 ): Promise<string> {
   if (canExecArgs(env)) {
     const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
+      signal: options.signal,
     });
     if (rgStdout !== undefined) return truncateLines(rgStdout, options.fetchCount);
     const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
+      signal: options.signal,
     });
     if (grepStdout !== undefined) return truncateLines(grepStdout, options.fetchCount);
     // Neither binary is available — an empty result is the honest answer.
@@ -263,10 +268,18 @@ async function runGrepSearch(
   // joined and quoted, with truncation still in JS.
   const timeout = SEARCH_COMMAND_TIMEOUT;
   const rgArgv = buildRgArgs(pattern, searchPath, options).map(quoteForShell);
-  const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, { timeout, cwd: env.rootPath });
+  const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, {
+    timeout,
+    cwd: env.rootPath,
+    signal: options.signal,
+  });
   if (!isCommandNotFound(rgResult.exitCode)) return truncateLines(rgResult.stdout, options.fetchCount);
   const grepArgv = buildGrepArgs(pattern, searchPath, options).map(quoteForShell);
-  const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, { timeout, cwd: env.rootPath });
+  const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, {
+    timeout,
+    cwd: env.rootPath,
+    signal: options.signal,
+  });
   return truncateLines(grepResult.stdout, options.fetchCount);
 }
 
@@ -418,7 +431,7 @@ export const createGrepTool = () => {
     outputSchema: grepOutputSchema,
     execute: async (
       { pattern, path, include, ignoreCase, offset, limit, outputMode, context },
-      { toolCallId, coreEnv }
+      { toolCallId, abortSignal, coreEnv }
     ) => {
       return withDuration(async () => {
         // Agents sometimes wrap the regex in quotes (e.g. `"extensions"`), which
@@ -453,9 +466,27 @@ export const createGrepTool = () => {
           context: contextLines,
           fetchCount,
           searchPathIsFile,
+          signal: abortSignal,
         };
 
-        const rawOutput = await runGrepSearch(coreEnv, searchPattern, searchPath, searchOptions);
+        // The search is the only thing here that the run can stop, so the abort is caught where it
+        // crosses that boundary. It must NOT fall through to the empty-result branch below: a search
+        // that was cut short did not look, and "no matches" is a claim this tool cannot make. Same
+        // contract as `run_command`/`webfetch` — settle as a normal result carrying `cancelled: true`
+        // rather than throwing, because a throw renders as a tool FAILURE.
+        let rawOutput: string;
+        try {
+          rawOutput = await runGrepSearch(coreEnv, searchPattern, searchPath, searchOptions);
+        } catch (err) {
+          if (!isAbortError(err, abortSignal)) throw err;
+          return {
+            matches: [] as { file: string; lineNumber: number; content: string }[],
+            content: "",
+            offset: skip,
+            limit: take,
+            cancelled: true,
+          };
+        }
 
         const lines = rawOutput
           .split("\n")
@@ -532,6 +563,21 @@ export const createGrepTool = () => {
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GrepOutput }) {
       if (isProjectedModelContent(output)) return output;
       const lines = output.matches?.map?.((m) => `${m.file}:${m.lineNumber}: ${m.content}`);
+      // A stopped search says so. Without this the model reads the (necessarily partial) matches
+      // below as the complete answer to its query.
+      if (output.cancelled === true) {
+        return [
+          {
+            type: "text" as const,
+            // The repo's wording for a stopped search (`websearch`) when there is nothing to show;
+            // "incomplete" only qualifies a result that actually carries matches.
+            content:
+              lines && lines.length > 0
+                ? `[Search cancelled by user — this result is incomplete.]\n${lines.join("\n")}`
+                : "[Search cancelled by user.]",
+          },
+        ];
+      }
       return [
         {
           type: "text" as const,

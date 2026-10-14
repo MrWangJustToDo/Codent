@@ -1,3 +1,5 @@
+import { ExecutionError } from "../../../env/types";
+
 import { SEARCH_COMMAND_TIMEOUT, SEARCH_OUTPUT_BYTE_LIMIT, looksLikeMissingBinary } from "./search-command.js";
 
 import type { CoreEnv } from "../../../env";
@@ -12,6 +14,18 @@ export interface ExecArgsOptions {
   cwd?: string;
   /** Milliseconds before the child is killed. Defaults to {@link SEARCH_COMMAND_TIMEOUT}. */
   timeout?: number;
+  /**
+   * The RUN's signal, forwarded to the host so the child dies with the run instead of running to
+   * its deadline. A search tool that ignores it keeps burning CPU on a workspace the user has
+   * already stopped looking at, and — worse — reports the empty stdout of the killed child as "no
+   * matches" (see {@link execArgs}).
+   */
+  signal?: AbortSignal;
+}
+
+/** The one shape a run abort is reported in (see {@link execArgs}). */
+function abortedCommand(file: string): ExecutionError {
+  return new ExecutionError("aborted", `"${file}" was stopped with the run`);
 }
 
 /** Outcome of an argv-based external command. */
@@ -49,6 +63,13 @@ export interface ExecArgsResult {
  * printing usable hits (an unreadable subdirectory is enough) and ripgrep/grep exit 1/2 to mean
  * "no matches". Only `missing` — the binary never ran — justifies falling through to another
  * candidate; anything else that produced output is a result.
+ *
+ * THROWS `ExecutionError("aborted")` when `options.signal` aborted. That is the one exception to
+ * "returns a shape rather than throwing", and it is deliberate: the candidates are a chain
+ * (`rg` → `grep`, `fd` → `find`), so a killed child returning empty stdout would be read as
+ * "try the next binary" and end at "no matches" — the one verdict that is certainly wrong for a
+ * search that never finished. Callers catch it with the signal they passed (see
+ * `isAbortError`) and report the run as cancelled.
  */
 export async function execArgs(
   env: CoreEnv,
@@ -64,9 +85,14 @@ export async function execArgs(
     return { stdout: "", stderr: "", code: null, missing: true, killed: false };
   }
 
+  // Never spawn for a run that is already over: the child would be killed immediately anyway, and
+  // on a host that cannot be told the signal it would run in full.
+  if (options.signal?.aborted) throw abortedCommand(file);
+
   const result = await env.execFile(file, args, {
     timeout: options.timeout ?? SEARCH_COMMAND_TIMEOUT,
     cwd: options.cwd,
+    signal: options.signal,
   });
   if (!result) {
     return { stdout: "", stderr: "", code: null, missing: true, killed: false };
@@ -75,6 +101,11 @@ export async function execArgs(
   // Prefer the host's own classification when it provides one (the Node adapter does), and fall
   // back to inspecting the text for hosts that only report a status. A host that reports
   // `missing` is authoritative — it knows how spawning failed; the fallback is for the others.
+  // The signal is the strongest evidence of why the child died: a timeout and an abort both arrive
+  // as `killed` with no status, so the host cannot be the one to tell them apart (see
+  // `isAbortError`). Checked before the shape below is returned.
+  if (options.signal?.aborted) throw abortedCommand(file);
+
   const code = result.code ?? null;
   const missing = result.missing === true || (code !== 0 && looksLikeMissingBinary(code, result.stderr));
   const killed = result.killed === true;

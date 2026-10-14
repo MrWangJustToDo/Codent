@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isAbortError } from "../../runtime-types/abort.js";
+
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
 import { canExecArgs, execArgsCapture } from "./util/exec-args.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
@@ -117,17 +119,20 @@ async function runGlobSearch(
     type: string;
     exclude: string | undefined;
     fetchCount: number;
+    signal?: AbortSignal;
   }
 ): Promise<string> {
   if (canExecArgs(env)) {
     for (const binary of FD_BINARIES) {
       const stdout = await execArgsCapture(env, binary, buildFdArgs(pattern, searchPath, options), {
         cwd: env.rootPath,
+        signal: options.signal,
       });
       if (stdout !== undefined) return truncateLines(stdout, options.fetchCount);
     }
     const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
+      signal: options.signal,
     });
     if (findStdout !== undefined) return truncateLines(findStdout, options.fetchCount);
     // Both binaries are absent — an empty result is the honest answer. Falling through to
@@ -142,6 +147,7 @@ async function runGlobSearch(
     const result = await env.runCommand(`${binary} ${argv.join(" ")}`, {
       timeout: SEARCH_COMMAND_TIMEOUT,
       cwd: env.rootPath,
+      signal: options.signal,
     });
     if (!isCommandNotFound(result.exitCode)) return truncateLines(result.stdout, options.fetchCount);
   }
@@ -149,6 +155,7 @@ async function runGlobSearch(
   const findResult = await env.runCommand(`find ${findArgv.join(" ")}`, {
     timeout: SEARCH_COMMAND_TIMEOUT,
     cwd: env.rootPath,
+    signal: options.signal,
   });
   return truncateLines(findResult.stdout, options.fetchCount);
 }
@@ -189,7 +196,7 @@ export const createGlobTool = () => {
         .describe("Additional directory or file pattern to exclude (e.g., 'vendor', '*.log')."),
     }),
     outputSchema: globOutputSchema,
-    execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId, coreEnv }) => {
+    execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId, abortSignal, coreEnv }) => {
       return withDuration(async () => {
         const searchPath = resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
@@ -203,9 +210,24 @@ export const createGlobTool = () => {
           offset: skip,
           limit: take,
           fetchCount,
+          signal: abortSignal,
         };
 
-        const rawOutput = await runGlobSearch(coreEnv, pattern, searchPath, searchOptions);
+        // Same contract as grep's: a run abort is a cancel, never "no files found" — see the note
+        // there. `resolveSearchPath` reads the path only, so the search is the only stoppable step.
+        let rawOutput: string;
+        try {
+          rawOutput = await runGlobSearch(coreEnv, pattern, searchPath, searchOptions);
+        } catch (err) {
+          if (!isAbortError(err, abortSignal)) throw err;
+          return {
+            files: [] as string[],
+            content: "",
+            offset: skip,
+            limit: take,
+            cancelled: true,
+          };
+        }
 
         const allFiles = rawOutput
           .split("\n")
@@ -244,6 +266,19 @@ export const createGlobTool = () => {
     // input, pagination/truncation/cache metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GlobOutput }) {
       if (isProjectedModelContent(output)) return output;
+      // A stopped search says so — see the same branch in grep's `toModelOutput`.
+      if (output.cancelled === true) {
+        const partial = output.files ?? [];
+        return [
+          {
+            type: "text" as const,
+            content:
+              partial.length > 0
+                ? `[Search cancelled by user — this result is incomplete.]\n${partial.join("\n")}`
+                : "[Search cancelled by user.]",
+          },
+        ];
+      }
       return [
         {
           type: "text" as const,

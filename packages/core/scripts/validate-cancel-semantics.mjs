@@ -244,6 +244,39 @@ const CATCHER_TOOLS = [
     ],
   },
   {
+    file: "agent/tools/grep-tool.ts",
+    name: "grep",
+    marker: "cancelled",
+    // The search is the only step the run can stop, so the abort is caught there and reported as a
+    // cancel — a killed `rg`'s empty stdout is not "no matches".
+    evidence: [
+      [/signal: abortSignal/, "passes the run's signal into the search, so Esc ends the spawn"],
+      [/cancelled: true/, "settles its own abort with `cancelled: true` instead of throwing"],
+      [/isAbortError\(/, "classifies the abort through the shared predicate, not a local heuristic"],
+    ],
+  },
+  {
+    file: "agent/tools/glob-tool.ts",
+    name: "glob",
+    marker: "cancelled",
+    evidence: [
+      [/signal: abortSignal/, "passes the run's signal into the search, so Esc ends the spawn"],
+      [/cancelled: true/, "settles its own abort with `cancelled: true` instead of throwing"],
+      [/isAbortError\(/, "classifies the abort through the shared predicate, not a local heuristic"],
+    ],
+  },
+  {
+    file: "agent/tools/tree-tool.ts",
+    name: "tree",
+    marker: "cancelled",
+    // Both halves of this tool can run long: the spawn, and the native walk that replaces it.
+    evidence: [
+      [/signal: abortSignal/, "passes the run's signal into the spawn AND the walk"],
+      [/cancelled: true/, "settles its own abort with `cancelled: true` instead of throwing"],
+      [/isAbortError\(/, "classifies the abort through the shared predicate, not a local heuristic"],
+    ],
+  },
+  {
     file: "agent/subagent/task-tool.ts",
     name: "task",
     marker: "aborted",
@@ -260,9 +293,6 @@ const CATCHER_TOOLS = [
 const NO_MARKER_REASON = {
   read_file: "no partial output worth keeping; the fallback marks the row",
   list_file: "no partial output worth keeping; the fallback marks the row",
-  glob: "no partial output worth keeping; the fallback marks the row",
-  grep: "no partial output worth keeping; the fallback marks the row",
-  tree: "no partial output worth keeping; the fallback marks the row",
   get_command_output: "background-job poll; a cancel leaves the job running, nothing to report",
   kill_command: "background-job control; synchronous",
   write_file: "synchronous and short; cannot be interrupted mid-write",

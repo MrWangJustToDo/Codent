@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { getEnv, type CoreEnvFs } from "../../env";
+import { ExecutionError } from "../../env/types";
+import { isAbortError } from "../../runtime-types/abort.js";
 import { toPosixPath, toPosixPathKey } from "../../utils/posix-path.js";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
@@ -32,6 +34,16 @@ export interface WalkTreeOptions {
    * default). It exists so a test can drive a win32-shaped walk on Linux.
    */
   join?: (parent: string, child: string) => string;
+  /**
+   * The run's signal. Without it a walk over a large tree keeps reading directories after the user
+   * has stopped the run — the spawn path was bounded by `execArgs`' deadline, the walk had nothing.
+   */
+  signal?: AbortSignal;
+}
+
+/** The one shape a run abort leaves a walk in — the same contract {@link execArgs} documents. */
+function abortedWalk(): ExecutionError {
+  return new ExecutionError("aborted", "tree walk stopped with the run");
 }
 
 /**
@@ -52,6 +64,7 @@ export async function walkTree(rootPath: string, options: WalkTreeOptions): Prom
 
   const visit = async (dir: string, relativeDir: string, depth: number): Promise<void> => {
     if (depth > options.maxDepth || results.length >= MAX_TREE_ENTRIES) return;
+    if (options.signal?.aborted) throw abortedWalk();
 
     let entries;
     try {
@@ -65,6 +78,9 @@ export async function walkTree(rootPath: string, options: WalkTreeOptions): Prom
 
     for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
       if (results.length >= MAX_TREE_ENTRIES) return;
+      // Checked per entry, not per directory: a directory can hold thousands, and each one costs a
+      // stat below.
+      if (options.signal?.aborted) throw abortedWalk();
 
       const isDirectory = entry.type === "directory";
       const relative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
@@ -155,13 +171,33 @@ export const createTreeTool = () => {
       tree: z.string().describe("The tree structure as a formatted string."),
       totalEntries: z.number().describe("Total number of entries (files and directories) shown."),
       truncated: z.boolean().describe("Whether the tree output was truncated."),
+      /**
+       * Present when the USER cancelled the run while the tree was being walked. `tree` is then
+       * empty because nothing was read — distinct from a directory that has no entries.
+       */
+      cancelled: z.boolean().optional().describe("True when the user aborted the run while the tree was running."),
       durationMs: z.number().describe("Execution duration in milliseconds."),
       ...toolOutputBaseSchema.shape,
     }),
-    execute: async ({ path, maxDepth, showHidden, dirsOnly, pattern, ignore }, { toolCallId, coreEnv }) => {
+    execute: async (
+      { path, maxDepth, showHidden, dirsOnly, pattern, ignore },
+      { toolCallId, abortSignal, coreEnv }
+    ) => {
       return withDuration(async () => {
         const rootPath = resolveSearchPath(coreEnv, path);
         const depth = maxDepth ?? 3;
+
+        // A stopped walk has no tree to report — and an empty tree would read as "this directory is
+        // empty", the one thing it certainly is not. Same contract as grep/glob: settle normally
+        // with `cancelled: true` rather than throwing (a throw renders as a tool FAILURE).
+        const cancelledOutput = () => ({
+          path: rootPath,
+          maxDepth: depth,
+          tree: "",
+          totalEntries: 0,
+          truncated: false,
+          cancelled: true,
+        });
 
         // Build `tree` arguments. argv, not a command string — the previous version
         // appended `2>/dev/null` and quoted values into a shell command, which is a parse
@@ -191,25 +227,37 @@ export const createTreeTool = () => {
         // status field here would be write-only.
         let result: { stdout: string; stderr: string; missing: boolean; killed: boolean };
         if (canExecArgs(coreEnv)) {
-          const argsResult = await execArgs(coreEnv, "tree", treeArgs, { cwd: coreEnv.rootPath });
-          result = {
-            stdout: argsResult.stdout,
-            stderr: argsResult.stderr,
-            missing: argsResult.missing,
-            killed: argsResult.killed,
-          };
+          try {
+            const argsResult = await execArgs(coreEnv, "tree", treeArgs, {
+              cwd: coreEnv.rootPath,
+              signal: abortSignal,
+            });
+            result = {
+              stdout: argsResult.stdout,
+              stderr: argsResult.stderr,
+              missing: argsResult.missing,
+              killed: argsResult.killed,
+            };
+          } catch (err) {
+            if (!isAbortError(err, abortSignal)) throw err;
+            return cancelledOutput();
+          }
         } else {
-          const envResult = await coreEnv.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`, {
-            cwd: coreEnv.rootPath,
-          });
-          // The string path has no kill signal of its own; a shell reports a killed child as a
-          // non-zero status, so there is nothing extra to distinguish here.
-          result = {
-            stdout: envResult.stdout,
-            stderr: envResult.stderr,
-            missing: isCommandNotFound(envResult.exitCode),
-            killed: false,
-          };
+          try {
+            const envResult = await coreEnv.runCommand(`tree ${treeArgs.map(quoteForShell).join(" ")}`, {
+              cwd: coreEnv.rootPath,
+              signal: abortSignal,
+            });
+            result = {
+              stdout: envResult.stdout,
+              stderr: envResult.stderr,
+              missing: isCommandNotFound(envResult.exitCode),
+              killed: false,
+            };
+          } catch (err) {
+            if (!isAbortError(err, abortSignal)) throw err;
+            return cancelledOutput();
+          }
         }
 
         // Fall back when `tree` could not run. Two conditions, deliberately narrow:
@@ -232,14 +280,21 @@ export const createTreeTool = () => {
           // reject it outright, so the fallback could not work on two of the three platforms
           // this tool runs on. `env.fs.readdir` is the same primitive the skill loader already
           // uses, and it removes an external dependency rather than adding a platform branch.
-          const paths = await walkTree(rootPath, {
-            fs: coreEnv.fs,
-            maxDepth: depth,
-            dirsOnly: dirsOnly ?? false,
-            showHidden: showHidden ?? false,
-            pattern,
-            ignore: ignore ?? [],
-          });
+          let paths: string[];
+          try {
+            paths = await walkTree(rootPath, {
+              fs: coreEnv.fs,
+              maxDepth: depth,
+              dirsOnly: dirsOnly ?? false,
+              showHidden: showHidden ?? false,
+              pattern,
+              ignore: ignore ?? [],
+              signal: abortSignal,
+            });
+          } catch (err) {
+            if (!isAbortError(err, abortSignal)) throw err;
+            return cancelledOutput();
+          }
           const rawTree = formatAsTree(paths, rootPath);
 
           const cached = await maybeCacheOutput(coreEnv, rawTree, `${toolCallId}-tree`);
@@ -286,8 +341,13 @@ export const createTreeTool = () => {
     },
     // Only send the tree text to the LLM — path/maxDepth are echoed in the
     // input, totalEntries/truncated/cachedOutputPath are UI metadata.
-    toModelOutput({ output }: { toolCallId: string; input: unknown; output: { tree: string } }) {
+    toModelOutput({ output }: { toolCallId: string; input: unknown; output: { tree: string; cancelled?: boolean } }) {
       if (isProjectedModelContent(output)) return output;
+      // An empty tree is an ANSWER (nothing there); a stopped walk has no answer at all, and the
+      // model must not read the two the same way.
+      if (output.cancelled === true) {
+        return [{ type: "text" as const, content: "[Search cancelled by user.]" }];
+      }
       return [{ type: "text" as const, content: output.tree }];
     },
   });

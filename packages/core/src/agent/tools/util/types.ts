@@ -153,6 +153,11 @@ export const globOutputSchema = z.object({
   offset: z.number().describe("The offset used for pagination (0-indexed)."),
   limit: z.number().describe("The limit used for pagination."),
   content: z.string().describe("The full glob output as a string (for caching)."),
+  /**
+   * Present when the USER aborted the run while the search was running. `files` is then empty
+   * because nothing was scanned — NOT because the pattern matched nothing.
+   */
+  cancelled: z.boolean().optional().describe("True when the user aborted the run while the search was running."),
   durationMs: z.number().describe("Execution duration in milliseconds."),
   ...toolOutputBaseSchema.shape,
 });
@@ -174,6 +179,11 @@ export const grepOutputSchema = z.object({
   offset: z.number().describe("The offset used for pagination (0-indexed)."),
   limit: z.number().describe("The limit used for pagination."),
   content: z.string().describe("The full grep output as a string (for caching)."),
+  /**
+   * Present when the USER aborted the run while the search was running. `matches` is then empty
+   * because nothing was scanned — NOT because the pattern matched nothing.
+   */
+  cancelled: z.boolean().optional().describe("True when the user aborted the run while the search was running."),
   durationMs: z.number().describe("Execution duration in milliseconds."),
   ...toolOutputBaseSchema.shape,
 });

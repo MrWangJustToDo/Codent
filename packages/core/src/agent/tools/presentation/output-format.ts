@@ -167,6 +167,11 @@ function formatEditFileOutput(output: EditFileOutput): string {
 
 function formatGlobOutput(output: GlobOutput): string {
   const { files } = output;
+  // A search the run stopped renders as cancelled, whatever it had printed. "No files found" would
+  // be a claim the search never earned — it was stopped mid-scan. Only the marker-only shape is
+  // replaced (the same line `isSyntheticCancelOutput` draws): a search that did return files still
+  // renders them rather than hiding output the user watched arrive.
+  if (output.cancelled === true && (!files || files.length === 0)) return TOOL_CANCELLED_MESSAGE;
   if (!files || files.length === 0) return "No files found";
 
   const maxShow = 5;
@@ -182,6 +187,9 @@ function formatGlobOutput(output: GlobOutput): string {
 
 function formatGrepOutput(output: GrepOutput): string {
   const { matches } = output;
+  // See {@link formatGlobOutput}: a cancelled search reports a cancel, and only when it has nothing
+  // to show — a stopped `grep` certainly is not a `grep` that found nothing.
+  if (output.cancelled === true && (!matches || matches.length === 0)) return TOOL_CANCELLED_MESSAGE;
   if (!matches || matches.length === 0) return "No matches found";
 
   const maxShow = 5;
