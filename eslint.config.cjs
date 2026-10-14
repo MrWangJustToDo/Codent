@@ -15,6 +15,10 @@ module.exports = [
       "**/.wxt",
       "eslint.config.cjs",
       "tmp",
+      // Per-package scratch (e.g. a probe script under `packages/server/tmp/`). Bare "tmp" only matches
+      // the repo root, so a gitignored probe inside a package was linted here while CI — a fresh clone
+      // without it — stayed green. Keep the local gate equal to the CI gate.
+      "**/tmp/**",
       "examples/extensions/**",
       ".agents/**",
     ],
