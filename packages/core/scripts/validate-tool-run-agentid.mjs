@@ -19,9 +19,12 @@ import { ManagedAgent } from "../dist/dev.mjs";
 const createToolRunContext = (agentId) => ({ agentId, coreEnv: {} });
 
 const seen = [];
+// The id is core-assigned provenance: it goes in through the creation seam (`init.id`), not through the
+// host-facing config — `ManagedAgentConfig` has no `id` (see `core-minted agent ids`).
 const managed = new ManagedAgent(
-  { id: "agent_registered", name: "probe-agent", model: "gpt-4" },
+  { name: "probe-agent", model: "gpt-4" },
   {
+    id: "agent_registered",
     context: {
       getMessages: () => [],
       getUIMessages: () => [],

@@ -41,6 +41,11 @@ export interface BuildManagedAgentOptions {
   getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
   /** Runtime this agent belongs to (env + provider); undefined = ambient. */
   runtime?: AgentRuntime;
+  /**
+   * Id core assigned when it — not a host — chose one (a spawned `task` subagent). Absent for a root
+   * agent, which gets a minted id.
+   */
+  id?: string;
 }
 
 /**
@@ -53,9 +58,9 @@ export async function buildManagedAgent({
   manager,
   getDefaultSkillDirs,
   runtime,
+  id,
 }: BuildManagedAgentOptions): Promise<BuildManagedAgentResult> {
   const {
-    id: customId,
     modelInfo: explicitModelInfo,
     name,
     skillDirs,
@@ -79,7 +84,7 @@ export async function buildManagedAgent({
     // it left every subagent's usage tracker without pricing (`$0` at record time).
     { ...restConfig, ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}), name },
     {
-      id: customId,
+      id,
       log,
       tools: {},
       todoManager,

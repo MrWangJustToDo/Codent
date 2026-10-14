@@ -188,13 +188,20 @@ export class AgentManager {
   /**
    * Create a new agent
    */
-  async createManagedAgent(config: ManagedAgentConfig, parentId?: string): Promise<ManagedAgent> {
+  /**
+   * Create a root agent (`parentId` undefined) or a subagent.
+   *
+   * `id` is the internal provenance seam: core passes it when IT chose the id (a spawned subagent);
+   * hosts cannot reach it, because `ManagedAgentConfig` has no id.
+   */
+  async createManagedAgent(config: ManagedAgentConfig, parentId?: string, id?: string): Promise<ManagedAgent> {
     const { managed, bootstrap } = await buildManagedAgent({
       config,
       parentId,
       manager: this,
       getDefaultSkillDirs,
       runtime: this.runtime,
+      ...(id ? { id } : {}),
     });
 
     if (this.agents.has(managed.id)) {
@@ -230,7 +237,18 @@ export class AgentManager {
   /**
    * Spawn a subagent from a parent agent
    */
-  async spawnSubagent(parentId: string, config: Partial<ManagedAgentConfig>): Promise<ManagedAgent> {
+  /**
+   * Spawn a subagent under `parentId`.
+   *
+   * `subagentId` is the id core assigned to this delegation (`subagent_…`); it is an argument rather
+   * than a config field because a host must not be able to choose an agent id — see
+   * `ManagedAgentConfig` and the `core-minted agent ids` requirement.
+   */
+  async spawnSubagent(
+    parentId: string,
+    config: Partial<ManagedAgentConfig>,
+    subagentId?: string
+  ): Promise<ManagedAgent> {
     const parent = this.agents.get(parentId);
     if (!parent) {
       throw new Error(`Parent agent not found: ${parentId}`);
@@ -245,7 +263,7 @@ export class AgentManager {
       ...config,
       ...(inheritedModelInfo ? { modelInfo: inheritedModelInfo } : {}),
     };
-    const subagent = await this.createManagedAgent(finalConfig, parentId);
+    const subagent = await this.createManagedAgent(finalConfig, parentId, subagentId);
 
     const customTools = (config as { subagentTools?: ToolsRecord | null }).subagentTools;
     if (customTools !== undefined) {

@@ -142,6 +142,22 @@ assert.equal(managed.name, "Resumed Target", "resume mirrors the restored displa
   owner.releaseSessionOwnership(target.id, probe);
 }
 
+// Provenance of the AGENT id, the other half of this subject: core assigns it. A spawned subagent gets
+// exactly the id core handed over (its `spawnSubagent` argument), never a minted one — that internal
+// channel exists because `ManagedAgentConfig` deliberately has no `id` for a host to set
+// (`core-minted agent ids`). Dropping the forward would mint an id over the spawned one, silently.
+{
+  const spawnedId = "subagent_probe_identity";
+  const spawned = await managed.manager.spawnSubagent(managed.id, { name: "id-provenance" }, spawnedId);
+  assert.equal(spawned.id, spawnedId, "a spawned subagent keeps the id core assigned");
+  assert.equal(
+    managed.manager.getAgent(spawnedId),
+    spawned,
+    "…and is registered under it, so nothing minted over it"
+  );
+  await managed.manager.destroyAgent(spawnedId);
+}
+
 // The resume must also ROUTE the log, not just the state: `session:restore` is the entry that says
 // which session was adopted, so it belongs in the restored session's own file. Regression — it was
 // emitted inside `restoreManagedSession`, which ran BEFORE `bindSessionLogSink` re-pointed the sink;

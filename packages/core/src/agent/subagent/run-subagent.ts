@@ -95,13 +95,17 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     throw new Error(`Parent agent not found: ${parentAgentId}`);
   }
 
-  const subagent = await manager.spawnSubagent(parentAgentId, {
-    id: subagentId,
-    name: `subagent-${description}`,
-    systemPrompt,
-    maxIterations,
-    subagentTools: customTools,
-  });
+  const subagent = await manager.spawnSubagent(
+    parentAgentId,
+    {
+      name: `subagent-${description}`,
+      systemPrompt,
+      maxIterations,
+      subagentTools: customTools,
+    },
+    // The id is core's to assign (`subagent_…`) — passed as the internal channel, not as config.
+    subagentId
+  );
 
   // link task to agent, for unstable input
   subagent.parentTaskId = parentTaskToolCallId;

@@ -184,7 +184,6 @@ export type { RunFinalizeReason } from "./agent-types.js";
 export type { AgentL1State, AgentMode } from "../runtime-types/session-payloads.js";
 
 export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
-  id?: string;
   name: string;
   modelInfo?: ModelInfo;
   modelStyle?: ModelStyle;
@@ -457,7 +456,11 @@ export class ManagedAgent {
       compaction?: CompactionService;
     }
   ) {
-    this.id = init.id ?? config.id ?? generateId("agent");
+    // Core mints the id, or takes the one core itself assigned to a spawned subagent (`init.id`, e.g.
+    // `subagent_…`). A host cannot choose one: `ManagedAgentConfig` has no `id` — an id a host could
+    // set is an id a host would correlate against, and this one is per-process (the disk session is
+    // the correlation key; ARCHITECTURE.md §1.7).
+    this.id = init.id ?? generateId("agent");
     // Runner cache / adapter / UI channel are one cluster (see managed-agent-runner-wiring.ts).
     this.runnerWiring = new RunnerWiring({
       getEventBus: () => this.eventBus,
