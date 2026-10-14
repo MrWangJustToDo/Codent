@@ -21,6 +21,7 @@ export { useFlattenCacheCleanup } from "./use-flatten-cache-cleanup.js";
 export { useForceUpdate } from "./use-force-update.js";
 export { useInputMode, type InputMode, type FreeformContext } from "./use-input-mode.js";
 export { usePreviewEdit } from "./use-preview-edit.js";
+export { useRetryTicker } from "./use-retry-ticker.js";
 export { useSelect } from "./use-select.js";
 export { useStatic } from "./use-static.js";
 export { useStaticHeights } from "./use-static-heights.js";

@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 
 import { Spinner } from "../components/Spinner";
+import { useRetryTicker } from "../hooks/use-retry-ticker";
 import { useTask } from "../hooks/use-task";
 import { COLORS } from "../theme/colors.js";
 import { formatToolInput } from "../utils/format";
@@ -10,6 +11,7 @@ import type { ToolCallPart } from "@tanstack/ai";
 
 export const TaskToolInputView = ({ part }: { part: ToolCallPart; toolInput: unknown }) => {
   const { allTools, total, agent, retry } = useTask({ taskId: part.id });
+  const retryNow = useRetryTicker(retry);
 
   const currentTool = allTools?.at(-1);
   const toolName = currentTool ? currentTool.toolName : "";
@@ -49,7 +51,7 @@ export const TaskToolInputView = ({ part }: { part: ToolCallPart; toolInput: unk
       {retry && (
         <Box flexShrink={0} flexGrow={0} paddingLeft={1}>
           <Text color={COLORS.danger} wrap="truncate">
-            {formatRetryStatus(retry)}
+            {formatRetryStatus(retry, retryNow)}
           </Text>
         </Box>
       )}

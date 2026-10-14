@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import { useEffect, useMemo, useState } from "react";
 
+import { useRetryTicker } from "../hooks/use-retry-ticker.js";
 import { SubagentPreviewView } from "../messages/SubagentPreviewView.js";
 import { formatTaskTurns } from "../messages/task-turns.js";
 import { COLORS } from "../theme/colors.js";
@@ -52,6 +53,7 @@ export const SubagentDetailPanel = ({
   void tick;
 
   const snap = childSession?.getSnapshot();
+  const retryNow = useRetryTicker(snap?.retry);
 
   const displayTitle = snap
     ? snap.name.startsWith("subagent-")
@@ -112,7 +114,7 @@ export const SubagentDetailPanel = ({
         </Box>
         {snap?.retry && (
           <Box>
-            <Spinner text={formatRetryStatus(snap.retry)} />
+            <Spinner text={formatRetryStatus(snap.retry, retryNow)} />
           </Box>
         )}
       </Box>

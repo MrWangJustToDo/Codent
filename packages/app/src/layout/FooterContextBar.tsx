@@ -4,6 +4,7 @@ import { toRaw } from "reactivity-store";
 
 import { Spinner } from "../components/Spinner.js";
 import { useAgent } from "../hooks/use-agent.js";
+import { useRetryTicker } from "../hooks/use-retry-ticker.js";
 import { useUserInput } from "../hooks/use-user-input.js";
 import { COLORS } from "../theme/colors.js";
 import { formatDuration } from "../utils/format.js";
@@ -12,8 +13,15 @@ import { formatRetryStatus } from "../utils/retry-status.js";
 
 import type { AgentRetryState, AgentStatus } from "@codent/core";
 
-/** Live LLM-retry visibility — single compact line (attempt counts + wait). */
-const RetryStatus = ({ retry }: { retry: AgentRetryState }) => <Spinner text={formatRetryStatus(retry)} />;
+/**
+ * Live LLM-retry visibility — single compact line (attempt counts + wait). The ticker
+ * turns the scheduled backoff into a real countdown and flips the line to its in-flight
+ * marker once the wait elapses, so "counting down" never reads as "request pending".
+ */
+const RetryStatus = ({ retry }: { retry: AgentRetryState }) => {
+  const now = useRetryTicker(retry);
+  return <Spinner text={formatRetryStatus(retry, now)} />;
+};
 
 /**
  * Context info bar above the input — shows status, shortcuts, queue counts and
