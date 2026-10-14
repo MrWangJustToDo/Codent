@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量：「中」37 条里 **19 条未修**（另 3 条 `【部分修】`、14 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
+> - 余量：「中」37 条里 **16 条未修**（另 2 条 `【部分修】`、17 条已修、1 条 `【不修】`）；「低」11 条里 **7 条未修**（另 2 条 `【部分修】`、1 条已修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -123,7 +123,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `8b244a0e`】 `tree` 的 `ignore` 在二进制路径（`-I` 支持 `|`）与 JS fallback（按名字精确匹配）语义不一致。→ fallback 改为同一契约（basename glob + `|` 备选），`validate:tree-walk` 覆盖。
 
 ### shell
-- 【部分修 · `d1f17c71`】 `run-command-tool.ts:220-224` ~~送进 `maybeCacheOutput` 的是 accumulator 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**~~ —— **已修**：改为优先用宿主自己的全文缓冲（`result.stdout`/`stderr` 是**全部 chunk 的拼接**，本地宿主与 HTTP 平面都如此），accumulator 仅作「流式但返回空」宿主的 fallback；`validate:command-output-cache` 断言超限输出的**头部标记在文件里**。**仍未修**：`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 仍是死代码（取消/超时分支只有 accumulator 可缓存，那时文件仍是尾部 —— 有 `truncated` 信号可让措辞诚实，属可选的下一小步）。
+- 【部分修 · `d1f17c71`】 `run-command-tool.ts:220-224` ~~送进 `maybeCacheOutput` 的是 accumulator 的 `snapshot().content`（已按 50KB/2000 行截成**尾部**）→ `cachedOutputPath` 号称"完整输出"，实际 >50KB 时**头部不可恢复**~~ —— **已修**：改为优先用宿主自己的全文缓冲（`result.stdout`/`stderr` 是**全部 chunk 的拼接**，本地宿主与 HTTP 平面都如此），accumulator 仅作「流式但返回空」宿主的 fallback；`validate:command-output-cache` 断言超限输出的**头部标记在文件里**。**仍未修**：`persistIfTruncated` / `fullOutputPath` / `getTempFilePath()` 仍是死代码（取消/超时分支只有 accumulator 可缓存，那时文件仍是尾部 —— 有 `truncated` 信号可让措辞诚实，属可选的下一小步）。→ **两处都已收口（`f7c51658`）**：死代码整体删除（新断言扫描源码确认这五个名字不再出现）；取消/超时分支把 accumulator 的 `truncated` 传进预览，措辞变成 `Output saved to: …（本次运行只保留了尾部）`，只有主路径（宿主给了全文缓冲）才说 `Full output saved to`。
 - 【未修】 `util/command-job-registry.ts`：`MAX_FINISHED_JOBS` 只限已结束 job，**运行中的 job 无上限**（各带一个日志 writer/文件）。
 - 【已修 · `a011c64e`】 `command-job-registry.ts:158` `markExited` 三元 `… ? "exited" : "exited"` 恒为 `exited`（失败 job 后被报 `completed`）；`kill` 对已结束 job 也返回成功（`kill-command-tool` 里"未在运行"分支成死代码）；`kill_command` 返回 `cachedOutputPath: null`（丢了 `logPath`）。→ 零退出才是 `exited`，其余（含"被信号杀掉、无退出码"）是 `failed`（完成通知本来就把非 `exited` 原样透传，所以**用户可见**地从 "completed" 变成 "failed + 真实退出码"）；`kill` 改为返回"是否真的杀掉了"；`kill_command` 回传 job 的 `logPath` 作为 `cachedOutputPath`（杀掉不等于抹掉输出）。`validate:command-job-registry` 覆盖，且它原有的"日志失败后仍可查询"断言正好成了 `markExited` 的非空转见证。
 - 【未修】 `output-accumulator.ts:166,220` 对同一 chunk 重复计数（`totalDecodedBytes` 翻倍，`truncated` 误判）；无消费者，所以是潜伏问题。
@@ -145,8 +145,8 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `d1f17c71`】 subagent 的 `run_in_background` 未被拦（analyzer 只看 `&`），但 subagent 拿不到 `get_command_output`/`kill_command` → 起了读不掉也杀不掉的 job。→ 在 `subagentSafe` 闸门里**先于 analyzer** 拒绝（"命令本身只读"不足以放行），`validate:safe-command` 断言只读+后台被拒、主 agent 仍可后台。
 - 【不修 · 有意为之（用户决定）】 丢弃的 pre-fork subagent 只 abort 未 `destroyAgent`（流重启/结束时累积）—— **不修**：`destroyAgent` 会把 subagent 从 catalog 移除，Ctrl+T 的 task 列表（及其预览 / 摘要流）就看不到了，而 `task-tool.ts:204` 本来就用 `autoDestroy: false` 保留它。代价（长会话里 catalog 缓慢增长）是明确接受的。若将来真要回收，方向是「保留最近 N 个已结束的」而不是立刻销毁。
 - 【已修 · `4079ee5c`】 `run-stats.ts:144-147` `hitStepBudget` 未加 `!aborted` → 用户取消也可能报 `reachedLimit=true`。→ 取消落在 tool loop 中段，`finishReason` 正是 `tool_calls` 且计数已达顶，于是 task 输出同时带 `aborted: true` + `reachedLimit: true`：transcript 行的状态词（`formatTaskOutput` 两个都推）、给父模型判断的 flag、以及 task 面板继承的 phase 都被污染。`validate:cancel-semantics` 原本就在断言这条不变量，但用的是 `finishReason: null`（取消不会产生这个形状），所以**没加 guard 也能过** —— 现已改用 `tool_calls`。
-- 【未修】 `hasSessionHistory`（`session-retrieval.ts:43-54`）把当前会话自己的日志也算作"有历史"。
-- 【未修】 `run-subagent.ts:506` 硬编码 `"begin_summary"`（应用 `BEGIN_SUMMARY_TOOL_NAME`）；`task-prefork-middleware.ts:98` 硬编码 `"task"`。
+- 【已修 · `f7c51658`】 `hasSessionHistory`（`session-retrieval.ts:43-54`）把当前会话自己的日志也算作"有历史"。→ 新增 `excludeSessionId`（agent 创建时传 live session id）；`session_search` 本来就默认排除当前会话，所以"只有自己那条日志"的workspace/每次 resume 都不该被宣称"可检索历史"。`validate:session-retrieval` 覆盖。
+- 【已修 · `f7c51658`】 `run-subagent.ts:506` 硬编码 `"begin_summary"`（应用 `BEGIN_SUMMARY_TOOL_NAME`）；`task-prefork-middleware.ts:98` 硬编码 `"task"`。→ 分别改用 `BEGIN_SUMMARY_TOOL_NAME` 与 `BUILTIN_TOOL_NAMES.task`（字面量会一直编译通过、却悄悄匹配不到任何东西）；`validate:cancel-semantics` 增加"识别方必须读同一处定义"的断言。
 
 ### plan / lsp / code-mode
 - 【未修】 LSP 请求**无超时**（各 tool 裸 `await sendRequest`，transport 也无）：server 挂住会永久阻塞该次运行，Esc 也解不开（未透传 abort）。
