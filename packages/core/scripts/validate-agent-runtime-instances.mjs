@@ -56,7 +56,7 @@ const fakeEnv = (root) => ({
   assert.equal(runtime.rootPath, "/workspaces/project-alpha");
   assert.equal(runtime.name, "project-alpha", "name defaults to the workspace root basename");
   assert.equal(runtime.env.rootPath, "/workspaces/project-alpha", "runtime carries its env (resolved copy)");
-  assert.ok(runtime.id.startsWith("rt"), "the runtime carries a stable id");
+  assert.ok(runtime.env.rootPath.length > 0, "the runtime carries the workspace it was built for");
 
   const named = new AgentRuntime({ env, name: "custom" });
   assert.equal(named.name, "custom", "an explicit name wins");
@@ -76,7 +76,8 @@ const fakeEnv = (root) => ({
     direct: { model: "m-b", style: "openai", baseURL: "http://b", apiKey: "key-b" },
   });
 
-  assert.notEqual(a.id, b.id, "each runtime has its own id");
+  // Identity was only ever a proxy for this: what must not be shared is the state a runtime owns.
+  assert.notEqual(a.host, b.host, "each runtime has its own session host");
   assert.notEqual(a.getEnv(), b.getEnv(), "each runtime has its own env");
   assert.notEqual(a.getManager(), b.getManager(), "each runtime has its own manager");
   assert.equal(a.getRootPath(), "/tmp/runtime-a");

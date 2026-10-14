@@ -73,8 +73,6 @@ export class CodentAgent {
 
   /** The runtime's session host. */
   readonly host: AgentSessionHost;
-  /** Stable runtime id. */
-  readonly id: string;
 
   private constructor(
     runtime: AgentRuntime,
@@ -86,7 +84,6 @@ export class CodentAgent {
     this.host = host;
     this.manager = manager;
     this.defaults = defaults;
-    this.id = runtime.id;
   }
 
   /**

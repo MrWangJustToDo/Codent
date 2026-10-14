@@ -13,6 +13,7 @@ export {
   type AgentSessionSubagentSummary,
   type AgentSessionSubscribeOptions,
   type AgentSessionSubscriber,
+  type DiskSessionId,
 } from "./types.js";
 
 export type {

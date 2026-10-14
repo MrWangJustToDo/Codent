@@ -102,13 +102,29 @@ export interface AgentSessionSubagentSummary {
   usage?: UsageChangeSnapshot;
 }
 
+/**
+ * A PERSISTED conversation id (`ses_…`): the `SessionData.id`, the `.agents/sessions/<id>.jsonl`
+ * file name, and the `.agents/logs/<id>/` directory.
+ *
+ * Deliberately spelled differently from the AgentSession HANDLE, which is addressed by `agentId`.
+ * The two have different lifetimes — a disk session survives a process restart, an agent id does
+ * not — and one word for both was the main source of confusion in this API. Annotate disk ids with
+ * this type; `activeSessionId` on the snapshot/list entry is the conversation an agent is
+ * currently attached to (not "the session's own id").
+ */
+export type DiskSessionId = string;
+
 export interface AgentSessionSnapshot {
   agentId: string;
   parentId?: string;
   name: string;
   status: AgentStatus;
-  /** Active on-disk session id (see {@link AgentL1State.sessionId}); absent before one exists. */
-  sessionId?: string;
+  /**
+   * The disk session ({@link DiskSessionId}) this agent is currently attached to; absent before
+   * one exists. Named `active…` on purpose: the binding is one-at-a-time and can switch
+   * (`/resume`), and the handle itself is addressed by `agentId`, never by this.
+   */
+  activeSessionId?: DiskSessionId;
   error: string;
   pendingApprovalCount: number;
   /** Present while a recoverable LLM failure is being retried (see {@link AgentRetryState}). */
@@ -183,7 +199,7 @@ export type AgentSessionCommand =
    * Also clears steer/follow-up queues and reconciles approval / ask_user status
    * from the restored messages.
    */
-  | { type: "session.resume"; sessionId: string }
+  | { type: "session.resume"; sessionId: DiskSessionId }
   /** List on-disk sessions for the resume picker. */
   | { type: "session.list" }
   /** Set reasoning-effort level for the current session (`/effort`). */

@@ -23,7 +23,7 @@ registerBuiltinCommand("resume", {
     if (host) {
       const live = await host.list();
       for (const e of live) {
-        if (e.sessionId) bound.add(e.sessionId);
+        if (e.activeSessionId) bound.add(e.activeSessionId);
       }
     }
 

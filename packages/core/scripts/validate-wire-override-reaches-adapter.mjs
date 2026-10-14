@@ -458,11 +458,7 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
   const { runner, calls } = makeRunner(channel, run);
   await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
 
-  assert.equal(
-    wireHasImage(calls[0]),
-    true,
-    "a capable model must still receive a tool result's image part"
-  );
+  assert.equal(wireHasImage(calls[0]), true, "a capable model must still receive a tool result's image part");
 }
 
 // ============================================================================

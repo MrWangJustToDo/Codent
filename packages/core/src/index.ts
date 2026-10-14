@@ -129,6 +129,7 @@ export {
   type AgentSessionSubscriber,
   type CreateLocalAgentSessionHostOptions,
   type CreateLocalAgentSessionOptions,
+  type DiskSessionId,
   type LocalAgentSessionHostManager,
   type LocalAgentSessionManager,
 } from "./agent-session";

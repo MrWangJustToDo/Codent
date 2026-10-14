@@ -14,7 +14,7 @@ import type { AgentSession } from "@codent/core";
  * miss it. They now share this.
  *
  * Order matters: the lines are built **before** `destroy`. The exit summary is a reading of the
- * live session (`snap.usage`, `snap.sessionId`), and the destroy is what removes it; building it
+ * live session (`snap.usage`, `snap.activeSessionId`), and the destroy is what removes it; building it
  * afterwards would capture a torn-down agent. The lines are then handed to the store, where the
  * already-mounted `ExitSummary` picks them up while the host's deferred `process.exit` gives Ink
  * a frame to paint.
@@ -38,7 +38,7 @@ function buildLinesFromSession(session: AgentSession): string[] | null {
   return buildExitSummaryLines({
     name: snap.name,
     agentId: snap.agentId,
-    sessionId: snap.sessionId,
+    sessionId: snap.activeSessionId,
     model: snap.model,
     usage: snap.usage,
     todos: snap.todos,

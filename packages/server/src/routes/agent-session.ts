@@ -279,7 +279,7 @@ export const agentSessionRoutes = new Hono()
       name: managed.name,
       ...(managed.parentId ? { parentId: managed.parentId } : {}),
       status: managed.getStatus(),
-      ...(managed.getSessionData?.()?.id ? { sessionId: managed.getSessionData()!.id } : {}),
+      ...(managed.getSessionData?.()?.id ? { activeSessionId: managed.getSessionData()!.id } : {}),
       createdAt: managed.createdAt,
       updatedAt: managed.updatedAt,
     }));

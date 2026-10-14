@@ -154,6 +154,38 @@ runtime value from crossing — a re-exported type is an edge, but a weaker one.
 
 ---
 
+### 1.7 Identity: runtime / agent / session
+
+> **runtime = where it runs (env + keys) · agent = who runs (handle, process-scoped) ·
+> session = what was said (persisted, survives a restart)**
+
+| id | Minted by | Prefix | Lifetime | Keyed on it |
+| --- | --- | --- | --- | --- |
+| agent id | `ManagedAgent` (`init.id ?? generateId("agent")`) | `agent_…` | **One process**; re-minted on restart | `AgentManager.agents` catalog · event-bus scope (`of(agentId, parentId)`) · **AgentSession addressing** · remote `/api/agent/:id` · `parentId` · per-agent log file name |
+| disk session | `SessionStore` | `ses_…` | **Across restarts** | `.agents/sessions/<id>.jsonl` · `.agents/logs/<id>/` · `session.resume` · `AgentSessionSnapshot.activeSessionId` · session-ownership claims |
+| `task` subagent ids | `generateId("subagent")` | `subagent_…` | One process | task rows / panel · that agent's log file name |
+
+`AgentSession` is **not** a fourth id: a handle is addressed by `agentId` (`host.create()`,
+`host.bind(agentId)`, `/api/agent/:id`) and *carries* the disk session it is attached to.
+
+Today's contract:
+
+- One runtime owns one `AgentManager` → one live root agent → one `AgentSession` (the app layer is
+  session-only: a second conversation is a second runtime).
+- A subagent has **no** disk session, but does have its own log file under the root agent's session
+  directory — the directory is keyed by the disk session, the file name by the agent.
+- `parentId` always references an **agent id**, never a session.
+- One disk session is held by one live agent at a time (`AgentManager.sessionOwners`).
+- `/resume` **re-binds** the existing agent instance to another disk session (it does not create a
+  second agent); the previous session's ownership is released on the switch.
+
+Direction (if one agent is ever to serve several sessions): the conversation-scoped state moves off
+`ManagedAgent` into a session object, `ManagedAgent.id` stops being the correlation key (the disk
+session becomes it), and session ownership grows a **file-level** lease — today's claim table is
+per-manager, so two runtimes over one workspace can open the same session and each write its own copy.
+
+---
+
 ## 2. Initialization process
 
 ### 2.1 `AgentManager.createManagedAgent(config, parentId?)`

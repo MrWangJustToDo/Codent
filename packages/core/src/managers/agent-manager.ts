@@ -460,6 +460,16 @@ export class AgentManager {
    * Acquire exclusive ownership of a persisted disk session for a live agent.
    * Returns `false` (and leaves ownership unchanged) when the session is already
    * held by a *different* live agent. Idempotent for the same agent.
+   *
+   * The table is `sessionId → agentId`, i.e. many sessions to one agent is representable — what
+   * keeps it one-to-one today is the caller releasing the previous session on switch
+   * (`session.resume` / `session.new` / teardown). Supporting several live sessions per agent is
+   * therefore a change to *that* release, plus moving the conversation state off the agent
+   * (`uiChannel` / `sessionData` / todos / plan / approvals / queues) — not a change to this table.
+   *
+   * Scope: this is per-`AgentManager`, so it guards one process. Two runtimes over the same
+   * workspace do not see each other's claims (the store's `reservedAt` only covers reusing an empty
+   * session).
    */
   acquireSessionOwnership(sessionId: string, agentId: string): boolean {
     const owner = this.sessionOwners.get(sessionId);

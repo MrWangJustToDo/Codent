@@ -49,7 +49,7 @@ export function readLocalAgentSessionSnapshot(
     ...(managed.parentId ? { parentId: managed.parentId } : {}),
     name: managed.name,
     status: managed.getStatus(),
-    ...(managed.getSessionData()?.id ? { sessionId: managed.getSessionData()!.id } : {}),
+    ...(managed.getSessionData()?.id ? { activeSessionId: managed.getSessionData()!.id } : {}),
     error: managed.getError(),
     pendingApprovalCount: managed.getPendingApprovalCount(),
     ...(managed.getRetry() ? { retry: managed.getRetry() } : {}),

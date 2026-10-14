@@ -1,7 +1,7 @@
 /**
  * Validates that the *active on-disk session* is observable through the session
  * protocol (audit gap #1):
- * - `AgentL1State.sessionId` / `AgentSessionSnapshot.sessionId` reflect the live
+ * - `AgentL1State.sessionId` / `AgentSessionSnapshot.activeSessionId` reflect the live
  *   disk session while the agent id stays stable.
  * - `session.resume` and `session.new` re-emit the retained `state` channel, so a
  *   live subscriber sees the switch (not just the command caller).
@@ -97,7 +97,7 @@ const readLog = async (id) => {
   }
 };
 const assertIdentity = (expected, label) => {
-  assert.equal(session.getSnapshot().sessionId, expected, `${label}: snapshot.sessionId`);
+  assert.equal(session.getSnapshot().activeSessionId, expected, `${label}: snapshot.activeSessionId`);
   assert.equal(managed.getL1State().sessionId, expected, `${label}: L1 sessionId`);
   assert.equal(seenSessionIds.at(-1), expected, `${label}: live state broadcast`);
   assert.equal(session.getSnapshot().agentId, agentId, `${label}: agent identity unchanged`);
@@ -107,7 +107,7 @@ const assertIdentity = (expected, label) => {
 // 1. Fresh session is observable from the start
 // ----------------------------------------------------------------------------
 
-const first = session.getSnapshot().sessionId;
+const first = session.getSnapshot().activeSessionId;
 assert.ok(first?.startsWith("ses_"), "fresh session exposes its disk session id");
 assertIdentity(first, "fresh");
 
@@ -126,6 +126,21 @@ assert.equal(resume.ok, true, "session.resume succeeds");
 assert.notEqual(target.id, first, "resume targets a different disk session");
 assertIdentity(target.id, "resume");
 assert.equal(managed.name, "Resumed Target", "resume mirrors the restored display name");
+
+// Ownership: /resume re-binds THIS agent, and the session it left is released. The claim table is
+// per-`AgentManager`, so a leaked claim would block that session for every other live agent in the
+// process — and it is `sessionId → agentId` shaped, i.e. several sessions per agent is representable;
+// what keeps it one-to-one today is exactly this release (see ARCHITECTURE.md §1.7).
+{
+  const owner = managed.manager;
+  assert.ok(owner, "the agent exposes the manager that holds the ownership table");
+  const probe = "probe-agent";
+
+  assert.equal(owner.acquireSessionOwnership(target.id, probe), false, "the resumed session stays claimed");
+  assert.equal(owner.acquireSessionOwnership(first, probe), true, "the session left behind was released");
+  owner.releaseSessionOwnership(first, probe);
+  owner.releaseSessionOwnership(target.id, probe);
+}
 
 // The resume must also ROUTE the log, not just the state: `session:restore` is the entry that says
 // which session was adopted, so it belongs in the restored session's own file. Regression — it was
