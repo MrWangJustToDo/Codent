@@ -84,6 +84,12 @@ export { LANGUAGE_TO_GRAMMAR } from "./agent/lsp/tree-sitter/parser-manager.js";
 // Built-in Memory extension (internal validation exports — not part of public API)
 // ============================================================================
 // ============================================================================
+// Built-in Jobs extension (internal validation exports — not part of public API)
+// ============================================================================
+// Already reachable through the published entry (`formatDuration`); re-exported here so every
+// validator import stays on `dist/dev.mjs`.
+export { formatDuration } from "./agent/tools/presentation/format.js";
+// ============================================================================
 // Built-in Skills extension (internal validation exports — not part of public API)
 // ============================================================================
 // ============================================================================

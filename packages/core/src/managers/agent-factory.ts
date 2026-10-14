@@ -2,6 +2,7 @@ import { AgentLog } from "../agent/agent-log";
 import { createCodeModeExtension } from "../agent/code-mode";
 import { createCompactionConfig } from "../agent/compaction/types.js";
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
+import { createJobsExtension } from "../agent/jobs/extension.js";
 import { createLspExtension } from "../agent/lsp";
 import { createMcpExtension, type McpExtensionConfig } from "../agent/mcp";
 import { McpManager } from "../agent/mcp/manager.js";
@@ -323,6 +324,23 @@ export async function buildManagedAgent({
       } catch (err) {
         log.warn("system", `Failed to load built-in Memory extension: ${err}`);
       }
+    }
+
+    // Built-in Jobs extension. Pure presentation (no tools, no turn-context text), so it has
+    // nothing to configure and no reason to be optional.
+    try {
+      const api = createJobsExtension();
+      const instance = await extensionRunner.loadExtension(api);
+      if (instance.state === "active") {
+        extensionsActive++;
+      } else {
+        log.warn(
+          "system",
+          `Built-in extension failed to activate "${api.id}": ${instance.error?.message ?? "unknown"}`
+        );
+      }
+    } catch (err) {
+      log.warn("system", `Failed to load built-in Jobs extension: ${err}`);
     }
 
     // Built-in MCP extension (enabled unless explicitly disabled).

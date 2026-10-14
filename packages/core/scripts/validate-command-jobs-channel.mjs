@@ -1,0 +1,304 @@
+/**
+ * Validates the retained `jobs` channel end to end: a background `run_command` job's lifecycle
+ * reaches extensions as a snapshot, and the built-in Jobs extension turns that into exactly one
+ * footer line.
+ *
+ * Four layers, each of which can stop working on its own while the others stay green:
+ *  1. `CommandJobRegistry` → change callback: membership + lifecycle changes notify, output
+ *     appends do not (they are far too frequent to broadcast and carry nothing to display).
+ *  2. Event → channel wiring: `session:jobs` maps to the retained `jobs` channel, the channel is
+ *     in the default set (an opt-in channel is one no remote client ever receives), it is
+ *     classified observable for extensions, and it deliberately carries NO event→log rule.
+ *  3. `createJobsExtension` → footer slot: one line, the 1s tick only while a job runs, the slot
+ *     removed once nothing runs, and the timer cleared on deactivate (the leak this feature's
+ *     risk list calls out: a surviving interval in the long-lived server process).
+ *  4. `summarizeJobs` → the text itself: which statuses count, which elapsed time is shown, and
+ *     the empty / finished-only / no-running cases that must render nothing at all.
+ *
+ * Run: pnpm --filter @codent/core run validate:command-jobs-channel
+ */
+
+import assert from "node:assert/strict";
+
+import {
+  AGENT_EVENT_META,
+  AGENT_SESSION_CHANNELS,
+  CommandJobRegistry,
+  DEFAULT_AGENT_SESSION_CHANNELS,
+  DEFAULT_EVENT_LOG_RULES,
+  EXTENSION_EVENT_VISIBILITY,
+  createJobsExtension,
+  registerCoreEnv,
+  summarizeJobs,
+} from "../dist/dev.mjs";
+
+// The registry resolves CoreEnv lazily (for the durable job log + stale sweep). This stub has no
+// `fs.appendFile`, so logging degrades to `null` and nothing touches disk.
+registerCoreEnv({
+  rootPath: "/workspace",
+  getPlatform: async () => "test",
+  getArch: async () => "arm64",
+  getEnv: async () => ({}),
+  homedir: async () => "/home/test",
+  fs: {
+    readFile: async () => "",
+    stat: async () => ({ isDirectory: false, isFile: false, size: 0, mtime: new Date() }),
+    readdir: async () => [],
+    writeFile: async () => {},
+    mkdir: async () => {},
+    exists: async () => false,
+  },
+});
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const ESC = "\u001b";
+const STYLE = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+
+/** Strip ANSI styling — assertions read the visible text while the style is asserted separately. */
+function plain(line) {
+  return line === null ? null : line.replace(STYLE, "");
+}
+
+/** A registry job summary, shaped exactly as the channel payload carries it. */
+function summary({ jobId, command = "sleep 30", status, exitCode = null, startedAt, endedAt = null }) {
+  return { jobId, command, status, exitCode, startedAt, endedAt };
+}
+
+// ============================================================================
+// 1. Registry change notification
+// ============================================================================
+
+{
+  const registry = new CommandJobRegistry();
+  const notified = [];
+  registry.setChangeListener((jobs) => notified.push(jobs));
+
+  // (a) Every membership / lifecycle change notifies.
+  const job = registry.create("sleep 30");
+  assert.equal(notified.length, 1, "(a) create notifies");
+  assert.deepEqual(
+    notified[0].map((j) => j.jobId),
+    [job.id],
+    "(a) the notification carries the job"
+  );
+
+  // Output appends are the hot path and must not notify.
+  registry.appendStdout(job.id, "partial output\n");
+  registry.appendStderr(job.id, "warning\n");
+  assert.equal(notified.length, 1, "(a) output appends do not notify");
+
+  // `kill` handles and raw output must not cross the boundary: the payload is replayed to remote
+  // clients and persisted nowhere, so it stays JSON-serializable and summary-only.
+  assert.deepEqual(Object.keys(notified[0][0]).sort(), [
+    "command",
+    "endedAt",
+    "exitCode",
+    "jobId",
+    "startedAt",
+    "status",
+  ]);
+
+  registry.markExited(job.id, 0);
+  assert.equal(notified.length, 2, "(a) markExited notifies");
+  assert.equal(notified[1][0].status, "exited", "(a) markExited reports the real status");
+
+  // A second terminal transition on a finished job is a no-op (and so is its notification).
+  registry.markExited(job.id, 0);
+  assert.equal(notified.length, 2, "(a) a repeat terminal transition does not re-notify");
+
+  const failing = registry.create("exit 1");
+  registry.markFailed(failing.id, "boom");
+  assert.equal(notified.at(-1).find((j) => j.jobId === failing.id).status, "failed");
+
+  const killed = registry.create("sleep 300");
+  registry.markKilled(killed.id);
+  assert.equal(notified.at(-1).find((j) => j.jobId === killed.id).status, "killed");
+
+  // No listener → no crash (the registry is also constructed standalone/ambient).
+  const bare = new CommandJobRegistry();
+  const bareJob = bare.create("echo hi");
+  bare.markExited(bareJob.id, 0);
+  bare.clear();
+}
+
+// ============================================================================
+// 2. Event → channel wiring
+// ============================================================================
+
+{
+  // (b) The retained projection.
+  assert.equal(AGENT_EVENT_META["session:jobs"]?.channel, "jobs", "(b) session:jobs maps to the jobs channel");
+  assert.equal(AGENT_EVENT_META["session:jobs"]?.retained, true, "(b) the jobs channel is retained");
+  assert.equal(AGENT_EVENT_META["session:jobs"]?.mode, "emit", "(b) it is an observer event");
+
+  assert.ok(AGENT_SESSION_CHANNELS.includes("jobs"), "jobs is a declared session channel");
+  assert.equal(
+    DEFAULT_AGENT_SESSION_CHANNELS.includes("jobs"),
+    true,
+    "jobs is a default channel — a remote client that had to opt in would never receive it"
+  );
+
+  // Exhaustiveness is compile-checked; this pins the classification the extension surface reads.
+  assert.equal(EXTENSION_EVENT_VISIBILITY["session:jobs"], "observable", "extensions may observe it");
+
+  // Deliberate absence: job start/stop must not write a log line per event.
+  assert.equal(DEFAULT_EVENT_LOG_RULES["session:jobs"], undefined, "session:jobs carries no event→log rule");
+}
+
+// ============================================================================
+// 3. The built-in extension
+// ============================================================================
+
+/** Minimal ExtensionContext: the extension touches only `ui.render` and `events.observe`. */
+function createHarness() {
+  const renders = [];
+  const subscriptions = [];
+  const ctx = {
+    id: "codent-jobs",
+    ui: { render: (surface, key, payload) => renders.push({ surface, key, payload }) },
+    events: {
+      observe: (type, handler) => {
+        subscriptions.push({ type, handler });
+        return () => {};
+      },
+    },
+  };
+  const emit = (jobs) => {
+    for (const { type, handler } of subscriptions) {
+      if (type === "session:jobs") handler({ type: "session:jobs", payload: { jobs } });
+    }
+  };
+  return { ctx, renders, subscriptions, emit };
+}
+
+{
+  const h = createHarness();
+  createJobsExtension().activate(h.ctx);
+
+  assert.equal(h.subscriptions.length, 1, "the extension subscribes once");
+  assert.equal(h.subscriptions[0].type, "session:jobs", "and to the jobs event");
+
+  // An empty first snapshot must cost nothing: the slot was never set, so there is nothing to clear.
+  h.emit([]);
+  assert.equal(h.renders.length, 0, "an empty snapshot renders nothing at all");
+
+  // One running job → exactly one footer line.
+  const startedAt = Date.now() - 2000;
+  h.emit([summary({ jobId: "job-1", status: "running", startedAt })]);
+  assert.equal(h.renders.length, 1, "a running job renders one line");
+  assert.equal(h.renders[0].surface, "footer");
+  assert.equal(h.renders[0].key, "jobs", "into its own slot, so it cannot overwrite another extension's");
+  assert.equal(typeof h.renders[0].payload, "string", "the payload is raw text (JSON-safe across a process boundary)");
+  assert.ok(
+    h.renders[0].payload.startsWith(`${ESC}[33m⏳${ESC}[0m ${ESC}[90m1 running · `),
+    "the line opens with an amber glyph and gray counts"
+  );
+  // Styling is ANSI (core cannot reach the host theme), a trailing reset is mandatory so the
+  // color does not bleed into the surrounding footer, and no other escape may ride along.
+  assert.match(h.renders[0].payload, new RegExp(`${ESC}\\[0m$`), "the line resets its styling");
+  assert.equal(
+    h.renders[0].payload.match(STYLE).join("|"),
+    "\u001b[33m|\u001b[0m|\u001b[90m|\u001b[0m",
+    "only the intended SGR codes are emitted, and the line ends reset"
+  );
+
+  // Nothing running any more → the slot is revoked (the one-line shape has no item to dim).
+  h.emit([]);
+  assert.equal(h.renders.at(-1).payload, null, "no running job removes the slot");
+
+  // …and a repeat revoke does not re-notify.
+  const afterRevoke = h.renders.length;
+  h.emit([]);
+  assert.equal(h.renders.length, afterRevoke, "a repeat empty snapshot is deduped");
+
+  // A finished-only list also renders nothing (it is not an error state).
+  const done = createHarness();
+  createJobsExtension().activate(done.ctx);
+  done.emit([
+    summary({ jobId: "job-done", status: "exited", exitCode: 0, startedAt: Date.now() - 5000, endedAt: Date.now() }),
+  ]);
+  assert.equal(done.renders.length, 0, "a finished job alone renders nothing");
+}
+
+// --- the elapsed-time tick (1s, only while something runs) -------------------
+
+{
+  const h = createHarness();
+  const ext = createJobsExtension();
+  ext.activate(h.ctx);
+
+  h.emit([summary({ jobId: "job-1", status: "running", startedAt: Date.now() - 3000 })]);
+  const afterFirstPaint = h.renders.length;
+
+  await sleep(1150);
+  assert.ok(h.renders.length > afterFirstPaint, "the tick repaints while a job is running");
+  // The payload must actually differ: the render slot dedupes an identical payload, so a tick that
+  // recomputed the same string would be invisible to the host. Compare the plain text — the styling
+  // is constant across ticks, so a styled comparison would pass even if the clock never advanced.
+  assert.notEqual(plain(h.renders.at(-1).payload), plain(h.renders[0].payload), "the tick emits a changed line");
+
+  // Job finishes → the tick stops (this is the "no running job, no timer" half).
+  h.emit([]);
+  const afterStop = h.renders.length;
+  await sleep(1200);
+  assert.equal(h.renders.length, afterStop, "the tick stops once nothing is running");
+
+  // Deactivate is the other half: a session that is torn down while a job still runs must not
+  // leave the interval behind in a long-lived host process.
+  const live = createHarness();
+  const liveExt = createJobsExtension();
+  liveExt.activate(live.ctx);
+  live.emit([summary({ jobId: "job-2", status: "running", startedAt: Date.now() - 1000 })]);
+  await sleep(1100);
+  assert.ok(live.renders.length > 1, "the tick is running before deactivate");
+  await liveExt.deactivate();
+  const afterDeactivate = live.renders.length;
+  await sleep(1200);
+  assert.equal(live.renders.length, afterDeactivate, "deactivate clears the timer");
+
+  await ext.deactivate();
+}
+
+// ============================================================================
+// 4. The summary text
+// ============================================================================
+
+{
+  const now = 10_000_000;
+  const running = (ms) => summary({ jobId: `j-${ms}`, status: "running", startedAt: now - ms });
+  const finished = (status, exitCode = 0) =>
+    summary({ jobId: `j-${status}`, status, exitCode, startedAt: now - 60_000, endedAt: now - 59_000 });
+
+  assert.equal(summarizeJobs([], now), null, "no jobs → no line");
+  assert.equal(summarizeJobs([finished("exited"), finished("failed", 1)], now), null, "no running job → no line");
+
+  // The shipped line is ANSI-styled; the assertions read its plain text so the style is not
+  // repeated in every expected string. The style itself is asserted above.
+  assert.equal(plain(summarizeJobs([running(2000)], now)), "⏳ 1 running · 2.0s");
+  assert.equal(plain(summarizeJobs([running(90_000)], now)), "⏳ 1 running · 1m 30s");
+
+  // Counts lead with what the user is waiting on, and `exited` is never counted — a success is the
+  // uninteresting outcome, so a mixed line must not bury the failure behind it.
+  const mixed = plain(summarizeJobs([running(5000), running(1000), finished("failed", 1)], now));
+  assert.equal(mixed, "⏳ 2 running · 1 failed · 5.0s");
+  assert.doesNotMatch(mixed, /exited/, "successful jobs are not listed");
+
+  assert.equal(plain(summarizeJobs([running(1000), finished("killed", null)], now)), "⏳ 1 running · 1 killed · 1.0s");
+
+  // Elapsed time is the OLDEST running job's age (what the user is still waiting on), not the newest.
+  assert.match(
+    plain(summarizeJobs([running(1000), running(30_000)], now)),
+    /· 30\.0s$/,
+    "elapsed follows the oldest running job"
+  );
+
+  // A finished job's own age never enters the line, however long ago it finished.
+  const stale = finished("failed", 1);
+  assert.equal(plain(summarizeJobs([running(1000), stale], now)), "⏳ 1 running · 1 failed · 1.0s");
+
+  // Sub-second elapsed still formats (formatDuration's ms branch).
+  assert.equal(plain(summarizeJobs([running(250)], now)), "⏳ 1 running · 250ms");
+}
+
+console.log("command-jobs-channel validation passed");

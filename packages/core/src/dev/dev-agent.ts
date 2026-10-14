@@ -362,8 +362,14 @@ export {
   compactSummaryStreamId,
   summaryStreamKey,
 } from "../agent/summary-stream";
-export { commandJobRegistry } from "../agent/tools/util/command-job-registry.js";
-export type { CommandJobRecord, CommandJobPollResult } from "../agent/tools/util/command-job-registry.js";
+export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
+export { CommandJobRegistry, commandJobRegistry } from "../agent/tools/util/command-job-registry.js";
+export type {
+  CommandJobChangeListener,
+  CommandJobRecord,
+  CommandJobPollResult,
+  CommandJobSummary,
+} from "../agent/tools/util/command-job-registry.js";
 export {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
