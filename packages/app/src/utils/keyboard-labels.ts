@@ -199,14 +199,14 @@ export function workspacePanelHint(): string {
  */
 export function busyQueueHint(steerCount: number, followUpCount: number, nextPreview?: string | null): string {
   const queued = steerCount + followUpCount;
-  const follow = `${KeyLabel.enter}: follow-up${followUpCount > 0 ? ` (${followUpCount})` : ""}`;
-  const force = `${modifiedEnterLabel()}: force submit`;
-  const abort = queued > 0 ? `${KeyLabel.esc}: abort (drops ${queued} queued)` : `${KeyLabel.esc}: abort`;
-  const parts = [follow, force, abort];
+  // One count, stated once: it leads the line, and the abort warning refers back to it rather than
+  // repeating the number (the first version said it three times, in ~110 columns).
+  const parts = [`${KeyLabel.enter} queue`, `${modifiedEnterLabel()} force submit`];
+  parts.push(queued > 0 ? `${KeyLabel.esc} abort (drops them)` : `${KeyLabel.esc} abort`);
   if (queued > 0) {
-    parts.unshift(nextPreview ? `Queued (${queued}): "${nextPreview}"` : `queued: ${queued}`);
+    parts.unshift(nextPreview ? `Queued (${queued}): "${nextPreview}"` : `Queued (${queued})`);
   }
-  return parts.join(" | ");
+  return parts.join(" \u00b7 ");
 }
 
 export function freeformSubmitHint(): string {

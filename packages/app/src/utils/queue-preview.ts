@@ -35,7 +35,7 @@ export function queuedTotal(queued: QueuedMessagesSnapshot | undefined): number 
  * head of the queue is a steer whenever there is one. Collapsed to a single line and ellipsised: the
  * footer is one row, and the job here is recognizing what you typed, not re-reading it.
  */
-export function nextQueuedPreview(queued: QueuedMessagesSnapshot | undefined, max = 40): string | null {
+export function nextQueuedPreview(queued: QueuedMessagesSnapshot | undefined, max = 28): string | null {
   const next = queued?.steer[0] ?? queued?.followUp[0];
   if (next === undefined) return null;
 

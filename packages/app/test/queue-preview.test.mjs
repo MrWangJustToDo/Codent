@@ -58,6 +58,11 @@ assert.equal(
 
 // One row: newlines collapse, and a long message is ellipsised rather than wrapped.
 assert.equal(nextQueuedPreview({ steer: [], followUp: ["first\nsecond\n\nthird"] }), "first second third");
+assert.ok(
+  (nextQueuedPreview({ steer: [], followUp: ["y".repeat(60)] }) ?? "").length <= 28,
+  "the default budget fits one row"
+);
+
 const long = "x".repeat(80);
 const short = nextQueuedPreview({ steer: [], followUp: [long] }, 20);
 assert.equal(short?.length, 20, "the preview fits the budget it is given");
@@ -67,8 +72,11 @@ assert.ok(short?.endsWith("…"), "…and says it was cut");
 // user WHAT they queued, and `Esc` silently dropped it.
 const hint = busyQueueHint(1, 1, "fix the flaky test");
 assert.ok(hint.includes(`Queued (2): "fix the flaky test"`), hint);
-assert.ok(hint.includes("drops 2 queued"), `the abort entry must name the queue it clears: ${hint}`);
+assert.ok(hint.includes("drops them"), `the abort entry refers back to the count it clears: ${hint}`);
 assert.ok(hint.includes("force submit"), hint);
+// The count is stated exactly once: it appeared three times when the preview was added to a hint that
+// already counted follow-ups and repeated the total in the abort warning.
+assert.equal((hint.match(/\(2\)/g) ?? []).length, 1, `one count, not three: ${hint}`);
 
 const emptyHint = busyQueueHint(0, 0);
 assert.ok(!emptyHint.includes("drops"), `nothing queued → nothing to warn about: ${emptyHint}`);
