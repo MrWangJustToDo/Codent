@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -40,7 +41,8 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
     onBeforeToolCall: async (_ctx, hookCtx) => {
       // A pre-forked `task` emits its own start when it is admitted (see task-prefork);
       // emitting here too would start the row's clock while a queued run still waits.
-      const deferStart = hookCtx.toolName === "task" && deps.isTaskToolStartDeferred?.(hookCtx.toolCallId) === true;
+      const deferStart =
+        hookCtx.toolName === BUILTIN_TOOL_NAMES.task && deps.isTaskToolStartDeferred?.(hookCtx.toolCallId) === true;
       if (!deferStart) {
         deps.emitEvent?.("agent:tool-start", {
           tool_name: hookCtx.toolName,
@@ -83,7 +85,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       return;
     },
     onAfterToolCall: async (_ctx, info) => {
-      if (info.ok && info.toolName === "todo") {
+      if (info.ok && info.toolName === BUILTIN_TOOL_NAMES.todo) {
         deps.getTodoManager?.()?.resetRoundCounter();
       }
 

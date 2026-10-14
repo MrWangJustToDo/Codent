@@ -1,8 +1,10 @@
+import { BUILTIN_TOOL_NAMES } from "../tool-names.js";
+
 function formatFilePathInput(input: Record<string, unknown>, toolName?: string): string {
   const path = input.path as string | undefined;
   if (!path) return "";
 
-  if (toolName === "read_file" && (input.offset !== undefined || input.limit !== undefined)) {
+  if (toolName === BUILTIN_TOOL_NAMES.readFile && (input.offset !== undefined || input.limit !== undefined)) {
     const offset = typeof input.offset === "number" ? input.offset : undefined;
     const limit = typeof input.limit === "number" ? input.limit : undefined;
 

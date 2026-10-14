@@ -6,6 +6,8 @@
  * rely on memory to list which files were involved.
  */
 
+import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
+
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -25,10 +27,18 @@ export interface FileOps {
 }
 
 /** Tools that read file content or structure */
-const READ_TOOLS = new Set(["read_file", "list_file", "tree"]);
+const READ_TOOLS: ReadonlySet<string> = new Set([
+  BUILTIN_TOOL_NAMES.readFile,
+  BUILTIN_TOOL_NAMES.listFile,
+  BUILTIN_TOOL_NAMES.tree,
+]);
 
 /** Tools that create or modify files */
-const WRITE_TOOLS = new Set(["write_file", "edit_file", "delete_file"]);
+const WRITE_TOOLS: ReadonlySet<string> = new Set([
+  BUILTIN_TOOL_NAMES.writeFile,
+  BUILTIN_TOOL_NAMES.editFile,
+  BUILTIN_TOOL_NAMES.deleteFile,
+]);
 
 // ============================================================================
 // Internal Helpers

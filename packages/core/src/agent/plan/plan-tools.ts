@@ -1,4 +1,5 @@
 import { getToolPresentation } from "../tools/presentation/registry.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
 import type { PlanModeController } from "./plan-mode-controller.js";
 import type { ToolsRecord } from "../tools/runtime/tools-record.js";
@@ -18,7 +19,7 @@ import type { ToolsRecord } from "../tools/runtime/tools-record.js";
  *
  * `task` stays available: subagents are already read-only (Claude/Cursor-style explore).
  */
-export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES = new Set(["kill_command"]);
+export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.killCommand]);
 
 /**
  * Whether a tool edits the workspace, by its own declaration.
@@ -31,10 +32,13 @@ export function isWorkspaceEditingTool(toolName: string): boolean {
 }
 
 /** Plan authoring tools — only offered while planning/ready. */
-export const PLAN_AUTHORING_TOOL_NAMES = new Set(["create_plan", "update_plan"]);
+export const PLAN_AUTHORING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  BUILTIN_TOOL_NAMES.createPlan,
+  BUILTIN_TOOL_NAMES.updatePlan,
+]);
 
 /** Plan completion — only offered while in retro. */
-export const PLAN_COMPLETION_TOOL_NAMES = new Set(["complete_plan"]);
+export const PLAN_COMPLETION_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.completePlan]);
 
 export function isMcpToolName(name: string): boolean {
   return name.startsWith("mcp__");
@@ -71,7 +75,7 @@ export function getPlanModeToolBlockReason(
     return `Plan mode: "${toolName}" is blocked while planning. Use /mode execute after the plan is ready.`;
   }
 
-  if (toolName === "run_command") {
+  if (toolName === BUILTIN_TOOL_NAMES.runCommand) {
     // run_command itself is NOT blocked here — it goes through the unified
     // needsApproval + command-safety approval rules (read-only auto-approve,
     // write/external paths ask the user y/n). Only background jobs are still

@@ -78,5 +78,15 @@ export const BUILTIN_TOOL_NAMES = {
   discoverTools: "discover_tools",
 } as const;
 
+/**
+ * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`.
+ *
+ * A classification over the registry, kept beside it because two planes need the same answer and a
+ * second copy is how a new client tool ends up understood by one and ignored by the other: the tool
+ * set's composition (`tools/runtime/create-tool-sets.ts`) and the pump predicate that must not treat a
+ * client tool as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
+ */
+export const CLIENT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.askUser]);
+
 /** The wire name of a built-in tool. */
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[keyof typeof BUILTIN_TOOL_NAMES];

@@ -24,6 +24,7 @@ import {
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
 import { analyzeCommand, createAnalysisContext } from "../../agent/tools/command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "../../agent/tools/command-safety/command-approval-policy.js";
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
@@ -638,7 +639,7 @@ export class AgentChatController {
     for (const part of messages.flatMap((m) => m.parts)) {
       if (part.type !== "tool-call") continue;
       const toolCall = part as ToolCallPart;
-      if (toolCall.name !== "run_command") continue;
+      if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
       if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
       const approvalId = toolCall.approval.id;
       const input = parseToolCallInput(toolCall);

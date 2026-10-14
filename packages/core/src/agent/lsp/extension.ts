@@ -17,6 +17,7 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
 import { defaultPath } from "../../env";
 import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
 import { FileSync } from "./file-sync.js";
 import { EXT_TO_LANGUAGE, getLanguageIdFromPath } from "./language-map.js";
@@ -80,11 +81,11 @@ export interface LspExtensionConfig {
  * listing them in `disabledTools` (i.e. not disabling them).
  */
 export const DEFAULT_DISABLED_LSP_TOOLS: readonly string[] = [
-  "lsp_rename",
-  "lsp_code_actions",
-  "ast_search",
-  "code_rewrite",
-  "code_overview",
+  BUILTIN_TOOL_NAMES.lspRename,
+  BUILTIN_TOOL_NAMES.lspCodeActions,
+  BUILTIN_TOOL_NAMES.astSearch,
+  BUILTIN_TOOL_NAMES.codeRewrite,
+  BUILTIN_TOOL_NAMES.codeOverview,
 ];
 
 const NOT_FOUND_ON_PATH = /not found on PATH/i;
@@ -499,9 +500,9 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
   // ---- File-sync + auto-diagnostics interceptors ----
   const handleAfter = async (toolName: string, filePath: string): Promise<void> => {
     try {
-      if (toolName === "read_file") {
+      if (toolName === BUILTIN_TOOL_NAMES.readFile) {
         await fileSync.handleFileRead(filePath);
-      } else if (toolName === "write_file" || toolName === "edit_file") {
+      } else if (toolName === BUILTIN_TOOL_NAMES.writeFile || toolName === BUILTIN_TOOL_NAMES.editFile) {
         await fileSync.handleFileWrite(filePath);
       }
     } catch {
@@ -672,10 +673,10 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
   const advertisedLazy: string[] = [];
   const pushAdvertised = (name: string, available: boolean) => {
     if (!shouldRegister(name) || !available) return;
-    if (name === "lsp_diagnostics") advertisedEager.push(name);
+    if (name === BUILTIN_TOOL_NAMES.lspDiagnostics) advertisedEager.push(name);
     else advertisedLazy.push(name);
   };
-  pushAdvertised("lsp_diagnostics", lspRuntimeAvailable || tsFallbackAvailable);
+  pushAdvertised(BUILTIN_TOOL_NAMES.lspDiagnostics, lspRuntimeAvailable || tsFallbackAvailable);
   pushAdvertised("lsp_hover", lspRuntimeAvailable || tsFallbackAvailable);
   pushAdvertised("lsp_definition", lspRuntimeAvailable || tsFallbackAvailable);
   pushAdvertised("lsp_completions", lspRuntimeAvailable);

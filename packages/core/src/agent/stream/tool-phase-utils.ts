@@ -1,12 +1,12 @@
+import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/tool-names.js";
+
 import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
+// The classification lives with the name registry: the tool set and this predicate must agree on it.
 import { isToolCallPart, partTextContent } from "./message-parts.js";
 
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { SessionInteractionsSnapshot } from "../../runtime-types/session-payloads.js";
 import type { ModelMessage, ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
-
-/** Client-side tools — UI supplies output via {@link AgentChatController.addToolResult}. */
-const CLIENT_TOOL_NAMES = new Set(["ask_user"]);
 
 function lastAssistantMessage(messages: UIMessage[]): UIMessage | undefined {
   return findLastMeaningfulAssistant(messages);
@@ -208,7 +208,7 @@ export function hasPendingAskUser(messages: UIMessage[]): boolean {
 
   for (const part of lastAssistant.parts) {
     if (!isToolCallPart(part)) continue;
-    if (part.name !== "ask_user") continue;
+    if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
     if (part.state === "input-complete" && part.output === undefined) return true;
   }
   return false;
@@ -253,7 +253,7 @@ export function collectPendingAskUser(messages: UIMessage[]): SessionInteraction
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      if (part.name !== "ask_user") continue;
+      if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
       if (part.state !== "input-complete" || part.output !== undefined) continue;
       const input = parseToolArguments(part.arguments) as
         { question?: string; options?: string[]; multiSelect?: boolean } | undefined;

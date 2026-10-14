@@ -1,3 +1,5 @@
+import { BUILTIN_TOOL_NAMES } from "../tool-names.js";
+
 import { isCancelledToolCall } from "./tool-state.js";
 
 import type { ToolCallPart } from "@tanstack/ai";
@@ -244,7 +246,7 @@ export function inlineSummaryForOutput(output: unknown, toolName: string): strin
   return getInlineSummary(part, toolName);
 }
 
-const SHOW_COMPACT_OUTPUT = new Set(["run_command"]);
+const SHOW_COMPACT_OUTPUT: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.runCommand]);
 
 /**
  * Get a compact multi-line output summary only for tools where it adds value.
@@ -262,7 +264,7 @@ export function getCompactOutput(part: ToolCallPart, toolName: string): string |
   if (!output) return null;
   // run_command: derive a compact summary from exit code / success.
   // Previously this read output.message; now we generate it from structured fields.
-  if (toolName === "run_command") {
+  if (toolName === BUILTIN_TOOL_NAMES.runCommand) {
     if (output.runInBackground && output.jobId) {
       return `Background job ${String(output.jobId)} started`;
     }

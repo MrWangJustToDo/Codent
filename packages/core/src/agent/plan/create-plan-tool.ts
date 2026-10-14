@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 import { withDuration } from "../tools/util/tool-result.js";
 import { toolOutputBaseSchema } from "../tools/util/types.js";
 
@@ -43,7 +44,7 @@ export type CreatePlanToolDeps = {
 };
 
 function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: CreatePlanToolDeps) {
-  const isUpdate = name === "update_plan";
+  const isUpdate = name === BUILTIN_TOOL_NAMES.updatePlan;
   return defineServerTool({
     name,
     present: { category: "other" },
