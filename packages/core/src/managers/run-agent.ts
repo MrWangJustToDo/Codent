@@ -177,16 +177,18 @@ export function buildAgentRunner(
       getUsage: () => usage,
       getAbortSignal: () => run.currentAbortController?.signal,
     }),
-    // Per-run wire overrides that must outlive the channel projection (capability
-    // strip + `max_tokens` continuation). Sits after `message-transform` so a
-    // capability strip cannot hide the real media part from an extension transformer.
-    createWireRecoveryMiddleware({
-      getRun: () => run,
-    }),
     createToolCompactMiddleware({
       getCompactionConfig: deps.getCompactionConfig,
       getToolCompactCache: deps.getToolCompactCache,
       getManagedAgent: () => managed,
+    }),
+    // Per-run wire overrides that must outlive the channel projection (capability
+    // strip + `max_tokens` continuation). Sits after `tool-compact` — the stage that
+    // turns a tool result into real content parts, so the strip can reach tool media
+    // at all — and after `message-transform`, so a strip cannot hide the real media
+    // part from an extension transformer.
+    createWireRecoveryMiddleware({
+      getRun: () => run,
     }),
     createTurnContextMiddleware({
       getFrozenSystemPrompt: deps.getFrozenSystemPrompt,

@@ -17,7 +17,13 @@ export interface ToolCompactMiddlewareDeps {
   registry?: ToModelOutputRegistry;
 }
 
-/** Per-tool LLM shaping via `toModelOutput` and recent-window placeholders. */
+/**
+ * Per-tool LLM shaping via `toModelOutput` and recent-window placeholders.
+ *
+ * Placement: this runs BEFORE `wire-recovery`, because it is what turns a tool result
+ * into real content parts — see the placement contract on that middleware. A capability
+ * strip placed earlier cannot see a tool's media at all.
+ */
 export function createToolCompactMiddleware(deps: ToolCompactMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   const registry = deps.registry ?? toModelOutputRegistry;
 

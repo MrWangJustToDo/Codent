@@ -74,8 +74,8 @@ const FACTORIES = [
   createLifecycleMiddleware,
   createCompactionMiddleware,
   createMessageTransformMiddleware,
-  createWireRecoveryMiddleware,
   createToolCompactMiddleware,
+  createWireRecoveryMiddleware,
   createTurnContextMiddleware,
   createExtensionsMiddleware,
   createEarlyToolResultUiMiddleware,
@@ -154,9 +154,11 @@ const liveNames = liveRunner.config.middleware.map((mw) => mw.name);
 // contract first so a regression reads as what it actually is.
 const compactionIdx = liveNames.indexOf("compaction");
 const transformIdx = liveNames.indexOf("message-transform");
+const toolCompactIdx = liveNames.indexOf("tool-compact");
 const wireRecoveryIdx = liveNames.indexOf("wire-recovery");
 assert.notEqual(compactionIdx, -1, "compaction middleware must be present in the assembled pipeline");
 assert.notEqual(transformIdx, -1, "message-transform middleware must be present in the assembled pipeline");
+assert.notEqual(toolCompactIdx, -1, "tool-compact middleware must be present in the assembled pipeline");
 assert.notEqual(wireRecoveryIdx, -1, "wire-recovery middleware must be present in the assembled pipeline");
 assert.equal(
   transformIdx,
@@ -166,12 +168,24 @@ assert.equal(
 );
 // The capability strip replaces media parts with a placeholder, so it has to run after
 // the extension transform or an extension could never see a real attachment on a model
-// that lacks vision. Both halves of this ordering have been broken by relocation before.
+// that lacks vision. Both of those orderings have been broken by relocation before.
+assert.equal(
+  toolCompactIdx,
+  transformIdx + 1,
+  `tool-compact must RUN immediately after message-transform — it is the stage that turns a tool ` +
+    `result into real content parts, and wire-recovery has to run after it. ` +
+    `Assembled order: ${liveNames.join(", ")}`
+);
+// ...and after `tool-compact`, because that is what materializes TOOL media: the channel
+// stores the result object, so the wire carries JSON text until the tool's `toModelOutput`
+// projects it. Before this stage the strip could only ever see an attachment's part, so a
+// tool's image went out untouched and the widened retry re-materialized it every call.
 assert.equal(
   wireRecoveryIdx,
-  transformIdx + 1,
-  `wire-recovery must RUN immediately after message-transform: before it, a capability strip ` +
-    `would hide the real media part from an extension transformer; before compaction, the ` +
+  toolCompactIdx + 1,
+  `wire-recovery must RUN immediately after tool-compact: before it, a capability strip cannot ` +
+    `reach media that only exists once the tool result has been projected; before message-transform, ` +
+    `the strip would hide the real media part from an extension transformer; before compaction, the ` +
     `channel projection would discard the strip. Assembled order: ${liveNames.join(", ")}`
 );
 

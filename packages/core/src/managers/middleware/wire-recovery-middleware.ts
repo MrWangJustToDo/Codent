@@ -2,9 +2,9 @@
  * `wire-recovery` middleware — applies the per-run wire overrides that must
  * survive the channel projection.
  *
- * Placement contract: this middleware MUST run AFTER `message-transform` (and
- * therefore after `compaction`). Both of those orderings are load-bearing, for
- * opposite reasons:
+ * Placement contract: this middleware MUST run AFTER `tool-compact`, which is also
+ * after `message-transform` and therefore after `compaction`. All three orderings are
+ * load-bearing, each for a different reason:
  *
  * - After `compaction`, because that middleware rebuilds the wire from
  *   `channel.getMessages()` and discards the incoming `config.messages`. An
@@ -18,6 +18,13 @@
  *   headline use case (replace an attachment with text from an out-of-process
  *   multimodal endpoint) could never run for a model that lacks vision. Ordering
  *   the strip last keeps the extension's view of the chain faithful.
+ * - After `tool-compact`, because that is what makes a TOOL result's media exist as a
+ *   part at all: the channel stores the result object, so the wire carries it as JSON
+ *   text until the tool's `toModelOutput` projects it (`read_file` → text + image).
+ *   Sitting before that stage, this seam could only ever strip media that was already
+ *   a part (a user attachment) — a tool's image reached the endpoint untouched, and the
+ *   widened retry could not recover, because the projection re-materializes the media
+ *   on every wire build.
  *
  * Everything here is wire-only. The channel — and therefore the persisted session
  * and the transcript UI — keeps the original media parts, so nothing in a

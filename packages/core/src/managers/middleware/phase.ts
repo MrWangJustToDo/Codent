@@ -32,11 +32,17 @@ export const CANONICAL_MIDDLEWARE_ORDER = [
   // MUST stay adjacent to `compaction`: it transforms the channel-projected wire
   // that `compaction` produces, and that projection discards any earlier edit.
   "message-transform",
-  // MUST stay after `message-transform`: a capability strip replaces media parts
-  // with a placeholder, so stripping first would hide the real attachment from an
-  // extension transformer. Also requires the channel projection to have run first.
-  "wire-recovery",
   "tool-compact",
+  // MUST stay after `tool-compact`: a capability strip replaces media parts with a
+  // placeholder, and for a TOOL result the media part does not exist until
+  // `tool-compact` projects the result through the tool's `toModelOutput`. Sitting
+  // before it left tool media unreachable (the strip saw JSON text and passed it
+  // through), so a model without vision was still sent the image — and the widened
+  // retry could not help, because the projection re-materializes it on every call.
+  // MUST stay after `message-transform` (a strip running first would hide the real
+  // attachment from an extension transformer) and after `compaction` (the channel
+  // projection discards anything applied before it).
+  "wire-recovery",
   "turn-context",
   "extensions",
   "early-tool-result-ui",

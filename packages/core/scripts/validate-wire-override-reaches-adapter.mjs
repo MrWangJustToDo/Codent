@@ -53,10 +53,13 @@ import {
   MULTIMODAL_OMITTED_PLACEHOLDER,
   SessionService,
   SessionStore,
+  ToolCompactCache,
   UsageTracker,
   WireProjectionCache,
   armCapabilityStrip,
   createCompactionMiddleware,
+  createReadFileTool,
+  createToolCompactMiddleware,
   createTruncationState,
   createTurnContextMiddleware,
   createWireRecoveryMiddleware,
@@ -236,13 +239,20 @@ function makeCompactionDeps(channel, cache = new WireProjectionCache()) {
 }
 
 /**
- * Build the real head of the pipeline under test: the compaction projection followed
- * by the wire-override seam, in the order `buildAgentRunner` assembles them.
+ * Build the real head of the pipeline under test: the compaction projection, the
+ * tool-output projection, then the wire-override seam — the order `buildAgentRunner`
+ * assembles them, and the order the seam depends on (a tool result only becomes a real
+ * content part at `tool-compact`, so a strip placed earlier cannot see its media).
  */
 function makeRunner(channel, run) {
   const { adapter, calls } = makeCapturingAdapter();
   const middleware = sortMiddlewaresByPhase([
     createCompactionMiddleware(makeCompactionDeps(channel)),
+    createToolCompactMiddleware({
+      getCompactionConfig: () => ({}),
+      getToolCompactCache: () => new ToolCompactCache(),
+      getManagedAgent: () => ({ parentId: undefined }),
+    }),
     createWireRecoveryMiddleware({ getRun: () => run }),
   ]);
   const runner = new AgentRunner({
@@ -335,6 +345,109 @@ function wireHasImage(messages) {
     "the stripped part must be replaced by the placeholder the model is told about"
   );
   assert.ok(wireHasImage(channel.getMessages()), "the channel must keep the original image — the strip is wire-only");
+}
+
+// ============================================================================
+// 1b. The strip must also reach media that comes from a TOOL result
+// ============================================================================
+//
+// The attachment above was the only fixture, and it is the easy half: its part is in the
+// channel, so it reaches the wire whole. A tool result is different — the channel stores
+// the RESULT OBJECT, so the wire carries it as JSON text until `tool-compact` projects it
+// through the tool's `toModelOutput`, and only then does an image part exist. With the
+// seam placed before that stage, this fixture went out with `"type":"image"` intact: a
+// model without vision was sent the image, and the widened retry could not recover
+// because the projection re-materializes it on every wire build.
+
+/** The raw `ReadFileOutput` a `read_file` call leaves in the channel for an image. */
+function rawImageReadOutput() {
+  return {
+    type: "image",
+    path: "shot.png",
+    mimeType: "image/png",
+    size: 4,
+    base64: "AAAA",
+  };
+}
+
+/**
+ * Register the real `read_file` tool: `tool-compact` projects a tool result through the
+ * tool's `toModelOutput` looked up in the process-global registry, so without this the
+ * projection is a no-op and this whole section would assert nothing (which is exactly how
+ * the case went uncovered — every fixture that existed merely *looked* covered).
+ */
+createReadFileTool();
+
+/** A channel with one user turn plus a `read_file` tool turn that returned an image. */
+function makeToolMediaChannel() {
+  const channel = new AgentUIChannel();
+  channel.addUserMessage("read the screenshot");
+  channel.setMessages([
+    ...channel.getMessages(),
+    {
+      id: "assistant-tool-turn",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "call-img",
+          name: "read_file",
+          arguments: JSON.stringify({ path: "shot.png" }),
+          state: "complete",
+          output: rawImageReadOutput(),
+        },
+        {
+          type: "tool-result",
+          toolCallId: "call-img",
+          content: JSON.stringify(rawImageReadOutput()),
+          state: "complete",
+        },
+      ],
+    },
+  ]);
+  return channel;
+}
+
+{
+  const channel = makeToolMediaChannel();
+  const run = new TestRun();
+  run.setWireDropPartTypes(new Set(["image"]));
+
+  const { runner, calls } = makeRunner(channel, run);
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  assert.ok(calls.length > 0, "the adapter must be called");
+  const wire = calls[0];
+  assert.equal(
+    wireHasImage(wire),
+    false,
+    "a tool result's image must not reach a model without vision — it only becomes a part at " +
+      "`tool-compact`, so the strip has to run after that stage"
+  );
+  assert.ok(
+    JSON.stringify(wire).includes(MULTIMODAL_OMITTED_PLACEHOLDER),
+    "the dropped tool media must be replaced by the placeholder, not silently vanish"
+  );
+  assert.ok(
+    JSON.stringify(channel.getMessages()).includes("AAAA"),
+    "the channel must keep the tool result — the strip is wire-only"
+  );
+}
+
+// The other half of that rule: a capable model still receives the projected tool media.
+// A fix that dropped it unconditionally would read as correct in the block above.
+{
+  const channel = makeToolMediaChannel();
+  const run = new TestRun();
+
+  const { runner, calls } = makeRunner(channel, run);
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  assert.equal(
+    wireHasImage(calls[0]),
+    true,
+    "a capable model must still receive a tool result's image part"
+  );
 }
 
 // ============================================================================
