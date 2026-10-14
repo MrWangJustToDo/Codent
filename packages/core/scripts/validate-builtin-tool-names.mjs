@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BUILTIN_TOOL_NAMES } from "../dist/dev.mjs";
@@ -145,6 +145,17 @@ const NAME_LITERAL_EXEMPT = [
 
 {
   const exempt = new Set(NAME_LITERAL_EXEMPT.map((entry) => entry.file));
+
+  /**
+   * A scanned file's repository-relative path, POSIX-normalized.
+   *
+   * The exemption list is written the way the repository is laid out (`agent/tools/...`), but `join`
+   * yields the HOST's separator — so on Windows the computed key was `agent\tools\...`, every
+   * exemption missed, and three deliberately-exempt literals were reported as offenders. CI's
+   * `validators-windows` job is the only place that could see it: on Linux the two spellings coincide.
+   * Normalizing here keeps one spelling of every path in this file.
+   */
+  const repoRelative = (file) => file.slice(join(SRC).length).split(sep).join("/");
   const walkTs = (dir) =>
     readdirSync(dir).flatMap((entry) => {
       const path = join(dir, entry);
@@ -153,7 +164,7 @@ const NAME_LITERAL_EXEMPT = [
 
   const offenders = [];
   for (const file of walkTs(join(SRC, "agent"))) {
-    const rel = file.slice(join(SRC).length);
+    const rel = repoRelative(file);
     if (exempt.has(rel)) continue;
     const source = readFileSync(file, "utf8");
     for (const name of actualSet) {
@@ -161,7 +172,10 @@ const NAME_LITERAL_EXEMPT = [
         new RegExp(`(?:===|!==)\\s*"${name}"`),
         new RegExp(`includes\\(\\s*"${name}"`),
         new RegExp(`new Set\\(\\[[^\\]]*"${name}"`),
-        new RegExp(`^\\s*"${name}",?$`, "m"),
+        // `\r?$`: a Windows checkout has CRLF, and a bare `$` straight after `,` never matches
+        // there — the one-name-per-line array form (which is how an LSP-style list is written)
+        // would then be invisible on Windows instead of reported.
+        new RegExp(`^\\s*"${name}",?\\r?$`, "m"),
       ];
       if (patterns.some((pattern) => pattern.test(source))) offenders.push(`${rel}: "${name}"`);
     }
