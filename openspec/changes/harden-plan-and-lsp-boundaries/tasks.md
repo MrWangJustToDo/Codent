@@ -15,23 +15,26 @@
 
 ## 2. LSP requests carry a deadline
 
-- [ ] 2.1 `LspConnection.sendRequest(method, params, options?: { timeoutMs?: number; signal?:
+- [x] 2.1 `LspConnection.sendRequest(method, params, options?: { timeoutMs?: number; signal?:
   AbortSignal })` in `env/lsp.ts`, documented as the contract: bounded, cancellable, and a rejection
   that is an ordinary tool failure.
-- [ ] 2.2 `@codent/node`'s LSP transport applies `options.timeoutMs ?? DEFAULT_LSP_REQUEST_TIMEOUT_MS`
+- [x] 2.2 `@codent/node`'s LSP transport applies `options.timeoutMs ?? DEFAULT_LSP_REQUEST_TIMEOUT_MS`
   to every request, wires `options.signal` to the request's cancellation token, and on expiry cancels
   the outstanding request (jsonrpc `CancellationTokenSource` → `$/cancelRequest`) before rejecting with
   a message naming the method and the deadline.
-- [ ] 2.3 The LSP tools and `shared/resolve-position.ts` pass the run's signal
+- [x] 2.3 The LSP tools and `shared/resolve-position.ts` pass the run's signal
   (`ctx.abortSignal`) through, so a stopped run settles a pending request immediately.
-- [ ] 2.4 `validate:lsp-request-deadline`: a connection that never answers rejects within the deadline
-  with the request named, a request cancelled by the caller's signal settles without the deadline, and
-  a healthy response is unaffected (the happy path still returns the server's result unchanged).
+- [x] 2.4 The assertions live in `validate:lsp-transport` rather than a new script — it already builds a
+  real connection to a mock server, so the mock gained an unanswered method (`test/hang`) plus a log of
+  the `$/cancelRequest` notifications it receives, and the checks are: an unanswered request rejects at
+  its deadline naming the request, the server was actually told to cancel it, a caller-signal abort
+  settles in ~50ms rather than at the deadline, and a healthy request is returned unchanged. A missing
+  deadline is a 3s failure (an outer guard), not a hang.
 
 ## 3. Verification
 
-- [ ] 3.1 `pnpm build:core` + `pnpm --filter @codent/core tsc --noEmit`; the two new validators.
-- [ ] 3.2 Full gates: `pnpm exec eslint <changed files>`, `node scripts/run-all-validators.mjs --dir
+- [x] 3.1 `pnpm build:core` + `pnpm --filter @codent/core tsc --noEmit`; the two new validators.
+- [x] 3.2 Full gates: `pnpm exec eslint <changed files>`, `node scripts/run-all-validators.mjs --dir
   packages/core`, `pnpm --filter @codent/app test`.
-- [ ] 3.3 Non-vacuity: with the derivation replaced by the old name list, 1.3's `code_rewrite` case
+- [x] 3.3 Non-vacuity: with the derivation replaced by the old name list, 1.3's `code_rewrite` case
   fails; with the transport's deadline removed, 2.4's never-answering case hangs.

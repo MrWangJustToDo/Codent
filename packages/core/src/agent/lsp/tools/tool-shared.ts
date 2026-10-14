@@ -4,6 +4,7 @@
 
 import { resolveSymbolPosition, getSymbolNames } from "../shared/resolve-position.js";
 
+import type { LspRequestOptions } from "../../../env/lsp.js";
 import type { LspManager } from "../lsp-manager.js";
 
 export interface TruncatedLines {
@@ -46,12 +47,13 @@ export interface ResolvedPositionResult {
 export async function resolvePosition(
   manager: LspManager,
   filePath: string,
-  params: { line?: number; character?: number; query?: string }
+  params: { line?: number; character?: number; query?: string },
+  requestOptions?: LspRequestOptions
 ): Promise<ResolvedPositionResult> {
   let { line, character } = params;
 
   if ((line === undefined || character === undefined) && params.query) {
-    const resolved = await resolveSymbolPosition(filePath, params.query, manager);
+    const resolved = await resolveSymbolPosition(filePath, params.query, manager, requestOptions);
     if (resolved) {
       line = resolved.line;
       character = resolved.character;
@@ -61,7 +63,7 @@ export async function resolvePosition(
         resolvedFrom: `Resolved "${params.query}" → ${resolved.symbolName} at ${line}:${character} [${resolved.source}]`,
       };
     }
-    const names = await getSymbolNames(filePath, manager);
+    const names = await getSymbolNames(filePath, manager, requestOptions);
     const hint = names.length > 0 ? `\nAvailable symbols: ${names.slice(0, 20).join(", ")}` : "";
     return { line: 0, character: 0, error: `Could not find symbol "${params.query}" in ${filePath}${hint}` };
   }

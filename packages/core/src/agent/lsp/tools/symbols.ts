@@ -6,6 +6,7 @@ import { fileUriToPath } from "../shared/format.js";
 
 import { truncateHead } from "./tool-shared.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
 import type { DocumentSymbol, SymbolInformation } from "vscode-languageserver-protocol";
@@ -72,7 +73,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
       },
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as { path?: string; query?: string };
       const filePath = params.path?.replace(/^@/, "");
       const query = params.query;
@@ -92,7 +93,8 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
           try {
             const result = await client.connection.sendRequest<DocumentSymbol[] | SymbolInformation[] | null>(
               "textDocument/documentSymbol",
-              { textDocument: { uri } }
+              { textDocument: { uri } },
+              { signal: options?.abortSignal }
             );
 
             if (!result || result.length === 0) {
@@ -126,9 +128,11 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
         const client = await deps.manager.getClientForLanguage(runningLang).catch(() => null);
         if (client) {
           try {
-            const result = await client.connection.sendRequest<SymbolInformation[] | null>("workspace/symbol", {
-              query: query ?? "",
-            });
+            const result = await client.connection.sendRequest<SymbolInformation[] | null>(
+              "workspace/symbol",
+              { query: query ?? "" },
+              { signal: options?.abortSignal }
+            );
             if (!result || result.length === 0) {
               return { text: `No workspace symbols found for query: "${query}"`, count: 0 };
             }

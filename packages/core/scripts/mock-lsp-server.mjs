@@ -16,6 +16,8 @@
  * Zero third-party deps (hand-rolled framing), so it runs anywhere.
  */
 
+import { appendFileSync } from "node:fs";
+
 // Documents currently open: uri -> { text, languageId, version }
 const docs = new Map();
 
@@ -107,6 +109,20 @@ function handleMessage(msg) {
       case "exit":
         process.exit(0);
         break;
+      case "$/cancelRequest": {
+        // Recorded so a validator can assert the *host* cancelled a request it stopped waiting for
+        // (otherwise "we cancelled the token" is an internal claim). Path comes from the environment;
+        // with none set this is a no-op.
+        const log = process.env.MOCK_LSP_CANCEL_LOG;
+        if (log) {
+          try {
+            appendFileSync(log, `${JSON.stringify(msg)}\n`);
+          } catch {
+            // Best effort: a validator's log path may be gone.
+          }
+        }
+        break;
+      }
       default:
         break;
     }
@@ -236,6 +252,10 @@ function handleMessage(msg) {
       reply(id, { changes: {} });
       break;
     }
+    case "test/hang":
+      // Deliberately unanswered: a server that received the request and will never reply. Only the
+      // host's request deadline can settle a call like this.
+      break;
     default:
       fail(id, -32601, `Mock LSP does not implement: ${method}`);
       break;

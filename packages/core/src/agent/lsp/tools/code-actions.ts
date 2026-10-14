@@ -6,6 +6,7 @@ import { fileUriToPath } from "../shared/format.js";
 
 import { resolvePosition, withResolved } from "./tool-shared.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { CodeAction, Command, Diagnostic, TextEdit, WorkspaceEdit } from "vscode-languageserver-protocol";
 
@@ -90,7 +91,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
       required: ["path"],
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as {
         path?: string;
         line?: number;
@@ -102,7 +103,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
       };
       const filePath = (params.path ?? "").replace(/^@/, "");
 
-      const pos = await resolvePosition(deps.manager, filePath, params);
+      const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, count: 0, preferredCount: 0 };
       const { line, character, resolvedFrom } = pos;
 
@@ -134,11 +135,15 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
       );
 
       try {
-        const response = await client.connection.sendRequest<CodeActionResponse>("textDocument/codeAction", {
-          textDocument: { uri },
-          range: { start: { line: startLine, character: startChar }, end: { line: endLine, character: endChar } },
-          context: { diagnostics: rangeDiags, only: params.kind ? [params.kind] : undefined },
-        });
+        const response = await client.connection.sendRequest<CodeActionResponse>(
+          "textDocument/codeAction",
+          {
+            textDocument: { uri },
+            range: { start: { line: startLine, character: startChar }, end: { line: endLine, character: endChar } },
+            context: { diagnostics: rangeDiags, only: params.kind ? [params.kind] : undefined },
+          },
+          { signal: options?.abortSignal }
+        );
 
         if (!response || response.length === 0) {
           return {

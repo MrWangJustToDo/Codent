@@ -14,13 +14,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
+  CancellationTokenSource,
   createMessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
   type MessageConnection,
 } from "vscode-languageserver-protocol/node";
 
-import type { LspConnection, LspServerConfig } from "@codent/core";
+import type { LspConnection, LspRequestOptions, LspServerConfig } from "@codent/core";
 import type {
   InitializeParams,
   InitializeResult,
@@ -32,6 +33,15 @@ import type {
  * Create an LSP connection that spawns `config.command` as a child process and
  * performs the LSP `initialize` handshake over its stdio.
  */
+/**
+ * How long a request may wait for a response before the host cancels it.
+ *
+ * Generous on purpose: a cold language server can take seconds to answer its first request while it
+ * indexes, and the bound exists to stop a *wedged* server, not a slow one. `LspRequestOptions.timeoutMs`
+ * overrides it per request.
+ */
+export const DEFAULT_LSP_REQUEST_TIMEOUT_MS = 30_000;
+
 export function createLspConnection(config: LspServerConfig): LspConnection {
   return new NodeLspConnection(config);
 }
@@ -258,11 +268,57 @@ class NodeLspConnection implements LspConnection {
     this.connection = null;
   }
 
-  sendRequest<R = unknown>(method: string, params?: unknown): Promise<R> {
+  sendRequest<R = unknown>(method: string, params?: unknown, options?: LspRequestOptions): Promise<R> {
     if (!this.connection || !this._initialized) {
       throw new Error(`LSP not initialized`);
     }
-    return this.connection.sendRequest(method, params) as Promise<R>;
+    const connection = this.connection;
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_LSP_REQUEST_TIMEOUT_MS;
+    const signal = options?.signal;
+
+    // The request is issued with a cancellation token so an expiry can cancel it WITH the server
+    // (`$/cancelRequest` — vscode-jsonrpc sends it when the token is cancelled): a server still
+    // computing a completion nobody will read would otherwise hold the queue for the next request.
+    const source = new CancellationTokenSource();
+
+    return new Promise<R>((resolve, reject) => {
+      let settled = false;
+      // In a holder: `finish` has to clear the timer, and the timer's callback has to call `finish`,
+      // so neither can be declared first as a `const`.
+      const pending = { timer: undefined as ReturnType<typeof setTimeout> | undefined };
+
+      const finish = (settle: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (pending.timer) clearTimeout(pending.timer);
+        signal?.removeEventListener("abort", onAbort);
+        settle();
+      };
+
+      const onAbort = () => {
+        source.cancel();
+        // Prefer the caller's reason, so `isAbortError(error, signal)` classifies this as the run's
+        // cancellation rather than a server failure.
+        const reason: unknown = signal?.reason;
+        finish(() => reject(reason instanceof Error ? reason : new Error(`LSP request "${method}" was cancelled`)));
+      };
+
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      pending.timer = setTimeout(() => {
+        source.cancel();
+        finish(() => reject(new Error(`LSP request "${method}" timed out after ${timeoutMs}ms`)));
+      }, timeoutMs);
+
+      connection.sendRequest(method, params, source.token).then(
+        (result) => finish(() => resolve(result as R)),
+        (error) => finish(() => reject(error))
+      );
+    });
   }
 
   sendNotification(method: string, params?: unknown): void {

@@ -7,6 +7,7 @@ import { findDefinition, getNodeAtPosition } from "../tree-sitter/symbol-extract
 
 import { resolvePosition, withResolved } from "./tool-shared.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 import type { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
@@ -99,11 +100,11 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
       required: ["path"],
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as { path?: string; line?: number; character?: number; query?: string };
       const filePath = (params.path ?? "").replace(/^@/, "");
 
-      const pos = await resolvePosition(deps.manager, filePath, params);
+      const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, count: 0 };
       const { line, character, resolvedFrom } = pos;
 
@@ -113,10 +114,11 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
         const uri = deps.manager.getFileUri(filePath);
         const position = { line: line - 1, character: character - 1 };
         try {
-          const result = await client.connection.sendRequest<DefinitionResult>("textDocument/definition", {
-            textDocument: { uri },
-            position,
-          });
+          const result = await client.connection.sendRequest<DefinitionResult>(
+            "textDocument/definition",
+            { textDocument: { uri }, position },
+            { signal: options?.abortSignal }
+          );
 
           if (!result || (Array.isArray(result) && result.length === 0)) {
             const fallback = await treeSitterDefinitionFallback(deps, filePath, line, character, resolvedFrom);

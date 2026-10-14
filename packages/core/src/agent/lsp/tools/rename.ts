@@ -6,6 +6,7 @@ import { fileUriToPath } from "../shared/format.js";
 
 import { resolvePosition, truncateHead, withResolved } from "./tool-shared.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { WorkspaceEdit, TextEdit } from "vscode-languageserver-protocol";
 
@@ -71,11 +72,11 @@ export function createRenameTool(deps: RenameToolDeps) {
       required: ["path", "newName"],
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as { path?: string; line?: number; character?: number; query?: string; newName?: string };
       const filePath = (params.path ?? "").replace(/^@/, "");
 
-      const pos = await resolvePosition(deps.manager, filePath, params);
+      const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, fileCount: 0, editCount: 0 };
       const { line, character, resolvedFrom } = pos;
 
@@ -88,11 +89,11 @@ export function createRenameTool(deps: RenameToolDeps) {
       const position = { line: line - 1, character: character - 1 };
 
       try {
-        const result = await client.connection.sendRequest<WorkspaceEdit | null>("textDocument/rename", {
-          textDocument: { uri },
-          position,
-          newName: params.newName,
-        });
+        const result = await client.connection.sendRequest<WorkspaceEdit | null>(
+          "textDocument/rename",
+          { textDocument: { uri }, position, newName: params.newName },
+          { signal: options?.abortSignal }
+        );
 
         if (!result) {
           return {

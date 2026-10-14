@@ -13,7 +13,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,10 +38,14 @@ function record(name, ok, detail = "") {
 }
 
 // ---- 1. createLspConnection + initialize handshake ----
+const CANCEL_LOG = resolve(WORK_DIR, "cancelled-requests.jsonl");
 const config = {
   command: process.execPath, // node
   args: [MOCK_SERVER],
   cwd: WORK_DIR,
+  // The mock appends every `$/cancelRequest` it receives here, so the deadline check below can assert
+  // the server was actually told to stop working.
+  env: { ...process.env, MOCK_LSP_CANCEL_LOG: CANCEL_LOG },
 };
 const conn = env.createLspConnection(config);
 
@@ -133,6 +137,84 @@ record("textDocument/references returns locations", Array.isArray(refs) && refs.
 
 // ---- 5. workspace/configuration request from server (client responds) ----
 // (Transport registers a handler; nothing to assert without a server asking, so skip.)
+
+// ---- 6a. a server that never answers cannot hold the run ----
+//
+// `test/hang` is answered by nobody, so only the host's deadline can settle it. Every LSP request used
+// to be unbounded: a wedged server blocked that run forever and Esc could not break it, because nothing
+// in the path listened for the run's signal.
+{
+  const started = Date.now();
+  let rejected = null;
+  // An outer guard as well: without the transport's deadline this request never settles, and a
+  // validator that hangs reports a timeout instead of the missing bound. The guard fails in 3s with a
+  // message that names the cause.
+  try {
+    await Promise.race([
+      conn.sendRequest("test/hang", {}, { timeoutMs: 400 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("no deadline: the request never settled")), 3000)),
+    ]);
+  } catch (err) {
+    rejected = err;
+  }
+  const elapsed = Date.now() - started;
+  record(
+    "an unanswered request rejects at its deadline, naming it",
+    rejected instanceof Error && /LSP request "test\/hang" timed out after 400ms/.test(rejected.message),
+    rejected ? rejected.message : "resolved"
+  );
+  record("…without waiting for anything else", elapsed < 2000, `${elapsed}ms`);
+
+  // The other half of the contract: the server was told to stop working on it. The notification is
+  // dispatched asynchronously, so this polls rather than racing it.
+  let cancelled = "";
+  for (let attempt = 0; attempt < 20; attempt++) {
+    cancelled = existsSync(CANCEL_LOG) ? readFileSync(CANCEL_LOG, "utf8") : "";
+    if (cancelled.includes("$/cancelRequest")) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  record(
+    "…and the host cancels the outstanding request with the server",
+    cancelled.includes("$/cancelRequest"),
+    cancelled.trim().split("\n").slice(-1)[0] || "(no cancel notification)"
+  );
+}
+
+// ---- 6b. the caller's signal releases a pending request ----
+{
+  const controller = new AbortController();
+  const started = Date.now();
+  // 10s, not the default: a broken signal half has to fail this check in seconds, not minutes.
+  const pending = conn.sendRequest("test/hang", {}, { timeoutMs: 10_000, signal: controller.signal });
+  setTimeout(() => controller.abort(new Error("run stopped")), 50);
+  let rejected = null;
+  try {
+    await pending;
+  } catch (err) {
+    rejected = err;
+  }
+  const elapsed = Date.now() - started;
+  record(
+    "stopping the run settles a pending request with the caller's reason",
+    rejected instanceof Error && rejected.message === "run stopped",
+    String(rejected?.message)
+  );
+  record("…immediately, not at the deadline", elapsed < 5000, `${elapsed}ms`);
+}
+
+// ---- 6c. a healthy request is unaffected by the bound ----
+{
+  const bounded = await conn.sendRequest(
+    "textDocument/hover",
+    { textDocument: { uri }, position: { line: 0, character: 0 } },
+    { timeoutMs: 400 }
+  );
+  record(
+    "a request the server answers is returned unchanged under a deadline",
+    Boolean(bounded?.contents),
+    String(bounded?.contents?.value ?? "").slice(0, 60)
+  );
+}
 
 // ---- 6. graceful shutdown ----
 conn.onUnexpectedExit(() => {

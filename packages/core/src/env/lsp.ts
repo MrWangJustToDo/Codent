@@ -50,6 +50,14 @@ export interface LspMessage {
  * Wraps the host-provided transport and exposes the low-level JSON-RPC surface
  * the LSP client builds on (`initialize`, `textDocument/*`, `shutdown`, etc.).
  */
+/** Per-request bounds. Both halves are optional; a host applies its default deadline either way. */
+export interface LspRequestOptions {
+  /** How long to wait for a response before cancelling the request. */
+  timeoutMs?: number;
+  /** The caller's abort signal — a stopped run releases a pending request. */
+  signal?: AbortSignal;
+}
+
 export interface LspConnection {
   /** The language this server handles (e.g. `typescript`). */
   readonly languageId: string;
@@ -62,7 +70,19 @@ export interface LspConnection {
   start(): Promise<void>;
 
   /** Send a JSON-RPC request and await its response. */
-  sendRequest<R = unknown>(method: string, params?: unknown): Promise<R>;
+  /**
+   * Send a request and await its response.
+   *
+   * **Bounded by contract.** `options.timeoutMs` (or the host's default when omitted) caps how long
+   * the host waits; when it expires the host cancels the outstanding request with the server — so a
+   * server that is still computing something nobody will read stops, instead of making the next
+   * request queue behind it — and rejects with an error naming the request and the deadline. A
+   * rejection is an ordinary tool failure: the run continues and the server session survives.
+   *
+   * `options.signal` belongs to the caller (the run): a run that is stopped settles a pending request
+   * immediately rather than waiting out the deadline.
+   */
+  sendRequest<R = unknown>(method: string, params?: unknown, options?: LspRequestOptions): Promise<R>;
 
   /** Send a JSON-RPC notification (fire-and-forget). */
   sendNotification(method: string, params?: unknown): void;

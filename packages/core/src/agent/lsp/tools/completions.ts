@@ -6,6 +6,7 @@ import { resolveSymbolPosition } from "../shared/resolve-position.js";
 import { insertDot, shouldSyntheticTrigger, syntheticDotLocks } from "../shared/synthetic-dot.js";
 import { SYNTHETIC_DOT_SETTLE_DELAY_MS } from "../shared/timing.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { FileSync } from "../file-sync.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { CompletionItem, CompletionList, CompletionItemKind, MarkupContent } from "vscode-languageserver-protocol";
@@ -101,7 +102,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
       required: ["path"],
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as {
         path?: string;
         line?: number;
@@ -193,10 +194,11 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
       try {
         let response: CompletionResponse;
         try {
-          response = await client.connection.sendRequest<CompletionResponse>("textDocument/completion", {
-            textDocument: { uri },
-            position: completionPosition,
-          });
+          response = await client.connection.sendRequest<CompletionResponse>(
+            "textDocument/completion",
+            { textDocument: { uri }, position: completionPosition },
+            { signal: options?.abortSignal }
+          );
         } finally {
           if (syntheticDot && originalContent !== null) {
             try {
@@ -234,7 +236,9 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
           const results = await Promise.allSettled(
             topItems.map((item) =>
               Promise.race([
-                client.connection.sendRequest<CompletionItem>("completionItem/resolve", item),
+                client.connection.sendRequest<CompletionItem>("completionItem/resolve", item, {
+                  signal: options?.abortSignal,
+                }),
                 new Promise<CompletionItem>((_, reject) =>
                   setTimeout(() => reject(new Error("resolve timeout")), 2000)
                 ),

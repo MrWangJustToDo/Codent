@@ -8,6 +8,7 @@
  * to a lightweight text-scan for the symbol name (whole-word, first occurrence).
  */
 
+import type { LspRequestOptions } from "../../../env/lsp.js";
 import type { LspManager } from "../lsp-manager.js";
 
 export interface ResolvedPosition {
@@ -28,16 +29,19 @@ type DocumentSymbolResponse = unknown[] | null;
 export async function resolveSymbolPosition(
   filePath: string,
   query: string,
-  manager: LspManager
+  manager: LspManager,
+  requestOptions?: LspRequestOptions
 ): Promise<ResolvedPosition | null> {
   // Try LSP document symbols first
   const client = await manager.getClientForFile(filePath).catch(() => null);
   if (client) {
     const uri = manager.getFileUri(filePath);
     try {
-      const symbols = await client.connection.sendRequest<DocumentSymbolResponse>("textDocument/documentSymbol", {
-        textDocument: { uri },
-      });
+      const symbols = await client.connection.sendRequest<DocumentSymbolResponse>(
+        "textDocument/documentSymbol",
+        { textDocument: { uri } },
+        requestOptions
+      );
       if (symbols && symbols.length > 0) {
         const match = findInSymbols(symbols, query);
         if (match) return match;
@@ -60,14 +64,20 @@ export async function resolveSymbolPosition(
 /**
  * Get top-level symbol names from a file (for error hints).
  */
-export async function getSymbolNames(filePath: string, manager: LspManager): Promise<string[]> {
+export async function getSymbolNames(
+  filePath: string,
+  manager: LspManager,
+  requestOptions?: LspRequestOptions
+): Promise<string[]> {
   const client = await manager.getClientForFile(filePath).catch(() => null);
   if (client) {
     const uri = manager.getFileUri(filePath);
     try {
-      const symbols = await client.connection.sendRequest<DocumentSymbolResponse>("textDocument/documentSymbol", {
-        textDocument: { uri },
-      });
+      const symbols = await client.connection.sendRequest<DocumentSymbolResponse>(
+        "textDocument/documentSymbol",
+        { textDocument: { uri } },
+        requestOptions
+      );
       if (symbols && symbols.length > 0) {
         return symbols.map((s) => (s as { name?: string }).name ?? "");
       }

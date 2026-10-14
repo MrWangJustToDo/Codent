@@ -6,6 +6,7 @@ import { formatLocation } from "../shared/format.js";
 
 import { resolvePosition, truncateHead, withResolved } from "./tool-shared.js";
 
+import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
 import type { Location } from "vscode-languageserver-protocol";
 
@@ -31,7 +32,7 @@ export function createReferencesTool(deps: ReferencesToolDeps) {
       required: ["path"],
       additionalProperties: false,
     },
-    execute: async (input: unknown) => {
+    execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as {
         path?: string;
         line?: number;
@@ -41,7 +42,7 @@ export function createReferencesTool(deps: ReferencesToolDeps) {
       };
       const filePath = (params.path ?? "").replace(/^@/, "");
 
-      const pos = await resolvePosition(deps.manager, filePath, params);
+      const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, count: 0 };
       const { line, character, resolvedFrom } = pos;
 
@@ -54,11 +55,15 @@ export function createReferencesTool(deps: ReferencesToolDeps) {
       const position = { line: line - 1, character: character - 1 };
 
       try {
-        const locations = await client.connection.sendRequest<Location[] | null>("textDocument/references", {
-          textDocument: { uri },
-          position,
-          context: { includeDeclaration: params.includeDeclaration ?? true },
-        });
+        const locations = await client.connection.sendRequest<Location[] | null>(
+          "textDocument/references",
+          {
+            textDocument: { uri },
+            position,
+            context: { includeDeclaration: params.includeDeclaration ?? true },
+          },
+          { signal: options?.abortSignal }
+        );
 
         if (!locations || locations.length === 0) {
           return { text: withResolved(resolvedFrom, "No references found."), count: 0 };
