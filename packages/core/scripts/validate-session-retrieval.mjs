@@ -88,24 +88,11 @@ await (async () => {
   mkdirSync(join(workspace, ".agents", "sessions"), { recursive: true });
   assert.equal(await hasSessionHistory(), false, "empty sessions dir is not history");
 
-  // A session that is not the caller's is history…
+  // A single session is history.
   writeFileSync(join(workspace, ".agents", "sessions", "ses_a.session.jsonl"), "{}");
-  assert.equal(await hasSessionHistory(), true, "a previous session counts as history");
-
-  // …but the caller's OWN session is not: `session_search` excludes it by default, so its file alone
-  // advertised retrieval for a conversation with nothing else to find (every first session, every
-  // resume). Without the exclusion this reads `true`.
-  assert.equal(
-    await hasSessionHistory(undefined, { excludeSessionId: "ses_a" }),
-    false,
-    "the live session's own file is not history"
-  );
-  writeFileSync(join(workspace, ".agents", "sessions", "ses_b.session.jsonl"), "{}");
-  assert.equal(
-    await hasSessionHistory(undefined, { excludeSessionId: "ses_a" }),
-    true,
-    "…and one OTHER session makes it history again"
-  );
+  assert.equal(await hasSessionHistory(), true, "one session counts as history");
+  // …including the live one: the section's third paragraph tells the model how to reach THIS session's
+  // compacted-away turns, so its own log alone is a reason to emit the guidance.
 
   console.log("✓ the section is gated on history existing");
 })();
