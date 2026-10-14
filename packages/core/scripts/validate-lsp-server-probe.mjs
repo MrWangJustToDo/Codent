@@ -307,6 +307,74 @@ assert.equal(enoentError.kind, "command_missing", "…and so is an ENOENT from t
   );
 }
 
+// 9b. Re-applying the SAME record must keep the running client. Regression: the drop above was
+// unconditional, so a no-op re-configuration (the same record re-applied — `/lsp-config <lang> <the same
+// command>`) detached the id from a live shared server and started a duplicate beside it. The duplicate
+// was also an orphan: `shutdownAll` dedupes over `clients`, so it could never shut the abandoned process
+// down, and the child outlived the session.
+{
+  const connections = [];
+  const sameRecordManager = new LspManager(
+    "/repo",
+    () => {
+      const connection = {
+        languageId: "typescript",
+        initialized: false,
+        disposed: false,
+        start: async () => {
+          connection.initialized = true;
+        },
+        sendRequest: async () => undefined,
+        sendNotification: () => {},
+        didOpen: () => {},
+        didChange: () => {},
+        onUnexpectedExit: () => {},
+        onPublishDiagnostics: () => {},
+        shutdown: async () => {
+          connection.disposed = true;
+        },
+        kill: () => {},
+      };
+      connections.push(connection);
+      return connection;
+    },
+    path,
+    fs,
+    undefined,
+    {},
+    undefined,
+    async () => true
+  );
+  const record = { command: "tsc-ls", args: ["--stdio"] };
+  sameRecordManager.setServerConfig("typescript", record);
+  sameRecordManager.setServerConfig("javascript", record);
+  sameRecordManager.startEagerly(["typescript"]);
+  await sameRecordManager.waitForClient("typescript", 1000);
+  assert.equal(connections.length, 1, "the two ids share one server");
+
+  const live = sameRecordManager.getRunningClient("typescript");
+  // The same values, a newly constructed object — what `/lsp-config` builds from a re-typed command.
+  sameRecordManager.setServerConfig("javascript", { command: "tsc-ls", args: ["--stdio"] });
+
+  assert.equal(
+    sameRecordManager.getRunningClient("javascript"),
+    live,
+    "re-applying the same record keeps the running client (the record did not change)"
+  );
+  assert.equal(sameRecordManager.getRunningClient("typescript"), live, "…and the sibling is untouched");
+  await sameRecordManager.waitForClient("javascript", 500);
+  assert.equal(connections.length, 1, "…so no duplicate process is started for an unchanged record");
+
+  // The orphan half: a duplicate would be unreachable to `shutdownAll` (it dedupes over `clients`), so
+  // every connection ever created must be disposed by the shutdown.
+  await sameRecordManager.shutdownAll();
+  assert.equal(
+    connections.filter((c) => !c.disposed).length,
+    0,
+    "every server this manager started is reachable by shutdownAll (no orphan outlives the session)"
+  );
+}
+
 // 10. A failed start is reported exactly ONCE, with the kind the start knows. Regression: the eager
 // wrapper re-reported every rejected start as a generic `start_failed`, so a missing binary produced two
 // notices — and the wrapper text (`Auto-start failed: … ENOENT`) missed the not-found fallback, so the

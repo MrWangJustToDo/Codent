@@ -7,7 +7,6 @@ identified by its config record rather than by a language id — so the default 
 `javascript`, `typescriptreact` and `javascriptreact`, four ids with one identical record, run a single
 `typescript-language-server` — and a crash, restart or shutdown acts on that process rather than on one of
 the ids pointing at it.
-TBD - created by archiving change share-lsp-server-per-config. Update Purpose after archive.
 ## Requirements
 ### Requirement: One server process per identical config record
 
@@ -30,6 +29,13 @@ The manager SHALL register a shared client under every language id it serves, so
 
 - **WHEN** `.lsp.json` overrides one of those ids with a different command, args, or settings
 - **THEN** that id gets its own server, and the ids whose records still match keep sharing the first
+
+#### Scenario: Re-applying a record that did not change
+
+- **WHEN** a language id is configured again with a record equal to the one it already resolves (the same
+  command and args re-applied, or a project config reloaded unchanged)
+- **THEN** it keeps resolving the running server, no second process is started for it, and no client is
+  left unreachable to `shutdownAll`
 
 #### Scenario: A document's own language reaches the server
 

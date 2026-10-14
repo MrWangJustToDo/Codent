@@ -211,11 +211,21 @@ export class LspManager {
     this.commandProbeCache.delete(config.command);
     // …and every cached server key: which ids share a process is derived from these records.
     this.serverKeys.clear();
-    // A shared client is no longer THIS id's server: without this, `/lsp status` reports the new command
-    // with `running: true` against the old process, `getRunningClient` hands back the old connection, and
+    const nextKey = this.serverKeyOf(languageId);
+    // Only when the RECORD actually changed is the running client no longer this id's server. Dropping the
+    // alias unconditionally would be wrong for a no-op re-configuration (the same record re-applied, the
+    // realistic trigger being `/lsp-config <lang> <the same command>`): the connection is still the one
+    // this id resolves, and it is still in use by the sibling ids — the id would start a duplicate process
+    // beside it, and the original would become an orphan that `shutdownAll` (which dedupes over
+    // `clients`) could never shut down, so the child would outlive the session.
+    //
+    // When it DID change, the alias must go: without this, `/lsp status` reports the new command with
+    // `running: true` against the old process, `getRunningClient` hands back the old connection, and
     // `getClientForLanguage` never starts the new config. The other ids still sharing the old record keep
     // it — the process is theirs, just not this id's any more.
-    this.clients.delete(languageId);
+    if (previousKey !== null && nextKey !== null && previousKey !== nextKey) {
+      this.clients.delete(languageId);
+    }
     this.dropOrphanedServerState(previousKey);
   }
 
