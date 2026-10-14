@@ -25,7 +25,7 @@
 > - **已修（审计之后）**：高 ①②（`b9dad0cf`）、③④⑤⑥（`7568c385` + 收紧波次）、⑦（`90d57f5b` / `3fc3a909`）、`native-fs` 软链接 `realpath` + 大小写折叠（`b9dad0cf` / `050bd6a1`）、`session_read` 体积闸门（`78835b24`，**分页建议那半仍未修**）、provider `response.text()` 上限（`0c3142a3`）、`toModelOutput` 幂等 guard（`de771a4f`：审计点名 4 个，实际 24 个声明站点）、资源与泄漏三处（`5b3df3fe`：mutation-queue 回收 / LSP 重启 timer 与计数 / pre-fork 重复注册返回值）、模型可见契约对齐（`8b244a0e`：`task` 描述 / `session_read` 分页建议 / `grep` 单文件 count + `output_mode` 键名 / `tree` 的 `ignore` 语义）。
 > - **报告不成立（写作当时即如此，不是修好的）**：`webfetch-html` 的「skip 状态是单一全局布尔」（当时已是 call-local `inSkippedTag` / `skipDepth`）、`RUN_COMMAND_TIMEOUT_MS` 每次前台调用取 env（`e29e746b` 已 memo）。两处都是 `[报告]` 未逐条复现的代价 —— 动手前请以当前源码为准。
 > - **⚠️ 一项曾是「假绿」，现已收口**：取消语义的 guard 读了错的谓词（`run_command` / `task` 取消后的 partial 输出被整体短接），而拦住它的两条断言被注释掉了 —— 见 ⑧。`fce0eb7f` 已把 guard 与断言一起恢复，`validate:cancel-semantics` 重新是在真断言。
-> - 余量（由 `node scripts/audit-summary.mjs` 从本文件的标记生成，勿手改）：「中」40 条里 **19 条未修**（另 17 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
+> - 余量（由 `node scripts/audit-summary.mjs` 从本文件的标记生成，勿手改）：「中」40 条里 **17 条未修**（另 19 条已修、2 条部分修、1 条不修、1 条不成立）；「低」11 条里 **7 条未修**（另 1 条已修、2 条部分修、1 条不成立）。剩余顺序见文末。
 
 ---
 
@@ -152,9 +152,9 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 - 【已修 · `f7c51658`】 `run-subagent.ts:506` 硬编码 `"begin_summary"`（应用 `BEGIN_SUMMARY_TOOL_NAME`）；`task-prefork-middleware.ts:98` 硬编码 `"task"`。→ 分别改用 `BEGIN_SUMMARY_TOOL_NAME` 与 `BUILTIN_TOOL_NAMES.task`（字面量会一直编译通过、却悄悄匹配不到任何东西）；`validate:cancel-semantics` 增加"识别方必须读同一处定义"的断言。
 
 ### plan / lsp / code-mode
-- 【未修】 LSP 请求**无超时**（各 tool 裸 `await sendRequest`，transport 也无）：server 挂住会永久阻塞该次运行，Esc 也解不开（未透传 abort）。
+- 【已修 · `f09a0ef1`】 LSP 请求**无超时**（各 tool 裸 `await sendRequest`，transport 也无）：server 挂住会永久阻塞该次运行，Esc 也解不开（未透传 abort）。→ `LspConnection.sendRequest` 接受 deadline + signal，宿主 transport 对每个请求施加 `DEFAULT_LSP_REQUEST_TIMEOUT_MS`（30s，只在**卡死**而不是慢的时候触发），到点向 server 发真正的 `$/cancelRequest` 并 reject 一个点名该请求的错误；LSP 工具把 run 的 `abortSignal` 传下去（7 个工具 × 2 处路径）。规格 `tool-timeout-contract` 已同步（OpenSpec change `harden-plan-and-lsp-boundaries`）。**留给后人的边界**：这是**宿主 transport** 的默认值，不是 run 级 deadline —— 接口上可选 `timeoutMs` 由宿主决定，seam 拿不到 run 作用域的 signal。
 - 【已修 · `5b3df3fe`】 `lsp-manager.ts:494-527` 崩溃重启的 `setTimeout`（最长 30s）**未被 `shutdownAll` 清理**，`shuttingDown` 复位后会话关闭还会重启一个 server；重启计数/退避也未复位。→ manager 按语言持有 timer 句柄（顺带解决「两条崩溃通知叠两个重启」）、`shutdownAll` 取消并复位计数/退避；`validate:lsp-restart-cleanup` 注入假连接，无需真 server。
-- 【未修】 plan-mode "只读" 可被内置 `code_rewrite`（`category:"edits"`，`dry_run=false` 就地写）绕过 —— `PLAN_MODE_EXCLUDED_TOOL_NAMES` 只硬编码了 4 个名字。
+- 【已修 · `6f6998b1`】 plan-mode "只读" 可被内置 `code_rewrite`（`category:"edits"`，`dry_run=false` 就地写）绕过 —— `PLAN_MODE_EXCLUDED_TOOL_NAMES` 只硬编码了 4 个名字→ 改为**按声明**派生：凡 `present.category === "edits"` 的工具一律扣留（`isWorkspaceEditingTool`，经 presentation registry 读取），所以将来新加的编辑类工具默认就在闸门内，不需要第二处改动；`kill_command` 作为唯一非编辑例外就地具名并写明理由。规格 `plan-mode-tool-boundary` 已同步（同一 OpenSpec change）。。
 - 【未修】 `code-mode/extension.ts:95-142` 的 `console` 补丁**不可重入**（并行 `execute_typescript` 会互相恢复 / 泄漏），`console.warn` 未补。
 - 【未修】 `memory-manager.ts:368-372` `MEMORY.md` 的"字节"上限用 `slice` 按**码元**截（CJK 可超 ~3×）；`lsp/tools/tool-shared.ts:23-32` `truncateHead` 的 `maxBytes` 同样是字符比较的启发式。
 - 【未修】 `lsp/tools/code-overview.ts:82` `depth` 由模型给且无 clamp。
@@ -232,7 +232,7 @@ for (const filename of [...allReplaced, ...allDeleted]) {
 0. ~~**先收「假绿」**：⑧ 的 cancel guard~~ —— **已完成**（`fce0eb7f`：guard 与两条断言一起恢复，并补了 `run_command` 那半）。
 1. **模型可见的正确性**（都是小改动、各能配 validator）：~~`list/glob/grep/tree` 的 `toModelOutput` 幂等 guard~~（已完成 · `de771a4f`，实际覆盖 24 个声明站点）· `task-tool` 对父模型说的「没有 `run_command`」与 `subagent-tools` 实际注册的 `run_command:subagentSafe` 自相矛盾 · `session_read` 描述里的 `offset += limit` 建议会跳消息 · `grep` 单文件 `count` 恒解析成 0 · `tree` 的 `ignore` 两套语义。
 2. **资源与泄漏**：只剩 **运行中的 job 无上限**。其余四项已定案：被丢弃的 pre-fork 不 `destroyAgent` → **不修**（理由见「中」：会让 task 列表看不到）；`file-mutation-queue` 的 Map 回收、`lsp-manager` 的重启 timer 与计数、`task-prefork.start()` 的返回值 → 已完成（`5b3df3fe`）。
-3. **契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时（server 挂住会永久阻塞该次运行，Esc 也解不开）· plan-mode 的「只读」可被内置 `code_rewrite` 绕过（应改为按 tool 的 `present.category` 派生，而不是硬编码 4 个名字）。
+3. ~~**契约 / 安全（按约定先开 OpenSpec change）**：LSP 请求无超时 · plan-mode 的「只读」可被内置 `code_rewrite` 绕过~~ —— **已完成**（OpenSpec change `harden-plan-and-lsp-boundaries`，`f09a0ef1` + `6f6998b1`，规格已同步；见「中」两条）。
 4. **其余中 / 低**：写 / 编辑一致性（~~`preview-edit` 与 `edit_file` 共用同一套匹配~~ 已完成 · `d1f17c71`；CRLF 归一化、`delete_file` 入队、`write_file` 的 temp+rename 与真实字节数仍未修）· ~~`run_command` 缓存全文~~（已完成 · `d1f17c71`；死代码清理仍可选）· ~~subagent 起后台 job~~（已完成 · `d1f17c71`）· `command-job-registry` 的状态判定与 `kill_command` 的 `logPath` · web 的域回退与超时叠加 · code-mode 的 console 补丁重入 · memory / skills 的字节与转义 · 低项收尾（展示换行、行数统计、`todo` 回传原值等）。
 
 > 高风险项已逐个核实源码；中 / 低为子代理报告，修复前先按当前源码复现一次（本次复核已发现两条报告项本身不成立）。修复时按仓库约定：契约/安全变更先开 OpenSpec change，功能修复配 validator。
