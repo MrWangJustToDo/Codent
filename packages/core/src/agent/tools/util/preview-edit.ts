@@ -2,14 +2,22 @@
  * Edit Preview — compute the before/after file content for a set of edits.
  *
  * Used by the UI to show a full-file diff during the approval phase, before
- * the edit_file tool's `execute()` runs. The function reads the file from disk
- * (via CoreEnv) and applies the same matching/replacement logic as the tool
- * itself (exact match first, then fuzzy match fallback).
+ * the edit_file tool's `execute()` runs. It reads the file from disk (via CoreEnv) and resolves each
+ * edit through the tool's own matcher ({@link resolveEditMatch} / {@link applyResolvedEdit}), so the
+ * approved diff is what the tool writes.
+ *
+ * It used to re-implement the matching (exact `includes` → fuzzy), which drifted from the tool in
+ * three ways that all pointed the same direction — a diff that is not the write: it never tried the
+ * over-escape variants the tool tries (so an escaped `oldString` previewed as *no change* while the
+ * tool would have written one), it ignored `startLine` (so with several matches the preview rewrote
+ * the first while the tool rewrote the one near that line), and it did not enforce uniqueness (so an
+ * edit the tool refuses previewed as an applied change).
  */
 
 import { getEnv, type CoreEnv } from "../../../env";
 
-import { fuzzyIncludes, fuzzyReplace, fuzzyReplaceAll, normalizeForFuzzyMatch } from "./fuzzy-match.js";
+import { applyResolvedEdit, isErrorResult, resolveEditMatch } from "./find-edit-match.js";
+import { normalizeForFuzzyMatch } from "./fuzzy-match.js";
 
 // ============================================================================
 // Types
@@ -24,6 +32,8 @@ export interface PreviewEditInput {
     oldString: string;
     newString: string;
     replaceAll?: boolean;
+    /** 1-indexed line the edit is expected at, as the tool receives it (disambiguates matches). */
+    startLine?: number;
   }>;
 }
 
@@ -33,6 +43,11 @@ export interface PreviewEditResult {
   oldFile: string;
   /** The full file content after all edits have been applied. */
   newFile: string;
+  /**
+   * Set when the tool would refuse this set, in which case it writes nothing at all and `newFile`
+   * equals `oldFile`. The reason is the tool's own, so the approval UI can say why the diff is empty.
+   */
+  error?: string;
 }
 
 // ============================================================================
@@ -70,36 +85,29 @@ export async function previewEdit(input: PreviewEditInput, env?: CoreEnv): Promi
   let normalizedContentValid = true;
 
   for (const edit of edits) {
-    const hasExactMatch = content.includes(edit.oldString);
-
     // Ensure the normalized cache reflects the current `content`.
     if (!normalizedContentValid) {
       normalizedContent = normalizeForFuzzyMatch(content);
       normalizedContentValid = true;
     }
 
-    const hasFuzzyMatch = hasExactMatch || fuzzyIncludes(content, edit.oldString, normalizedContent);
+    const match = resolveEditMatch(content, edit.oldString, edit.newString, {
+      replaceAll: edit.replaceAll,
+      startLine: edit.startLine,
+      normalizedContent,
+    });
 
-    // If neither match is found, skip this edit (the tool would throw, but
-    // for preview purposes we just leave the content unchanged so the UI can
-    // still show a partial diff).
-    if (!hasExactMatch && !hasFuzzyMatch) {
-      continue;
+    if (isErrorResult(match)) {
+      // The tool throws on the first unresolved edit and writes nothing at all (its
+      // `fs.writeFile` sits after the loop), so the honest preview of this set is the original file,
+      // plus the reason. Reporting a partial application would show a diff for a write that never
+      // happens.
+      return { oldFile, newFile: oldFile, error: match.error };
     }
 
-    let newContent: string;
-    if (hasExactMatch) {
-      newContent = edit.replaceAll
-        ? content.replaceAll(edit.oldString, edit.newString)
-        : content.replace(edit.oldString, edit.newString);
-    } else {
-      newContent = edit.replaceAll
-        ? fuzzyReplaceAll(content, edit.oldString, edit.newString, normalizedContent)
-        : fuzzyReplace(content, edit.oldString, edit.newString, normalizedContent);
-    }
-
-    if (newContent !== content) {
-      content = newContent;
+    const next = applyResolvedEdit(content, match, Boolean(edit.replaceAll), normalizedContent);
+    if (next !== content) {
+      content = next;
       normalizedContentValid = false; // content changed, invalidate cache
     }
   }

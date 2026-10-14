@@ -140,7 +140,15 @@ function createManaged(id) {
         setUIMessages: () => {},
         getMessagesForLLM: () => [],
       },
-      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {}, agent: () => {}, clear: () => {}, setRun: () => {} },
+      log: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        agent: () => {},
+        clear: () => {},
+        setRun: () => {},
+      },
       tools: {},
       getTodoManager: () => null,
     }

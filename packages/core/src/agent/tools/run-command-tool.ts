@@ -148,6 +148,18 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       // project-internal commands execute; anything else is denied with a
       // reason surfaced to the model (insufficient permissions).
       if (subagentSafe) {
+        // Background is denied outright, before the analyzer: a subagent's tool set has neither
+        // `get_command_output` nor `kill_command` (see `subagent-tools.ts`), so a job it starts is one
+        // it can never poll or stop. The call returns a job id, the subagent's run ends, and the job
+        // keeps running behind a session with no handle on it — which is why "the command itself is
+        // read-only" must not be enough to allow it.
+        if (run_in_background) {
+          throw new Error(
+            "Background commands are not available to subagents: they have no get_command_output or " +
+              "kill_command, so a job they start cannot be polled or stopped. Run the command in the " +
+              "foreground instead, or ask the main agent to run it in the background."
+          );
+        }
         const ctx = await createAnalysisContext(coreEnv);
         const absoluteCwd = cwd ? ctx.path.resolve(ctx.rootPath, cwd) : ctx.cwd;
         const report = await analyzeCommand(command, { ...ctx, cwd: absoluteCwd });
@@ -296,13 +308,20 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       stdoutAccumulator.finish();
       stderrAccumulator.finish();
 
-      // Prefer streamed accumulation; fall back to CommandResult buffers when the
-      // CoreEnv implementation does not invoke onStdout/onStderr (e.g. older remotes).
-      const stdoutRaw = stdoutAccumulator.snapshot().content || result.stdout || "";
-      const stderrRaw = stderrAccumulator.snapshot().content || result.stderr || "";
+      // The cache file must hold the FULL output. It is advertised as such in the preview the model
+      // reads ("Full output saved to …") and it is what `read_file` is told to open when the visible
+      // output is a preview — so caching the accumulator's text wrote a *truncated* file, one that
+      // stopped exactly where the display did.
+      //
+      // `result.stdout` is the host's own accumulation of every chunk (the local host joins them all,
+      // and the HTTP plane returns its buffers verbatim), so it is the full text; the accumulator keeps
+      // only a bounded tail (50KB / 2000 lines) to cap the agent's memory, and is the fallback for a
+      // host that streams its chunks but returns nothing.
+      const stdoutFull = result.stdout || stdoutAccumulator.snapshot().content;
+      const stderrFull = result.stderr || stderrAccumulator.snapshot().content;
 
-      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutRaw, `${toolCallId}-stdout`);
-      const stderrResult = await maybeCacheOutput(coreEnv, stderrRaw, `${toolCallId}-stderr`);
+      const stdoutResult = await maybeCacheOutput(coreEnv, stdoutFull, `${toolCallId}-stdout`);
+      const stderrResult = await maybeCacheOutput(coreEnv, stderrFull, `${toolCallId}-stderr`);
 
       const cachedOutputPath = stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null;
 

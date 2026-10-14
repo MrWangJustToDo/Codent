@@ -16,7 +16,10 @@ import assert from "node:assert/strict";
 
 import {
   SUBAGENT_DENY_MESSAGE,
+  clearCoreEnv,
   commandPrefix,
+  createRunCommandTool,
+  defaultPath,
   evaluateCommandApproval,
   normalizedCommand,
   getEnv,
@@ -187,6 +190,80 @@ const MUTATING_COMMANDS = [
 for (const command of MUTATING_COMMANDS) {
   const { action } = await decide(command);
   assert.notEqual(action, "allow", `expected approval for: ${command}`);
+}
+
+// ---------------------------------------------------------------------------
+// The tool's own gate: what a subagent's `run_command` refuses
+// ---------------------------------------------------------------------------
+//
+// The policy above answers "may this command run"; the gate in `run-command-tool.ts` is what a
+// subagent actually meets, and it has one rule the policy cannot express — a background job. A
+// subagent's tool set has neither `get_command_output` nor `kill_command`, so a job it starts is one
+// it can never poll or stop: the call returns a job id, the run ends, and the job keeps going. A
+// read-only command passing the analyzer is therefore not enough to allow it, which is asserted here
+// rather than left to the policy's tables.
+
+{
+  const makeEnv = () => ({
+    rootPath: ROOT,
+    getPlatform: async () => "linux",
+    getArch: async () => "x64",
+    homedir: async () => "/home/user",
+    getEnv: async () => ({}),
+    // The real helper (pathe-backed): the analyzer resolves globs and checks absoluteness through it.
+    path: defaultPath,
+    fs: { readFile: async () => "", writeFile: async () => {}, readdir: async () => [], exists: async () => false },
+    runCommand: async () => ({ stdout: "ok\n", stderr: "", exitCode: 0 }),
+    startCommand: async () => ({ pid: 1, kill: async () => {} }),
+    commandExists: async () => true,
+  });
+
+  /** Run a subagent-safe command, reporting either the result or the refusal. */
+  const run = async (args) => {
+    const env = makeEnv();
+    clearCoreEnv();
+    registerCoreEnv(env);
+    try {
+      const result = await createRunCommandTool({ subagentSafe: true }).execute(args, {
+        toolCallId: "t",
+        coreEnv: env,
+      });
+      return { result, error: null };
+    } catch (error) {
+      return { result: null, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
+  const allowed = await run({ command: "ls -la" });
+  assert.equal(allowed.error, null, `a read-only command runs: ${allowed.error}`);
+  assert.equal(allowed.result.cachedOutputPath, null, "…and reports no spill for a small output");
+
+  const write = await run({ command: "rm -rf src" });
+  assert.match(write.error ?? "", /insufficient permissions/i, "a write command is refused with the subagent message");
+
+  const external = await run({ command: "cat /etc/passwd" });
+  assert.ok(external.error, "an external path is refused");
+
+  // The rule this section exists for: the command itself is read-only, so the analyzer allows it —
+  // only the background guard can refuse it.
+  const background = await run({ command: "ls -la", run_in_background: true });
+  assert.match(
+    background.error ?? "",
+    /[Bb]ackground commands are not available to subagents/,
+    `a read-only BACKGROUND command must still be refused (got: ${background.result ? "allowed" : background.error})`
+  );
+  assert.match(background.error ?? "", /get_command_output|kill_command/, "…and the reason names what is missing");
+
+  // The main agent keeps it: nothing here may take background execution away from the user's own run.
+  const mainEnv = makeEnv();
+  clearCoreEnv();
+  registerCoreEnv(mainEnv);
+  const mainAgent = await createRunCommandTool().execute(
+    { command: "ls -la", run_in_background: true },
+    { toolCallId: "t", coreEnv: mainEnv }
+  );
+  assert.equal(mainAgent.runInBackground, true, "the main agent can still start a background job");
+  assert.equal(typeof mainAgent.jobId, "string", "…and gets a job id back");
 }
 
 console.log("validate:safe-command OK");

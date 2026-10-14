@@ -24,7 +24,7 @@ const previewCache = new Map<string, PreviewEditResult>();
 export function usePreviewEdit(
   toolCallId: string | undefined,
   path: string | undefined,
-  edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }> | undefined
+  edits: Array<{ oldString: string; newString: string; replaceAll?: boolean; startLine?: number }> | undefined
 ): PreviewEditResult | null {
   const env = useCoreEnv();
   // When toolCallId is undefined the caller has opted out of previewing

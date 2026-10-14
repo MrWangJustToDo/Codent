@@ -1,7 +1,8 @@
-import { Box } from "ink";
+import { Box, Text } from "ink";
 import { Fragment, memo } from "react";
 
 import { usePreviewEdit, useSize } from "../hooks";
+import { COLORS } from "../theme/colors.js";
 
 import { MessageDiffView } from "./MessageDiffView.js";
 
@@ -53,6 +54,13 @@ export const EditFilePreview = memo(function EditFilePreview({
 
   return (
     <Box flexDirection="column">
+      {preview?.error ? (
+        /* The tool would refuse this set, so nothing will be written: an empty diff here is the
+           truth, and the reason is what makes it readable instead of confusing. */
+        <Text color={COLORS.warning} wrap="wrap">
+          ⚠ edit_file will refuse this: {preview.error}
+        </Text>
+      ) : null}
       {hasFullPreview ? (
         /* Full-file diff: original file → file after all edits applied */
         <MessageDiffView width={width} oldPath={path} oldFile={oldFile} newPath={path} newFile={newFile} />
