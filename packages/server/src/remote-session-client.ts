@@ -240,6 +240,10 @@ function applyEvent(
         model: event.payload.model,
         modelInfo: event.payload.modelInfo ?? undefined,
         reasoningEffort: event.payload.reasoningEffort ?? undefined,
+        // The run duration is set at the END of a run, when no other channel fires, so it has to
+        // ride this event. Without it the footer's "Completed in 1.2s" only appeared after an
+        // unrelated full resync — `dispatch()` deliberately does not refetch the snapshot.
+        lastStreamDurationMs: event.payload.lastStreamDurationMs,
         // On-disk session identity (agent identity is the connection, not this).
         ...(event.payload.sessionId ? { sessionId: event.payload.sessionId } : {}),
       };
@@ -292,6 +296,8 @@ function applyEvent(
       return { ...snapshot, iteration: event.payload };
     case "jobs":
       return { ...snapshot, jobs: event.payload };
+    case "subagents":
+      return { ...snapshot, subagents: event.payload.subagents };
     default:
       return snapshot;
   }
@@ -605,6 +611,22 @@ function parseSseBlock(block: string): AgentSessionEvent | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * @internal Exported for validators that assert an event actually mutates the cached snapshot.
+ *
+ * The remote plane has its own failure mode — a channel that never updates a field the UI reads,
+ * so the value only moves on a full `resync()`. A validator that only inspects `AGENT_EVENT_META`,
+ * `AGENT_SESSION_CHANNELS` or the SSE frame cannot see that; it has to run the reducer.
+ */
+export function applyEventForTests(
+  snapshot: AgentSessionSnapshot,
+  event: AgentSessionEvent,
+  summaryCache = new Map<string, SummaryStreamSnapshot>(),
+  toolBuffers = new Map()
+): AgentSessionSnapshot {
+  return applyEvent(snapshot, event, summaryCache, toolBuffers);
 }
 
 /** @internal Exported for validate:agent-session-http */

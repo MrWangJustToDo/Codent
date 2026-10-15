@@ -21,16 +21,17 @@ export const SubagentPanel = () => {
 
     // Row-level status is handled by SubagentTaskRow (per-child session
     // subscription). The root only needs to re-read the task list when its
-    // membership changes (a subagent is created or destroyed).
+    // membership changes.
+    //
+    // Watch the retained `subagents` channel rather than `subagent:created` /
+    // `subagent:destroyed`: those carry a single id, and off-process (a remote
+    // session) they do not update the cached snapshot, so the panel would re-read
+    // the same stale list. The channel carries the whole list.
     return rootSession.subscribe(
       (event) => {
-        if (event.channel !== "lifecycle") return;
-        const type = event.payload.type;
-        if (type === "subagent:created" || type === "subagent:destroyed") {
-          setListRevision((n) => n + 1);
-        }
+        if (event.channel === "subagents") setListRevision((n) => n + 1);
       },
-      { channels: ["lifecycle"] }
+      { channels: ["subagents"] }
     );
   }, [view, rootSession]);
 

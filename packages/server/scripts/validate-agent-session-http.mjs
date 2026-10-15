@@ -22,11 +22,76 @@ process.env.SANDBOX_ENV = "native";
 
 const { createServer } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
-const { parseAgentSessionSseBlockForTests, RemoteSessionClient } = await import("../dist/remote-session-client.mjs");
+const {
+  applyEventForTests,
+  parseAgentSessionSseBlockForTests,
+  RemoteSessionClient,
+} = await import("../dist/remote-session-client.mjs");
 
 // ── 0. SSE parse helper still tolerates heartbeats ──
 assert.equal(parseAgentSessionSseBlockForTests(": ping\n\n"), null);
 assert.equal(parseAgentSessionSseBlockForTests("event: ping\ndata: \n\n"), null);
+
+// ── 0b. The remote snapshot reducer must actually carry the fields the UI reads ──
+//
+// A remote client caches a snapshot and updates it from channel events; `dispatch()` deliberately
+// does NOT refetch it. So a field the UI renders, with no channel carrying it, is stale until an
+// unrelated full resync — and locally the same code looks correct, because
+// `LocalAgentSession.getSnapshot()` reads live memory. Both of these shipped that way.
+{
+  const base = {
+    agentId: "a1",
+    name: "n",
+    status: "running",
+    error: "",
+    pendingApprovalCount: 0,
+    mode: "normal",
+    lastStreamDurationMs: 0,
+    messages: [],
+    queues: { steer: [], followUp: [] },
+    usage: {},
+    todos: [],
+    todosTitle: null,
+    plan: {},
+    autoMode: false,
+    mcp: { servers: [] },
+    extensions: { extensions: [] },
+    toolDescriptors: [],
+    interactions: { approvals: [], askUser: [] },
+    jobs: { jobs: [] },
+    iteration: { current: 0, max: 0 },
+    subagents: [],
+  };
+
+  // (i) The footer renders "Completed in 1.2s" from `lastStreamDurationMs`, which is set at the END
+  // of a run — the moment no other channel fires. It has to ride the state event.
+  const l1 = {
+    status: "completed",
+    name: "n",
+    sessionId: null,
+    error: "",
+    pendingApprovalCount: 0,
+    model: "m",
+    modelInfo: null,
+    reasoningEffort: null,
+    lastStreamDurationMs: 4321,
+  };
+  const done = applyEventForTests(base, { channel: "state", payload: l1, ts: 1 });
+  assert.equal(done.status, "completed");
+  assert.equal(done.lastStreamDurationMs, 4321, "the state channel carries the run duration");
+
+  // (ii) `subagent:created` / `:destroyed` carry a single id, so the list can only move through the
+  // retained `subagents` channel. A panel that re-reads its cached snapshot on those events would
+  // gain and lose nothing off-process.
+  const added = applyEventForTests(base, {
+    channel: "subagents",
+    payload: { subagents: [{ id: "s1", status: "running" }] },
+    ts: 2,
+  });
+  assert.equal(added.subagents.length, 1, "the subagents channel adds a task row");
+  const removed = applyEventForTests(added, { channel: "subagents", payload: { subagents: [] }, ts: 3 });
+  assert.equal(removed.subagents.length, 0, "and removes one");
+}
 
 const server = createServer();
 await new Promise((resolve) => setTimeout(resolve, 400));
