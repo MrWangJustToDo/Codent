@@ -8,12 +8,12 @@ import { getActiveHost } from "../../utils/session-resolve.js";
 import { useAutocomplete } from "../use-autocomplete.js";
 import { useCommandOutput } from "../use-command-output.js";
 import { useConfig } from "../use-config.js";
-import { useExtensionPanel, CLOSE_DEBOUNCE_MS as EXTENSION_CLOSE_DEBOUNCE_MS } from "../use-extension-panel.js";
+import { useExtensionPanel } from "../use-extension-panel.js";
 import { usePlanPreview } from "../use-plan-preview.js";
-import { useSubagentPanel, CLOSE_DEBOUNCE_MS as SUBAGENT_CLOSE_DEBOUNCE_MS } from "../use-subagent-panel.js";
-import { useWorkspaceView, CLOSE_DEBOUNCE_MS as WORKSPACE_CLOSE_DEBOUNCE_MS } from "../use-workspace-view.js";
+import { useSubagentPanel } from "../use-subagent-panel.js";
+import { useWorkspacePanel } from "../use-workspace-panel.js";
 
-import { isAnyPanelOpen } from "./context.js";
+import { isAnyPanelOpen, panelJustClosed } from "./context.js";
 
 import type { KeybindingContext } from "./context.js";
 
@@ -80,18 +80,18 @@ export function useGlobalKeybindings(ctx: KeybindingContext): void {
     }
 
     if (inputKey.ctrl && inputChar === "e") {
-      const ws = useWorkspaceView.getReadonlyState();
+      const ws = useWorkspacePanel.getReadonlyState();
       if (ws.view === "workspace") {
-        useWorkspaceView.getActions().close();
+        useWorkspacePanel.getActions().close();
       } else {
-        useWorkspaceView.getActions().open();
+        useWorkspacePanel.getActions().open();
       }
       return;
     }
 
     if (inputKey.escape && ctx.mode !== "freeform" && ctx.mode !== "select") {
       // Workspace panel open: let WorkspacePanel handle Esc
-      if (useWorkspaceView.getReadonlyState().view === "workspace") return;
+      if (useWorkspacePanel.getReadonlyState().view === "workspace") return;
       // Resume picker open: let it handle Esc (it cancels). Without this the picker owns the
       // keyboard (`isAnyPanelOpen`) but no handler would answer Esc, so it would read as dead.
       if (useConfig.getReadonlyState().config.resumeSession === "__picker__") return;
@@ -107,15 +107,11 @@ export function useGlobalKeybindings(ctx: KeybindingContext): void {
         usePlanPreview.getActions().hide();
         return;
       }
-      const workspace = useWorkspaceView.getReadonlyState();
-      if (Date.now() - workspace.lastClosedAt < WORKSPACE_CLOSE_DEBOUNCE_MS) {
-        return;
-      }
-      // Debounce: prevent ESC from calling stop() right after panel closes.
-      if (Date.now() - panel.lastClosedAt < SUBAGENT_CLOSE_DEBOUNCE_MS) {
-        return;
-      }
-      if (Date.now() - extPanel.lastClosedAt < EXTENSION_CLOSE_DEBOUNCE_MS) {
+      // A panel Esc may have just closed: this keystroke is the one that closed it (the panel's
+      // own handler runs first and Ink broadcasts to everyone), and aborting here would be the
+      // leak this branch used to have. `panelJustClosed` owns the list of debounced panels, so a
+      // new panel cannot be forgotten the way the config editor was.
+      if (panelJustClosed()) {
         return;
       }
       if (useAutocomplete.getReadonlyState().visible) {

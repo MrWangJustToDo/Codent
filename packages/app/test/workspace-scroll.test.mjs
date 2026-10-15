@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 
-import { useWorkspaceView } from "../dist/hooks/use-workspace-view.mjs";
+import { useWorkspacePanel } from "../dist/hooks/use-workspace-panel.mjs";
 import { clampScrollTop, ensureIndexVisible, visibleWindow } from "../dist/utils/workspace-scroll.mjs";
 
 assert.equal(ensureIndexVisible(0, 0, 5, 10), 0);
@@ -28,18 +28,18 @@ assert.deepEqual(visibleWindow([], 3, 4), { start: 0, end: 0, slice: [] });
 // A mode switch swaps the whole row set (full tree ↔ changed files), so the window resets with
 // it: an offset carried over from the full tree landed past the end of the shorter diff list and
 // the pane drew blank.
-assert.equal(useWorkspaceView.getReadonlyState().view, "closed");
-const ws = useWorkspaceView.getActions();
+assert.equal(useWorkspacePanel.getReadonlyState().view, "closed");
+const ws = useWorkspacePanel.getActions();
 ws.open();
 ws.setTreeScrollTop(80);
-assert.equal(useWorkspaceView.getReadonlyState().treeScrollTop, 80);
+assert.equal(useWorkspacePanel.getReadonlyState().treeScrollTop, 80);
 
 ws.toggleMode();
-assert.equal(useWorkspaceView.getReadonlyState().mode, "diff");
-assert.equal(useWorkspaceView.getReadonlyState().treeScrollTop, 0, "toggleMode resets the tree window");
+assert.equal(useWorkspacePanel.getReadonlyState().mode, "diff");
+assert.equal(useWorkspacePanel.getReadonlyState().treeScrollTop, 0, "toggleMode resets the tree window");
 
 ws.setTreeScrollTop(80);
 ws.setMode("preview");
-assert.equal(useWorkspaceView.getReadonlyState().treeScrollTop, 0, "setMode resets the tree window");
+assert.equal(useWorkspacePanel.getReadonlyState().treeScrollTop, 0, "setMode resets the tree window");
 
 console.log("workspace-scroll validation passed");

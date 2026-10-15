@@ -137,5 +137,13 @@ export const ENTRIES = [
 
   // Emitted for the test suite (`test/workspace-scroll.test.mjs`), which drives the tree
   // window's reset-on-mode-switch through the real store.
-  "src/hooks/use-workspace-view.ts",
+  "src/hooks/use-workspace-panel.ts",
+  // Emitted for `test/panel-keyboard.test.mjs`: the panel gate decides whether a keystroke
+  // reaches the app, so it is asserted through the real stores rather than a copy. The four
+  // panel stores come with it, one entry each — the gate is only meaningful if every panel is
+  // driven, and a store is not reachable through the bundle that imports it.
+  "src/hooks/keybindings/context.ts",
+  "src/hooks/use-config-editor.ts",
+  "src/hooks/use-subagent-panel.ts",
+  "src/hooks/use-extension-panel.ts",
 ];

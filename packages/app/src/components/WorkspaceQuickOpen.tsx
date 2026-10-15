@@ -2,7 +2,7 @@ import { Box, Text, useInput } from "ink";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
-import { useWorkspaceView } from "../hooks/use-workspace-view.js";
+import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatIconGlyph, getFileIconStyle } from "../utils/file-icons.js";
 import { fetchWorkspaceFileList, fuzzyFilterFiles, type FuzzyFileResult } from "../utils/workspace-file-search.js";
@@ -45,9 +45,9 @@ interface WorkspaceQuickOpenProps {
 
 export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOpenProps) => {
   const env = useCoreEnv();
-  const quickOpen = useWorkspaceView((s) => s.quickOpen);
+  const quickOpen = useWorkspacePanel((s) => s.quickOpen);
   const { closeQuickOpen, moveQuickOpenCursor, selectFile, setMode, setQuickOpenCursor, setQuickOpenQuery } =
-    useWorkspaceView.getActions();
+    useWorkspacePanel.getActions();
 
   const [files, setFiles] = useState<string[] | null>(null);
   const [scrollTop, setScrollTop] = useState(0);

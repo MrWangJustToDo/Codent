@@ -34,7 +34,7 @@ import { WorkspaceFileMode } from "./dist/components/WorkspaceFileMode.mjs";
 import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
 import { useSize } from "./dist/hooks/use-size.mjs";
 import { useWorkspaceGit } from "./dist/hooks/use-workspace-git.mjs";
-import { useWorkspaceView } from "./dist/hooks/use-workspace-view.mjs";
+import { useWorkspacePanel } from "./dist/hooks/use-workspace-panel.mjs";
 import { parseGitStatus } from "./dist/utils/workspace-git-status.mjs";
 
 configureEnv({ allowNonBrowserUpdates: true });
@@ -186,9 +186,9 @@ const press = async (seq, wait = 250) => {
   await settle(wait);
 };
 
-const selected = () => useWorkspaceView.getReadonlyState().selectedPath;
-const paneFocus = () => useWorkspaceView.getReadonlyState().paneFocus;
-const mode = () => useWorkspaceView.getReadonlyState().mode;
+const selected = () => useWorkspacePanel.getReadonlyState().selectedPath;
+const paneFocus = () => useWorkspacePanel.getReadonlyState().paneFocus;
+const mode = () => useWorkspacePanel.getReadonlyState().mode;
 const statusEntries = () => parseGitStatus(statusPayload()).size;
 
 /**
@@ -226,7 +226,7 @@ const record = (name, pass, detail) => results.push({ name, pass, detail });
 
 // ── 1. a file created inside an already-listed directory gets a row ─────────
 
-useWorkspaceView.getActions().open();
+useWorkspacePanel.getActions().open();
 await settle(900);
 
 // Visiting `docs/readme.md` expands `docs/` and lists it, which is the state symptom 1 needs: the

@@ -5,7 +5,7 @@ import { COLORS } from "../theme/colors.js";
 import { FileContent } from "./FileContent.js";
 import { FileDiffContent } from "./FileDiffContent.js";
 
-import type { WorkspaceMode } from "../hooks/use-workspace-view.js";
+import type { WorkspaceMode } from "../hooks/use-workspace-panel.js";
 import type { CodeViewRef, DiffViewRef } from "@git-diff-view/cli";
 import type { Ref } from "react";
 

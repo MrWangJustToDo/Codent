@@ -1,10 +1,10 @@
-import { useWorkspaceView } from "../hooks/use-workspace-view.js";
+import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 
 import { PanelOverlay } from "./PanelOverlay.js";
 import { WorkspaceFileMode } from "./WorkspaceFileMode.js";
 
 export const WorkspacePanel = () => {
-  const view = useWorkspaceView((s) => s.view);
+  const view = useWorkspacePanel((s) => s.view);
 
   return (
     <PanelOverlay open={view === "workspace"}>

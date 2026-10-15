@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useSize } from "../hooks/use-size.js";
 import { useWorkspaceGit } from "../hooks/use-workspace-git.js";
-import { useWorkspaceView } from "../hooks/use-workspace-view.js";
+import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { COLORS } from "../theme/colors.js";
 import { workspacePanelHint } from "../utils/keyboard-labels.js";
 import { clearWorkspaceDiffStatsCache } from "../utils/workspace-diff-stats.js";
@@ -41,13 +41,13 @@ const PREVIEW_SCROLL_STEP = 3;
 
 export const WorkspaceFileMode = () => {
   const env = useCoreEnv();
-  const paneFocus = useWorkspaceView((s) => s.paneFocus);
-  const mode = useWorkspaceView((s) => s.mode);
-  const selectedPath = useWorkspaceView((s) => s.selectedPath);
-  const treeScrollTop = useWorkspaceView((s) => s.treeScrollTop);
-  const quickOpen = useWorkspaceView((s) => s.quickOpen);
+  const paneFocus = useWorkspacePanel((s) => s.paneFocus);
+  const mode = useWorkspacePanel((s) => s.mode);
+  const selectedPath = useWorkspacePanel((s) => s.selectedPath);
+  const treeScrollTop = useWorkspacePanel((s) => s.treeScrollTop);
+  const quickOpen = useWorkspacePanel((s) => s.quickOpen);
   const { close, openQuickOpen, selectFile, setPaneFocus, toggleMode, setTreeScrollTop } =
-    useWorkspaceView.getActions();
+    useWorkspacePanel.getActions();
 
   const previewRef = useRef<CodeViewRef>(null);
   const diffRef = useRef<DiffViewRef>(null);
@@ -123,7 +123,7 @@ export const WorkspaceFileMode = () => {
     (nextIndex: number) => {
       const clamped = Math.max(0, Math.min(nextIndex, Math.max(0, items.length - 1)));
       setCursorIndex(clamped);
-      const currentScroll = useWorkspaceView.getReadonlyState().treeScrollTop;
+      const currentScroll = useWorkspacePanel.getReadonlyState().treeScrollTop;
       setTreeScrollTop(ensureIndexVisible(clamped, currentScroll, paneBodyLines, items.length));
     },
     [items.length, paneBodyLines, setTreeScrollTop]
@@ -177,7 +177,7 @@ export const WorkspaceFileMode = () => {
   // is the helper for exactly this and had no caller before.
   useEffect(() => {
     setCursorIndex((prev) => Math.min(prev, Math.max(0, items.length - 1)));
-    const currentScroll = useWorkspaceView.getReadonlyState().treeScrollTop;
+    const currentScroll = useWorkspacePanel.getReadonlyState().treeScrollTop;
     setTreeScrollTop(clampScrollTop(currentScroll, items.length, paneBodyLines));
   }, [items.length, paneBodyLines, setTreeScrollTop]);
 
@@ -238,7 +238,7 @@ export const WorkspaceFileMode = () => {
     if (alreadyAligned) return;
 
     setCursorIndex(action.index);
-    const currentScroll = useWorkspaceView.getReadonlyState().treeScrollTop;
+    const currentScroll = useWorkspacePanel.getReadonlyState().treeScrollTop;
     setTreeScrollTop(ensureIndexVisible(action.index, currentScroll, paneBodyLines, items.length));
     // A satisfied request is retired here so the post-expand re-run is a no-op
     // instead of expanding again forever.

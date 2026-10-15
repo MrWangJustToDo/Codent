@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 
 import { COLORS } from "../theme/colors.js";
 
-import type { WorkspaceMode } from "../hooks/use-workspace-view.js";
+import type { WorkspaceMode } from "../hooks/use-workspace-panel.js";
 import type { WorkspaceDiffStats } from "../utils/workspace-diff-stats.js";
 import type { WorkspaceGitInfo } from "../utils/workspace-git-info.js";
 

@@ -19,7 +19,7 @@ import { useFlattenCacheCleanup } from "../hooks/use-flatten-cache-cleanup.js";
 import { useSize } from "../hooks/use-size.js";
 import { useStatic } from "../hooks/use-static.js";
 import { useSubagentPanel } from "../hooks/use-subagent-panel.js";
-import { useWorkspaceView } from "../hooks/use-workspace-view.js";
+import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { Content } from "../layout/Content.js";
 import { Footer } from "../layout/Footer.js";
 import { Header } from "../layout/Header.js";
@@ -74,7 +74,7 @@ export const Agent = () => {
 
   const subagentPanelView = useSubagentPanel((s) => s.view);
   const subagentPanelOpen = subagentPanelView !== "closed";
-  const workspaceView = useWorkspaceView((s) => s.view);
+  const workspaceView = useWorkspacePanel((s) => s.view);
   const workspaceOpen = workspaceView === "workspace";
   const extensionPanelView = useExtensionPanel((s) => s.view);
   const extensionPanelOpen = extensionPanelView !== "closed";

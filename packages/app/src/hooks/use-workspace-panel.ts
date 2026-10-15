@@ -24,7 +24,7 @@ export interface WorkspaceQuickOpenState {
   cursor: number;
 }
 
-export const useWorkspaceView = createState(
+export const useWorkspacePanel = createState(
   () => ({
     view: "closed" as WorkspaceView,
     mode: "preview" as WorkspaceMode,
@@ -94,7 +94,7 @@ export const useWorkspaceView = createState(
         state.treeScrollTop = Math.max(0, scrollTop);
       },
     }),
-    withNamespace: "useWorkspaceView",
+    withNamespace: "useWorkspacePanel",
     withDeepSelector: false,
     withStableSelector: true,
   }
