@@ -90,11 +90,17 @@ interface CoreEnv {
   homedir(): Promise<string>;
   fs: CoreEnvFs;                   // Filesystem operations
   runCommand(cmd, opts?): Promise<CommandResult>;
-  exec(cmd, opts?): Promise<CoreEnvExecResult>;
+  exec(cmd, opts?): Promise<CoreEnvExecResult>;   // Free-text command through a shell
   fetch(input, init?): Promise<Response>;
   destroy?(): Promise<void>;       // Lifecycle cleanup
-  // Optional: byteLength, base64Encode/Decode, getMimeType, readFileRange, createMCPStdioTransport,
-  //           createLspConnection, createIsolateDriver (code-mode TS sandbox backend)
+  // Optional, defaulted: cwd() (-- the directory commands run in; defaults to rootPath),
+  //                      byteLength, base64Encode/Decode, path
+  // Optional, feature-gated (absent = the feature degrades, never throws):
+  //   execFile (argv-shaped, no shell), startCommand, getShellInfo, commandExists,
+  //   readFileRange, appendFile / rename / appendFileSync / mkdirSync / existsSync,
+  //   getMimeType, resizeImage, locateTreeSitterGrammar,
+  //   createMCPStdioTransport, getMCPTransportProcess, createLspConnection,
+  //   createIsolateDriver (code-mode TS sandbox backend)
 }
 ```
 

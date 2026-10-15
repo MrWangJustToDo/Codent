@@ -166,7 +166,10 @@ runtime value from crossing — a re-exported type is an edge, but a weaker one.
 | `task` subagent ids | `generateId("subagent")` | `subagent_…` | One process | task rows / panel · that agent's log file name |
 
 `AgentSession` is **not** a fourth id: a handle is addressed by `agentId` (`host.create()`,
-`host.bind(agentId)`, `/api/agent/:id`) and *carries* the disk session it is attached to.
+`host.connect(agentId)`, `/api/agent/:id`) and *carries* the disk session it is attached to.
+The two id spaces meet where a handle is **resolved**: the catalog operations actually take the
+disk id (`listPersistedSessions` / `deleteSession`, and ACP's `session/list` / `session/delete`),
+while every other request goes through the agent id.
 
 Today's contract:
 

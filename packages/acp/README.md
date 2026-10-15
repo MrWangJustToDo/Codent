@@ -91,12 +91,12 @@ host that is remote (`--remote-session`) can be served over ACP too.
 | `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
 | client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local) |
 | `session/fork` | ✅ (`session.clone`; source must be live in-process) |
-| `session/prompt` / `cancel` / `set_mode` | ✅ (StopReason mapped; cancel → `cancelled`) |
+| `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` is the write side of the `mode` select we advertise, sharing `set_mode`'s implementation) |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
 | `tool_call` / `tool_call_update` | ✅ kind / title / locations / structured diff / streamed output |
 | `plan` (from todos) | ✅ |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
-| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode`) |
+| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`) |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
 | `compaction_update` / `notice` | ✅ gated by the client capability |
