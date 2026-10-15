@@ -245,6 +245,22 @@ export interface CoreEnv {
   rootPath: string;
 
   /**
+   * The directory commands run in by default (absolute).
+   *
+   * Semantics are "the default cwd for command execution in this env", not "the process's
+   * current directory": the default implementation answers {@link rootPath}, which is what the
+   * command path already does (`native-run.ts` resolves an explicit `options.cwd` and otherwise
+   * runs in `rootPath`). A host whose command default differs from its root overrides this.
+   *
+   * Deliberately NOT `process.cwd()`: once a host receives a root distinct from the process cwd
+   * (a `--cwd <path>` launch), a `process.cwd()` answer would disagree with where its commands
+   * actually run — and a caller asking for the default cwd is asking for the latter.
+   *
+   * Optional, with a default, so existing implementations need no change.
+   */
+  cwd?(): Promise<string>;
+
+  /**
    * Path utilities (synchronous, pure computation).
    * Defaults to `defaultPath` (POSIX-style via `pathe`) if not provided.
    */
@@ -401,6 +417,12 @@ export interface ResolvedCoreEnv extends CoreEnv {
   byteLength: (str: string, encoding?: string) => number;
   base64Encode: (data: Uint8Array) => string;
   base64Decode: (str: string) => Uint8Array;
+  /**
+   * Always present after resolution: defaults to `rootPath` (see {@link CoreEnv.cwd}).
+   * Resolving here rather than at each call site is what lets every existing implementation
+   * ignore this member entirely.
+   */
+  cwd: () => Promise<string>;
 }
 
 /**
@@ -446,6 +468,8 @@ export function resolveCoreEnv(env: CoreEnv): ResolvedCoreEnv {
     byteLength: env.byteLength ?? defaultByteLength,
     base64Encode: env.base64Encode ?? defaultBase64Encode,
     base64Decode: env.base64Decode ?? defaultBase64Decode,
+    // Bound to the env being resolved, so the default follows that env's own root.
+    cwd: env.cwd ?? (() => Promise.resolve(env.rootPath)),
   };
 }
 
