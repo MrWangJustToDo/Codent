@@ -636,6 +636,21 @@ Unhandled `RUN_ERROR` chunks (anything other than a successful recovery strategy
 
 **Vision / multimodal:** Some text-only APIs (notably DeepSeek Chat Completions) reject multimodal parts with `unknown variant image_url, expected text`. `runStreamWithRecovery` uses capability-aware sanitization (`vision` / `audio` / `video` / `document`): unsupported parts are stripped from the **wire** copy (and all multimodal parts are stripped once on schema rejection); UI history keeps media for display.
 
+#### Deliberately not used: server-side context management
+
+The Anthropic adapter accepts a `modelOptions.context_management` we do not set
+(`BetaContextManagementConfig`, whitelisted by `ai-anthropic` and sent with its beta;
+`@tanstack/ai` 0.69's `withCompaction({ native })` is the SDK-level entry for the OpenAI
+Responses equivalent, `POST /responses/compact`, which we do not reach either because we run
+Chat Completions). It holds three edits, and two of them land on work this layer already does —
+so the reason for declining each is recorded rather than left to be rediscovered:
+
+| Edit | Overlaps | Why we do not send it |
+|------|----------|------------------------|
+| `clear_tool_uses_20250919` | Layer 1 `tool_compact` (`clear_at_least` / `clear_tool_inputs` / a preserved-tool list against our `toModelOutput` projection) | **Deferred, not excluded.** The wire/channel divergence it causes is already our accepted model for tool results (the channel keeps the full persisted result, the wire gets the projection). What keeps our own is that `tool_compact` runs on every provider while this is Anthropic-beta-only, and its place in the pipeline is load-bearing — `message-transform` must precede it and the capability strip must follow, because a strip before it sees JSON text and passes the image through. |
+| `clear_thinking_20251015` | Layer 2 `reasoning_stripping` (**disabled** pending the DeepSeek `reasoning_content` echo-back requirement) | Doubly unreachable while Layer 2 stays off; revisit if that decision is ever reversed. |
+| `compact_20260112` | Layer 3 `auto_compact` (server-side summarization, `instructions`, a trigger token threshold) | **Excluded by the channel being the source of truth.** Auto-compact *appends a SUMMARY message to the channel* — a visible transcript row that `getModelVisibleMessages` then projects summary-first, and `session:compact` / restore read back. A server-side compact returns an opaque compaction block that has no durable row, so the channel and the wire would disagree in a way nothing downstream can reconcile (context fill accounting, restore, the reactive-overflow path). It is also Anthropic-only, while auto-compact must run on OpenAI-compatible providers too. |
+
 ### 5.5 Manual `/compact`
 
 **File:** `packages/app/src/commands/compact.ts`
