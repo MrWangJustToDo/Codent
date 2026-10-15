@@ -125,6 +125,12 @@ export class SessionService {
     input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "log">
   ): Promise<string> {
     const { usage, resolveTextAdapter, log } = input;
+    // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
+    // that does not exist yet; some providers answer with a plausible-looking name and some
+    // reject the request outright (400 → the caller's fallback is also empty). The persist
+    // path gates on this before calling, and the guard lives here too so no caller can hand
+    // the summarizer an empty conversation.
+    if (!userMessage.trim()) return "";
     try {
       const textAdapter = (await resolveTextAdapter?.()) ?? null;
       if (!textAdapter) return userMessage.slice(0, 50);
@@ -280,33 +286,41 @@ export class SessionService {
     // sessions whose name was overwritten to "" before the empty-title guard
     // would otherwise never retitle again (name !== "New Session").
     if (!this.data.name || this.data.name === "New Session") {
-      const firstUserText = getFirstUserInput(uiMessages || []);
-      // Capture the session identity: the title LLM call is async, and a /new or
-      // /resume during it swaps `this.data`. Without this guard the old session's
-      // title would be written into (and persisted to) the new session.
-      const target = this.data;
-      this.generateSessionTitle(firstUserText, { usage, resolveTextAdapter, log }).then((title) => {
-        if (this.data !== target) return;
-        const trimmed = title.trim();
-        if (!trimmed) {
-          // Skip empty/whitespace titles (e.g. a no-uiMessages persist passes an
-          // empty first user text). Keep "New Session" — and repair legacy blank
-          // names so the UI never shows an empty label — until a persist with
-          // real messages regenerates the title.
-          if (!target.name || !target.name.trim()) {
-            target.name = "New Session";
-            void this.saveToStore(emitEvent, "session-title");
+      const firstUserText = getFirstUserInput(uiMessages || []).trim();
+      // A brand-new session is persisted *before* its first turn by state-only writes:
+      // `persistSessionModelState` carries no `uiMessages`, and `/clear` queues one (its mode
+      // resets), whose lazily-resolved payload lands after the new session is adopted. There is
+      // nothing to title at that point — an empty prompt produced a title with no conversation
+      // behind it and a wasted side call (some providers reject the empty input outright, which
+      // surfaced only as a `side-query` warn). Title only once a persist actually carries a
+      // first user message.
+      if (firstUserText) {
+        // Capture the session identity: the title LLM call is async, and a /new or
+        // /resume during it swaps `this.data`. Without this guard the old session's
+        // title would be written into (and persisted to) the new session.
+        const target = this.data;
+        this.generateSessionTitle(firstUserText, { usage, resolveTextAdapter, log }).then((title) => {
+          if (this.data !== target) return;
+          const trimmed = title.trim();
+          if (!trimmed) {
+            // A whitespace-only provider reply. Keep "New Session" — and repair legacy
+            // blank names so the UI never shows an empty label — until a later persist
+            // regenerates the title.
+            if (!target.name || !target.name.trim()) {
+              target.name = "New Session";
+              void this.saveToStore(emitEvent, "session-title");
+            }
+            return;
           }
-          return;
-        }
-        target.name = trimmed;
-        // Broadcast the new display name so live UI / snapshots see the
-        // auto-generated title (the write above only touches SessionData).
-        onTitleResolved?.(trimmed);
-        // Reuse the unified save path so a title-write failure also emits
-        // `session:save-error` (target "session-title").
-        void this.saveToStore(emitEvent, "session-title");
-      });
+          target.name = trimmed;
+          // Broadcast the new display name so live UI / snapshots see the
+          // auto-generated title (the write above only touches SessionData).
+          onTitleResolved?.(trimmed);
+          // Reuse the unified save path so a title-write failure also emits
+          // `session:save-error` (target "session-title").
+          void this.saveToStore(emitEvent, "session-title");
+        });
+      }
     }
 
     const saveTarget = uiMessages !== undefined ? "session+uiMessages" : "session";

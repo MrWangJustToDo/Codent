@@ -1,5 +1,5 @@
 /**
- * Regression gate for the persistence/session P0 data-loss bugs.
+ * Regression gate for the persistence/session save bugs.
  *
  * Each block is written so it FAILS on the pre-fix code — a gate that only passes
  * on both the old and new implementation is not a gate. The comments name the old
@@ -21,6 +21,11 @@
  * 4. **An empty list is only written when the caller says so.** Every other caller
  *    omits `uiMessages` instead of passing `[]`; a stray empty array must not erase
  *    a real transcript.
+ * 5. **Auto-title waits for a first user message.** A fresh ("New Session") session is
+ *    persisted before its first turn by state-only writes, so the title path used to hand
+ *    the side LLM an empty prompt — a title with no conversation behind it, and a wasted
+ *    call (some providers 400 on the empty input, surfacing only as a `side-query` warn).
+ *    Old code: the title resolver ran for a persist that carried no user message.
  *
  * Run: pnpm --filter @codent/core run validate:session-persist-integrity
  */
@@ -401,6 +406,55 @@ function newService() {
     ["m1"],
     "content on disk"
   );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Auto-title waits for a first user message (no empty-prompt side call)
+// ---------------------------------------------------------------------------
+{
+  setupEnv();
+  const store = new SessionStore();
+  const service = new SessionService();
+  service.setStore(store, { modelStyle: "openai", model: "test-model" });
+  // Deliberately keep the default "New Session" name: that is the state `/clear` leaves
+  // a fresh session in, and what arms the auto-title path.
+  const data = service.ensureSessionData();
+  assert.equal(data.name, "New Session", "a fresh session starts on the placeholder name");
+
+  // A null adapter keeps the LLM out of the test: the fallback title is the first 50 chars
+  // of the user text, so the *name* proves the path ran, and the call count proves whether
+  // it ran at all. On the pre-fix code the state-only persists below each invoked this
+  // resolver — the title call was made with an empty prompt.
+  let adapterCalls = 0;
+  const resolveTextAdapter = async () => {
+    adapterCalls += 1;
+    return null;
+  };
+  const persist = (uiMessages) =>
+    service.persistSession({
+      usage: new UsageTracker(),
+      getTodoManager: () => null,
+      resolveTextAdapter,
+      uiMessages,
+    });
+  // The title write is fire-and-forget inside a `.then`, so give it a turn to land.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  // `persistSessionModelState` carries no `uiMessages` at all (this is what `/clear`'s mode
+  // resets queue); a stray empty list is the same "nothing to title" case. Neither may reach
+  // the side LLM.
+  await persist(undefined);
+  await persist([]);
+  await settle();
+  assert.equal(adapterCalls, 0, "no title call without a first user message");
+  assert.equal(data.name, "New Session", "the empty session keeps its placeholder name");
+
+  // The same fresh session, now carrying a first user message: the title path runs once.
+  await persist([textMessage("m1", "hello there")]);
+  await settle();
+  assert.equal(adapterCalls, 1, "a first user message triggers exactly one title call");
+  assert.equal(data.name, "hello there", "the adapter-less fallback names the session");
+  assert.equal((await store.load(data.id)).name, "hello there", "the fallback title reached disk");
 }
 
 console.log("session-persist-integrity validation passed");
