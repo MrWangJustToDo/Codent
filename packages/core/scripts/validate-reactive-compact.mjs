@@ -10,8 +10,12 @@
 import assert from "node:assert/strict";
 
 import {
+  CONTEXT_OVERFLOW_CODES,
   isPromptTooLongError,
   extractRunErrorMessage,
+  attachRunErrorCode,
+  attachRunErrorRetryAfterMs,
+  throwOnRunError,
   createAgentStatusController,
   reactiveCompact,
   handleManagedReactiveCompact,
@@ -20,9 +24,125 @@ import {
   CompactionService,
 } from "../dist/dev.mjs";
 
-assert.equal(isPromptTooLongError(new Error("prompt_too_long")), true);
-assert.equal(isPromptTooLongError(new Error("context length exceeded")), true);
+// ============================================================================
+// Overflow detection
+// ============================================================================
+//
+// Two independent ways in, and the earlier version of this file covered only one:
+// every assertion below used to be prose, so the classifier could (and did) ignore
+// the provider's stable `code` without any check noticing. The code path is the
+// primary one now — it is what makes the check survive a provider rewording its
+// error — so it is asserted first, and the prose list is asserted as the fallback
+// it is.
+
+// --- code-first: the provider's own identifier, no prose required ---------------
+for (const code of CONTEXT_OVERFLOW_CODES) {
+  const error = Object.assign(new Error("upstream rejected the request"), { code });
+  assert.equal(isPromptTooLongError(error), true, `code "${code}" must classify as overflow`);
+}
+
+// The code is matched case-insensitively: `attachRunErrorCode` copies the provider's
+// spelling verbatim, and a gateway may capitalize it.
+assert.equal(
+  isPromptTooLongError(Object.assign(new Error("nope"), { code: "CONTEXT_OVERFLOW" })),
+  true,
+  "a differently-cased code must still classify"
+);
+
+// A RUN_ERROR chunk handed through unchanged (the shape `throwOnRunError` receives)
+// must classify from its `code`, because that is where the SDK puts it.
+assert.equal(
+  isPromptTooLongError({ type: "RUN_ERROR", code: "context_overflow", message: "whatever the provider said" }),
+  true,
+  "a RUN_ERROR chunk must classify from `code`"
+);
+// ...and from its *message*, which for a chunk lives under `error`/`message`, not on
+// the object itself — the reason `errorMessage()` alone was not enough.
+assert.equal(
+  isPromptTooLongError({ type: "RUN_ERROR", message: "", error: "prompt is too long" }),
+  true,
+  "a RUN_ERROR chunk must classify from its nested message"
+);
+
+// --- prose fallback: the two spellings that were missing, and the originals ---
+// These are the ones a real overflow actually carried and that the old list missed.
+for (const message of ["prompt is too long: 210000 tokens > 200000 maximum", "context_length_exceeded"]) {
+  assert.equal(isPromptTooLongError(new Error(message)), true, `prose fallback must match: ${message}`);
+}
+// The original list is not regressed by the rewrite.
+for (const message of [
+  "prompt_too_long",
+  "context length exceeded",
+  "too many tokens",
+  "max tokens exceeded",
+  "maximum context length",
+  "request too large",
+]) {
+  assert.equal(isPromptTooLongError(new Error(message)), true, `original prose entry must still match: ${message}`);
+}
+
+// --- negatives: an unrelated failure, and a code that only looks like one --------
 assert.equal(isPromptTooLongError(new Error("network timeout")), false);
+assert.equal(isPromptTooLongError(new Error("invalid api key")), false);
+assert.equal(isPromptTooLongError(Object.assign(new Error("rate limited"), { code: "429" })), false);
+assert.equal(isPromptTooLongError(undefined), false);
+
+// --- the carried signals survive `throwOnRunError` -------------------------------
+// Regression: the thrown error used to be a bare `new Error(message)`, so `code` and
+// `retryAfterMs` — both of which the chunk route preserves — were dropped on this
+// one. An overflow arriving here was then classified by prose alone.
+{
+  async function* oneError() {
+    yield {
+      type: "RUN_ERROR",
+      message: "upstream rejected the request",
+      code: "context_overflow",
+      metadata: { tanstack: { retryAfterMs: 2500 } },
+    };
+  }
+  let thrown;
+  try {
+    for await (const chunk of throwOnRunError(oneError())) {
+      void chunk;
+    }
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof Error, "throwOnRunError must throw on RUN_ERROR");
+  assert.equal(thrown.code, "context_overflow", "the thrown error must carry the chunk's code");
+  assert.equal(thrown.retryAfterMs, 2500, "the thrown error must carry the normalized retry hint");
+  assert.equal(isPromptTooLongError(thrown), true, "the thrown error must classify as overflow without prose");
+}
+
+// --- the two attach helpers agree with each other and with the chunk route -------
+{
+  const chunk = { type: "RUN_ERROR", code: "context_overflow", metadata: { tanstack: { retryAfterMs: 900 } } };
+  const withCode = attachRunErrorCode(new Error("x"), chunk);
+  const withBoth = attachRunErrorRetryAfterMs(withCode, chunk);
+  assert.equal(withBoth.code, "context_overflow");
+  assert.equal(withBoth.retryAfterMs, 900);
+
+  // Idempotent, and an existing value is never overwritten.
+  const again = attachRunErrorRetryAfterMs(withBoth, chunk);
+  assert.equal(again.retryAfterMs, 900);
+
+  const preSet = Object.assign(new Error("x"), { code: "my-own", retryAfterMs: 1 });
+  const kept = attachRunErrorRetryAfterMs(attachRunErrorCode(preSet, chunk), chunk);
+  assert.equal(kept.code, "my-own", "an error's own code wins over the chunk's");
+  assert.equal(kept.retryAfterMs, 1, "an error's own retry hint wins over the chunk's");
+
+  // The SDK stringifies an absent code into the literal "undefined" — not a signal.
+  const noCode = attachRunErrorCode(new Error("x"), { type: "RUN_ERROR", code: "undefined" });
+  assert.equal(noCode.code, undefined, "the literal string 'undefined' is not a code");
+
+  // A non-RUN_ERROR chunk must not be mined for signals.
+  const fromText = attachRunErrorRetryAfterMs(
+    attachRunErrorCode(new Error("x"), { type: "TEXT_MESSAGE_CONTENT", code: "context_overflow" }),
+    { type: "TEXT_MESSAGE_CONTENT", metadata: { tanstack: { retryAfterMs: 5 } } }
+  );
+  assert.equal(fromText.code, undefined, "a non-error chunk must not contribute a code");
+  assert.equal(fromText.retryAfterMs, undefined, "a non-error chunk must not contribute a retry hint");
+}
 
 assert.equal(extractRunErrorMessage({ type: "TEXT_MESSAGE_CONTENT", delta: "hi" }), "");
 assert.equal(

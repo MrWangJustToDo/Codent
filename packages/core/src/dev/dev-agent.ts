@@ -26,8 +26,18 @@ export type { QueueMode } from "../agent/queue/pending-message-queue.js";
 export { SessionStore } from "../agent/persistence/session-store.js";
 export { autoCompact } from "../agent/compaction/auto-compact.js";
 export { applyCompactionResult } from "../agent/compaction/apply-compaction-result.js";
-export { isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
-export { attachRunErrorCode, extractRunErrorMessage, throwOnRunError } from "../agent/stream/stream-errors.js";
+export {
+  CONTEXT_OVERFLOW_CODES,
+  isPromptTooLongError,
+  reactiveCompact,
+} from "../agent/compaction/reactive-compact.js";
+export {
+  attachRunErrorCode,
+  attachRunErrorRetryAfterMs,
+  extractRunErrorMessage,
+  throwOnRunError,
+  type RunErrorSignals,
+} from "../agent/stream/stream-errors.js";
 export { AgentConfigSchema } from "../managers/agent-types.js";
 export { formatReadFileToolResult } from "../agent/tools/util/format-read-file-result.js";
 export {
