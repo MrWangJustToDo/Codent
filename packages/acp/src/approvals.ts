@@ -12,9 +12,10 @@
  * - **workspace file writes** (`write_file`, `edit_file`) while the client declared
  *   `fs.writeTextFile` and the target is workspace-internal — see
  *   `AcpClientEnv.routesWriteToClient`. `.agents/**` writes stay ours, so they stay prompts.
- * - **argv execution** (`execFile`) while the client declared `terminal`. That is what
- *   glob / grep / tree do, and they carry no approval of their own — the entry exists so the rule
- *   is stated where the mapping lives rather than being silently absent.
+ * - **argv execution** (`execFile`) while the client declared `terminal`. That is what glob /
+ *   grep / tree do, and none of them carries an approval (they are read-only searches), so this
+ *   needs no branch below — it is recorded here because it is the *other* class of request that
+ *   leaves the process, and a future write-capable argv tool would have to be considered.
  *
  * Everything else stays local, and each for a reason:
  *

@@ -57,6 +57,11 @@ What it does and does not change:
   and nothing else — the write capability is not a licence to delete), and `run_command` (it runs
   on our own shell). Plan mode also keeps them: the client authorises a file operation, not the
   read-only phase.
+- **A session that does not exist yet also falls back.** `session/new` has no id to send until
+  core mints one inside `host.create`, and that call reads the workspace (your `AGENTS.md`, plus
+  `.lsp.json` / `.mcp.json`). Those reads are served locally rather than refused, because refusing
+  them is silent: the instruction loader catches a failed read and reports "no documentation file
+  found", so every new session would lose its project instructions.
 - **A missing capability falls back, it does not fail.** Read-only clients read remotely and
   write locally; a client without `terminal` falls back for every command, and `execFile` is
   simply absent (feature detection reads "unsupported" and degrades) rather than defined to

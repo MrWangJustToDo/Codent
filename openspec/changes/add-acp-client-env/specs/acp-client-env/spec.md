@@ -17,6 +17,13 @@
 - **THEN** 发往 client 的请求 SHALL 携带各自的 `sessionId`
 - **AND** 两个会话 SHALL 互不共享 env
 
+#### Scenario: 会话尚未存在时的读取
+- **WHEN** 会话创建过程中（`sessionId` 尚未绑定）需要读取工作区文件
+      （项目指令 `AGENTS.md`/`CLAUDE.md`、`.lsp.json`、`.mcp.json`）
+- **THEN** 该读取 SHALL 由回退（本地）环境服务，SHALL NOT 向 client 发起请求
+- **AND** MUST NOT 失败或抛错 —— 取不到 `sessionId` 是「本会话暂不可用 client」，
+      不是「读不到文件」；项目指令 SHALL 正常进入 system prompt
+
 ### Requirement: client 未声明的能力回退而非失败
 
 client-backed 环境 SHALL 在 client 未声明某能力时回退到其构建时的本地回退环境，
@@ -128,6 +135,19 @@ client-backed 环境的 `terminal/*` SHALL 只用于 argv 型执行（`execFile`
 #### Scenario: 无 push 通道时不忙等
 - **WHEN** 终端长时间无新输出
 - **THEN** agent MUST NOT 以无间隔轮询 `terminal/output`
+
+#### Scenario: 取消必须能中断 argv 型执行
+- **WHEN** 一个经 client 终端的 `execFile` 执行期间调用方发出中止信号（`signal`）
+- **THEN** 轮询 SHALL 在下一轮检测到中止并结束
+- **AND** agent SHALL 终止该 client 终端（`terminal/kill`）并释放它
+- **AND** 该执行 MUST NOT 以「成功且结果为空」的形态返回
+
+#### Scenario: 超时与截断不得伪装成成功结果
+- **WHEN** 终端在 deadline 内未给出退出状态，或 client 报告输出被截断
+- **THEN** 结果 SHALL 标记为被终止（`killed: true`）
+- **AND** MUST NOT 把部分输出当作完整结果返回给调用方
+- **AND** 依赖该结果的调用方（glob/grep/tree）SHALL 据此回落到其进程内实现，
+      而非报告「零匹配」
 
 #### Scenario: run_command 的流式输出不受影响
 - **WHEN** 在 client-backed 环境下调用 `run_command`

@@ -369,15 +369,19 @@ function fakeSession(id, diskId) {
     createSessionHost: async (context) => {
       factoryContexts.push(context);
       const id = { value: "" };
-      // Deliberately read the (late-bound) id up front: it MUST throw before `host.create`
-      // returns, so a client request can never be issued with an empty session id.
+      // Read the (late-bound) id up front. It MUST answer `undefined` rather than throw: a throw
+      // here is swallowed by the instruction loader's `catch`, which silently costs every new
+      // session its project instructions (see `validate-acp-client-env-bootstrap.mjs`, which
+      // proves it end to end). `undefined` means "serve this locally".
+      let preCreate;
       let preCreateError = null;
       try {
-        context.sessionId();
+        preCreate = context.sessionId();
       } catch (error) {
         preCreateError = error;
       }
-      check("the session id is not readable before the session exists", preCreateError !== null);
+      check("reading the session id before the session exists does not throw", preCreateError === null);
+      check("it answers `undefined`, meaning 'serve locally'", preCreate === undefined);
       return {
         host: {
           async create() {
@@ -627,6 +631,134 @@ function fakeSession(id, diskId) {
   // And a sink built over this env really does attach, which is the property that matters.
   const sinkEnv = { ...env, fs: { ...env.fs } };
   check("the env the sink sees still has appendFile", typeof sinkEnv.fs.appendFile === "function");
+}
+
+// ===========================================================================
+// 9. A live terminal: abort and timeout must not read as "no matches"
+// ===========================================================================
+
+{
+  /**
+   * A client whose terminal never exits on its own — the only shape that exercises the polling
+   * loop's exit conditions. The earlier sections' client returns `exitStatus` on the second poll,
+   * so none of them can reach an abort or a deadline.
+   */
+  function neverExitingClient() {
+    const calls = [];
+    return {
+      calls,
+      client: () => ({
+        request: async (method, params) => {
+          calls.push({ method, params });
+          if (method === methods.client.terminal.create) return { terminalId: "t_slow" };
+          if (method === methods.client.terminal.output) return { output: "partial", truncated: false };
+          if (method === methods.client.terminal.kill) return {};
+          if (method === methods.client.terminal.release) return {};
+          throw new Error(`unexpected ${method}`);
+        },
+      }),
+    };
+  }
+
+  function slowEnv(overrides = {}) {
+    const rec = neverExitingClient();
+    return {
+      ...rec,
+      env: createAcpClientEnv({
+        client: rec.client,
+        sessionId: () => "ses_slow",
+        rootPath: "/ws",
+        fallback: fallbackEnv,
+        caps: fullCaps,
+        log: () => {},
+        ...overrides,
+      }),
+    };
+  }
+
+  // --- abort ---------------------------------------------------------------
+  {
+    const { env, calls } = slowEnv();
+    const controller = new AbortController();
+    // Abort while the loop is polling: the first sleep is 20 ms, so this lands mid-loop.
+    setTimeout(() => controller.abort(), 30);
+    const outcome = await env
+      .execFile("grep", ["-r", "x", "/ws"], { signal: controller.signal })
+      .then((r) => ({ kind: "returned", r }))
+      .catch((e) => ({ kind: "threw", code: e.code, message: e.message }));
+    check(
+      "an aborted execFile does not resolve as a successful empty search",
+      outcome.kind === "threw" ? outcome.code === "aborted" : false
+    );
+    check(
+      "the aborted terminal was killed",
+      calls.some((c) => c.method === methods.client.terminal.kill)
+    );
+    check(
+      "the aborted terminal was released",
+      calls.some((c) => c.method === methods.client.terminal.release)
+    );
+    check(
+      "abort was not mistaken for a deadline",
+      !calls.some((c) => c.method === methods.client.terminal.output && c.params?.terminalId === undefined)
+    );
+  }
+
+  // --- an already-aborted signal never spawns a terminal -------------------
+  {
+    const { env, calls } = slowEnv();
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await env
+      .execFile("grep", ["x"], { signal: controller.signal })
+      .then((r) => ({ kind: "returned", r }))
+      .catch((e) => ({ kind: "threw", code: e.code }));
+    check(
+      "an already-aborted signal fails rather than running",
+      outcome.kind !== "returned" || outcome.r.killed === true
+    );
+    check("no terminal was created before the abort", !calls.some((c) => c.method === methods.client.terminal.create));
+  }
+
+  // --- deadline ------------------------------------------------------------
+  {
+    const { env, calls } = slowEnv();
+    const started = Date.now();
+    const result = await env.execFile("grep", ["-r", "x", "/ws"], { timeout: 60 });
+    check("a deadline produces a result (not a hang)", Boolean(result));
+    check("a timed-out search is marked killed, so callers fall back", result.killed === true);
+    check("a timed-out search does not claim a clean exit code", result.code === null);
+    check("a timed-out search says why on stderr", /time budget|exceeded/i.test(result.stderr));
+    check("the deadline was actually respected", Date.now() - started < 2000);
+    check(
+      "the timed-out terminal was killed and released",
+      calls.some((c) => c.method === methods.client.terminal.kill) &&
+        calls.some((c) => c.method === methods.client.terminal.release)
+    );
+  }
+
+  // --- truncation ----------------------------------------------------------
+  {
+    const rec = neverExitingClient();
+    const env = createAcpClientEnv({
+      client: () => ({
+        request: async (method) => {
+          if (method === methods.client.terminal.create) return { terminalId: "t_trunc" };
+          if (method === methods.client.terminal.output) return { output: "clipped", truncated: true };
+          return {};
+        },
+      }),
+      sessionId: () => "ses_slow",
+      rootPath: "/ws",
+      fallback: fallbackEnv,
+      caps: fullCaps,
+      log: () => {},
+    });
+    void rec;
+    const result = await env.execFile("grep", ["-r", "x", "/ws"]);
+    check("a truncated buffer is not presented as a complete result", result.killed === true);
+    check("truncation is explained on stderr", /truncat/i.test(result.stderr));
+  }
 }
 
 finish(checker.failures);

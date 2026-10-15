@@ -84,3 +84,34 @@
 - [x] 4.3 `pnpm build && pnpm lint && pnpm typecheck`、`pnpm --filter @codent/app test`
 - [x] 4.4 `pnpm --filter @codent/core run` 既有守卫（新增 env 成员不得引入第二份实现）
 - [x] 4.5 `openspec validate add-acp-client-env --strict`
+
+## 5. 第五轮审计（--client-env 通读）—— 逐条核实并修
+
+审计结论：报告 3 个 bug + 6 项小问题、以及「校验脚本看不见 create 期间的读取」这一共同盲点，**全部属实**。
+
+- [x] 5.1 🔴 **Bug A：`session/new` 静默丢掉项目指令**。`host.create` 期间会读工作区文件
+      （`AGENTS.md`/`CLAUDE.md`、`.lsp.json`、`.mcp.json`），而 `sessionId` 尚未绑定 → 旧的
+      「未绑定即抛错」被 `instruction-files.ts:113` 的裸 `catch` 吞掉 → 报「没有指令文件」→
+      每个新会话都没有 `<project_instructions>`；load/resume 因为先 bind 而正常（不对称即掩盖点）。
+      **修法（报告首选）**：`sessionId()` 改为返回 `string | undefined`，未绑定时
+      **委托 fallback** 并计一条 `no-session-yet`。不变量从「必须保持顺序」变为「永不失败」。
+- [x] 5.2 🟠 **Bug B：`execFile` 忽略 `signal`**。`exec-args.ts:99` 确实在透传，client-env 从未读它
+      → Esc 停不掉，一直轮询到 10 分钟 deadline。**修法**：轮询每轮检查 `signal`；中止时
+      `terminal/kill` + release 并抛 `ExecutionError("aborted", …)`（与本地 env 契约一致）；
+      已中止的信号**不再创建终端**。
+- [x] 5.3 🟠 **Bug C：超时/截断被当成「成功、零匹配」**。deadline `break` 落到
+      `{ stdout, stderr: "", code: null }`，无 `killed` → `exec-args.ts:155` 放行部分输出。
+      **修法**：deadline 与 truncated 均返回 `killed: true` + stderr 说明 + `terminal/kill`，
+      让调用方回落到进程内实现。
+- [x] 5.4 小问题：① `routesWriteToClient` 改为纯查询（不再经 `mustFallback` 污染计数）；
+      ② `note()` 分桶改为 `localOnlyPath` / `localNoCapability` / `other`（字节读、自由文本、
+      二进制写属**有意本地路由**，不再算作「缺能力」）；③ `session/new` 失败时
+      `runtime.dispose()`（新增 try/catch，避免泄漏 per-session env）；
+      ④ 补注释说明 argv 路径 stderr 恒空（ACP 单缓冲）；
+      ⑤ 修正 `approvals.ts` 中「argv 执行自带审批」的措辞（无此分支）；
+      ⑥ 修正 env 工厂关于「create 期间只有 `.agents/**` 会跑」的旧注释。
+- [x] 5.5 **补端到端用例（盲点）**：新增 `validate-acp-client-env-bootstrap.mjs`，
+      真 `createNodeEnv` + 真 `CodentAgent` + 真 `host.create` + 含 `AGENTS.md` 的工作区，
+      断言 `session:doc` 事件带上项目指令；另有一条「client 拒绝一切请求仍能创建成功」。
+- [x] 5.6 变异取证：I（去掉未绑定守卫）抓 3 条；J（轮询忽略 signal）抓 1 条；
+      K（超时伪装成功）抓 2 条；L（终端不 kill）抓 2 条

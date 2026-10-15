@@ -127,15 +127,20 @@ export interface AcpAgentOptions {
 /** What {@link AcpAgentOptions.createSessionHost} needs to build one session's client-backed env. */
 export interface AcpClientEnvFactoryContext {
   /**
-   * The ACP session id as the client knows it (the disk id — see {@link diskSessionId}).
+   * The ACP session id as the client knows it (the disk id — see {@link diskSessionId}), or
+   * `undefined` before the session exists.
    *
-   * A getter, not a value, because of an ordering fact: `session/load` and `session/resume` are
-   * told the id by the client, but `session/new` is not — core mints it inside `host.create`
-   * (`ensureSessionData`), which is also the call that needs this env. The holder is filled in
-   * immediately after that returns, and the env MUST NOT issue a client request before then: the
-   * only work `create` does touches `.agents/**`, which never reaches the client anyway.
+   * A nullable getter, not a value, because of an ordering fact: `session/load` and
+   * `session/resume` are told the id by the client, but `session/new` is not — core mints it
+   * inside `host.create` (`ensureSessionData`), which is the very call that needs this env.
+   *
+   * During that call the env is asked to read workspace files — the instruction file
+   * (`AGENTS.md` / `CLAUDE.md`), `.lsp.json`, `.mcp.json` — and none of them can be tagged with a
+   * session id yet. They are served from the local fallback and counted; refusing them is not an
+   * option, because the instruction loader catches a failed read and reports "no documentation
+   * file found", so a refusal silently costs every new session its project instructions.
    */
-  sessionId: () => string;
+  sessionId: () => string | undefined;
   /** The client capabilities observed during `initialize`. */
   clientCapabilities: ClientCapabilities | undefined;
   /**
@@ -262,15 +267,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     let sessionId = "";
     const perSession = await options.createSessionHost({
       client,
-      sessionId: () => {
-        if (!sessionId) {
-          throw new Error(
-            "client-env: the session id was requested before the session existed; " +
-              "only `.agents/**` work may run before `host.create` returns"
-          );
-        }
-        return sessionId;
-      },
+      // `undefined` while the session does not exist yet: `host.create` reads workspace files
+      // (AGENTS.md / CLAUDE.md, `.lsp.json`, `.mcp.json`) before it hands back a session, and those
+      // reads have no session to tag. They are answered locally instead of refused — see the
+      // factory contract in `agent.ts`, and Bug A's trace: a throw here was swallowed by the
+      // instruction loader's `catch`, which silently produced a session with no project rules.
+      sessionId: () => (sessionId ? sessionId : undefined),
       clientCapabilities: initCaps,
     });
     return {
@@ -535,7 +537,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // With `--client-env` the session's env is client-backed and therefore per-session, so the
     // runtime is built here rather than borrowed from the process-wide host.
     const runtime = await createRuntime();
-    const { session } = await runtime.host.create(createOptions(mapped.servers));
+    let session: AgentSession;
+    try {
+      ({ session } = await runtime.host.create(createOptions(mapped.servers)));
+    } catch (error) {
+      // The runtime owns a per-session env; if the session never came to exist, nothing else will
+      // ever release it (only `closeBridge` disposes, and there is no bridge yet).
+      await runtime.dispose().catch(() => undefined);
+      throw error;
+    }
     const acpId = diskSessionId(session);
     runtime.bind(acpId);
     const bridge = attach(session, initCaps, acpId, runtime);

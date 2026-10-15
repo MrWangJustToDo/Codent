@@ -31,7 +31,7 @@ import {
   type ReadTextFileResponse,
   type TerminalOutputResponse,
 } from "@agentclientprotocol/sdk";
-import { defaultPath } from "@codent/core";
+import { defaultPath, ExecutionError } from "@codent/core";
 
 import type {
   CoreEnv,
@@ -90,8 +90,21 @@ export interface AcpClientCapabilities {
 export interface AcpClientEnvOptions {
   /** The agent-side connection handle; the env calls back through `client.request`. */
   client: () => AgentContext;
-  /** The ACP session every request is tagged with (a getter: see the factory context). */
-  sessionId: () => string;
+  /**
+   * The ACP session every request is tagged with, or `undefined` before the session exists.
+   *
+   * A getter, not a value, and *nullable*, because of an ordering fact: `session/load` and
+   * `session/resume` are told the id by the client, but `session/new` is not — core mints it inside
+   * `host.create`, which is also the call that needs this env. During that call the env is asked to
+   * read workspace files (the instruction file, `.lsp.json`, `.mcp.json`) that simply cannot be
+   * tagged with a session id.
+   *
+   * `undefined` therefore means "serve this locally", not "fail": every client request needs an id,
+   * so without one the only correct answer is the fallback. Throwing here is not an option — the
+   * instruction loader catches a failed read and reports "no documentation file found", so a throw
+   * silently costs every new session its project instructions.
+   */
+  sessionId: () => string | undefined;
   /** Workspace root (also the default command cwd). */
   rootPath: string;
   /** The complete local env that serves everything the client cannot. */
@@ -104,8 +117,13 @@ export interface AcpClientEnvOptions {
 export interface AcpClientEnv extends ResolvedCoreEnv {
   /** The capability matrix this env was built with (read by validation and README claims). */
   readonly clientCapabilities: AcpClientCapabilities;
-  /** Number of clients routed locally rather than to the client, per reason. */
-  readonly fallbackCounts: { localOnlyPath: number; noCapability: number };
+  /**
+   * Where requests ended up, by reason.
+   *
+   * `other` is deliberate local routing (byte reads, free-text commands, binary writes) — not a
+   * capability gap, so it is not folded into `localNoCapability`.
+   */
+  readonly fallbackCounts: { localOnlyPath: number; localNoCapability: number; other: number };
   /**
    * Whether a write to `target` is the **client's** to authorise.
    *
@@ -125,11 +143,25 @@ export interface AcpClientEnv extends ResolvedCoreEnv {
  */
 export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
   const { client, sessionId, rootPath, fallback, caps } = options;
-  const fallbackCounts = { localOnlyPath: 0, noCapability: 0 };
+  const fallbackCounts = { localOnlyPath: 0, localNoCapability: 0, other: 0 };
 
+  /**
+   * Record a locally-served request.
+   *
+   * The two counters mean different things and must not be merged: `localOnlyPath` counts paths
+   * this env refuses to send (`.agents/**`, outside the root), while `localNoCapability` counts
+   * requests the client *could* have served but did not — either because the capability is
+   * missing, or because the session does not exist yet. Deliberate local routes (byte reads,
+   * free-text commands) are neither: they are already in an "other" bucket, because reporting them
+   * as a missing capability would make the matrix read as if the client were less capable than it
+   * is.
+   */
+  const PATHS_WE_NEVER_SEND = ["local-only-path", "no-session-yet"];
+  const NO_CAPABILITY_REASONS = ["no-capability:readTextFile", "no-capability:writeTextFile", "no-capability:terminal"];
   const note = (reason: string): void => {
-    if (reason === "local-only-path") fallbackCounts.localOnlyPath += 1;
-    else fallbackCounts.noCapability += 1;
+    if (PATHS_WE_NEVER_SEND.includes(reason)) fallbackCounts.localOnlyPath += 1;
+    else if (NO_CAPABILITY_REASONS.includes(reason)) fallbackCounts.localNoCapability += 1;
+    else fallbackCounts.other += 1;
     options.log?.(`client-env: ${reason}`);
   };
 
@@ -139,6 +171,15 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     note("local-only-path");
     return true;
   };
+
+  /**
+   * Whether the client can be asked anything at all right now.
+   *
+   * False before the session exists: every client request carries a `sessionId`, so a read during
+   * `host.create` (the instruction file, `.lsp.json`, `.mcp.json`) has nowhere to go. It is served
+   * locally and counted — see the factory contract on {@link AcpClientEnvOptions.sessionId}.
+   */
+  const hasSession = (): boolean => Boolean(sessionId());
 
   // Two overloads mirroring `CoreEnvFs.readFile` — the encoding decides the return type, and a
   // single implementation signature cannot express that.
@@ -154,8 +195,9 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       note("byte-read");
       return fallback.fs.readFile(target, "buffer");
     }
-    if (mustFallback(target) || !caps.readTextFile) {
+    if (mustFallback(target) || !caps.readTextFile || !hasSession()) {
       if (!caps.readTextFile) note("no-capability:readTextFile");
+      else if (!hasSession()) note("no-session-yet");
       return fallback.fs.readFile(target);
     }
     // No `line` / `limit`: core's `readFile` has no line window (the `read_file` tool slices the
@@ -171,8 +213,9 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     readFile,
 
     async writeFile(target: string, content: string | Uint8Array) {
-      if (mustFallback(target) || !caps.writeTextFile) {
+      if (mustFallback(target) || !caps.writeTextFile || !hasSession()) {
         if (!caps.writeTextFile) note("no-capability:writeTextFile");
+        else if (!hasSession()) note("no-session-yet");
         await fallback.fs.writeFile(target, content);
         return;
       }
@@ -232,12 +275,24 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
    * There is no incremental delivery here by construction: `execFile`'s contract is a full
    * `{ stdout, stderr, code }`, and the callers (glob/grep/tree) consume it that way. Output is
    * read by bounded polling — never a busy loop — and the terminal is always released.
+   *
+   * `stderr` is always empty on this path: ACP exposes one merged terminal buffer, with no stream
+   * to separate. A failing argv search therefore reports its message inside `stdout`, which is
+   * acceptable only because the callers fall back on a non-zero `code` (or `killed`) rather than
+   * parsing the text — see `exec-args.ts`.
    */
   const execFileViaTerminal = async (
     file: string,
     args: string[],
     execOptions?: CoreEnvExecFileOptions
   ): Promise<CoreEnvExecResult> => {
+    // Never spawn for a run that is already over: the terminal would be killed immediately anyway,
+    // and on a client that bills or displays terminals that is a visible artefact. `execArgs`
+    // makes the same check for the same reason.
+    if (execOptions?.signal?.aborted) {
+      note("terminal-aborted");
+      throw new ExecutionError("aborted", `${file} was cancelled`);
+    }
     const created = (await client().request(methods.client.terminal.create, {
       sessionId: sessionId(),
       command: file,
@@ -252,7 +307,17 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       let truncated = false;
       const deadline = Date.now() + (execOptions?.timeout ?? TERMINAL_DEADLINE_MS);
       let exitCode: number | null = null;
+      // Why the loop ended, when it did not end because the process did. Each of these produces a
+      // result the caller must NOT read as a real one — see the return below.
+      let endedBy: "exit" | "aborted" | "timeout" | "truncated" = "exit";
       for (;;) {
+        // Cancellation is checked every turn, not just at entry: this loop can run for the whole
+        // deadline, and `execArgs` documents that a host which cannot be told the signal runs the
+        // child to completion. Esc has to stop a grep, not wait ten minutes for it.
+        if (execOptions?.signal?.aborted) {
+          endedBy = "aborted";
+          break;
+        }
         const snapshot = (await client().request(methods.client.terminal.output, {
           sessionId: sessionId(),
           terminalId,
@@ -266,17 +331,49 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
           exitCode = snapshot.exitStatus.exitCode ?? null;
           break;
         }
-        if (Date.now() >= deadline) break;
+        if (truncated) {
+          endedBy = "truncated";
+          break;
+        }
+        if (Date.now() >= deadline) {
+          endedBy = "timeout";
+          break;
+        }
         await sleep(delay);
         delay = Math.min(delay * 2, POLL_MAX_MS);
       }
-      if (truncated) {
-        // `CoreEnvExecResult` has no truncation flag, and silently returning a clipped buffer would
-        // read as a complete result. Say so on stderr (the callers surface it) and count it.
-        note("terminal-output-truncated");
-        return { stdout: output, stderr: "terminal output truncated by the client", code: exitCode };
+
+      if (endedBy === "exit") {
+        return { stdout: output, stderr: "", code: exitCode };
       }
-      return { stdout: output, stderr: "", code: exitCode };
+
+      // Everything else ended without the process telling us it finished, so `killed: true` is the
+      // only honest answer: `execArgsCapture` maps `killed` to `undefined`, and its callers then
+      // fall back to their in-process implementation. Returning the partial buffer instead would be
+      // read as a complete result — an empty grep that looks like "no matches" rather than a
+      // failure, which is the exact confusion `exec-args.ts` warns about.
+      //
+      // This is also why the child is killed rather than left to run: a released-but-running
+      // terminal keeps consuming the client's resources with nobody reading it.
+      await client()
+        .request(methods.client.terminal.kill, { sessionId: sessionId(), terminalId })
+        .catch(() => undefined);
+      if (endedBy === "aborted") {
+        note("terminal-aborted");
+        // Aborts surface as an error, matching what the local env does for a cancelled command.
+        throw new ExecutionError("aborted", `${file} was cancelled`);
+      }
+      if (endedBy === "timeout") {
+        note("terminal-timeout");
+        return { stdout: output, stderr: `${file} exceeded its time budget`, code: null, killed: true };
+      }
+      note("terminal-output-truncated");
+      return {
+        stdout: output,
+        stderr: "terminal output truncated by the client",
+        code: null,
+        killed: true,
+      };
     } finally {
       // Release even when the read threw: a leaked terminal outlives the run.
       await client()
@@ -287,7 +384,10 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
 
   const env: AcpClientEnv = {
     rootPath,
-    routesWriteToClient: (target: string) => caps.writeTextFile && !mustFallback(target),
+    // A pure query: it answers "would a write here leave the process" and must not touch the
+    // counters, or every approval check would inflate the routing stats (and mix an approval
+    // decision into a routing one). `isLocalOnlyPath` inline, not `mustFallback`.
+    routesWriteToClient: (target: string) => caps.writeTextFile && !isLocalOnlyPath(rootPath, target),
     path: fallback.path,
     byteLength: fallback.byteLength,
     base64Encode: fallback.base64Encode,
@@ -304,6 +404,9 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       note("free-text-command");
       return fallback.exec(command, execOptions);
     },
+    // Omitted (not defined-to-throw) when the client has no terminal, and equally before a session
+    // exists: `execArgs` feature-detects on the member's presence, so absence is the "unsupported"
+    // answer it already knows how to degrade from.
     ...(caps.terminal ? { execFile: execFileViaTerminal } : {}),
     fetch: (input, init) => fallback.fetch(input, init),
     getPlatform: () => fallback.getPlatform(),
