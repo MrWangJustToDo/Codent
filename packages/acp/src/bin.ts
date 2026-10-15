@@ -40,7 +40,12 @@ function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
 }
 
 async function main(): Promise<void> {
-  const options = await bootstrapAcpAgent({ model: parseModelFlags(process.argv.slice(2)) });
+  const argv = process.argv.slice(2);
+  const options = await bootstrapAcpAgent({
+    model: parseModelFlags(argv),
+    // Opt-in: without it the env planes are byte-for-byte what they were before this flag existed.
+    clientEnv: argv.includes("--client-env"),
+  });
   const connection = runAcpAgentStdio(options);
 
   const shutdown = (): void => {

@@ -5,9 +5,24 @@
  * ACP→IM bridges can drive the agent without any Codent-specific host code.
  */
 
-export { createAcpAgent, runAcpAgentStdio, type AcpAgentOptions, type AcpAgentDefaults } from "./agent.js";
+export {
+  createAcpAgent,
+  runAcpAgentStdio,
+  type AcpAgentOptions,
+  type AcpAgentDefaults,
+  type AcpClientEnvFactoryContext,
+  type AcpSessionRuntime,
+} from "./agent.js";
 export { DEFAULT_SESSION_PAGE_SIZE, decodeCursor, encodeCursor, paginateSessions, toSessionInfo } from "./sessions.js";
 export { mapAcpMcpServers } from "./mcp.js";
+export { isClientOwnedApproval, type PendingApproval, type ApprovalToolInput } from "./approvals.js";
+export {
+  createAcpClientEnv,
+  isLocalOnlyPath,
+  type AcpClientEnv,
+  type AcpClientCapabilities,
+  type AcpClientEnvOptions,
+} from "./client-env.js";
 export { bootstrapLocalAcp, bootstrapAcpAgent, type LocalAcpBootstrap, type AcpModelOverride } from "./bootstrap.js";
 export { AcpProjector, type AcpProjectorOptions } from "./projector.js";
 export { promptBlocksToContent, textBlock, type PromptCaps, type PromptMapping } from "./content.js";

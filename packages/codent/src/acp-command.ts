@@ -8,10 +8,14 @@
 
 import type { AcpModelOverride } from "@codent/acp";
 
-export async function runAcpCommand(model?: AcpModelOverride): Promise<never> {
+export async function runAcpCommand(model?: AcpModelOverride, options: { clientEnv?: boolean } = {}): Promise<never> {
   const { bootstrapAcpAgent, runAcpAgentStdio } = await import("@codent/acp");
-  const options = await bootstrapAcpAgent(model ? { model } : {});
-  const connection = runAcpAgentStdio(options);
+  const bootOptions = {
+    ...(model ? { model } : {}),
+    ...(options.clientEnv ? { clientEnv: true } : {}),
+  };
+  const acpOptions = await bootstrapAcpAgent(bootOptions);
+  const connection = runAcpAgentStdio(acpOptions);
 
   const shutdown = (): void => {
     try {

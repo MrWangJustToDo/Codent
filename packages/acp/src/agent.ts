@@ -12,6 +12,7 @@
 import { agent as createAgentApp, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { BUILTIN_TOOL_NAMES } from "@codent/core";
 
+import { shouldSuppressApproval } from "./approvals.js";
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
 import { mapAcpMcpServers } from "./mcp.js";
@@ -25,6 +26,7 @@ import { AcpProjector } from "./projector.js";
 import { paginateSessions } from "./sessions.js";
 import { toolKindFor } from "./tools.js";
 
+import type { AcpClientEnv } from "./client-env.js";
 import type { SessionUpdate } from "./types.js";
 import type {
   AgentApp,
@@ -49,8 +51,30 @@ import type {
 } from "@codent/core";
 
 /** Per-session bookkeeping. */
+/**
+ * A session's runtime: the host its agent was created on, plus the two things the caller needs
+ * from a per-session (client-backed) runtime — late binding of the disk id, and release.
+ */
+interface SessionRuntime {
+  host: AgentSessionHost;
+  /** Bind the disk session id once `host.create` has minted it. */
+  bind: (sessionId: string) => void;
+  dispose: () => Promise<void>;
+  /**
+   * The client-backed env, when this runtime has one (`--client-env`).
+   *
+   * Present means "writes may leave this process", which is what decides whether an approval is
+   * still ours to ask — see `approvals.ts`.
+   */
+  clientEnv?: AcpClientEnv;
+}
+
 interface SessionBridge {
   session: AgentSession;
+  /** The runtime that owns this session (per-session under `--client-env`). */
+  runtime: SessionRuntime;
+  /** Client-backed env for this session, when the flag is on. */
+  clientEnv?: AcpClientEnv;
   /** The external ACP session id all updates/requests are tagged with. */
   acpId: string;
   projector: AcpProjector;
@@ -59,6 +83,8 @@ interface SessionBridge {
   cancelled: boolean;
   lastFinishReason: string | undefined;
   seenApprovals: Set<string>;
+  /** Approvals dropped because the client owns the decision (reported on session close). */
+  clientOwnedApprovals: number;
   seenAskUser: Set<string>;
   /** In-flight permission/elicitation request controllers (cancelled on cancel/close). */
   pending: Set<AbortController>;
@@ -85,6 +111,58 @@ export interface AcpAgentOptions {
   defaults: AcpAgentDefaults;
   rootPath?: string;
   version?: string;
+  /**
+   * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
+   *
+   * Absent by default, in which case every session goes through `host` exactly as before. When
+   * present, `session/new` / `load` / `resume` ask it for a host **bound to that session's env**
+   * and use that host instead, which is what keeps "one runtime owns one env" intact (the runtime
+   * carries its own env, and tools read it from `ToolRunContext.coreEnv`).
+   *
+   * It receives the disk session id because every client request must carry it.
+   */
+  createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
+}
+
+/** What {@link AcpAgentOptions.createSessionHost} needs to build one session's client-backed env. */
+export interface AcpClientEnvFactoryContext {
+  /**
+   * The ACP session id as the client knows it (the disk id — see {@link diskSessionId}).
+   *
+   * A getter, not a value, because of an ordering fact: `session/load` and `session/resume` are
+   * told the id by the client, but `session/new` is not — core mints it inside `host.create`
+   * (`ensureSessionData`), which is also the call that needs this env. The holder is filled in
+   * immediately after that returns, and the env MUST NOT issue a client request before then: the
+   * only work `create` does touches `.agents/**`, which never reaches the client anyway.
+   */
+  sessionId: () => string;
+  /** The client capabilities observed during `initialize`. */
+  clientCapabilities: ClientCapabilities | undefined;
+  /**
+   * The agent-side connection handle, for calling `fs/*` / `terminal/*` back to the client.
+   *
+   * Passed down rather than imported: the connection belongs to the app, and a session's env must
+   * not be able to outlive it.
+   */
+  client: () => AgentContext;
+}
+
+/**
+ * A per-session runtime handed back by {@link AcpAgentOptions.createSessionHost}.
+ *
+ * `dispose` is required and not optional: this runtime owns an env built for one session, and a
+ * leaked one keeps a client-backed env (and its fallback handle) alive after the session is gone.
+ */
+export interface AcpSessionRuntime {
+  host: AgentSessionHost;
+  dispose: () => Promise<void>;
+  /**
+   * The client-backed env this runtime serves, when it has one.
+   *
+   * Presence is what tells the approval policy that writes may leave the process — see
+   * `approvals.ts`. Omitted by runtimes that do not borrow the client's filesystem.
+   */
+  clientEnv?: AcpClientEnv;
 }
 
 const AGENT_NAME = "codent";
@@ -171,14 +249,56 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
   };
 
-  const attach = (session: AgentSession, clientCaps: ClientCapabilities | undefined, acpId: string): SessionBridge => {
+  /**
+   * Build this session's runtime.
+   *
+   * Without `--client-env` there is nothing per-session: `bind` is a no-op and `dispose` does
+   * nothing, so every call site reads the same whether or not the flag is on.
+   */
+  const createRuntime = async (): Promise<SessionRuntime> => {
+    if (!options.createSessionHost) {
+      return { host: options.host, bind: () => undefined, dispose: async () => undefined };
+    }
+    let sessionId = "";
+    const perSession = await options.createSessionHost({
+      client,
+      sessionId: () => {
+        if (!sessionId) {
+          throw new Error(
+            "client-env: the session id was requested before the session existed; " +
+              "only `.agents/**` work may run before `host.create` returns"
+          );
+        }
+        return sessionId;
+      },
+      clientCapabilities: initCaps,
+    });
+    return {
+      host: perSession.host,
+      bind: (id: string) => {
+        sessionId = id;
+      },
+      dispose: perSession.dispose,
+      ...(perSession.clientEnv ? { clientEnv: perSession.clientEnv } : {}),
+    };
+  };
+
+  const attach = (
+    session: AgentSession,
+    clientCaps: ClientCapabilities | undefined,
+    acpId: string,
+    runtime: SessionRuntime
+  ): SessionBridge => {
     const bridge: SessionBridge = {
       session,
+      runtime,
+      clientEnv: runtime.clientEnv,
       acpId,
       chain: Promise.resolve(),
       cancelled: false,
       lastFinishReason: undefined,
       seenApprovals: new Set(),
+      clientOwnedApprovals: 0,
       seenAskUser: new Set(),
       pending: new Set(),
       elicitation: Boolean(clientCaps?.elicitation?.form),
@@ -207,7 +327,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     await bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
     bridge.projector.stop();
     for (const [id, b] of bridges) if (b === bridge) bridges.delete(id);
-    await options.host.destroy(bridge.session.id);
+    await bridge.runtime.host.destroy(bridge.session.id);
+    // Release the per-session env/runtime. A no-op without `--client-env`, and idempotent with it
+    // (a fork moves the bridge to a new id, but the runtime instance does not change).
+    await bridge.runtime.dispose().catch(() => undefined);
   };
 
   const handleInteractions = async (bridge: SessionBridge, payload: unknown): Promise<void> => {
@@ -218,6 +341,24 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     for (const approval of snapshot.approvals ?? []) {
       if (bridge.seenApprovals.has(approval.approvalId)) continue;
       bridge.seenApprovals.add(approval.approvalId);
+      // Under `--client-env` some approvals are the client's to grant, and it already did (it
+      // served the `fs/*` call we made). Asking again would be the same question twice, so the
+      // answer is given here instead — see `approvals.ts` for the exact set and the exclusions.
+      if (
+        bridge.clientEnv &&
+        shouldSuppressApproval({
+          approval,
+          messages: bridge.session.getSnapshot().messages ?? [],
+          clientEnv: bridge.clientEnv,
+          mode: bridge.session.getSnapshot().mode,
+        })
+      ) {
+        bridge.clientOwnedApprovals += 1;
+        void bridge.session
+          .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved: true })
+          .catch(() => undefined);
+        continue;
+      }
       void requestApproval(bridge, approval);
     }
     for (const ask of snapshot.askUser ?? []) {
@@ -391,9 +532,13 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (mapped.error) {
       throw new Error(mapped.error);
     }
-    const { session } = await options.host.create(createOptions(mapped.servers));
+    // With `--client-env` the session's env is client-backed and therefore per-session, so the
+    // runtime is built here rather than borrowed from the process-wide host.
+    const runtime = await createRuntime();
+    const { session } = await runtime.host.create(createOptions(mapped.servers));
     const acpId = diskSessionId(session);
-    const bridge = attach(session, initCaps, acpId);
+    runtime.bind(acpId);
+    const bridge = attach(session, initCaps, acpId, runtime);
     const snapshot = session.getSnapshot();
     // Record what the client is being told, so `set_mode` knows whether it changed anything.
     bridge.lastAdvertisedConfigMode = snapshot.mode;
@@ -424,13 +569,16 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (mapped.error) {
       throw new Error(mapped.error);
     }
-    const { session } = await options.host.create({
+    // The client told us the id here, so the client-backed env can carry it from the start.
+    const runtime = await createRuntime();
+    runtime.bind(sessionId);
+    const { session } = await runtime.host.create({
       ...createOptions(mapped.servers),
       resumeSessionId: sessionId,
     });
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
-    const bridge = attach(session, clientCaps, sessionId);
+    const bridge = attach(session, clientCaps, sessionId, runtime);
     if (replay) bridge.projector.replayFrom(session.getSnapshot());
   };
 

@@ -9,6 +9,11 @@
  *
  * `cwd` MUST be the workspace root: the local CoreEnv is built from it (`createNodeEnv`),
  * so an ACP client should spawn `codent acp` inside the workspace it wants the agent to see.
+ *
+ * With `--client-env` the local env stops being the whole story: each session gets a CoreEnv whose
+ * filesystem and argv execution are borrowed from the ACP client (see `client-env.ts`), with the
+ * local env kept as the fallback for everything the client cannot serve. That env is per-session
+ * (every client request carries a `sessionId`), so the runtime is per-session too.
  */
 
 import {
@@ -25,7 +30,9 @@ import {
 } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
 
-import type { AcpAgentDefaults, AcpAgentOptions } from "./agent.js";
+import { createAcpClientEnv } from "./client-env.js";
+
+import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
 import type { AgentSessionHost, ModelProvider, ModelStyle } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
@@ -48,11 +55,22 @@ export interface LocalAcpBootstrap {
   host: AgentSessionHost;
   defaults: AcpAgentDefaults;
   rootPath: string;
+  /**
+   * Present only under `--client-env`: builds the per-session runtime whose env borrows the
+   * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
+   */
+  createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
 }
 
 /** Register CoreEnv + model provider and return a local host + defaults. */
 export async function bootstrapLocalAcp(
-  options: { cwd?: string; sandbox?: "local" | "native"; model?: AcpModelOverride } = {}
+  options: {
+    cwd?: string;
+    sandbox?: "local" | "native";
+    model?: AcpModelOverride;
+    /** `--client-env`: build each session's env from the ACP client's fs/terminal capabilities. */
+    clientEnv?: boolean;
+  } = {}
 ): Promise<LocalAcpBootstrap> {
   const rootPath = options.cwd ?? process.cwd();
   const sandboxMode = options.sandbox ?? (process.env.SANDBOX_ENV === "native" ? "native" : "local");
@@ -139,9 +157,53 @@ export async function bootstrapLocalAcp(
 
   const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
 
+  // `--client-env`: one runtime per session, each over a client-backed env whose fallback is the
+  // local env above (which the boot runtime keeps alive — a per-session env only borrows it, so it
+  // must NOT be destroyed by `dispose`).
+  const createSessionHost = options.clientEnv
+    ? async (context: AcpClientEnvFactoryContext): Promise<AcpSessionRuntime> => {
+        const caps = {
+          readTextFile: Boolean(context.clientCapabilities?.fs?.readTextFile),
+          writeTextFile: Boolean(context.clientCapabilities?.fs?.writeTextFile),
+          terminal: Boolean(context.clientCapabilities?.terminal),
+        };
+        // The capability matrix and every fallback decision are logged (no values, just the shape):
+        // a tool route that looks wrong is nearly always a capability the client never declared.
+        process.stderr.write(
+          `[codent-acp] client-env capabilities: ` +
+            `readTextFile=${caps.readTextFile} writeTextFile=${caps.writeTextFile} terminal=${caps.terminal}\n`
+        );
+        const clientEnv = createAcpClientEnv({
+          client: context.client,
+          sessionId: context.sessionId,
+          rootPath,
+          // The boot runtime's own env, already resolved (`getEnv()` applies the defaults), so the
+          // per-session env inherits the exact fs/path/exec behaviour this process would have used.
+          fallback: agent.getEnv(),
+          caps,
+          log: (message) => process.stderr.write(`[codent-acp] ${message}\n`),
+        });
+        const sessionAgent = await CodentAgent.create({
+          env: clientEnv,
+          ...(provider ? { provider } : {}),
+          // Borrowed fallback env: disposing this runtime must not tear down the local env that
+          // every other session's fallback still depends on.
+          ownsEnv: false,
+        });
+        return {
+          host: sessionAgent.host,
+          dispose: () => sessionAgent.dispose(),
+          // Surfaced so the approval policy can ask this env the only question that matters:
+          // would a write to this path actually leave the process?
+          clientEnv,
+        };
+      }
+    : undefined;
+
   return {
     host: agent.host,
     rootPath,
+    ...(createSessionHost ? { createSessionHost } : {}),
     defaults: {
       model,
       ...(style ? { modelStyle: style } : {}),
@@ -155,7 +217,14 @@ export async function bootstrapLocalAcp(
 
 /** Build the full option set by bootstrapping locally. */
 export async function bootstrapAcpAgent(
-  options: { cwd?: string; sandbox?: "local" | "native"; version?: string; model?: AcpModelOverride } = {}
+  options: {
+    cwd?: string;
+    sandbox?: "local" | "native";
+    version?: string;
+    model?: AcpModelOverride;
+    /** `--client-env`: borrow the client's fs/terminal for each session. */
+    clientEnv?: boolean;
+  } = {}
 ): Promise<AcpAgentOptions> {
   const boot = await bootstrapLocalAcp(options);
   return {
@@ -163,5 +232,6 @@ export async function bootstrapAcpAgent(
     defaults: boot.defaults,
     rootPath: boot.rootPath,
     ...(options.version ? { version: options.version } : {}),
+    ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
   };
 }

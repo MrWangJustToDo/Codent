@@ -70,7 +70,9 @@ if (isAcpRequested(argv)) {
           baseURL: acpConfig.baseURL,
           apiKey: acpConfig.apiKey,
         }
-      : undefined
+      : undefined,
+    // `--client-env` opts into borrowing the client's fs/terminal per session.
+    { clientEnv: argv.includes("--client-env") }
   );
 }
 
