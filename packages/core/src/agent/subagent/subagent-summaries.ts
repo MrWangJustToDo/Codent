@@ -2,17 +2,25 @@
  * Child-agent rows for a status surface (task panel, `subagents` snapshot field, retained
  * `subagents` session channel).
  *
- * Lives in `managers/**` rather than in the `agent-session/**` snapshot module because the thing it
- * projects — `ManagedAgent` + its catalog — is owned here, and `agent-session` is a host layer a
- * manager must not import (`validate-layer-boundaries` captures that edge as a runtime value
- * import). The session snapshot and the retained channel both call it, so the two can never
- * disagree about what a row contains.
+ * Lives with the rest of the subagent-domain derivations (`run-stats`, `progress-summary`,
+ * `subagent-stop-reason`) because that is what it is: a projection of a child agent into
+ * something displayable. It is the sibling of `task-run-state.ts`, which it calls.
+ *
+ * It reads `ManagedAgent` and its catalog, which are owned by `managers/**` — so it reaches them
+ * through the `runtime-types/hosts.ts` ports module, exactly as `task-run-state.ts` does. That
+ * module exists for this: `agent → managers` is not an allowed edge, but domain code may name the
+ * manager's *type* through the sink. (Type-only is all this needs: `managed.id`, `child.usage` and
+ * `child.getStatus()` are members of that type.)
+ *
+ * Not in `agent-session/**`, where the snapshot consumes it: that layer is the host boundary, and a
+ * manager must not import it. The session snapshot and the retained channel both call this, so the
+ * two can never disagree about what a row contains.
  */
 
-import { readTaskRunPhase } from "../agent/subagent/task-run-state.js";
+import { readTaskRunPhase } from "./task-run-state.js";
 
-import type { ManagedAgent } from "./managed-agent.js";
-import type { AgentSessionSubagentSummary, UsageChangeSnapshot } from "../runtime-types/session-payloads.js";
+import type { ManagedAgent } from "../../runtime-types/hosts.js";
+import type { AgentSessionSubagentSummary, UsageChangeSnapshot } from "../../runtime-types/session-payloads.js";
 
 interface SubagentCatalog {
   getSubagents(parentId: string): ManagedAgent[];

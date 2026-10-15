@@ -69,6 +69,7 @@ import { AGENT_LOG_DIR, type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan-prompts.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
+import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import {
   type PreforkDiscardCause,
   discardRegisteredPrefork,
@@ -127,7 +128,6 @@ import { ExtensionRegistryService } from "./services/extension-registry-service.
 import { MemoryService } from "./services/memory-service.js";
 import { SessionService } from "./services/session-service.js";
 import { UsageHistoryService } from "./services/usage-history-service.js";
-import { buildSubagentSummaries } from "./subagent-summaries.js";
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 

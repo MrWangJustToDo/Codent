@@ -1,14 +1,11 @@
+import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
-import { buildSubagentSummaries } from "../managers/subagent-summaries.js";
 /**
  * Project ManagedAgent → AgentSessionSnapshot (serializable, no live handles).
  */
 
 import type { AgentSessionSnapshot } from "./types.js";
 import type { ManagedAgent } from "../managers/managed-agent.js";
-// Re-exported for hosts that consumed it from this module before the projection
-// was moved down into `managers/**` (see that module for why).
-export { buildSubagentSummaries } from "../managers/subagent-summaries.js";
 
 interface SubagentCatalog {
   getSubagents(parentId: string): ManagedAgent[];
