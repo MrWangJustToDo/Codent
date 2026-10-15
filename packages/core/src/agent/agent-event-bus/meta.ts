@@ -87,6 +87,7 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   // Subagents
   // ==========================================================================
   "subagent:created": { mode: "emit", channel: "lifecycle" },
+  "subagent:queue": { mode: "emit", channel: "lifecycle" },
   "subagent:started": { mode: "emit", channel: "lifecycle" },
   "subagent:prefork-discarded": { mode: "emit", channel: "lifecycle" },
   "subagent:completed": { mode: "emit", channel: "lifecycle" },

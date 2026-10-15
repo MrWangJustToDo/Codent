@@ -38,6 +38,7 @@ import {
   discardRegisteredPrefork,
   getTaskPreforkCoordinator,
   type PreforkDiscardCause,
+  type TaskPreforkCoordinator,
 } from "../../agent/subagent/task-prefork.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
@@ -69,6 +70,52 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
   // `RUN_STARTED`; registered pre-forks outlive iterations and are discarded only at the
   // run boundaries.
   let pendingCalls = new Map<string, PendingTaskCall>();
+
+  /**
+   * Label per registered `task` call, so a waiting row can name itself in the queue snapshot.
+   *
+   * Pruned by `emitQueue` against the coordinator's live entries, so it cannot grow with the
+   * session — a joined or discarded call drops out the next time the queue is published.
+   */
+  const descriptions = new Map<string, string>();
+
+  /**
+   * Publish the whole queue (see `subagent:queue`).
+   *
+   * A snapshot on every mutation rather than a per-task delta: the coordinator admits several
+   * calls at once and a restart discards them all, so a receiver that patched its own set would
+   * need to model every transition exactly. Replacing the set needs none of that.
+   */
+  const emitQueue = (): void => {
+    const managed = deps.getManagedAgent();
+    if (!managed) return;
+    const coordinator = getTaskPreforkCoordinator(managed);
+    for (const toolCallId of [...descriptions.keys()]) {
+      if (!coordinator.has(toolCallId)) descriptions.delete(toolCallId);
+    }
+    deps.emitEvent?.("subagent:queue", {
+      queued: coordinator.queuedToolCallIds().map((toolCallId) => {
+        const description = descriptions.get(toolCallId);
+        return description ? { toolCallId, description } : { toolCallId };
+      }),
+      active: coordinator.activeCount,
+      max: coordinator.maxActive,
+    });
+  };
+
+  /**
+   * The parent's coordinator with this middleware's publisher attached.
+   *
+   * Attached here (idempotently) rather than created by the middleware: the coordinator is shared
+   * per agent (`getTaskPreforkCoordinator`), and the mutation hook is the only way to announce a
+   * transition the middleware never sees — a run finishing and freeing a slot, which promotes the
+   * next waiting task.
+   */
+  const coordinatorFor = (managed: ManagedAgent): TaskPreforkCoordinator => {
+    const coordinator = getTaskPreforkCoordinator(managed);
+    coordinator.setOnChange(emitQueue);
+    return coordinator;
+  };
 
   const discardRegistered = (managed: ManagedAgent, cause: PreforkDiscardCause) => {
     // Report what the discard actually threw away. The record carries the subagents already
@@ -126,7 +173,12 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
       if (chunk.type === "TOOL_CALL_END") {
         const pending = pendingCalls.get(chunk.toolCallId);
         if (pending) {
-          trySpawn(deps, managed, chunk.toolCallId, pending, chunk.input);
+          trySpawn(deps, managed, chunk.toolCallId, pending, chunk.input, {
+            coordinatorFor,
+            remember: (toolCallId, description) => {
+              if (description) descriptions.set(toolCallId, description);
+            },
+          });
         }
       }
 
@@ -175,12 +227,25 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
  * Parse the streamed args and pre-fork the subagent. Any parse failure simply
  * skips pre-forking — the task tool then runs serially at execute time.
  */
+/**
+ * What a pre-fork registration needs from the middleware that owns the queue publication.
+ *
+ * Injected rather than reached through module scope: the description map and the publisher belong
+ * to one middleware instance (one agent), and this function is module-level so the task tool can
+ * also be driven from the serial path.
+ */
+interface QueuePublisher {
+  coordinatorFor: (managed: ManagedAgent) => TaskPreforkCoordinator;
+  remember: (toolCallId: string, description: string | undefined) => void;
+}
+
 function trySpawn(
   deps: TaskPreforkMiddlewareDeps,
   managed: ManagedAgent,
   toolCallId: string,
   pending: PendingTaskCall,
-  endInput: unknown
+  endInput: unknown,
+  queue: QueuePublisher
 ): void {
   let prompt: string | undefined;
   let description: string | undefined;
@@ -200,7 +265,11 @@ function trySpawn(
   }
   if (!prompt?.trim()) return;
 
-  const coordinator = getTaskPreforkCoordinator(managed);
+  const coordinator = queue.coordinatorFor(managed);
+  // Recorded BEFORE `start`: registration announces the queue synchronously, so a label written
+  // afterwards would miss the first snapshot and a waiting row would show as unnamed until the
+  // next transition.
+  queue.remember(toolCallId, description);
   // Tie the subagent to the parent's current run so a parent abort cascades.
   const controller = new AbortController();
   const parentSignal = deps.manager.getAgent(managed.id)?.run.currentAbortController?.signal;

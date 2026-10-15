@@ -217,6 +217,7 @@
     "validate:extension-render-owner": "pnpm run build && node scripts/validate-extension-render-owner.mjs",
     "validate:extension-ui-channel": "pnpm run build && node scripts/validate-extension-ui-channel.mjs",
     "validate:task-prefork": "pnpm run build && node scripts/validate-task-prefork.mjs",
+    "validate:task-queue": "pnpm run build && node scripts/validate-task-queue.mjs",
     "validate:task-run-state": "pnpm run build && node scripts/validate-task-run-state.mjs",
     "validate:code-mode-extension": "pnpm run build && node scripts/validate-code-mode-extension.mjs",
     "validate:code-mode-binding-names": "pnpm run build && node scripts/validate-code-mode-binding-names.mjs",

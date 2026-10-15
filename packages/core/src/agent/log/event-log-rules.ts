@@ -334,6 +334,12 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     formatMessage: (event) =>
       `Subagent started: ${p(event).description ?? event.agentId}${taskBindingSuffix(p(event))}`,
   },
+  /**
+   * Not logged: the queue is UI state, re-published on every admission and discard, so a line per
+   * emission would flood the timeline with a fact the task rows already show. `false` is the
+   * "no log line" marker this table uses.
+   */
+  "subagent:queue": false,
   /** An eagerly started `task` run was thrown away — the line that names an orphan. */
   "subagent:prefork-discarded": {
     level: "warn",

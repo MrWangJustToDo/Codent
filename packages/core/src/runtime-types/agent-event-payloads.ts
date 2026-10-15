@@ -255,6 +255,26 @@ export type AgentEventPayloadMap = {
     error?: string;
   };
   "compaction:reactive-max-retries": EmptyAgentEventPayload;
+  /**
+   * The pre-fork queue: `task` calls admitted a few at a time, the rest waiting for a slot.
+   *
+   * A SNAPSHOT, not a delta — every emission carries the whole queue, so a receiver replaces its
+   * set and a dropped, duplicated or re-ordered event cannot desync it. (Ordered by admission,
+   * which is the order the rows would start in.) Without it a waiting task was invisible: it has
+   * no subagent yet, so it appears in neither `subagents` nor `agent:tool-start`.
+   */
+  "subagent:queue": {
+    /** Waiting tasks, in admission order. Empty means nothing is waiting. */
+    queued?: Array<{
+      toolCallId: string;
+      /** The task's own label, when known — what the row shows while it waits. */
+      description?: string;
+    }>;
+    /** Slots currently occupied by running tasks. */
+    active?: number;
+    /** The cap `active` is counted against (`maxConcurrentTasks`). */
+    max?: number;
+  };
   "subagent:created": {
     subagentId?: string;
     /**

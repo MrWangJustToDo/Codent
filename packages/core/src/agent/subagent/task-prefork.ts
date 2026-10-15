@@ -95,6 +95,9 @@ export class TaskPreforkCoordinator {
   private readonly waiting = new Set<PreforkEntry>();
   private active = 0;
 
+  /** Set by {@link setOnChange}: announced on every queue/occupancy mutation. */
+  private onChange?: () => void;
+
   /**
    * @param getMaxActive Concurrency cap provider, read per admission so a value
    *   changed through `ManagedAgent.updateConfig` takes effect on the next run.
@@ -109,6 +112,42 @@ export class TaskPreforkCoordinator {
   /** Runs currently holding a concurrency slot (excludes queued runs). */
   get activeCount(): number {
     return this.active;
+  }
+
+  /** The cap currently enforced. Re-read from the provider, so an `updateConfig` is honored. */
+  get maxActive(): number {
+    return this.getMaxActive();
+  }
+
+  /**
+   * Tasks waiting for a slot, in admission order (the order they will start in).
+   *
+   * Read from `waiting` rather than the entries' `state`: an entry is admitted by opening its
+   * gate, and `state` only flips to `running` when the drive loop next runs — so `state` briefly
+   * reports "queued" for a run that already holds a slot.
+   */
+  queuedToolCallIds(): string[] {
+    const queued: string[] = [];
+    for (const [toolCallId, entry] of this.entries) {
+      if (!entry.aborted && this.waiting.has(entry)) queued.push(toolCallId);
+    }
+    return queued;
+  }
+
+  /**
+   * Publish every mutation of the queue/occupancy to a host.
+   *
+   * A callback rather than a bus or a logger: this class stays transport-free (the middleware owns
+   * the event), and the callback is the ONLY place a snapshot is taken, so a new mutation cannot
+   * forget to announce itself — the failure mode would be a UI that keeps showing a task as
+   * waiting after it started, or a slot count that never drops.
+   */
+  setOnChange(onChange: () => void): void {
+    this.onChange = onChange;
+  }
+
+  private notify(): void {
+    this.onChange?.();
   }
 
   has(toolCallId: string): boolean {
@@ -162,6 +201,9 @@ export class TaskPreforkCoordinator {
       }
     }
     this.entries.clear();
+    // Every registered run is gone: announce it, or a host would keep rendering the queue it saw
+    // before the discard (including tasks whose attempt this just cancelled).
+    this.notify();
     return discarded;
   }
 
@@ -214,6 +256,9 @@ export class TaskPreforkCoordinator {
     } else {
       this.waiting.add(entry);
     }
+    // Announce from here rather than from each branch: whether this call started immediately or
+    // joined the queue, its arrival changed what a host should show.
+    this.notify();
     return true;
   }
 
@@ -225,6 +270,7 @@ export class TaskPreforkCoordinator {
     const entry = this.entries.get(toolCallId);
     if (!entry) return null;
     this.entries.delete(toolCallId);
+    this.notify();
     return entry.promise;
   }
 
@@ -233,6 +279,8 @@ export class TaskPreforkCoordinator {
     entry.occupying = true;
     this.active += 1;
     entry.openGate();
+    // No `notify()` here: every caller announces afterwards (the registering `start`, or `drive`'s
+    // finally after `promote`), and two snapshots for one transition would be pure noise.
   }
 
   private async drive(
@@ -247,6 +295,7 @@ export class TaskPreforkCoordinator {
         this.active -= 1;
         this.promote();
       }
+      this.notify();
       return cancelledStubResult();
     }
     entry.state = "running";
@@ -261,6 +310,9 @@ export class TaskPreforkCoordinator {
       entry.occupying = false;
       this.active -= 1;
       this.promote();
+      // After `promote`: a freed slot usually admits someone, so this announcement carries the
+      // post-promotion queue rather than a one-off intermediate state.
+      this.notify();
     }
   }
 

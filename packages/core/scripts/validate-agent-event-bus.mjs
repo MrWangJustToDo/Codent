@@ -143,6 +143,9 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.equal(AGENT_EVENT_META["tool:chunk"].channel, "tool");
   assert.equal(AGENT_EVENT_META["agent:tool-approval-resolved"].channel, "lifecycle");
   assert.equal(AGENT_EVENT_META["subagent:progress-summary-error"].channel, "lifecycle");
+  // The pre-fork queue rides the lifecycle channel with the rest of the subagent family, so a host
+  // that already watches subagent rows gets the wait state on the same subscription.
+  assert.equal(AGENT_EVENT_META["subagent:queue"].channel, "lifecycle");
 }
 
 console.log("agent-event-bus validation passed");

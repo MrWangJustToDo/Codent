@@ -71,6 +71,7 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "compaction:reactive-max-retries": "observable",
   // Subagents
   "subagent:created": "observable",
+  "subagent:queue": "observable",
   "subagent:started": "observable",
   "subagent:prefork-discarded": "observable",
   "subagent:completed": "observable",
