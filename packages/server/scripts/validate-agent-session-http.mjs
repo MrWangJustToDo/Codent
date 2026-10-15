@@ -104,6 +104,30 @@ assert.equal((await gzipRes.json()).name, "parity-agent");
   assert.equal(typeof frame.ts, "number");
 }
 
+// ── 2d. `?channels=` is narrowed to real channel names, and rejects unknown ones ──
+//
+// The query string is untrusted text that used to reach `session.subscribe` as `string[]`.
+// Narrowing it must not degrade into "subscribe to everything": core reads an *empty*
+// channel list as "use the defaults", so an unknown name dropped to `[]` would hand the
+// client every channel it did not ask for. Assert the rejection instead.
+{
+  const unknown = await fetch(`${baseUrl}/api/agent/${snap.agentId}/events?channels=bogus`);
+  assert.equal(unknown.status, 400, "an unknown channel must be rejected, not silently dropped");
+  const body = await unknown.json();
+  assert.match(body.message, /bogus/, "the rejection must name the offending channel");
+
+  // A mixed list is rejected too — a partially-unknown request must not half-subscribe.
+  const mixed = await fetch(`${baseUrl}/api/agent/${snap.agentId}/events?channels=state,bogus`);
+  assert.equal(mixed.status, 400);
+
+  // The legitimate spelling still works, and an empty value falls back to the defaults.
+  const ok = await fetch(`${baseUrl}/api/agent/${snap.agentId}/events?channels=state,messages`, {
+    signal: AbortSignal.timeout(1500),
+  });
+  assert.equal(ok.status, 200);
+  ok.body?.cancel();
+}
+
 // ── 3. State-channel sync: rename propagates without a snapshot refetch ──
 const stateUnsub = session.subscribe(() => {}, { channels: ["state"] });
 await new Promise((resolve) => setTimeout(resolve, 150));

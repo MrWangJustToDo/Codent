@@ -20,26 +20,37 @@ import { getServerEnv, getServerManager } from "../server-runtime.js";
 
 import { readServerModelEnv } from "./provider.js";
 
-import type { ModelsConfig, ModelsConfigEntry } from "@codent/core";
+import type {
+  AgentSession,
+  AgentSessionChannel,
+  AgentSessionCommand,
+  ModelsConfig,
+  ModelsConfigEntry,
+} from "@codent/core";
 
-interface SummarySnapshotLike {
-  key: string;
-  [field: string]: unknown;
-}
-
-interface SessionLike {
-  id: string;
+/**
+ * `AgentSession` with only its snapshot payload erased.
+ *
+ * `AgentSessionSnapshot.messages` is `UIMessage[]` from `@tanstack/ai`, and this file
+ * exports the Hono route object — whose type is *inferred* from its handlers. A
+ * `getSnapshot(): AgentSessionSnapshot` reachable through those handlers makes the route
+ * type unnameable without `@codent/core/node_modules/@tanstack/ai` (TS2742, "cannot be named
+ * without a reference to … This is likely not portable"), which would break the emitted
+ * declaration of a published entry (`@codent/server` → `dist/index.d.mts`).
+ *
+ * Only the snapshot is erased. `dispatch` / `subscribe` keep their core types, so a command
+ * is still checked against the discriminated union and the `tool` channel payload is still
+ * narrowed by its discriminant — the earlier hand-written `SessionLike` erased all of it and
+ * needed `as unknown as` at every crossing.
+ *
+ * `AgentSession` still satisfies this (a snapshot is an `unknown`), so no cast is needed at
+ * the `createLocalAgentSession` call site.
+ */
+interface SessionWithErasedSnapshot extends Omit<AgentSession, "getSnapshot"> {
   getSnapshot(): unknown;
-  dispatch(command: unknown): Promise<unknown>;
-  subscribe(
-    handler: (event: { channel: string; payload?: unknown }) => void | Promise<void>,
-    options?: { channels?: string[] }
-  ): () => void;
-  getSummaryStreamSnapshot?(key: string): SummarySnapshotLike | null;
-  listSummaryStreamSnapshots?(): SummarySnapshotLike[];
 }
 
-const sessions = new Map<string, SessionLike>();
+const sessions = new Map<string, SessionWithErasedSnapshot>();
 
 /**
  * Disconnect recovery: when the last SSE subscriber leaves, a run can keep
@@ -60,16 +71,12 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
 const sseClients = new Map<string, number>();
 const sseStopTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function snapshotStatus(snapshot: unknown): string | undefined {
-  return (snapshot as { status?: string } | null | undefined)?.status;
-}
-
-function hasActiveRun(session: SessionLike): boolean {
-  const status = snapshotStatus(session.getSnapshot());
+function hasActiveRun(session: SessionWithErasedSnapshot): boolean {
+  const status = (session.getSnapshot() as { status?: string } | null | undefined)?.status;
   return status != null && ACTIVE_RUN_STATUSES.has(status);
 }
 
-function scheduleIdleStop(id: string, session: SessionLike): void {
+function scheduleIdleStop(id: string, session: SessionWithErasedSnapshot): void {
   if (sseStopTimers.has(id)) return;
   const timer = setTimeout(() => {
     sseStopTimers.delete(id);
@@ -124,7 +131,7 @@ function appendCapped(chunks: string[], bytes: number, chunk: string): { chunks:
   return { chunks, bytes: total };
 }
 
-function attachToolBuffer(id: string, session: SessionLike): void {
+function attachToolBuffer(id: string, session: SessionWithErasedSnapshot): void {
   if (toolUnsubs.has(id)) return;
   const buffers = new Map<string, ToolBufferEntry>();
   toolBuffers.set(id, buffers);
@@ -132,11 +139,8 @@ function attachToolBuffer(id: string, session: SessionLike): void {
     id,
     session.subscribe((event) => {
       if (event.channel !== "tool") return;
-      const payload = event.payload as
-        | { kind: "chunk"; chunk: { toolCallId: string; type: "stdout" | "stderr"; chunk: string } }
-        | { kind: "clear"; toolCallId: string }
-        | undefined;
-      if (!payload) return;
+      if (event.channel !== "tool") return;
+      const payload = event.payload;
       if (payload.kind === "clear") {
         buffers.delete(payload.toolCallId);
         return;
@@ -223,15 +227,13 @@ async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
  * resolveModelConfig pipeline used at session creation. Commands that DO carry
  * explicit connection fields pass through unchanged.
  */
-async function resolveServerModelSetCommand(command: unknown): Promise<unknown> {
-  const cmd = command as { type?: string; model?: string; modelStyle?: string } | null;
-  if (cmd?.type !== "model.set" || !cmd.model?.trim()) return command;
-  const raw = command as Record<string, unknown>;
-  if (raw.modelBaseURL || raw.modelApiKey) return command;
+async function resolveServerModelSetCommand(command: AgentSessionCommand): Promise<AgentSessionCommand> {
+  if (command.type !== "model.set" || !command.model?.trim()) return command;
+  if (command.modelBaseURL || command.modelApiKey) return command;
 
   const { resolveModelConfig } = await loadCore();
   const config = await loadServerModelsConfig();
-  const model = cmd.model;
+  const model = command.model;
   const entry = (config?.models ?? []).find(
     (e): e is Extract<ModelsConfigEntry, { type: "direct" }> => e.type === "direct" && !!e.models?.includes(model)
   );
@@ -245,26 +247,26 @@ async function resolveServerModelSetCommand(command: unknown): Promise<unknown> 
     : await resolveModelConfig({
         ...readServerModelEnv(),
         model,
-        ...(cmd.modelStyle ? { style: cmd.modelStyle as "openai" | "anthropic" } : {}),
+        ...(command.modelStyle ? { style: command.modelStyle } : {}),
       });
   if (!connection.baseURL) return command;
   return {
-    ...raw,
+    ...command,
     modelStyle: connection.style,
     modelBaseURL: connection.baseURL,
     ...(connection.apiKey ? { modelApiKey: connection.apiKey } : {}),
-    modelInfo: raw.modelInfo ?? modelInfo ?? null,
+    modelInfo: command.modelInfo ?? modelInfo ?? null,
   };
 }
 
-async function getSession(id: string): Promise<SessionLike | undefined> {
+async function getSession(id: string): Promise<SessionWithErasedSnapshot | undefined> {
   const existing = sessions.get(id);
   if (existing) return existing;
   const { createLocalAgentSession } = await loadCore();
   const manager = getServerManager();
   const managed = manager.getAgent(id);
   if (!managed) return undefined;
-  const session = createLocalAgentSession({ managed, manager }) as unknown as SessionLike;
+  const session = createLocalAgentSession({ managed, manager });
   sessions.set(id, session);
   attachToolBuffer(id, session);
   return session;
@@ -340,7 +342,13 @@ export const agentSessionRoutes = new Hono()
     }
     const manager = getServerManager();
     const host = createLocalAgentSessionHost({ manager });
-    const { session } = await host.create({
+    // Annotated deliberately: `host.create()` returns the real `AgentSession`, and leaving that
+    // inferred would make this route object's type unnameable without `@tanstack/ai`
+    // (see SessionWithErasedSnapshot).
+    // Annotated deliberately: `host.create()` returns the real `AgentSession`, and leaving that
+    // inferred would make this route object's type unnameable without `@tanstack/ai`
+    // (see SessionWithErasedSnapshot).
+    const { session }: { session: SessionWithErasedSnapshot } = await host.create({
       name: body.name || "remote",
       model: connection.model,
       systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt(undefined, getServerEnv())),
@@ -356,8 +364,8 @@ export const agentSessionRoutes = new Hono()
       resumeSessionId: body.resumeSessionId,
       ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
     });
-    sessions.set(session.id, session as unknown as SessionLike);
-    attachToolBuffer(session.id, session as unknown as SessionLike);
+    sessions.set(session.id, session);
+    attachToolBuffer(session.id, session);
     // Redact secrets: `body` now carries toolConfig (websearch API keys) alongside the model
     // apiKey, so never stringify the whole payload — only its non-secret shape.
     const { apiKey: _apiKey, toolConfig: _toolConfig, ...safeBody } = body;
@@ -366,7 +374,7 @@ export const agentSessionRoutes = new Hono()
         `-> id=${session.id} sessions.size=${sessions.size} ` +
         `inManager=${manager.getAgent(session.id)?.id ?? "NONE"}`
     );
-    return c.json({ id: session.id, snapshot: (session as SessionLike).getSnapshot() });
+    return c.json({ id: session.id, snapshot: session.getSnapshot() });
   })
   .get("/:id/snapshot", compress(), async (c) => {
     const id = c.req.param("id");
@@ -405,12 +413,25 @@ export const agentSessionRoutes = new Hono()
     if (!session) return c.json({ error: true, message: "Session not found" }, 404);
 
     const channelsParam = c.req.query("channels");
-    const channels = channelsParam
-      ? channelsParam
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : undefined;
+    // `?channels=` is untrusted URL text; narrow it to the protocol's channel names (core's
+    // list, not a copy). An unknown name is rejected rather than dropped: dropping it would
+    // narrow to an empty list, and core reads an empty list as "use the defaults" — i.e. the
+    // client would silently receive *every* channel it did not ask for. Previously an unknown
+    // name was passed through and matched nothing, so the client silently got no events at all.
+    let channels: AgentSessionChannel[] | undefined;
+    if (channelsParam) {
+      const { AGENT_SESSION_CHANNELS } = await loadCore();
+      const known = new Set<string>(AGENT_SESSION_CHANNELS);
+      const requested = channelsParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const unknown = requested.filter((s) => !known.has(s));
+      if (unknown.length > 0) {
+        return c.json({ error: true, message: `Unknown channel(s): ${unknown.join(", ")}` }, 400);
+      }
+      channels = requested.filter((s): s is AgentSessionChannel => known.has(s));
+    }
 
     return streamSSE(c, async (stream) => {
       let closed = false;
@@ -448,7 +469,7 @@ export const agentSessionRoutes = new Hono()
         async (event) => {
           if (closed) return;
           if (event.channel === "messages") {
-            delta.push(event.payload as unknown[]);
+            delta.push(event.payload);
             return;
           }
           await writeFrame(event.channel, event.payload);
