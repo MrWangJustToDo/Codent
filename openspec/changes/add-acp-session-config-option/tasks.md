@@ -26,6 +26,8 @@
 - [x] 4.1 `packages/core/ARCHITECTURE.md:169`：`host.bind(agentId)` 是**幽灵方法**（`AgentSessionHost` 只有 `create` / `connect` / `list` / `destroy` 及可选的 `listPersistedSessions` / `deleteSession`）——改为指向真实寻址面
 - [x] 4.2 `AGENTS.md` 的 `CoreEnv` 接口块：补 `cwd()`，并把 `// Optional:` 清单一并补全（`execFile`、`appendFile`、`rename`、`startCommand`、`getShellInfo`）
 
-## 5. 跟进项（本 change 不做，先记录）
+## 5. 一致化（本 change 一并收口）
 
-- [x] 5.1 `session/set_mode` 对**不存在的会话**静默返回 `{}`（报告成功），与 `fork` / `delete` / `prompt` 的显式拒绝不一致——属既有行为，改动会影响既有客户端，留待独立跟进
+- [x] 5.1 `session/set_mode` 对**不存在的会话**改为显式拒绝（原先静默返回 `{}`，对一个从未触碰的会话报告成功）
+- [x] 5.2 断言两个入口对同一缺失会话给出**一致**的拒绝；并记录 `session/close` 为何是真例外（期望状态已经为真）
+- [x] 5.3 变异验证：把 `set_mode` 的拒绝改回静默成功 ⇒ 断言失败

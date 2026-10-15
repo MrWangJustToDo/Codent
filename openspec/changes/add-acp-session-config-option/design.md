@@ -56,13 +56,21 @@ if (!option) throw new Error(`Unknown configuration option: ${configId}`);
 而查表判定不可能漏——选项集本身就是唯一真源。`type: "boolean"` 的分支同理不需要特判：
 按 `configId` 找到项之后，值经 `mode` 校验即可。
 
-### Decision: 会话不存在时拒绝，而不是静默成功
+### Decision: `set_config_option` 与 `set_mode` 对不存在的会话**一致**地拒绝
 
-其他 `sessionId` 类请求在找不到 live bridge 时抛错（`session/fork` / `session/delete` / `prompt`），
-`set_mode` 是唯一的例外：它在 `bridges.get()` 为 `undefined` 时**没有抛错，只返回 `{}`**。
-这是一个既有缺陷（对不存在的会话报告「改模式成功」），但**修它不是本 change 的目标**——
-它属于 `set_mode` 的行为，动它会超出范围且可能影响既有客户端。本 change 的新方法选择与
-`session/delete` 一致的显式拒绝，并在 tasks 中记录 `set_mode` 的这个不一致性作为跟进项。
+两者都经 `applyMode` 改变会话状态，因此对同一个「会话不存在」必须给同一个答案。
+原本 `set_mode` 是唯一例外：`bridges.get()` 为 `undefined` 时它**不抛错、只返回 `{}`**，即
+对一个从未触碰的会话报告「改模式成功」。
+
+本 change 把这个例外也收紧为拒绝，理由是：
+
+- **沉默的成功无法被客户端发现**。返回 `{}` 与真正切换成功在协议上不可区分，客户端会把
+  自己那份 `configOptions` 缓存标成已生效——而服务端什么都没发生。
+- **不对称本身是缺陷**。同一个操作经两个入口得到「拒绝」与「成功」两个答案，只取决于客户端
+  碰巧用了哪条通路；而本 change 的全部意义就是让这两条通路等价。
+- **`session/close` 的容忍不是反例**。它同样容忍缺失，但那里期望状态**已经是真的**（会话已经不在了，
+  「关闭成功」是诚实答案）；`set_mode` 的期望状态（模式 = X）则完全不成立。判据是
+  「期望状态是否已经为真」，不是「是否容忍缺失」。
 
 ## Risks
 

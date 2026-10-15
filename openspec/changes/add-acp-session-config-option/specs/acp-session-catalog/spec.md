@@ -8,6 +8,10 @@ agent SHALL 在 `session/new` 与 `session/fork` 的响应中携带 `configOptio
 模式仍经既有 `session/set_mode` 与 `current_mode_update` 通路同步，该 `configOptions` 项 SHALL 与该通路
 保持一致，MUST NOT 成为第二个真源。
 
+对**不存在的会话**改变会话状态的请求（`session/set_mode`、`session/set_config_option`，以及既有的
+`prompt` / `cancel` / `fork`）SHALL 以 JSON-RPC 错误拒绝，MUST NOT 静默报告成功；`session/close` MAY
+容忍缺失（那里期望状态已经为真）。判据是「期望状态是否已经为真」，不是「该请求是否幂等」。
+
 广告了 `configOptions` 即 SHALL 接受 `session/set_config_option`：`configOptions` 是声明，
 `session/set_config_option` 是该声明的写回路径，二者 MUST 同时存在。该方法 SHALL
 以 `configId` 在**当前声明的选项集**中查找（而非硬编码某个 id），未找到时返回 JSON-RPC 错误；
@@ -56,7 +60,9 @@ agent SHALL 在 `session/new` 与 `session/fork` 的响应中携带 `configOptio
 #### Scenario: 不存在的会话被显式拒绝
 
 - **WHEN** client 为一个没有 live 会话的 `sessionId` 调用 `session/set_config_option`
+      **或** `session/set_mode`
 - **THEN** agent SHALL 返回 JSON-RPC 错误，MUST NOT 报告成功
+- **AND** 两个入口 SHALL 给出一致的答案（同一操作，同一会话状态，MUST NOT 因通路而异）
 
 #### Scenario: load 与 resume 形状不变
 

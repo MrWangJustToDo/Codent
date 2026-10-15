@@ -715,9 +715,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
-    // NOTE: an unknown session is silently a no-op here (pre-existing; `fork` / `delete` /
-    // `prompt` all reject). Left alone deliberately — see the change's design.md.
-    if (bridge) await applyMode(bridge, ctx.params.modeId as AgentMode);
+    // Reject, like every other handler that must CHANGE something: reporting success for a session
+    // we never touched is a lie the client cannot detect. (`close` is allowed to tolerate absence —
+    // there the desired state is already true, so "ok" is honest. Here it is not.)
+    if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
+    await applyMode(bridge, ctx.params.modeId as AgentMode);
     return {};
   });
 

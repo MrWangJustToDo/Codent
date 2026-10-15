@@ -429,17 +429,31 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     check("a refused option does not change the mode", cfgSession.getSnapshot().mode === "normal");
 
     // A session that does not exist cannot have its mode set — reporting success would be a lie.
-    let ghost = null;
-    try {
-      await cx.request(methods.agent.session.setConfigOption, {
+    // Both entry points reach the same `applyMode`, so they must give the SAME answer here; a
+    // client that happens to use one route must not be told a different story than the other.
+    const ghostly = async (send) => {
+      try {
+        await send();
+        return null; // resolved = reported success
+      } catch (error) {
+        return `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+      }
+    };
+    const ghost = await ghostly(() =>
+      cx.request(methods.agent.session.setConfigOption, {
         sessionId: "ses_ghost",
         configId: "mode",
         value: "plan",
-      });
-    } catch (error) {
-      ghost = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
-    }
+      })
+    );
     check("an unknown session is refused rather than reported as set", /ses_ghost/i.test(ghost ?? ""));
+    const ghostViaSetMode = await ghostly(() =>
+      cx.request(methods.agent.session.setMode, { sessionId: "ses_ghost", modeId: "plan" })
+    );
+    check(
+      "set_mode refuses an unknown session too (the two entry points agree)",
+      /ses_ghost/i.test(ghostViaSetMode ?? "")
+    );
   });
 }
 
