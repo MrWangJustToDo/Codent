@@ -307,6 +307,142 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   });
 }
 
+// --- session/set_config_option: the write side of the advertised selector ----
+//
+// `configOptions` is a declaration, and `session/set_config_option` is the request that acts on
+// it. Advertising the `mode` select without registering the setter meant a client rendered a mode
+// dropdown and got "Method not found" (-32601) the instant a user touched it — so these assertions
+// exist to keep the two halves welded together.
+{
+  const cfgSession = makeFakeSession("agent_cfg", "ses_cfg", { mode: "plan" });
+  const cfgHost = {
+    async create() {
+      return { session: cfgSession };
+    },
+    connect: () => cfgSession,
+    list: () => [],
+    async destroy() {},
+    async listPersistedSessions() {
+      return [];
+    },
+    async deleteSession() {
+      return true;
+    },
+  };
+  const cfgUpdates = [];
+  const cfgClient = createClient({ name: "cfg-client" }).onNotification(methods.client.session.update, (ctx) =>
+    cfgUpdates.push(ctx.params)
+  );
+  const cfgApp = createAcpAgent({ host: cfgHost, defaults: { model: "fake-model" }, rootPath: "/ws" });
+
+  await cfgClient.connectWith(cfgApp, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    const fresh = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+
+    // The advertised id is accepted, and the mode actually moves (not just reported as moved).
+    // Caught rather than awaited bare: if the handler ever disappears the request rejects with
+    // "Method not found", and an unhandled rejection would abort the whole file as a stack trace
+    // instead of reporting which promise the agent broke.
+    cfgUpdates.length = 0;
+    let resp = null;
+    let writeError = null;
+    try {
+      resp = await cx.request(methods.agent.session.setConfigOption, {
+        sessionId: fresh.sessionId,
+        configId: "mode",
+        value: "normal",
+      });
+    } catch (error) {
+      writeError = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+    }
+    check(
+      "session/set_config_option is accepted (the advertised select is writable)",
+      writeError === null && resp !== null
+    );
+    check("it really changed the session mode", cfgSession.getSnapshot().mode === "normal");
+    check(
+      "its response carries the full option set with the new value",
+      resp?.configOptions?.find((o) => o.category === "mode")?.currentValue === "normal"
+    );
+    const viaConfig = cfgUpdates.filter((u) => u.update.sessionUpdate === "config_option_update");
+
+    // THE point of this section: the two entry points are one behaviour. Same target mode, same
+    // session → the emitted update must be identical field for field, or they have started to
+    // drift into two mode systems.
+    cfgUpdates.length = 0;
+    await cx.request(methods.agent.session.setMode, { sessionId: fresh.sessionId, modeId: "plan" });
+    cfgUpdates.length = 0;
+    await cx.request(methods.agent.session.setMode, { sessionId: fresh.sessionId, modeId: "normal" });
+    const viaSetMode = cfgUpdates.filter((u) => u.update.sessionUpdate === "config_option_update");
+    check(
+      "set_config_option and set_mode produce an identical config_option_update",
+      viaConfig.length === 1 &&
+        viaSetMode.length === 1 &&
+        JSON.stringify(viaConfig[0].update) === JSON.stringify(viaSetMode[0].update)
+    );
+
+    // Idempotence carries over from the shared implementation (it is the same guard).
+    cfgUpdates.length = 0;
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "mode",
+      value: "normal",
+    });
+    check(
+      "re-setting the same value through set_config_option emits no update",
+      cfgUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").length === 0
+    );
+
+    // The response must describe the SESSION, not echo the request. This only shows up when the
+    // session does not do what it was asked: `planUnavailable` makes the session refuse `plan`, so
+    // an echo would happily report "plan" for a session that is still "normal".
+    cfgUpdates.length = 0;
+    cfgSession.state.planUnavailable = true;
+    const refused = await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "mode",
+      value: "plan",
+    });
+    check(
+      "a value the session refuses is reported as the session's ACTUAL mode, not the request",
+      refused.configOptions?.find((o) => o.category === "mode")?.currentValue === "normal"
+    );
+    check("the session really did refuse it", cfgSession.getSnapshot().mode === "normal");
+    check(
+      "a refused value emits no config_option_update (nothing took effect)",
+      cfgUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").length === 0
+    );
+    cfgSession.state.planUnavailable = false;
+
+    // An id outside the advertised set is refused, and refusing must not have moved anything.
+    let badId = null;
+    try {
+      await cx.request(methods.agent.session.setConfigOption, {
+        sessionId: fresh.sessionId,
+        configId: "not-an-option",
+        value: "plan",
+      });
+    } catch (error) {
+      badId = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+    }
+    check("an undeclared configId is refused", /not-an-option/i.test(badId ?? ""));
+    check("a refused option does not change the mode", cfgSession.getSnapshot().mode === "normal");
+
+    // A session that does not exist cannot have its mode set — reporting success would be a lie.
+    let ghost = null;
+    try {
+      await cx.request(methods.agent.session.setConfigOption, {
+        sessionId: "ses_ghost",
+        configId: "mode",
+        value: "plan",
+      });
+    } catch (error) {
+      ghost = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+    }
+    check("an unknown session is refused rather than reported as set", /ses_ghost/i.test(ghost ?? ""));
+  });
+}
+
 // A host without the catalog members must NOT advertise list/delete.
 {
   const bareClient = createClient({ name: "bare-client" });

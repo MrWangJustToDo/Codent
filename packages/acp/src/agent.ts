@@ -689,26 +689,56 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     };
   });
 
-  app.onRequest(methods.agent.session.setMode, async (ctx) => {
-    const mode = ctx.params.modeId as AgentMode;
-    if (!MODE_IDS.includes(mode)) throw new Error(`Unknown mode: ${ctx.params.modeId}`);
-    const bridge = bridges.get(ctx.params.sessionId);
-    if (bridge) {
-      await bridge.session.dispatch({ type: "mode.set", mode });
-      // Re-read the mode from the session rather than echoing the request: the dispatch may be a
-      // no-op (already in that mode) or clamp to something else, and the advertised option must
-      // describe what the session ACTUALLY is. Without this update the client keeps whatever
-      // `configOptions` it got from `session/new`/`session/fork` and its selector drifts silently.
-      const current = bridge.session.getSnapshot().mode;
-      if (current !== bridge.lastAdvertisedConfigMode) {
-        bridge.lastAdvertisedConfigMode = current;
-        emit(bridge.acpId, {
-          sessionUpdate: "config_option_update",
-          configOptions: sessionConfigOptions(current),
-        });
-      }
+  /**
+   * Apply a mode to a live session — the ONE place a mode change happens.
+   *
+   * ACP reaches this by two routes (`session/set_mode`, and `session/set_config_option` via the
+   * `mode` config option it advertises), and they must not grow into two mode systems: the
+   * dispatch, the re-read and the follow-up update are all one behaviour.
+   */
+  const applyMode = async (bridge: SessionBridge, mode: AgentMode): Promise<void> => {
+    if (!MODE_IDS.includes(mode)) throw new Error(`Unknown mode: ${mode}`);
+    await bridge.session.dispatch({ type: "mode.set", mode });
+    // Re-read the mode from the session rather than echoing the request: the dispatch may be a
+    // no-op (already in that mode) or clamp to something else, and the advertised option must
+    // describe what the session ACTUALLY is. Without this update the client keeps whatever
+    // `configOptions` it got from `session/new`/`session/fork` and its selector drifts silently.
+    const current = bridge.session.getSnapshot().mode;
+    if (current !== bridge.lastAdvertisedConfigMode) {
+      bridge.lastAdvertisedConfigMode = current;
+      emit(bridge.acpId, {
+        sessionUpdate: "config_option_update",
+        configOptions: sessionConfigOptions(current),
+      });
     }
+  };
+
+  app.onRequest(methods.agent.session.setMode, async (ctx) => {
+    const bridge = bridges.get(ctx.params.sessionId);
+    // NOTE: an unknown session is silently a no-op here (pre-existing; `fork` / `delete` /
+    // `prompt` all reject). Left alone deliberately — see the change's design.md.
+    if (bridge) await applyMode(bridge, ctx.params.modeId as AgentMode);
     return {};
+  });
+
+  // The write side of the `configOptions` we advertise: declaring a select implies accepting the
+  // request that sets it. Without this a client renders the mode selector and then gets
+  // "Method not found" (-32601) the moment anyone touches it.
+  app.onRequest(methods.agent.session.setConfigOption, async (ctx) => {
+    const bridge = bridges.get(ctx.params.sessionId);
+    if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
+
+    // Look the id up in the SET WE ADVERTISE rather than comparing against a literal: adding an
+    // option later must not leave this check behind (a hardcoded id would reject the new one).
+    const snapshot = bridge.session.getSnapshot();
+    const option = sessionConfigOptions(snapshot.mode).find((entry) => entry.id === ctx.params.configId);
+    if (!option) throw new Error(`Unknown configuration option: ${ctx.params.configId}`);
+
+    // The one option we expose is the mode select, so its value is a mode id.
+    await applyMode(bridge, ctx.params.value as AgentMode);
+
+    // Protocol requires the FULL set back (there is no incremental form), read after the change.
+    return { configOptions: sessionConfigOptions(bridge.session.getSnapshot().mode) };
   });
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
