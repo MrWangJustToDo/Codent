@@ -134,4 +134,8 @@ export const ENTRIES = [
   "src/utils/user-input-helpers.ts",
 
   "src/utils/streaming-ingest.ts",
+
+  // Emitted for the test suite (`test/workspace-scroll.test.mjs`), which drives the tree
+  // window's reset-on-mode-switch through the real store.
+  "src/hooks/use-workspace-view.ts",
 ];

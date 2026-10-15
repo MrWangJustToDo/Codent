@@ -44,7 +44,9 @@ export const useCommandOutput = createState(
       },
       scrollNext: () => {
         if (!state.lines) return;
-        state.scrollOffset = Math.min(state.lines.length - MAX_VISIBLE, state.scrollOffset + 1);
+        // Clamp into `[0, length - MAX_VISIBLE]`: the keybindings guard on `hasScroll()`, but the
+        // action itself must not be able to set a negative offset (a pane shorter than the cap).
+        state.scrollOffset = Math.max(0, Math.min(state.lines.length - MAX_VISIBLE, state.scrollOffset + 1));
       },
       hasScroll: (): boolean => {
         return (state.lines?.length ?? 0) > MAX_VISIBLE;

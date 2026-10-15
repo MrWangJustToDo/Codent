@@ -74,10 +74,15 @@ export const useWorkspaceView = createState(
         state.paneFocus = "preview";
       },
       setMode: (mode: WorkspaceMode) => {
+        // Preview and diff list *different* row sets (the full tree vs the changed files), so a
+        // window offset does not carry over: an offset from the full tree lands past the end of
+        // the usually-shorter changed-files list and the pane draws blank. Reset it with the rows.
         state.mode = mode;
+        state.treeScrollTop = 0;
       },
       toggleMode: () => {
         state.mode = state.mode === "preview" ? "diff" : "preview";
+        state.treeScrollTop = 0;
       },
       setPaneFocus: (paneFocus: WorkspacePaneFocus) => {
         state.paneFocus = paneFocus;

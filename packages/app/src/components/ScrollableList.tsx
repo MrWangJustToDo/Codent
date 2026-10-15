@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 
 import { COLORS } from "../theme/colors.js";
+import { visibleWindow } from "../utils/workspace-scroll.js";
 
 import type { ReactNode } from "react";
 
@@ -19,9 +20,10 @@ interface ScrollableListProps<T> {
 export function ScrollableList<T>({ items, maxVisible, scrollOffset, renderItem }: ScrollableListProps<T>) {
   if (items.length === 0) return null;
 
-  const start = Math.max(0, Math.min(scrollOffset, items.length - maxVisible));
-  const end = Math.min(start + maxVisible, items.length);
-  const visibleItems = items.slice(start, end);
+  // One definition of "what is on screen": the same clamp the file tree and quick-open use, so
+  // a stale offset can never draw past the rows (`calcScrollOffset` above already keeps a focused
+  // index in view; this is the render-side guarantee).
+  const { start, end, slice: visibleItems } = visibleWindow(items, scrollOffset, maxVisible);
 
   const hasMoreAbove = start > 0;
   const hasMoreBelow = end < items.length;

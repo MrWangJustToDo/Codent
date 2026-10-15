@@ -7,7 +7,7 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatIconGlyph, getFileIconStyle } from "../utils/file-icons.js";
 import { fetchWorkspaceFileList, fuzzyFilterFiles, type FuzzyFileResult } from "../utils/workspace-file-search.js";
 import { joinWorkspacePath } from "../utils/workspace-path.js";
-import { ensureIndexVisible } from "../utils/workspace-scroll.js";
+import { clampScrollTop, ensureIndexVisible, visibleWindow } from "../utils/workspace-scroll.js";
 
 const MAX_RESULTS = 50;
 
@@ -77,11 +77,18 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
 
   const visibleCount = Math.max(3, height - 4);
 
-  // Clamp the cursor to the result list and keep it visible while typing.
+  // Keep the cursor inside the result list and the window inside the rows while typing.
+  // `ensureIndexVisible` leaves the offset untouched when the cursor already sits inside the
+  // current window, so a list that shrank under it kept an out-of-range offset — clamp the result.
   useEffect(() => {
-    if (results.length === 0) return;
+    if (results.length === 0) {
+      setScrollTop(0);
+      return;
+    }
     if (cursor >= results.length) setQuickOpenCursor(results.length - 1);
-    setScrollTop((prev) => ensureIndexVisible(cursor, prev, visibleCount, results.length));
+    setScrollTop((prev) =>
+      clampScrollTop(ensureIndexVisible(cursor, prev, visibleCount, results.length), results.length, visibleCount)
+    );
   }, [cursor, results.length, visibleCount, setQuickOpenCursor]);
 
   const openSelected = () => {
@@ -125,7 +132,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
     }
   });
 
-  const windowResults = results.slice(scrollTop, scrollTop + visibleCount);
+  const { start: windowStart, slice: windowResults } = visibleWindow(results, scrollTop, visibleCount);
 
   return (
     <Box flexDirection="column" width={width} height={height} borderStyle="single" borderColor={COLORS.primary}>
@@ -148,7 +155,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
       </Box>
       <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
         {windowResults.map((result, offset) => {
-          const index = scrollTop + offset;
+          const index = windowStart + offset;
           const isCursor = index === cursor;
           const icon = getFileIconStyle(result.path);
           return (

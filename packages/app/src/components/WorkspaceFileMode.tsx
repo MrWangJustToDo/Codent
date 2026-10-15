@@ -13,7 +13,7 @@ import { clearWorkspaceFileListCache } from "../utils/workspace-file-search.js";
 import { clearWorkspaceDiffCache } from "../utils/workspace-git-diff.js";
 import { clearGitStatusCache } from "../utils/workspace-git-status.js";
 import { decideReveal } from "../utils/workspace-reveal.js";
-import { ensureIndexVisible } from "../utils/workspace-scroll.js";
+import { clampScrollTop, ensureIndexVisible } from "../utils/workspace-scroll.js";
 
 import { clearContentCache } from "./FileContent.js";
 import { clearDirCache, computeDirStatuses, FileTree, useDiffFileTree, useFileTree } from "./FileTree.js";
@@ -164,9 +164,22 @@ export const WorkspaceFileMode = () => {
     setRootPath(env.rootPath);
   }, [env]);
 
+  // A mode switch swaps the whole row set (`fullItems` ↔ `diffItems`), so a row index no longer
+  // names the same file — start the cursor at the top, mirroring `open()`. The store resets the
+  // scroll offset along with the mode.
+  useEffect(() => {
+    setCursorIndex(0);
+  }, [mode]);
+
+  // The tree window must stay inside the row set. Rows shrink without a mode switch (a directory
+  // collapse, a git-status refresh dropping changed files) and the pane grows/shortens on resize —
+  // without this the offset outlives the rows and `FileTree` draws blank space. `clampScrollTop`
+  // is the helper for exactly this and had no caller before.
   useEffect(() => {
     setCursorIndex((prev) => Math.min(prev, Math.max(0, items.length - 1)));
-  }, [items.length]);
+    const currentScroll = useWorkspaceView.getReadonlyState().treeScrollTop;
+    setTreeScrollTop(clampScrollTop(currentScroll, items.length, paneBodyLines));
+  }, [items.length, paneBodyLines, setTreeScrollTop]);
 
   // A **selection** raises the reveal request; the effect below consumes it.
   //

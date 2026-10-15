@@ -7,6 +7,7 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatFolderGlyph, formatIconGlyph, getFileIconStyle, getFolderIconStyle } from "../utils/file-icons.js";
 import { buildDiffTreeItems, type FlatTreeItem } from "../utils/workspace-diff-tree.js";
 import { joinWorkspacePath, workspaceRelativePath } from "../utils/workspace-path.js";
+import { visibleWindow } from "../utils/workspace-scroll.js";
 
 import type { WorkspaceFileDiffStat } from "../utils/workspace-diff-stats.js";
 import type { CoreEnv, FileEntry } from "@codent/core";
@@ -447,12 +448,15 @@ export const FileTree = ({
       </Text>
     );
 
-  const windowItems = items.slice(scrollTop, scrollTop + visibleCount);
+  // Clamp the window at render. The owner resets the offset on a mode switch and keeps it valid
+  // as rows/height change, but a stale prop must never draw an empty window. Row indices follow
+  // the clamped `start`, not the raw offset — see `visibleWindow`.
+  const { start, slice: windowItems } = visibleWindow(items, scrollTop, visibleCount);
 
   return (
     <Box flexDirection="column">
       {windowItems.map((item, offset) => {
-        const index = scrollTop + offset;
+        const index = start + offset;
         const isCursor = index === cursorIndex;
         const isSelected = item.type === "file" && selectedPath === item.path;
         const rowBg = isCursor ? BG.rowCursor : isSelected ? BG.rowSelected : undefined;
