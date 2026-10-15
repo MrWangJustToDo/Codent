@@ -145,6 +145,15 @@ agent SHALL 在 `session/new` 与 `session/fork` 的响应中携带 `configOptio
 模式仍经既有 `session/set_mode` 与 `current_mode_update` 通路同步，该 `configOptions` 项 SHALL 与该通路
 保持一致，MUST NOT 成为第二个真源。
 
+对**不存在的会话**改变会话状态的请求（`session/set_mode`、`session/set_config_option`，以及既有的
+`prompt` / `cancel` / `fork`）SHALL 以 JSON-RPC 错误拒绝，MUST NOT 静默报告成功；`session/close` MAY
+容忍缺失（那里期望状态已经为真）。判据是「期望状态是否已经为真」，不是「该请求是否幂等」。
+
+广告了 `configOptions` 即 SHALL 接受 `session/set_config_option`：`configOptions` 是声明，
+`session/set_config_option` 是该声明的写回路径，二者 MUST 同时存在。该方法 SHALL
+以 `configId` 在**当前声明的选项集**中查找（而非硬编码某个 id），未找到时返回 JSON-RPC 错误；
+值与模式一样 SHALL 经既有 `mode.set` 分发并回读会话实际状态，MUST NOT 另建一套模式逻辑。
+
 #### Scenario: 新会话下发模式选择器
 
 - **WHEN** client 调用 `session/new`
@@ -169,6 +178,28 @@ agent SHALL 在 `session/new` 与 `session/fork` 的响应中携带 `configOptio
 备注：**必须**补这条更新 —— `configOptions` 只随 `session/new` / `session/fork` 响应下发，
 没有它客户端的缓存在创建后就永远不再变化。发送的是完整集合（协议的 `ConfigOptionUpdate` 只带
 `configOptions`，无增量形态）。
+
+#### Scenario: 声明过的配置项可被写回
+
+- **WHEN** client 对 `session/new` 广告的 `configId` 调用 `session/set_config_option`
+- **THEN** 请求 SHALL 被接受，且该会话的模式 SHALL 变为所给值
+- **AND** 响应 SHALL 含**完整**选项集，其中 `category: "mode"` 项的当前值 SHALL 等于会话的实际模式
+- **AND** agent SHALL 追加一条 `config_option_update`，其内容与同一模式经 `session/set_mode`
+      切换时**逐字段相同**（两个入口 MUST 是同一行为的两种写法）
+- **AND** 切换后若模式未变（已是该值），SHALL NOT 重复广播
+
+#### Scenario: 未声明的配置项被显式拒绝
+
+- **WHEN** client 为当前选项集之外的 `configId` 调用 `session/set_config_option`
+- **THEN** agent SHALL 返回 JSON-RPC 错误，MUST NOT 静默接受
+- **AND** 会话模式 MUST NOT 被改变
+
+#### Scenario: 不存在的会话被显式拒绝
+
+- **WHEN** client 为一个没有 live 会话的 `sessionId` 调用 `session/set_config_option`
+      **或** `session/set_mode`
+- **THEN** agent SHALL 返回 JSON-RPC 错误，MUST NOT 报告成功
+- **AND** 两个入口 SHALL 给出一致的答案（同一操作，同一会话状态，MUST NOT 因通路而异）
 
 #### Scenario: load 与 resume 形状不变
 
