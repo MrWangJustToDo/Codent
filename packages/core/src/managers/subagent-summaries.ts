@@ -9,10 +9,10 @@
  * disagree about what a row contains.
  */
 
-import { readTaskRunPhase } from "./task-run-state.js";
+import { readTaskRunPhase } from "../agent/subagent/task-run-state.js";
 
-import type { ManagedAgent } from "../../managers/managed-agent.js";
-import type { AgentSessionSubagentSummary, UsageChangeSnapshot } from "../../runtime-types/session-payloads.js";
+import type { ManagedAgent } from "./managed-agent.js";
+import type { AgentSessionSubagentSummary, UsageChangeSnapshot } from "../runtime-types/session-payloads.js";
 
 interface SubagentCatalog {
   getSubagents(parentId: string): ManagedAgent[];
