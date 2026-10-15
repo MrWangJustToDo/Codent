@@ -98,6 +98,10 @@ export {
   type BuiltinCommandScope,
 } from "./agent/commands/catalog.js";
 export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from "./agent/persistence";
+// A host that supplies MCP servers per session (`AgentSessionCreateOptions.mcpServers`) must be
+// able to NAME the config it passes, so the union is public even though the manager is not.
+export type { McpServerConfig, McpServerConfigStdio, McpServerConfigHttp } from "./agent/mcp";
+export type { McpConfigSourceKind } from "./runtime-types/mcp-status.js";
 export type { UsageRecord, UsageRecordInput } from "./agent/usage";
 export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage";
 

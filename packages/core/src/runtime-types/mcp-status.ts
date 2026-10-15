@@ -22,3 +22,16 @@ export interface McpServerStatus {
   args?: string[];
   url?: string;
 }
+
+/**
+ * Where a session's MCP servers came from — the answer to "why did my `mcp.json` not apply?".
+ *
+ * Declared here rather than in `agent/mcp/` for the same reason {@link McpServerStatus} is: the
+ * `session:mcp` event payload names it, and `runtime-types` cannot depend on the MCP domain
+ * without inverting the leaf. `agent/mcp/options.ts` re-exports it, so MCP-internal call sites
+ * can keep importing from their own directory.
+ *
+ * `"session-options"` deliberately does NOT travel through the path-semantic
+ * `configPath` / `configLoadedFrom` fields — `/mcp` renders those as file paths.
+ */
+export type McpConfigSourceKind = "file" | "session-options";

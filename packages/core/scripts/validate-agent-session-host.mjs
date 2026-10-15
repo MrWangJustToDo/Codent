@@ -30,6 +30,8 @@ function createFake(id, parentId) {
   const usage = new UsageTracker();
   const todoManager = new TodoManager();
   /** @type {any} */
+  let sessionData = null;
+  /** @type {any} */
   const managed = {
     id,
     name: id,
@@ -102,9 +104,15 @@ function createFake(id, parentId) {
     initChat() {
       return managed.chatController;
     },
-    ensureSessionData() {},
+    // The real `ensureSessionData()` mints the agent's disk session id (and is always called by
+    // `host.create`), so the double must too — otherwise `activeSessionId` would be absent from
+    // every snapshot/list entry, which is a state production never actually reaches.
+    ensureSessionData() {
+      if (!sessionData) sessionData = { id: `ses_${id}`, messages: [] };
+      return sessionData;
+    },
     getSessionData() {
-      return null;
+      return sessionData;
     },
     getLog() {
       return null;
@@ -158,6 +166,79 @@ const manager = {
 
 const host = createLocalAgentSessionHost({ manager });
 
+// --- in-memory session store -------------------------------------------------
+//
+// `SessionStore` addresses every log by a fixed RELATIVE path (`.agents/sessions/<id>.session.jsonl`)
+// and uses only `exists` / `mkdir` / `readdir` / `remove` / `readFile` / `stat` / `delete` (the last
+// through the `fs` object it was handed). Its reads go through `readLastState`, which prefers the
+// `readFileRange` tail window and falls back to a whole-file read — so the fake must serve both,
+// not just `readFile`.
+const SESSION_DIR = ".agents/sessions";
+const SESSION_LOG_SUFFIX = ".session.jsonl";
+const SESSION_VERSION = 7;
+const SESSION_LOG_MESSAGE = "message";
+
+const sessionFiles = new Map();
+const sessionDirs = new Set();
+
+function bytes(text) {
+  // `Buffer` rather than `TextEncoder`: the latter is not in this repo's validate-script globals.
+  return Buffer.from(text, "utf8");
+}
+
+/** Write a session log whose single line carries the state `list()` reads back. */
+function writeSessionFile(id, { name, updatedAt } = {}) {
+  sessionDirs.add(SESSION_DIR);
+  sessionFiles.set(
+    `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`,
+    JSON.stringify({
+      t: SESSION_LOG_MESSAGE,
+      message: null,
+      state: { id, name, version: SESSION_VERSION, modelStyle: "openai", model: "m", createdAt: 1, updatedAt },
+    }) + "\n"
+  );
+}
+
+registerCoreEnv({
+  rootPath: "/tmp",
+  path: {},
+  runCommand: async () => ({}),
+  exec: async () => ({}),
+  fetch: async () => new Response(""),
+  getPlatform: async () => "linux",
+  getArch: async () => "x64",
+  getEnv: async () => ({}),
+  homedir: async () => "/tmp",
+  fs: {
+    exists: async (p) => sessionFiles.has(p) || sessionDirs.has(p),
+    mkdir: async (p) => {
+      sessionDirs.add(p);
+    },
+    readdir: async (p) =>
+      [...sessionFiles.keys()]
+        .filter((file) => file.startsWith(`${p}/`))
+        .map((file) => ({ name: file.slice(p.length + 1), type: "file" })),
+    remove: async (p) => {
+      sessionFiles.delete(p);
+    },
+    stat: async (p) => {
+      const content = sessionFiles.get(p);
+      if (content === undefined) throw new Error(`ENOENT: ${p}`);
+      return { size: bytes(content).length, isDirectory: () => false };
+    },
+    readFile: async (p, encoding) => {
+      const content = sessionFiles.get(p);
+      if (content === undefined) throw new Error(`ENOENT: ${p}`);
+      return encoding === "buffer" ? bytes(content) : content;
+    },
+    readFileRange: async (p, start, end) => {
+      const content = sessionFiles.get(p);
+      if (content === undefined) throw new Error(`ENOENT: ${p}`);
+      return bytes(content).subarray(start, end);
+    },
+  },
+});
+
 const { session } = await host.create({ name: "root", model: "test-model" });
 assert.equal(session.getSnapshot().name, "root");
 assert.equal(host.list().length, 1);
@@ -178,5 +259,53 @@ await host.destroy(session.id);
 assert.equal(host.list().length, 0);
 assert.equal(host.connect(session.id), null);
 assert.equal(host.connect(child.id), null);
+
+// --- persisted-session catalog (optional members) ---------------------------
+//
+// `listPersistedSessions` / `deleteSession` are optional on the host interface (a host bound to a plane
+// with no local store cannot serve them). When present they must answer about the DISK catalog,
+// which `list()` deliberately does not: a session from an earlier process has no live agent and
+// is still resumable.
+assert.equal(typeof host.listPersistedSessions, "function");
+assert.equal(typeof host.deleteSession, "function");
+
+// A session that exists only as a file is listed...
+writeSessionFile("ses_ondisk", { name: "On disk", updatedAt: 500 });
+const persisted = await host.listPersistedSessions();
+assert.ok(
+  persisted.some((meta) => meta.id === "ses_ondisk"),
+  "listPersistedSessions must include a session that has no live agent"
+);
+assert.equal(host.list().length, 0, "list() still reports only live agents");
+
+// ...and deleting it does not require opening it.
+assert.equal(await host.deleteSession("ses_ondisk"), true);
+assert.ok(!(await host.listPersistedSessions()).some((meta) => meta.id === "ses_ondisk"));
+assert.equal(await host.deleteSession("ses_ondisk"), false, "a second delete reports absence");
+
+// The case a naive store-delegation gets wrong: a session that is LIVE but has no file yet
+// (created, never persisted). Deleting it must succeed — the caller is holding it right now.
+const fresh = await host.create({ name: "fresh", model: "test-model" });
+const freshId = fresh.session.getSnapshot().activeSessionId;
+assert.ok(freshId, "a root session always has a disk session id");
+assert.equal(await host.deleteSession(freshId), true, "deleteSession succeeds for a live, file-less session");
+assert.equal(await host.deleteSession(freshId), false, "and reports absence the second time");
+
+// The case a `destroy()`-only implementation gets wrong: LIVE *and already persisted*. `destroy()`
+// settles the log flush, but it only releases a still-empty session's startup reservation — it
+// does not remove the log. Without an explicit store delete on this branch, the session would
+// survive `deleteSession` and keep appearing in `listPersistedSessions`.
+const persistedLive = await host.create({ name: "persisted", model: "test-model" });
+const persistedId = persistedLive.session.getSnapshot().activeSessionId;
+writeSessionFile(persistedId, { name: "persisted", updatedAt: 900 });
+assert.ok(
+  (await host.listPersistedSessions()).some((meta) => meta.id === persistedId),
+  "the live session's own log is in the disk catalog"
+);
+assert.equal(await host.deleteSession(persistedId), true, "deleteSession succeeds for a live, persisted session");
+assert.ok(
+  !(await host.listPersistedSessions()).some((meta) => meta.id === persistedId),
+  "deleting a live session removes its log rather than only releasing the live agent"
+);
 
 console.log("agent-session-host validation passed");

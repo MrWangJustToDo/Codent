@@ -4,6 +4,7 @@ import type { ExtensionZod } from "./extension-zod.js";
 import type { CoreEnv } from "../../env";
 import type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
 import type { ModelCapability } from "../../models/types.js";
+import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
 import type { ModelToolContent, ToModelOutputContext } from "../tools/runtime/to-model-output-registry.js";
 import type { ModelMessage, SchemaInput } from "@tanstack/ai";
@@ -668,6 +669,12 @@ export interface ExtensionContext {
     info: (msg: string) => void;
     warn: (msg: string) => void;
     error: (msg: string) => void;
+    /**
+     * Agent-logger surface with the log's **category** selectable, for extension diagnostics
+     * that are not `hooks` output (e.g. MCP configuration provenance). `info`/`warn`/`error`
+     * above stay the category-less convenience form and remain the common path.
+     */
+    log: (level: LogLevel, category: LogCategory, msg: string) => void;
   };
 }
 

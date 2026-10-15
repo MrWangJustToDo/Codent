@@ -477,5 +477,6 @@ export {
   type CreateSkillsExtensionOptions,
 } from "../agent/skills";
 export { createMcpExtension, type McpExtensionConfig, type CreateMcpExtensionOptions } from "../agent/mcp";
+export { mcpConfigFromServers, type McpConfigSourceKind } from "../agent/mcp/options.js";
 // The owner every MCP registration carries, so a validator can assert the removal matches.
 export { MCP_TOOL_OWNER, McpManager } from "../agent/mcp/manager.js";

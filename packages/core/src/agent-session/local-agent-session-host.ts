@@ -21,6 +21,7 @@ import type {
 } from "./host-types.js";
 import type { LocalAgentSessionManager } from "./local-agent-session.js";
 import type { AgentSession } from "./types.js";
+import type { SessionMeta } from "../agent/persistence/types.js";
 import type { AgentManager } from "../managers/agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "../managers/managed-agent.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
@@ -38,6 +39,11 @@ export interface LocalAgentSessionHostManager extends LocalAgentSessionManager {
    * destroy path simply returns without waiting for the teardown to settle.
    */
   settleTeardowns?(): Promise<void>;
+  /**
+   * Drop this agent's claim on a disk session id (`sessionId → agentId`). Optional so the
+   * minimal manager surface stays minimal.
+   */
+  releaseSessionOwnership?(sessionId: string, agentId: string): void;
 }
 
 export interface CreateLocalAgentSessionHostOptions {
@@ -72,6 +78,7 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
     ...(options.providerMode ? { providerMode: options.providerMode } : {}),
     ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
     ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
+    ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
     ...(options.extensionDirs?.length ? { extensionDirs: options.extensionDirs } : {}),
     ...(options.toolConfig ? { toolConfig: options.toolConfig } : {}),
   };
@@ -124,7 +131,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // Resolve the reuse/resume target up front and pass it through as
     // `initialSessionId`, so the managed agent's session id (and thus the
     // session-scoped log sink) is correct before any bootstrap log entry.
-    const targetSessionId = await resolveBootstrapSessionId(options, this.manager.runtime?.env ?? getEnv());
+    const targetSessionId = await resolveBootstrapSessionId(options, this.storeEnv);
     const managed = await this.manager.createManagedAgent({
       ...toManagedConfig(options),
       ...(targetSessionId ? { initialSessionId: targetSessionId } : {}),
@@ -167,6 +174,54 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
 
   list(): AgentSessionListEntry[] {
     return this.manager.getAgents().map(toListEntry);
+  }
+
+  /** Disk catalog: the workspace's persisted sessions, not the live agents `list()` reports. */
+  async listPersistedSessions(): Promise<SessionMeta[]> {
+    const store = new SessionStore(this.storeEnv);
+    return store.list();
+  }
+
+  /**
+   * Remove a persisted session.
+   *
+   * Success is "it was live, or its file is gone". A session minted by `create` and not yet
+   * persisted exists only in memory, so `store.delete` returns false for it and reporting that
+   * as "not found" would deny the deletion of a session the caller is currently holding.
+   */
+  async deleteSession(sessionId: string): Promise<boolean> {
+    // `sessionId` here is the DISK id, while `manager.getAgent` is keyed by AGENT id — so this
+    // lookup always misses. It is kept only as a cheap exact-hit probe; the lookup that actually
+    // resolves a disk id to its owning agent is `sessionOwningAgent` below.
+    const live = this.manager.getAgent(sessionId) ?? this.sessionOwningAgent(sessionId);
+    if (live) {
+      // Release the disk-session claim before tearing down, mirroring the branch/close paths, so
+      // the ownership table does not keep pointing at a session whose log is about to vanish.
+      this.manager.releaseSessionOwnership?.(sessionId, live.id);
+      // Tear-down settles the log flush; only after that is removing the file safe.
+      await this.destroy(live.id);
+      // `destroy` is NOT enough on its own: it releases a still-empty session's startup
+      // reservation but leaves the log file in place, so without this delete a live session that
+      // had already been persisted would survive `deleteSession` and keep appearing in
+      // `listPersistedSessions`.
+      await new SessionStore(this.storeEnv).delete(sessionId).catch(() => undefined);
+      // The session was live, so the caller's delete succeeded whether or not it had a file yet.
+      return true;
+    }
+    return new SessionStore(this.storeEnv).delete(sessionId);
+  }
+
+  /** Find the live root agent currently holding `sessionId` (ownership table lookup). */
+  private sessionOwningAgent(sessionId: string): ManagedAgent | undefined {
+    for (const managed of this.manager.getAgents()) {
+      if (managed.parentId) continue;
+      if (managed.getSessionData?.()?.id === sessionId) return managed;
+    }
+    return undefined;
+  }
+
+  private get storeEnv(): ResolvedCoreEnv {
+    return this.manager.runtime?.env ?? getEnv();
   }
 
   getModelProvider() {

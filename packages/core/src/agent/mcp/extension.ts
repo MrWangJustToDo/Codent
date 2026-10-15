@@ -1,6 +1,7 @@
 import { loadMcpConfig } from "./config.js";
 
 import type { McpManager, McpServerStatus } from "./manager.js";
+import type { McpConfig } from "./types.js";
 import type { ExtensionAPI, ExtensionContext } from "../extension/types.js";
 
 // ============================================================================
@@ -12,6 +13,12 @@ export interface CreateMcpExtensionOptions {
   mcpManager: McpManager;
   /** Explicit config path; when omitted, defaults (.agents/mcp.json, .mcp.json) are probed. */
   configPath?: string;
+  /**
+   * Servers supplied by the session's create options. When non-null these REPLACE the config
+   * file entirely (identical names with different commands/urls would otherwise make "which one
+   * won" unanswerable), so the file is not even read.
+   */
+  servers?: McpConfig | null;
 }
 
 export interface McpExtensionConfig {
@@ -29,7 +36,7 @@ export interface McpExtensionConfig {
  * Deactivation shuts down all connected clients.
  */
 export function createMcpExtension(options: CreateMcpExtensionOptions): ExtensionAPI {
-  const { mcpManager, configPath } = options;
+  const { mcpManager, configPath, servers } = options;
   return {
     id: "codent-mcp",
     name: "MCP",
@@ -45,7 +52,7 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
         disabledContent: () =>
           "MCP extension is disabled — external MCP servers (mcp__<server>_<tool>) and the /mcp status command are unavailable.",
       });
-      await activateMcp(ctx, mcpManager, configPath);
+      await activateMcp(ctx, mcpManager, configPath, servers ?? null);
     },
     deactivate() {
       return mcpManager.shutdown();
@@ -53,22 +60,51 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
   };
 }
 
-async function activateMcp(ctx: ExtensionContext, mcpManager: McpManager, configPath?: string): Promise<void> {
-  const loadResult = await loadMcpConfig(ctx.coreEnv, configPath);
+async function activateMcp(
+  ctx: ExtensionContext,
+  mcpManager: McpManager,
+  configPath?: string,
+  explicit?: McpConfig | null
+): Promise<void> {
+  let config: McpConfig | null = null;
 
-  if (loadResult?.loadErrors) {
-    for (const err of loadResult.loadErrors) {
+  if (explicit) {
+    // Session-supplied servers REPLACE the file, so the file is not read at all: a broken
+    // `.agents/mcp.json` must not emit warnings for a session whose servers never came from it.
+    config = explicit;
+    mcpManager.setConfigSourceKind("session-options");
+  } else {
+    const loadResult = await loadMcpConfig(ctx.coreEnv, configPath);
+    for (const err of loadResult?.loadErrors ?? []) {
       ctx.logger.warn(err);
     }
+    mcpManager.setConfigSource(configPath, loadResult?.sourcePath);
+    mcpManager.setConfigSourceKind("file");
+    config = loadResult?.config ?? null;
   }
 
-  mcpManager.setConfigSource(configPath, loadResult?.sourcePath);
-
-  if (!loadResult || Object.keys(loadResult.config.mcpServers).length === 0) {
+  if (!config || Object.keys(config.mcpServers).length === 0) {
     return;
   }
 
-  const tools = await mcpManager.initialize(loadResult.config);
+  // Names and transports only: `env` / `headers` values are credentials and MUST NOT be
+  // logged — the values are deliberately never read here. The FILE path is included on the file
+  // branch because "which file applied" is the useful answer there (and it is a path, unlike
+  // the source kind, so it does not misrepresent anything).
+  const inventory = Object.entries(config.mcpServers)
+    .map(([name, server]) => `${name}/${server.transport}`)
+    .join(", ");
+  const origin =
+    mcpManager.configSourceKind === "file" && mcpManager.configLoadedFrom
+      ? `${mcpManager.configSourceKind} (${mcpManager.configLoadedFrom})`
+      : mcpManager.configSourceKind;
+  ctx.logger.log(
+    "info",
+    "system",
+    `MCP configuration source: ${origin} (${Object.keys(config.mcpServers).length} servers: ${inventory})`
+  );
+
+  const tools = await mcpManager.initialize(config);
 
   for (const [name, tool] of Object.entries(tools)) {
     ctx.registerTool({

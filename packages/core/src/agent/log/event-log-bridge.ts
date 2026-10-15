@@ -3,6 +3,7 @@ import { truncateText } from "../../utils/text-truncation.js";
 
 import { DEFAULT_EVENT_LOG_RULES, type EventLogRule } from "./event-log-rules.js";
 
+import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent, AgentEventBus, AgentEventType } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 import type { McpServerStatus } from "../mcp/manager.js";
@@ -129,11 +130,15 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
 // ============================================================================
 
 function logSessionMcp(log: AgentLog, event: AgentEvent): void {
+  const configSourceKind = p(event).configSourceKind as McpConfigSourceKind | undefined;
   const configLoadedFrom = p(event).configLoadedFrom as string | undefined;
-  if (configLoadedFrom) {
+  // The source is the answer to "why did my mcp.json not apply?", so a session-options session
+  // says so explicitly — without it the absence of a config path reads as "no config found".
+  if (configSourceKind === "session-options") {
+    log.info("system", "MCP config: supplied by the session's create options (config file not consulted)");
+  } else if (configLoadedFrom) {
     log.info("system", `MCP config: ${configLoadedFrom}`);
   }
-
   const servers = (p(event).servers as McpServerStatus[] | undefined) ?? [];
   if (servers.length === 0) {
     log.debug("system", "No MCP servers configured");

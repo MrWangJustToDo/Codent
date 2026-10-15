@@ -148,7 +148,7 @@ import type { DispatchRank } from "../agent/extension/dispatch-order.js";
 import type { ExtensionTurnContextSection } from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
-import type { McpExtensionConfig } from "../agent/mcp";
+import type { McpExtensionConfig, McpServerConfig } from "../agent/mcp";
 import type { McpManager } from "../agent/mcp/manager.js";
 import type { MemoryExtensionConfig } from "../agent/memory";
 import type { MemoryManager } from "../agent/memory/memory-manager.js";
@@ -201,6 +201,11 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   skillDirs?: string[];
   compaction?: CompactionConfigInput;
   mcpConfigPath?: string;
+  /**
+   * Explicit MCP servers for this agent, replacing the config file when non-empty.
+   * See `AgentSessionCreateOptions.mcpServers` — this is the same option one layer down.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
   /**
    * Pre-resolved on-disk session id to adopt at bootstrap (before the session
    * log sink attaches), so a reused/resumed session's id is fixed from the

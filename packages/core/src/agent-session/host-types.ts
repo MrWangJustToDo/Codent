@@ -10,6 +10,8 @@
  */
 
 import type { AgentSession, DiskSessionId } from "./types.js";
+import type { McpServerConfig } from "../agent/mcp";
+import type { SessionMeta } from "../agent/persistence/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { CoreEnv } from "../env";
 import type { ModelInfo, ModelStyle } from "../models/types.js";
@@ -39,6 +41,18 @@ export interface AgentSessionCreateOptions {
   /** Max concurrent `task` subagents under this agent (default 4). */
   maxConcurrentTasks?: number;
   mcpConfigPath?: string;
+  /**
+   * MCP servers supplied directly by the caller for THIS session, keyed by server name.
+   *
+   * When present (and non-empty) it REPLACES `.agents/mcp.json` rather than merging: the two
+   * sources can name the same server with entirely different `command` / `url`, and silently
+   * picking one is the hardest failure to explain. It also matches the existing "explicit
+   * config isolates the on-disk one" precedent (`--model` / `--base-url` / `--api-key` skip
+   * `.agents/config/models.json`). Omitted ⇒ behavior is unchanged (the file is the source).
+   *
+   * Note the type: `McpServerConfig` is ONE server's union; the map is the plural form.
+   */
+  mcpServers?: Record<string, McpServerConfig>;
   extensionDirs?: string[];
   /** Continue the latest on-disk session after the agent is created (bootstrap only). */
   continueSession?: boolean;
@@ -86,6 +100,30 @@ export interface AgentSessionHost {
   list(): AgentSessionListEntry[] | Promise<AgentSessionListEntry[]>;
   /** Destroy an agent (cascades to children) and drop its session handle. */
   destroy(agentId: string): Promise<void>;
+  /**
+   * Enumerate the workspace's PERSISTED sessions (disk catalog), ordered `updatedAt` desc.
+   *
+   * Distinct from {@link list}, which reports the live agents this host owns: a session created
+   * by an earlier process is resumable but has no live agent, so a session picker built on
+   * `list()` shows nothing after a restart. This answers "what is stored", `list` answers
+   * "what is running".
+   *
+   * Optional because a host bound to a plane with no local store cannot serve it (the
+   * remote-session host forwards to an agent server and holds no disk catalog), and because
+   * making it required would break every existing implementer at compile time. Same convention
+   * as {@link getModelProvider} / {@link getEnv}: absent means "this host cannot", and a
+   * consumer must detect the absence instead of calling it.
+   */
+  listPersistedSessions?(): Promise<SessionMeta[]>;
+  /**
+   * Remove a persisted session. Returns whether the session's data was removed.
+   *
+   * Lifecycle, not a bare store call: a session that is still live must be torn down first
+   * (otherwise an append stream keeps writing to the removed log), and a session that is
+   * ALREADY live-only — one minted in memory by `create` and not yet written to disk — counts
+   * as removed. Optional for the same reason as {@link listPersistedSessions}.
+   */
+  deleteSession?(sessionId: DiskSessionId): Promise<boolean>;
   /**
    * The runtime's model provider, so app-side model resolution uses this runtime's
    * connection rather than the process-global registry. Omitted by remote-session

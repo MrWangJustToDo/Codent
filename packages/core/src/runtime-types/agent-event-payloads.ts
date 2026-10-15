@@ -7,7 +7,7 @@
 
 import type { AgentEventType } from "./agent-events.js";
 import type { AgentRetryStrategy } from "./agent-retry.js";
-import type { McpServerStatus } from "./mcp-status.js";
+import type { McpConfigSourceKind, McpServerStatus } from "./mcp-status.js";
 
 /** Explicit empty object for events with no fields. */
 export type EmptyAgentEventPayload = Record<string, never>;
@@ -27,6 +27,12 @@ export type AgentEventPayloadMap = {
   "session:mcp": {
     configPath?: string;
     configLoadedFrom?: string;
+    /**
+     * Where the servers came from: `"session-options"` means the caller supplied them at
+     * create time, which is why `.agents/mcp.json` did not apply. Absent means the file.
+     * Kept separate from the two path fields because those are rendered as file paths.
+     */
+    configSourceKind?: McpConfigSourceKind;
     servers?: McpServerStatus[];
     toolCount?: number;
   };

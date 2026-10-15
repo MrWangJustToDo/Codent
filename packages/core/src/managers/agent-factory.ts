@@ -4,7 +4,7 @@ import { createCompactionConfig } from "../agent/compaction/types.js";
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
 import { createJobsExtension } from "../agent/jobs/extension.js";
 import { createLspExtension } from "../agent/lsp";
-import { createMcpExtension, type McpExtensionConfig } from "../agent/mcp";
+import { createMcpExtension, mcpConfigFromServers, type McpExtensionConfig } from "../agent/mcp";
 import { McpManager } from "../agent/mcp/manager.js";
 import { createMemoryExtension } from "../agent/memory/extension.js";
 import { MemoryManager } from "../agent/memory/memory-manager.js";
@@ -67,6 +67,7 @@ export async function buildManagedAgent({
     skillDirs,
     compaction,
     mcpConfigPath,
+    mcpServers,
     initialSessionId,
     ...restConfig
   } = config;
@@ -352,7 +353,12 @@ export async function buildManagedAgent({
         if (mcpManager) {
           const mcpConfig: McpExtensionConfig | undefined =
             typeof config.mcp === "object" && config.mcp !== null ? config.mcp : undefined;
-          const api = createMcpExtension({ mcpManager, configPath: mcpConfig?.configPath ?? mcpConfigPath });
+          const api = createMcpExtension({
+            mcpManager,
+            configPath: mcpConfig?.configPath ?? mcpConfigPath,
+            // Session-supplied servers win over the file (see `mcpConfigFromServers`).
+            servers: mcpConfigFromServers(mcpServers),
+          });
           const instance = await extensionRunner.loadExtension(api);
           if (instance.state === "active") {
             extensionsActive++;

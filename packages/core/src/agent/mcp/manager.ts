@@ -6,6 +6,7 @@ import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry
 
 import { resolveMcpModelOutput, wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
 
+import type { McpConfigSourceKind } from "./options.js";
 import type { McpConfig, McpServerConfig } from "./types.js";
 import type { McpProcessHandle, ResolvedCoreEnv } from "../../env";
 import type { McpServerStatus } from "../../runtime-types/mcp-status.js";
@@ -86,9 +87,14 @@ export class McpManager {
    * and the actual source path that was loaded. Recorded by the MCP extension
    * (or any loader) so session-bootstrap telemetry can report where config came
    * from without re-deriving it in the factory.
+   *
+   * Both fields are PATH-semantic (`/mcp` renders them as paths), so a session whose
+   * servers came from its create options must NOT write a marker like `"session-options"`
+   * into either — it records {@link configSourceKind} instead and leaves these unset.
    */
   private configPathValue?: string;
   private configLoadedFromValue?: string;
+  private configSourceKindValue: McpConfigSourceKind = "file";
 
   /** Explicit path passed by the caller (may be a default lookup). */
   get configPath(): string | undefined {
@@ -100,10 +106,29 @@ export class McpManager {
     return this.configLoadedFromValue;
   }
 
+  /**
+   * Where this session's servers came from. `"session-options"` means the caller supplied
+   * them at create time, which is why no config file applied.
+   */
+  get configSourceKind(): McpConfigSourceKind {
+    return this.configSourceKindValue;
+  }
+
   /** Record the config source for session-bootstrap telemetry. */
   setConfigSource(configPath: string | undefined, loadedFrom: string | undefined): void {
     this.configPathValue = configPath;
     this.configLoadedFromValue = loadedFrom;
+  }
+
+  /**
+   * Record that the servers came from the session's create options (not a file).
+   *
+   * A separate setter rather than a third parameter on {@link setConfigSource}: the two
+   * existing parameters are paths and are rendered as paths, so a source that is not a file
+   * cannot be expressed through them without lying about one of them.
+   */
+  setConfigSourceKind(kind: McpConfigSourceKind): void {
+    this.configSourceKindValue = kind;
   }
 
   /**

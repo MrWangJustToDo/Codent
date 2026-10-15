@@ -39,6 +39,7 @@ import type {
 import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
+import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -747,6 +748,7 @@ export class ExtensionRunner {
         info: (msg: string) => this.writeExtensionLog("info", api.id, msg),
         warn: (msg: string) => this.writeExtensionLog("warn", api.id, msg),
         error: (msg: string) => this.writeExtensionLog("error", api.id, msg),
+        log: (level, category, msg) => this.writeExtensionLog(level, api.id, msg, category),
       },
     };
   }
@@ -756,15 +758,20 @@ export class ExtensionRunner {
    * is wired; fall back to console for standalone runner usage (validation
    * scripts, hosts that build an ExtensionRunner without an agent).
    */
-  private writeExtensionLog(level: "info" | "warn" | "error", extensionId: string, msg: string): void {
+  private writeExtensionLog(level: LogLevel, extensionId: string, msg: string, category: LogCategory = "hooks"): void {
     const message = `[extension:${extensionId}] ${msg}`;
     const log = this.options.log;
     if (log) {
-      if (level === "error") log.error("hooks", message);
-      else if (level === "warn") log.warn("hooks", message);
-      else log.info("hooks", message);
+      // `category` is the caller's (defaults to `hooks`, the historical extension category);
+      // `level` is passed through whole so `debug` is expressible rather than silently upgraded.
+      if (level === "debug") log.debug(category, message);
+      else if (level === "error") log.error(category, message);
+      else if (level === "warn") log.warn(category, message);
+      else log.info(category, message);
       return;
     }
+    // No agent log wired (standalone runner): keep the pre-existing console behavior, which
+    // prints debug/info through `log` and never emits to stderr for a non-warning.
     if (level === "error") console.error(message);
     else if (level === "warn") console.warn(message);
     else console.log(message);

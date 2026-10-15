@@ -48,6 +48,7 @@ export async function emitSessionBootstrapEvents(
     emitAgentTelemetry(managed, "session:mcp", {
       configPath: mcpManager.configPath,
       configLoadedFrom: mcpManager.configLoadedFrom,
+      configSourceKind: mcpManager.configSourceKind,
       servers,
       toolCount: servers.reduce((sum, server) => sum + server.toolCount, 0),
     });

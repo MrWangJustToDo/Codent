@@ -139,6 +139,10 @@ function makeStubManager() {
   return {
     state,
     setConfigSource: () => {},
+    // Part of the surface `createMcpExtension` touches: the extension records the source KIND
+    // separately from the path-semantic `configPath` / `configLoadedFrom` fields.
+    setConfigSourceKind: () => {},
+    configSourceKind: "file",
     async initialize() {
       state.initialized++;
       return state.tools;
