@@ -79,6 +79,14 @@ export interface AgentDocLoadResult {
    * depth or budget stop). Empty when no imports needed expanding.
    */
   importNotices: string[];
+  /**
+   * Candidates that existed but could not be read, with the error.
+   *
+   * Distinct from "not found": these are host failures (a refusing client, a sandbox, a broken
+   * mount) and they are why a workspace with an `AGENTS.md` can still come up without
+   * instructions. Callers should surface them rather than let the absence look intentional.
+   */
+  readErrors?: Array<{ path: string; error: unknown }>;
 }
 
 /**
@@ -130,12 +138,27 @@ export function formatAgentDocResult(result: AgentDocLoadResult, env?: ResolvedC
 export async function loadAgentDoc(config: AgentDocLoaderConfig): Promise<AgentDocLoadResult> {
   const { rootPath, filenames = DEFAULT_AGENT_DOC_FILENAMES, maxBytes, loadOverride = true, env } = config;
 
-  const primary = await resolvePrimaryInstruction({ rootPath, filenames, maxBytes, ...(env ? { env } : {}) });
+  // Collect read failures so "the file exists but could not be read" is never reported as "there is
+  // no file" — the two are indistinguishable to a user without this.
+  const readErrors: Array<{ path: string; error: unknown }> = [];
+  const onReadError = (path: string, error: unknown): void => {
+    readErrors.push({ path, error });
+    config.onReadError?.(path, error);
+  };
+
+  const primary = await resolvePrimaryInstruction({
+    rootPath,
+    filenames,
+    maxBytes,
+    ...(env ? { env } : {}),
+    onReadError,
+  });
   if (!primary) {
     return {
       content: "",
       notice: `No agent documentation file found (searched: ${filenames.join(", ")})`,
       importNotices: [],
+      ...(readErrors.length ? { readErrors } : {}),
     };
   }
 

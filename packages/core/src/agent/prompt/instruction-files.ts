@@ -84,6 +84,14 @@ export interface InstructionDiscoveryOptions {
   maxBytes?: number;
   /** Owning runtime's env; ambient only when omitted (standalone/legacy callers). */
   env?: ResolvedCoreEnv;
+  /**
+   * Called when an existing candidate could not be READ (as opposed to not existing).
+   *
+   * Not noise: a host whose reads can be refused — a client-backed env, a sandbox, a remote
+   * workspace — otherwise turns "the read failed" into "there is no instruction file", and the
+   * session runs with no project instructions and nothing said about it.
+   */
+  onReadError?: (filePath: string, error: unknown) => void;
 }
 
 // ============================================================================
@@ -110,8 +118,11 @@ export async function resolvePrimaryInstruction(
     try {
       if (!(await env.fs.exists(filePath))) continue;
       return await resolveFile(env, filePath, filename, rootPath, maxBytes);
-    } catch {
-      // Unreadable candidate — fall through to the next one.
+    } catch (error) {
+      // Unreadable candidate — fall through to the next one, but say so: the file EXISTS (just
+      // checked), so a failed read is a host problem, not an absent file. Swallowing it silently
+      // reports "no agent documentation file found" for a workspace that plainly has one.
+      options.onReadError?.(filePath, error);
       continue;
     }
   }

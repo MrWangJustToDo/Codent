@@ -17,6 +17,7 @@
  * Run: pnpm --filter @codent/core run validate:instruction-imports
  */
 
+import { defaultPath } from "@codent/core";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,8 +47,11 @@ const ws = mkdtempSync(join(tmpdir(), "instr-imports-"));
 const normPath = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
 const outside = mkdtempSync(join(tmpdir(), "instr-outside-"));
 
-registerCoreEnv({
+const hostEnv = {
   rootPath: ws,
+  // Synchronous POSIX path helpers, as `resolveCoreEnv` would supply. Passed explicitly because
+  // this double is also handed to `loadAgentDoc` directly (bypassing the registry's defaults).
+  path: defaultPath,
   getPlatform: async () => "test",
   getArch: async () => "arm64",
   getEnv: async () => ({}),
@@ -68,7 +72,9 @@ registerCoreEnv({
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
   fetch: async () => ({ ok: true, status: 200 }),
-});
+};
+
+registerCoreEnv(hostEnv);
 
 const write = (name, content) => {
   const full = join(ws, name);
@@ -278,6 +284,49 @@ await (async () => {
   assert.equal(full.content.length >= bounded.content.length, true, "a larger budget never yields less content");
 
   console.log("✓ the byte budget counts bytes, not characters");
+})();
+
+// ---------------------------------------------------------------------------
+// 7b. A file that EXISTS but cannot be READ must not look like "no file"
+// ---------------------------------------------------------------------------
+//
+// The distinction the silent `catch` used to erase. A host whose reads can be refused
+// (a client-backed env, a sandbox, a broken mount) would otherwise report "no agent
+// documentation file found" for a workspace that plainly has an AGENTS.md, and the
+// session would run with no project instructions and nothing said about it.
+await (async () => {
+  const ws2 = mkdtempSync(join(tmpdir(), "instr-read-error-"));
+  writeFileSync(join(ws2, "AGENTS.md"), "# rules\n");
+
+  // Present on disk, but every read is refused — the "client declines" shape.
+  const hostile = {
+    ...hostEnv,
+    rootPath: ws2,
+    fs: {
+      ...hostEnv.fs,
+      exists: async () => true,
+      readFile: async () => {
+        throw new Error("client refused fs/read_text_file");
+      },
+    },
+  };
+
+  const errors = [];
+  const result = await loadAgentDoc({
+    rootPath: ws2,
+    filenames: ["AGENTS.md"],
+    env: hostile,
+    onReadError: (p) => errors.push(p),
+  });
+
+  assert.equal(result.content, "", "a refused read yields no content (nothing to trust)");
+  assert.equal(errors.length, 1, "the refused read is REPORTED, not swallowed");
+  assert.ok(errors[0].endsWith("AGENTS.md"), "the report names the file that failed");
+  assert.ok(
+    Array.isArray(result.readErrors) && result.readErrors.length === 1,
+    "the result carries the read failure so a caller can surface it"
+  );
+  console.log("✓ an unreadable instruction file is reported, not mistaken for absent");
 })();
 
 // ---------------------------------------------------------------------------

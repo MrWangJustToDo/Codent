@@ -115,3 +115,31 @@
       断言 `session:doc` 事件带上项目指令；另有一条「client 拒绝一切请求仍能创建成功」。
 - [x] 5.6 变异取证：I（去掉未绑定守卫）抓 3 条；J（轮询忽略 signal）抓 1 条；
       K（超时伪装成功）抓 2 条；L（终端不 kill）抓 2 条
+
+## 6. 第六轮审计（修复回归）—— 逐条核实并修
+
+结论：报告 5 项**全部属实**，其中 #1 是**本次修复新引入的回归**。类型层发现也已实证。
+
+- [x] 6.1 🟠 **回归：进程已退出且输出被截断时，截断信号丢失**。`endedBy` 重构让 exit 先赢，
+      而 `TerminalOutputResponse.truncated` 与 `exitStatus` **可以同时存在**（进程已结束 + 缓冲区被
+      字节上限裁过）→ 被裁的 stdout 当作完整结果（grep 少报匹配、静默）。修复前的代码在循环**外**
+      用 `if (truncated)` 兜住，所以这是回归。**修法**：`endedBy = truncated ? "truncated" : "exit"`。
+      变异 M 抓 2 条。
+- [x] 6.2 🟠 **`execFile` 是唯一没有「未绑定即降级」守卫的 client 路径**。四处直接发
+      `sessionId: sessionId()` → 未绑定时发出 `undefined`，与「can never fail」不变量矛盾。
+      当前不可达（create 期间无 argv 调用），属潜在洞。**修法**：补 `!hasSession()` ⇒ 委托
+      `fallback.execFile`；无回退则返回 `missing: true`（`execArgsCapture` 既有的「不支持」形状），
+      而非抛错。变异 N 抓 2 条。
+- [x] 6.3 **类型层发现（已实证）**：`pnpm typecheck` 拦不住这类错误 —— `AgentContext.request` 有第二个
+      宽松重载（`method: string, params?: unknown`，`acp.d.ts:176`），收窄重载匹配失败后被它吞掉。
+      我用 `sessionId: 12345` 写了个探针，`tsc` 通过 ⇒ 这四处请求的参数**不受 schema 校验**。
+      结论记入 tasks，不改代码（属 SDK 形状，非本 change 范围）。
+- [x] 6.4 🟠 **`instruction-files.ts` 裸 catch 仍会掩盖「client 拒绝」**。新增
+      `InstructionDiscoveryOptions.onReadError` 钩子 + `AgentDocLoadResult.readErrors`；
+      `agent-factory` 在无内容但有读错时 `log.warn`。并在
+      `validate-instruction-imports.mjs` 加一节断言（存在但读失败 ≠ 不存在）。变异 O 抓 1 条。
+- [x] 6.5 nit **`note()` 对同一请求记两次 + 桶名语义**。`readFile`/`writeFile` 改为「至多一条理由」；
+      `no-session-yet` 从 `localOnlyPath` 移到 `localNoCapability`（理由是**何时**，不是**何处**）。
+      变异 P 抓 3 条、Q 抓 2 条。
+- [x] 6.6 nit **`resumeSession` 失败路径漏 runtime**。与 `session/new` 同样的 try/catch + dispose；
+      并补两条断言（new 与 load 的失败都必须释放）。变异 R 抓 1 条、S 抓 1 条。

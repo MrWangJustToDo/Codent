@@ -23,6 +23,7 @@ import {
   permissionOptions,
 } from "./permissions.js";
 import { AcpProjector } from "./projector.js";
+import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
 import { paginateSessions } from "./sessions.js";
 import { toolKindFor } from "./tools.js";
 
@@ -51,24 +52,6 @@ import type {
 } from "@codent/core";
 
 /** Per-session bookkeeping. */
-/**
- * A session's runtime: the host its agent was created on, plus the two things the caller needs
- * from a per-session (client-backed) runtime — late binding of the disk id, and release.
- */
-interface SessionRuntime {
-  host: AgentSessionHost;
-  /** Bind the disk session id once `host.create` has minted it. */
-  bind: (sessionId: string) => void;
-  dispose: () => Promise<void>;
-  /**
-   * The client-backed env, when this runtime has one (`--client-env`).
-   *
-   * Present means "writes may leave this process", which is what decides whether an approval is
-   * still ours to ask — see `approvals.ts`.
-   */
-  clientEnv?: AcpClientEnv;
-}
-
 interface SessionBridge {
   session: AgentSession;
   /** The runtime that owns this session (per-session under `--client-env`). */
@@ -254,37 +237,6 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
   };
 
-  /**
-   * Build this session's runtime.
-   *
-   * Without `--client-env` there is nothing per-session: `bind` is a no-op and `dispose` does
-   * nothing, so every call site reads the same whether or not the flag is on.
-   */
-  const createRuntime = async (): Promise<SessionRuntime> => {
-    if (!options.createSessionHost) {
-      return { host: options.host, bind: () => undefined, dispose: async () => undefined };
-    }
-    let sessionId = "";
-    const perSession = await options.createSessionHost({
-      client,
-      // `undefined` while the session does not exist yet: `host.create` reads workspace files
-      // (AGENTS.md / CLAUDE.md, `.lsp.json`, `.mcp.json`) before it hands back a session, and those
-      // reads have no session to tag. They are answered locally instead of refused — see the
-      // factory contract in `agent.ts`, and Bug A's trace: a throw here was swallowed by the
-      // instruction loader's `catch`, which silently produced a session with no project rules.
-      sessionId: () => (sessionId ? sessionId : undefined),
-      clientCapabilities: initCaps,
-    });
-    return {
-      host: perSession.host,
-      bind: (id: string) => {
-        sessionId = id;
-      },
-      dispose: perSession.dispose,
-      ...(perSession.clientEnv ? { clientEnv: perSession.clientEnv } : {}),
-    };
-  };
-
   const attach = (
     session: AgentSession,
     clientCaps: ClientCapabilities | undefined,
@@ -322,6 +274,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridges.set(acpId, bridge);
     return bridge;
   };
+
+  /** Build this session's runtime (see `session-runtime.ts`). */
+  const createRuntime = (): Promise<SessionRuntime> =>
+    buildSessionRuntime({ options, client, getClientCapabilities: () => initCaps });
 
   const closeBridge = async (bridge: SessionBridge): Promise<void> => {
     for (const controller of bridge.pending) controller.abort();
@@ -582,10 +538,18 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // The client told us the id here, so the client-backed env can carry it from the start.
     const runtime = await createRuntime();
     runtime.bind(sessionId);
-    const { session } = await runtime.host.create({
-      ...createOptions(mapped.servers),
-      resumeSessionId: sessionId,
-    });
+    let session: AgentSession;
+    try {
+      ({ session } = await runtime.host.create({
+        ...createOptions(mapped.servers),
+        resumeSessionId: sessionId,
+      }));
+    } catch (error) {
+      // A failed restore is the common case here (unknown or unreadable id), and the runtime owns a
+      // per-session env that nothing else would ever release — same reason as `session/new`.
+      await runtime.dispose().catch(() => undefined);
+      throw error;
+    }
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
     const bridge = attach(session, clientCaps, sessionId, runtime);

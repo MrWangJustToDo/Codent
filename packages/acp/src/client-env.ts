@@ -123,7 +123,14 @@ export interface AcpClientEnv extends ResolvedCoreEnv {
    * `other` is deliberate local routing (byte reads, free-text commands, binary writes) — not a
    * capability gap, so it is not folded into `localNoCapability`.
    */
-  readonly fallbackCounts: { localOnlyPath: number; localNoCapability: number; other: number };
+  readonly fallbackCounts: {
+    /** Paths never sent to a client (`.agents/**`, outside the root). */
+    localOnlyPath: number;
+    /** Requests the client could have served but could not be asked: no capability, or no session yet. */
+    localNoCapability: number;
+    /** Deliberate local routing (byte reads, free-text commands, binary writes). */
+    other: number;
+  };
   /**
    * Whether a write to `target` is the **client's** to authorise.
    *
@@ -156,8 +163,18 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
    * as a missing capability would make the matrix read as if the client were less capable than it
    * is.
    */
-  const PATHS_WE_NEVER_SEND = ["local-only-path", "no-session-yet"];
-  const NO_CAPABILITY_REASONS = ["no-capability:readTextFile", "no-capability:writeTextFile", "no-capability:terminal"];
+  /**
+   * `no-session-yet` sits in `localNoCapability`, not in `localOnlyPath`, because the reason is
+   * *when* the request happened, not *where* it pointed: the path would have gone to the client a
+   * moment later. Filing it under the path bucket would make a startup read look like a guard hit.
+   */
+  const PATHS_WE_NEVER_SEND = ["local-only-path"];
+  const NO_CAPABILITY_REASONS = [
+    "no-session-yet",
+    "no-capability:readTextFile",
+    "no-capability:writeTextFile",
+    "no-capability:terminal",
+  ];
   const note = (reason: string): void => {
     if (PATHS_WE_NEVER_SEND.includes(reason)) fallbackCounts.localOnlyPath += 1;
     else if (NO_CAPABILITY_REASONS.includes(reason)) fallbackCounts.localNoCapability += 1;
@@ -195,9 +212,11 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       note("byte-read");
       return fallback.fs.readFile(target, "buffer");
     }
-    if (mustFallback(target) || !caps.readTextFile || !hasSession()) {
-      if (!caps.readTextFile) note("no-capability:readTextFile");
-      else if (!hasSession()) note("no-session-yet");
+    // At most ONE reason is recorded per request: `mustFallback` counts the path itself, so the
+    // later conditions must not add a second note for the same read.
+    if (mustFallback(target)) return fallback.fs.readFile(target);
+    if (!caps.readTextFile || !hasSession()) {
+      note(!caps.readTextFile ? "no-capability:readTextFile" : "no-session-yet");
       return fallback.fs.readFile(target);
     }
     // No `line` / `limit`: core's `readFile` has no line window (the `read_file` tool slices the
@@ -213,9 +232,13 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     readFile,
 
     async writeFile(target: string, content: string | Uint8Array) {
-      if (mustFallback(target) || !caps.writeTextFile || !hasSession()) {
-        if (!caps.writeTextFile) note("no-capability:writeTextFile");
-        else if (!hasSession()) note("no-session-yet");
+      // At most ONE reason per request — `mustFallback` has already counted the path case.
+      if (mustFallback(target)) {
+        await fallback.fs.writeFile(target, content);
+        return;
+      }
+      if (!caps.writeTextFile || !hasSession()) {
+        note(!caps.writeTextFile ? "no-capability:writeTextFile" : "no-session-yet");
         await fallback.fs.writeFile(target, content);
         return;
       }
@@ -293,6 +316,19 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       note("terminal-aborted");
       throw new ExecutionError("aborted", `${file} was cancelled`);
     }
+    // No session yet ⇒ no client call is possible (every request carries a `sessionId`), so this
+    // degrades exactly like the fs paths rather than sending `sessionId: undefined`. Unreachable on
+    // today's create path — nothing spawns argv before a session exists — but the invariant is
+    // "this can never fail", and an unbound call would break it at the first such caller.
+    if (!hasSession()) {
+      note("no-session-yet");
+      if (fallback.execFile) return await fallback.execFile(file, args, execOptions);
+      // No terminal to run in and no fallback that can spawn: report the shape `execArgs` already
+      // understands as "unsupported" (`missing` ⇒ `execArgsCapture` returns undefined ⇒ the caller
+      // falls back to its in-process implementation). Throwing would turn a degrade into a failure,
+      // which is the thing this invariant exists to prevent.
+      return { stdout: "", stderr: `${file} cannot run before the session exists`, code: null, missing: true };
+    }
     const created = (await client().request(methods.client.terminal.create, {
       sessionId: sessionId(),
       command: file,
@@ -329,6 +365,11 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
         truncated = Boolean(snapshot.truncated);
         if (snapshot.exitStatus) {
           exitCode = snapshot.exitStatus.exitCode ?? null;
+          // A finished process is normally the end of it — but `truncated` is independent and can
+          // be set on the same response (the process exited AND its buffer was clipped by the
+          // client's byte limit). Running out of one byte limit is not the same as running out of
+          // output, so the exit only ends the loop *cleanly* when the buffer is intact.
+          endedBy = truncated ? "truncated" : "exit";
           break;
         }
         if (truncated) {

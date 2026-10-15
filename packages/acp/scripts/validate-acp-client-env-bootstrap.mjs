@@ -146,11 +146,13 @@ function makeEnv(root, { bindImmediately = false } = {}) {
   const root = await makeWorkspace("acp-e2e-count-");
   const { env } = makeEnv(root);
   await env.fs.readFile(path.join(root, "AGENTS.md"));
+  // "No session yet" is a WHEN, not a WHERE: the same path would have gone to the client a moment
+  // later, so it belongs with the capability bucket rather than the path bucket.
   check(
-    "an unbound read is counted as 'no session yet', not as a capability the client lacks",
-    env.fallbackCounts.localNoCapability === 0 && env.fallbackCounts.localOnlyPath === 1
+    "an unbound workspace read is counted as 'could not ask', not as a path we never send",
+    env.fallbackCounts.localNoCapability === 1 && env.fallbackCounts.localOnlyPath === 0
   );
-  check("the two counters are not conflated", env.fallbackCounts.other === 0);
+  check("it is not misfiled as deliberate local routing", env.fallbackCounts.other === 0);
 
   // A query must not move a counter: `routesWriteToClient` is asked on every approval.
   const before = { ...env.fallbackCounts };

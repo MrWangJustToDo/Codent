@@ -23,6 +23,13 @@
 - **THEN** 该读取 SHALL 由回退（本地）环境服务，SHALL NOT 向 client 发起请求
 - **AND** MUST NOT 失败或抛错 —— 取不到 `sessionId` 是「本会话暂不可用 client」，
       不是「读不到文件」；项目指令 SHALL 正常进入 system prompt
+- **AND** 该规则 SHALL 覆盖**每一条** client 路径（`fs/read_text_file`、`fs/write_text_file`、
+      `execFile`），MUST NOT 出现某个入口在未绑定时把 `sessionId: undefined` 发出去
+
+#### Scenario: 指令文件存在但读取被拒
+- **WHEN** 项目指令文件存在，但读取失败（如 client 拒绝 `fs/read_text_file`）
+- **THEN** 该失败 SHALL 被上报（日志或等价出口），MUST NOT 被静默吞掉
+- **AND** MUST NOT 把「读取失败」表述为「没有指令文件」
 
 ### Requirement: client 未声明的能力回退而非失败
 
@@ -148,6 +155,11 @@ client-backed 环境的 `terminal/*` SHALL 只用于 argv 型执行（`execFile`
 - **AND** MUST NOT 把部分输出当作完整结果返回给调用方
 - **AND** 依赖该结果的调用方（glob/grep/tree）SHALL 据此回落到其进程内实现，
       而非报告「零匹配」
+
+#### Scenario: 进程已退出但输出被截断
+- **WHEN** client 的同一响应同时给出退出状态与「输出被截断」
+- **THEN** 该结果 SHALL 按截断处理（标记 `killed: true` 并在 stderr 说明）
+- **AND** MUST NOT 因为进程已结束就把被裁剪的输出当作完整结果返回
 
 #### Scenario: run_command 的流式输出不受影响
 - **WHEN** 在 client-backed 环境下调用 `run_command`

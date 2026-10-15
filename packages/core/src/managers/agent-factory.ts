@@ -21,6 +21,7 @@ import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/t
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
+import { errorMessage } from "../utils/errors.js";
 
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
@@ -125,6 +126,13 @@ export async function buildManagedAgent({
         ? `${docResult.content}\n\n## Local Override\n\n${docResult.overrideContent}`
         : docResult.content;
       managed.setAgentDocContent(instructions, docResult.source);
+    } else if (docResult.readErrors?.length) {
+      // The file exists but could not be read — a refusing client, a sandbox, a broken mount. Say it
+      // out loud: without this the session simply has no project instructions and nothing explains
+      // why, which is indistinguishable from "the project has no AGENTS.md".
+      for (const { path: failedPath, error } of docResult.readErrors) {
+        log?.warn("agent", `Instruction file could not be read: ${failedPath} (${errorMessage(error)})`);
+      }
     }
     // One-time gate for the session-retrieval section (root agents only, like the
     // agent doc): whether past conversations exist to point the model at.
