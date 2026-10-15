@@ -904,6 +904,10 @@ export class ManagedAgent {
   /**
    * Set the reasoning-effort level and invalidate the cached runner so the next
    * run rebuilds {@link AgentRunner} with the new `modelOptions`.
+   *
+   * The persisted value is a *record* of the state a message was produced under (see
+   * `SessionData.reasoningEffort`), not a session-owned setting: `/effort` is expected to
+   * move into the config flow, after which this only stamps the transcript being written.
    */
   setReasoningEffort(effort: AgentConfig["reasoningEffort"]): void {
     this.updateConfig({ reasoningEffort: effort });

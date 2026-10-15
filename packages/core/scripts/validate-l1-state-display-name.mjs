@@ -80,6 +80,9 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
   service.setStore(
     {
       create: () => ({ id: "ses_test", name: "New Session", usage: {}, cost: 0, contextTokens: 0, uiMessages: [] }),
+      // No file is ever written by this fake, so the session is "not on disk" — the
+      // persist guard treats a content-less session with no file as nothing to write.
+      exists: async () => false,
       save: async (data) => {
         saved.push(data);
       },

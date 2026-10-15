@@ -85,6 +85,15 @@ function setupEnv({ failMediaWrites }) {
       async appendFile(p, content) {
         files.set(p, (files.get(p) ?? "") + String(content));
       },
+      // Atomic log replace. The store is driven directly (`store.save`) to seed the file, so
+      // provide `rename`; without it the store rewrites in place and a concurrent `load()` can
+      // read a truncated file.
+      async rename(from, to) {
+        const content = files.get(from);
+        if (content === undefined) throw new Error(`ENOENT: ${from}`);
+        files.set(to, content);
+        files.delete(from);
+      },
       async mkdir() {},
       async exists(p) {
         if (files.has(p)) return true;
@@ -131,6 +140,11 @@ setupEnv({ failMediaWrites: true });
   const data = service.ensureSessionData();
   data.name = "keep"; // skip auto-title so this only exercises the dehydrate path
   data.uiMessages = [];
+  // Seed the file first: a session reaches disk only on its first *content* save, so a persist
+  // whose dehydrate fails on a brand-new session would (correctly) write nothing. With the file
+  // present this exercises the media-failure path — "the rest of the session still persisted" —
+  // rather than first-write semantics.
+  await store.save(data);
 
   const events = [];
   const input = {

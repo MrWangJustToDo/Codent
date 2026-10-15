@@ -135,9 +135,20 @@ export interface SessionData {
   name: string;
   /** Schema version for future migrations */
   version: number;
-  /** API style used for this session */
+  /**
+   * Provider style these messages were produced with.
+   *
+   * A *record* of the state at the time the messages were generated, not a settings holder
+   * the session owns: on resume it is adopted so the conversation continues on the same plane
+   * (see `ManagedAgent.applyPersistedModel`), while changing the provider lives in the config
+   * flow. Together with {@link model} it says what this transcript was made with.
+   */
   modelStyle: ModelStyle;
-  /** Model name used */
+  /**
+   * Model these messages were produced with — same "record of the producing state" contract as
+   * {@link modelStyle}. Adopted on resume so a continued turn targets the same model; switching
+   * models is a config-flow concern, not a session-owned setting.
+   */
   model: string;
   /** Full conversation as UIMessages (for client display on resume; includes in-chain summaries) */
   uiMessages: TanStackUIMessage[];
@@ -153,7 +164,14 @@ export interface SessionData {
   todoTitle?: string | null;
   /** Whether todos are bound to plan building (optional; older sessions omit this). */
   todoPlanBound?: boolean;
-  /** Reasoning effort level for this session (OpenAI `reasoning_effort` / Anthropic `effort`). */
+  /**
+   * Reasoning effort recorded with this transcript (OpenAI `reasoning_effort` / Anthropic
+   * `effort`).
+   *
+   * Same contract as {@link model}: a record of the state a message was produced under, not a
+   * session-owned toggle. `/effort` is expected to move into the config flow; this field then
+   * only reflects how a given transcript's turns were generated.
+   */
   reasoningEffort?: ReasoningEffort;
   /**
    * Plan-mode lifecycle snapshot (phase, markdown, path, seeded flags).

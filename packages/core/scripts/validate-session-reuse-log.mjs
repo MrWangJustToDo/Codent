@@ -6,6 +6,10 @@
  *    divider) instead of a transient `.agents/logs/{newId}` dir.
  * 3. No stray log dirs are created for the reused launch.
  *
+ * The leftover empty session file is written directly with `store.save`, because a session
+ * now reaches disk only on its first *content* save: a fresh launch and `/clear` no longer
+ * leave one, so the reuse path exercised here is defensive (a legacy leftover).
+ *
  * Run: pnpm --filter @codent/core run validate:session-reuse-log
  */
 
@@ -35,6 +39,10 @@ registerCoreEnv({
     readFile: async (p, encoding) => fs.promises.readFile(toAbs(p), encoding ?? "utf-8"),
     writeFile: async (p, content) => fs.promises.writeFile(toAbs(p), content),
     appendFile: async (p, content) => fs.promises.appendFile(toAbs(p), content, "utf8"),
+    // Atomic log replace (`SessionStore` writes a temp file and renames it). The store is now
+    // driven directly below, so the mock must provide it — without `rename` the store rewrites
+    // the log in place and a concurrent `load()` can read a truncated file.
+    rename: async (from, to) => fs.promises.rename(toAbs(from), toAbs(to)),
     mkdir: async (p) => fs.promises.mkdir(toAbs(p), { recursive: true }),
     exists: async (p) =>
       fs.promises.access(toAbs(p)).then(
@@ -85,8 +93,12 @@ assert.ok(sessionE?.startsWith("ses_"), `launch 1 stable ses_ id, got ${sessionE
 managed1.getLog().info("system", "launch-1-marker");
 await sleep(450); // default flush interval is 250ms
 
-// Persist the empty session so launch 2 can discover it as the latest empty one.
-managed1.persistSession();
+// Leave an empty session file for launch 2 to discover. Written through `store.save`
+// directly: `managed.persistSession()` no longer creates one (a session reaches disk only
+// on its first content save), so this stands in for the leftover file an older build left
+// behind — the defensive case the reuse path still covers.
+const emptySession = managed1.getSessionData();
+await managed1.getSessionStore().save(emptySession);
 await sleep(50);
 
 const logDirE = path.join(rootPath, ".agents/logs", sessionE);

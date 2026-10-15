@@ -203,6 +203,17 @@ export class SessionStore {
   }
 
   /**
+   * Whether this session has ever been written to disk (its log file exists).
+   *
+   * The log is the session's only durable form and it is created on the first *content*
+   * save (see `SessionService.persistSessionInner`), so a fresh session reports `false`
+   * until it has something to write. `load()` uses the same check to report "not found".
+   */
+  async exists(id: string): Promise<boolean> {
+    return this.fs.exists(this.getLogPath(id));
+  }
+
+  /**
    * Load a full session by ID by folding its log. Returns null when the log is
    * missing or holds no usable lines.
    */
@@ -287,6 +298,13 @@ export class SessionStore {
    * no user messages) and is not currently reserved by a concurrent live agent.
    * Lets hosts reuse the leftover empty session from a previous startup instead
    * of creating a fresh one, without racing another process onto the same id.
+   *
+   * **Defensive.** A session now reaches disk only on its first *content* save
+   * (see `SessionService.persistSessionInner`), so a normal launch and `/clear` no
+   * longer leave a reusable empty file behind. What this can still match is a
+   * leftover empty file from an older build, or one written empty by
+   * {@link reserveSession} / {@link releaseReservation} — so it is kept for those
+   * and is otherwise expected to return `null`.
    */
   async getLatestEmpty(): Promise<SessionData | null> {
     const metas = await this.list();

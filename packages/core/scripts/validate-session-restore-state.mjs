@@ -10,8 +10,9 @@
  *   persisted total, so `updateWindowUsage` used to count it twice);
  * - a state-only save (no new message) re-emits the last message line, and the
  *   new state survives a later resume;
- * - a mode switch persists on its own (no turn needed): `mode.set auto` and
- *   `mode.set plan` reach disk and come back on resume;
+ * - a mode switch persists on its own (no turn needed) once the session is on disk:
+ *   `mode.set auto` and `mode.set plan` reach disk and come back on resume. A session
+ *   with no content is never written, so this block saves one first;
  * - approvals are derived from the folded messages, keeping the recorded
  *   decision time (`approvalAt`).
  *
@@ -271,6 +272,12 @@ let sessionId;
   const session = created.session;
   const managed = manager.getAgent(session.getSnapshot().agentId);
   const id = managed.getSessionData().id;
+
+  // A session reaches disk only on its first *content* save, so establish one: the file
+  // stands in for the transcript a real session would already carry. With the session on
+  // disk, the effort/mode switch below must still persist on its own, with no turn.
+  const store = managed.getSessionStore();
+  await store.save(managed.getSessionData());
 
   const effort = await session.dispatch({ type: "effort.set", effort: "xhigh" });
   assert.equal(effort.ok, true, "effort.set succeeds");

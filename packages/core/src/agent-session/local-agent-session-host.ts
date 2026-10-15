@@ -85,6 +85,11 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
  * - default → most recently updated *empty* session (no user messages), reserved
  *   here so a concurrent process skips it and picks a different one
  *
+ * The empty-session branch is **defensive**: a session is written to disk only on its
+ * first content save, so a fresh launch has no leftover empty file to reuse and this
+ * normally resolves to `undefined` (a new session). It still covers a leftover empty
+ * file from an older build or one written empty by `SessionStore.reserveSession`.
+ *
  * Returns `undefined` when a fresh session should be created. Best-effort: a
  * degraded/missing CoreEnv fs falls back to a fresh session.
  */

@@ -26,6 +26,10 @@
  *    the side LLM an empty prompt — a title with no conversation behind it, and a wasted
  *    call (some providers 400 on the empty input, surfacing only as a `side-query` warn).
  *    Old code: the title resolver ran for a persist that carried no user message.
+ * 6. **A session reaches disk only on its first content save.** State-only persists (a mode
+ *    reset during `/clear`, a mode/effort/model toggle) used to create the log for a session
+ *    with no content, leaving an empty "New Session" behind. Old code: a state-only persist
+ *    wrote the file.
  *
  * Run: pnpm --filter @codent/core run validate:session-persist-integrity
  */
@@ -455,6 +459,58 @@ function newService() {
   assert.equal(adapterCalls, 1, "a first user message triggers exactly one title call");
   assert.equal(data.name, "hello there", "the adapter-less fallback names the session");
   assert.equal((await store.load(data.id)).name, "hello there", "the fallback title reached disk");
+}
+
+// ---------------------------------------------------------------------------
+// 8. A session reaches disk only on its first content save
+// ---------------------------------------------------------------------------
+{
+  setupEnv();
+  const store = new SessionStore();
+  const service = new SessionService();
+  service.setStore(store, { modelStyle: "openai", model: "test-model" });
+  const data = service.ensureSessionData();
+  data.name = "gate"; // keep the auto-title path out of this block
+  const sessionFiles = () => [...files.keys()].filter((p) => p.endsWith(".session.jsonl"));
+
+  // State-only persists — `/clear`'s mode resets, `persistSessionModelState`, a mode / effort /
+  // model toggle — must not create a file for a session with no content yet. Old code: each one
+  // wrote the log, leaving an empty "New Session" on disk (and a ghost row in `/resume`).
+  await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null });
+  await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null, uiMessages: [] });
+  await service.persistSession({
+    usage: new UsageTracker(),
+    getTodoManager: () => null,
+    uiMessages: [],
+    forceEmptyMessages: true,
+  });
+  assert.deepEqual(sessionFiles(), [], "no session file before the first content save");
+
+  // The first save that carries a message creates the file — and the state the earlier
+  // writes computed rides along with it.
+  const wrote = await service.persistSession({
+    usage: new UsageTracker(),
+    getTodoManager: () => null,
+    uiMessages: [textMessage("m1", "hello")],
+  });
+  assert.equal(wrote, true, "the first content save reports success");
+  assert.equal(sessionFiles().length, 1, "the content save creates the session file");
+  assert.deepEqual(
+    (await store.load(data.id)).uiMessages.map((m) => m.id),
+    ["m1"],
+    "the message is on disk"
+  );
+
+  // Once the file exists, a forced empty write still lands — that is what an in-place clear
+  // over an existing session needs, and it must not be mistaken for the "fresh session" skip.
+  const cleared = await service.persistSession({
+    usage: new UsageTracker(),
+    getTodoManager: () => null,
+    uiMessages: [],
+    forceEmptyMessages: true,
+  });
+  assert.equal(cleared, true, "a forced empty write on an existing file succeeds");
+  assert.deepEqual((await store.load(data.id)).uiMessages, [], "the existing file was emptied");
 }
 
 console.log("session-persist-integrity validation passed");

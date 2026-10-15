@@ -323,6 +323,18 @@ export class SessionService {
       }
     }
 
+    // A session reaches disk only once it has something to write. `/clear` starts a
+    // brand-new session, and a mode/effort/model toggle issued before the first message
+    // persists *state* against it — but an empty session that nothing can be resumed from
+    // is not worth a file. Create it on the first save that carries a message; the state
+    // computed above rides along with that write. This is also what keeps `/resume` free of
+    // empty "New Session" rows. A skip is "nothing to write yet", not a failure — the caller
+    // asked for state that is derived and will be written by the next content save.
+    const store = this.store;
+    if (store && this.data.uiMessages.length === 0 && !(await store.exists(this.data.id))) {
+      return messagesPersisted;
+    }
+
     const saveTarget = uiMessages !== undefined ? "session+uiMessages" : "session";
     // Await so callers that `await persistSession` observe durability; emit on
     // failure (do not rethrow — persist remains best-effort for fire-and-forget hosts).

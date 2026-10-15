@@ -3,7 +3,8 @@
  * re-applied when the session is resumed:
  * - `model.set` persists `model` / `modelStyle` into the session record
  *   (previously only `store.create` wrote it → resume always fell back to the
- *   creation-time default model).
+ *   creation-time default model). On a session already on disk: a session with no
+ *   content is never written, so the block saves one first.
  * - `session.resume` adopts the persisted model (except under remote-provider,
  *   where the provider server owns the model).
  *
@@ -92,8 +93,11 @@ const managed = manager.getAgent(agentId);
 const store = managed.getSessionStore();
 const sessionId = managed.getSessionData().id;
 
-managed.persistSession();
-await waitFor(async () => (await store.load(sessionId)) !== null, "initial session written");
+// A session reaches disk only on its first *content* save (`SessionService.persistSessionInner`),
+// so a state-only `persistSession()` on a fresh session is a no-op. Save the session directly to
+// stand in for the transcript a real session would carry; `model.set` must then persist on its own.
+await store.save(managed.getSessionData());
+await waitFor(async () => (await store.load(sessionId)) !== null, "initial session on disk");
 assert.equal((await store.load(sessionId)).model, "default-model");
 
 const switched = await session.dispatch({ type: "model.set", model: "switched-model", modelStyle: "anthropic" });
