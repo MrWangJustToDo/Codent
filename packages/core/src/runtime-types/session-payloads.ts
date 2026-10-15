@@ -36,6 +36,16 @@ export interface AgentL1State {
   modelInfo: ModelInfo | null;
   /** Current reasoning-effort level (null = model default). */
   reasoningEffort: ReasoningEffort | null;
+  /**
+   * Wall-clock duration of the last completed run, in ms (0 before any run finishes).
+   *
+   * Travels here for the same reason `model` and `reasoningEffort` do: a remote client caches a
+   * snapshot and only refreshes it on connect/reconnect, so a field with no channel of its own
+   * would show a stale value until then. The footer renders `Completed in 1.2s` from this, and
+   * `lastStreamDurationMs` is set at the very END of a run — exactly the moment no other channel
+   * fires — so without it the duration only appeared after an unrelated resync.
+   */
+  lastStreamDurationMs: number;
 }
 
 /**
@@ -96,6 +106,31 @@ export interface SessionJobSummary {
 /** Background jobs started by this agent (mirrors the retained `jobs` channel). */
 export interface SessionJobsSnapshot {
   jobs: SessionJobSummary[];
+}
+
+/**
+ * A child agent (a `task` delegation or an internal worker), as a status surface sees it.
+ *
+ * Lives here rather than in `agent-session/types.ts` because the projection `ManagedAgent` → row is
+ * defined in `managers/**`, and a manager cannot import the host-facing `agent-session/` layer. The
+ * session re-exports it, so the public name is unchanged.
+ */
+export interface AgentSessionSubagentSummary {
+  id: string;
+  status: AgentStatus;
+  name?: string;
+  /** Display label derived from spawn description when available. */
+  description?: string;
+  parentTaskToolCallId?: string;
+  /**
+   * Task-level phase machine for the delegated run this row wraps
+   * (running → summary | limit); see TaskRunState. Absent for a non-task row.
+   * `limit` is a budget cutoff, NOT a natural finish — a row that ends there must
+   * not read as one (the subagent's own `status` is `completed` in both cases,
+   * because the run neither errored nor was cancelled).
+   */
+  taskPhase?: "running" | "summary" | "limit";
+  usage?: UsageChangeSnapshot;
 }
 
 /** Content accepted by the steer / follow-up queues. */

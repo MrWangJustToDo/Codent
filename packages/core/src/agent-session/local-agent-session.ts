@@ -100,13 +100,31 @@ function projectChannelEvent(channel: AgentSessionChannel, event: AgentEvent): A
         payload: { servers: (event.payload as { servers?: ChannelPayload<"mcp">["servers"] }).servers ?? [] },
         ts,
       };
+    case "jobs":
+      // `session:jobs` carries `SessionJobsSnapshot`, whose shape already matches the channel
+      // payload — no re-shaping. This branch was missing while the event kept its
+      // `AGENT_EVENT_META` row, its `AGENT_SESSION_CHANNELS` entry, its place in
+      // `DEFAULT_AGENT_SESSION_CHANNELS` and its `retain()`: `session:jobs` was routed here and
+      // hit `default: return null`, so the retained value never reached a subscriber. The one
+      // consumer, `RemoteSessionClient`, has a `case "jobs"` that could therefore never run.
+      return { channel, payload: event.payload as ChannelPayload<"jobs">, ts };
+    case "subagents":
+      // Shape already matches `{ subagents }`, as with `jobs` above.
+      return { channel, payload: event.payload as ChannelPayload<"subagents">, ts };
     case "lifecycle":
       // The lifecycle channel carries the typed AgentEvent envelope itself.
       return { channel, payload: event as ChannelPayload<"lifecycle">, ts };
     case "extension-ui":
       return { channel, payload: event.payload as ChannelPayload<"extension-ui">, ts };
-    default:
+    default: {
+      // Exhaustiveness. Every channel is handled above, so `channel` is `never` here — dropping a
+      // channel is then a COMPILE error rather than a silent `return null` at runtime. That is what
+      // `session:jobs` was: declared, retained, in the default set, and dropped because this
+      // function had no branch for it while every per-event validator stayed green.
+      const uncovered: never = channel;
+      void uncovered;
       return null;
+    }
   }
 }
 

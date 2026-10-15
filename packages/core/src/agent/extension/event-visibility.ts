@@ -102,6 +102,7 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "session:interaction": "observable",
   "agent:iteration": "observable",
   "session:jobs": "observable",
+  "session:subagents": "observable",
   // Deliberately withheld (each needs a reason).
   // token-by-token streaming already has a dedicated UI path; observing it invites
   // per-chunk extension work on the hot path.

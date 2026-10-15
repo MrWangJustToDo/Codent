@@ -237,6 +237,23 @@ managed.usage.updateWindowUsage({ inputTokens: 3, outputTokens: 1, totalTokens: 
 managed.getTodoManager().update([{ content: "x", status: "pending", priority: "medium" }], "work");
 assert.ok(channels.includes("usage"));
 assert.ok(channels.includes("todos"));
+
+// Every channel a routed event declares must survive the projector. `projectChannelEvent` maps by
+// hand off the channel it is handed, so a channel that is declared in `AGENT_EVENT_META`, listed in
+// `AGENT_SESSION_CHANNELS`, and in the DEFAULT subscription set can still hit the `default: return
+// null` branch and be dropped silently — nothing type-checks the pair, and the meta-level
+// assertions in validate-command-jobs-channel stay green because they never exercise the projector.
+managed.getEventBus().emit("session:jobs", {
+  jobs: [
+    { jobId: "job-1", command: "sleep 30", status: "running", exitCode: null, startedAt: Date.now(), endedAt: null },
+  ],
+});
+assert.ok(channels.includes("jobs"), "session:jobs must reach its channel, not fall through the projector");
+
+// The retained `subagents` list must reach its channel too — it is the only channel that can add or
+// drop a task row off-process, and the per-id `subagent:*` lifecycle events carry no list.
+managed.getEventBus().emit("session:subagents", { subagents: [] });
+assert.ok(channels.includes("subagents"), "session:subagents must reach its channel");
 unsub();
 
 const child = createFake("agent_child", "agent_root");

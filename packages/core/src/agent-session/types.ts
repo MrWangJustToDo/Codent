@@ -25,6 +25,7 @@ import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js"
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type {
+  AgentSessionSubagentSummary,
   AgentIterationState,
   SessionInteractionsSnapshot,
   SessionJobsSnapshot,
@@ -57,6 +58,7 @@ export const AGENT_SESSION_CHANNELS = [
   "interaction",
   "iteration",
   "jobs",
+  "subagents",
 ] as const;
 
 export type AgentSessionChannel = (typeof AGENT_SESSION_CHANNELS)[number];
@@ -81,6 +83,10 @@ export const DEFAULT_AGENT_SESSION_CHANNELS: readonly AgentSessionChannel[] = [
   // opt in explicitly would never see it — the same reasoning recorded for `mcp`
   // below. The payload is counts/summaries only, so the extra frame is cheap.
   "jobs",
+  // Child-agent rows (retained). Default for the same reason as `jobs`: no host
+  // opts in explicitly, and it is the only channel that can add or drop a task row
+  // off-process — `subagent:created`/`:destroyed` carry a single id.
+  "subagents",
   // `mcp` is a retained projection (see `session:mcp`); it gets no explicit
   // `channels:[...]` opt-in from any host, so without this it is never delivered.
   "mcp",
@@ -94,23 +100,13 @@ export interface AgentSessionExtensionsSummary {
   extensions: ExtensionInfo[];
 }
 
-export interface AgentSessionSubagentSummary {
-  id: string;
-  status: AgentStatus;
-  name?: string;
-  /** Display label derived from spawn description when available. */
-  description?: string;
-  parentTaskToolCallId?: string;
-  /**
-   * Task-level phase machine for the delegated run this row wraps
-   * (running → summary | limit); see TaskRunState. Absent for a non-task row.
-   * `limit` is a budget cutoff, NOT a natural finish — a row that ends there must
-   * not read as one (the subagent's own `status` is `completed` in both cases,
-   * because the run neither errored nor was cancelled).
-   */
-  taskPhase?: "running" | "summary" | "limit";
-  usage?: UsageChangeSnapshot;
-}
+/**
+ * A child agent (a `task` delegation or an internal worker), as a status surface sees it.
+ *
+ * Re-exported from `runtime-types/session-payloads` (where the projection's own layer can reach
+ * it) so the published name and its import path through this module are unchanged.
+ */
+export type { AgentSessionSubagentSummary } from "../runtime-types/session-payloads.js";
 
 /**
  * A PERSISTED conversation id (`ses_…`): the `SessionData.id`, the `.agents/sessions/<id>.jsonl`
@@ -287,7 +283,8 @@ export type AgentSessionEvent =
   | { channel: "mode"; payload: { mode: AgentMode; autoMode: boolean }; ts: number }
   | { channel: "interaction"; payload: SessionInteractionsSnapshot; ts: number }
   | { channel: "iteration"; payload: AgentIterationState; ts: number }
-  | { channel: "jobs"; payload: SessionJobsSnapshot; ts: number };
+  | { channel: "jobs"; payload: SessionJobsSnapshot; ts: number }
+  | { channel: "subagents"; payload: { subagents: AgentSessionSubagentSummary[] }; ts: number };
 
 export type AgentSessionSubscriber = (event: AgentSessionEvent) => void;
 

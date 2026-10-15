@@ -12,7 +12,7 @@
  *   short-circuits (see {@link InterceptableEvent}/{@link EventInterceptor}).
  */
 
-import type { AgentSessionChannel } from "../../agent-session/types.js";
+import type { AgentSessionChannel, AgentSessionSubagentSummary } from "../../agent-session/types.js";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 import type {
   AgentIterationState,
@@ -79,6 +79,15 @@ export interface AgentEvents extends AgentEventPayloadMap {
   "agent:iteration": AgentIterationState;
   /** Background command jobs started by this agent (summary only — no output). */
   "session:jobs": SessionJobsSnapshot;
+  /**
+   * Child agents (task delegations and internal workers), as the snapshot's `subagents` array.
+   *
+   * A retained list channel for the same reason `session:jobs` is one: the per-row
+   * `subagent:created` / `subagent:destroyed` lifecycle events carry a single id, so a subscriber
+   * that re-reads its cached snapshot on them gains and loses nothing off-process — the list had
+   * no channel of its own and moved only on a full resync.
+   */
+  "session:subagents": { subagents: AgentSessionSubagentSummary[] };
   /** Extension UI notification. */
   "extension:ui": AgentExtensionUiEvent;
   /** Streaming tool output chunk. */

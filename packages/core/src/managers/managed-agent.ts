@@ -127,6 +127,7 @@ import { ExtensionRegistryService } from "./services/extension-registry-service.
 import { MemoryService } from "./services/memory-service.js";
 import { SessionService } from "./services/session-service.js";
 import { UsageHistoryService } from "./services/usage-history-service.js";
+import { buildSubagentSummaries } from "./subagent-summaries.js";
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
@@ -171,6 +172,7 @@ import type {
   QueuedMessageContent,
   AgentIterationState,
   AgentL1State,
+  AgentSessionSubagentSummary,
   AgentMode,
   SessionInteractionsSnapshot,
   SessionJobsSnapshot,
@@ -754,6 +756,8 @@ export class ManagedAgent {
       model: this.config.model,
       modelInfo: this.modelInfo,
       reasoningEffort: this.config.reasoningEffort ?? null,
+      // Set at the end of a run, so it has to ride the state event that follows the status flip.
+      lastStreamDurationMs: this.getLastStreamDurationMs(),
     };
   }
 
@@ -788,6 +792,17 @@ export class ManagedAgent {
   }
 
   /**
+   * Child-agent list for the retained `subagents` channel.
+   *
+   * Same projection as the snapshot's `subagents` field, and the reason it needs a channel at all:
+   * `subagent:created` / `subagent:destroyed` carry a single id, so off-process a task row could
+   * never be added or removed — the list only moved on a full snapshot refetch.
+   */
+  readSubagents(): { subagents: AgentSessionSubagentSummary[] } {
+    return { subagents: buildSubagentSummaries(this, this.manager) };
+  }
+
+  /**
    * Record the agent-loop iteration progress for the current run and project it
    * onto the retained `iteration` channel. Called by the lifecycle middleware at
    * each model-iteration boundary.
@@ -814,6 +829,26 @@ export class ManagedAgent {
     options?: { parentId?: string; agentId?: string }
   ): void {
     emitAgentTelemetry(this, type, payload, options);
+
+    // Any `subagent:*` transition can change a child row, which is what the retained `subagents`
+    // summary carries. Refresh here, at the ONE place these events are dispatched, rather than at
+    // each call site — per-site publishing is how the list ended up with no channel at all:
+    // `subagent:created` / `:destroyed` each had to remember, and neither did.
+    //
+    // The event is dispatched by the CHILD, but the rows describe the PARENT's children, so resolve
+    // the parent and refresh its scope. A root agent emitting its own event refreshes itself.
+    if (type.startsWith("subagent:")) {
+      const parent = this.parentId ? this.manager?.getAgent(this.parentId) : this;
+      parent?.refreshSubagents();
+    }
+  }
+
+  /**
+   * Republish the retained `subagents` list for this agent's scope.
+   * @internal
+   */
+  refreshSubagents(): void {
+    this.eventBus?.emit("session:subagents", this.readSubagents());
   }
 
   /**
@@ -839,6 +874,7 @@ export class ManagedAgent {
     bus.retain("session:interaction", () => this.readInteractions());
     bus.retain("agent:iteration", () => this.readIteration());
     bus.retain("session:jobs", () => this.readJobs());
+    bus.retain("session:subagents", () => this.readSubagents());
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
     this.dispatchEvent = (event) => {

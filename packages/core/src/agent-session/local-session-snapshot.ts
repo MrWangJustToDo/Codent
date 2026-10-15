@@ -1,43 +1,18 @@
-import { readTaskRunPhase } from "../agent/subagent/task-run-state.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { buildSubagentSummaries } from "../managers/subagent-summaries.js";
 /**
  * Project ManagedAgent → AgentSessionSnapshot (serializable, no live handles).
  */
 
-import type { AgentSessionSnapshot, AgentSessionSubagentSummary } from "./types.js";
+import type { AgentSessionSnapshot } from "./types.js";
 import type { ManagedAgent } from "../managers/managed-agent.js";
-
-function subagentDescription(name: string | undefined): string | undefined {
-  if (!name) return undefined;
-  if (name.startsWith("subagent-")) {
-    const rest = name.slice("subagent-".length).trim();
-    return rest || undefined;
-  }
-  return name;
-}
+// Re-exported for hosts that consumed it from this module before the projection
+// was moved down into `managers/**` (see that module for why).
+export { buildSubagentSummaries } from "../managers/subagent-summaries.js";
 
 interface SubagentCatalog {
   getSubagents(parentId: string): ManagedAgent[];
 }
-
-export function buildSubagentSummaries(
-  managed: ManagedAgent,
-  manager: SubagentCatalog | null | undefined
-): AgentSessionSubagentSummary[] {
-  if (!manager) return [];
-  // Includes internal workers (compaction / memory summarizers): the task
-  // panel doubles as an observability surface for hidden agents.
-  return manager.getSubagents(managed.id).map((child) => ({
-    id: child.id,
-    status: child.getStatus(),
-    name: child.name,
-    taskPhase: readTaskRunPhase(managed, child.parentTaskId),
-    ...(subagentDescription(child.name) ? { description: subagentDescription(child.name) } : {}),
-    ...(child.parentTaskId ? { parentTaskToolCallId: child.parentTaskId } : {}),
-    usage: child.usage.getChangeSnapshot(),
-  }));
-}
-
 export function readLocalAgentSessionSnapshot(
   managed: ManagedAgent,
   manager: SubagentCatalog | null | undefined

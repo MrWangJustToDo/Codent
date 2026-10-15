@@ -128,6 +128,10 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   // without waiting for the next transition. Deliberately NOT in
   // DEFAULT_EVENT_LOG_RULES: a job start/stop is not worth a log line per event.
   "session:jobs": { mode: "emit", channel: "jobs", retained: true },
+  // Child-agent list. Retained for the same reason as `session:jobs`, and it is the
+  // only channel that can add or drop a task row off-process — the `subagent:*`
+  // lifecycle events carry one id each and are not a list.
+  "session:subagents": { mode: "emit", channel: "subagents", retained: true },
   "extension:ui": { mode: "emit", channel: "extension-ui" },
   "tool:chunk": { mode: "emit", channel: "tool" },
   "tool:clear": { mode: "emit", channel: "tool" },
