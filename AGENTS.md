@@ -950,7 +950,7 @@ Three-layer context compaction (plus reactive compaction) for infinite agent ses
 | Layer 1 | `tool_compact` | Every LLM call | `toModelOutput` transforms (cached per toolCallId) |
 | Layer 2 | `reasoning_stripping` | Every LLM call (DeepSeek models) | Strip reasoning content from history to optimize prefix cache |
 | Layer 3 | `auto_compact` | Token threshold exceeded | LLM summarization |
-| Reactive | `reactive_compact` | `prompt_too_long` API error | Emergency compaction, then retry |
+| Reactive | `reactive_compact` | Context-overflow API error (provider `code` first, prose fallback) | Emergency compaction, then retry |
 
 **Configuration:** `compaction` option on `createManagedAgent`:
 ```typescript
@@ -970,7 +970,7 @@ compaction: {
 
 **Summarizer input:** The summarization subagent receives labeled segments — `<to_compress>` (pre-cut history), `<turn_prefix>` (split-turn prefix, dedicated prompt), and `<still_in_context>` (kept turns) — plus optional `<previous-summary>` for incremental updates. Prompt rules tell the model to summarize the compressed segment thoroughly and use the kept segment only to align Goal/Next (no detailed restatement).
 
-**Post-compact (same request):** Append `[CONVERSATION SUMMARY]` onto the UI channel (chronological SoT). Compaction middleware then projects summary-first wire from the **live channel** and never writes the projection back. Auto-compact does not run again until a new durable message lands after that SUMMARY (window reset would otherwise re-trigger via `estimateTokens`). Recovery (`prompt_too_long` / retries) re-reads `managed.ui.getMessages()` live so mid-run appends are visible.
+**Post-compact (same request):** Append `[CONVERSATION SUMMARY]` onto the UI channel (chronological SoT). Compaction middleware then projects summary-first wire from the **live channel** and never writes the projection back. Auto-compact does not run again until a new durable message lands after that SUMMARY (window reset would otherwise re-trigger via `estimateTokens`). Recovery (context-overflow / retries) re-reads `managed.ui.getMessages()` live so mid-run appends are visible.
 
 **No transcript archive.** Compaction only *appends* the SUMMARY to the channel; it never removes the pre-cut messages, and the session is persisted from that channel — so `.agents/sessions/<id>.session.jsonl` retains the whole conversation and the summary is purely additive. The former `.agents/transcripts/<sessionId>/compact-<n>.md` archive was a derived, lower-fidelity duplicate of messages still in the log and has been **removed** (writer, summary `## Compact archives` list, and prompts). `stripCompactArchiveSections` remains only to drop the section from summaries persisted before the removal. Recall of compacted-away detail goes through the `session_search` / `session_read` tools over the session log.
 
@@ -980,7 +980,7 @@ compaction: {
 
 **Reasoning stripping (Layer 2)** is disabled in `compaction-middleware.ts` because DeepSeek thinking mode requires `reasoning_content` echo-back. DeepSeek endpoints use `ReasoningChatCompletionsTextAdapter`, which maps stream `reasoning_content` into `thinking` and writes it back on subsequent requests.
 
-**Reactive compaction** runs via `runStreamWithRecovery` (`managers/run-stream-recovery.ts`) — on `prompt_too_long` errors, `ManagedAgent.handleReactiveCompact()` appends a SUMMARY onto the live UI channel and retries (skipped for subagents). The retained tail is selected by token budget at a pairing-safe boundary (`selectReactiveTail`), degrading to the latest valid boundary when everything fits the budget — progress is always guaranteed. `getMessages` is a live channel read so the retry does not reuse a pre-run snapshot. The same shell also retries **transient** provider errors (429 / rate-limit / 502–504 / network) with exponential backoff for both main agent and subagents (honors Retry-After when available).
+**Reactive compaction** runs via `runStreamWithRecovery` (`managers/run-stream-recovery.ts`) — on a **context-overflow** error (`isPromptTooLongError` in `agent/compaction/reactive-compact.ts` classifies it **by the provider's stable `code` first** — `context_overflow` / `context_length_exceeded` / `model_context_window_exceeded` / `prompt_too_long` — and falls back to prose only when no usable code is present; `CONTEXT_OVERFLOW_CODES` is the set), `ManagedAgent.handleReactiveCompact()` appends a SUMMARY onto the live UI channel and retries (skipped for subagents). The retained tail is selected by token budget at a pairing-safe boundary (`selectReactiveTail`), degrading to the latest valid boundary when everything fits the budget — progress is always guaranteed. `getMessages` is a live channel read so the retry does not reuse a pre-run snapshot. The same shell also retries **transient** provider errors (429 / rate-limit / 502–504 / network) with exponential backoff for both main agent and subagents (honors Retry-After when available).
 
 ## Workspace `.agents/` layout
 

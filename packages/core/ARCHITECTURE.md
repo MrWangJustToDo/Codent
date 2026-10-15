@@ -521,7 +521,7 @@ That cache has **two** collectors, and neither subsumes the other: compaction's 
 | Kind                   | Where                                       | Examples                                                                                                                                                                                                                                                                                                                            |
 | ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Adapter-specific**   | `models/adapter-factory.ts`, `*-adapter.ts` | DeepSeek `reasoning_content` echo (`ReasoningChatCompletionsTextAdapter`); Chat Completions tool-image lift (`liftToolMediaForChatCompletions` — tool text stays string, images become a synthetic user `image_url` message); PDF text extract in `read_file` for Completions; Anthropic vs OpenAI Chat Completions style selection |
-| **Capability-generic** | middleware / reactive retry                 | Multimodal strip via `vision`/`audio`/`video`/`document` (`capability-message-utils`); `prompt_too_long` reactive compact                                                                                                                                                                                                           |
+| **Capability-generic** | middleware / reactive retry                 | Multimodal strip via `vision`/`audio`/`video`/`document` (`capability-message-utils`); context-overflow reactive compact (provider `code` first)                                                                                                                  |
 | **Config / metadata**  | `model-config`, `models.dev`, session       | `modelStyle`, pricing, `capabilities[]` (see below), unused-for-now `reasoningConfig` (tag/effort/budget — not yet mapped to request options)                                                                                                                                                                                        |
 
 ### Model capabilities — where the list comes from
@@ -611,7 +611,7 @@ On later iterations (no compact), `onConfig` again converts the live channel and
 
 **Files:** `run-stream-recovery.ts`, `stream-recovery/*`, `reactive-compact.ts`, `managed-agent.handleReactiveCompact`
 
-When the API returns `prompt_too_long`:
+When the API rejects the request as too long — classified by the provider's stable `code` (`context_overflow`, `context_length_exceeded`, `model_context_window_exceeded`, `prompt_too_long`, …) with prose only as the fallback, see `isPromptTooLongError` / `CONTEXT_OVERFLOW_CODES` in `agent/compaction/reactive-compact.ts`:
 
 ```
 runStreamWithRecovery catches RUN_ERROR / thrown error

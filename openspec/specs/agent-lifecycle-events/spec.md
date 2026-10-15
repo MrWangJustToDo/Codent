@@ -32,7 +32,7 @@ The system SHALL emit `compaction:auto-start` only for auto-compaction and `comp
 - **THEN** the AgentEventBus emits `compaction:auto-start` and does not emit `compaction:reactive-start`
 
 #### Scenario: Reactive compact start
-- **WHEN** reactive compaction begins after a `prompt_too_long` recovery path
+- **WHEN** reactive compaction begins after a context-overflow recovery path (classified by the provider's stable `code` first, prose fallback)
 - **THEN** the AgentEventBus emits `compaction:reactive-start` exactly once for that attempt and does not emit `compaction:auto-start`
 
 ### Requirement: Session restore and subagent destroy emit lifecycle events

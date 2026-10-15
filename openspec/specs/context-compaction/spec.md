@@ -82,5 +82,5 @@ Reactive (emergency) compaction SHALL select its retained tail by token budget u
 #### Scenario: Emergency compact with huge trailing messages
 
 - **WHEN** reactive compaction runs on a conversation whose last few messages alone exceed the keep budget
-- **THEN** the retained tail SHALL be reduced to fit the budget without splitting any tool pair, and the session SHALL be retryable instead of repeatedly failing with `prompt_too_long`
+- **THEN** the retained tail SHALL be reduced to fit the budget without splitting any tool pair, and the session SHALL be retryable instead of repeatedly failing with a context-overflow error
 
