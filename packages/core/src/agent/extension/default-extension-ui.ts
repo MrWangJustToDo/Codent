@@ -61,7 +61,7 @@ export class DefaultExtensionUI implements ExtensionUI {
   subscribe<T = unknown>(type: string, handler: (data: T) => void): () => void {
     if (!this.bus) return () => {};
     return this.bus.on("extension:ui", (event) => {
-      if (event.payload.type === type) handler(event.payload as unknown as T);
+      if (event.payload.type === type) handler(event.payload as T);
     });
   }
 

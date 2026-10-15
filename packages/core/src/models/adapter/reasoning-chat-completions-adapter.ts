@@ -79,6 +79,9 @@ export class ReasoningChatCompletionsTextAdapter extends ChatCompletionsTextAdap
           typeof (chunk as { content?: unknown }).content === "string" ? (chunk as { content: string }).content : "";
         const delta = existingDelta || content || reasoningBuffer;
         if (delta) {
+          // Necessary cast: `delta` / `content` are runtime extras TanStack reads off a
+          // STEP_FINISHED event, but neither AG-UI's `StepFinishedEvent` nor TanStack's
+          // extension of it declares them — there is no precise type to spell this with.
           yield {
             ...(chunk as object),
             type: EventType.STEP_FINISHED,
@@ -96,6 +99,9 @@ export class ReasoningChatCompletionsTextAdapter extends ChatCompletionsTextAdap
       if (chunk.type === EventType.RUN_FINISHED) {
         if (reasoningBuffer) {
           if (!sawStepFinishedWithDelta) {
+            // Same reason as above: `stepId` / `model` / `delta` are not in the protocol's
+            // StepFinishedEvent. This one is synthesized from scratch, so it also has to carry
+            // the `stepName` the protocol does require.
             yield {
               type: EventType.STEP_FINISHED,
               stepName: "thinking",
@@ -126,10 +132,15 @@ export class ReasoningChatCompletionsTextAdapter extends ChatCompletionsTextAdap
       return converted;
     }
 
-    return {
+    // `reasoning_content` is a non-standard field (DeepSeek and friends) that OpenAI's
+    // `ChatCompletionMessageParam` does not declare. Spelling the extension as an intersection
+    // keeps the assignment checked — `as unknown as` here asserted a shape nothing could verify,
+    // which is how a drifting field name would have gone unnoticed.
+    const withReasoning: ChatCompletionMessageParam & { reasoning_content?: string } = {
       ...converted,
       reasoning_content: reasoningContent,
-    } as unknown as ChatCompletionMessageParam;
+    };
+    return withReasoning;
   }
 }
 

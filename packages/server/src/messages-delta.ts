@@ -104,7 +104,7 @@ export function createMessagesDeltaWriter(write: (payload: MessagesDeltaPayload)
   const schedule = (): void => {
     if (timer !== null) return;
     timer = setTimeout(flush, PATCH_COALESCE_MS);
-    (timer as unknown as { unref?: () => void }).unref?.();
+    (timer as { unref?: () => void }).unref?.();
   };
 
   return {

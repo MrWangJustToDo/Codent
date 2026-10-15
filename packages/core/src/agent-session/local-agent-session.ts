@@ -102,7 +102,7 @@ function projectChannelEvent(channel: AgentSessionChannel, event: AgentEvent): A
       };
     case "lifecycle":
       // The lifecycle channel carries the typed AgentEvent envelope itself.
-      return { channel, payload: event as unknown as ChannelPayload<"lifecycle">, ts };
+      return { channel, payload: event as ChannelPayload<"lifecycle">, ts };
     case "extension-ui":
       return { channel, payload: event.payload as ChannelPayload<"extension-ui">, ts };
     default:

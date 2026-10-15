@@ -558,7 +558,7 @@ export class AgentManager {
     const store = managed.getSessionStore();
     if (!store) return [];
 
-    return (await store.list()) as unknown as SessionData[];
+    return (await store.list()) as SessionData[];
   }
 
   /**

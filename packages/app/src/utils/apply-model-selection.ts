@@ -33,7 +33,7 @@ export type ModelSelectionResult = { ok: true } | { ok: false; error: string };
  * (the store wraps them in readonly proxies, which provider registration rejects).
  */
 export function getLoadedModelsState(): LoadedModelsState | null {
-  const raw = toRaw(useConfig.getReadonlyState().modelsConfig) as unknown as LoadedModelsState | null;
+  const raw = toRaw(useConfig.getReadonlyState().modelsConfig) as LoadedModelsState | null;
   if (!raw) return null;
   return JSON.parse(JSON.stringify(raw)) as LoadedModelsState;
 }

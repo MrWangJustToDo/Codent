@@ -242,7 +242,7 @@ export function inlineSummaryForOutput(output: unknown, toolName: string): strin
     arguments: "",
     state: "complete",
     output,
-  } as unknown as ToolCallPart;
+  } as ToolCallPart;
   return getInlineSummary(part, toolName);
 }
 

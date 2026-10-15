@@ -313,27 +313,27 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
 
     switch (toolName) {
       case "list_file":
-        return formatListFileOutput(out as unknown as ListFileOutput);
+        return formatListFileOutput(out as ListFileOutput);
       case "run_command":
-        return formatRunCommandOutput(out as unknown as RunCommandOutput);
+        return formatRunCommandOutput(out as RunCommandOutput);
       case "get_command_output":
-        return formatGetCommandOutput(out as unknown as GetCommandOutput);
+        return formatGetCommandOutput(out as GetCommandOutput);
       case "kill_command":
-        return formatKillCommandOutput(out as unknown as KillCommandOutput);
+        return formatKillCommandOutput(out as KillCommandOutput);
       case "read_file":
-        return formatReadFileOutput(out as unknown as ReadFileOutput);
+        return formatReadFileOutput(out as ReadFileOutput);
       case "write_file":
-        return formatWriteFileOutput(out as unknown as WriteFileOutput);
+        return formatWriteFileOutput(out as WriteFileOutput);
       case "edit_file":
-        return formatEditFileOutput(out as unknown as EditFileOutput);
+        return formatEditFileOutput(out as EditFileOutput);
       case "glob":
-        return formatGlobOutput(out as unknown as GlobOutput);
+        return formatGlobOutput(out as GlobOutput);
       case "grep":
-        return formatGrepOutput(out as unknown as GrepOutput);
+        return formatGrepOutput(out as GrepOutput);
       case "todo":
-        return formatTodoOutput(out as unknown as TodoOutput);
+        return formatTodoOutput(out as TodoOutput);
       case "task":
-        return formatTaskOutput(out as unknown as TaskOutput);
+        return formatTaskOutput(out as TaskOutput);
       case "create_plan":
       case "update_plan":
         // Plan body is reviewed via PlanReadyBanner markdown preview — no tool output dump.
@@ -359,7 +359,7 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
       }
       case "ask_user":
         return formatAskUserOutput(
-          out as unknown as {
+          out as {
             question?: string;
             answer?: string;
             hasOptions?: boolean;

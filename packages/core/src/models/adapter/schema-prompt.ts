@@ -186,7 +186,7 @@ function resolveJsonSchema(schema: SchemaInput): JsonSchemaNode | null {
   const fromStandard = standard?.jsonSchema?.input?.();
   if (fromStandard && typeof fromStandard === "object") return fromStandard as JsonSchemaNode;
 
-  const raw = schema as unknown as JsonSchemaNode;
+  const raw = schema as JsonSchemaNode;
   if (raw && typeof raw === "object" && (raw.type || raw.properties)) return raw;
 
   return null;

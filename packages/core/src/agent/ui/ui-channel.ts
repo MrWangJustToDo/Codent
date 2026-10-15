@@ -261,7 +261,7 @@ export class AgentUIChannel {
 
     let changed = false;
     const next = this.getMessages().map((message) => {
-      const parts = (message as unknown as { parts?: DisplayAwarePart[] }).parts;
+      const parts = (message as { parts?: DisplayAwarePart[] }).parts;
       if (!parts?.length) return message;
 
       let touched = false;
@@ -559,7 +559,7 @@ function attachMissingToolDisplays(messages: TanStackUIMessage[]): TanStackUIMes
 
   let changed = false;
   const next = messages.map((message) => {
-    const parts = (message as unknown as { parts?: ToolCallPartLike[] }).parts;
+    const parts = (message as { parts?: ToolCallPartLike[] }).parts;
     if (!parts?.length) return message;
 
     let touched = false;

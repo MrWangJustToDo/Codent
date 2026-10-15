@@ -140,7 +140,7 @@ export function createProxiedFetch(): typeof fetch {
     }
 
     const bytes = data.body ? decodeBase64(data.body) : new Uint8Array();
-    return new Response(bytes as unknown as BodyInit, {
+    return new Response(bytes as BodyInit, {
       status: data.status ?? 500,
       statusText: data.statusText ?? "",
       headers: data.headers,

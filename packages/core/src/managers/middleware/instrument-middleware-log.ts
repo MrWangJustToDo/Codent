@@ -64,10 +64,10 @@ export function instrumentMiddlewareLog<TContext>(
     const wrapped: ChatMiddleware<TContext> = { ...mw };
 
     for (const hook of LOGGED_HOOK_KEYS) {
-      const fn = (mw as unknown as Record<string, unknown>)[hook];
+      const fn = (mw as Record<string, unknown>)[hook];
       if (typeof fn !== "function") continue;
 
-      (wrapped as unknown as Record<string, unknown>)[hook] = (
+      (wrapped as Record<string, unknown>)[hook] = (
         ctx: ChatMiddlewareContext<TContext>,
         ...rest: unknown[]
       ): unknown => {

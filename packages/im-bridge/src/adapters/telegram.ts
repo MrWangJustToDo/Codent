@@ -328,7 +328,7 @@ export class TelegramAdapter implements ChatAdapter {
 
   private registerHandlers(): void {
     this.bot.on("message", async (ctx) => {
-      const message = ctx.message as unknown as RawMessage | undefined;
+      const message = ctx.message as RawMessage | undefined;
       const handler = this.messageHandler;
       if (!message || !handler) return;
       if (message.from?.is_bot) return; // loop prevention: never deliver bot messages
@@ -366,7 +366,7 @@ export class TelegramAdapter implements ChatAdapter {
       const handler = this.buttonHandler;
       if (!handler) return;
       const query = ctx.callbackQuery;
-      const message = query.message as unknown as { chat: RawChat; message_id: number } | undefined;
+      const message = query.message as { chat: RawChat; message_id: number } | undefined;
       if (!message) {
         await ctx.answerCallbackQuery({ text: "Unsupported callback target" });
         return;

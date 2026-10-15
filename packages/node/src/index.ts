@@ -301,8 +301,8 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
 
     getMCPTransportProcess: (transport) => {
       const child =
-        (transport as unknown as { _process?: ChildProcess; process?: ChildProcess })._process ??
-        (transport as unknown as { process?: ChildProcess }).process;
+        (transport as { _process?: ChildProcess; process?: ChildProcess })._process ??
+        (transport as { process?: ChildProcess }).process;
       if (!child) return undefined;
       return {
         killed: child.killed,

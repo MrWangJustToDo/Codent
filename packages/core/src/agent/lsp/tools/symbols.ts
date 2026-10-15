@@ -142,7 +142,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
               let location = "";
               if (s.location) {
                 const absPath = fileUriToPath(s.location.uri, rootDir);
-                const line = (s.location as unknown as { range?: { start?: { line?: number } } }).range?.start?.line;
+                const line = (s.location as { range?: { start?: { line?: number } } }).range?.start?.line;
                 location = ` ${absPath}:${line != null ? line + 1 : "?"}`;
               }
               return `${kindName(s.kind)} ${s.name}${location}`;

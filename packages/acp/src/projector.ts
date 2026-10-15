@@ -124,7 +124,7 @@ export class AcpProjector {
       this.cursors.set(message.id, { text: text.length, thought: thought.length });
       for (const part of message.parts) {
         if (part.type !== "tool-call") continue;
-        this.emitToolCall(part as unknown as ToolCallPartLike, true);
+        this.emitToolCall(part as ToolCallPartLike, true);
       }
     }
   }
@@ -177,8 +177,8 @@ export class AcpProjector {
         this.emitAssistantThought(message);
       }
       for (const part of message.parts) {
-        if (part.type === "tool-call") this.emitToolCall(part as unknown as ToolCallPartLike, false);
-        else if (part.type === "tool-result") this.emitToolResult(part as unknown as ToolResultPartLike);
+        if (part.type === "tool-call") this.emitToolCall(part as ToolCallPartLike, false);
+        else if (part.type === "tool-result") this.emitToolResult(part as ToolResultPartLike);
       }
     }
   }

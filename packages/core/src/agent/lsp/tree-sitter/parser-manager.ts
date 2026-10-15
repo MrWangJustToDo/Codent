@@ -103,7 +103,7 @@ export class TreeSitterManager {
     if (this.wsError) return null;
     try {
       // Dynamic import keeps web-tree-sitter out of the core bundle.
-      const mod = (await import("web-tree-sitter")) as unknown as WebTreeSitterModule;
+      const mod = (await import("web-tree-sitter")) as WebTreeSitterModule;
       this.ws = mod;
       return mod;
     } catch (err) {

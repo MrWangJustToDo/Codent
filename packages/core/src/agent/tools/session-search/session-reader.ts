@@ -120,7 +120,7 @@ interface PartLike {
 }
 
 function partsOf(message: PersistedUIMessage): PartLike[] {
-  return Array.isArray(message.parts) ? (message.parts as unknown as PartLike[]) : [];
+  return Array.isArray(message.parts) ? (message.parts as PartLike[]) : [];
 }
 
 /** Text of a message: its text parts joined; media/other parts contribute nothing. */
@@ -234,14 +234,9 @@ export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: strin
     if (!(await env.fs.exists(path))) return [];
     const lines = await readLog(env.fs, path);
     const { uiMessages } = foldLog(lines);
-    const summaryIndex = latestSummaryIndex(uiMessages as unknown as PersistedUIMessage[]);
+    const summaryIndex = latestSummaryIndex(uiMessages as PersistedUIMessage[]);
     return uiMessages.map((message, index) =>
-      toSessionMessage(
-        sessionId,
-        index,
-        message as unknown as PersistedUIMessage,
-        index >= summaryIndex ? "current" : "shadowed"
-      )
+      toSessionMessage(sessionId, index, message as PersistedUIMessage, index >= summaryIndex ? "current" : "shadowed")
     );
   } catch {
     return [];
