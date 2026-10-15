@@ -177,10 +177,17 @@ client env 因此 SHALL：
   且 `validate:acp` 对开关的两态都跑；client env 不新增任何 CoreEnv 语义。
 - **`cwd()` 触达每个 CoreEnv 实现**。→ 缓解：默认实现返回 `rootPath`，因此只需 client env 覆盖；
   不引入必须实现的成员（放进 `resolveCoreEnv` 的默认化）。
-- **权限模型反转**：走 client env 后，**写文件与 argv 型执行**的审批由 client 侧负责，我们的
-  `session/request_permission` 在这两类动作上会显著减少。自由文本命令（`exec` / `runCommand`）不在此列
-  —— 它们仍在本地执行，审批也仍在本地。→ 缓解：写进 spec（「审批授权方转移」），并在 README 说明
-  `--client-env` 的后果。
+- **权限模型反转**：走 client env 后，**确实发往 client 的动作**的审批由 client 侧负责，我们的
+  `session/request_permission` 在这一类动作上会减少。判定以「该动作是否真的离开本进程」为准，
+  而不是以工具名为准 —— 实现落在 `approvals.ts`（唯一判定处），因此下列都**不**转移：
+  - 未走 client 的写：`.agents/**`、工作区外路径，或 client 未声明 `fs.writeTextFile`；
+  - `delete_file` / `kill_command`：ACP `fs/*` 只有读写文本，没有任何删除方法，
+    写能力不能被读成「也能删」——这是唯一不可回滚的误判；
+  - `run_command` / `exec`：自由文本，仍在本地 shell 上执行，审批也仍在本地；
+  - `plan` 模式：client 授权的是**文件操作**，不是会话的只读阶段，
+    用它抵掉 plan 的提示等于为一个不会执行的写入花掉 client 的许可。
+  → 缓解：写进 spec（「审批授权方转移」含上述排除项）与 README，并有变异取证
+  （E 删 `delete_file` 排除 / F 去掉路径与能力守卫 / G 去掉 plan 守卫）。
 - **调试变难**（工具不再本地可复现）。→ 缓解：`.agents/**` 仍本地；每次都记录能力探测结果与回退点。
 
 ## Migration Plan
