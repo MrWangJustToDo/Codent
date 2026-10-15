@@ -98,8 +98,6 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
         const description = descriptions.get(toolCallId);
         return description ? { toolCallId, description } : { toolCallId };
       }),
-      active: coordinator.activeCount,
-      max: coordinator.maxActive,
     });
   };
 

@@ -262,18 +262,19 @@ export type AgentEventPayloadMap = {
    * set and a dropped, duplicated or re-ordered event cannot desync it. (Ordered by admission,
    * which is the order the rows would start in.) Without it a waiting task was invisible: it has
    * no subagent yet, so it appears in neither `subagents` nor `agent:tool-start`.
+   *
+   * Deliberately no occupancy counts. A waiting entry exists *because* the cap is full, so `n/m`
+   * carried no information — and it could be actively wrong: the cap is re-read per admission, so
+   * lowering it mid-run makes `active > max` ("4/2 running"), and raising it does not promote until
+   * a run ends. The only non-derivable number would be the cap itself, and nothing needs it yet.
    */
   "subagent:queue": {
-    /** Waiting tasks, in admission order. Empty means nothing is waiting. */
+    /** Waiting tasks, in admission order. Empty (or absent) means nothing is waiting. */
     queued?: Array<{
       toolCallId: string;
       /** The task's own label, when known — what the row shows while it waits. */
       description?: string;
     }>;
-    /** Slots currently occupied by running tasks. */
-    active?: number;
-    /** The cap `active` is counted against (`maxConcurrentTasks`). */
-    max?: number;
   };
   "subagent:created": {
     subagentId?: string;

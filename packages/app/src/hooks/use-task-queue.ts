@@ -25,47 +25,37 @@ export interface QueuedTask {
   description?: string;
 }
 
-export interface TaskQueueSnapshot {
-  queued: QueuedTask[];
-  /** Slots currently occupied by running tasks. */
-  active: number;
-  /** The cap `active` is counted against. */
-  max: number;
+/**
+ * Narrow one `subagent:queue` payload, tolerating a host that omits a field.
+ *
+ * Only the queue membership is read: occupancy counts were deliberately left out of the payload
+ * (a waiting entry *because* the cap is full says nothing with `n/m`, and the cap moves), so there
+ * is nothing else to read.
+ */
+function readQueued(payload: Record<string, unknown>): QueuedTask[] {
+  if (!Array.isArray(payload.queued)) return [];
+  return payload.queued.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { toolCallId, description } = entry as { toolCallId?: unknown; description?: unknown };
+    if (typeof toolCallId !== "string") return [];
+    return [{ toolCallId, ...(typeof description === "string" ? { description } : {}) }];
+  });
 }
 
-const EMPTY_QUEUE: TaskQueueSnapshot = { queued: [], active: 0, max: 0 };
-
-/** Narrow one `subagent:queue` payload, tolerating a host that omits a field. */
-function readSnapshot(payload: Record<string, unknown>): TaskQueueSnapshot {
-  const queued = Array.isArray(payload.queued)
-    ? payload.queued.flatMap((entry) => {
-        if (!entry || typeof entry !== "object") return [];
-        const { toolCallId, description } = entry as { toolCallId?: unknown; description?: unknown };
-        if (typeof toolCallId !== "string") return [];
-        return [{ toolCallId, ...(typeof description === "string" ? { description } : {}) }];
-      })
-    : [];
-  return {
-    queued,
-    active: typeof payload.active === "number" ? payload.active : 0,
-    max: typeof payload.max === "number" ? payload.max : 0,
-  };
-}
-
-export const useTaskQueue = (): TaskQueueSnapshot => {
+export const useTaskQueue = (): QueuedTask[] => {
   const session = toRaw(useAgent((s) => s.session));
-  const [queue, setQueue] = useState<TaskQueueSnapshot>(EMPTY_QUEUE);
+  const [queue, setQueue] = useState<QueuedTask[]>([]);
 
   useEffect(() => {
     // A different session's queue has nothing to do with this one's rows.
-    setQueue(EMPTY_QUEUE);
+    setQueue([]);
     if (!session) return;
 
     return session.subscribe(
       (event) => {
         if (event.channel !== "lifecycle") return;
         if (event.payload.type !== "subagent:queue") return;
-        setQueue(readSnapshot(event.payload as unknown as Record<string, unknown>));
+        setQueue(readQueued(event.payload as unknown as Record<string, unknown>));
       },
       { channels: ["lifecycle"] }
     );

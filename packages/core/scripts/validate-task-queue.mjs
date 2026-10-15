@@ -3,9 +3,9 @@
  *
  * A turn's `task` calls are admitted a few at a time; the rest wait for a slot, and a waiting task
  * has no subagent yet, so it appears in neither `snapshot.subagents` nor `agent:tool-start`. The
- * coordinator's view (`queuedToolCallIds` / `activeCount` / `maxActive`) plus `setOnChange` are the
- * only source for that state, so every transition a host must see is asserted here:
- * registration, admission when a slot frees, and discard.
+ * coordinator's view (`queuedToolCallIds`) plus `setOnChange` are the only source for that state, so
+ * every transition a host must see is asserted here: registration, admission when a slot frees, and
+ * discard.
  *
  * Split from `validate-task-prefork.mjs` (which covers admission/join/discard semantics) because
  * that file is at the line ceiling: this is the same subject, a different question.
@@ -32,11 +32,7 @@ const doneResult = {
   const coordinator = new TaskPreforkCoordinator(() => 2);
   const notifications = [];
   coordinator.setOnChange(() => {
-    notifications.push({
-      queued: coordinator.queuedToolCallIds(),
-      active: coordinator.activeCount,
-      max: coordinator.maxActive,
-    });
+    notifications.push({ queued: coordinator.queuedToolCallIds() });
   });
 
   const releases = [];
@@ -54,15 +50,10 @@ const doneResult = {
   startBlocking("t2");
   startBlocking("t3");
 
-  assert.equal(coordinator.maxActive, 2, "the cap is read through the provider");
   assert.equal(coordinator.activeCount, 2, "two runs hold slots");
   assert.deepEqual(coordinator.queuedToolCallIds(), ["t3"], "the third waits, in admission order");
   assert.equal(notifications.length, 3, "each registration announces the queue it produced");
-  assert.deepEqual(
-    notifications.at(-1),
-    { queued: ["t3"], active: 2, max: 2 },
-    "the snapshot carries the whole queue, not a delta"
-  );
+  assert.deepEqual(notifications.at(-1), { queued: ["t3"] }, "the snapshot carries the whole queue, not a delta");
 
   // A slot frees → the waiting run is admitted and the queue empties. The two admitted runs reach
   // their factory body in a microtask after `admit` opens their gate, so wait for them first.
@@ -73,7 +64,7 @@ const doneResult = {
   assert.deepEqual(coordinator.queuedToolCallIds(), [], "an admission removes the waiting run");
   assert.equal(coordinator.activeCount, 2, "…and takes the freed slot (t2 + t3)");
   assert.ok(
-    notifications.some((entry) => entry.queued.length === 0 && entry.active === 2),
+    notifications.some((entry) => entry.queued.length === 0),
     "the admission itself was announced"
   );
 
@@ -85,12 +76,14 @@ const doneResult = {
   assert.deepEqual(notifications.at(-1).queued, [], "the announced queue is empty");
   assert.equal(coordinator.size, 0, "and nothing is registered");
 
-  // Let the aborted runs settle: their releases are what drop the slot count, and each drop is
-  // announced too (a stale `active` would keep a host showing slots as busy forever).
+  // Let the aborted runs settle so nothing is left pending: their releases drop the slot counter
+  // (what admission reads), and each is announced as well.
+  const afterDiscard = notifications.length;
   for (const release of releases) release();
   await sleep(10);
   assert.equal(coordinator.activeCount, 0, "the slots are released as the aborted runs settle");
-  assert.equal(notifications.at(-1).active, 0, "and the release was announced");
+  assert.ok(notifications.length > afterDiscard, "a release is announced too");
+  assert.deepEqual(notifications.at(-1).queued, [], "and an empty queue is what it reports");
 }
 
 console.log("task-queue validation passed");

@@ -12,7 +12,7 @@ import type { ToolCallPart } from "@tanstack/ai";
 
 export const TaskToolInputView = ({ part, toolInput }: { part: ToolCallPart; toolInput: unknown }) => {
   const { allTools, total, agent, retry } = useTask({ taskId: part.id });
-  const { queued, active, max } = useTaskQueue();
+  const queued = useTaskQueue();
   const retryNow = useRetryTicker(retry);
 
   const currentTool = allTools?.at(-1);
@@ -44,7 +44,7 @@ export const TaskToolInputView = ({ part, toolInput }: { part: ToolCallPart; too
         {waiting ? (
           <Box flexShrink={0} flexGrow={0} paddingLeft={1}>
             <Text color={COLORS.muted} dimColor>
-              queued{max > 0 ? ` (${active}/${max} running)` : ""}
+              queued
             </Text>
           </Box>
         ) : (

@@ -114,19 +114,13 @@ export class TaskPreforkCoordinator {
     return this.active;
   }
 
-  /** The cap currently enforced. Re-read from the provider, so an `updateConfig` is honored. */
-  get maxActive(): number {
-    return this.getMaxActive();
-  }
-
   /**
    * Tasks waiting for a slot, in admission order (the order they will start in).
    *
    * Read from `waiting` rather than the entries' `state`: an entry is admitted by opening its
    * gate, and `state` only flips to `running` when the drive loop next runs — so `state` briefly
    * reports "queued" for a run that already holds a slot.
-   */
-  queuedToolCallIds(): string[] {
+   */ queuedToolCallIds(): string[] {
     const queued: string[] = [];
     for (const [toolCallId, entry] of this.entries) {
       if (!entry.aborted && this.waiting.has(entry)) queued.push(toolCallId);
