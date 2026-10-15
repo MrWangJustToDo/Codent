@@ -154,9 +154,16 @@ export async function loadAgentDoc(config: AgentDocLoaderConfig): Promise<AgentD
     onReadError,
   });
   if (!primary) {
+    // Say which of the two things happened. "Not found" is a fact about the project; a failed read
+    // is a fact about the host (a refusing client, a sandbox, a broken mount), and reporting the
+    // second as the first tells the user their project has no AGENTS.md when it plainly does.
+    const notice = readErrors.length
+      ? `No agent documentation could be READ (${readErrors.map((r) => r.path).join(", ")}); ` +
+        `the file(s) exist but every read failed`
+      : `No agent documentation file found (searched: ${filenames.join(", ")})`;
     return {
       content: "",
-      notice: `No agent documentation file found (searched: ${filenames.join(", ")})`,
+      notice,
       importNotices: [],
       ...(readErrors.length ? { readErrors } : {}),
     };

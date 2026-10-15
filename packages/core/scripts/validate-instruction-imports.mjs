@@ -326,6 +326,14 @@ await (async () => {
     Array.isArray(result.readErrors) && result.readErrors.length === 1,
     "the result carries the read failure so a caller can surface it"
   );
+  // The NOTICE is what reaches the `session:doc` event and the transcript — the one line a user
+  // actually reads. Claiming "no file found" here would undo the whole point of reporting the read
+  // failure, because the file plainly exists.
+  assert.ok(
+    !/No agent documentation file found/.test(result.notice ?? ""),
+    `the notice must not blame absence for a refused read, got: ${result.notice}`
+  );
+  assert.ok(/READ|read/i.test(result.notice ?? ""), `the notice must say the read failed, got: ${result.notice}`);
   console.log("✓ an unreadable instruction file is reported, not mistaken for absent");
 })();
 

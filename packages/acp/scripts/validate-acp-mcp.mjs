@@ -432,6 +432,38 @@ function makeFakeSession(id, diskId, overrides = {}) {
   });
 }
 
+// --- fork is the ONE path that refuses mcpServers ---------------------------
+//
+// `load` and `resume` obey `mcpServers` because each builds a fresh agent through `Host.create`;
+// a fork reuses the source's live bridge, so it genuinely cannot swap them. That asymmetry is the
+// whole reason this rule exists, which makes it exactly the kind of thing a test must pin down
+// rather than infer from the code staying quiet.
+
+{
+  const { host, createCalls } = makeHost();
+  const client = createClient({ name: "fork-mcp-client" });
+  const app = createAcpAgent({ host, defaults: { model: "fake-model" }, rootPath: "/ws" });
+
+  await client.connectWith(app, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    const created = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    const before = createCalls.length;
+
+    let text = "";
+    try {
+      await cx.request(methods.agent.session.fork, {
+        sessionId: created.sessionId,
+        cwd: "/ws",
+        mcpServers: [{ name: "late", command: "node", args: ["server.js"], env: [] }],
+      });
+    } catch (error) {
+      text = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+    }
+    check("session/fork refuses mcpServers", /mcpServers/i.test(text));
+    check("a refused fork creates no session", createCalls.length === before);
+  });
+}
+
 // --- the /mcp source display ------------------------------------------------
 
 {
