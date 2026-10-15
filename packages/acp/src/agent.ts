@@ -14,6 +14,7 @@ import { BUILTIN_TOOL_NAMES } from "@codent/core";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
+import { mapAcpMcpServers } from "./mcp.js";
 import {
   buildElicitationRequest,
   mapElicitationResponse,
@@ -21,6 +22,7 @@ import {
   permissionOptions,
 } from "./permissions.js";
 import { AcpProjector } from "./projector.js";
+import { paginateSessions } from "./sessions.js";
 import { toolKindFor } from "./tools.js";
 
 import type { SessionUpdate } from "./types.js";
@@ -29,12 +31,15 @@ import type {
   AgentConnection,
   AgentContext,
   ClientCapabilities,
+  McpServer,
   PromptRequest,
+  SessionConfigOption,
   SessionMode,
   SessionModeState,
   StopReason,
 } from "@agentclientprotocol/sdk";
 import type {
+  McpServerConfig,
   AgentSession,
   AgentSessionHost,
   AgentSessionSnapshot,
@@ -59,6 +64,11 @@ interface SessionBridge {
   pending: Set<AbortController>;
   elicitation: boolean;
   promptCaps: PromptCaps;
+  /**
+   * The mode the client was last told about (via `configOptions`). Its `category: "mode"` entry
+   * is the client's cached selector state, so it is only re-sent when it actually changed.
+   */
+  lastAdvertisedConfigMode: AgentMode | undefined;
 }
 
 export interface AcpAgentDefaults {
@@ -88,6 +98,48 @@ const MODE_META: Record<AgentMode, { name: string; description: string }> = {
 function sessionModes(current: AgentMode): SessionModeState {
   const availableModes: SessionMode[] = MODE_IDS.map((id) => ({ id, ...MODE_META[id] }));
   return { currentModeId: current, availableModes };
+}
+
+/**
+ * The ACP session id for a live session: the **disk** session id (`ses_…`), never the agent id.
+ *
+ * `AgentSession.id` is the agent id (`agent_…`, `local-agent-session.ts`), and the two are not
+ * interchangeable: `session/load` / `session/resume` address a PERSISTED conversation, and
+ * `session/list` / `session/delete` hand out disk ids too. Exposing the agent id here (as this
+ * did) made the id returned by `session/new` unusable for `session/load`, and made
+ * `session/delete` / `session/fork`'s "find the live bridge" lookups miss every session
+ * enumerated from disk.
+ *
+ * `host.create` mints one via `managed.ensureSessionData()` before returning, so this is always
+ * present for a root session.
+ */
+function diskSessionId(session: AgentSession): string {
+  const active = session.getSnapshot().activeSessionId;
+  if (!active) {
+    // Not expected for a root session (see above). Fail loudly rather than fall back to the
+    // agent id, which would silently reintroduce the two-id-spaces bug this guards against.
+    throw new Error(`ACP session has no disk session id (agent ${session.id})`);
+  }
+  return active;
+}
+
+/**
+ * The session config select (`category: "mode"`) advertised by `session/new` and `session/fork`.
+ * Reads the same `mode` channel state as `session/set_mode` / `current_mode_update`, so it is a
+ * projection of that truth, not a second source.
+ */
+function sessionConfigOptions(current: AgentMode): SessionConfigOption[] {
+  return [
+    {
+      id: "mode",
+      name: "Mode",
+      description: "How the agent handles risky actions",
+      category: "mode",
+      type: "select",
+      currentValue: current,
+      options: MODE_IDS.map((id) => ({ value: id, name: MODE_META[id].name, description: MODE_META[id].description })),
+    },
+  ];
 }
 
 /** Create the ACP agent app (handlers registered; call `connect(stream)` to serve). */
@@ -131,6 +183,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       pending: new Set(),
       elicitation: Boolean(clientCaps?.elicitation?.form),
       promptCaps: { image: true, audio: true, embeddedContext: true },
+      lastAdvertisedConfigMode: undefined,
       projector: undefined as unknown as AcpProjector,
     };
     bridge.projector = new AcpProjector(session, {
@@ -257,9 +310,27 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: { image: true, audio: true, embeddedContext: true },
-        // Per-session MCP servers are not wired yet — do not over-claim.
-        mcpCapabilities: { http: false, sse: false },
-        sessionCapabilities: { resume: {}, close: {} },
+        // Per-session MCP servers are wired through `session/new` (`mcp.ts` maps and
+        // validates them). stdio / http / sse are all connectable by core; `acp` is the one
+        // form with no core entry point, so it is neither declared here nor accepted there.
+        mcpCapabilities: { http: true, sse: true },
+        // `list` / `delete` are host-dependent: a host that cannot enumerate or remove
+        // persisted sessions must not have us advertise them (the remote-session host has no
+        // local store). Declaring a capability we cannot serve is exactly what the
+        // "capabilities are truthful" rule forbids.
+        sessionCapabilities: {
+          ...(options.host.listPersistedSessions ? { list: {} } : {}),
+          ...(options.host.deleteSession ? { delete: {} } : {}),
+          resume: {},
+          close: {},
+          // UNSTABLE in the SDK. Declared because we cover the WHOLE request, which the base spec
+          // makes a precondition of declaring `fork`: `mcpServers` is refused loudly (a fork
+          // reuses the source's live agent, so its servers genuinely cannot change − unlike
+          // `session/new`/`load`/`resume`, which each build a fresh agent and therefore obey it),
+          // `additionalDirectories` is refused too, and `cwd` is only a hint (the root is fixed at
+          // handshake). Nothing here is silently dropped.
+          fork: {},
+        },
         auth: { logout: {} },
       },
       agentInfo: { name: AGENT_NAME, title: "Codent", version },
@@ -270,7 +341,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   app.onRequest(methods.agent.authenticate, () => ({}));
   app.onRequest(methods.agent.logout, () => ({}));
 
-  const createOptions = (): Parameters<AgentSessionHost["create"]>[0] => ({
+  const createOptions = (mcpServers?: Record<string, McpServerConfig>): Parameters<AgentSessionHost["create"]>[0] => ({
     name: `${AGENT_NAME}-${bridges.size + 1}`,
     model: options.defaults.model,
     ...(options.defaults.modelStyle ? { modelStyle: options.defaults.modelStyle } : {}),
@@ -278,36 +349,98 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     ...(options.defaults.modelApiKey ? { modelApiKey: options.defaults.modelApiKey } : {}),
     ...(options.defaults.modelInfo ? { modelInfo: options.defaults.modelInfo } : {}),
     ...(options.defaults.systemPrompt ? { systemPrompt: options.defaults.systemPrompt } : {}),
+    // Session-supplied servers REPLACE the workspace `.agents/mcp.json` (see
+    // `AgentSessionCreateOptions.mcpServers`); absent ⇒ the file is the source, as before.
+    ...(mcpServers ? { mcpServers } : {}),
   });
 
+  /**
+   * Refuse a request that asks for `additionalDirectories`.
+   *
+   * The capability is deliberately undeclared (the agent serves exactly the workspace root it
+   * was handed at handshake), and the base requirement is that a request for an undeclared
+   * capability is refused rather than quietly ignored:
+   * `openspec/specs/acp-agent-host/spec.md` — "对应的 client 请求 MUST NOT 被接受（返回 JSON-RPC 错误）".
+   * Ignoring the field would let a client keep talking to an agent that cannot see the roots it
+   * asked for, with nothing anywhere saying so.
+   *
+   * EVERY request type that can carry the field must call this — `session/new`, `session/load`,
+   * `session/resume`, `session/fork`. `session/new` was the one that used to ignore it, which
+   * was the worst of the four: it is the entry point a client reaches for by default.
+   */
+  const rejectAdditionalDirectories = (directories: string[] | undefined | null): void => {
+    if (directories?.length) {
+      throw new Error(
+        "additionalDirectories is not supported: this agent serves exactly the workspace root it " + "was started with"
+      );
+    }
+  };
+
   app.onRequest(methods.agent.session.new, async (ctx) => {
+    // Checked FIRST, so a refused request creates nothing (same ordering as the malformed-MCP
+    // check below).
+    rejectAdditionalDirectories(ctx.params.additionalDirectories);
     if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
       process.stderr.write(
         `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
       );
     }
-    const { session } = await options.host.create(createOptions());
-    const bridge = attach(session, initCaps, session.id);
-    return { sessionId: bridge.acpId, modes: sessionModes(session.getSnapshot().mode) };
+    // Mapped (and validated) BEFORE the session exists: a malformed entry must not leave a
+    // half-configured session behind, and a client cannot retract one it was never told about.
+    const mapped = mapAcpMcpServers(ctx.params.mcpServers);
+    if (mapped.error) {
+      throw new Error(mapped.error);
+    }
+    const { session } = await options.host.create(createOptions(mapped.servers));
+    const acpId = diskSessionId(session);
+    const bridge = attach(session, initCaps, acpId);
+    const snapshot = session.getSnapshot();
+    // Record what the client is being told, so `set_mode` knows whether it changed anything.
+    bridge.lastAdvertisedConfigMode = snapshot.mode;
+    return {
+      sessionId: acpId,
+      modes: sessionModes(snapshot.mode),
+      configOptions: sessionConfigOptions(snapshot.mode),
+    };
   });
 
   const resumeSession = async (
     sessionId: string,
     replay: boolean,
-    clientCaps: ClientCapabilities | undefined
+    clientCaps: ClientCapabilities | undefined,
+    mcpServers: McpServer[] | undefined,
+    additionalDirectories: string[] | undefined
   ): Promise<void> => {
-    const { session } = await options.host.create({ ...createOptions(), resumeSessionId: sessionId });
+    // `additionalDirectories` is not a declared capability; see `rejectAdditionalDirectories`.
+    rejectAdditionalDirectories(additionalDirectories);
+    // Restoring a session runs the same `Host.create` as `session/new` (with `resumeSessionId`),
+    // so a client-supplied list is carried exactly the same way: it replaces the workspace
+    // config for this session, and an empty list falls back to the file.
+    //
+    // Rejecting it instead would be a hard block on every client that sends its configured
+    // servers here — which is the normal case, and `load` cannot even omit the field (it is
+    // required by `LoadSessionRequest`).
+    const mapped = mapAcpMcpServers(mcpServers);
+    if (mapped.error) {
+      throw new Error(mapped.error);
+    }
+    const { session } = await options.host.create({
+      ...createOptions(mapped.servers),
+      resumeSessionId: sessionId,
+    });
+    // The requested disk id is authoritative here (it is what the client will keep using);
+    // `diskSessionId` is the same value after the restore, so assert rather than diverge.
     const bridge = attach(session, clientCaps, sessionId);
     if (replay) bridge.projector.replayFrom(session.getSnapshot());
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {
-    await resumeSession(ctx.params.sessionId, true, initCaps);
+    await resumeSession(ctx.params.sessionId, true, initCaps, ctx.params.mcpServers, ctx.params.additionalDirectories);
     return {};
   });
 
   app.onRequest(methods.agent.session.resume, async (ctx) => {
-    await resumeSession(ctx.params.sessionId, false, initCaps);
+    await resumeSession(ctx.params.sessionId, false, initCaps, ctx.params.mcpServers, ctx.params.additionalDirectories);
     return {};
   });
 
@@ -317,11 +450,142 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     return {};
   });
 
+  // --------------------------------------------------------------------------
+  // Session catalog (list / delete / fork)
+  // --------------------------------------------------------------------------
+
+  app.onRequest(methods.agent.session.list, async (ctx) => {
+    const listPersisted = options.host.listPersistedSessions;
+    if (!listPersisted) {
+      // Not advertised in initialize for such a host — but a client may call anyway.
+      throw new Error("This host cannot enumerate persisted sessions (no listPersistedSessions capability)");
+    }
+    // `ListSessionsRequest` carries only `cwd`, `cursor` and `_meta` (no `additionalDirectories`,
+    // unlike the session-creating requests), so there is nothing here to refuse. `cwd` is purely
+    // an optional filter and is NOT forwarded: the root is fixed at handshake, and the catalog we
+    // answer from is already scoped to it, so echoing the client's value back would only pretend
+    // to filter.
+    if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
+      process.stderr.write(
+        `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
+      );
+    }
+    const listed = await listPersisted.call(options.host);
+    const page = paginateSessions(listed, rootPath, { cursor: ctx.params.cursor });
+    return {
+      sessions: page.sessions,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
+  });
+
+  app.onRequest(methods.agent.session.delete, async (ctx) => {
+    const deleteSession = options.host.deleteSession;
+    if (!deleteSession) {
+      throw new Error("This host cannot delete persisted sessions (no deleteSession capability)");
+    }
+    // `DeleteSessionRequest` carries only `sessionId` — nothing else to check.
+    const sessionId = ctx.params.sessionId;
+    // Stop and unregister a live session first: deleting the log out from under a running
+    // agent would leave an append stream writing to a removed file.
+    const live = bridges.get(sessionId);
+    if (live) await closeBridge(live);
+
+    // Success is "was live, or its file is gone" — a session created by `session/new` and
+    // deleted immediately has NO file yet (`ensureSessionData` only mints the id in memory),
+    // so a bare `store.delete` returning false must not be reported as "not found".
+    const removed = await deleteSession.call(options.host, sessionId);
+    if (!removed && !live) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+    return {};
+  });
+
+  app.onRequest(methods.agent.session.fork, async (ctx) => {
+    const sourceId = ctx.params.sessionId;
+    const bridge = bridges.get(sourceId);
+    if (!bridge) throw new Error(`Unknown session: ${sourceId}`);
+
+    // Same refusal as every other request type (defined once above) — a fork is exactly as
+    // unable to widen the workspace root as a fresh session is.
+    rejectAdditionalDirectories(ctx.params.additionalDirectories);
+
+    // Mirror `session/new`'s note: the root is fixed at handshake, so a differing `cwd` is
+    // informational rather than an error (a fork cannot move the source's conversation).
+    if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
+      process.stderr.write(
+        `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
+      );
+    }
+
+    // MCP servers are fixed when the agent is created, and this path REUSES the source's live
+    // agent — there is no `Host.create` on the fork path — so a fork genuinely cannot swap them.
+    // Rejecting loudly beats ignoring the parameter.
+    //
+    // This is the fork-only rule: `session/load` and `session/resume` DO obey `mcpServers`,
+    // because each of those builds a fresh agent through `Host.create`.
+    if (ctx.params.mcpServers?.length) {
+      throw new Error(
+        "session/fork does not accept mcpServers: MCP servers are fixed when a session is created " +
+          "and forking does not change them"
+      );
+    }
+
+    // Captured BEFORE the dispatch: a successful clone re-points the session to a NEW disk id,
+    // so reading `activeSessionId` afterwards (or inside the re-key below) would key the map by
+    // the new id twice and leave the source key behind — a second key for one bridge.
+    const sourceDiskId = diskSessionId(bridge.session);
+
+    // `session.clone` copies the whole transcript (ACP's fork request carries no fork point).
+    // The source session is left intact on disk; core also refuses while a run is active.
+    const result = (await bridge.session.dispatch({ type: "session.clone" })) as {
+      ok: boolean;
+      error?: string;
+      data?: { sessionId?: string };
+    };
+    if (!result?.ok) {
+      throw new Error(result?.error ?? "session/fork failed");
+    }
+    const newId = result.data?.sessionId ?? diskSessionId(bridge.session);
+
+    // Re-key the SAME bridge: `branchSession` already switched the underlying agent to the new
+    // session, so a second bridge would double-subscribe and double-send every update. Set the
+    // new key before dropping the old one so no frame lands in a gap, and refresh `acpId`
+    // because `emit` closes over `bridge.acpId`.
+    bridges.set(newId, bridge);
+    if (newId !== sourceId) bridges.delete(sourceId);
+    // The dispatch may also have changed the disk id without producing a new ACP id; drop the
+    // stale key either way so `bridges` never maps two ids to one bridge.
+    if (sourceDiskId !== newId && sourceDiskId !== sourceId) bridges.delete(sourceDiskId);
+    bridge.acpId = newId;
+
+    const snapshot = bridge.session.getSnapshot();
+    bridge.lastAdvertisedConfigMode = snapshot.mode;
+    return {
+      sessionId: newId,
+      modes: sessionModes(snapshot.mode),
+      configOptions: sessionConfigOptions(snapshot.mode),
+    };
+  });
+
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
     const mode = ctx.params.modeId as AgentMode;
     if (!MODE_IDS.includes(mode)) throw new Error(`Unknown mode: ${ctx.params.modeId}`);
     const bridge = bridges.get(ctx.params.sessionId);
-    if (bridge) await bridge.session.dispatch({ type: "mode.set", mode });
+    if (bridge) {
+      await bridge.session.dispatch({ type: "mode.set", mode });
+      // Re-read the mode from the session rather than echoing the request: the dispatch may be a
+      // no-op (already in that mode) or clamp to something else, and the advertised option must
+      // describe what the session ACTUALLY is. Without this update the client keeps whatever
+      // `configOptions` it got from `session/new`/`session/fork` and its selector drifts silently.
+      const current = bridge.session.getSnapshot().mode;
+      if (current !== bridge.lastAdvertisedConfigMode) {
+        bridge.lastAdvertisedConfigMode = current;
+        emit(bridge.acpId, {
+          sessionUpdate: "config_option_update",
+          configOptions: sessionConfigOptions(current),
+        });
+      }
+    }
     return {};
   });
 

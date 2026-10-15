@@ -21,6 +21,7 @@ import {
   createAcpAgent,
   mapElicitationResponse,
   mapPermissionOutcome,
+  paginateSessions,
   parseSlashCommand,
   permissionOptions,
   promptBlocksToContent,
@@ -31,15 +32,10 @@ import {
   toolTitleFor,
 } from "../dist/index.mjs";
 
-let failures = 0;
-function check(label, cond) {
-  if (cond) {
-    console.log(`PASS  ${label}`);
-  } else {
-    failures += 1;
-    console.log(`FAIL  ${label}`);
-  }
-}
+import { createChecker, finish } from "./acp-report.mjs";
+
+const checker = createChecker();
+const check = checker.check;
 
 // ===========================================================================
 // A. Pure mapping units
@@ -155,6 +151,62 @@ check("plain text is not a command", parseSlashCommand("hello") === null);
   check("UI-only commands are not advertised", !cmds.builtin.some((c) => c.name === "quit"));
 }
 
+// --- session catalog mapping / paging (pure) --------------------------------
+{
+  const metas = [
+    { id: "ses_a", name: "A", version: 1, modelStyle: "openai", model: "m", createdAt: 3, updatedAt: 300 },
+    { id: "ses_b", name: "", version: 1, modelStyle: "openai", model: "m", createdAt: 2, updatedAt: 200 },
+    { id: "ses_c", name: "C", version: 1, modelStyle: "openai", model: "m", createdAt: 1, updatedAt: 100 },
+  ];
+  const p1 = paginateSessions(metas, "/ws", { pageSize: 2 });
+  check(
+    "paging returns the newest page and a cursor",
+    JSON.stringify(p1.sessions.map((s) => s.sessionId)) === JSON.stringify(["ses_a", "ses_b"]) &&
+      typeof p1.nextCursor === "string"
+  );
+  const p2 = paginateSessions(metas, "/ws", { pageSize: 2, cursor: p1.nextCursor });
+  check(
+    "the cursor resumes strictly older and exhausts",
+    JSON.stringify(p2.sessions.map((s) => s.sessionId)) === JSON.stringify(["ses_c"]) && p2.nextCursor == null
+  );
+  check("pages never overlap", !p1.sessions.some((s) => p2.sessions.some((t) => t.sessionId === s.sessionId)));
+  check("an empty catalog is an empty page, not an error", paginateSessions([], "/ws").sessions.length === 0);
+  check(
+    "a malformed cursor degrades to the first page",
+    paginateSessions(metas, "/ws", { cursor: "nope" }).sessions.length === 3
+  );
+  check(
+    "a legacy `updatedAt`-only cursor degrades to the first page",
+    paginateSessions(metas, "/ws", { cursor: "200", pageSize: 2 }).sessions[0].sessionId === "ses_a"
+  );
+  check(
+    "title is omitted when the session has no name",
+    paginateSessions(metas, "/ws").sessions.find((s) => s.sessionId === "ses_b")?.title === undefined
+  );
+  check("updatedAt is ISO 8601", paginateSessions(metas, "/ws").sessions[0].updatedAt === new Date(300).toISOString());
+
+  // Sessions sharing a millisecond are ordinary (`Date.now()` granularity, and a scripted client
+  // creates them back to back). An `updatedAt`-only boundary would DROP whichever of the pair
+  // straddled a page cut — so the id is the tie-breaker, and every row must be visited once.
+  const tied = [
+    { id: "ses_t1", name: "T1", version: 1, modelStyle: "openai", model: "m", createdAt: 1, updatedAt: 500 },
+    { id: "ses_t2", name: "T2", version: 1, modelStyle: "openai", model: "m", createdAt: 1, updatedAt: 500 },
+    { id: "ses_t3", name: "T3", version: 1, modelStyle: "openai", model: "m", createdAt: 1, updatedAt: 400 },
+  ];
+  const t1 = paginateSessions(tied, "/ws", { pageSize: 1 });
+  const t2 = paginateSessions(tied, "/ws", { pageSize: 1, cursor: t1.nextCursor });
+  const t3 = paginateSessions(tied, "/ws", { pageSize: 1, cursor: t2.nextCursor });
+  const visited = [...t1.sessions, ...t2.sessions, ...t3.sessions].map((s) => s.sessionId);
+  check(
+    "a same-millisecond pair is not dropped across a page boundary",
+    visited.length === 3 && new Set(visited).size === 3
+  );
+  check(
+    "same-millisecond rows come back in id order, then the older row",
+    JSON.stringify(visited) === JSON.stringify(["ses_t1", "ses_t2", "ses_t3"])
+  );
+}
+
 // ===========================================================================
 // B. In-process ACP conformance (SDK client ↔ our agent)
 // ===========================================================================
@@ -163,6 +215,10 @@ function baseSnapshot(id, overrides = {}) {
   return {
     agentId: id,
     name: id,
+    // A root session ALWAYS has a disk session id in production (`host.create` mints one via
+    // `ensureSessionData()`), and the ACP layer keys everything on it — so the default test
+    // double carries one too. Sessions that need it to differ from the agent id pass both.
+    activeSessionId: `ses_${id}`,
     status: "idle",
     error: "",
     pendingApprovalCount: 0,
@@ -195,9 +251,13 @@ function baseSnapshot(id, overrides = {}) {
   };
 }
 
-function makeFakeSession(id) {
+function makeFakeSession(id, diskId = id) {
   const listeners = new Set();
-  let snap = baseSnapshot(id);
+  // `AgentSession.id` is the AGENT id and `activeSessionId` is the DISK id — two different
+  // values, exactly as in production (`local-agent-session.ts` sets `id = managed.id`). Keeping
+  // them distinct here is what makes the "ACP sessionId is the disk id" assertions meaningful;
+  // a mock that collapsed them would hide the bug this section exists to catch.
+  let snap = baseSnapshot(id, { activeSessionId: diskId });
   return {
     id,
     getSnapshot: () => snap,
@@ -209,9 +269,9 @@ function makeFakeSession(id) {
     dispatch: async (command) => {
       if (command.type === "send") {
         const message = { id: "m1", role: "assistant", parts: [{ type: "text", content: "Hello from ACP." }] };
-        snap = baseSnapshot(id, { status: "running", messages: [message] });
+        snap = baseSnapshot(id, { status: "running", messages: [message], activeSessionId: diskId });
         for (const l of listeners) l({ channel: "messages", payload: [message], ts: Date.now() });
-        snap = baseSnapshot(id, { status: "completed", messages: [message] });
+        snap = baseSnapshot(id, { status: "completed", messages: [message], activeSessionId: diskId });
         for (const l of listeners) l({ channel: "state", payload: snap, ts: Date.now() });
         return { ok: true };
       }
@@ -228,7 +288,7 @@ const clientApp = createClient({ name: "test-client" }).onNotification(methods.c
 
 const host = {
   async create() {
-    return { session: makeFakeSession("s1") };
+    return { session: makeFakeSession("agent_1", "ses_1") };
   },
   connect: () => null,
   list: () => [],
@@ -246,9 +306,22 @@ await clientApp.connectWith(app, async (cx) => {
   const news = await cx.request(methods.agent.session.new, { cwd: "/workspace", mcpServers: [] });
   check("session/new returns a sessionId", typeof news.sessionId === "string" && news.sessionId.length > 0);
   check(
+    "session/new returns the DISK session id, not the agent id",
+    news.sessionId === "ses_1" && news.sessionId !== "agent_1"
+  );
+  check(
     "session/new returns modes with normal active",
     news.modes?.currentModeId === "normal" && news.modes.availableModes.length === 3
   );
+  const modeOption = news.configOptions?.find((o) => o.category === "mode");
+  check(
+    "session/new advertises a mode select whose value matches modes.currentModeId",
+    modeOption?.type === "select" && modeOption.currentValue === news.modes?.currentModeId
+  );
+
+  // The id from session/new must be directly usable by the other session methods.
+  await cx.request(methods.agent.session.resume, { sessionId: news.sessionId, cwd: "/workspace", mcpServers: [] });
+  check("session/new's id is accepted by session/resume (one id space)", true);
 
   const prompt = await cx.request(methods.agent.session.prompt, {
     sessionId: news.sessionId,
@@ -533,13 +606,13 @@ await streamClient.connectWith(streamApp, async (cx) => {
 // G. session/load replays once; session/resume never replays
 // ===========================================================================
 
-function makeRestoredSession(id) {
+function makeRestoredSession(id, diskId = id) {
   const listeners = new Set();
   const messages = [
     { id: "u1", role: "user", parts: [{ type: "text", content: "prior question" }] },
     { id: "a1", role: "assistant", parts: [{ type: "text", content: "prior answer" }] },
   ];
-  const snap = baseSnapshot(id, { messages });
+  const snap = baseSnapshot(id, { messages, activeSessionId: diskId });
   return {
     id,
     getSnapshot: () => snap,
@@ -554,12 +627,15 @@ function makeRestoredSession(id) {
 
 const loadUpdates = [];
 const loadClient = createClient({ name: "load-client" }).onNotification(methods.client.session.update, (ctx) =>
-  loadUpdates.push(ctx.params.update)
+  // Keep the whole params object so the SESSION ID can be asserted, not just the update body.
+  loadUpdates.push(ctx.params)
 );
 const loadApp = createAcpAgent({
   host: {
-    async create() {
-      return { session: makeRestoredSession("s-loaded") };
+    // The requested disk id is what the bridge must key on, so the mock adopts it as its
+    // `activeSessionId` (the real host restores exactly the id it was handed).
+    async create(options) {
+      return { session: makeRestoredSession("agent_old", options?.resumeSessionId ?? "ses_old") };
     },
     connect: () => null,
     list: () => [],
@@ -570,10 +646,16 @@ const loadApp = createAcpAgent({
 });
 
 await loadClient.connectWith(loadApp, async (cx) => {
-  await cx.request(methods.agent.session.load, { sessionId: "sess-old", cwd: "/ws", mcpServers: [] });
+  await cx.request(methods.agent.session.load, { sessionId: "ses_old", cwd: "/ws", mcpServers: [] });
   await new Promise((r) => setTimeout(r, 10));
-  const agentTexts = loadUpdates.filter((u) => u.sessionUpdate === "agent_message_chunk").map((u) => u.content.text);
-  const userTexts = loadUpdates.filter((u) => u.sessionUpdate === "user_message_chunk").map((u) => u.content.text);
+  const agentTexts = loadUpdates
+    .map((u) => u.update)
+    .filter((u) => u.sessionUpdate === "agent_message_chunk")
+    .map((u) => u.content.text);
+  const userTexts = loadUpdates
+    .map((u) => u.update)
+    .filter((u) => u.sessionUpdate === "user_message_chunk")
+    .map((u) => u.content.text);
   check(
     "session/load replays the user turn exactly once",
     JSON.stringify(userTexts) === JSON.stringify(["prior question"])
@@ -582,13 +664,17 @@ await loadClient.connectWith(loadApp, async (cx) => {
     "session/load replays the agent turn exactly once (no double)",
     JSON.stringify(agentTexts) === JSON.stringify(["prior answer"])
   );
+  check(
+    "session/load tags every update with the disk id it was given",
+    loadUpdates.length > 0 && loadUpdates.every((p) => p.sessionId === "ses_old")
+  );
 
   loadUpdates.length = 0;
-  await cx.request(methods.agent.session.resume, { sessionId: "sess-old", cwd: "/ws", mcpServers: [] });
+  await cx.request(methods.agent.session.resume, { sessionId: "ses_old", cwd: "/ws", mcpServers: [] });
   await new Promise((r) => setTimeout(r, 10));
   check(
     "session/resume does not replay history",
-    loadUpdates.filter((u) => u.sessionUpdate.endsWith("_message_chunk")).length === 0
+    loadUpdates.filter((p) => p.update.sessionUpdate.endsWith("_message_chunk")).length === 0
   );
 });
 
@@ -658,5 +744,4 @@ await approvalClient.connectWith(approvalApp, async (cx) => {
   );
 });
 
-console.log(`\n${failures === 0 ? "ALL PASSED" : `${failures} FAILURE(S)`}`);
-process.exit(failures === 0 ? 0 : 1);
+finish(checker.failures);

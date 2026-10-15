@@ -6,6 +6,8 @@
  */
 
 export { createAcpAgent, runAcpAgentStdio, type AcpAgentOptions, type AcpAgentDefaults } from "./agent.js";
+export { DEFAULT_SESSION_PAGE_SIZE, decodeCursor, encodeCursor, paginateSessions, toSessionInfo } from "./sessions.js";
+export { mapAcpMcpServers } from "./mcp.js";
 export { bootstrapLocalAcp, bootstrapAcpAgent, type LocalAcpBootstrap, type AcpModelOverride } from "./bootstrap.js";
 export { AcpProjector, type AcpProjectorOptions } from "./projector.js";
 export { promptBlocksToContent, textBlock, type PromptCaps, type PromptMapping } from "./content.js";

@@ -46,12 +46,14 @@ host that is remote (`--remote-session`) can be served over ACP too.
 |---|---|
 | `initialize` / `authenticate` / `logout` | ✅ (capabilities negotiated; no interactive auth) |
 | `session/new` / `load` / `resume` / `close` | ✅ (load replays; resume does not) |
+| `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
+| `session/fork` | ✅ (`session.clone`; source must be live in-process) |
 | `session/prompt` / `cancel` / `set_mode` | ✅ (StopReason mapped; cancel → `cancelled`) |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
 | `tool_call` / `tool_call_update` | ✅ kind / title / locations / structured diff / streamed output |
 | `plan` (from todos) | ✅ |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
-| `current_mode_update` / `session_info_update` / `usage_update` | ✅ |
+| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode`) |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
 | `compaction_update` / `notice` | ✅ gated by the client capability |
@@ -69,7 +71,15 @@ host that is remote (`--remote-session`) can be served over ACP too.
 ## Known limitations
 
 - stdio only (ACP remote HTTP/WS transports are still experimental).
-- Per-session `mcpServers` from `session/new` are not wired yet; the agent uses its
-  own `.agents/mcp.json`.
-- The ACP session id is the agent id; `session/load` restores the on-disk transcript
-  by id.
+- Per-session `mcpServers` from `session/new` are connected over stdio, http, or sse; a
+  client-supplied list REPLACES `.agents/mcp.json` for that session (it is not merged). The
+  `acp` transport (a client-bridged server) is not supported and is rejected explicitly.
+- `session/resume` / `session/load` accept `mcpServers` the same way `session/new` does (both build
+  a fresh agent via `Host.create`). `session/fork` rejects it, because a fork reuses the source's
+  live agent and genuinely cannot swap servers.
+- The ACP session id is the disk session id.
+- `additionalDirectories` is not supported and is refused with a JSON-RPC error on every request
+  that can carry it (`session/new`, `session/load`, `session/resume`, `session/fork`) — one shared
+  check, one message. It is never silently ignored, so a client cannot end up talking to an agent
+  that cannot see the roots it asked for. `cwd` is only a hint (the root is fixed at handshake) and
+  is not forwarded.
