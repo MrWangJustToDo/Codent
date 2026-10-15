@@ -6,7 +6,7 @@
  * observer event MUST have an entry (completeness is compile-checked).
  */
 
-import type { AgentEventMeta, AgentEventType } from "./types.js";
+import type { AgentEventMeta, AgentEventMetaTable, AgentEventType } from "./types.js";
 
 /** Interceptor event keys. `prefix:*` patterns match open-ended (tool) names. */
 export const INTERCEPTOR_EVENT_PATTERNS = [
@@ -135,4 +135,4 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "extension:ui": { mode: "emit", channel: "extension-ui" },
   "tool:chunk": { mode: "emit", channel: "tool" },
   "tool:clear": { mode: "emit", channel: "tool" },
-};
+} satisfies AgentEventMetaTable;

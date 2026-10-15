@@ -262,29 +262,64 @@ export type ExtensionUIEvent =
   | { type: "notify"; message: string; level?: "success" | "info" | "error" }
   | { type: "context"; context: ExtensionUiContext };
 
-export type AgentSessionEvent =
-  | { channel: "state"; payload: AgentL1State; ts: number }
-  | { channel: "messages"; payload: UIMessage[]; ts: number }
-  | { channel: "queues"; payload: QueuedMessagesSnapshot; ts: number }
-  | { channel: "usage"; payload: UsageChangeSnapshot; ts: number }
-  | { channel: "todos"; payload: { items: TodoItem[]; title: string | null }; ts: number }
-  | { channel: "plan"; payload: PlanModeState; ts: number }
-  | {
-      channel: "tool";
-      payload: { kind: "chunk"; chunk: StreamingChunk } | { kind: "clear"; toolCallId: string };
-      ts: number;
-    }
-  | { channel: "summary"; payload: SummaryStreamEvent; ts: number }
-  | { channel: "lifecycle"; payload: AgentEvent; ts: number }
-  | { channel: "extension-ui"; payload: ExtensionUIEvent; ts: number }
-  | { channel: "extensions"; payload: AgentSessionExtensionsSummary; ts: number }
-  | { channel: "tool-presentation"; payload: { descriptors: ToolPresentationInfo[] }; ts: number }
-  | { channel: "mcp"; payload: AgentSessionMcpSummary; ts: number }
-  | { channel: "mode"; payload: { mode: AgentMode; autoMode: boolean }; ts: number }
-  | { channel: "interaction"; payload: SessionInteractionsSnapshot; ts: number }
-  | { channel: "iteration"; payload: AgentIterationState; ts: number }
-  | { channel: "jobs"; payload: SessionJobsSnapshot; ts: number }
-  | { channel: "subagents"; payload: { subagents: AgentSessionSubagentSummary[] }; ts: number };
+/**
+ * The channel → payload pairing, in one place.
+ *
+ * The pair is a fact about the protocol, not two independent facts, so it is written once and
+ * {@link AgentSessionEvent} is derived from it. `AGENT_EVENT_META` then constrains each routed
+ * event against this map (`AgentEventChannelPayloadType`), which is what makes a wrong pairing a
+ * compile error: pointing a routed event at another channel's name leaves its payload assignable
+ * to neither, and TS2559 fires "has no properties in common".
+ *
+ * That check is the answer to a real blind spot. `channel` alone is a free string (any channel name
+ * type-checks) and the projector's per-case `as` erased the payload side, so `session:mcp` routed to
+ * `"plan"` — a valid channel holding the wrong payload type — compiled cleanly and passed all 249
+ * validators. The pairing was the only unstated fact, and it is now the stated one.
+ */
+/**
+ * The channel → payload pairing, in one place. {@link AgentSessionEvent} is derived from it, and
+ * `AGENT_EVENT_META` is constrained against it, so a channel paired with the wrong payload type is
+ * not expressible. `channel` alone is a free string and the projector's per-case `as` erases the
+ * payload side, which is how `session:mcp` could be routed to `"plan"` and still compile.
+ */
+export interface AgentSessionChannelPayloads {
+  state: AgentL1State;
+  messages: UIMessage[];
+  queues: QueuedMessagesSnapshot;
+  usage: UsageChangeSnapshot;
+  todos: { items: TodoItem[]; title: string | null };
+  plan: PlanModeState;
+  tool: { kind: "chunk"; chunk: StreamingChunk } | { kind: "clear"; toolCallId: string };
+  summary: SummaryStreamEvent;
+  lifecycle: AgentEvent;
+  "extension-ui": ExtensionUIEvent;
+  extensions: AgentSessionExtensionsSummary;
+  "tool-presentation": { descriptors: ToolPresentationInfo[] };
+  mcp: AgentSessionMcpSummary;
+  mode: { mode: AgentMode; autoMode: boolean };
+  interaction: SessionInteractionsSnapshot;
+  iteration: AgentIterationState;
+  jobs: SessionJobsSnapshot;
+  subagents: { subagents: AgentSessionSubagentSummary[] };
+}
+
+export type AgentSessionEvent = {
+  [C in AgentSessionChannel]: { channel: C; payload: AgentSessionChannelPayloads[C]; ts: number };
+}[AgentSessionChannel];
+
+/**
+ * Compile-time completeness check against {@link AgentSessionChannel}.
+ *
+ * A missing key is already an error (the mapped type above needs it); this catches the other half — a
+ * key left behind after a channel is renamed, which would otherwise sit here unread.
+ */
+type _MissingChannelPayloadKeys = Exclude<AgentSessionChannel, keyof AgentSessionChannelPayloads>;
+type _ExtraChannelPayloadKeys = Exclude<keyof AgentSessionChannelPayloads, AgentSessionChannel>;
+type _AssertChannelPayloadMapExact = [_MissingChannelPayloadKeys | _ExtraChannelPayloadKeys] extends [never]
+  ? true
+  : _MissingChannelPayloadKeys | _ExtraChannelPayloadKeys;
+const _channelPayloadMapExact: _AssertChannelPayloadMapExact = true;
+void _channelPayloadMapExact;
 
 export type AgentSessionSubscriber = (event: AgentSessionEvent) => void;
 

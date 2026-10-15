@@ -12,7 +12,11 @@
  *   short-circuits (see {@link InterceptableEvent}/{@link EventInterceptor}).
  */
 
-import type { AgentSessionChannel, AgentSessionSubagentSummary } from "../../agent-session/types.js";
+import type {
+  AgentSessionChannel,
+  AgentSessionChannelPayloads,
+  AgentSessionSubagentSummary,
+} from "../../agent-session/types.js";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 import type {
   AgentIterationState,
@@ -117,6 +121,50 @@ export interface AgentEventMeta {
   retained?: boolean;
 }
 
+/**
+ * The `channel` a routed event may name, constrained by that event's own payload.
+ *
+ * `AgentSessionChannelPayloads` is the single source of the channel → payload pairing (it also
+ * derives `AgentSessionEvent`), so a channel name is only offered here when the event's payload is
+ * assignable to that channel's payload. `AGENT_EVENT_META` is checked against this table, which is
+ * what turns a mis-pairing into a compile error.
+ *
+ * That check is the answer to a real blind spot. `channel` alone is a free string — every channel
+ * name type-checks — and the projector's per-case `as` erased the payload side, so routing
+ * `session:mcp` to `"plan"` (a valid channel holding the wrong payload type) compiled cleanly and
+ * passed all 249 validators. The pairing was the one unstated fact; now it is the stated one.
+ *
+ * Two channels are exempt, and they are exempt for the same reason — the channel does not carry the
+ * event's payload:
+ *  * `lifecycle` carries the `AgentEvent` **envelope** (the branch maps `event`, not
+ *    `event.payload`), so a lifecycle event's payload is not the channel payload;
+ *  * `mcp` carries a **re-shaped** summary (`{ servers }`), because `session:mcp`'s own payload is
+ *    the load report (config path / source), not the server list.
+ * Whose mis-pairing the projector's `never` exhaustiveness check already catches.
+ */
+export type AgentEventMetaTable = {
+  [K in AgentEventType]:
+    { mode: AgentEventDispatchMode; retained?: boolean; channel?: undefined } | ChannelRouteRow<AgentEvents[K]>;
+};
+
+/**
+ * The possible `channel` rows for a payload of type `P`, or `never` when none apply.
+ *
+ * `P` is a parameter of *this* alias rather than the outer mapped type's index on purpose. Writing the
+ * same conditional inline as `AgentEvents[K] extends AgentSessionChannelPayloads[C]` looks
+ * equivalent and is not: TypeScript iterates the inner mapped type in order to compute the union, and
+ * while it does, the outer `K` is not yet resolvable, so every non-exempt branch collapses to
+ * `never` — the constraint then accepts any channel and the check silently does nothing. (Measured:
+ * `mcp` → `plan` compiles with the inline form and is rejected with this one.)
+ */
+type ChannelRouteRow<P> = {
+  [C in keyof AgentSessionChannelPayloads]: C extends "lifecycle" | "mcp"
+    ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C }
+    : [P] extends [AgentSessionChannelPayloads[C]]
+      ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C }
+      : never;
+}[keyof AgentSessionChannelPayloads];
+
 /** Caller-supplied envelope overrides (defaults derive from the emitting scope). */
 export interface AgentEventMetaInput {
   agentId?: string;
@@ -124,7 +172,6 @@ export interface AgentEventMetaInput {
   sessionId?: string;
 }
 
-/** Typed envelope (discriminated on `type`) shared by the wire and subscribers. */
 export type AgentEvent<T extends AgentEventType = AgentEventType> = {
   [K in T]: {
     type: K;
