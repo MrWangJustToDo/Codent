@@ -47,6 +47,8 @@ assistant 文本 SHALL 以 `agent_message_chunk` 逐段发送；同一条 `UIMes
 
 工具调用 SHALL 在其开始时以 `tool_call`（含 `toolCallId`、`title`、`kind`、`status: "pending"`、可选 `rawInput`、`locations`）报告，并在执行中以 `tool_call_update` 更新 `status`（`in_progress`/`completed`/`failed`）与 `content`/`rawOutput`。`kind` SHALL 由工具种类映射（如 `reads`→`read`、`edits`→`edit`、`searches`→`search`、`commands`→`execute`、web 工具→`fetch`，删除→`delete`，其余→`other`）。流式工具输出（`tool` 通道）SHOULD 作为 `tool_call_update` 的 `content` 增量转发。
 
+写/编辑类工具（`write_file` / `edit_file`）的编辑预览 SHALL 以 `content: [{ type: "diff" }]` 发给 client：参数一经可解析即发（MUST NOT 等到调用结束），且终态内容 SHALL 同时携带 `diff` 与结果文本。理由是 ACP 的 `content` 是**替换**语义：只带一半的写入方会擦掉另一半，而两个写入方（调用自身的终态迁移、结果 part）的执行顺序由引擎决定；若结果 part 先落地（它会把状态推到终态），调用自身的迁移会因状态未变而被跳过，预览就永远不会发出。
+
 #### Scenario: 工具生命周期
 
 - **WHEN** 模型调用一个读文件工具并成功返回
@@ -61,6 +63,17 @@ assistant 文本 SHALL 以 `agent_message_chunk` 逐段发送；同一条 `UIMes
 
 - **WHEN** 工具执行抛错
 - **THEN** 对应的 `tool_call_update` SHALL 使用 `status: "failed"` 并携带错误文本
+
+#### Scenario: 编辑预览的时机与两个写入方
+
+- **WHEN** 一个 `write_file` 调用先以部分 `arguments` 出现、随后参数完整、最后结果落地
+- **THEN** agent SHALL 在参数可解析时即发一条带 `diff` 的 `tool_call_update`
+- **AND** client 最终持有的该调用 `content` SHALL 同时含 `diff` 与结果文本（无论结果 part 与调用终态谁先到）
+
+#### Scenario: 重复 tick 不重发预览
+
+- **WHEN** `messages` 通道就同一次调用重复上报（内容未变）
+- **THEN** agent MUST NOT 重发预览或新增更新
 
 ### Requirement: 计划以 plan 更新（来自 todos）
 
@@ -102,7 +115,9 @@ agent SHALL 在每轮结束（以及 `session/new`/`session/load`/模型切换�
 
 ### Requirement: 压缩与通知按能力门控
 
-仅当 client 声明 `session.compaction` 时，agent 才 SHALL 发送 `compaction_update`/`compaction_summary_chunk`（映射自动/反应式压缩与 SUMMARY 流）；否则 SHALL 用普通 agent message 描述压缩。仅当 client 声明 `session.notices` 时，agent 才 SHALL 发送 `notice`；否则用 agent message。
+仅当 client 声明 `session.compaction` 时，agent 才 SHALL 发送 `compaction_update`/`compaction_summary_chunk`（映射自动/反应式/手动压缩与 SUMMARY 流）；否则 SHALL 用普通 agent message 描述压缩。仅当 client 声明 `session.notices` 时，agent 才 SHALL 发送 `notice`；否则用 agent message。
+
+压缩 SHALL 按 `compaction_update` 的 upsert 语义报告：同一行以 `in_progress` 开启，`compaction_summary_chunk` 按序追加摘要，最后以 `completed`（携带摘要正文）、`failed`（携带原因）或 `cancelled` 关闭。开启信号 SHALL 取自 `state` 通道的 `compacting` 状态（手动 `/compact` 不产生任何 lifecycle 事件，状态是它唯一的可见信号），或 SUMMARY 流的 `reset`；两者指向同一次压缩时 MUST NOT 开出第二行。每次压缩 SHALL 使用各自的 `compactionId` —— 协议里该 id 是 upsert 键，复用等于告诉 client 第二次压缩是第一次的补丁。
 
 #### Scenario: 未声明压缩能力时降级
 
@@ -110,10 +125,28 @@ agent SHALL 在每轮结束（以及 `session/new`/`session/load`/模型切换�
 - **THEN** agent MUST NOT 发送 `compaction_update`
 - **AND** MAY 用一条 agent message 说明发生了压缩
 
-#### Scenario: 声明后可带摘要流
+#### Scenario: 声明后按生命周期报告
 
-- **WHEN** client 声明 `session.compaction` 且压缩产生 SUMMARY
-- **THEN** agent SHALL 发送带稳定 `compactionId` 的 `compaction_update`，并 MAY 以 `compaction_summary_chunk` 流式补充摘要
+- **WHEN** client 声明 `session.compaction`，且会话开始一次自动压缩并产生 SUMMARY
+- **THEN** agent SHALL 先发该 `compactionId` 的 `compaction_update`（`status: "in_progress"`）
+- **AND** SHALL 以 `compaction_summary_chunk` 按序转发摘要片段（同一 `compactionId`）
+- **AND** SHALL 以 `completed` 关闭该行，并在其中携带完整摘要正文
+- **AND** MUST NOT 为该次压缩开出第二个 `compactionId`
+
+#### Scenario: 手动压缩也可见
+
+- **WHEN** client 声明 `session.compaction`，且用户或 client 触发一次手动 `/compact`（它不产生任何 lifecycle 事件）
+- **THEN** agent SHALL 通过 `state` 通道的 `compacting` 状态开始该行，并在状态离开时关闭它
+
+#### Scenario: 中止与失败的收尾
+
+- **WHEN** 压缩过程中运行被中止，或压缩以错误收场
+- **THEN** 对应行 SHALL 分别以 `cancelled` / `failed`（携带原因）关闭，MUST NOT 停留在 `in_progress`
+
+#### Scenario: 两次压缩是两行
+
+- **WHEN** 同一会话先后发生两次压缩
+- **THEN** 两次的 `compaction_update` SHALL 使用不同的 `compactionId`
 
 ### Requirement: 会话元信息更新
 

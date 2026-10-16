@@ -260,14 +260,14 @@ catalog's `command` field, so this host never restates a command name.
 | `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of both the `mode` and `model` selects we advertise, each sharing its own entry point) |
 | `user_message_chunk` | ✅ one per user turn, stable `messageId`; injected `<ctx>` rows are skipped |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
-| `tool_call` / `tool_call_update` | ✅ kind / title / locations / structured diff / streamed output |
+| `tool_call` / `tool_call_update` | ✅ kind / title / locations / streamed output; a write or edit carries its `diff` — sent as soon as the input is resolvable, and again with the result text, since an update replaces what the client holds |
 | `plan` (from todos) | ✅ always the complete entry list |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
 | `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set) |
 | model selector (`configOptions`, `category: "model"`) | ✅ when `.agents/config/models.json` is the source (the protocol has no `session/set_model`) |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
-| `compaction_update` / `notice` | ✅ gated by the client capability |
+| `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
 | per-session `mcpServers` | ✅ stdio / http / sse on `new` / `load` / `resume`; `acp` refused; fork refuses the field |
 | `additionalDirectories` | ⛔ deliberately undeclared, refused with one shared error on all four requests that can carry it |
 
@@ -345,8 +345,12 @@ validator runner, which discovers `validate-*.mjs` by glob rather than by a list
 - No `authMethods`, and no `providers/*`: credentials are resolved locally by the process that owns
   the workspace, so there is nothing for a client to configure or to authenticate against.
   `providers/*` is an ACP v2 draft surface in the SDK and is not advertised.
-- Compaction reports through `compaction_update` (a single stable `compactionId`) only; the optional
-  `compaction_summary_chunk` stream is not emitted, and the `summary` channel is not projected.
+- Compaction is reported only for clients that advertise `session.compaction`, which is what the
+  protocol requires: the row opens as `in_progress` (from the `state` status, so a manual `/compact`
+  — which emits no lifecycle event at all — is visible too), the summarizer's stream is forwarded as
+  `compaction_summary_chunk`, and the row closes as `completed` (carrying the summary), `failed`, or
+  `cancelled`. Each compaction gets its own `compactionId`: the id is the protocol's upsert key, so
+  reusing one would tell the client the second compaction was a patch to the first.
 - `additionalDirectories` is not supported and is refused with a JSON-RPC error on every request
   that can carry it (`session/new`, `session/load`, `session/resume`, `session/fork`) — one shared
   check, one message. It is never silently ignored, so a client cannot end up talking to an agent

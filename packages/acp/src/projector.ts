@@ -22,6 +22,7 @@ import { toolCallInfo, toolDiffFor, toolKindFor, toolResultText, toolStatusFor, 
 
 import type {
   AcpCommands,
+  ContentBlock,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -29,7 +30,13 @@ import type {
   ToolCallPartLike,
   ToolResultPartLike,
 } from "./types.js";
-import type { AgentSession, AgentSessionEvent, AgentSessionSnapshot } from "@codent/core";
+import type {
+  AgentL1State,
+  AgentSession,
+  AgentSessionEvent,
+  AgentSessionSnapshot,
+  SummaryStreamEvent,
+} from "@codent/core";
 import type { UIMessage } from "@tanstack/ai";
 
 const STREAM_FLUSH_MS = 300;
@@ -68,6 +75,12 @@ interface ToolState {
   streamBuffer: string;
   lastStreamFlush: number;
   resultEmitted: boolean;
+  /**
+   * The edit preview (`diff`) already went out — either inside the initial `tool_call` or as its own
+   * update. `messages` re-emits the whole array on every tick, so without this a preview would be
+   * re-sent on every one of them.
+   */
+  previewSent: boolean;
 }
 
 export class AcpProjector {
@@ -82,6 +95,14 @@ export class AcpProjector {
   private priorTitle: string | undefined;
   private priorMode: string | undefined;
   private unsubscribe: (() => void) | null = null;
+  /**
+   * The compaction currently on the wire, if any. Its id is the protocol's upsert key, so every
+   * signal for ONE compaction (the announcement, the summary chunks, the completion) has to carry the
+   * same one — two ids would render as two rows.
+   */
+  private compaction: { id: string; key: string; summary: string } | undefined;
+  /** Fallback ids, for a compaction whose summary stream was never seen (the epoch keys better). */
+  private compactionSeq = 0;
 
   constructor(
     private readonly session: AgentSession,
@@ -163,7 +184,10 @@ export class AcpProjector {
         this.emitUsage(event.payload);
         break;
       case "state":
-        this.emitTitle(event.payload.name);
+        this.onState(event.payload);
+        break;
+      case "summary":
+        this.onSummary(event.payload);
         break;
       case "extensions":
         this.emitCommands();
@@ -282,6 +306,13 @@ export class AcpProjector {
     if (!state) this.createToolCall(part, replay);
     else {
       state.input = toolInputOf(part) ?? state.input;
+      // The preview is a function of the INPUT, so it goes out as soon as the input is final — not when
+      // the call reaches a terminal status. `content` on an update REPLACES what the client holds, and
+      // the two writers (this transition, and the result part below) run in the engine's order, not
+      // ours: a preview that waits for the end is erased by the result text, or never sent at all when
+      // the result part moved the status first (`emitToolResult` sets it) and this branch became a
+      // no-op. That is how a `write_file` row lost its edit preview.
+      this.emitPreview(id, state);
       const next = toolStatusFor(String(part.state), part.output?.success === false);
       if (next !== state.status) {
         state.status = next;
@@ -311,24 +342,24 @@ export class AcpProjector {
     // live tick then downgraded it to `pending` — a terminal row the client had already frozen, so the
     // approval row could not be answered at all (reported as a stuck session with a "hidden" tool call).
     const status: ToolCallStatus = toolStatusFor(String(part.state), part.output?.success === false);
-    this.tools.set(part.id, {
-      status,
-      name: part.name,
-      input: part.input,
-      streamBuffer: "",
-      lastStreamFlush: 0,
-      resultEmitted: replay,
-    });
+    const input = toolInputOf(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
-    this.options.emit({
-      sessionUpdate: "tool_call",
-      toolCallId: part.id,
-      name: part.name,
+    const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text);
+    this.tools.set(part.id, {
       status,
-      ...toolCallInfo(part.name, toolInputOf(part), this.options.rootPath, display?.text),
+      name: part.name,
+      // `toolInputOf`, not `part.input`: the parsed field only exists once the engine has parsed the
+      // call, while the raw `arguments` are there from the first tick. Everything downstream (title,
+      // preview) reads this, so it holds the best-known input rather than the strictest one.
+      input,
+      streamBuffer: "",
+      lastStreamFlush: 0,
+      resultEmitted: replay,
+      previewSent: (info.content ?? []).some((content) => content.type === "diff"),
     });
+    this.options.emit({ sessionUpdate: "tool_call", toolCallId: part.id, name: part.name, status, ...info });
   }
 
   private emitToolResult(part: ToolResultPartLike): void {
@@ -349,17 +380,53 @@ export class AcpProjector {
         ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
         : {}),
       status,
-      ...(text ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] } : {}),
+      ...(resultState && this.toolContentFor(resultState, true, text)
+        ? { content: this.toolContentFor(resultState, true, text) }
+        : text
+          ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] }
+          : {}),
       ...(part.content !== undefined ? { rawOutput: part.content } : {}),
     });
   }
 
-  private toolContentFor(state: ToolState, terminal: boolean): ToolCallContent[] | undefined {
+  /**
+   * The content a tool row shows: the edit preview (a `diff`) and the result text, TOGETHER.
+   *
+   * Both halves describe the same call, and ACP's `content` on an update replaces what the client
+   * holds — so a writer that sends only its own half erases the other's, and what the user ends up
+   * seeing depends on which writer ran last. One builder, used by both writers, is what makes the row
+   * order-independent.
+   */
+  private toolContentFor(state: ToolState, terminal: boolean, text?: string): ToolCallContent[] | undefined {
     if (!terminal) return undefined;
+    const content: ToolCallContent[] = [];
     const diff = toolDiffFor(state.name, state.input, this.options.rootPath);
-    if (diff) return [diff];
-    if (state.streamBuffer) return [{ type: "content", content: textBlock(state.streamBuffer) }];
-    return undefined;
+    if (diff) content.push(diff);
+    const body = text?.trim() ? text : state.streamBuffer;
+    if (body) content.push({ type: "content", content: textBlock(body) });
+    return content.length > 0 ? content : undefined;
+  }
+
+  /**
+   * Send the call's edit preview (`diff`) once, the moment its input is resolvable.
+   *
+   * Not gated on status: a client renders the preview from the content it holds, and the natural
+   * moment for it is "the arguments are known", which is before the tool has run — and, when the
+   * result lands first, the only moment it can still be sent.
+   */
+  private emitPreview(id: string, state: ToolState): void {
+    if (state.previewSent) return;
+    const diff = toolDiffFor(state.name, state.input, this.options.rootPath);
+    if (!diff) return;
+    state.previewSent = true;
+    this.options.emit({
+      sessionUpdate: "tool_call_update",
+      toolCallId: id,
+      title: toolTitleOf(state.name, state.input),
+      kind: toolKindFor(state.name),
+      status: state.status,
+      content: [diff],
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -441,14 +508,125 @@ export class AcpProjector {
   }
 
   /** Compaction completion → `compaction_update` (gated by the client capability). */
-  private onLifecycle(event: { type: string }): void {
+  private onLifecycle(event: { type: string; error?: unknown }): void {
     if (!this.options.client.compaction) return;
     const type = event.type;
     if (type === "compaction:auto-complete" || type === "compaction:reactive-complete") {
-      this.options.emit({ sessionUpdate: "compaction_update", compactionId: "compact", status: "completed" });
+      this.finishCompaction("completed");
     } else if (type === "compaction:auto-error" || type === "compaction:reactive-error") {
-      this.options.emit({ sessionUpdate: "compaction_update", compactionId: "compact", status: "failed" });
+      this.finishCompaction("failed", typeof event.error === "string" ? event.error : undefined);
     }
+  }
+
+  /**
+   * The `state` channel: the status is the only signal a compaction gets that does not depend on the
+   * summarizer producing text, so it opens the row when nothing else has.
+   *
+   * `core` deliberately keeps `compaction:auto-start` / `reactive-start` channel-less ("status covers
+   * 'compacting'"), which is exactly this field — and both the automatic and the manual path go
+   * through `beginCompaction`, so a manual `/compact` is reported here too.
+   */
+  private onState(state: AgentL1State): void {
+    this.emitTitle(state.name);
+    if (!this.options.client.compaction) return;
+    if (state.status === "compacting") {
+      if (!this.compaction) {
+        this.compaction = { id: this.nextCompactionId(), key: "", summary: "" };
+        this.announceCompaction();
+      }
+      return;
+    }
+    if (!this.compaction) return;
+    // Leaving `compacting` without a summary `end`: aborted mid-summary, or failed before its first
+    // chunk. Neither produces an `end`, and both would otherwise leave the row open forever.
+    this.finishCompaction(state.status === "aborted" ? "cancelled" : "completed");
+  }
+
+  /**
+   * The `summary` channel: the compact summarizer's own stream.
+   *
+   * A task summary is not ours to project (its row is the `task` tool call), so only `compact` is
+   * followed. `reset` opens the row, `append` streams it, `end` closes it — which is the protocol's
+   * `compaction_summary_chunk` contract verbatim ("a first-seen id creates an in-progress compaction").
+   */
+  private onSummary(event: SummaryStreamEvent): void {
+    if (!this.options.client.compaction) return;
+    if (event.type === "reset") {
+      if (event.source !== "compact") return;
+      if (this.compaction) {
+        // Opened already from the status (`compacting` fires first): the same compaction, one row.
+        this.compaction.key = event.key;
+        return;
+      }
+      this.compaction = {
+        id: event.epoch ?? event.compactId ?? this.nextCompactionId(),
+        key: event.key,
+        summary: "",
+      };
+      this.announceCompaction();
+      return;
+    }
+    const active = this.compaction;
+    if (!active || event.key !== active.key) return;
+    if (event.type === "append") {
+      active.summary += event.chunk;
+      this.options.emit({
+        sessionUpdate: "compaction_summary_chunk",
+        compactionId: active.id,
+        content: textBlock(event.chunk),
+      });
+      return;
+    }
+    this.finishCompaction("completed");
+  }
+
+  /** An id is only required to be unique within the session, so a counter satisfies it. */
+  private nextCompactionId(): string {
+    this.compactionSeq += 1;
+    return `compact-${this.compactionSeq}`;
+  }
+
+  private announceCompaction(): void {
+    this.emitCompactionUpdate("in_progress");
+  }
+
+  private emitCompactionUpdate(
+    status: "in_progress" | "completed" | "failed" | "cancelled",
+    extra?: { summary?: ContentBlock[]; error?: string }
+  ): void {
+    if (!this.options.client.compaction || !this.compaction) return;
+    this.options.emit({
+      sessionUpdate: "compaction_update",
+      compactionId: this.compaction.id,
+      status,
+      ...extra,
+    });
+  }
+
+  /**
+   * Close the open compaction: the summary stream's `end`, a lifecycle fault, or leaving `compacting`.
+   * The accumulated summary is patched in once, at the end — the chunks already streamed it, and
+   * `summary` has replace semantics, so sending it again is what makes the row readable for a client
+   * that dropped the chunks.
+   */
+  private finishCompaction(status: "completed" | "failed" | "cancelled", error?: string): void {
+    if (!this.compaction) {
+      // A completion with no row of ours (its summary stream was never seen) still has to tell the
+      // client what happened — one update, which is also what creates the row on the client's side.
+      this.options.emit({
+        sessionUpdate: "compaction_update",
+        compactionId: this.nextCompactionId(),
+        status,
+        ...(error ? { error } : {}),
+      });
+      return;
+    }
+    const summary = this.compaction.summary.trim();
+    this.emitCompactionUpdate(status, {
+      ...(status === "completed" && summary ? { summary: [textBlock(summary)] } : {}),
+      ...(error ? { error } : {}),
+    });
+    this.compaction = undefined;
   }
 
   /** Extension notify → ACP `notice` (gated); otherwise leave it to the extension's own UI. */
