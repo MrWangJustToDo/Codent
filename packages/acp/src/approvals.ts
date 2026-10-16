@@ -108,7 +108,7 @@ export interface ApprovalToolPart {
   input?: unknown;
   arguments?: string;
   /** Core's rendered presentation for the call, when it has been attached. */
-  display?: { summary?: string };
+  display?: { summary?: string; text?: string };
 }
 
 /**

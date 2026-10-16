@@ -116,7 +116,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         approval.toolName,
         toolInputFor(messages, approval.toolCallId),
         rootPath,
-        toolPartFor(messages, approval.toolCallId)?.display?.summary
+        toolPartFor(messages, approval.toolCallId)?.display?.text
       );
       // Named at the boundary so a field the client's schema rejects is reported here, on the
       // literal, rather than silently degrading the call's result type to `unknown`.

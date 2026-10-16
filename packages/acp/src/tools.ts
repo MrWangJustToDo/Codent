@@ -7,7 +7,7 @@
  * coupled to ACP, and we never fabricate a diff we cannot reconstruct.
  */
 
-import { BUILTIN_TOOL_NAMES, getToolPresentation } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, formatToolInput, getToolPresentation } from "@codent/core";
 
 import { textBlock } from "./content.js";
 
@@ -148,27 +148,27 @@ function shellCommandOf(name: string, input: unknown): string | undefined {
   return typeof command === "string" && command.trim() ? command.trim() : undefined;
 }
 
-/** One line, bounded — a title is a heading, not the payload. */
-function oneLine(text: string, max = 120): string {
-  const flattened = text.replace(/\s+/g, " ").trim();
-  return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
-}
-
 /**
  * The client-facing description of one tool call: title, kind, locations, and the input/content that
  * make it answerable.
  *
  * Shared by the transcript (`tool_call` / `tool_call_update`) and by the permission request, because
  * the two must not diverge — and because an approval prompt that cannot show WHAT it is approving is
- * not a decision anyone can make. `run_command` was the case in point: {@link toolTitleFor} renders a
- * verb plus a path, so a command (which has no path) came out as a bare "Run" with the command itself
- * nowhere in the payload.
+ * not a decision anyone can make.
+ *
+ * The TITLE comes from core's own input formatter ({@link formatToolInput}) — the same string the app
+ * puts at the head of a tool row (`ToolCallPartView`), so a `grep` names its pattern, a `webfetch` its
+ * url, a `run_command` its command. ACP used to compose the title itself from a verb plus a PATH, so
+ * every tool whose key parameter is not a path lost it ("Run", "Search <path>", "Web search").
+ *
+ * The result text (`displayText`, i.e. core's `part.display.text`) goes in the CONTENT, never in the
+ * title: the title names the call, which is what a client shows while the call is still pending.
  */
 export function toolCallInfo(
   name: string,
   input: unknown,
   rootPath: string,
-  displaySummary?: string
+  displayText?: string
 ): {
   title: string;
   kind: ToolKind;
@@ -176,18 +176,17 @@ export function toolCallInfo(
   rawInput?: unknown;
   content?: ToolCallContent[];
 } {
-  const command = shellCommandOf(name, input);
-  const title =
-    displaySummary ??
-    (command ? `${TITLE_VERBS[name] ?? name.replace(/_/g, " ")}: ${oneLine(command)}` : toolTitleFor(name, input));
   const diff = toolDiffFor(name, input, rootPath);
+  const command = shellCommandOf(name, input);
   const content: ToolCallContent[] | undefined = diff
     ? [diff]
     : command
       ? [{ type: "content", content: textBlock(command) }]
-      : undefined;
+      : displayText
+        ? [{ type: "content", content: textBlock(displayText) }]
+        : undefined;
   return {
-    title,
+    title: formatToolInput(input, name, { compact: true }) || toolTitleFor(name, input),
     kind: toolKindFor(name),
     locations: toolLocationsFor(input, rootPath),
     ...(input !== undefined ? { rawInput: input } : {}),

@@ -304,7 +304,7 @@ export class AcpProjector {
       lastStreamFlush: 0,
       resultEmitted: replay,
     });
-    const display = (part as { display?: { summary?: string } }).display;
+    const display = (part as { display?: { summary?: string; text?: string } }).display;
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
     this.options.emit({
@@ -312,7 +312,7 @@ export class AcpProjector {
       toolCallId: part.id,
       name: part.name,
       status,
-      ...toolCallInfo(part.name, part.input, this.options.rootPath, display?.summary),
+      ...toolCallInfo(part.name, part.input, this.options.rootPath, display?.text),
     });
   }
 

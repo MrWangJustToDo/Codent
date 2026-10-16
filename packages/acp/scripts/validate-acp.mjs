@@ -11,6 +11,7 @@
  */
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
+import { formatToolInput } from "@codent/core";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ import {
   parseSlashCommand,
   permissionOptions,
   promptBlocksToContent,
+  toolCallInfo,
   toolDiffFor,
   toolKindFor,
   toolLocationsFor,
@@ -37,6 +39,31 @@ import { baseSnapshot } from "./session-fixture.mjs";
 
 const checker = createChecker();
 const check = checker.check;
+
+// --- tool-call titles -------------------------------------------------------
+//
+// The title of a tool call is core's OWN input formatter — the string the app puts at the head of a
+// row — not a verb-plus-path composed here. ACP's old composition dropped the key parameter of every
+// tool whose parameter is not a path: "Run" (no command), "Search <path>" (no pattern), "Web search"
+// (no query). Asserted against `formatToolInput` itself, so the two cannot drift apart again.
+for (const [tool, input, expected] of [
+  ["grep", { pattern: "TODO", path: "packages/core" }, "TODO"],
+  ["websearch", { query: "acp protocol" }, "acp protocol"],
+  ["webfetch", { url: "https://example.com/docs" }, "https://example.com/docs"],
+  ["task", { prompt: "find the tests", description: "find-tests" }, "find-tests"],
+  ["run_command", { command: "pnpm build" }, "pnpm build"],
+]) {
+  const info = toolCallInfo(tool, input, "/ws");
+  check(
+    `a ${tool} call names its parameter in the title`,
+    info.title.includes(expected) && info.title === formatToolInput(input, tool, { compact: true }),
+    `${info.title} (expected to include ${expected})`
+  );
+  check(
+    `…and carries the input itself for any client that renders raw`,
+    JSON.stringify(info.rawInput) === JSON.stringify(input)
+  );
+}
 
 // ===========================================================================
 // A. Pure mapping units
