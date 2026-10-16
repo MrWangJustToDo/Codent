@@ -55,7 +55,7 @@ export const useTaskQueue = (): QueuedTask[] => {
       (event) => {
         if (event.channel !== "lifecycle") return;
         if (event.payload.type !== "subagent:queue") return;
-        setQueue(readQueued(event.payload as unknown as Record<string, unknown>));
+        setQueue(readQueued(event.payload));
       },
       { channels: ["lifecycle"] }
     );
