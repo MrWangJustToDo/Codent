@@ -22,10 +22,30 @@
  */
 
 import { formatCompactionSummaryContent } from "@codent/core";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { AcpProjector, toolLocationsFor } from "../dist/index.mjs";
+import { AcpProjector, sessionConfigOptions, toolLocationsFor } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
+
+/**
+ * The protocol's own answer to "is this payload shaped right".
+ *
+ * The SDK ships zod schemas for every notification, and they are the only check that sees RUNTIME
+ * values — the SDK's types are erased, and most of what this host emits is assembled by hand from core's
+ * channels. Every `emit` below goes through it, so each new scenario inherits the net.
+ */
+const sdkDir = dirname(createRequire(import.meta.url).resolve("@agentclientprotocol/sdk"));
+const zod = await import(pathToFileURL(join(sdkDir, "schema/zod.gen.js")).href);
+const schemaFailures = [];
+function validateUpdate(update) {
+  const parsed = zod.zSessionUpdate.safeParse(update);
+  if (parsed.success) return;
+  const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"} ${issue.message}`).join("; ");
+  schemaFailures.push(`${update.sessionUpdate}: ${issues}`);
+}
 
 const checker = createChecker();
 const check = checker.check;
@@ -47,7 +67,10 @@ function capture(client = { compaction: true, notices: true }, commands = () => 
   };
   const projector = new AcpProjector(session, {
     rootPath: "/ws",
-    emit: (update) => emitted.push(update),
+    emit: (update) => {
+      emitted.push(update);
+      validateUpdate(update);
+    },
     commands,
     client,
   });
@@ -600,6 +623,48 @@ const compactKey = "compact:agent_1";
       const thoughts = chunks.filter((u) => u.sessionUpdate === "agent_thought_chunk");
       return thoughts[0].content.text === "first thought" && thoughts[1].content.text === " and more";
     })()
+  );
+}
+
+// ===========================================================================
+// 8. Conformance: every payload against the SDK's own schema
+// ===========================================================================
+{
+  check(
+    "every `session/update` this host emitted passes the protocol's schema",
+    schemaFailures.length === 0,
+    schemaFailures.slice(0, 3).join(" | ")
+  );
+
+  // The `session/new` / `load` response carries the selectors a client renders; they are built by hand
+  // (there is no `session/set_model` in this protocol), so the schema is the check that they are the
+  // protocol's shape and not merely ours.
+  const snapshot = {
+    todos: [],
+    mode: "normal",
+    usage: undefined,
+    name: "probe",
+    model: "anthropic/claude-3.5-sonnet",
+    messages: [],
+  };
+  const withCatalog = {
+    sessionId: "s1",
+    configOptions: sessionConfigOptions(snapshot, [
+      { index: 0, style: "anthropic", models: ["anthropic/claude-3.5-sonnet"] },
+    ]),
+  };
+  const withoutCatalog = { sessionId: "s1", configOptions: sessionConfigOptions(snapshot, undefined) };
+  const withCatalogParsed = zod.zNewSessionResponse.safeParse(withCatalog);
+  const withoutCatalogParsed = zod.zNewSessionResponse.safeParse(withoutCatalog);
+  check(
+    "a `session/new` response with both selectors passes the schema",
+    withCatalogParsed.success,
+    withCatalogParsed.success ? "" : JSON.stringify(withCatalogParsed.error.issues.slice(0, 3))
+  );
+  check(
+    "…and with no catalog it drops the model option rather than advertising a fake choice",
+    withoutCatalogParsed.success && withoutCatalog.configOptions.length === 1,
+    JSON.stringify(withoutCatalog.configOptions.map((o) => o.id))
   );
 }
 
