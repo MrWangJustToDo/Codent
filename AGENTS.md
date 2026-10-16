@@ -770,9 +770,13 @@ The default task tool row shows the current subagent exploration tool during ana
 After the subagent calls `begin_summary`, the UI switches to summary phase and streams final text
 via `SummaryStreamHub` (`reset` / `append` / `end` on key `task:${toolCallId}`) into `useSummaryStream` /
 `SummaryStreamView` — not UIMessage diffs or `emitStreamingChunk` (those remain for `run_command`).
-On restart-style stream recovery (429 / capability sanitize), `AgentUIChannel.resetForStreamRetry()`
-keeps the user prompt and clears tools/summary so the task panel does not keep stale state;
-terminal non-abort failures still call `failRun()`. Max-tokens continuation does not reset.
+On restart-style stream recovery (429 / capability sanitize), `AgentUIChannel.resetRetryUiState()`
+resets only the attempt-scoped UI state (the streamed summary banner text + phase unlock), for **both**
+profiles. It must never touch the message history: the retry's wire is re-projected from the channel
+(`compaction.onConfig`), so dropping rows there restarts the exploration instead of resuming it — the
+subagent-only version of this reset is what made a `task` re-explore after a network drop.
+Terminal non-abort failures still call `failRun()` (the run is over, so its rows *are* dropped).
+Max-tokens continuation does not reset.
 Compact summarization uses the same hub with stable key `compact:${parentAgentId}` (one in-flight compact per agent).
 Only the last text-only step is returned to the parent as the task `summary`; `toModelOutput` also includes completion status (`reachedLimit` / `incomplete` / `aborted` / `truncated`) so the parent can judge whether findings are trustworthy to extend. The iteration pair (`iterations` = model turns, `maxIterations` = the budget it ran under) is **host-only**: it is persisted on the task output so a restored row can still show `used/budget`, but it is in neither `toModelOutput` nor the description — `reachedLimit` already is the budget verdict, and a bare count says nothing without a ceiling.
 

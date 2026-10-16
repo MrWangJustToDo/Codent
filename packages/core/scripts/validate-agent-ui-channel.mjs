@@ -353,7 +353,7 @@ assert.equal(monoSnap.pendingLine, "line6");
 unsubMono();
 
 // ============================================================================
-// resetForStreamRetry keeps user prompt, rolls summary phase back, clears hub text
+// resetRetryUiState keeps the message history, rolls summary phase back, clears hub text
 // ============================================================================
 
 const retryHub = new SummaryStreamHub();
@@ -420,12 +420,18 @@ await retryChannel.consumeRun({
       threadId: "thread-retry",
       runId: "run-retry-1",
     };
-    // Simulate mid-consume soft reset (as runStreamWithRecovery does before retry)
-    retryChannel.resetForStreamRetry();
+    // Simulate the retry-time UI reset (as runStreamWithRecovery does before a restart retry).
+    retryChannel.resetRetryUiState();
     assert.equal(retryChannel.getTaskRunPhase(), "tools");
-    assert.equal(retryChannel.getMessages().length, 1);
+    // The history is the wire: what the dead attempt already did must survive the reset, or the
+    // retry re-explores from the prompt. (Subagent-only history loss is the bug this guards.)
     assert.equal(retryChannel.getMessages()[0].role, "user");
-    assert.ok(retryEvents.filter((e) => e.type === "reset").length >= 2, "begin_summary reset + soft-reset");
+    assert.equal(retryChannel.getMessages().length, 2, "the attempt's history is kept (prompt + in-flight assistant)");
+    assert.ok(
+      retryChannel.getMessages().some((m) => m.parts.some((p) => p.type === "tool-call" && p.id === "tc-grep")),
+      "the tool call the dead attempt already made is still in the channel"
+    );
+    assert.ok(retryEvents.filter((e) => e.type === "reset").length >= 2, "begin_summary reset + retry reset");
     yield {
       type: EventType.RUN_STARTED,
       threadId: "thread-retry",
@@ -479,8 +485,9 @@ assert.equal(retrySnap.pendingLine, "C".repeat(80));
 assert.equal(retryChannel.getTaskRunPhase(), "tools");
 unsubRetry();
 
-// resetForStreamRetry keeps ALL leading user messages (synthetic ctx + prompt),
-// not just the first — subagent channels may hold <ctx kind=...> around the prompt.
+// resetRetryUiState drops NO messages — not even assistant rows. The channel history is the wire
+// (`compaction.onConfig` re-projects from it every attempt), so a subagent that already explored
+// keeps that exploration across a retry instead of restarting from its prompt.
 const tcRetryChannel = new AgentUIChannel({
   initialMessages: [
     {
@@ -503,10 +510,11 @@ const tcRetryChannel = new AgentUIChannel({
     },
   ],
 });
-tcRetryChannel.resetForStreamRetry();
-assert.equal(tcRetryChannel.getMessages().length, 2, "leading user messages survive soft reset");
+tcRetryChannel.resetRetryUiState();
+assert.equal(tcRetryChannel.getMessages().length, 3, "the retry reset drops no message at all");
 assert.equal(tcRetryChannel.getMessages()[0].parts[0].content, "<ctx kind=current_date>\nnow\n</ctx>");
 assert.equal(tcRetryChannel.getMessages()[1].parts[0].content, "find the test framework");
+assert.equal(tcRetryChannel.getMessages()[2].parts[0].content, "partial work");
 
 // failRun keeps the seeded prompt (+ optional error message) and clears summary state
 const failChannel = new AgentUIChannel({

@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 
 import {
+  AgentUIChannel,
   armCapabilityStrip,
   extractRetryAfterSeconds,
   isTransientRetryableError,
@@ -312,10 +313,38 @@ assert.equal(
 );
 assert.equal(msRetryStates[0].delayMs, 20, "the recorded delay matches the provider hint");
 
-// --- subagent restart-style retry soft-resets UI + clears error status ---
+// --- subagent restart-style retry resets attempt-scoped UI, keeps its history ------
+//
+// A restart retry re-projects its wire from the channel (`compaction.onConfig`), so the channel IS
+// the progress the retry resumes from. This seeds what a mid-exploration network drop leaves behind
+// (prompt + the tool call already made) and asserts the retry still has it: wiping that history was
+// subagent-only, which is exactly why a `task` restarted from its prompt.
+class CountingChannel extends AgentUIChannel {
+  resetCalls = 0;
+  resetRetryUiState() {
+    this.resetCalls += 1;
+    super.resetRetryUiState();
+  }
+}
+
+const subChannel = new CountingChannel({
+  initialMessages: [
+    {
+      id: "sub-prompt",
+      role: "user",
+      parts: [{ type: "text", content: "find the test framework" }],
+      createdAt: new Date(),
+    },
+    {
+      id: "sub-progress",
+      role: "assistant",
+      parts: [{ type: "tool-call", id: "tc-1", name: "grep", arguments: '{"pattern":"vitest"}' }],
+      createdAt: new Date(),
+    },
+  ],
+});
 
 attempts = 0;
-let resetCalls = 0;
 let recoveryRetryCalls = 0;
 let lastError = "stale";
 const subManaged = {
@@ -326,11 +355,7 @@ const subManaged = {
   setError(error) {
     lastError = error;
   },
-  getUI: () => ({
-    resetForStreamRetry() {
-      resetCalls += 1;
-    },
-  }),
+  getUI: () => subChannel,
   statusController: {
     onRecoveryRetry() {
       recoveryRetryCalls += 1;
@@ -342,32 +367,51 @@ const subOut = [];
 for await (const chunk of runStreamWithRecovery({
   managed: subManaged,
   manager: {},
-  getMessages: () => msgs,
+  getMessages: () => subChannel.getMessages(),
   run: () => flakyThenOk(),
 })) {
   subOut.push(chunk.type);
 }
 assert.equal(attempts, 2);
-assert.equal(resetCalls, 1, "subagent should soft-reset UI before restart retry");
+assert.equal(subChannel.resetCalls, 1, "subagent resets attempt-scoped UI before the restart retry");
+assert.equal(subChannel.getMessages().length, 2, "…without discarding the exploration the retry resumes from");
+assert.ok(
+  subChannel.getMessages().some((m) => m.parts.some((p) => p.type === "tool-call" && p.id === "tc-1")),
+  "the tool call the dead attempt already made is still in the channel"
+);
 assert.equal(recoveryRetryCalls, 1, "subagent should clear error status before backoff");
 assert.equal(lastError, "");
 assert.deepEqual(subOut, ["TEXT_MESSAGE_CONTENT", "RUN_FINISHED"]);
 
-// --- root agent restart does not call resetForStreamRetry ---
-
+// --- the root takes the SAME attempt-scoped reset: no profile asymmetry -----------
+//
+// The reset is display-only, so applying it to the root changes nothing about its wire. This
+// assertion pins the unification: the subagent-only branch is what made a `task` restart while the
+// root resumed, and a gate that only covered the subagent side would let it come back unnoticed.
 attempts = 0;
-resetCalls = 0;
 recoveryRetryCalls = 0;
+const rootChannel = new CountingChannel({
+  initialMessages: [
+    {
+      id: "root-prompt",
+      role: "user",
+      parts: [{ type: "text", content: "check the repo" }],
+      createdAt: new Date(),
+    },
+    {
+      id: "root-progress",
+      role: "assistant",
+      parts: [{ type: "tool-call", id: "tc-root", name: "grep", arguments: '{"pattern":"x"}' }],
+      createdAt: new Date(),
+    },
+  ],
+});
 const rootManaged = {
   run: makeRunCoordinatorStub(),
   usage: null,
   log: { warn() {}, debug() {}, error() {} },
   setError() {},
-  getUI: () => ({
-    resetForStreamRetry() {
-      resetCalls += 1;
-    },
-  }),
+  getUI: () => rootChannel,
   statusController: {
     onRecoveryRetry() {
       recoveryRetryCalls += 1;
@@ -378,13 +422,14 @@ const rootManaged = {
 for await (const chunk of runStreamWithRecovery({
   managed: rootManaged,
   manager: {},
-  getMessages: () => msgs,
+  getMessages: () => rootChannel.getMessages(),
   run: () => flakyThenOk(),
 })) {
   void chunk;
 }
 assert.equal(attempts, 2);
-assert.equal(resetCalls, 0, "root agent must not wipe UI on transient retry");
+assert.equal(rootChannel.resetCalls, 1, "the root gets the same attempt-scoped reset as a subagent");
+assert.equal(rootChannel.getMessages().length, 2, "and keeps its history too");
 assert.equal(recoveryRetryCalls, 1, "root still clears error status via onRecoveryRetry");
 
 // --- abort during retry backoff returns promptly and does not retry ---
@@ -411,6 +456,7 @@ const abortManaged = {
   setError() {},
   setRetry() {},
   emitEvent() {},
+  getUI: () => undefined,
   statusController: { onRecoveryRetry() {} },
 };
 

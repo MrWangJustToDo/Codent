@@ -334,25 +334,25 @@ export class AgentUIChannel {
   }
 
   /**
-   * Soft-reset UI before a restart-style stream recovery (transient / capability).
+   * Reset the ATTEMPT-scoped UI state before a restart-style stream retry.
    *
-   * Keeps the first user prompt, drops assistant/tool rows, and rolls the task
-   * phase out of `summary`. Unlike {@link failRun}, does **not** end the active
-   * summary hub subscription — {@link consumeRun} still owns that lifecycle.
+   * Never the message history. The history is not a preview: `compaction.onConfig` re-projects the
+   * wire from this channel on every attempt, so dropping rows here did not clear "stale work" — it
+   * deleted the model's context and forced the retry to redo it. That is exactly what happened to
+   * subagents (this method was called for them and nobody else): a task that had completed five
+   * tool calls before a network drop came back as a fresh exploration, while a root agent, which
+   * never had this reset, resumed from the same five results.
    *
-   * Call this when `runStreamWithRecovery` retries a subagent stream so the task
-   * panel does not keep stale tools / summary text while the model restarts.
+   * What IS attempt-scoped, and therefore reset here:
+   * - the summary text streamed into the task / compact banner — the retry re-streams it from the
+   *   start, so keeping the old text would splice two attempts into one line;
+   * - the phase unlock that gates that text;
+   * - the in-flight assistant message id.
+   *
+   * Unlike {@link failRun}, the active summary hub subscription is **not** ended — {@link consumeRun}
+   * still owns that lifecycle.
    */
-  resetForStreamRetry(): void {
-    // Keep ALL leading user messages — subagent channels may hold leading
-    // synthetic <ctx kind=...> user messages around the real task prompt, so
-    // keeping only the first user message could drop the prompt itself.
-    const kept: TanStackUIMessage[] = [];
-    for (const message of this.getMessages()) {
-      if (message.role !== "user") break;
-      kept.push(message);
-    }
-    this.setMessages(kept);
+  resetRetryUiState(): void {
     this.currentTurnMessageId = undefined;
 
     if (this.summaryHub && this.parentTaskToolCallId && !this.compactId) {

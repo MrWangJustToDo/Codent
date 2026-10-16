@@ -623,9 +623,9 @@ runStreamWithRecovery catches RUN_ERROR / thrown error
   → reactive path: handleReactiveCompact (max 1 retry by default; skipped for subagents)
   → transient path: 429 / rate-limit / 502–504 / network — same messages + exponential backoff
     (honors Retry-After when present; works for main agent and subagents)
-  → before restart-style retry (not max-tokens continue): subagents call
-    `AgentUIChannel.resetForStreamRetry()` (keep user prompt, clear tools/summary phase)
-    + `statusController.onRecoveryRetry()` so the task panel does not linger on `error`
+  → before restart-style retry (not max-tokens continue): `resetRetryUiState()` on the channel —
+    attempt-scoped only (summary banner + phase unlock), NEVER the message history, which is the
+    wire this retry re-projects from — plus `statusController.onRecoveryRetry()` for both profiles
   → beginCompaction("reactive")  // emits compaction:reactive-start only (not auto-start)
   → reactiveCompact: summarize + keep tail messages
   → applyReactiveCompactionResult → append SUMMARY on channel

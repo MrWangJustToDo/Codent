@@ -367,8 +367,14 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
 }
 
 /**
- * Before a full stream restart: soft-reset subagent UI + clear error status, and throw away
+ * Before a full stream restart: clear the attempt-scoped UI state + error status, and throw away
  * any pre-forked `task` runs the dead attempt started.
+ *
+ * The UI reset is display-only ({@link AgentUIChannel.resetRetryUiState} — the retry re-streams the
+ * summary banner). It deliberately does NOT touch the message history, for either profile: that
+ * history IS the wire (see `getModelVisibleMessages` / the compaction middleware), so discarding it
+ * would delete the very progress the retry exists to resume. The root never discarded it; making
+ * the subagent discard it is what turned a network blip into a full re-exploration.
  *
  * The discard belongs HERE rather than on `RUN_STARTED` (where it used to be): that event fires
  * once per model *iteration*, so it aborted a pre-fork the tool phase was about to join on
@@ -378,9 +384,9 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
  * Wire `messages` stay as set by the recovery strategy (may be capability-stripped).
  */
 function prepareRestartStyleRetry(options: RecoveryOptions): void {
-  if (options.managed.parentId && options.managed.getUI()) {
-    options.managed.getUI()!.resetForStreamRetry();
-  }
+  // Optional-chained like the `log` / `setRetry` / `statusController` reads below: this helper is
+  // driven by hosts whose only guarantee is that a run reached the recovery loop.
+  options.managed.getUI?.()?.resetRetryUiState();
   // Report the orphans the same way the run boundaries do — this is the restart case, and it
   // is the one that makes an eager run look abandoned. `run-start` names it: the attempt is
   // being replaced by a fresh stream whose tool calls carry new ids.
