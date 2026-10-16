@@ -189,6 +189,8 @@ const AGENT_NAME = "codent";
 
 /** Create the ACP agent app (handlers registered; call `connect(stream)` to serve). */
 export function createAcpAgent(options: AcpAgentOptions): AgentApp {
+  // `CODENT_ACP_TRACE=1` narrates every outgoing `session/update` on stderr (see `emit`).
+  const TRACE_UPDATES = process.env.CODENT_ACP_TRACE === "1";
   const app = createAgentApp({ name: AGENT_NAME });
   const rootPath = options.rootPath ?? process.cwd();
   const version = options.version ?? "0.0.1";
@@ -207,6 +209,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   const emit = (acpId: string, update: SessionUpdate): void => {
+    if (TRACE_UPDATES) {
+      // One line per outgoing update, with the id the client keys on and (for text) a snippet: a client
+      // that renders something the agent did not send — a doubled prompt, a repeated turn — is settled
+      // by reading what WAS sent, instead of guessing at which side duplicated it.
+      const key = update as { messageId?: string; toolCallId?: string; content?: { text?: string } };
+      const text = typeof key.content?.text === "string" ? ` ${JSON.stringify(key.content.text.slice(0, 40))}` : "";
+      process.stderr.write(`[codent-acp] → ${update.sessionUpdate} ${key.messageId ?? key.toolCallId ?? ""}${text}\n`);
+    }
     try {
       void client()
         .notify(methods.client.session.update, { sessionId: acpId, update })
