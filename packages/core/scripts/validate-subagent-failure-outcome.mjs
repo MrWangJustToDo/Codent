@@ -96,8 +96,20 @@ const catchBody = SRC.slice(catchStart, catchEnd);
 assert.ok(catchBody.includes("failed = true"), "the non-abort branch marks the run failed");
 assert.ok(!/\bthrow err\b/.test(catchBody), "the catch must not rethrow: that is what skipped the shared finalization");
 assert.ok(catchBody.includes("channel?.getMessages()"), "and reads the work the attempt produced");
+assert.ok(
+  !catchBody.includes("channel.failRun("),
+  "the panel cleanup waits for the abort/failure precedence, so a cancel that surfaced as an error cannot leave a failure line"
+);
 
 // Terminal honesty, in both reports of it: a failed run is not a completed one.
+assert.ok(
+  /if \(aborted\) \{\s*failed = false;/.test(SRC),
+  "an abort outranks a captured fault — status, notice and payload tell one story"
+);
+assert.ok(
+  /if \(failed\) \{\s*try \{\s*channel\.failRun\(/.test(SRC),
+  "failRun is applied after that precedence, and only for a failure"
+);
 assert.ok(
   SRC.includes('aborted || failed ? "subagent:error" : "subagent:completed"'),
   "a failed run emits subagent:error, not subagent:completed"

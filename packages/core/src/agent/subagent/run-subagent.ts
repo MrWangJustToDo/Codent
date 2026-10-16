@@ -239,15 +239,9 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       // branch used to leave `previewMessages` empty while wiping the panel).
       previewMessages = channel?.getMessages() ?? previewMessages;
       output = extractAssistantText(previewMessages)?.trim() || "(no summary)";
-      if (failed) {
-        try {
-          // Display only: trim the PANEL to the prompt + a failure line. The evidence above is
-          // already read, so this cannot lose it from the result.
-          channel.failRun(errorMessage);
-        } catch {
-          // ignore cleanup errors while the run finalizes as an error
-        }
-      }
+      // NOTE: no `failRun` here — the panel cleanup waits until the abort/failure precedence below
+      // is settled, so a cancel that surfaced as an error cannot leave a failure line in the panel
+      // it is about to replace.
     }
 
     // Esc → managed.abort() sets status during consume; stream often completes without throw.
@@ -255,6 +249,26 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       aborted ||
       subagentManaged.getStatus() === "aborted" ||
       Boolean(subagentManaged.run.currentAbortController?.signal.aborted);
+
+    // An abort OUTRANKS a captured fault, and both can be true at once: an Esc that lands as the
+    // provider errors puts a non-abort error in the catch while the signal is already aborted. A
+    // stream cancelled by the operator is a STOP, not a fault, so clear the pair here — status,
+    // summary notice and event payload then all tell the same story (without this, the payload
+    // claimed a fault while the status said `aborted`).
+    if (aborted) {
+      failed = false;
+      errorMessage = undefined;
+    }
+
+    // Display-only cleanup, AFTER the precedence is settled: trim the PANEL to the prompt + a
+    // failure line. The evidence was read in the catch, so this cannot lose it from the result.
+    if (failed) {
+      try {
+        channel.failRun(errorMessage);
+      } catch {
+        // ignore cleanup errors while the run finalizes as an error
+      }
+    }
 
     // Why it stopped, read from the abort reason. TWO signals can carry it and both must be
     // consulted: the caller's `abortSignal` (the pre-fork route ties the child to the parent
