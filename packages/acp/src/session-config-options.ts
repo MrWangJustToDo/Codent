@@ -22,6 +22,7 @@
  * session's switch change another's connection.
  */
 
+import { RequestError } from "@agentclientprotocol/sdk";
 import { resolveModelInfoFromModelsDev } from "@codent/core";
 
 import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
@@ -198,7 +199,7 @@ export function isModeId(value: string): value is AgentMode {
  * entry would wipe the model entry out of the client's cache).
  */
 export async function applyMode(target: ConfigOptionTarget, mode: AgentMode): Promise<AgentSessionSnapshot> {
-  if (!isModeId(mode)) throw new Error(`Unknown mode: ${mode}`);
+  if (!isModeId(mode)) throw RequestError.invalidParams(undefined, `Unknown mode: ${mode}`);
   await target.session.dispatch({ type: "mode.set", mode });
   // Re-read rather than echo: the dispatch may be a no-op (already in that mode) or clamp to
   // something else, and the advertised option must describe what the session ACTUALLY is.
@@ -221,14 +222,16 @@ export async function applyModel(
   value: string,
   catalog: AcpModelCatalogEntry[] | undefined
 ): Promise<ModelSwitchOutcome> {
-  if (!catalog?.length) throw new Error("No models are configured (no `.agents/config/models.json`)");
+  if (!catalog?.length)
+    throw RequestError.invalidParams(undefined, "No models are configured (no `.agents/config/models.json`)");
 
   const decoded = decodeModelChoice(value);
   const entry = decoded ? catalog.find((candidate) => candidate.index === decoded.entryIndex) : undefined;
   const model = decoded?.model ?? value;
-  if (decoded && !entry) throw new Error(`Unknown model entry: ${decoded.entryIndex}`);
-  if (!decoded && model !== target.session.getSnapshot().model) throw new Error(`Unknown model: ${value}`);
-  if (entry && !entry.models.includes(model)) throw new Error(`Unknown model: ${model}`);
+  if (decoded && !entry) throw RequestError.invalidParams(undefined, `Unknown model entry: ${decoded.entryIndex}`);
+  if (!decoded && model !== target.session.getSnapshot().model)
+    throw RequestError.invalidParams(undefined, `Unknown model: ${value}`);
+  if (entry && !entry.models.includes(model)) throw RequestError.invalidParams(undefined, `Unknown model: ${model}`);
 
   // Metadata is best-effort and must NOT be able to fail the switch: `resolveModelInfoFromModelsDev`
   // THROWS when models.dev is unreachable with no cache ("No cached data available"), and a model

@@ -9,7 +9,13 @@
  * `elicitation/create` round-trips.
  */
 
-import { agent as createAgentApp, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import {
+  agent as createAgentApp,
+  methods,
+  ndJsonStream,
+  PROTOCOL_VERSION,
+  RequestError,
+} from "@agentclientprotocol/sdk";
 import { isActiveStatus } from "@codent/core";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
@@ -187,7 +193,8 @@ export interface AcpSessionRuntime {
 
 const AGENT_NAME = "codent";
 
-/** Create the ACP agent app (handlers registered; call `connect(stream)` to serve). */
+/** Create the ACP agent app (handlers registered; call `connect(stream)` to serve).
+ *  At the line ceiling — extract a subject rather than adding prose here. */
 export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // `CODENT_ACP_TRACE=1` narrates every outgoing `session/update` on stderr (see `emit`).
   const TRACE_UPDATES = process.env.CODENT_ACP_TRACE === "1";
@@ -210,9 +217,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   const emit = (acpId: string, update: SessionUpdate): void => {
     if (TRACE_UPDATES) {
-      // One line per outgoing update, with the id the client keys on and (for text) a snippet: a client
-      // that renders something the agent did not send — a doubled prompt, a repeated turn — is settled
-      // by reading what WAS sent, instead of guessing at which side duplicated it.
+      // One line per outgoing update (id + text snippet): "the client shows something we did not send"
+      // is settled by reading what WAS sent.
       const key = update as { messageId?: string; toolCallId?: string; content?: { text?: string } };
       const text = typeof key.content?.text === "string" ? ` ${JSON.stringify(key.content.text.slice(0, 40))}` : "";
       process.stderr.write(`[codent-acp] → ${update.sessionUpdate} ${key.messageId ?? key.toolCallId ?? ""}${text}\n`);
@@ -560,7 +566,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // so a bare `store.delete` returning false must not be reported as "not found".
     const removed = await deleteSession.call(options.host, sessionId);
     if (!removed && !live) {
-      throw new Error(`Unknown session: ${sessionId}`);
+      throw RequestError.invalidParams(undefined, `Unknown session: ${sessionId}`);
     }
     return {};
   });
@@ -568,7 +574,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   app.onRequest(methods.agent.session.fork, async (ctx) => {
     const sourceId = ctx.params.sessionId;
     const bridge = bridges.get(sourceId);
-    if (!bridge) throw new Error(`Unknown session: ${sourceId}`);
+    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${sourceId}`);
 
     // Same refusal as every other request type (defined once above) — a fork is exactly as
     // unable to widen the workspace root as a fresh session is.
@@ -582,14 +588,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       );
     }
 
-    // MCP servers are fixed when the agent is created, and this path REUSES the source's live
-    // agent — there is no `Host.create` on the fork path — so a fork genuinely cannot swap them.
-    // Rejecting loudly beats ignoring the parameter.
-    //
-    // This is the fork-only rule: `session/load` and `session/resume` DO obey `mcpServers`,
-    // because each of those builds a fresh agent through `Host.create`.
+    // Fork-only rule: this path REUSES the source's live agent (no `Host.create`), so it cannot swap
+    // MCP servers — `load`/`resume` do obey them, because each builds a fresh agent.
     if (ctx.params.mcpServers?.length) {
-      throw new Error(
+      throw RequestError.invalidParams(
+        undefined,
         "session/fork does not accept mcpServers: MCP servers are fixed when a session is created " +
           "and forking does not change them"
       );
@@ -688,7 +691,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // Reject, like every other handler that must CHANGE something: reporting success for a session
     // we never touched is a lie the client cannot detect. (`close` is allowed to tolerate absence —
     // there the desired state is already true, so "ok" is honest. Here it is not.)
-    if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
+    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
     const before = advertised(bridge);
     await applyMode(toTarget(bridge), ctx.params.modeId as AgentMode);
     advertise(bridge, before);
@@ -700,7 +703,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // found" (-32601) the moment anyone touches it.
   app.onRequest(methods.agent.session.setConfigOption, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
-    if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
+    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
 
     // Look the id up in the SET WE ADVERTISE rather than comparing against a literal: adding an
     // option later must not leave this check behind (a hardcoded id would reject the new one).
@@ -709,7 +712,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       options.modelCatalog,
       bridge.selectedModelEntryIndex
     ).find((entry) => entry.id === ctx.params.configId);
-    if (!option) throw new Error(`Unknown configuration option: ${ctx.params.configId}`);
+    if (!option) throw RequestError.invalidParams(undefined, `Unknown configuration option: ${ctx.params.configId}`);
 
     // Dispatch on the option's CATEGORY, not on the configId. Reading the id would hardcode the set
     // again, and assuming "the only option is mode" (as this did while mode was the only one) sends
@@ -731,7 +734,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       default:
         // No third option is advertised, so an unhandled category is a real gap. Swallow it and the
         // client's selector silently stops meaning anything.
-        throw new Error(`Configuration option "${option.id}" has no write path (category: ${option.category})`);
+        throw RequestError.invalidRequest(
+          undefined,
+          `Configuration option "${option.id}" has no write path (category: ${option.category})`
+        );
     }
     advertise(bridge, before);
 
@@ -747,7 +753,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
-    if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
+    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
     const run = bridge.chain.then(() => runPrompt(bridge, ctx.params));
     bridge.chain = run.catch(() => undefined);
     return run;
@@ -785,11 +791,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
     try {
       await bridge.session.dispatch({ type: "send", content: mapping.content });
-      // A turn can SUSPEND — an approval or an `ask_user` — and the pump RETURNS there: the client
-      // answers, `respondToToolApproval` starts a new pump, and the SAME turn keeps streaming.
-      // Resolving the prompt at that point told the client the turn was over while its continuation
-      // still arrived — messages updating under a "not running" status. Wait for the TURN instead:
-      // the status leaves the active set only when the turn really ends, since a wait is still active.
+      // A suspended turn (approval / ask_user) returns the pump while the SAME turn keeps streaming:
+      // resolving here told the client the turn was over. Wait for the TURN. */
       await waitForTurnEnd(bridge);
     } catch (error) {
       if (bridge.cancelled) return { stopReason: "cancelled" };
@@ -798,16 +801,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     return { stopReason: stopReasonFor(bridge) };
   };
 
-  /**
-   * Resolve once the session is no longer ACTIVE — the turn is over, not merely suspended — or once
-   * this session was cancelled.
-   *
-   * The event is the mechanism and a short interval is the safety net. A status change that never
-   * reaches us would otherwise hang the prompt for good, and a hung prompt BLOCKS the client's next
-   * submission (`bridge.chain` serializes prompts): that is exactly "after an abort, typing does
-   * nothing". A cancel also ends the wait by definition — the client asked for it — so `cancelled`
-   * counts as over, whether or not the status has landed yet.
-   */
+  /** Resolve when the turn is over (not merely suspended), or when this session was cancelled.
+   *  A hang here blocks the client's next submission (`bridge.chain` serializes prompts). */
   const waitForTurnEnd = (bridge: { session: AgentSession; cancelled: boolean }): Promise<void> =>
     new Promise((resolve) => {
       const isOver = (): boolean => bridge.cancelled || !isActiveStatus(bridge.session.getSnapshot().status);
