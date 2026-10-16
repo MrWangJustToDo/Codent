@@ -756,6 +756,7 @@ function makeApprovalSession(id) {
         // approval answer resumes it — that is why the pump returns, and why the prompt must not resolve
         // here (resolving told the client the turn was over while its continuation still streamed).
         snap = baseSnapshot(id, { status: "waiting", messages: approvalMessages });
+        emit({ channel: "messages", payload: approvalMessages, ts: Date.now() });
         emit({
           channel: "interaction",
           payload: { approvals: [{ approvalId: "ap1", toolName: "run_command", toolCallId: "tc1" }], askUser: [] },
@@ -763,7 +764,10 @@ function makeApprovalSession(id) {
         emit({ channel: "state", payload: snap });
       }
       if (command.type === "respondApproval") {
+        approvalMessages[0].parts[0].state = "complete";
+        approvalMessages[0].parts[0].output = { success: true, stdout: "ok" };
         snap = baseSnapshot(id, { status: "completed", messages: approvalMessages });
+        emit({ channel: "messages", payload: approvalMessages, ts: Date.now() });
         emit({ channel: "state", payload: snap });
       }
       return { ok: true };
@@ -771,17 +775,17 @@ function makeApprovalSession(id) {
   };
 }
 
+const catalogUpdatesForApproval = [];
 let permissionParams = null;
-const approvalClient = createClient({ name: "approval-client" }).onRequest(
-  methods.client.session.requestPermission,
-  async (ctx) => {
+const approvalClient = createClient({ name: "approval-client" })
+  .onNotification(methods.client.session.update, (ctx) => catalogUpdatesForApproval.push(ctx.params.update))
+  .onRequest(methods.client.session.requestPermission, async (ctx) => {
     permissionParams = ctx.params;
     // Answer LATE: the suspension window has to be observable, or "the prompt stayed pending" cannot
     // be told apart from "the approval round-trip was simply fast" (the flake this check exists for).
     await new Promise((r) => setTimeout(r, 80));
     return { outcome: { outcome: "selected", optionId: "allow-once" } };
-  }
-);
+  });
 const approvalApp = createAcpAgent({
   host: {
     async create() {
@@ -834,6 +838,13 @@ await approvalClient.connectWith(approvalApp, async (cx) => {
   check(
     "…with the kind/status a client renders it by",
     asked?.kind === "execute" && asked?.status === "pending" && asked?.toolCallId === "tc1"
+  );
+  const completed = catalogUpdatesForApproval.find(
+    (u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === "tc1"
+  );
+  check(
+    "a tool_call_update carries the title again (a client may replace its row)",
+    typeof completed?.title === "string" && completed.title.includes(APPROVED_COMMAND)
   );
 });
 

@@ -18,7 +18,7 @@
 import { isContextUIMessage, parseToolInput } from "@codent/core";
 
 import { textBlock } from "./content.js";
-import { toolCallInfo, toolDiffFor, toolResultText, toolStatusFor } from "./tools.js";
+import { toolCallInfo, toolDiffFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
 import type {
   AcpCommands,
@@ -291,6 +291,10 @@ export class AcpProjector {
         this.options.emit({
           sessionUpdate: "tool_call_update",
           toolCallId: id,
+          // The label travels again on every update: a client that replaces its row from the update
+          // would otherwise show a blank one (see `toolTitleOf`).
+          title: toolTitleOf(state.name, state.input),
+          kind: toolKindFor(state.name),
           status: next,
           ...(content ? { content } : {}),
           // `rawOutput` only when there is no content to show: sending both rendered the same result
@@ -337,9 +341,13 @@ export class AcpProjector {
       state.streamBuffer = "";
     }
     const text = toolResultText(part.content) || (part.error ?? "");
+    const resultState = this.tools.get(part.toolCallId);
     this.options.emit({
       sessionUpdate: "tool_call_update",
       toolCallId: part.toolCallId,
+      ...(resultState
+        ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
+        : {}),
       status,
       ...(text ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] } : {}),
       ...(part.content !== undefined ? { rawOutput: part.content } : {}),
@@ -375,6 +383,8 @@ export class AcpProjector {
     this.options.emit({
       sessionUpdate: "tool_call_update",
       toolCallId: chunk.toolCallId,
+      title: toolTitleOf(state.name, state.input),
+      kind: toolKindFor(state.name),
       status: state.status === "pending" ? "in_progress" : state.status,
       content: [{ type: "content", content: textBlock(state.streamBuffer) }],
     });

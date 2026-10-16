@@ -149,6 +149,18 @@ function shellCommandOf(name: string, input: unknown): string | undefined {
 }
 
 /**
+ * The row's label: core's input formatter, else the verb+path form.
+ *
+ * ONE definition — {@link toolCallInfo} uses it for the first sight of a call, and every
+ * `tool_call_update` carries it again: an update that only reports a status leaves a row blank in a
+ * client that replaces its row from the update instead of merging fields (reported as "after
+ * approving, the tool has no title").
+ */
+export function toolTitleOf(name: string, input: unknown): string {
+  return formatToolInput(input, name, { compact: true }) || toolTitleFor(name, input);
+}
+
+/**
  * The client-facing description of one tool call: title, kind, locations, and the input/content that
  * make it answerable.
  *
@@ -186,7 +198,7 @@ export function toolCallInfo(
         ? [{ type: "content", content: textBlock(displayText) }]
         : undefined;
   return {
-    title: formatToolInput(input, name, { compact: true }) || toolTitleFor(name, input),
+    title: toolTitleOf(name, input),
     kind: toolKindFor(name),
     locations: toolLocationsFor(input, rootPath),
     ...(input !== undefined ? { rawInput: input } : {}),
