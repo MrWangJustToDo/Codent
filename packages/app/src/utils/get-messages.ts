@@ -1,3 +1,5 @@
+import { isContextUIMessage } from "@codent/core";
+
 import {
   computeMessageRenderSignature,
   dedupeToolCallsInMessages,
@@ -36,20 +38,6 @@ export type GetMessagesOptions = {
 /** Default cache namespace for callers that only need one slot. */
 const DEFAULT_NAMESPACE = "transcript";
 
-/**
- * Synthetic per-turn context rows (`<ctx kind=…>`) are persisted for the model but hidden
- * in the transcript. They must be excluded both from rendering and from window-boundary
- * selection: treating one as a turn boundary would leave the real user message outside
- * the window (see {@link resolveWindowStart}).
- */
-export const isSyntheticContextMessage = (message: UIMessage): boolean => {
-  if (message.role !== "user") return false;
-  if (message.parts.length !== 1) return false;
-  const part = message.parts[0];
-  if (part.type !== "text") return false;
-  return (part.content ?? "").trimStart().startsWith("<ctx kind=");
-};
-
 const filterValidMessage = (message: UIMessage) => {
   if (message.role === "assistant") {
     const onlyPart = message.parts.length === 1 ? message.parts[0] : null;
@@ -60,8 +48,8 @@ const filterValidMessage = (message: UIMessage) => {
     if (message.parts.length === 1 && message.parts[0].type === "text") {
       const content = message.parts[0].content?.trim() ?? "";
       if (content.length === 0) return false;
-      // Synthetic context messages (<ctx kind=...>) are persisted for the model but hidden in the transcript.
-      if (message.role === "user" && content.startsWith("<ctx kind=")) return false;
+      // Synthetic context rows are persisted for the model but hidden from the transcript.
+      if (isContextUIMessage(message)) return false;
     }
   }
   return true;
@@ -121,7 +109,7 @@ function resolveWindowStart(messages: UIMessage[], windowSize: number): number {
   let remaining = windowSize;
   let boundary = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (isSyntheticContextMessage(messages[i])) continue;
+    if (isContextUIMessage(messages[i])) continue;
     if (--remaining === 0) {
       boundary = i;
       break;
@@ -130,7 +118,7 @@ function resolveWindowStart(messages: UIMessage[], windowSize: number): number {
   if (boundary < 0) return 0;
 
   for (let i = boundary; i >= 0; i--) {
-    if (messages[i]?.role === "user" && !isSyntheticContextMessage(messages[i])) return i;
+    if (messages[i]?.role === "user" && !isContextUIMessage(messages[i])) return i;
   }
   return 0;
 }
@@ -166,7 +154,7 @@ export const getMessages = (messages: UIMessage[], options: GetMessagesOptions =
   const normalizedMessages = normalizeToolPartsInMessages(windowedMessages);
   // Temporary display-only safety net for old sessions with cloned toolCallIds.
   const dedupedMessages = dedupeToolCallsInMessages(normalizedMessages);
-  const withoutTurnContext = dedupedMessages.filter((message) => !isSyntheticContextMessage(message));
+  const withoutTurnContext = dedupedMessages.filter((message) => !isContextUIMessage(message));
   // Windowing already ran above; these are the surviving messages.
   const lastMessage = withoutTurnContext.length > 0 ? withoutTurnContext[withoutTurnContext.length - 1] : null;
   // Messages that entered the static derivation and produced no rendered row survive as

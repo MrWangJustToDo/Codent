@@ -137,6 +137,14 @@ export {
   type LocalAgentSessionHostManager,
   type LocalAgentSessionManager,
 } from "./agent-session";
+
+/**
+ * `isContextUIMessage` answers "is this row a synthetic `<ctx kind=…>` context block?" — persisted
+ * for the MODEL, never conversation, so any host that renders a transcript to a human must hide it.
+ * Exported as the ONE definition of that question (the app's transcript and ACP's `session/load`
+ * replay both need it, and neither should re-spell the shell).
+ */
+export { CONTEXT_OPEN_PREFIX, isContextUIMessage } from "./agent/turn-context";
 export { isUserVisibleTaskRow, type SubagentRowLike } from "./agent-session/subagent-row.js";
 export type { AgentL1State } from "./managers/managed-agent.js";
 export type { AgentRetryState, AgentRetryStrategy } from "./runtime-types/agent-retry.js";

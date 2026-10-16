@@ -610,6 +610,8 @@ function makeRestoredSession(id, diskId = id) {
   const listeners = new Set();
   const messages = [
     { id: "u1", role: "user", parts: [{ type: "text", content: "prior question" }] },
+    // Synthetic per-turn context is persisted for the MODEL, not the reader: a replay must hide it.
+    { id: "ctx-1", role: "user", parts: [{ type: "text", content: "<ctx kind=git_status>\nmain\n</ctx>" }] },
     { id: "a1", role: "assistant", parts: [{ type: "text", content: "prior answer" }] },
   ];
   const snap = baseSnapshot(id, { messages, activeSessionId: diskId });
@@ -663,6 +665,10 @@ await loadClient.connectWith(loadApp, async (cx) => {
   check(
     "session/load replays the agent turn exactly once (no double)",
     JSON.stringify(agentTexts) === JSON.stringify(["prior answer"])
+  );
+  check(
+    "session/load hides the injected <ctx> context from the replay",
+    !userTexts.some((text) => text.includes("<ctx kind=")) && userTexts.length === 1
   );
   check(
     "session/load tags every update with the disk id it was given",

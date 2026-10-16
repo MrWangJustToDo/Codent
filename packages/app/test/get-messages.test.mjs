@@ -11,6 +11,8 @@
  * first render forever, so the folded tool area never updated.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 
 import { computeMessageRenderSignature } from "../dist/index.mjs";
 import { countSourceMessages, getMessages } from "../dist/utils/get-messages.mjs";
@@ -151,5 +153,24 @@ assert.equal(
   distinctSources,
   "the counter must match the real distinct-source count for digit-tailed ids"
 );
+
+// ---------------------------------------------------------------------------
+// The synthetic-context predicate is CORE's, not a host copy.
+//
+// It answers "is this row a `<ctx kind=…>` context block?" — persisted for the model, hidden from
+// every reader. Core owns the shell (`CONTEXT_OPEN_PREFIX`, `isContextUIMessage`), and ACP's
+// `session/load` replay hides the same rows with it. A host that re-spells the marker drifts the
+// moment the shell changes, and the drift shows up as injected context in someone's transcript.
+
+{
+  const source = readFileSync(new URL("../src/utils/get-messages.ts", import.meta.url), "utf8");
+  assert.ok(source.includes("isContextUIMessage"), "the transcript asks core's predicate");
+  // What must not come back is a host-side COMPARISON against the shell (the old
+  // `content.startsWith("<ctx kind=")`); the same text in a comment is just prose.
+  assert.ok(
+    !/(startsWith|includes|indexOf)\(\s*["'`]<ctx kind=/.test(source),
+    "and does not compare against a re-spelled shell marker"
+  );
+}
 
 process.stdout.write("get-messages: ok\n");

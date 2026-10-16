@@ -15,6 +15,8 @@
  * `extension-ui` → notices, `interaction` → the caller's permission/elicitation hook.
  */
 
+import { isContextUIMessage } from "@codent/core";
+
 import { textBlock } from "./content.js";
 import { toolDiffFor, toolKindFor, toolLocationsFor, toolResultText, toolStatusFor, toolTitleFor } from "./tools.js";
 
@@ -101,6 +103,9 @@ export class AcpProjector {
    */
   replayFrom(snapshot: AgentSessionSnapshot): void {
     for (const message of snapshot.messages) {
+      // Synthetic `<ctx kind=…>` rows are persisted for the model, not for the reader: replaying one
+      // would show the injected context as if the user had typed it.
+      if (isContextUIMessage(message)) continue;
       if (message.role === "user") {
         const text = textOf(message);
         if (text) {

@@ -1,6 +1,8 @@
+import { isContextUIMessage } from "@codent/core";
+
 import { bumpAgentUsage } from "../hooks/use-agent-usage.js";
 import { useDynamic } from "../hooks/use-dynamic.js";
-import { getTextContent, isSyntheticContextMessage } from "../utils/get-messages.js";
+import { getTextContent } from "../utils/get-messages.js";
 import { getActiveSession } from "../utils/session-resolve.js";
 
 import { registerBuiltinCommand } from "./utils/registry.js";
@@ -22,7 +24,7 @@ registerBuiltinCommand("fork", {
     const snapshot = getActiveSession()?.getSnapshot();
     const messages = (snapshot?.messages ?? []) as UIMessage[];
     return messages
-      .filter((message) => message.role === "user" && !isSyntheticContextMessage(message))
+      .filter((message) => message.role === "user" && !isContextUIMessage(message))
       .map((message) => {
         const text = messageText(message).replace(/\s+/g, " ").slice(0, 80);
         return { label: text || "(empty message)", value: message.id };
