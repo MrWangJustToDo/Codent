@@ -799,27 +799,30 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   /**
-   * Resolve once the session is no longer ACTIVE — the turn is over, not merely suspended.
+   * Resolve once the session is no longer ACTIVE — the turn is over, not merely suspended — or once
+   * this session was cancelled.
    *
-   * Subscribes to the `state` channel rather than polling: a status change is the event, and the
-   * snapshot is read through `getSnapshot()` when it arrives. A client that neither answers nor
-   * cancels leaves the prompt pending, which is what the protocol expects of a turn awaiting input.
+   * The event is the mechanism and a short interval is the safety net. A status change that never
+   * reaches us would otherwise hang the prompt for good, and a hung prompt BLOCKS the client's next
+   * submission (`bridge.chain` serializes prompts): that is exactly "after an abort, typing does
+   * nothing". A cancel also ends the wait by definition — the client asked for it — so `cancelled`
+   * counts as over, whether or not the status has landed yet.
    */
-  const waitForTurnEnd = (bridge: SessionBridge): Promise<void> =>
+  const waitForTurnEnd = (bridge: { session: AgentSession; cancelled: boolean }): Promise<void> =>
     new Promise((resolve) => {
-      const isOver = (): boolean => !isActiveStatus(bridge.session.getSnapshot().status);
+      const isOver = (): boolean => bridge.cancelled || !isActiveStatus(bridge.session.getSnapshot().status);
       if (isOver()) {
         resolve();
         return;
       }
-      const unsubscribe = bridge.session.subscribe(
-        () => {
-          if (!isOver()) return;
-          unsubscribe();
-          resolve();
-        },
-        { channels: ["state"] }
-      );
+      const timer = setInterval(finish, 250);
+      const unsubscribe = bridge.session.subscribe(finish, { channels: ["state", "lifecycle"] });
+      function finish(): void {
+        if (!isOver()) return;
+        clearInterval(timer);
+        unsubscribe();
+        resolve();
+      }
     });
 
   return app;
