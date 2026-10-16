@@ -11,6 +11,7 @@
  */
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
+import { defaultPath } from "@codent/core";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -788,16 +789,22 @@ function fakeSession(id, diskId) {
   // resolves a model, and with a stubbed one it still performs a models.dev lookup — a network call
   // in a resolution test (0.8s cached / 4.9s uncached) and a dependency on the machine's own model
   // config, which is what made this section fail on a fresh checkout.
+  //
+  // Both assertions go through `defaultPath`, not through POSIX string conventions. `paths.ts` is
+  // POSIX-spelled on purpose (`pathe`), so on Windows its result is `D:/…`: absolute by both the
+  // product's predicate and the platform's, yet it does not start with `/`. `startsWith("/")` and a
+  // bare `=== process.cwd()` (which hands back `D:\\…`) are POSIX-only and were failing the Windows
+  // validator job; the helper's own predicate and its normalization are what the contract is.
   const relativeRoot = resolveRoot("relative/workspace");
   check(
     "a relative root is normalized to absolute",
-    relativeRoot.startsWith("/") && relativeRoot.endsWith("/relative/workspace"),
+    defaultPath.isAbsolute(relativeRoot) && relativeRoot.endsWith("/relative/workspace"),
     relativeRoot
   );
   check("an absolute root is not re-based", resolveRoot("/abs/ws") === "/abs/ws", resolveRoot("/abs/ws"));
   check(
     "an omitted root is the process cwd (the one place it is the right base)",
-    resolveRoot(undefined) === process.cwd(),
+    defaultPath.normalize(process.cwd()) === resolveRoot(undefined),
     resolveRoot(undefined)
   );
   check(
