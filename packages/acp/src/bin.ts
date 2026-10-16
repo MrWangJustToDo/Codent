@@ -9,7 +9,7 @@ import { parseModelStyle } from "@codent/core";
 import { runAcpAgentStdio } from "./agent.js";
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
 
-/** Minimal model-flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`, `--api-key/-k`). */
+/** Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`, `--api-key/-k`, `--remote-provider`). */
 function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
@@ -29,13 +29,15 @@ function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
     }
     return undefined;
   };
+  const remoteProvider = get("remote-provider") || process.env.REMOTE_PROVIDER;
   const model = get("model", "m");
-  if (!model) return undefined;
+  if (!model && !remoteProvider) return undefined;
   return {
-    model,
+    ...(model ? { model } : {}),
     style: parseModelStyle(get("style")),
     baseURL: get("base-url", "url", "u"),
     apiKey: get("api-key", "k"),
+    ...(remoteProvider ? { remoteProvider } : {}),
   };
 }
 

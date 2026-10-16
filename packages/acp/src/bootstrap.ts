@@ -20,6 +20,7 @@ import {
   buildDefaultSystemPrompt,
   CodentAgent,
   createDirectModelProvider,
+  createRemoteProvider,
   getModelProvider,
   loadModels,
   registerCoreEnv,
@@ -56,6 +57,10 @@ export interface AcpModelOverride {
   style?: ModelStyle;
   baseURL?: string;
   apiKey?: string;
+  /** Remote model provider URL (`--remote-provider` / REMOTE_PROVIDER). When
+   *  set, the provider server holds the LLM keys and supplies the model —
+   *  orthogonal to the local CoreEnv, so no explicit `model` is required. */
+  remoteProvider?: string;
 }
 
 export interface LocalAcpBootstrap {
@@ -114,7 +119,21 @@ export async function bootstrapLocalAcp(
   /** The entry that model came from — a model id shared by several entries stays resolvable. */
   let modelCatalogActiveIndex: number | undefined;
 
-  if (options.model?.model?.trim()) {
+  if (options.model?.remoteProvider) {
+    // Remote provider plane: the server holds the keys and supplies the model,
+    // so no explicit `--model` is needed. Mirrors the TUI's remote-provider
+    // branch in the release host — CoreEnv stays local, only the provider is
+    // remote. `createRemoteProvider` lives in core (global fetch only).
+    const remoteProvider = await createRemoteProvider(options.model.remoteProvider);
+    provider = remoteProvider;
+    registerModelProvider(provider);
+    const fromProvider = await resolveModelConfigFromProvider({}, provider);
+    model = fromProvider.connection.model;
+    style = fromProvider.connection.style;
+    baseURL = fromProvider.connection.baseURL;
+    apiKey = fromProvider.connection.apiKey;
+    modelInfo = fromProvider.modelInfo;
+  } else if (options.model?.model?.trim()) {
     // Explicit CLI override: the flags are authoritative and the on-disk models.json is
     // skipped — same isolation as the TUI's `--model` startup.
     const { connection } = await resolveModelConfig({

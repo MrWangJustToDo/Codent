@@ -13,6 +13,7 @@ import {
 } from "@codent/app";
 import {
   createDirectModelProvider,
+  createRemoteProvider,
   installAgentLogProcessGuards,
   loadModelsConfigFromFile,
   parseModelsConfig,
@@ -34,15 +35,18 @@ import { TerminalTitle } from "./terminal-title.js";
 import type { CoreEnv, ModelProvider } from "@codent/core";
 
 // ============================================================================
-// codent — local-only release host
+// codent — local-only release host (remote-provider plane)
 // ============================================================================
 //
-// Boot sequence (local only, no remote planes):
+// Boot sequence (local CoreEnv, local or remote provider):
 //   loadEnv → parseCliArgs → registerCoreEnv(createNodeEnv)
-//           → registerModelProvider(direct) → initConfig → render(App)
+//           → registerModelProvider(direct | remote) → initConfig → render(App)
 //
-// `@codent/app` / `core` / `node` are inlined by tsdown, so the published
-// package has no `@codent/*` runtime dependency and no remote client import.
+// The CoreEnv is always the local Node.js workspace. The model provider may be
+// direct (flags / `.env`) or remote (`--remote-provider` / REMOTE_PROVIDER), in
+// which case the provider server holds the LLM keys and the workspace stays on
+// the local filesystem. `@codent/app` / `core` / `node` are inlined by tsdown,
+// so the published package has no `@codent/*` runtime dependency.
 
 const argv = process.argv.slice(2);
 
@@ -63,12 +67,13 @@ installAgentLogProcessGuards();
 if (isAcpRequested(argv)) {
   const acpConfig = parseCliArgs(argv.slice(1));
   await runAcpCommand(
-    acpConfig.modelExplicit
+    acpConfig.modelExplicit || acpConfig.remoteProvider
       ? {
           model: acpConfig.model,
           style: acpConfig.style,
           baseURL: acpConfig.baseURL,
           apiKey: acpConfig.apiKey,
+          ...(acpConfig.remoteProvider ? { remoteProvider: acpConfig.remoteProvider } : {}),
         }
       : undefined,
     // `--client-env` opts into borrowing the client's fs/terminal per session.
@@ -92,24 +97,28 @@ const useOsSandbox = (process.env.SANDBOX_ENV || "local") !== "native";
 const coreEnv: CoreEnv = createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox });
 registerCoreEnv(coreEnv);
 
-// Provider plane — local LLM keys from flags / `.env`.
-const modelProvider: ModelProvider = createDirectModelProvider({
-  model: appConfig.model,
-  style: appConfig.style,
-  baseURL: appConfig.baseURL,
-  apiKey: appConfig.apiKey,
-});
+// Provider plane — local LLM keys from flags / `.env`, or remote keys held on
+// a `--remote-provider` server (orthogonal to the local CoreEnv).
+const modelProvider: ModelProvider = appConfig.remoteProvider
+  ? await createRemoteProvider(appConfig.remoteProvider)
+  : createDirectModelProvider({
+      model: appConfig.model,
+      style: appConfig.style,
+      baseURL: appConfig.baseURL,
+      apiKey: appConfig.apiKey,
+    });
 registerModelProvider(modelProvider);
 
 configureEnv({ allowNonBrowserUpdates: true });
 
-// First-run config detection: if no `.agents/config/models.json` exists and the
-// user didn't pass explicit model flags, enter the config editor before
-// initializing the session. The editor writes a config via the same file source
-// the unified pipeline reads, so startup continues through the exact same load
-// path as an existing config.
+// First-run config detection: if no `.agents/config/models.json` exists, the
+// user passed no explicit model flags, and there is no remote provider to
+// supply MODEL, enter the config editor before initializing the session. The
+// editor writes a config via the same file source the unified pipeline reads,
+// so startup continues through the exact same load path as an existing config.
 const helpRequested = isHelpRequested(process.argv.slice(2));
-const needsConfigEditor = !helpRequested && !appConfig.modelExplicit && !(await loadModelsConfigFromFile());
+const needsConfigEditor =
+  !helpRequested && !appConfig.remoteProvider && !appConfig.modelExplicit && !(await loadModelsConfigFromFile());
 
 if (!needsConfigEditor) {
   await initConfig(appConfig);

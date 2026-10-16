@@ -7,14 +7,16 @@ import type { AppConfig } from "@codent/app";
 import type { ModelStyle } from "@codent/core";
 
 // ============================================================================
-// Argument Parsing (local-only)
+// Argument Parsing (local-only, remote-provider plane)
 // ============================================================================
 //
-// `codent` is the local-only release host. The three remote planes the
-// development host (`@codent/cli`) carries — `--remote-env` (workspace),
-// `--remote-provider` (LLM keys) and `--remote-session` (whole agent loop) —
-// are intentionally absent here, so neither `REMOTE_ENV` / `REMOTE_PROVIDER` /
-// `REMOTE_SESSION` nor a conflicting flag pair is ever parsed.
+// `codent` is the local-only release host. It carries `--remote-provider`
+// (LLM keys on a remote server, orthogonal to the local CoreEnv) so the
+// provider server can hold the API keys while the workspace stays local.
+// The other two remote planes the development host (`@codent/cli`) has —
+// `--remote-env` (workspace) and `--remote-session` (whole agent loop) — are
+// intentionally absent here, so neither `REMOTE_ENV` / `REMOTE_SESSION` nor a
+// conflicting flag pair is ever parsed.
 
 /** Default max iterations for the CLI host agent loop. */
 export const CLI_DEFAULT_MAX_ITERATIONS = 50;
@@ -99,6 +101,10 @@ const getEnv = (key: string, fallback: string = ""): string => process.env[key] 
 // ============================================================================
 
 export interface ParsedCliConfig extends Partial<AppConfig> {
+  /** Remote model provider URL (`--remote-provider` / REMOTE_PROVIDER).
+   *  Orthogonal to CoreEnv — the provider server holds the LLM keys while the
+   *  workspace stays on the local filesystem. */
+  remoteProvider?: string;
   /** Whether any model-related flag was passed explicitly on the CLI
    *  (`--model` / `--style` / `--base-url` / `--api-key`), as opposed to
    *  only `.env` defaults. */
@@ -173,11 +179,18 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     "max-concurrent-tasks"
   );
 
+  // Remote provider plane (`--remote-provider` / REMOTE_PROVIDER): orthogonal to
+  // CoreEnv — the workspace stays local while the LLM keys live on the server.
+  const envRemoteProvider = getEnv("REMOTE_PROVIDER");
+  const remoteProviderFlag = getFlag(parsed, "remote-provider");
+  const remoteProvider = typeof remoteProviderFlag === "string" ? remoteProviderFlag : envRemoteProvider || undefined;
+
   return {
     model: connection.model,
     style: connection.style,
     baseURL: connection.baseURL,
     apiKey: connection.apiKey,
+    ...(remoteProvider ? { remoteProvider } : {}),
     systemPrompt: getFlagString(parsed, "", "system", "s"),
     initialPrompt: parsed.positional.join(" "),
     maxIterations: getFlagNumber(parsed, isNaN(envMaxIter) ? CLI_DEFAULT_MAX_ITERATIONS : envMaxIter, "max-iterations"),
