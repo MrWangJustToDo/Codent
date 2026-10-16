@@ -25,10 +25,6 @@ const DENY = [
   "ExtensionLoader",
   "getDefaultExtensionDirs",
   "DEFAULT_EXTENSION_DIR",
-  "formatCompactionSummaryContent",
-  "extractCompactionSummaryBody",
-  "CONVERSATION_SUMMARY_START",
-  "CONVERSATION_SUMMARY_END",
 ];
 
 const mod = await import(pathToFileURL(indexPath).href);
@@ -39,6 +35,15 @@ assert.equal(leaked.length, 0, `Forbidden public exports found: ${leaked.join(",
 // Presentation is now descriptor-based: `getToUI` was removed with the
 // `toUI`/`display` extension fields (unify-tool-presentation-in-core, "no aliases
 // kept"). Assert the replacements are published instead of the deleted lookup.
+//
+// The compaction-summary markers and predicates are here for the opposite reason to `DENY`: they
+// LOOK internal (they name the `[CONVERSATION SUMMARY]` wire format), but they are pure
+// constants/functions and they answer one question — "is this row a compaction summary?" — that
+// the app's transcript, ACP's `session/load` replay and the compaction chain all must agree on.
+// The two alternatives are both worse: a per-host copy is the drift this replaced (`@codent/app`
+// kept a full copy under a "must stay in sync" comment), and every host importing them by deep
+// path is banned by `@codent/app`'s `validate:core-imports`. So they belong on the public entry,
+// exactly like `isContextUIMessage` above them.
 for (const name of [
   "agentManager",
   "createLocalAgentSessionHost",
@@ -53,6 +58,10 @@ for (const name of [
   "computeToolDisplay",
   "previewEdit",
   "generateId",
+  "CONVERSATION_SUMMARY_START",
+  "CONVERSATION_SUMMARY_END",
+  "extractCompactionSummaryBody",
+  "formatCompactionSummaryContent",
 ]) {
   assert.ok(name in mod, `Expected public export missing: ${name}`);
 }

@@ -12,6 +12,7 @@
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { createAcpAgent, createAcpClientEnv, isLocalOnlyPath, resolveRoot, toWirePath } from "../dist/index.mjs";
@@ -712,8 +713,12 @@ function fakeSession(id, diskId) {
   // --- no process.cwd() fallback ------------------------------------------------------------
   // `pathe.resolve("", t)` silently resolves against the process's cwd. An empty root means "no base
   // to resolve against", and the honest answer is the path unchanged.
+  //
+  // The directory to chdir INTO must exist: a hardcoded `/tmp` is POSIX-only, and the CI matrix runs
+  // this on Windows, where the chdir failed with ENOENT before reaching the assertion. `os.tmpdir()`
+  // is the portable answer, and it is what the other validators already use.
   const previousCwd = process.cwd();
-  process.chdir("/tmp");
+  process.chdir(os.tmpdir());
   try {
     check(
       "an empty rootPath returns the path unchanged (no process.cwd() fallback)",
