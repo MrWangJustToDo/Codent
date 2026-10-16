@@ -1,0 +1,108 @@
+/**
+ * Validates that a LIVE turn carries its boundary: the user message is reported, once.
+ *
+ * The live path used to report assistant text only, so two consecutive replies arrived with nothing
+ * between them — a client can only render that as one run of text — and injected `<ctx>` rows rode
+ * along. Split out of `validate-acp.mjs`: a different subject from its permission/session suites,
+ * and that file is at the line ceiling.
+ *
+ * Run: node scripts/validate-acp-live-turns.mjs
+ */
+
+import { client as createClient, methods } from "@agentclientprotocol/sdk";
+
+import { createAcpAgent } from "../dist/index.mjs";
+
+import { createChecker, finish } from "./acp-report.mjs";
+import { baseSnapshot } from "./session-fixture.mjs";
+
+const checker = createChecker();
+const check = checker.check;
+
+// ===========================================================================
+// G2. A LIVE turn carries its boundary: the user message is reported, once
+// ===========================================================================
+
+// The live path used to report assistant text only. Two consecutive replies therefore arrived with
+// nothing between them — a client can only render that as one run of text — and a `session/load`
+// afterwards added a second copy of the whole conversation. The turn's user message is now part of
+// the stream (as it always was in the replay), reported once, with injected context skipped.
+
+let pushLiveMessages = null;
+const liveTurnUpdates = [];
+const liveTurnClient = createClient({ name: "live-turn-client" }).onNotification(methods.client.session.update, (ctx) =>
+  liveTurnUpdates.push(ctx.params)
+);
+const liveTurnSession = (() => {
+  const listeners = new Set();
+  let messages = [];
+  return {
+    id: "agent_live",
+    getSnapshot: () => baseSnapshot("agent_live", { messages }),
+    getSummaryStreamSnapshot: () => null,
+    subscribe: (handler) => {
+      listeners.add(handler);
+      return () => listeners.delete(handler);
+    },
+    dispatch: async (command) => {
+      if (command.type === "send") {
+        messages = [
+          { id: "u-live", role: "user", parts: [{ type: "text", content: "what changed?" }] },
+          // Injected context: persisted for the model, never shown to a reader.
+          { id: "ctx-live", role: "user", parts: [{ type: "text", content: "<ctx kind=mode>\nnormal\n</ctx>" }] },
+          { id: "a-live", role: "assistant", parts: [{ type: "text", content: "the diff" }] },
+        ];
+        pushLiveMessages = () => {
+          for (const listener of listeners) listener({ channel: "messages", payload: messages, ts: Date.now() });
+        };
+        pushLiveMessages();
+      }
+      return { ok: true };
+    },
+  };
+})();
+const liveTurnApp = createAcpAgent({
+  host: {
+    async create() {
+      return { session: liveTurnSession };
+    },
+    connect: () => null,
+    list: () => [],
+    async destroy() {},
+  },
+  defaults: { model: "fake-model" },
+  rootPath: "/ws",
+});
+
+await liveTurnClient.connectWith(liveTurnApp, async (cx) => {
+  await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+  const started = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+  liveTurnUpdates.length = 0;
+  await cx.request(methods.agent.session.prompt, {
+    sessionId: started.sessionId,
+    prompt: [{ type: "text", text: "what changed?" }],
+  });
+  const chunks = liveTurnUpdates
+    .map((p) => p.update)
+    .filter((u) => u.sessionUpdate === "user_message_chunk" || u.sessionUpdate === "agent_message_chunk");
+  check(
+    "a live turn reports its user message, before the assistant reply",
+    JSON.stringify(chunks.map((u) => u.sessionUpdate)) ===
+      JSON.stringify(["user_message_chunk", "agent_message_chunk"]) &&
+      chunks[0]?.content?.text === "what changed?" &&
+      chunks[0]?.messageId === "u-live"
+  );
+  check(
+    "the live stream never reports an injected <ctx> row",
+    !chunks.some((u) => (u.content?.text ?? "").includes("<ctx kind="))
+  );
+  // The same channel payload again (the channel re-emits on every change): the turn is already told.
+  liveTurnUpdates.length = 0;
+  pushLiveMessages();
+  check(
+    "re-reporting the same messages does not duplicate the user turn",
+    liveTurnUpdates.filter((p) => p.update.sessionUpdate === "user_message_chunk").length === 0
+  );
+});
+
+finish(checker.failures);

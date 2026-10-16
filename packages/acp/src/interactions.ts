@@ -13,18 +13,18 @@
 import { methods } from "@agentclientprotocol/sdk";
 import { BUILTIN_TOOL_NAMES } from "@codent/core";
 
-import { shouldSuppressApproval } from "./approvals.js";
+import { shouldSuppressApproval, toolInputFor, toolPartFor } from "./approvals.js";
 import {
   buildElicitationRequest,
   mapElicitationResponse,
   mapPermissionOutcome,
   permissionOptions,
 } from "./permissions.js";
-import { toolKindFor } from "./tools.js";
+import { toolCallInfo } from "./tools.js";
 
 import type { AcpClientEnv } from "./client-env.js";
 import type { SessionUpdate } from "./types.js";
-import type { AgentContext } from "@agentclientprotocol/sdk";
+import type { AgentContext, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@codent/core";
 
 /** What an interaction handler reads and writes on a live session. */
@@ -65,6 +65,8 @@ export interface InteractionHandlerContext {
   client: () => AgentContext;
   /** Send a `session/update` for one session. */
   emit: (acpId: string, update: SessionUpdate) => void;
+  /** Workspace root, for the absolute paths a tool call's `locations` carry. */
+  rootPath: string;
   onClientOwnedApproval: () => void;
 }
 
@@ -100,26 +102,36 @@ function askUserOutput(
 }
 
 export function createInteractionHandlers(context: InteractionHandlerContext): InteractionHandlers {
-  const { client, emit } = context;
+  const { client, emit, rootPath } = context;
 
   const requestApproval = async (bridge: InteractionBridge, approval: ApprovalRequest): Promise<void> => {
     const controller = new AbortController();
     bridge.pending.add(controller);
     try {
-      const response = await client().request(
-        methods.client.session.requestPermission,
-        {
-          sessionId: bridge.acpId,
-          toolCall: {
-            toolCallId: approval.toolCallId,
-            title: approval.toolName,
-            kind: toolKindFor(approval.toolName),
-            status: "pending",
-          },
-          options: permissionOptions(),
-        },
-        { cancellationSignal: controller.signal }
+      // The prompt has to carry WHAT is being approved. It used to send the tool NAME as the title
+      // and nothing else, so a `run_command` arrived as a bare "Run": the client had no command to
+      // show, and the user was asked to approve something they could not read.
+      const messages = bridge.session.getSnapshot().messages ?? [];
+      const info = toolCallInfo(
+        approval.toolName,
+        toolInputFor(messages, approval.toolCallId),
+        rootPath,
+        toolPartFor(messages, approval.toolCallId)?.display?.summary
       );
+      // Named at the boundary so a field the client's schema rejects is reported here, on the
+      // literal, rather than silently degrading the call's result type to `unknown`.
+      const params: RequestPermissionRequest = {
+        sessionId: bridge.acpId,
+        toolCall: {
+          toolCallId: approval.toolCallId,
+          ...info,
+          status: "pending",
+        },
+        options: permissionOptions(),
+      };
+      const response = await client().request(methods.client.session.requestPermission, params, {
+        cancellationSignal: controller.signal,
+      });
       const decision = mapPermissionOutcome(response);
       if (!decision) return;
       await bridge.session.dispatch({

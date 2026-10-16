@@ -348,6 +348,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const { handleInteractions } = createInteractionHandlers({
     client,
     emit,
+    rootPath,
     onClientOwnedApproval: () => undefined,
   });
 

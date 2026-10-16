@@ -103,24 +103,48 @@ export function shouldSuppressApproval(input: {
   });
 }
 
+/** The tool-call part for one call id, as far as this host reads it. */
+export interface ApprovalToolPart {
+  input?: unknown;
+  arguments?: string;
+  /** Core's rendered presentation for the call, when it has been attached. */
+  display?: { summary?: string };
+}
+
+/**
+ * Find one tool-call part across a transcript.
+ *
+ * The ONE lookup: {@link toolInputFor} narrows its result to the field the write policy reads, while
+ * the approval prompt needs the same part's raw input and display summary — two walkers would be two
+ * chances to miss the same call.
+ */
+export function toolPartFor(
+  messages: ReadonlyArray<{ parts?: ReadonlyArray<unknown> }>,
+  toolCallId: string
+): ApprovalToolPart | undefined {
+  for (const message of messages) {
+    for (const part of (message.parts ?? []) as ReadonlyArray<Record<string, unknown>>) {
+      if (part.type !== "tool-call") continue;
+      if (part.toolCallId !== toolCallId && part.id !== toolCallId) continue;
+      return part as ApprovalToolPart;
+    }
+  }
+  return undefined;
+}
+
 export function toolInputFor(
   messages: ReadonlyArray<{ parts?: ReadonlyArray<unknown> }>,
   toolCallId: string
 ): ApprovalToolInput | undefined {
-  for (const message of messages) {
-    for (const part of (message.parts ?? []) as ReadonlyArray<Record<string, unknown>>) {
-      const p = part as { type?: string; toolCallId?: string; id?: string; input?: unknown; arguments?: string };
-      if (p.type !== "tool-call") continue;
-      if (p.toolCallId !== toolCallId && p.id !== toolCallId) continue;
-      if (p.input && typeof p.input === "object") return p.input as ApprovalToolInput;
-      if (typeof p.arguments === "string") {
-        try {
-          const parsed = JSON.parse(p.arguments) as ApprovalToolInput;
-          return parsed && typeof parsed === "object" ? parsed : undefined;
-        } catch {
-          return undefined;
-        }
-      }
+  const part = toolPartFor(messages, toolCallId);
+  if (!part) return undefined;
+  if (part.input && typeof part.input === "object") return part.input as ApprovalToolInput;
+  if (typeof part.arguments === "string") {
+    try {
+      const parsed = JSON.parse(part.arguments) as ApprovalToolInput;
+      return parsed && typeof parsed === "object" ? parsed : undefined;
+    } catch {
+      return undefined;
     }
   }
   return undefined;

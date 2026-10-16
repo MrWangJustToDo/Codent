@@ -9,6 +9,8 @@
 
 import { BUILTIN_TOOL_NAMES, getToolPresentation } from "@codent/core";
 
+import { textBlock } from "./content.js";
+
 import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
 import type { ToolActivityCategory } from "@codent/core";
 
@@ -139,8 +141,64 @@ export function toolDiffFor(name: string, input: unknown, rootPath: string): Too
   return undefined;
 }
 
-/** Build the ACP `tool_call_update` status from a tool part state. */
-export function toolStatusFor(state: string, hasError: boolean): "pending" | "in_progress" | "completed" | "failed" {
+/** The command line a shell tool carries, when it carries one. */
+function shellCommandOf(name: string, input: unknown): string | undefined {
+  if (name !== BUILTIN_TOOL_NAMES.runCommand) return undefined;
+  const command = asRecord(input)?.command;
+  return typeof command === "string" && command.trim() ? command.trim() : undefined;
+}
+
+/** One line, bounded — a title is a heading, not the payload. */
+function oneLine(text: string, max = 120): string {
+  const flattened = text.replace(/\s+/g, " ").trim();
+  return flattened.length > max ? `${flattened.slice(0, max - 1)}…` : flattened;
+}
+
+/**
+ * The client-facing description of one tool call: title, kind, locations, and the input/content that
+ * make it answerable.
+ *
+ * Shared by the transcript (`tool_call` / `tool_call_update`) and by the permission request, because
+ * the two must not diverge — and because an approval prompt that cannot show WHAT it is approving is
+ * not a decision anyone can make. `run_command` was the case in point: {@link toolTitleFor} renders a
+ * verb plus a path, so a command (which has no path) came out as a bare "Run" with the command itself
+ * nowhere in the payload.
+ */
+export function toolCallInfo(
+  name: string,
+  input: unknown,
+  rootPath: string,
+  displaySummary?: string
+): {
+  title: string;
+  kind: ToolKind;
+  locations: Array<{ path: string }>;
+  rawInput?: unknown;
+  content?: ToolCallContent[];
+} {
+  const command = shellCommandOf(name, input);
+  const title =
+    displaySummary ??
+    (command ? `${TITLE_VERBS[name] ?? name.replace(/_/g, " ")}: ${oneLine(command)}` : toolTitleFor(name, input));
+  const diff = toolDiffFor(name, input, rootPath);
+  const content: ToolCallContent[] | undefined = diff
+    ? [diff]
+    : command
+      ? [{ type: "content", content: textBlock(command) }]
+      : undefined;
+  return {
+    title,
+    kind: toolKindFor(name),
+    locations: toolLocationsFor(input, rootPath),
+    ...(input !== undefined ? { rawInput: input } : {}),
+    ...(content ? { content } : {}),
+  };
+}
+
+/** Build the ACP `tool_call_update` status from a tool part state. */ export function toolStatusFor(
+  state: string,
+  hasError: boolean
+): "pending" | "in_progress" | "completed" | "failed" {
   if (hasError || state === "error") return "failed";
   if (state === "complete") return "completed";
   // `approval-responded` means approved-but-not-yet-run: still in progress, not done.

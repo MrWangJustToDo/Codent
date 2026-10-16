@@ -18,7 +18,7 @@
 import { isContextUIMessage } from "@codent/core";
 
 import { textBlock } from "./content.js";
-import { toolDiffFor, toolKindFor, toolLocationsFor, toolResultText, toolStatusFor, toolTitleFor } from "./tools.js";
+import { toolCallInfo, toolDiffFor, toolResultText, toolStatusFor } from "./tools.js";
 
 import type {
   AcpCommands,
@@ -305,15 +305,14 @@ export class AcpProjector {
       resultEmitted: replay,
     });
     const display = (part as { display?: { summary?: string } }).display;
+    // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
+    // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
     this.options.emit({
       sessionUpdate: "tool_call",
       toolCallId: part.id,
-      title: display?.summary || toolTitleFor(part.name, part.input),
       name: part.name,
-      kind: toolKindFor(part.name),
       status,
-      ...(part.input !== undefined ? { rawInput: part.input } : {}),
-      locations: toolLocationsFor(part.input, this.options.rootPath),
+      ...toolCallInfo(part.name, part.input, this.options.rootPath, display?.summary),
     });
   }
 

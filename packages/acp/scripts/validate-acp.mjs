@@ -33,6 +33,7 @@ import {
 } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
+import { baseSnapshot } from "./session-fixture.mjs";
 
 const checker = createChecker();
 const check = checker.check;
@@ -210,46 +211,6 @@ check("plain text is not a command", parseSlashCommand("hello") === null);
 // ===========================================================================
 // B. In-process ACP conformance (SDK client ↔ our agent)
 // ===========================================================================
-
-function baseSnapshot(id, overrides = {}) {
-  return {
-    agentId: id,
-    name: id,
-    // A root session ALWAYS has a disk session id in production (`host.create` mints one via
-    // `ensureSessionData()`), and the ACP layer keys everything on it — so the default test
-    // double carries one too. Sessions that need it to differ from the agent id pass both.
-    activeSessionId: `ses_${id}`,
-    status: "idle",
-    error: "",
-    pendingApprovalCount: 0,
-    mode: "normal",
-    lastStreamDurationMs: 0,
-    messages: [],
-    queues: { steer: [], followUp: [] },
-    usage: {
-      contextFillTokens: 0,
-      tokenLimit: 200000,
-      percent: 0,
-      cost: 0,
-      llmDurationMs: 0,
-      llmOutputTokens: 0,
-      total: {},
-      window: {},
-      billedInputTokens: 0,
-    },
-    todos: [],
-    todosTitle: null,
-    plan: {},
-    autoMode: false,
-    mcp: { servers: [] },
-    extensions: { extensions: [] },
-    toolDescriptors: [],
-    interactions: { approvals: [], askUser: [] },
-    iteration: { current: 1, max: 100 },
-    subagents: [],
-    ...overrides,
-  };
-}
 
 function makeFakeSession(id, diskId = id) {
   const listeners = new Set();
@@ -690,99 +651,34 @@ await loadClient.connectWith(loadApp, async (cx) => {
 });
 
 // ===========================================================================
-// G2. A LIVE turn carries its boundary: the user message is reported, once
-// ===========================================================================
-
-// The live path used to report assistant text only. Two consecutive replies therefore arrived with
-// nothing between them — a client can only render that as one run of text — and a `session/load`
-// afterwards added a second copy of the whole conversation. The turn's user message is now part of
-// the stream (as it always was in the replay), reported once, with injected context skipped.
-
-let pushLiveMessages = null;
-const liveTurnUpdates = [];
-const liveTurnClient = createClient({ name: "live-turn-client" }).onNotification(methods.client.session.update, (ctx) =>
-  liveTurnUpdates.push(ctx.params)
-);
-const liveTurnSession = (() => {
-  const listeners = new Set();
-  let messages = [];
-  return {
-    id: "agent_live",
-    getSnapshot: () => baseSnapshot("agent_live", { messages }),
-    getSummaryStreamSnapshot: () => null,
-    subscribe: (handler) => {
-      listeners.add(handler);
-      return () => listeners.delete(handler);
-    },
-    dispatch: async (command) => {
-      if (command.type === "send") {
-        messages = [
-          { id: "u-live", role: "user", parts: [{ type: "text", content: "what changed?" }] },
-          // Injected context: persisted for the model, never shown to a reader.
-          { id: "ctx-live", role: "user", parts: [{ type: "text", content: "<ctx kind=mode>\nnormal\n</ctx>" }] },
-          { id: "a-live", role: "assistant", parts: [{ type: "text", content: "the diff" }] },
-        ];
-        pushLiveMessages = () => {
-          for (const listener of listeners) listener({ channel: "messages", payload: messages, ts: Date.now() });
-        };
-        pushLiveMessages();
-      }
-      return { ok: true };
-    },
-  };
-})();
-const liveTurnApp = createAcpAgent({
-  host: {
-    async create() {
-      return { session: liveTurnSession };
-    },
-    connect: () => null,
-    list: () => [],
-    async destroy() {},
-  },
-  defaults: { model: "fake-model" },
-  rootPath: "/ws",
-});
-
-await liveTurnClient.connectWith(liveTurnApp, async (cx) => {
-  await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
-  const started = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
-  liveTurnUpdates.length = 0;
-  await cx.request(methods.agent.session.prompt, {
-    sessionId: started.sessionId,
-    prompt: [{ type: "text", text: "what changed?" }],
-  });
-  const chunks = liveTurnUpdates
-    .map((p) => p.update)
-    .filter((u) => u.sessionUpdate === "user_message_chunk" || u.sessionUpdate === "agent_message_chunk");
-  check(
-    "a live turn reports its user message, before the assistant reply",
-    JSON.stringify(chunks.map((u) => u.sessionUpdate)) ===
-      JSON.stringify(["user_message_chunk", "agent_message_chunk"]) &&
-      chunks[0]?.content?.text === "what changed?" &&
-      chunks[0]?.messageId === "u-live"
-  );
-  check(
-    "the live stream never reports an injected <ctx> row",
-    !chunks.some((u) => (u.content?.text ?? "").includes("<ctx kind="))
-  );
-  // The same channel payload again (the channel re-emits on every change): the turn is already told.
-  liveTurnUpdates.length = 0;
-  pushLiveMessages();
-  check(
-    "re-reporting the same messages does not duplicate the user turn",
-    liveTurnUpdates.filter((p) => p.update.sessionUpdate === "user_message_chunk").length === 0
-  );
-});
-
-// ===========================================================================
 // H. Permission round-trip (approval → request_permission → respondApproval)
 // ===========================================================================
 
 const dispatched = [];
+/**
+ * The command the approval is about. A real session always has the tool-call part on its channel
+ * while the approval is pending, which is where the prompt gets its input from — a mock without it
+ * would let an approval prompt that shows NOTHING pass.
+ */
+const APPROVED_COMMAND = "npm run build --filter @codent/app";
+const approvalMessages = [
+  {
+    id: "m-approval",
+    role: "assistant",
+    parts: [
+      {
+        id: "tc1",
+        type: "tool-call",
+        name: "run_command",
+        input: { command: APPROVED_COMMAND },
+        state: "input-complete",
+      },
+    ],
+  },
+];
 function makeApprovalSession(id) {
   const listeners = new Set();
-  let snap = baseSnapshot(id);
+  let snap = baseSnapshot(id, { messages: approvalMessages });
   const emit = (event) => {
     for (const l of listeners) l({ ...event, ts: Date.now() });
   };
@@ -797,22 +693,26 @@ function makeApprovalSession(id) {
     dispatch: async (command) => {
       dispatched.push(command);
       if (command.type === "send") {
-        snap = baseSnapshot(id, { status: "running" });
+        snap = baseSnapshot(id, { status: "running", messages: approvalMessages });
         emit({
           channel: "interaction",
-          payload: { approvals: [{ approvalId: "ap1", toolName: "edit_file", toolCallId: "tc1" }], askUser: [] },
+          payload: { approvals: [{ approvalId: "ap1", toolName: "run_command", toolCallId: "tc1" }], askUser: [] },
         });
         await new Promise((r) => setTimeout(r, 20));
-        snap = baseSnapshot(id, { status: "completed" });
+        snap = baseSnapshot(id, { status: "completed", messages: approvalMessages });
       }
       return { ok: true };
     },
   };
 }
 
+let permissionParams = null;
 const approvalClient = createClient({ name: "approval-client" }).onRequest(
   methods.client.session.requestPermission,
-  () => ({ outcome: { outcome: "selected", optionId: "allow-once" } })
+  (ctx) => {
+    permissionParams = ctx.params;
+    return { outcome: { outcome: "selected", optionId: "allow-once" } };
+  }
 );
 const approvalApp = createAcpAgent({
   host: {
@@ -838,6 +738,25 @@ await approvalClient.connectWith(approvalApp, async (cx) => {
   check(
     "approval round-trip reaches respondApproval with approved=true",
     approval?.approved === true && approval?.approvalId === "ap1"
+  );
+
+  // The prompt itself: what the client is asked to approve. It used to carry the tool NAME as the
+  // title and nothing else, so a `run_command` arrived as a bare "Run" — the client could not show
+  // the command and the user was asked to approve something unreadable.
+  const asked = permissionParams?.toolCall;
+  check(
+    "the approval prompt names the command as its title",
+    typeof asked?.title === "string" && asked.title.includes(APPROVED_COMMAND),
+    asked?.title
+  );
+  check("…carries the raw input the command lives in", asked?.rawInput?.command === APPROVED_COMMAND);
+  check(
+    "…and a content block with the command text",
+    (asked?.content ?? []).some((entry) => entry?.type === "content" && entry.content?.text === APPROVED_COMMAND)
+  );
+  check(
+    "…with the kind/status a client renders it by",
+    asked?.kind === "execute" && asked?.status === "pending" && asked?.toolCallId === "tc1"
   );
 });
 
