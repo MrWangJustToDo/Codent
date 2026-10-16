@@ -600,7 +600,29 @@ function makeRestoredSession(id, diskId = id) {
     { id: "u1", role: "user", parts: [{ type: "text", content: "prior question" }] },
     // Synthetic per-turn context is persisted for the MODEL, not the reader: a replay must hide it.
     { id: "ctx-1", role: "user", parts: [{ type: "text", content: "<ctx kind=git_status>\nmain\n</ctx>" }] },
-    { id: "a1", role: "assistant", parts: [{ type: "text", content: "prior answer" }] },
+    {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        { type: "text", content: "prior answer" },
+        // Never approved: the row has to say `pending`, not `completed`.
+        {
+          id: "tc-pending",
+          type: "tool-call",
+          name: "run_command",
+          arguments: '{"command":"rm -rf build"}',
+          state: "approval-requested",
+        },
+        {
+          id: "tc-done",
+          type: "tool-call",
+          name: "run_command",
+          arguments: '{"command":"ls"}',
+          state: "complete",
+          output: { success: true },
+        },
+      ],
+    },
   ];
   const snap = baseSnapshot(id, { messages, activeSessionId: diskId });
   return {
@@ -662,6 +684,16 @@ await loadClient.connectWith(loadApp, async (cx) => {
   check(
     "session/load hides the injected <ctx> context from the replay",
     !userTexts.some((text) => text.includes("<ctx kind=")) && userTexts.length === 1
+  );
+
+  // A replayed call that never finished must not be advertised as `completed`: the next live tick then
+  // downgrades it (a frozen terminal row in the client), which is how an call awaiting approval became
+  // invisible and left the session stuck on a prompt nobody could answer.
+  const replayedTools = loadUpdates.map((p) => p.update).filter((u) => u.sessionUpdate === "tool_call");
+  check(
+    "a replayed call reports the status its part actually has",
+    replayedTools.every((u) => u.toolCallId !== "tc-pending" || u.status === "pending") &&
+      replayedTools.some((u) => u.toolCallId === "tc-pending")
   );
   check(
     "session/load tags every update with the disk id it was given",

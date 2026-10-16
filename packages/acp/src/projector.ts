@@ -302,7 +302,11 @@ export class AcpProjector {
   }
 
   private createToolCall(part: ToolCallPartLike, replay: boolean): void {
-    const status: ToolCallStatus = replay ? "completed" : "pending";
+    // The status comes from the PART's state, not from "was this a replay": a replayed call that never
+    // finished (awaiting approval, cancelled, interrupted) was advertised as `completed`, and the next
+    // live tick then downgraded it to `pending` — a terminal row the client had already frozen, so the
+    // approval row could not be answered at all (reported as a stuck session with a "hidden" tool call).
+    const status: ToolCallStatus = toolStatusFor(String(part.state), part.output?.success === false);
     this.tools.set(part.id, {
       status,
       name: part.name,
