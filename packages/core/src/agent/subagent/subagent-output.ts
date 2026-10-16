@@ -28,6 +28,30 @@ export const truncateSummary = (
 };
 
 /**
+ * Prefix for a failed run's summary — the sibling of `SUBAGENT_STOP_NOTICES`.
+ *
+ * Exported so a consumer can recognize the class without re-spelling it, exactly like the
+ * stop notices.
+ */
+export const SUBAGENT_FAILURE_NOTICE_PREFIX = "⚠️ Task failed:";
+
+/**
+ * Prefix a FAILED run's summary with the fault, keeping whatever partial work exists.
+ *
+ * The sibling of {@link applySubagentStopNotice} for the other terminal case: a stop names
+ * *who* ended the run, a failure names *why* it died. Both exist for the same reason — the
+ * text reaches the parent model's context, so it must not be mistakable for a finished
+ * result. That matters most when the partial work is ordinary narration ("let me check…"):
+ * without the prefix it reads as a conclusion.
+ */
+export function applySubagentFailureNotice(summary: string, errorMessage?: string): string {
+  const notice = `${SUBAGENT_FAILURE_NOTICE_PREFIX} ${errorMessage ?? "unknown error"}`;
+  const trimmed = summary.trim();
+  if (!trimmed || trimmed === EMPTY_SUMMARY) return notice;
+  return `${notice}\n\n${trimmed}`;
+}
+
+/**
  * Ensure a stopped run surfaces a clear notice in the summary text returned to
  * the parent (UI + `toModelOutput`), not only an `aborted` flag.
  *

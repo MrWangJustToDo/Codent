@@ -748,7 +748,7 @@ The project supports **subagents** — context-isolated agents spawned to handle
 | Tools | Read-only: `read_file`, `glob`, `grep`, `list_file`, `tree`, `websearch`, `webfetch`, plus marker `begin_summary` (no `run_command` / write tools) |
 | Return | Summary only to parent LLM context; UI keeps a read-only UIMessage preview when `bridgeUI` is enabled |
 | Iteration Limit | 50 steps max (TanStack `maxIterations`; cutoff leaves `finishReason: tool_calls`) |
-| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` / `truncated`; explore runs require `begin_summary` for a complete result |
+| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` / `truncated`; explore runs require `begin_summary` for a complete result. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error |
 | Summary Limit | 5000 characters max |
 
 | UI Preview | `bridgeUI: true` (default when `parentTaskToolCallId` is set): parent panel + task-tool streaming via the subagent’s `AgentUIChannel` |
@@ -775,7 +775,9 @@ resets only the attempt-scoped UI state (the streamed summary banner text + phas
 profiles. It must never touch the message history: the retry's wire is re-projected from the channel
 (`compaction.onConfig`), so dropping rows there restarts the exploration instead of resuming it — the
 subagent-only version of this reset is what made a `task` re-explore after a network drop.
-Terminal non-abort failures still call `failRun()` (the run is over, so its rows *are* dropped).
+Terminal non-abort failures still call `failRun()`, but only to trim the **panel**: the run reaches
+the shared finalization (so the parent gets `incomplete: true` + the fault in the summary) instead of
+rethrowing out of `runSubagent` — a dead `task` used to surface as a bare tool error with no flags.
 Max-tokens continuation does not reset.
 Compact summarization uses the same hub with stable key `compact:${parentAgentId}` (one in-flight compact per agent).
 Only the last text-only step is returned to the parent as the task `summary`; `toModelOutput` also includes completion status (`reachedLimit` / `incomplete` / `aborted` / `truncated`) so the parent can judge whether findings are trustworthy to extend. The iteration pair (`iterations` = model turns, `maxIterations` = the budget it ran under) is **host-only**: it is persisted on the task output so a restored row can still show `used/budget`, but it is in neither `toModelOutput` nor the description — `reachedLimit` already is the budget verdict, and a bare count says nothing without a ceiling.

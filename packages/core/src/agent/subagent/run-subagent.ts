@@ -13,7 +13,7 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { isProgressSummaryEligible, summarizeProgress } from "./progress-summary.js";
 import { captureStreamFinishReason, deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";
-import { applySubagentStopNotice, truncateSummary } from "./subagent-output.js";
+import { applySubagentFailureNotice, applySubagentStopNotice, truncateSummary } from "./subagent-output.js";
 import { resolveSubagentStopReason, type SubagentStopReason } from "./subagent-stop-reason.js";
 import { beginTaskRun, enterTaskPhase } from "./task-run-state.js";
 import { resolveSubagentBridgeUI, SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
@@ -175,6 +175,9 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
 
     let output = "(no summary)";
     let aborted = false;
+    /** The run died (not a cancel). Terminal, reported as `incomplete` — never thrown. */
+    let failed = false;
+    let errorMessage: string | undefined;
     let finishReason: string | null = null;
     let previewMessages: UIMessage[] = [];
 
@@ -218,42 +221,27 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       const managed = manager.getAgent(subagentId);
       if (managed?.getStatus() === "aborted" || managed?.isAbortError(err)) {
         aborted = true;
-        previewMessages = channel?.getMessages() ?? previewMessages;
-        output = extractAssistantText(previewMessages)?.trim() || "(no summary)";
       } else {
-        const errorMessage = formatAgentStreamError(err, "Subagent run failed").message;
-        // Non-abort failure: surface a real terminal state before propagating.
-        // Keep the task prompt + record the error in the preview (so the detail
-        // view never spins on an empty transcript), flip the subagent status to
-        // `error`, and emit `subagent:error`. The throw below skips the normal
-        // outcome/telemetry path, so without this the task lingers as `running`
-        // (e.g. after 429 retries are exhausted).
+        failed = true;
+        errorMessage = formatAgentStreamError(err, "Subagent run failed").message;
+        // No throw, and no telemetry here: the SHARED finalization below now applies the terminal
+        // status and emits the single `subagent:error` for this run. Rethrowing (what this branch
+        // used to do) skipped that finalization — so the parent's `task` call surfaced as a bare
+        // tool error with no `incomplete` flag and no summary of what the run had found.
+      }
+      // BOTH throw-paths keep what the attempt produced. The channel is the only record of the
+      // work, and reading it here is what makes the outcome describable to the parent (the failure
+      // branch used to leave `previewMessages` empty while wiping the panel).
+      previewMessages = channel?.getMessages() ?? previewMessages;
+      output = extractAssistantText(previewMessages)?.trim() || "(no summary)";
+      if (failed) {
         try {
+          // Display only: trim the PANEL to the prompt + a failure line. The evidence above is
+          // already read, so this cannot lose it from the result.
           channel.failRun(errorMessage);
         } catch {
-          // ignore cleanup errors while propagating the run failure
+          // ignore cleanup errors while the run finalizes as an error
         }
-        try {
-          subagentManaged.statusController.applyRunOutcome({
-            kind: "error",
-            messages: previewMessages,
-            path: "detached",
-            errorMessage,
-          });
-        } catch {
-          // ignore status errors while propagating the run failure
-        }
-        try {
-          subagentManaged.finalizeRun("error");
-        } catch {
-          // ignore finalize errors while propagating the run failure
-        }
-        subagent.emitEvent(
-          "subagent:error",
-          { subagentId, error: errorMessage, parentTaskToolCallId },
-          { parentId: parentAgentId }
-        );
-        throw err;
       }
     }
 
@@ -273,18 +261,27 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       aborted,
       reason: abortSignal?.reason ?? subagentManaged.run.currentAbortController?.signal.reason,
     });
-    const outcomeKind = aborted ? "aborted" : "finished";
+    // A failure is a terminal outcome in its own right now that this code is reached: `kind:
+    // "error"` flips the status, and `deriveSubagentRunStats` reads that status into `incomplete`
+    // — the flag the parent judges the summary by (see `run-stats.ts`).
+    const outcomeKind = aborted ? "aborted" : failed ? "error" : "finished";
     subagentManaged.statusController.applyRunOutcome({
       kind: outcomeKind,
       messages: previewMessages,
       path: "detached",
+      ...(failed && errorMessage ? { errorMessage } : {}),
     });
     subagentManaged.finalizeRun(outcomeKind);
-    // ONLY on an abort. A finished run has no stop reason, and applying the notice by class
-    // appended `[Task cancelled.]` to every SUCCESSFUL subagent — which then reached the
-    // parent model's context as a cancellation the operator never made. The summary of a
-    // finished run is its output, verbatim.
-    const noticed = aborted ? applySubagentStopNotice(output, stopReason) : output;
+    // ONLY for an abort or a failure — never for a finished run. Applying a notice by class
+    // appended `[Task cancelled.]` to every SUCCESSFUL subagent, which then reached the parent
+    // model's context as a cancellation the operator never made. A finished run's summary is its
+    // output, verbatim; a STOPPED one names who stopped it, and a FAILED one names the fault so
+    // partial narration cannot read as a conclusion.
+    const noticed = aborted
+      ? applySubagentStopNotice(output, stopReason)
+      : failed
+        ? applySubagentFailureNotice(output, errorMessage)
+        : output;
     let { summary: finalOutput, truncated } = truncateSummary(noticed, maxOutputLength);
 
     const runStats = deriveSubagentRunStats({
@@ -381,47 +378,63 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     }
 
     subagent.emitEvent(
-      aborted ? "subagent:error" : "subagent:completed",
-      aborted
+      aborted || failed ? "subagent:error" : "subagent:completed",
+      failed
         ? {
-            // A cancel reuses the abort branch, so the flag leads: `error` then holds the
-            // partial narration — a summary of work done, not a fault — and the flag is
-            // what tells the log bridge (and any other consumer) which of the two it has.
-            cancelled: true,
-            // How the run was stopped. `cancelled` alone merges a user cancel with a run
-            // the parent restarted, which is exactly the attribution the log used to get
-            // wrong (every abort read as "cancelled by user").
-            stopReason,
+            // A fault, not a cancel: `error` is the message the run died of, where the cancel
+            // branch below carries partial narration. Emitted here so the payload and the
+            // terminal state are produced by one path.
             subagentId,
             parentTaskToolCallId,
-            error: finalOutput,
+            error: errorMessage,
           }
-        : {
-            subagentId,
-            parentTaskToolCallId,
-            summary: finalOutput,
-            iterations: statusFlags.iterations,
-            // Recorded next to the count so the persisted log data carries the budget the
-            // number was measured against — a bare count there says nothing about how close
-            // the run came to its limit. (Both land as structured `data` fields; the log
-            // message is `Subagent completed: <summary>` either way.)
-            maxIterations: statusFlags.maxIterations,
-            durationMs,
-            usage: {
+        : aborted
+          ? {
+              // A cancel reuses the abort branch, so the flag leads: `error` then holds the
+              // partial narration — a summary of work done, not a fault — and the flag is
+              // what tells the log bridge (and any other consumer) which of the two it has.
+              cancelled: true,
+              // How the run was stopped. `cancelled` alone merges a user cancel with a run
+              // the parent restarted, which is exactly the attribution the log used to get
+              // wrong (every abort read as "cancelled by user").
+              stopReason,
+              subagentId,
+              parentTaskToolCallId,
+              error: finalOutput,
+            }
+          : {
+              subagentId,
+              parentTaskToolCallId,
+              summary: finalOutput,
+              iterations: statusFlags.iterations,
+              // Recorded next to the count so the persisted log data carries the budget the
+              // number was measured against — a bare count there says nothing about how close
+              // the run came to its limit. (Both land as structured `data` fields; the log
+              // message is `Subagent completed: <summary>` either way.)
+              maxIterations: statusFlags.maxIterations,
+              durationMs,
+              usage: {
+                inputTokens: usage.inputTokens ?? 0,
+                outputTokens: usage.outputTokens ?? 0,
+                totalTokens: usage.totalTokens ?? 0,
+              },
+              // Flat token fields so the Event→Log entry keeps the numbers structured.
               inputTokens: usage.inputTokens ?? 0,
               outputTokens: usage.outputTokens ?? 0,
               totalTokens: usage.totalTokens ?? 0,
             },
-            // Flat token fields so the Event→Log entry keeps the numbers structured.
-            inputTokens: usage.inputTokens ?? 0,
-            outputTokens: usage.outputTokens ?? 0,
-            totalTokens: usage.totalTokens ?? 0,
-          },
       { parentId: parentAgentId }
     );
     // The parent-log mirror for the terminal state (see the `created`/`started` mirror above).
-    if (aborted) {
-      parentManaged.logSubagentLifecycle("stopped", { subagentId, parentTaskToolCallId, stopReason });
+    if (aborted || failed) {
+      // A failure has no abort reason — it did not stop, it died — so the mirror says only
+      // "stopped" (the line reads `Subagent stopped: …`) rather than naming a reason that does
+      // not exist.
+      parentManaged.logSubagentLifecycle("stopped", {
+        subagentId,
+        parentTaskToolCallId,
+        ...(aborted ? { stopReason } : {}),
+      });
     } else {
       parentManaged.logSubagentLifecycle("completed", {
         subagentId,

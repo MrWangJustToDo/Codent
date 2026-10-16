@@ -82,7 +82,12 @@ export {
 } from "../agent/tools/run-command-tool.js";
 export { createWebfetchTool } from "../agent/tools/webfetch-tool.js";
 export { createWebsearchTool } from "../agent/tools/websearch-tool.js";
-export { applySubagentStopNotice, truncateSummary } from "../agent/subagent/subagent-output.js";
+export {
+  applySubagentFailureNotice,
+  applySubagentStopNotice,
+  SUBAGENT_FAILURE_NOTICE_PREFIX,
+  truncateSummary,
+} from "../agent/subagent/subagent-output.js";
 export {
   resolveSubagentStopReason,
   subagentStopNotice,

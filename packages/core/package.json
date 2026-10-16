@@ -108,6 +108,7 @@
     "validate:capability-message-utils": "pnpm run build && node scripts/validate-capability-message-utils.mjs",
     "validate:run-coordinator": "pnpm run build && node scripts/validate-run-coordinator.mjs",
     "validate:subagent-run-stats": "pnpm run build && node scripts/validate-subagent-run-stats.mjs",
+    "validate:subagent-failure-outcome": "pnpm run build && node scripts/validate-subagent-failure-outcome.mjs",
     "validate:subagent-usage-pricing": "pnpm run build && node scripts/validate-subagent-usage-pricing.mjs",
     "validate:memory-extraction-usage": "pnpm run build && node scripts/validate-memory-extraction-usage.mjs",
     "validate:lifetime-total-tokens": "pnpm run build && node scripts/validate-lifetime-total-tokens.mjs",

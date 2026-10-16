@@ -299,5 +299,9 @@ async function runSummarizerSubagent(
     { manager }
   );
 
+  // A failed summarizer now RETURNS its terminal state instead of throwing (see
+  // `executeSubagentRun`), so the flags decide here. Empty output is what the callers already
+  // treat as "no report" — without this a failure's partial narration could be taken for one.
+  if (result.aborted || result.incomplete) return "";
   return result.output?.trim() ?? "";
 }
