@@ -1,5 +1,11 @@
 /**
- * Why a `task` subagent stopped, and what its summary says about it.
+ * Why a `task` subagent ended, and what its summary says about it.
+ *
+ * Two terminal classes, kept deliberately disjoint: a run that STOPPED (an abort — user Esc, the
+ * parent's run moving on, the parent agent stopping) and one that FAILED (provider fault, context
+ * overflow). `isProgressSummaryEligible` treats an output that is only a stop notice as "nothing
+ * usable", so a failure notice overlapping one of those would silently change whether the
+ * progress-summary fallback fires.
  *
  * A subagent's run can end through several different aborts and the task summary has to
  * be honest about which one it was, because the text reaches both the transcript UI and
@@ -110,6 +116,12 @@ export const SUBAGENT_STOP_NOTICES: readonly string[] = [
 ];
 
 /**
+ * Prefix for a FAILED run's summary — the sibling vocabulary to {@link SUBAGENT_STOP_NOTICES},
+ * and never one of them (see the module header for what the overlap would break).
+ */
+export const SUBAGENT_FAILURE_NOTICE_PREFIX = "⚠️ Task failed:";
+
+/**
  * Classify an abort reason.
  *
  * Ordering matters: the parent cascade runs *after* the agent's own stop, so a parent
@@ -149,4 +161,40 @@ export function subagentStopNotice(reason: SubagentStopReason): string {
     default:
       return SUBAGENT_ABORTED_NOTICE;
   }
+}
+
+/** The sentinel `extractAssistantText` yields for a run that produced no final answer. */
+const EMPTY_SUMMARY = "(no summary)";
+
+/**
+ * Ensure a stopped run surfaces a clear notice in the summary text returned to the parent (UI +
+ * `toModelOutput`), not only an `aborted` flag.
+ *
+ * The notice names the *reason* instead of assuming the user did it, so a run the parent restarted
+ * is not recorded as a cancellation nobody made.
+ */
+export function applySubagentStopNotice(summary: string, reason: SubagentStopReason): string {
+  const noticed = subagentStopNotice(reason);
+  const trimmed = summary.trim();
+  if (!trimmed || trimmed === EMPTY_SUMMARY) {
+    return noticed;
+  }
+  // Any stop notice already in the text is the same class of message; do not stack them.
+  if (SUBAGENT_STOP_NOTICES.some((notice) => trimmed.includes(notice))) return summary;
+  return `${trimmed}\n\n${noticed}`;
+}
+
+/**
+ * Prefix a FAILED run's summary with the fault, keeping whatever partial work exists.
+ *
+ * The sibling of {@link applySubagentStopNotice}: a stop names *who* ended the run, a failure names
+ * *why* it died. Both exist because the text reaches the parent model's context, so it must not be
+ * mistakable for a finished result — which matters most when the partial work is ordinary narration
+ * ("let me check…"), where the prefix is the only thing that stops it reading as a conclusion.
+ */
+export function applySubagentFailureNotice(summary: string, errorMessage?: string): string {
+  const notice = `${SUBAGENT_FAILURE_NOTICE_PREFIX} ${errorMessage ?? "unknown error"}`;
+  const trimmed = summary.trim();
+  if (!trimmed || trimmed === EMPTY_SUMMARY) return notice;
+  return `${notice}\n\n${trimmed}`;
 }

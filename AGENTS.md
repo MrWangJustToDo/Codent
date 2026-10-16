@@ -748,7 +748,7 @@ The project supports **subagents** — context-isolated agents spawned to handle
 | Tools | Read-only: `read_file`, `glob`, `grep`, `list_file`, `tree`, `websearch`, `webfetch`, plus marker `begin_summary` (no `run_command` / write tools) |
 | Return | Summary only to parent LLM context; UI keeps a read-only UIMessage preview when `bridgeUI` is enabled |
 | Iteration Limit | 50 steps max (TanStack `maxIterations`; cutoff leaves `finishReason: tool_calls`) |
-| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` / `truncated`; explore runs require `begin_summary` for a complete result. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error |
+| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` / `truncated`; explore runs require `begin_summary` for a complete result. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error, and it takes the same progress-summary fallback (`isProgressSummaryEligible` accepts `failed` as a terminal cause) |
 | Summary Limit | 5000 characters max |
 
 | UI Preview | `bridgeUI: true` (default when `parentTaskToolCallId` is set): parent panel + task-tool streaming via the subagent’s `AgentUIChannel` |

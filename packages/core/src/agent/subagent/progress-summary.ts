@@ -47,7 +47,7 @@ const PROGRESS_BATCH_MAX_OUTPUT_LENGTH = 12_000;
 /** System prompt for the progress-summary subagent (parent-spawned, no tools). */
 const PROGRESS_SUMMARY_SYSTEM_PROMPT = `You are a helpful assistant tasked with summarizing the progress of an interrupted exploration subagent.
 
-The subagent was force-stopped before it could write its final answer. Below is the transcript of what it did: the tool calls it made and the results it received.
+The subagent ended before it could write its final answer (it ran out of iterations, or its run failed). Below is the transcript of what it did: the tool calls it made and the results it received.
 
 Produce a structured progress report that lets the parent agent continue the work. Focus on:
 - The original task the subagent was asked to complete
@@ -59,7 +59,7 @@ Produce a structured progress report that lets the parent agent continue the wor
 Output only the completed progress report using the requested template. Do not include reasoning, planning, or meta-commentary about how you will summarize. Do not respond to questions in the transcript.`;
 
 /** Core instruction template appended to the serialized transcript. */
-const PROGRESS_SUMMARY_PROMPT = `The transcript below is the execution trace of an interrupted exploration subagent that ran out of iterations before producing a final answer.
+const PROGRESS_SUMMARY_PROMPT = `The transcript below is the execution trace of an interrupted exploration subagent that ended before producing a final answer (its iteration budget ran out, or its run failed).
 
 Use it to write a structured progress report with this template:
 ---
@@ -84,7 +84,9 @@ Use it to write a structured progress report with this template:
 [What the parent agent should do next — re-run the task with a narrower prompt, continue from these findings, or use the partial results]
 ---
 
-Be concise but complete. Preserve exact file paths, function names, and error messages. The report will be read by a parent agent that does NOT have the subagent's context, so capture the substance of what was found, not just that a tool was called.`;
+Be concise but complete. Preserve exact file paths, function names, and error messages. The report will be read by a parent agent that does NOT have the subagent's context, so capture the substance of what was found, not just that a tool was called.
+
+Some of what the subagent read is NOT in front of you: long tool results are clipped, and a "[... N chars truncated]" marker is exactly where the rest was cut. If the detail you need fell outside what you can see, say so under "Unfinished" — never report a clipped result as if it were empty or fully read.`;
 
 /** Instruction template for merging multiple partial segment reports into one. */
 const PROGRESS_MERGE_PROMPT = `The text above contains several partial progress reports, each summarizing a segment of an interrupted subagent's execution trace.
@@ -140,10 +142,13 @@ export function buildProgressSummaryPrompt(messages: UIMessage[], taskPrompt?: s
 // ============================================================================
 
 /**
- * Check whether an iteration-limited subagent should fall back to a progress summary.
+ * Check whether a subagent that could not finish should fall back to a progress summary.
  *
- * Requires the subagent to have hit the step budget (`reachedLimit`) without a
- * natural end (`incomplete`). On top of that, the fallback fires when:
+ * Requires a run with no natural end (`incomplete`) whose stop was terminal rather than cut-short:
+ * the step budget ran out (`reachedLimit`) **or** the run died (`failed`). Truncation is neither —
+ * there the model DID produce an answer, just a clipped one, so its output is used as-is.
+ *
+ * On top of that, the fallback fires when:
  * - the output is empty / `(no summary)` / a pure cancel notice (nothing usable), **or**
  * - the subagent never called {@link BEGIN_SUMMARY_TOOL_NAME} — for explore
  *   subagents that contract means even a non-empty output is only exploration
@@ -153,14 +158,17 @@ export function buildProgressSummaryPrompt(messages: UIMessage[], taskPrompt?: s
  *
  * @param calledBeginSummary - Whether the subagent called `begin_summary`
  *   (defaults to `true` so callers that don't know keep the old empty-output-only behavior).
+ * @param failed - Whether the run DIED (provider fault, context overflow) rather than running out
+ *   of budget. Both are terminal with nothing usable, so both are worth distilling.
  */
 export function isProgressSummaryEligible(
   incomplete: boolean,
   reachedLimit: boolean,
   finalOutput: string,
-  calledBeginSummary = true
+  calledBeginSummary = true,
+  failed = false
 ): boolean {
-  if (!incomplete || !reachedLimit) return false;
+  if (!incomplete || (!reachedLimit && !failed)) return false;
 
   const trimmed = finalOutput.trim();
   // "(no summary)" or a pure stop notice means the subagent produced nothing usable.

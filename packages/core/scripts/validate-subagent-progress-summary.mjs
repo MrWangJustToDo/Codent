@@ -71,6 +71,10 @@ assert.ok(prompt.includes("[Assistant tool calls]"), "tool calls serialized");
 assert.ok(prompt.includes("grep("), "tool name present in tool calls");
 assert.ok(prompt.includes("[Tool result from grep]"), "tool result serialized with name");
 assert.ok(prompt.includes("[Tool result from read_file]"), "second tool result serialized");
+// The summarizer's input is CLIPPED, not complete: long tool results carry a `[... N chars
+// truncated]` marker. The prompt has to say so, or the report presents a cut-off result as read.
+assert.ok(prompt.includes("chars truncated"), "the prompt names the clip marker");
+assert.ok(prompt.includes("never report a clipped result"), "…and forbids reporting it as read");
 console.log("(a) buildProgressSummaryPrompt serializes [Assistant tool calls] + [Tool result from] OK");
 
 // ============================================================================
@@ -100,6 +104,30 @@ assert.equal(
 assert.equal(isProgressSummaryEligible(false, false, "(no summary)"), false, "normal completion no fallback");
 assert.equal(isProgressSummaryEligible(false, true, "(no summary)"), false, "reachedLimit but not incomplete");
 assert.equal(isProgressSummaryEligible(true, false, "(no summary)"), false, "incomplete but not reachedLimit");
+
+// The OTHER terminal cause: the run DIED (provider fault, context overflow). No budget cutoff, but
+// nothing usable either — so it takes the same fallback. This is the shape a context overflow
+// leaves behind, and it is the case whose trace is too large to hand over unsegmented.
+assert.equal(
+  isProgressSummaryEligible(true, false, "(no summary)", true, true),
+  true,
+  "failed + incomplete + (no summary) -> fallback"
+);
+assert.equal(
+  isProgressSummaryEligible(true, false, "Let me check the config…", false, true),
+  true,
+  "failed + incomplete + narration without begin_summary -> fallback"
+);
+assert.equal(
+  isProgressSummaryEligible(true, false, "## Final Summary\n\nDone.", true, true),
+  false,
+  "a run that failed AFTER its final answer has usable output -> no fallback"
+);
+assert.equal(
+  isProgressSummaryEligible(false, false, "(no summary)", true, true),
+  false,
+  "`incomplete` is still required — `failed` alone is not a cause to distill"
+);
 
 // False: subagent produced usable partial content AND called begin_summary at the limit.
 assert.equal(

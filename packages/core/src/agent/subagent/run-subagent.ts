@@ -13,8 +13,13 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { isProgressSummaryEligible, summarizeProgress } from "./progress-summary.js";
 import { captureStreamFinishReason, deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";
-import { applySubagentFailureNotice, applySubagentStopNotice, truncateSummary } from "./subagent-output.js";
-import { resolveSubagentStopReason, type SubagentStopReason } from "./subagent-stop-reason.js";
+import { truncateSummary } from "./subagent-output.js";
+import {
+  applySubagentFailureNotice,
+  applySubagentStopNotice,
+  resolveSubagentStopReason,
+  type SubagentStopReason,
+} from "./subagent-stop-reason.js";
 import { beginTaskRun, enterTaskPhase } from "./task-run-state.js";
 import { resolveSubagentBridgeUI, SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
 
@@ -309,12 +314,18 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       incomplete: runStats.incomplete,
     };
 
-    // Fallback: when the subagent hit the iteration budget before writing a final
-    // answer (reachedLimit + incomplete), spawn a parent-owned summarizer that
-    // distills the execution trace into a structured progress report. This also
-    // covers the mid-tool-loop cutoff: output may hold exploration narration
-    // ("Let me do a final check…") but without a `begin_summary` call it is not a
-    // final answer. Failure is silent — the original output is kept unchanged.
+    // Fallback: when the subagent ended without a final answer — the iteration budget ran out
+    // (`reachedLimit`), or the run DIED (a provider fault, a context overflow) — spawn a
+    // parent-owned summarizer that distills the execution trace into a structured progress report,
+    // so the exploration already paid for is not thrown away. This also covers the mid-tool-loop
+    // cutoff: output may hold exploration narration ("Let me do a final check…") but without a
+    // `begin_summary` call it is not a final answer. Failure is silent — the original output is
+    // kept unchanged.
+    //
+    // The summarizer's input is bounded by the model's window (`summarization-budget.ts` splits it
+    // into segments, and long tool results are clipped with a marker the prompt tells it to respect),
+    // which is what makes this safe for the oversized case: a context-overflow failure is precisely
+    // a trace too large to hand over in one piece.
     //
     // Gated to exploration subagents (default explore tools). Compaction
     // summarizer subagents pass `tools: {}` — never fall back for them, or the
@@ -325,15 +336,16 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         statusFlags.incomplete,
         statusFlags.reachedLimit,
         finalOutput,
-        hasBeginSummaryCall(previewMessages)
+        hasBeginSummaryCall(previewMessages),
+        failed
       )
     ) {
-      // Mirror generation into the task summary UI: the phase machine flips to
-      // `limit` (NOT `summary` — the run was cut off by the budget, and the UI
-      // must not present the fallback report as a natural finish) and the hub
-      // reset switches the panel to its summary view; deltas stream live; end
-      // settles the view. Without this the report would only appear after the
-      // whole side-LLM pass finishes.
+      // Mirror generation into the task summary UI: the phase machine flips to `limit` — its one
+      // terminal-not-summary phase, meaning "cut off before a final answer" — and the hub reset
+      // switches the panel to its summary view; deltas stream live; end settles the view. Without
+      // this the report would only appear after the whole side-LLM pass finishes. A FAILED run
+      // reuses `limit` too: the machine has no separate phase for it, and the cause reaches the
+      // reader through the summary's failure prefix and the `error` status.
       enterPhase("limit");
       const hub = parentTaskToolCallId ? parentManaged.summaryStreams : undefined;
       if (hub && parentTaskToolCallId) {
