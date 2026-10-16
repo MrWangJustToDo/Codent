@@ -65,6 +65,12 @@ interface ToolState {
 export class AcpProjector {
   private readonly cursors = new Map<string, MsgCursor>();
   private readonly tools = new Map<string, ToolState>();
+  /**
+   * User messages already reported. A user turn lands in the channel whole (it is not streamed), so
+   * one emission per message id is the whole contract — and the set is what keeps a *replayed* turn
+   * from being re-sent by the next live tick.
+   */
+  private readonly emittedUserMessages = new Set<string>();
   private priorTitle: string | undefined;
   private priorMode: string | undefined;
   private unsubscribe: (() => void) | null = null;
@@ -107,10 +113,7 @@ export class AcpProjector {
       // would show the injected context as if the user had typed it.
       if (isContextUIMessage(message)) continue;
       if (message.role === "user") {
-        const text = textOf(message);
-        if (text) {
-          this.options.emit({ sessionUpdate: "user_message_chunk", messageId: message.id, content: textBlock(text) });
-        }
+        this.emitUserMessage(message);
         continue;
       }
       if (message.role !== "assistant") continue;
@@ -177,6 +180,10 @@ export class AcpProjector {
 
   private emitMessages(messages: UIMessage[]): void {
     for (const message of messages) {
+      // Report the user turn too: the stream has to carry the turn boundary, or nothing separates two
+      // consecutive assistant replies and a client can only render them as one run of text (which is
+      // how a live conversation followed by a `session/load` came out merged and out of order).
+      if (message.role === "user") this.emitUserMessage(message);
       if (message.role === "assistant") {
         this.emitAssistantText(message);
         this.emitAssistantThought(message);
@@ -186,6 +193,27 @@ export class AcpProjector {
         else if (part.type === "tool-result") this.emitToolResult(part as ToolResultPartLike);
       }
     }
+  }
+
+  /**
+   * Report one user turn, once.
+   *
+   * Shared by the live path and {@link replayFrom} on purpose: they are the two halves of one
+   * question ("what has this client been told about the conversation?"), and a `user_message_chunk`
+   * sent twice is a duplicated turn in the client's transcript. Injected context rows are skipped
+   * here for the same reason they are skipped on replay — they are not conversation.
+   */
+  private emitUserMessage(message: UIMessage): void {
+    if (isContextUIMessage(message)) return;
+    if (this.emittedUserMessages.has(message.id)) return;
+    const text = textOf(message);
+    if (!text) return;
+    this.emittedUserMessages.add(message.id);
+    this.options.emit({
+      sessionUpdate: "user_message_chunk",
+      messageId: message.id,
+      content: textBlock(text),
+    });
   }
 
   private emitAssistantText(message: UIMessage): void {
