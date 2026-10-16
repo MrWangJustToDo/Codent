@@ -91,12 +91,13 @@ host that is remote (`--remote-session`) can be served over ACP too.
 | `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
 | client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local) |
 | `session/fork` | ✅ (`session.clone`; source must be live in-process) |
-| `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` is the write side of the `mode` select we advertise, sharing `set_mode`'s implementation) |
+| `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of both the `mode` and `model` selects we advertise, each sharing its own entry point) |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
 | `tool_call` / `tool_call_update` | ✅ kind / title / locations / structured diff / streamed output |
 | `plan` (from todos) | ✅ |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
-| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`) |
+| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set — the protocol has no incremental form) |
+| model selector (`configOptions`, `category: "model"`) | ✅ when `.agents/config/models.json` is the source (the protocol has no `session/set_model`) |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
 | `compaction_update` / `notice` | ✅ gated by the client capability |
@@ -121,6 +122,18 @@ host that is remote (`--remote-session`) can be served over ACP too.
   a fresh agent via `Host.create`). `session/fork` rejects it, because a fork reuses the source's
   live agent and genuinely cannot swap servers.
 - The ACP session id is the disk session id.
+- **Model switching may switch the provider.** A model option's value encodes its `models.json`
+  entry (`"<entryIndex>:<model>"`), and selecting one applies that entry's `style` / `baseURL` /
+  `apiKey` — the same thing `/models` does in the TUI. Credentials are never advertised (only the
+  model id, its display name, and an entry description).
+  The selector appears **only** when `.agents/config/models.json` is the source: explicit
+  `--model` / `--base-url` / `--api-key` flags skip that file, and a one-value selector would be a
+  fake choice. Switching needs no model metadata — if models.dev is unreachable the switch still
+  happens, it just leaves the model's capabilities/cap messages unlabelled.
+- `session/load` / `session/resume` responses carry **no** `configOptions` (their shape is frozen),
+  so a client loses the mode and model selectors after reopening a session. Those responses do not
+  carry the legacy `modes` field either. Fixing it is a separate change — it should add both at once
+  rather than only the model.
 - `additionalDirectories` is not supported and is refused with a JSON-RPC error on every request
   that can carry it (`session/new`, `session/load`, `session/resume`, `session/fork`) — one shared
   check, one message. It is never silently ignored, so a client cannot end up talking to an agent
