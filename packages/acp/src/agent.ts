@@ -27,7 +27,7 @@ import { AcpProjector } from "./projector.js";
 import { applyMode, applyModel, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
 import { diskSessionId, sessionSelectors, sessionSelectorsFor, stopReasonFor } from "./session-status.js";
-import { paginateSessions } from "./sessions.js";
+import { createSessionCatalog } from "./sessions.js";
 
 import type { AcpClientEnv } from "./client-env.js";
 import type { AcpModelCatalogEntry, ConfigOptionTarget } from "./session-config-options.js";
@@ -530,48 +530,22 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // Session catalog (list / delete / fork)
   // --------------------------------------------------------------------------
 
-  app.onRequest(methods.agent.session.list, async (ctx) => {
-    const listPersisted = options.host.listPersistedSessions;
-    if (!listPersisted) {
-      // Not advertised in initialize for such a host — but a client may call anyway.
-      throw new Error("This host cannot enumerate persisted sessions (no listPersistedSessions capability)");
-    }
-    // `cwd` is an optional filter here and is NOT forwarded: the root is fixed at handshake and the
-    // catalog is already scoped to it, so echoing the value back would only pretend to filter.
-    if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
-      process.stderr.write(
-        `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
-      );
-    }
-    const listed = await listPersisted.call(options.host);
-    const page = paginateSessions(listed, rootPath, { cursor: ctx.params.cursor });
-    return {
-      sessions: page.sessions,
-      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-    };
+  const catalog = createSessionCatalog({
+    ...(options.host.listPersistedSessions
+      ? { listPersistedSessions: options.host.listPersistedSessions.bind(options.host) }
+      : {}),
+    ...(options.host.deleteSession ? { deleteSession: options.host.deleteSession.bind(options.host) } : {}),
+    rootPath,
+    closeLive: async (sessionId) => {
+      const live = bridges.get(sessionId);
+      if (!live) return false;
+      await closeBridge(live);
+      return true;
+    },
+    note: (text) => process.stderr.write(text),
   });
-
-  app.onRequest(methods.agent.session.delete, async (ctx) => {
-    const deleteSession = options.host.deleteSession;
-    if (!deleteSession) {
-      throw new Error("This host cannot delete persisted sessions (no deleteSession capability)");
-    }
-    // `DeleteSessionRequest` carries only `sessionId` — nothing else to check.
-    const sessionId = ctx.params.sessionId;
-    // Stop and unregister a live session first: deleting the log out from under a running
-    // agent would leave an append stream writing to a removed file.
-    const live = bridges.get(sessionId);
-    if (live) await closeBridge(live);
-
-    // Success is "was live, or its file is gone" — a session created by `session/new` and
-    // deleted immediately has NO file yet (`ensureSessionData` only mints the id in memory),
-    // so a bare `store.delete` returning false must not be reported as "not found".
-    const removed = await deleteSession.call(options.host, sessionId);
-    if (!removed && !live) {
-      throw RequestError.invalidParams(undefined, `Unknown session: ${sessionId}`);
-    }
-    return {};
-  });
+  app.onRequest(methods.agent.session.list, (ctx) => catalog.list(ctx.params));
+  app.onRequest(methods.agent.session.delete, (ctx) => catalog.remove(ctx.params));
 
   app.onRequest(methods.agent.session.fork, async (ctx) => {
     const sourceId = ctx.params.sessionId;

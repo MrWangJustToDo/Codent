@@ -16,7 +16,9 @@
  * The token stays opaque to the client (a JSON pair it has no reason to interpret).
  */
 
-import type { SessionInfo } from "@agentclientprotocol/sdk";
+import { RequestError } from "@agentclientprotocol/sdk";
+
+import type { DeleteSessionRequest, ListSessionsRequest, SessionInfo } from "@agentclientprotocol/sdk";
 import type { SessionMeta } from "@codent/core";
 
 /** Rows per page when the client does not ask for more. */
@@ -95,5 +97,65 @@ export function paginateSessions(
     sessions: page.map((meta) => toSessionInfo(meta, rootPath)),
     // Only advertise a next page when something was actually left over.
     ...(last && remaining.length > page.length ? { nextCursor: encodeCursor(last.updatedAt, last.id) } : {}),
+  };
+}
+
+/**
+ * The catalog plane's request handlers — `session/list` and `session/delete`.
+ *
+ * They live here, next to the paging and mapping they answer with, and away from `agent.ts`'s handler
+ * table (that file is at its line ceiling). Both are "sessions that are not the prompt loop": the
+ * dependency they need from the running app is one callback (`closeLive`), which keeps the extraction
+ * honest — a module that needs seven closures is a module that has not found its subject yet.
+ */
+export interface SessionCatalogDeps {
+  /** `undefined` when the host cannot enumerate (then `session/list` is not advertised either). */
+  listPersistedSessions?: () => Promise<SessionMeta[]>;
+  /** `undefined` when the host cannot delete. */
+  deleteSession?: (sessionId: string) => Promise<boolean>;
+  /** The workspace root; a `cwd` in the request is only ever compared against it. */
+  rootPath: string;
+  /** Stop a live session before its log is removed — deleting under a running agent would leave an
+   *  append stream writing to a removed file. Returns whether one was closed: a session that was live
+   *  counts as deleted even when it has no file yet. */
+  closeLive: (sessionId: string) => Promise<boolean>;
+  /** Diagnostics sink (stderr in a host). */
+  note: (text: string) => void;
+}
+
+export function createSessionCatalog(deps: SessionCatalogDeps) {
+  return {
+    async list(params: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> {
+      if (!deps.listPersistedSessions) {
+        // Not advertised in initialize for such a host — but a client may call anyway.
+        throw new Error("This host cannot enumerate persisted sessions (no listPersistedSessions capability)");
+      }
+      // `cwd` is an optional filter here and is NOT forwarded: the root is fixed at handshake and the
+      // catalog is already scoped to it, so echoing the value back would only pretend to filter.
+      if (params.cwd && params.cwd !== deps.rootPath) {
+        deps.note(`[codent-acp] note: session cwd ${params.cwd} differs from workspace root ${deps.rootPath}\n`);
+      }
+      const listed = await deps.listPersistedSessions();
+      const page = paginateSessions(listed, deps.rootPath, { cursor: params.cursor });
+      return {
+        sessions: page.sessions,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      };
+    },
+
+    async remove(params: DeleteSessionRequest): Promise<Record<string, never>> {
+      if (!deps.deleteSession) {
+        throw new Error("This host cannot delete persisted sessions (no deleteSession capability)");
+      }
+      // `DeleteSessionRequest` carries only `sessionId` — nothing else to check.
+      const sessionId = params.sessionId;
+      const wasLive = await deps.closeLive(sessionId);
+      // Success is "was live, or its file is gone" — a session created by `session/new` and deleted
+      // immediately has NO file yet (`ensureSessionData` only mints the id in memory), so a bare
+      // `delete` returning false must not be reported as "not found".
+      const removed = await deps.deleteSession(sessionId);
+      if (!removed && !wasLive) throw RequestError.invalidParams(undefined, `Unknown session: ${sessionId}`);
+      return {};
+    },
   };
 }
