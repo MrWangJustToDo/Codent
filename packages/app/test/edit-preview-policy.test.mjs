@@ -1,11 +1,12 @@
 /**
  * Validates that an edit_file diff is never PREDICTED after the write has landed.
  *
- * `previewEdit` resolves the edit against the file as it is NOW, so for a call whose `output` is
- * missing from the part it recomputed against the already-edited file, failed to match, and rendered
+ * `previewEdit` resolves the edit against the file as it is NOW, so for a call whose part has no
+ * `output` yet it recomputed against the already-edited file, failed to match, and rendered
  * `⚠ edit_file will refuse this` plus a `newFile === oldFile` diff ("no changes") for an edit that
- * had succeeded. Measured: 888 persisted `edit_file` calls sit in `approval-responded` with no
- * output part, and their changes ARE in the files.
+ * had succeeded. The reachable window is "after the write, before the result lands": a part is
+ * `approval-responded` with no output until then, and it can stay there (the session log shows
+ * `approval-responded → complete` normally, `→ error` when the run ends first).
  *
  * Run: node --test test/edit-preview-policy.test.mjs
  */

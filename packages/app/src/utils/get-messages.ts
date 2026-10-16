@@ -158,7 +158,8 @@ export const getMessages = (messages: UIMessage[], options: GetMessagesOptions =
   // Legacy-session caveat: a message dropped by the window no longer contributes a
   // dedupe anchor, so a duplicate toolCallId whose first occurrence fell outside the
   // window stays visible. Only affects pre-`suppress-replayed` sessions (see the
-  // TODO(cleanup) on `dedupeToolCallsInMessages`).
+  // TODO(cleanup) on `dedupeToolCallsInMessages`, which carries the re-measurement:
+  // 0 cross-message clones over 14327 calls, so this caveat is theoretical today).
   const windowStart = options.window ? resolveWindowStart(messages, options.window) : 0;
   const windowedMessages = windowStart > 0 ? messages.slice(windowStart) : messages;
 

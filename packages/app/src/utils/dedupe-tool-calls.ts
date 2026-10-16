@@ -147,6 +147,12 @@ type ToolLocation = { messageIdx: number; partIdx: number };
  * Core `suppress-replayed-tool-chunks` now prevents duplicate toolCallIds at ingest;
  * new sessions (e.g. ses_mscmazgx) have zero duplicates. Keep only while old dirty
  * sessions may still be opened. Do not remove {@link normalizeToolPartsInMessages}.
+ *
+ * Re-measured 2026-10-16 over every session on the authoring machine — 14327 distinct tool calls,
+ * **0** appearing in more than one message — so nothing here is load-bearing for them, and the
+ * window-splitting caveat in `get-messages.ts` is theoretical rather than observed. (What a session
+ * log DOES contain repeatedly is the same message re-emitted as its parts change: `SessionStore`
+ * folds that by message id on load, so it is not a duplicate call.)
  */
 export function dedupeToolCallsInMessages(messages: UIMessage[]): UIMessage[] {
   if (messages.length === 0) return messages;
