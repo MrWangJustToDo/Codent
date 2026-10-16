@@ -93,10 +93,14 @@ SHALL NOT 自行发明行窗口；并且 SHALL NOT 定义 core 的 `readFileRang
 
 ### Requirement: 发往 client 的路径必须是绝对路径
 
-所有携带路径的 client 请求（`fs/read_text_file`、`fs/write_text_file` 的 `path`，`terminal/create` 的
-`cwd`）SHALL 在发出前解析为**绝对路径**。ACP 对三者的规范要求是「Absolute path to the file」与
+所有携带路径的 client 请求 SHALL 在发出前解析为**绝对路径**：`fs/read_text_file` / `fs/write_text_file`
+的 `path`，以及 `terminal/create` 的 `cwd`。ACP 对三者的规范要求是「Absolute path to the file」与
 「Must be an absolute path」，而 core 的调用方（`write_file` / `edit_file` / `read_file` / `execFile`）
 传入的通常是**工作区相对路径** —— 相对路径无法归属任何根，client 会按**自身 cwd** 解析并拒绝。
+
+该解析 SHALL 只有**一份实现**（`paths.ts` 的 `toWirePath`），由 `fs/*` 的两个 body、`terminal/create` 的
+`cwd`，以及 `toolLocationsFor` / `toolDiffFor` 共用 —— `tool_call.location.path` 与随后的 `fs/*` 请求
+描述**同一个文件**，MUST NOT 各有一份实现而拼出两个字符串。
 
 #### Scenario: 相对路径按 rootPath 解析为绝对路径
 
@@ -151,12 +155,14 @@ SHALL NOT 自行发明行窗口；并且 SHALL NOT 定义 core 的 `readFileRang
 
 ### Requirement: rename 只在写入未路由到 client 时透传
 
+client-backed env MUST NOT 在写入路由到 client（即 client 声明 `fs.writeTextFile`）时暴露 `rename`。
+
 `rename` 是「整文件重写」的第二步（写同目录临时文件，再 rename 就位），而该重写的**写入**部分是一个
 工作区文本文件、会被路由到 client。若此时仍无条件透传 `rename`，第二步会在**我们的**文件系统上执行，
 而临时文件在 **client 的**盘上 —— 本地编辑器恰好共用同一块盘时看不出问题，真正的远端 client
 （Zed over SSH、dev container、另一台机器）会得到 ENOENT（或跨设备 EXDEV），并遗留临时文件。
 
-因此：当写入路由到 client（即 client 声明 `fs.writeTextFile`）时，client-backed env SHALL **不**暴露
+因此：当写入路由到 client 时，client-backed env SHALL **不**暴露
 `rename`，使 `write_file` 走其文档化的直接写分支（对目标路径发**一次**写）。当写入仍属本地时
 （`.agents/**`、工作区外、或 client 未声明写能力），`rename` SHALL 照常透传，原子重写的保证不失效。
 
