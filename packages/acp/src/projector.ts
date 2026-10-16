@@ -15,7 +15,7 @@
  * `extension-ui` → notices, `interaction` → the caller's permission/elicitation hook.
  */
 
-import { isContextUIMessage } from "@codent/core";
+import { isContextUIMessage, parseToolInput } from "@codent/core";
 
 import { textBlock } from "./content.js";
 import { toolCallInfo, toolDiffFor, toolResultText, toolStatusFor } from "./tools.js";
@@ -33,6 +33,14 @@ import type { AgentSession, AgentSessionEvent, AgentSessionSnapshot } from "@cod
 import type { UIMessage } from "@tanstack/ai";
 
 const STREAM_FLUSH_MS = 300;
+
+/**
+ * The call's input: the parsed field when the engine has it, else the raw `arguments` JSON.
+ *
+ * While a call streams, only `arguments` exists — reading `input` alone is why a `grep`/`read_file`
+ * row arrived with a bare "Search"/"Read" and no parameters, and with no `rawInput` either.
+ */
+const toolInputOf = (part: ToolCallPartLike): unknown => part.input ?? parseToolInput(part);
 
 export interface AcpProjectorOptions {
   rootPath: string;
@@ -180,10 +188,6 @@ export class AcpProjector {
 
   private emitMessages(messages: UIMessage[]): void {
     for (const message of messages) {
-      // Report the user turn too: the stream has to carry the turn boundary, or nothing separates two
-      // consecutive assistant replies and a client can only render them as one run of text (which is
-      // how a live conversation followed by a `session/load` came out merged and out of order).
-      if (message.role === "user") this.emitUserMessage(message);
       if (message.role === "assistant") {
         this.emitAssistantText(message);
         this.emitAssistantThought(message);
@@ -196,12 +200,13 @@ export class AcpProjector {
   }
 
   /**
-   * Report one user turn, once.
+   * Report one user turn, once — used by {@link replayFrom}.
    *
-   * Shared by the live path and {@link replayFrom} on purpose: they are the two halves of one
-   * question ("what has this client been told about the conversation?"), and a `user_message_chunk`
-   * sent twice is a duplicated turn in the client's transcript. Injected context rows are skipped
-   * here for the same reason they are skipped on replay — they are not conversation.
+   * NOT the live path: a client that submits a prompt renders it itself, so echoing it live is a
+   * duplicated turn (reported as after a cancel: `1` → `11`, because the client's own optimistic row
+   * stops being deduplicated once the turn it belonged to is gone). The replay is the half that needs
+   * this: there the client has nothing, and the user side is what keeps two consecutive assistant
+   * replies from reading as one run of text.
    */
   private emitUserMessage(message: UIMessage): void {
     if (isContextUIMessage(message)) return;
@@ -276,7 +281,7 @@ export class AcpProjector {
     const state = this.tools.get(id);
     if (!state) this.createToolCall(part, replay);
     else {
-      state.input = part.input ?? state.input;
+      state.input = toolInputOf(part) ?? state.input;
       const next = toolStatusFor(String(part.state), part.output?.success === false);
       if (next !== state.status) {
         state.status = next;
@@ -288,7 +293,9 @@ export class AcpProjector {
           toolCallId: id,
           status: next,
           ...(content ? { content } : {}),
-          ...(terminal && part.output !== undefined ? { rawOutput: part.output } : {}),
+          // `rawOutput` only when there is no content to show: sending both rendered the same result
+          // twice (once as content, once as the raw output).
+          ...(terminal && content === undefined && part.output !== undefined ? { rawOutput: part.output } : {}),
         });
       }
     }
@@ -312,7 +319,7 @@ export class AcpProjector {
       toolCallId: part.id,
       name: part.name,
       status,
-      ...toolCallInfo(part.name, part.input, this.options.rootPath, display?.text),
+      ...toolCallInfo(part.name, toolInputOf(part), this.options.rootPath, display?.text),
     });
   }
 

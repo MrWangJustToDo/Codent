@@ -1,10 +1,11 @@
 /**
- * Validates that a LIVE turn carries its boundary: the user message is reported, once.
+ * Validates what the LIVE path reports for a turn: the assistant text, and no echo of the prompt.
  *
- * The live path used to report assistant text only, so two consecutive replies arrived with nothing
- * between them — a client can only render that as one run of text — and injected `<ctx>` rows rode
- * along. Split out of `validate-acp.mjs`: a different subject from its permission/session suites,
- * and that file is at the line ceiling.
+ * The live path briefly echoed the user's message too (to give the stream a turn boundary). That is
+ * the client's own row — `1` came back as `11` after a cancel, once the client stopped deduplicating a
+ * row whose turn was gone — so the echo now lives only in the replay, where the client has nothing.
+ * Injected `<ctx>` rows must never be reported either. Split out of `validate-acp.mjs`: a different
+ * subject from its permission/session suites, and that file is at the line ceiling.
  *
  * Run: node scripts/validate-acp-live-turns.mjs
  */
@@ -85,23 +86,16 @@ await liveTurnClient.connectWith(liveTurnApp, async (cx) => {
   const chunks = liveTurnUpdates
     .map((p) => p.update)
     .filter((u) => u.sessionUpdate === "user_message_chunk" || u.sessionUpdate === "agent_message_chunk");
+  // A client that submits a prompt renders it itself: echoing it live is a duplicate turn (reported
+  // as `1` → `11` after a cancel, when the client's own optimistic row stops being deduplicated). The
+  // REPLAY is the half that must carry the user side — `validate-acp`'s session/load section covers it.
   check(
-    "a live turn reports its user message, before the assistant reply",
-    JSON.stringify(chunks.map((u) => u.sessionUpdate)) ===
-      JSON.stringify(["user_message_chunk", "agent_message_chunk"]) &&
-      chunks[0]?.content?.text === "what changed?" &&
-      chunks[0]?.messageId === "u-live"
+    "a live turn does NOT echo the user's prompt (the client authored it)",
+    chunks.every((u) => u.sessionUpdate !== "user_message_chunk") && chunks.length > 0
   );
   check(
     "the live stream never reports an injected <ctx> row",
     !chunks.some((u) => (u.content?.text ?? "").includes("<ctx kind="))
-  );
-  // The same channel payload again (the channel re-emits on every change): the turn is already told.
-  liveTurnUpdates.length = 0;
-  pushLiveMessages();
-  check(
-    "re-reporting the same messages does not duplicate the user turn",
-    liveTurnUpdates.filter((p) => p.update.sessionUpdate === "user_message_chunk").length === 0
   );
 });
 

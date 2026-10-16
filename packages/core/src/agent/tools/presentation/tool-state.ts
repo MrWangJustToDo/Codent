@@ -55,7 +55,7 @@ export function isCancelledToolCall(part: ToolCallPart | { output?: unknown }): 
   return typeof output?.error === "string" && isAbortError(new Error(output.error));
 }
 
-export function parseToolInput(part: ToolCallPart): unknown {
+export function parseToolInput(part: { arguments?: string }): unknown {
   if (!part.arguments) return undefined;
   try {
     return JSON.parse(part.arguments) as unknown;

@@ -15,6 +15,8 @@ export interface ToolCallPartLike {
   id: string;
   name: string;
   input?: unknown;
+  /** The engine's raw JSON arguments — the only place the input exists while it streams. */
+  arguments?: string;
   state: string;
   output?: { success?: boolean } & Record<string, unknown>;
 }
