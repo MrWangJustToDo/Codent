@@ -81,6 +81,18 @@ interface SessionBridge {
    * incremental form: any change re-sends the WHOLE option set.
    */
   lastAdvertisedConfigModel: string | undefined;
+  /**
+   * The entry the session's connection came from (`.agents/config/models.json` index), when this
+   * process knows it: seeded at attach from the config's active entry, updated by every model switch.
+   *
+   * Needed because a model id is only unique within an entry — with `shared` in two entries, an
+   * advertisement that resolves the current model by first match names the wrong entry, and a client
+   * re-selecting that value would dispatch the wrong credentials. `undefined` means "not recorded"
+   * (a resumed session), which degrades to first match rather than a wrong claim.
+   */
+  selectedModelEntryIndex: number | undefined;
+  /** The entry index the client was last told about — the mirror that makes a silent change visible. */
+  lastAdvertisedConfigEntryIndex: number | undefined;
 }
 
 export interface AcpAgentDefaults {
@@ -103,6 +115,12 @@ export interface AcpAgentOptions {
    * makes the ACP model selector disappear there.
    */
   modelCatalog?: AcpModelCatalogEntry[];
+  /**
+   * The config entry `modelCatalog`'s active model came from — the seed for a session's recorded
+   * entry, so `session/new` can advertise the right one when a model id appears in several entries.
+   * Absent whenever {@link modelCatalog} is (nothing to disambiguate).
+   */
+  modelCatalogActiveIndex?: number;
   /**
    * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
    *
@@ -228,6 +246,17 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
   };
 
+  /**
+   * The entry a session's connection comes from, when the config tells us: the active entry, and
+   * only when it actually holds that session's model. Anything else stays unrecorded rather than
+   * guessed — see {@link SessionBridge.selectedModelEntryIndex}.
+   */
+  const seededModelEntryIndex = (model: string | undefined): number | undefined => {
+    if (!model || options.modelCatalogActiveIndex === undefined) return undefined;
+    const active = options.modelCatalog?.find((entry) => entry.index === options.modelCatalogActiveIndex);
+    return active?.models.includes(model) ? active.index : undefined;
+  };
+
   const attach = (
     session: AgentSession,
     clientCaps: ClientCapabilities | undefined,
@@ -250,6 +279,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
       lastAdvertisedConfigModel: undefined,
+      // The connection's entry, when this process can know it: `session/new` took it from the
+      // config's active entry. A resumed session whose model is not in that entry (the file changed
+      // under it, or another process switched it) keeps `undefined` — the snapshot carries the model
+      // id but not the connection, so first-match resolution is the honest fallback there.
+      selectedModelEntryIndex: seededModelEntryIndex(session.getSnapshot().model),
+      lastAdvertisedConfigEntryIndex: undefined,
       projector: undefined as unknown as AcpProjector,
     };
     bridge.projector = new AcpProjector(session, {
@@ -402,10 +437,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     const snapshot = session.getSnapshot();
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
+    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: acpId,
       modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -577,10 +613,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     const snapshot = bridge.session.getSnapshot();
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
+    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: newId,
       modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -599,21 +636,38 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    * others out of the client's cache. And a re-set of the same value must stay silent: the client's
    * cache is already correct, and re-broadcasting would be noise the user cannot act on.
    */
-  const advertise = (bridge: SessionBridge, previous: { mode: AgentMode; model?: string }): void => {
+  const advertise = (
+    bridge: SessionBridge,
+    previous: { mode: AgentMode; model?: string; entryIndex?: number }
+  ): void => {
     const snapshot = bridge.session.getSnapshot();
-    if (snapshot.mode === previous.mode && snapshot.model === previous.model) return;
+    if (
+      snapshot.mode === previous.mode &&
+      snapshot.model === previous.model &&
+      bridge.selectedModelEntryIndex === previous.entryIndex
+    ) {
+      return;
+    }
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
+    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     emit(bridge.acpId, {
       sessionUpdate: "config_option_update",
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
     });
   };
 
-  /** The values the client was last told about, so {@link advertise} can tell "changed" from "same". */
-  const advertised = (bridge: SessionBridge): { mode: AgentMode; model?: string } => ({
+  /**
+   * The values the client was last told about, so {@link advertise} can tell "changed" from "same".
+   *
+   * The entry index is compared too: switching between two entries that offer the SAME model id
+   * (`0:shared` → `1:shared`) changes the connection while the model string stands still, and a
+   * client whose cache said `0:shared` must be told.
+   */
+  const advertised = (bridge: SessionBridge): { mode: AgentMode; model?: string; entryIndex?: number } => ({
     mode: bridge.lastAdvertisedConfigMode ?? bridge.session.getSnapshot().mode,
     model: bridge.lastAdvertisedConfigModel,
+    entryIndex: bridge.lastAdvertisedConfigEntryIndex,
   });
 
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
@@ -637,9 +691,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
     // Look the id up in the SET WE ADVERTISE rather than comparing against a literal: adding an
     // option later must not leave this check behind (a hardcoded id would reject the new one).
-    const option = sessionConfigOptions(bridge.session.getSnapshot(), options.modelCatalog).find(
-      (entry) => entry.id === ctx.params.configId
-    );
+    const option = sessionConfigOptions(
+      bridge.session.getSnapshot(),
+      options.modelCatalog,
+      bridge.selectedModelEntryIndex
+    ).find((entry) => entry.id === ctx.params.configId);
     if (!option) throw new Error(`Unknown configuration option: ${ctx.params.configId}`);
 
     // Dispatch on the option's CATEGORY, not on the configId. Reading the id would hardcode the set
@@ -651,9 +707,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       case "mode":
         await applyMode(toTarget(bridge), ctx.params.value as AgentMode);
         break;
-      case "model":
-        await applyModel(toTarget(bridge), ctx.params.value as string, options.modelCatalog);
+      case "model": {
+        const applied = await applyModel(toTarget(bridge), ctx.params.value as string, options.modelCatalog);
+        // Record the entry the connection came from, so every later advertisement names it instead
+        // of first-matching a model id that several entries may share. A bare re-selection of the
+        // current model reports no entry and leaves the recorded one alone.
+        if (applied.entryIndex !== undefined) bridge.selectedModelEntryIndex = applied.entryIndex;
         break;
+      }
       default:
         // No third option is advertised, so an unhandled category is a real gap. Swallow it and the
         // client's selector silently stops meaning anything.
@@ -662,7 +723,13 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     advertise(bridge, before);
 
     // Protocol requires the FULL set back (there is no incremental form), read after the change.
-    return { configOptions: sessionConfigOptions(bridge.session.getSnapshot(), options.modelCatalog) };
+    return {
+      configOptions: sessionConfigOptions(
+        bridge.session.getSnapshot(),
+        options.modelCatalog,
+        bridge.selectedModelEntryIndex
+      ),
+    };
   });
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {

@@ -591,7 +591,59 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     // session here accepts no such mode, so a mode mutation would show up immediately.
     check("a model write does not move the session mode", modelSession.getSnapshot().mode === "normal");
 
+    // --- the ENTRY attribution for a model id that exists in more than one entry ---------------
+    //
+    // `shared` sits in entry 0 AND entry 1, which is the whole reason the option value encodes the
+    // entry. Resolving the current model by first match names entry 0 for a session running on entry
+    // 1's connection — and then the value the client was TOLD, re-selected verbatim, dispatches
+    // entry 0's credentials. These assertions are the round trip the encoding exists for.
+    modelConnections.length = 0;
+    const ambiguous = await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "model",
+      value: "1:shared",
+    });
+    check(
+      "a duplicated model id switches through the entry it names",
+      modelConnections.length === 1 && modelConnections[0].baseURL === "https://two.example/v1"
+    );
+    const toldValue = ambiguous?.configOptions?.find((o) => o.category === "model")?.currentValue;
+    check("the advertisement names THAT entry, not the first one offering the id", toldValue === "1:shared");
+
+    modelConnections.length = 0;
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "model",
+      value: toldValue,
+    });
+    check(
+      "re-selecting the advertised value keeps the SAME connection",
+      modelConnections.length === 1 && modelConnections[0].baseURL === "https://two.example/v1"
+    );
+
+    // The same id on the other entry IS a different connection: the model string stands still, so
+    // only the recorded entry makes the change visible (and the client's cache must be corrected).
+    modelConnections.length = 0;
+    modelUpdates.length = 0;
+    const otherEntry = await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "model",
+      value: "0:shared",
+    });
+    const entryUpdate = modelUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").at(-1);
+    check(
+      "the same id on another entry still notifies (the connection changed, the model did not)",
+      entryUpdate?.update.configOptions?.find((o) => o.category === "model")?.currentValue === "0:shared"
+    );
+    check(
+      "…and it went through that entry's connection",
+      otherEntry?.configOptions?.find((o) => o.category === "model")?.currentValue === "0:shared" &&
+        modelConnections.length === 1 &&
+        modelConnections[0].baseURL === "https://one.example/v1"
+    );
+
     // An unknown value is refused and, crucially, changes nothing.
+    const modelBeforeRefusal = modelSession.getSnapshot().model;
     modelConnections.length = 0;
     const refusedUnknown = await (async () => {
       try {
@@ -608,7 +660,7 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     check("an unknown model entry is refused", /ghost|Unknown model/i.test(refusedUnknown ?? ""));
     check(
       "a refused model does not change the model or its connection",
-      modelSession.getSnapshot().model === "beta" && modelConnections.length === 0
+      modelSession.getSnapshot().model === modelBeforeRefusal && modelConnections.length === 0
     );
 
     // A model missing from the catalog (the file was edited under a live session) must still be

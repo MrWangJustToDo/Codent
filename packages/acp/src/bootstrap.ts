@@ -71,6 +71,11 @@ export interface LocalAcpBootstrap {
    */
   modelCatalog?: AcpModelCatalogEntry[];
   /**
+   * The entry `modelCatalog`'s active model came from. Carried so a session's connection can be
+   * attributed to the right entry when a model id appears in several of them.
+   */
+  modelCatalogActiveIndex?: number;
+  /**
    * Present only under `--client-env`: builds the per-session runtime whose env borrows the
    * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
    */
@@ -101,6 +106,8 @@ export async function bootstrapLocalAcp(
   // Built only on the `models.json` path: the flags path deliberately skips that file, and the
   // `.env` fallback has no list at all — so neither can offer a choice.
   let modelCatalog: AcpModelCatalogEntry[] | undefined;
+  /** The entry that model came from — a model id shared by several entries stays resolvable. */
+  let modelCatalogActiveIndex: number | undefined;
 
   if (options.model?.model?.trim()) {
     // Explicit CLI override: the flags are authoritative and the on-disk models.json is
@@ -146,6 +153,7 @@ export async function bootstrapLocalAcp(
             ...(loadedEntry.apiKey ? { apiKey: loadedEntry.apiKey } : {}),
             models: [...loadedEntry.models],
           }));
+          modelCatalogActiveIndex = loaded.active.entryIndex;
         }
       }
     } catch {
@@ -231,6 +239,7 @@ export async function bootstrapLocalAcp(
     host: agent.host,
     rootPath,
     ...(modelCatalog ? { modelCatalog } : {}),
+    ...(modelCatalogActiveIndex !== undefined ? { modelCatalogActiveIndex } : {}),
     ...(createSessionHost ? { createSessionHost } : {}),
     defaults: {
       model,
@@ -260,6 +269,7 @@ export async function bootstrapAcpAgent(
     defaults: boot.defaults,
     rootPath: boot.rootPath,
     ...(boot.modelCatalog ? { modelCatalog: boot.modelCatalog } : {}),
+    ...(boot.modelCatalogActiveIndex !== undefined ? { modelCatalogActiveIndex: boot.modelCatalogActiveIndex } : {}),
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
   };

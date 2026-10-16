@@ -93,6 +93,31 @@ function modeConfigOption(current: AgentMode): SessionConfigOption {
 }
 
 /**
+ * The catalog entry a session's current model's connection belongs to.
+ *
+ * `selectedEntryIndex` is the entry the connection was actually taken from — recorded by whoever
+ * switched it ({@link applyModel}) and seeded at `session/new` from the config's active entry. It is
+ * consulted FIRST because a model id is only unique within an entry: with `shared` in two entries,
+ * first-match resolution names entry 0 for a session running on entry 1's connection, and
+ * re-selecting that advertised value would then dispatch entry 0's credentials.
+ *
+ * First-match stays as the fallback for a session whose entry was never recorded in this process —
+ * a resumed session: its snapshot carries the model id but not the connection, so this is the best
+ * available answer rather than a claim.
+ */
+function resolveCurrentEntry(
+  catalog: AcpModelCatalogEntry[],
+  current: string,
+  selectedEntryIndex?: number
+): AcpModelCatalogEntry | undefined {
+  if (selectedEntryIndex !== undefined) {
+    const recorded = catalog.find((entry) => entry.index === selectedEntryIndex);
+    if (recorded?.models.includes(current)) return recorded;
+  }
+  return catalog.find((entry) => entry.models.includes(current));
+}
+
+/**
  * Build the `category: "model"` select from the catalog.
  *
  * `current` is guaranteed to appear in `options`: the protocol requires the agent to provide a
@@ -100,7 +125,11 @@ function modeConfigOption(current: AgentMode): SessionConfigOption {
  * list. A current model missing from the catalog (the file was edited under a live session, or a
  * restored session predates it) is therefore inserted, unencoded, rather than dropped.
  */
-function modelConfigOption(catalog: AcpModelCatalogEntry[], current: string): SessionConfigOption {
+function modelConfigOption(
+  catalog: AcpModelCatalogEntry[],
+  current: string,
+  selectedEntryIndex?: number
+): SessionConfigOption {
   const options: SessionConfigSelectOption[] = catalog.flatMap((entry) =>
     entry.models.map((model) => ({
       value: encodeModelChoice(entry.index, model),
@@ -109,7 +138,7 @@ function modelConfigOption(catalog: AcpModelCatalogEntry[], current: string): Se
       description: `entry ${entry.index} · ${entry.style} · ${entry.baseURL}`,
     }))
   );
-  const currentEntry = catalog.find((entry) => entry.models.includes(current));
+  const currentEntry = resolveCurrentEntry(catalog, current, selectedEntryIndex);
   if (!currentEntry) {
     options.unshift({ value: current, name: current, description: "current model (not in models.json)" });
   }
@@ -134,7 +163,8 @@ function modelConfigOption(catalog: AcpModelCatalogEntry[], current: string): Se
  */
 export function sessionConfigOptions(
   snapshot: AgentSessionSnapshot,
-  catalog: AcpModelCatalogEntry[] | undefined
+  catalog: AcpModelCatalogEntry[] | undefined,
+  selectedEntryIndex?: number
 ): SessionConfigOption[] {
   const mode = modeConfigOption(snapshot.mode);
   const selectable = catalog?.some((entry) => entry.models.length > 0) ?? false;
@@ -142,7 +172,7 @@ export function sessionConfigOptions(
   // Model first: it is the option users reach for most often, and the spec makes array order the
   // agent's declared priority. The mode option stays either way — it is the `configOptions`
   // counterpart of the legacy `modes` field some clients still read.
-  return [modelConfigOption(catalog as AcpModelCatalogEntry[], snapshot.model), mode];
+  return [modelConfigOption(catalog as AcpModelCatalogEntry[], snapshot.model, selectedEntryIndex), mode];
 }
 
 /** What a write needs from the session it acts on — the bridge's session and its id. */
@@ -181,12 +211,16 @@ export async function applyMode(target: ConfigOptionTarget, mode: AgentMode): Pr
  * Accepts either an encoded catalog value (`"<entryIndex>:<model>"`) or a bare model id, because
  * {@link modelConfigOption} inserts the session's current model unencoded when it is missing from
  * the catalog; re-selecting that value is a no-op rather than an error.
+ *
+ * Returns the entry the new connection came from (`undefined` when nothing was re-resolved). The
+ * caller records it: without that, the next advertisement can only guess which entry a
+ * duplicated model id belongs to.
  */
 export async function applyModel(
   target: ConfigOptionTarget,
   value: string,
   catalog: AcpModelCatalogEntry[] | undefined
-): Promise<AgentSessionSnapshot> {
+): Promise<ModelSwitchOutcome> {
   if (!catalog?.length) throw new Error("No models are configured (no `.agents/config/models.json`)");
 
   const decoded = decodeModelChoice(value);
@@ -218,5 +252,12 @@ export async function applyModel(
   });
   if (!result.ok) throw new Error(result.error ?? `Failed to switch model: ${model}`);
 
-  return target.session.getSnapshot();
+  return { snapshot: target.session.getSnapshot(), ...(entry ? { entryIndex: entry.index } : {}) };
+}
+
+/** What {@link applyModel} reports back: the session after the change, and the entry it used. */
+export interface ModelSwitchOutcome {
+  snapshot: AgentSessionSnapshot;
+  /** The catalog entry the connection came from — record it, or the next advertisement cannot name it. */
+  entryIndex?: number;
 }
