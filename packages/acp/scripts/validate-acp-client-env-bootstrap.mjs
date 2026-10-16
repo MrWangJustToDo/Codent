@@ -71,7 +71,7 @@ function makeEnv(root, { bindImmediately = false } = {}) {
 
 {
   const root = await makeWorkspace("acp-e2e-doc-");
-  const { env, clientRequests } = makeEnv(root);
+  const { env, clientRequests, logs } = makeEnv(root);
 
   const agent = await CodentAgent.create({ env });
   // The real sequence: the env is unbound while `host.create` runs, then bound.
@@ -80,6 +80,13 @@ function makeEnv(root, { bindImmediately = false } = {}) {
 
   const { session } = await agent.host.create({ name: "e2e", model: "gpt-4o" });
   check("the session was created", Boolean(session));
+
+  // The designed local routes are COUNTED and not narrated: a session's own `.agents/**` reads all
+  // take this branch, so a line each printed ~50 WARN lines per session load (reported as an error).
+  check(
+    "a designed local route is counted, not logged",
+    env.fallbackCounts.localOnlyPath > 0 && !logs.some((line) => line.includes("local-only-path"))
+  );
 
   check(
     "the project instruction file WAS loaded during create",

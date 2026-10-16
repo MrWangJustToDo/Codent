@@ -169,6 +169,19 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
    * moment later. Filing it under the path bucket would make a startup read look like a guard hit.
    */
   const PATHS_WE_NEVER_SEND = ["local-only-path"];
+  /**
+   * Reasons that are the DESIGNED route rather than a fallback worth a line each — the counters below
+   * still record every decision, which is the tested contract; the line was only ever a duplicate.
+   */
+  const ROUTINE_REASONS = new Set([
+    "local-only-path",
+    "byte-read",
+    "binary-write",
+    "free-text-command",
+    "no-session-yet",
+  ]);
+  /** Missing-capability routes already reported, so each is said once rather than per request. */
+  const reportedMissingCapabilities = new Set<string>();
   const NO_CAPABILITY_REASONS = [
     "no-session-yet",
     "no-capability:readTextFile",
@@ -179,6 +192,19 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     if (PATHS_WE_NEVER_SEND.includes(reason)) fallbackCounts.localOnlyPath += 1;
     else if (NO_CAPABILITY_REASONS.includes(reason)) fallbackCounts.localNoCapability += 1;
     else fallbackCounts.other += 1;
+    // The counter above is the machine-readable record; a line per request is a duplicate of it, and
+    // for the DESIGNED routes it is noise that reads as a fault: `local-only-path` fires for every
+    // `.agents/**` request, so loading one session printed ~50 WARN-tagged lines (reported as an
+    // error). Only the reasons a user can act on — or an anomaly — get a line now.
+    if (ROUTINE_REASONS.has(reason)) return;
+    // A capability the client never declared is actionable once ("you did not enable terminal"), not
+    // once per request on that route.
+    if (reason.startsWith("no-capability:")) {
+      if (reportedMissingCapabilities.has(reason)) return;
+      reportedMissingCapabilities.add(reason);
+      options.log?.(`client-env: ${reason} (this route stays local)`);
+      return;
+    }
     options.log?.(`client-env: ${reason}`);
   };
 
