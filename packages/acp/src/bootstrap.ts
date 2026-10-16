@@ -32,7 +32,13 @@ import { createNodeEnv } from "@codent/node";
 
 import { createAcpClientEnv } from "./client-env.js";
 
-import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
+import type {
+  AcpAgentDefaults,
+  AcpAgentOptions,
+  AcpModelCatalogEntry,
+  AcpSessionRuntime,
+  AcpClientEnvFactoryContext,
+} from "./agent.js";
 import type { AgentSessionHost, ModelProvider, ModelStyle } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
@@ -55,6 +61,15 @@ export interface LocalAcpBootstrap {
   host: AgentSessionHost;
   defaults: AcpAgentDefaults;
   rootPath: string;
+  /**
+   * The selectable models from `.agents/config/models.json`, when that file was the source.
+   *
+   * Absent on the explicit-flags path (`--model …`) and on the `.env` fallback, which is what
+   * makes the ACP model selector disappear there: a selector offering exactly one value would be
+   * a fake choice. The list is process-wide (one config file), while the *current* model is
+   * per-session — see `sessionConfigOptions` in `agent.ts`.
+   */
+  modelCatalog?: AcpModelCatalogEntry[];
   /**
    * Present only under `--client-env`: builds the per-session runtime whose env borrows the
    * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
@@ -83,6 +98,9 @@ export async function bootstrapLocalAcp(
   let baseURL: string | undefined;
   let apiKey: string | undefined;
   let modelInfo: AcpAgentDefaults["modelInfo"];
+  // Built only on the `models.json` path: the flags path deliberately skips that file, and the
+  // `.env` fallback has no list at all — so neither can offer a choice.
+  let modelCatalog: AcpModelCatalogEntry[] | undefined;
 
   if (options.model?.model?.trim()) {
     // Explicit CLI override: the flags are authoritative and the on-disk models.json is
@@ -119,6 +137,15 @@ export async function bootstrapLocalAcp(
           baseURL = fromProvider.connection.baseURL;
           apiKey = fromProvider.connection.apiKey;
           modelInfo = fromProvider.modelInfo;
+          // The catalog is the reason this file was read: keep the whole list, not just the
+          // active entry, so `session/new` can advertise the models the user may switch to.
+          modelCatalog = loaded.entries.map((loadedEntry, index) => ({
+            index,
+            style: loadedEntry.style,
+            baseURL: loadedEntry.baseURL,
+            ...(loadedEntry.apiKey ? { apiKey: loadedEntry.apiKey } : {}),
+            models: [...loadedEntry.models],
+          }));
         }
       }
     } catch {
@@ -203,6 +230,7 @@ export async function bootstrapLocalAcp(
   return {
     host: agent.host,
     rootPath,
+    ...(modelCatalog ? { modelCatalog } : {}),
     ...(createSessionHost ? { createSessionHost } : {}),
     defaults: {
       model,
@@ -231,6 +259,7 @@ export async function bootstrapAcpAgent(
     host: boot.host,
     defaults: boot.defaults,
     rootPath: boot.rootPath,
+    ...(boot.modelCatalog ? { modelCatalog: boot.modelCatalog } : {}),
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
   };

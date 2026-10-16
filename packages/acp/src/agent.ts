@@ -10,24 +10,18 @@
  */
 
 import { agent as createAgentApp, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-import { BUILTIN_TOOL_NAMES } from "@codent/core";
 
-import { shouldSuppressApproval } from "./approvals.js";
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
+import { createInteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
-import {
-  buildElicitationRequest,
-  mapElicitationResponse,
-  mapPermissionOutcome,
-  permissionOptions,
-} from "./permissions.js";
 import { AcpProjector } from "./projector.js";
+import { applyMode, applyModel, MODE_IDS, MODE_META, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
 import { paginateSessions } from "./sessions.js";
-import { toolKindFor } from "./tools.js";
 
 import type { AcpClientEnv } from "./client-env.js";
+import type { AcpModelCatalogEntry, ConfigOptionTarget } from "./session-config-options.js";
 import type { SessionUpdate } from "./types.js";
 import type {
   AgentApp,
@@ -36,7 +30,6 @@ import type {
   ClientCapabilities,
   McpServer,
   PromptRequest,
-  SessionConfigOption,
   SessionMode,
   SessionModeState,
   StopReason,
@@ -50,6 +43,10 @@ import type {
   ModelStyle,
   AgentMode,
 } from "@codent/core";
+
+// Re-exported so a host builds `AcpAgentOptions` from one import site rather than reaching into the
+// module that happens to consume the catalog.
+export type { AcpModelCatalogEntry } from "./session-config-options.js";
 
 /** Per-session bookkeeping. */
 interface SessionBridge {
@@ -78,6 +75,12 @@ interface SessionBridge {
    * is the client's cached selector state, so it is only re-sent when it actually changed.
    */
   lastAdvertisedConfigMode: AgentMode | undefined;
+  /**
+   * The model the client was last told about (via `configOptions`). Tracked separately from
+   * {@link lastAdvertisedConfigMode} because the two change independently and the protocol has no
+   * incremental form: any change re-sends the WHOLE option set.
+   */
+  lastAdvertisedConfigModel: string | undefined;
 }
 
 export interface AcpAgentDefaults {
@@ -94,6 +97,12 @@ export interface AcpAgentOptions {
   defaults: AcpAgentDefaults;
   rootPath?: string;
   version?: string;
+  /**
+   * Selectable models, when the workspace's `models.json` was the source. Absent on the explicit
+   * `--model` flags path (which skips that file) and on the `.env` fallback — both of which is what
+   * makes the ACP model selector disappear there.
+   */
+  modelCatalog?: AcpModelCatalogEntry[];
   /**
    * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
    *
@@ -154,13 +163,14 @@ export interface AcpSessionRuntime {
 }
 
 const AGENT_NAME = "codent";
-const MODE_IDS: AgentMode[] = ["normal", "auto", "plan"];
-const MODE_META: Record<AgentMode, { name: string; description: string }> = {
-  normal: { name: "Normal", description: "Ask before risky actions" },
-  auto: { name: "Auto", description: "Skip tool approvals (YOLO)" },
-  plan: { name: "Plan", description: "Explore read-only, then build a plan" },
-};
 
+/**
+ * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
+ *
+ * The spec says agents with mode-like configuration SHOULD send both: `configOptions` for clients
+ * that understand it, `modes` for those that only read the older API. The mode vocabulary itself
+ * lives in `session-config-options.ts` (one home, shared with the `category: "mode"` option).
+ */
 function sessionModes(current: AgentMode): SessionModeState {
   const availableModes: SessionMode[] = MODE_IDS.map((id) => ({ id, ...MODE_META[id] }));
   return { currentModeId: current, availableModes };
@@ -187,25 +197,6 @@ function diskSessionId(session: AgentSession): string {
     throw new Error(`ACP session has no disk session id (agent ${session.id})`);
   }
   return active;
-}
-
-/**
- * The session config select (`category: "mode"`) advertised by `session/new` and `session/fork`.
- * Reads the same `mode` channel state as `session/set_mode` / `current_mode_update`, so it is a
- * projection of that truth, not a second source.
- */
-function sessionConfigOptions(current: AgentMode): SessionConfigOption[] {
-  return [
-    {
-      id: "mode",
-      name: "Mode",
-      description: "How the agent handles risky actions",
-      category: "mode",
-      type: "select",
-      currentValue: current,
-      options: MODE_IDS.map((id) => ({ value: id, name: MODE_META[id].name, description: MODE_META[id].description })),
-    },
-  ];
 }
 
 /** Create the ACP agent app (handlers registered; call `connect(stream)` to serve). */
@@ -258,6 +249,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       elicitation: Boolean(clientCaps?.elicitation?.form),
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
+      lastAdvertisedConfigModel: undefined,
       projector: undefined as unknown as AcpProjector,
     };
     bridge.projector = new AcpProjector(session, {
@@ -275,6 +267,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     return bridge;
   };
 
+  /** The {@link ConfigOptionTarget} shape the shared write helpers act on. */
+  const toTarget = (bridge: SessionBridge): ConfigOptionTarget => ({ session: bridge.session, acpId: bridge.acpId });
+
   /** Build this session's runtime (see `session-runtime.ts`). */
   const createRuntime = (): Promise<SessionRuntime> =>
     buildSessionRuntime({ options, client, getClientCapabilities: () => initCaps });
@@ -291,112 +286,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     await bridge.runtime.dispose().catch(() => undefined);
   };
 
-  const handleInteractions = async (bridge: SessionBridge, payload: unknown): Promise<void> => {
-    const snapshot = payload as {
-      approvals?: Array<{ approvalId: string; toolName: string; toolCallId: string }>;
-      askUser?: Array<{ toolCallId: string; question: string; options?: string[]; multiSelect?: boolean }>;
-    };
-    for (const approval of snapshot.approvals ?? []) {
-      if (bridge.seenApprovals.has(approval.approvalId)) continue;
-      bridge.seenApprovals.add(approval.approvalId);
-      // Under `--client-env` some approvals are the client's to grant, and it already did (it
-      // served the `fs/*` call we made). Asking again would be the same question twice, so the
-      // answer is given here instead — see `approvals.ts` for the exact set and the exclusions.
-      if (
-        bridge.clientEnv &&
-        shouldSuppressApproval({
-          approval,
-          messages: bridge.session.getSnapshot().messages ?? [],
-          clientEnv: bridge.clientEnv,
-          mode: bridge.session.getSnapshot().mode,
-        })
-      ) {
-        bridge.clientOwnedApprovals += 1;
-        void bridge.session
-          .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved: true })
-          .catch(() => undefined);
-        continue;
-      }
-      void requestApproval(bridge, approval);
-    }
-    for (const ask of snapshot.askUser ?? []) {
-      if (bridge.seenAskUser.has(ask.toolCallId)) continue;
-      bridge.seenAskUser.add(ask.toolCallId);
-      void requestElicitation(bridge, ask);
-    }
-  };
-
-  const requestApproval = async (
-    bridge: SessionBridge,
-    approval: { approvalId: string; toolName: string; toolCallId: string }
-  ): Promise<void> => {
-    const controller = new AbortController();
-    bridge.pending.add(controller);
-    try {
-      const response = await client().request(
-        methods.client.session.requestPermission,
-        {
-          sessionId: bridge.acpId,
-          toolCall: {
-            toolCallId: approval.toolCallId,
-            title: approval.toolName,
-            kind: toolKindFor(approval.toolName),
-            status: "pending",
-          },
-          options: permissionOptions(),
-        },
-        { cancellationSignal: controller.signal }
-      );
-      const decision = mapPermissionOutcome(response);
-      if (!decision) return;
-      await bridge.session.dispatch({
-        type: "respondApproval",
-        approvalId: approval.approvalId,
-        approved: decision.approved,
-      });
-    } catch {
-      // connection closed / cancelled — the session's own approval timeout settles it
-    } finally {
-      bridge.pending.delete(controller);
-    }
-  };
-
-  const requestElicitation = async (
-    bridge: SessionBridge,
-    ask: { toolCallId: string; question: string; options?: string[]; multiSelect?: boolean }
-  ): Promise<void> => {
-    const controller = new AbortController();
-    bridge.pending.add(controller);
-    try {
-      if (!bridge.elicitation) {
-        emit(bridge.acpId, {
-          sessionUpdate: "agent_message_chunk",
-          messageId: `${bridge.acpId}-ask-${ask.toolCallId}`,
-          content: { type: "text", text: `The agent asked: ${ask.question}` },
-        });
-        await bridge.session.dispatch({
-          type: "addToolResult",
-          toolCallId: ask.toolCallId,
-          output: askUserOutput(ask, null, true),
-        });
-        return;
-      }
-      const response = await client().request(
-        methods.client.elicitation.create,
-        buildElicitationRequest(bridge.acpId, ask),
-        { cancellationSignal: controller.signal }
-      );
-      await bridge.session.dispatch({
-        type: "addToolResult",
-        toolCallId: ask.toolCallId,
-        output: askUserOutput(ask, mapElicitationResponse(response), false),
-      });
-    } catch {
-      // connection closed / cancelled — leave the interaction to time out
-    } finally {
-      bridge.pending.delete(controller);
-    }
-  };
+  const { handleInteractions } = createInteractionHandlers({
+    client,
+    emit,
+    onClientOwnedApproval: () => undefined,
+  });
 
   // --------------------------------------------------------------------------
   // Handlers
@@ -506,12 +400,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     runtime.bind(acpId);
     const bridge = attach(session, initCaps, acpId, runtime);
     const snapshot = session.getSnapshot();
-    // Record what the client is being told, so `set_mode` knows whether it changed anything.
     bridge.lastAdvertisedConfigMode = snapshot.mode;
+    bridge.lastAdvertisedConfigModel = snapshot.model;
     return {
       sessionId: acpId,
       modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot.mode),
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
     };
   });
 
@@ -682,10 +576,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
     const snapshot = bridge.session.getSnapshot();
     bridge.lastAdvertisedConfigMode = snapshot.mode;
+    bridge.lastAdvertisedConfigModel = snapshot.model;
     return {
       sessionId: newId,
       modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot.mode),
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
     };
   });
 
@@ -696,22 +591,30 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    * `mode` config option it advertises), and they must not grow into two mode systems: the
    * dispatch, the re-read and the follow-up update are all one behaviour.
    */
-  const applyMode = async (bridge: SessionBridge, mode: AgentMode): Promise<void> => {
-    if (!MODE_IDS.includes(mode)) throw new Error(`Unknown mode: ${mode}`);
-    await bridge.session.dispatch({ type: "mode.set", mode });
-    // Re-read the mode from the session rather than echoing the request: the dispatch may be a
-    // no-op (already in that mode) or clamp to something else, and the advertised option must
-    // describe what the session ACTUALLY is. Without this update the client keeps whatever
-    // `configOptions` it got from `session/new`/`session/fork` and its selector drifts silently.
-    const current = bridge.session.getSnapshot().mode;
-    if (current !== bridge.lastAdvertisedConfigMode) {
-      bridge.lastAdvertisedConfigMode = current;
-      emit(bridge.acpId, {
-        sessionUpdate: "config_option_update",
-        configOptions: sessionConfigOptions(current),
-      });
-    }
+  /**
+   * Re-advertise the WHOLE option set, but only when the value actually changed.
+   *
+   * The protocol's `ConfigOptionUpdate` carries `configOptions` and has no incremental form, so a
+   * single changed entry still means re-sending the set — sending only that entry would wipe the
+   * others out of the client's cache. And a re-set of the same value must stay silent: the client's
+   * cache is already correct, and re-broadcasting would be noise the user cannot act on.
+   */
+  const advertise = (bridge: SessionBridge, previous: { mode: AgentMode; model?: string }): void => {
+    const snapshot = bridge.session.getSnapshot();
+    if (snapshot.mode === previous.mode && snapshot.model === previous.model) return;
+    bridge.lastAdvertisedConfigMode = snapshot.mode;
+    bridge.lastAdvertisedConfigModel = snapshot.model;
+    emit(bridge.acpId, {
+      sessionUpdate: "config_option_update",
+      configOptions: sessionConfigOptions(snapshot, options.modelCatalog),
+    });
   };
+
+  /** The values the client was last told about, so {@link advertise} can tell "changed" from "same". */
+  const advertised = (bridge: SessionBridge): { mode: AgentMode; model?: string } => ({
+    mode: bridge.lastAdvertisedConfigMode ?? bridge.session.getSnapshot().mode,
+    model: bridge.lastAdvertisedConfigModel,
+  });
 
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
@@ -719,28 +622,47 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // we never touched is a lie the client cannot detect. (`close` is allowed to tolerate absence —
     // there the desired state is already true, so "ok" is honest. Here it is not.)
     if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
-    await applyMode(bridge, ctx.params.modeId as AgentMode);
+    const before = advertised(bridge);
+    await applyMode(toTarget(bridge), ctx.params.modeId as AgentMode);
+    advertise(bridge, before);
     return {};
   });
 
   // The write side of the `configOptions` we advertise: declaring a select implies accepting the
-  // request that sets it. Without this a client renders the mode selector and then gets
-  // "Method not found" (-32601) the moment anyone touches it.
+  // request that sets it. Without this a client renders the selector and then gets "Method not
+  // found" (-32601) the moment anyone touches it.
   app.onRequest(methods.agent.session.setConfigOption, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
     if (!bridge) throw new Error(`Unknown session: ${ctx.params.sessionId}`);
 
     // Look the id up in the SET WE ADVERTISE rather than comparing against a literal: adding an
     // option later must not leave this check behind (a hardcoded id would reject the new one).
-    const snapshot = bridge.session.getSnapshot();
-    const option = sessionConfigOptions(snapshot.mode).find((entry) => entry.id === ctx.params.configId);
+    const option = sessionConfigOptions(bridge.session.getSnapshot(), options.modelCatalog).find(
+      (entry) => entry.id === ctx.params.configId
+    );
     if (!option) throw new Error(`Unknown configuration option: ${ctx.params.configId}`);
 
-    // The one option we expose is the mode select, so its value is a mode id.
-    await applyMode(bridge, ctx.params.value as AgentMode);
+    // Dispatch on the option's CATEGORY, not on the configId. Reading the id would hardcode the set
+    // again, and assuming "the only option is mode" (as this did while mode was the only one) sends
+    // a model id through `mode.set` — which reports success and broadcasts a current value that
+    // never took effect.
+    const before = advertised(bridge);
+    switch (option.category) {
+      case "mode":
+        await applyMode(toTarget(bridge), ctx.params.value as AgentMode);
+        break;
+      case "model":
+        await applyModel(toTarget(bridge), ctx.params.value as string, options.modelCatalog);
+        break;
+      default:
+        // No third option is advertised, so an unhandled category is a real gap. Swallow it and the
+        // client's selector silently stops meaning anything.
+        throw new Error(`Configuration option "${option.id}" has no write path (category: ${option.category})`);
+    }
+    advertise(bridge, before);
 
     // Protocol requires the FULL set back (there is no incremental form), read after the change.
-    return { configOptions: sessionConfigOptions(bridge.session.getSnapshot().mode) };
+    return { configOptions: sessionConfigOptions(bridge.session.getSnapshot(), options.modelCatalog) };
   });
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
@@ -791,26 +713,6 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   return app;
-}
-
-/** `ask_user` result shaped for `askUserOutputSchema` (the client tool's contract). */
-function askUserOutput(
-  ask: { question: string; options?: string[] },
-  answer: { answer: string; selected?: string[]; draft?: string } | null,
-  cancelled: boolean
-): Record<string, unknown> {
-  return {
-    question: ask.question,
-    answer: answer?.answer ?? "",
-    hasOptions: Boolean(ask.options?.length),
-    durationMs: 0,
-    cachedOutputPath: null,
-    success: true,
-    tool: BUILTIN_TOOL_NAMES.askUser,
-    ...(answer?.selected ? { selected: answer.selected, multiSelect: true } : {}),
-    ...(answer?.draft !== undefined ? { draft: answer.draft } : {}),
-    ...(cancelled ? { cancelled: true } : {}),
-  };
 }
 
 function stopReasonFor(bridge: SessionBridge): StopReason {
