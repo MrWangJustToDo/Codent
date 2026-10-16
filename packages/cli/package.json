@@ -34,6 +34,16 @@
     "codent": "./dist/index.mjs"
   },
   "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./host": {
+      "types": "./dist/host.d.mts",
+      "import": "./dist/host.mjs"
+    }
+  },
   "files": [
     "dist"
   ],
@@ -45,6 +55,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codent/acp": "workspace:*",
     "@codent/core": "workspace:*",
     "@codent/node": "workspace:*",
     "@codent/server": "workspace:*",

@@ -1,12 +1,17 @@
 import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
-import type { CoreEnv, ModelProvider } from "@codent/core";
+import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
 
 /**
- * Local adapter. Builds the process's {@link CodentAgent} runtime from the host-owned
- * env / provider planes and drives model resolution through its {@link AgentSessionHost}.
- * `--remote-session` binds a remote host into the same runtime handle (no local manager).
+ * Local adapter — shared by the development host (`@codent/cli`) and the
+ * self-contained release host (`codent-cli`). Builds the process's
+ * {@link CodentAgent} runtime from the host-owned env / provider planes.
+ *
+ * `--remote-session` binds a remote AgentSession host into the same runtime
+ * handle (no local manager). The host factory is injected rather than imported
+ * from `@codent/server/client` so this module stays server-free — the release
+ * host can inline it without pulling in `@codent/server`.
  */
 export class LocalAgentAdapter implements AgentAdapter {
   private agent: CodentAgent | null = null;
@@ -15,6 +20,7 @@ export class LocalAgentAdapter implements AgentAdapter {
   private _env: CoreEnv;
   private _provider: ModelProvider | undefined;
   private _ownsEnv: boolean;
+  private _createRemoteSessionHost: ((opts: { baseUrl: string }) => AgentSessionHost) | undefined;
 
   constructor(options: {
     exit: () => void;
@@ -23,12 +29,15 @@ export class LocalAgentAdapter implements AgentAdapter {
     provider?: ModelProvider;
     /** True only for a locally-built env; a borrowed remote env must not be destroyed on exit. */
     ownsEnv?: boolean;
+    /** Injected remote AgentSession host factory (`@codent/server/client` in the dev host). */
+    createRemoteAgentSessionHost?: (opts: { baseUrl: string }) => AgentSessionHost;
   }) {
     this._exit = options.exit;
     this._readClipboardImage = options.readClipboardImage ?? null;
     this._env = options.env;
     this._provider = options.provider;
     this._ownsEnv = options.ownsEnv ?? false;
+    this._createRemoteSessionHost = options.createRemoteAgentSessionHost;
   }
 
   async initialize(config: AppConfig): Promise<InitResult> {
@@ -37,9 +46,13 @@ export class LocalAgentAdapter implements AgentAdapter {
     // host when --remote-session is configured (agent loop runs server-side). Both
     // are held by one CodentAgent so the provider/env planes resolve per runtime.
     if (config.remoteSession) {
-      const host = (await import("@codent/server/client")).createRemoteAgentSessionHost({
-        baseUrl: config.remoteSession,
-      });
+      if (!this._createRemoteSessionHost) {
+        throw new Error(
+          "--remote-session is not available in this build (no remote AgentSession host injected). " +
+            "Use the development host (@codent/cli) for remote sessions."
+        );
+      }
+      const host = this._createRemoteSessionHost({ baseUrl: config.remoteSession });
       this.agent = await CodentAgent.create({ env: this._env, host });
     } else {
       this.agent = await CodentAgent.create({

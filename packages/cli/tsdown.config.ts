@@ -20,7 +20,11 @@ const rewriteRendererSpecifiers = () => ({
 });
 
 export default defineConfig({
-  entry: ["src/index.tsx"],
+  // Two entries: `index.tsx` is the bin (injects @codent/server factories);
+  // `host.tsx` is the server-free library entry the self-contained release host
+  // (`codent-cli`) imports so it can inline the shared host logic without
+  // pulling in @codent/server.
+  entry: ["src/index.tsx", "src/host.tsx"],
   format: ["esm"],
   dts: true,
   clean: true,
@@ -29,11 +33,12 @@ export default defineConfig({
   deps: {
     // The logic layer and the rendering primitives stay real dependencies, named directly:
     // core owns the agent loop and is shared with the server, and the renderer must resolve to
-    // ONE copy in the host process.
+    // ONE copy in the host process. @codent/acp is the ACP host the bin serves over stdio.
     neverBundle: [
       "@codent/core",
       "@codent/node",
       "@codent/server",
+      "@codent/acp",
       "@my-react/react",
       "@my-react/react/jsx-runtime",
       "@my-react/react/jsx-dev-runtime",

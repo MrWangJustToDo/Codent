@@ -66,6 +66,7 @@
   "devDependencies": {
     "@codent/acp": "workspace:*",
     "@codent/app": "workspace:*",
+    "@codent/cli": "workspace:*",
     "@codent/core": "workspace:*",
     "@codent/node": "workspace:*",
     "@types/node": "^26.6.4",
