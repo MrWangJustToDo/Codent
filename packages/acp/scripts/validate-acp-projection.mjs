@@ -535,14 +535,19 @@ const compactKey = "compact:agent_1";
 }
 
 // ===========================================================================
-// 7. Thinking is sent once, and re-reporting a message does not send it again
+// 7. Thinking shares its turn's messageId, and a replay keeps part order
 // ===========================================================================
 //
-// Reported as "thinking is duplicated in Zed". Measured over three real sessions (1545 / 255 / 4
-// assistant messages, replay + redundant ticks), the projector emits exactly one `agent_thought_chunk`
-// per message and nothing on a repeated tick — so the wire is not the source. Pinned here so it cannot
-// become one: `messages` re-ports the whole array on every change, and one chunk per message is the
-// contract that keeps a client's append-by-`messageId` from doubling it.
+// Reported from Zed: after a reconnect the thinking appeared AFTER the reply, and a thought arrived
+// twice. The protocol is explicit about the cause of the first: "All chunks belonging to the same
+// message share the same `messageId`. A change in `messageId` indicates a new message has started."
+// We were sending thinking under a SECOND id (`<id>-thought`), so every turn was two messages — and the
+// replay emitted them grouped by kind (text, then thinking, then calls), so the second message landed
+// after the reply. Zed's own adapter (`@zed-industries/claude-code-acp`) never invents an id (it sends
+// none at all) and replays through the same mapping it streams live, so its order is the message's.
+// Measured over three real sessions before this change: the live path emitted each thought exactly once
+// (no shrink and no rewritten prefix across 4000+ successive message snapshots), so the duplicate was on
+// the replay path — which re-sent content the client already had with a different messageId.
 {
   const messages = [
     {
@@ -550,14 +555,8 @@ const compactKey = "compact:agent_1";
       role: "assistant",
       parts: [
         { type: "thinking", content: "first thought" },
+        { type: "tool-call", id: "call-1", name: "read_file", arguments: '{"path":"a.ts"}', state: "complete" },
         { type: "text", content: "answer" },
-      ],
-    },
-    {
-      id: "a2",
-      role: "assistant",
-      parts: [
-        { type: "thinking", content: "second thought" },
         { type: "thinking", content: " and more" },
       ],
     },
@@ -566,22 +565,41 @@ const compactKey = "compact:agent_1";
   c.projector.replayFrom({ todos: [], mode: "normal", usage: undefined, name: "probe", messages });
   for (let i = 0; i < 3; i++) c.push("messages", messages);
 
-  const thoughts = c.updates("agent_thought_chunk");
+  const kinds = c.emitted
+    .filter((u) => ["agent_thought_chunk", "agent_message_chunk"].includes(u.sessionUpdate))
+    .map((u) => (u.sessionUpdate === "agent_thought_chunk" ? "thought" : "text"));
   check(
-    "one thought chunk per message — a multi-part thought streams as one block",
-    thoughts.length === 2 && thoughts[0].messageId === "a1-thought" && thoughts[1].messageId === "a2-thought",
-    JSON.stringify(thoughts.map((u) => u.messageId))
+    "a replay keeps the message's own part order (thinking → tool call → text → thinking)",
+    JSON.stringify(kinds) === JSON.stringify(["thought", "text", "thought"]),
+    JSON.stringify(kinds)
+  );
+  const chunks = c.emitted.filter((u) => ["agent_thought_chunk", "agent_message_chunk"].includes(u.sessionUpdate));
+  check(
+    "every chunk of a turn shares its messageId (a changed id IS a new message)",
+    chunks.every((u) => u.messageId === "a1"),
+    JSON.stringify(chunks.map((u) => u.messageId))
   );
   check(
-    "…and three redundant ticks add nothing (a client appends by messageId)",
-    thoughts.every((u) => (u.content.text ?? "").length > 0) &&
-      c.emitted.filter((u) => u.sessionUpdate === "agent_thought_chunk").length === 2,
+    "the tool call is reported at its own position, not after the text",
+    (() => {
+      const seq = c.emitted
+        .filter((u) => ["agent_thought_chunk", "agent_message_chunk", "tool_call"].includes(u.sessionUpdate))
+        .map((u) => u.sessionUpdate);
+      return seq.indexOf("tool_call") === 1;
+    })(),
     JSON.stringify(c.emitted.map((u) => u.sessionUpdate))
   );
   check(
-    "a message with several thinking parts concatenates them, in order",
-    (thoughts.find((u) => u.messageId === "a2-thought")?.content.text ?? "") === "second thought and more",
-    JSON.stringify(thoughts.find((u) => u.messageId === "a2-thought")?.content.text)
+    "thinking is streamed once per part, and three redundant ticks add nothing",
+    chunks.filter((u) => u.sessionUpdate === "agent_thought_chunk").length === 2,
+    JSON.stringify(chunks.map((u) => u.sessionUpdate))
+  );
+  check(
+    "the parts arrive in order and are concatenated by the client",
+    (() => {
+      const thoughts = chunks.filter((u) => u.sessionUpdate === "agent_thought_chunk");
+      return thoughts[0].content.text === "first thought" && thoughts[1].content.text === " and more";
+    })()
   );
 }
 

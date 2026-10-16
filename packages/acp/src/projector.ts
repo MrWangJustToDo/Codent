@@ -6,7 +6,10 @@
  * projector keeps **per-message / per-tool cursors** and only emits the delta:
  *
  *  - assistant text   → `agent_message_chunk`, only the appended substring, stable `messageId`
- *  - thinking         → `agent_thought_chunk`, same cursor scheme
+ *  - thinking         → `agent_thought_chunk`, same cursor scheme AND the same `messageId` as the
+ *                        turn's text: the protocol says a changing `messageId` starts a NEW message, so a
+ *                        `-thought` suffix split every turn in two — and a replay that sent the text
+ *                        first then rendered the thinking after the reply.
  *  - tool calls       → `tool_call` (first sight) then `tool_call_update` **on transition only**
  *
  * Other channels map directly: `todos` → `plan`, `mode` → `current_mode_update`,
@@ -194,23 +197,31 @@ export class AcpProjector {
         continue;
       }
       if (message.role !== "assistant") continue;
+      // Replay in PART order — the order the live stream produced. Emitting "all the text, then all the
+      // thinking, then the tool calls" reordered every turn (thinking after the reply, calls after both),
+      // which is exactly what a client showed after a reconnect. Zed's own adapter replays by feeding the
+      // stored messages through the same notification mapping it streams live, so its order comes for
+      // free; this is that shape without a second code path.
       const text = textOf(message);
-      if (text) {
-        this.options.emit({ sessionUpdate: "agent_message_chunk", messageId: message.id, content: textBlock(text) });
-      }
       const thought = thoughtOf(message);
-      if (thought) {
-        this.options.emit({
-          sessionUpdate: "agent_thought_chunk",
-          messageId: `${message.id}-thought`,
-          content: textBlock(thought),
-        });
+      for (const part of message.parts) {
+        if (part.type === "thinking") {
+          this.options.emit({
+            sessionUpdate: "agent_thought_chunk",
+            messageId: message.id,
+            content: textBlock(part.content),
+          });
+        } else if (part.type === "text") {
+          this.options.emit({
+            sessionUpdate: "agent_message_chunk",
+            messageId: message.id,
+            content: textBlock(part.content),
+          });
+        } else if (part.type === "tool-call") {
+          this.emitToolCall(part as ToolCallPartLike, true);
+        }
       }
       this.cursors.set(message.id, { text: text.length, thought: thought.length });
-      for (const part of message.parts) {
-        if (part.type !== "tool-call") continue;
-        this.emitToolCall(part as ToolCallPartLike, true);
-      }
     }
   }
 
@@ -342,7 +353,7 @@ export class AcpProjector {
       if (thought) {
         this.options.emit({
           sessionUpdate: "agent_thought_chunk",
-          messageId: `${message.id}-thought-${Date.now()}`,
+          messageId: message.id,
           content: textBlock(thought),
         });
       }
@@ -352,7 +363,7 @@ export class AcpProjector {
     if (thought.length > cursor.thought) {
       this.options.emit({
         sessionUpdate: "agent_thought_chunk",
-        messageId: `${message.id}-thought`,
+        messageId: message.id,
         content: textBlock(thought.slice(cursor.thought)),
       });
       cursor.thought = thought.length;
