@@ -146,6 +146,12 @@ export {
  */
 export { CONTEXT_OPEN_PREFIX, isContextUIMessage } from "./agent/turn-context";
 /**
+ * Media helpers for hosts that must put bytes on their own wire: a `media://`-era session stores
+ * `source.value` as a data URL after hydration, and a protocol like ACP wants raw base64. Parsing a
+ * data URL is one of the shared single-definition helpers, so it is exported rather than re-spelled.
+ */
+export { buildDataUrl, extractBase64Content } from "./agent/media/media-store.js";
+/**
  * `isCompactionSummaryUIMessage` answers the same question for the OTHER synthetic row: the
  * `[CONVERSATION SUMMARY]` message a compaction appends. It is model context, not conversation —
  * a transcript must not render it as if the user had typed it (which is what ACP's `session/load`

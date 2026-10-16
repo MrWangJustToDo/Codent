@@ -16,7 +16,9 @@
  */
 
 import {
+  extractBase64Content,
   extractCompactionSummaryBody,
+  findBuiltinCommand,
   isCompactionSummaryUIMessage,
   isContextUIMessage,
   parseToolInput,
@@ -27,6 +29,7 @@ import { toolCallInfo, toolDiffFor, toolKindFor, toolResultText, toolStatusFor, 
 
 import type {
   AcpCommands,
+  ContentBlock,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -60,6 +63,39 @@ const COMPACTION_NOTICE = "[Context compacted — earlier turns are summarized i
  * row arrived with a bare "Search"/"Read" and no parameters, and with no `rawInput` either.
  */
 const toolInputOf = (part: ToolCallPartLike): unknown => part.input ?? parseToolInput(part);
+
+/**
+ * An image part as ACP's `image` content block, or undefined when this part is not one.
+ *
+ * Two shapes reach us, both from core: a tool result carries the bytes (`{ base64, mimeType }`), while a
+ * message part carries `source.value` — a data URL once the session has hydrated it, and only a
+ * `media://` ref before that (which this layer cannot read; a reader that has neither gets nothing
+ * rather than a broken image). Stripping the data-URL prefix is core's `extractBase64Content`, because
+ * parsing a data URL is a helper we keep in one place.
+ */
+function imageBlockOf(part: unknown): ContentBlock | undefined {
+  const rec = part as {
+    type?: string;
+    base64?: string;
+    mimeType?: string;
+    source?: { value?: string; mimeType?: string };
+  };
+  if (rec?.type !== "image") return undefined;
+  const raw =
+    typeof rec.base64 === "string" ? rec.base64 : typeof rec.source?.value === "string" ? rec.source.value : undefined;
+  if (!raw || raw.startsWith("media://")) return undefined;
+  return {
+    type: "image",
+    data: extractBase64Content(raw),
+    mimeType: rec.mimeType ?? rec.source?.mimeType ?? "image/png",
+  };
+}
+
+/** Every image part of a part list, in order. */
+function imageBlocksOf(parts: unknown): ContentBlock[] {
+  if (!Array.isArray(parts)) return [];
+  return parts.map((part) => imageBlockOf(part)).filter((block): block is ContentBlock => Boolean(block));
+}
 
 export interface AcpProjectorOptions {
   rootPath: string;
@@ -252,13 +288,21 @@ export class AcpProjector {
     }
     if (this.emittedUserMessages.has(message.id)) return;
     const text = textOf(message);
-    if (!text) return;
+    const images = imageBlocksOf(message.parts);
+    if (!text && images.length === 0) return;
     this.emittedUserMessages.add(message.id);
-    this.options.emit({
-      sessionUpdate: "user_message_chunk",
-      messageId: message.id,
-      content: textBlock(text),
-    });
+    if (text) {
+      this.options.emit({
+        sessionUpdate: "user_message_chunk",
+        messageId: message.id,
+        content: textBlock(text),
+      });
+    }
+    // An attachment is part of the turn: without this the client loses the image from history on
+    // `session/load` (its own live row is the client's, so only the replay can carry it back).
+    for (const image of images) {
+      this.options.emit({ sessionUpdate: "user_message_chunk", messageId: message.id, content: image });
+    }
   }
 
   private emitAssistantText(message: UIMessage): void {
@@ -396,8 +440,8 @@ export class AcpProjector {
         ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
         : {}),
       status,
-      ...(resultState && this.toolContentFor(resultState, true, text)
-        ? { content: this.toolContentFor(resultState, true, text) }
+      ...(resultState && this.toolContentFor(resultState, true, text, part.content)
+        ? { content: this.toolContentFor(resultState, true, text, part.content) }
         : text
           ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] }
           : {}),
@@ -413,13 +457,21 @@ export class AcpProjector {
    * seeing depends on which writer ran last. One builder, used by both writers, is what makes the row
    * order-independent.
    */
-  private toolContentFor(state: ToolState, terminal: boolean, text?: string): ToolCallContent[] | undefined {
+  private toolContentFor(
+    state: ToolState,
+    terminal: boolean,
+    text?: string,
+    parts?: unknown
+  ): ToolCallContent[] | undefined {
     if (!terminal) return undefined;
     const content: ToolCallContent[] = [];
     const diff = toolDiffFor(state.name, state.input, this.options.rootPath);
     if (diff) content.push(diff);
     const body = text?.trim() ? text : state.streamBuffer;
     if (body) content.push({ type: "content", content: textBlock(body) });
+    // A tool that returned an image (a `read_file` of a screenshot, say) put one in the model's context;
+    // without this the client's row shows nothing for it.
+    for (const image of imageBlocksOf(parts)) content.push({ type: "content", content: image });
     return content.length > 0 ? content : undefined;
   }
 
@@ -542,11 +594,20 @@ export class AcpProjector {
   private emitCommands(): void {
     const { builtin, extension } = this.options.commands();
     const seen = new Set<string>();
-    const availableCommands: Array<{ name: string; description: string }> = [];
+    const availableCommands: Array<{ name: string; description: string; input?: { hint: string } }> = [];
     for (const cmd of [...builtin, ...extension]) {
       if (seen.has(cmd.name)) continue;
       seen.add(cmd.name);
-      availableCommands.push({ name: cmd.name, description: cmd.description });
+      // The catalog's `usage` IS the argument hint (`/compact [focus]` → `[focus]`): the protocol shows it
+      // until the user types input, and core already declares it.
+      const hint = findBuiltinCommand(cmd.name)
+        ?.usage?.replace(/^\/[\w-]+/, "")
+        .trim();
+      availableCommands.push({
+        name: cmd.name,
+        description: cmd.description,
+        ...(hint ? { input: { hint } } : {}),
+      });
     }
     this.options.emit({ sessionUpdate: "available_commands_update", availableCommands });
   }

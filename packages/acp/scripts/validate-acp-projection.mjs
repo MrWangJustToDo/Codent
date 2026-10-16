@@ -35,7 +35,7 @@ const check = checker.check;
 // ===========================================================================
 
 /** Every `session/update` the projector emitted, in order. */
-function capture(client = { compaction: true, notices: true }) {
+function capture(client = { compaction: true, notices: true }, commands = () => ({ builtin: [], extension: [] })) {
   const listeners = new Set();
   const emitted = [];
   const session = {
@@ -48,7 +48,7 @@ function capture(client = { compaction: true, notices: true }) {
   const projector = new AcpProjector(session, {
     rootPath: "/ws",
     emit: (update) => emitted.push(update),
-    commands: () => ({ builtin: [], extension: [] }),
+    commands,
     client,
   });
   projector.start();
@@ -407,6 +407,181 @@ const compactKey = "compact:agent_1";
     JSON.stringify(toolLocationsFor({ path: "src/a.ts", paths: ["src/b.ts"], offset: 0 }, "/ws")) ===
       JSON.stringify([{ path: "/ws/src/a.ts", line: 1 }, { path: "/ws/src/b.ts" }]),
     JSON.stringify(toolLocationsFor({ path: "src/a.ts", paths: ["src/b.ts"], offset: 0 }, "/ws"))
+  );
+}
+
+// ===========================================================================
+// 6. Media on the wire, and the command argument hint
+// ===========================================================================
+//
+// `ContentBlock` is `text | image | audio | resource_link | embedded_resource`, and we sent only text.
+// Two places lost real content because of it: a tool that returns an image (`read_file` of a
+// screenshot) reached the client as an empty row, and a user attachment disappeared from history on
+// `session/load` (only the replay can carry it back — the live row is the client's own).
+{
+  const IMAGE_TOOL_RESULT = {
+    id: "r1",
+    role: "tool",
+    parts: [
+      {
+        id: "call-1",
+        type: "tool-result",
+        toolCallId: "call-1",
+        state: "complete",
+        content: [
+          { type: "text", text: "read src/shot.png" },
+          { type: "image", path: "src/shot.png", mimeType: "image/png", base64: "QUJD", size: 3 },
+        ],
+      },
+    ],
+  };
+  const callPart = {
+    id: "call-1",
+    type: "tool-call",
+    name: "read_file",
+    arguments: '{"path":"src/shot.png"}',
+    state: "complete",
+    input: { path: "src/shot.png" },
+  };
+
+  const tool = capture();
+  tool.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }]);
+  tool.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }, IMAGE_TOOL_RESULT]);
+  const content = tool.lastContent("call-1") ?? [];
+  const imageBlock = content.flatMap((c) => (c.type === "content" ? [c.content] : [])).find((b) => b.type === "image");
+  check(
+    "an image a tool produced reaches the client as an image block",
+    imageBlock?.type === "image" && imageBlock.data === "QUJD" && imageBlock.mimeType === "image/png",
+    JSON.stringify(content.map((c) => c.type))
+  );
+  check(
+    "…alongside the text, not instead of it",
+    content.some((c) => c.type === "content" && c.content.type === "text"),
+    JSON.stringify(content.map((c) => c.type))
+  );
+  tool.stop();
+
+  // A user attachment, on replay. The hydrated shape is a data URL; the data-URL prefix is not part of
+  // ACP's base64 payload, so it must be stripped (core owns that parsing).
+  const attach = capture();
+  attach.projector.replayFrom({
+    todos: [],
+    mode: "normal",
+    usage: undefined,
+    name: "probe",
+    messages: [
+      {
+        id: "msg_img",
+        role: "user",
+        parts: [
+          { type: "text", content: "look at this" },
+          { type: "image", source: { type: "data", value: "data:image/png;base64,QUJD", mimeType: "image/png" } },
+        ],
+      },
+    ],
+  });
+  const chunks = attach.updates("user_message_chunk");
+  check(
+    "a replayed attachment carries its bytes (prefix stripped, same messageId as the text)",
+    chunks.length === 2 &&
+      chunks[1].content.type === "image" &&
+      chunks[1].content.data === "QUJD" &&
+      chunks[1].messageId === "msg_img",
+    JSON.stringify(chunks.map((u) => [u.content.type, u.content.data ?? u.content.text]))
+  );
+  attach.stop();
+
+  // An un-hydrated ref is NOT an image: sending `media://…` as base64 would render a broken image, and
+  // this layer cannot read the store.
+  const refOnly = capture();
+  refOnly.projector.replayFrom({
+    todos: [],
+    mode: "normal",
+    usage: undefined,
+    name: "probe",
+    messages: [
+      {
+        id: "msg_ref",
+        role: "user",
+        parts: [{ type: "image", source: { value: "media://abc.png", mimeType: "image/png" } }],
+      },
+    ],
+  });
+  check(
+    "an un-hydratable `media://` ref is dropped rather than sent as a broken image",
+    refOnly.updates("user_message_chunk").length === 0,
+    JSON.stringify(refOnly.emitted.map((u) => u.sessionUpdate))
+  );
+  refOnly.stop();
+
+  // The catalog's `usage` becomes the protocol's `input.hint`; a command with no arguments has none.
+  const commands = capture({ compaction: true, notices: true }, () => ({
+    builtin: [
+      { name: "compact", description: "Compress conversation context" },
+      { name: "clear", description: "Clear the conversation" },
+    ],
+    extension: [{ name: "ext_echo", description: "echo" }],
+  }));
+  const advertised = commands.updates("available_commands_update").at(-1)?.availableCommands ?? [];
+  const compact = advertised.find((c) => c.name === "compact");
+  const clear = advertised.find((c) => c.name === "clear");
+  check(
+    "a command that takes arguments advertises the hint the catalog already declares",
+    compact?.input?.hint === "[focus]",
+    JSON.stringify(compact)
+  );
+  check("…and one that takes none advertises no input", clear?.input === undefined, JSON.stringify(clear));
+  commands.stop();
+}
+
+// ===========================================================================
+// 7. Thinking is sent once, and re-reporting a message does not send it again
+// ===========================================================================
+//
+// Reported as "thinking is duplicated in Zed". Measured over three real sessions (1545 / 255 / 4
+// assistant messages, replay + redundant ticks), the projector emits exactly one `agent_thought_chunk`
+// per message and nothing on a repeated tick — so the wire is not the source. Pinned here so it cannot
+// become one: `messages` re-ports the whole array on every change, and one chunk per message is the
+// contract that keeps a client's append-by-`messageId` from doubling it.
+{
+  const messages = [
+    {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        { type: "thinking", content: "first thought" },
+        { type: "text", content: "answer" },
+      ],
+    },
+    {
+      id: "a2",
+      role: "assistant",
+      parts: [
+        { type: "thinking", content: "second thought" },
+        { type: "thinking", content: " and more" },
+      ],
+    },
+  ];
+  const c = capture();
+  c.projector.replayFrom({ todos: [], mode: "normal", usage: undefined, name: "probe", messages });
+  for (let i = 0; i < 3; i++) c.push("messages", messages);
+
+  const thoughts = c.updates("agent_thought_chunk");
+  check(
+    "one thought chunk per message — a multi-part thought streams as one block",
+    thoughts.length === 2 && thoughts[0].messageId === "a1-thought" && thoughts[1].messageId === "a2-thought",
+    JSON.stringify(thoughts.map((u) => u.messageId))
+  );
+  check(
+    "…and three redundant ticks add nothing (a client appends by messageId)",
+    thoughts.every((u) => (u.content.text ?? "").length > 0) &&
+      c.emitted.filter((u) => u.sessionUpdate === "agent_thought_chunk").length === 2,
+    JSON.stringify(c.emitted.map((u) => u.sessionUpdate))
+  );
+  check(
+    "a message with several thinking parts concatenates them, in order",
+    (thoughts.find((u) => u.messageId === "a2-thought")?.content.text ?? "") === "second thought and more",
+    JSON.stringify(thoughts.find((u) => u.messageId === "a2-thought")?.content.text)
   );
 }
 
