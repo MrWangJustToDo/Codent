@@ -900,6 +900,18 @@ await forkClient.connectWith(forkApp, async (cx) => {
     mcpRejected = text.includes("mcpServers");
   }
   check("session/fork rejects mcpServers with an explanatory error", mcpRejected);
+
+  // A fork of a session this process never opened is the NORMAL case for a client forking from
+  // `session/list`: the source is RESTORED first (the same path as `load`), not refused — otherwise a
+  // client's own history list is unusable for forking (reported as `Invalid params: Unknown session`).
+  const coldFork = await cx
+    .request(methods.agent.session.fork, { sessionId: "ses_never_opened", cwd: "/ws", mcpServers: [] })
+    .then((r) => r.sessionId)
+    .catch((error) => `${error?.message ?? ""} ${error?.data?.details ?? ""}`);
+  check(
+    "session/fork restores a source it has not opened in this process",
+    typeof coldFork === "string" && coldFork.length > 0 && !coldFork.includes("Unknown session")
+  );
 });
 
 finish(checker.failures);

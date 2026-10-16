@@ -194,7 +194,7 @@ export interface AcpSessionRuntime {
 const AGENT_NAME = "codent";
 
 /** Create the ACP agent app (handlers registered; call `connect(stream)` to serve).
- *  At the line ceiling — extract a subject rather than adding prose here. */
+ *  At the line ceiling — extract a subject rather than adding prose. */
 export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // `CODENT_ACP_TRACE=1` narrates every outgoing `session/update` on stderr (see `emit`).
   const TRACE_UPDATES = process.env.CODENT_ACP_TRACE === "1";
@@ -573,28 +573,33 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   app.onRequest(methods.agent.session.fork, async (ctx) => {
     const sourceId = ctx.params.sessionId;
-    const bridge = bridges.get(sourceId);
-    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${sourceId}`);
 
     // Same refusal as every other request type (defined once above) — a fork is exactly as
     // unable to widen the workspace root as a fresh session is.
     rejectAdditionalDirectories(ctx.params.additionalDirectories);
 
-    // Mirror `session/new`'s note: the root is fixed at handshake, so a differing `cwd` is
-    // informational rather than an error (a fork cannot move the source's conversation).
+    // A fork of a session this process has not opened is NORMAL for a client forking from
+    // `session/list`: restore it first, exactly like `load`, then clone (no replay — the client
+    // watches the NEW id from here on).
+    const wasLive = bridges.has(sourceId);
+    let bridge = bridges.get(sourceId);
+    if (!bridge) {
+      await resumeSession(sourceId, false, initCaps, ctx.params.mcpServers, undefined);
+      bridge = bridges.get(sourceId);
+    }
+    if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${sourceId}`);
+
+    // Informational only: the root is fixed at handshake (a fork cannot move the conversation).
     if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
-      process.stderr.write(
-        `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
-      );
+      process.stderr.write(`[codent-acp] note: fork cwd ${ctx.params.cwd} differs from root ${rootPath}\n`);
     }
 
     // Fork-only rule: this path REUSES the source's live agent (no `Host.create`), so it cannot swap
     // MCP servers — `load`/`resume` do obey them, because each builds a fresh agent.
-    if (ctx.params.mcpServers?.length) {
+    if (ctx.params.mcpServers?.length && wasLive) {
       throw RequestError.invalidParams(
         undefined,
-        "session/fork does not accept mcpServers: MCP servers are fixed when a session is created " +
-          "and forking does not change them"
+        "session/fork does not accept mcpServers for a live source (they are fixed at creation)"
       );
     }
 
