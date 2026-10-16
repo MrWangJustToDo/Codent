@@ -51,7 +51,7 @@ const PATH_KEYS = ["path", "file", "filePath", "file_path", "target"] as const;
 const PATH_LIST_KEYS = ["paths", "files"] as const;
 
 /** Collect absolute file paths a tool call touches, for ACP `locations`. */
-export function toolLocationsFor(input: unknown, rootPath: string): Array<{ path: string }> {
+export function toolLocationsFor(input: unknown, rootPath: string): Array<{ path: string; line?: number }> {
   const rec = asRecord(input);
   if (!rec) return [];
   const found: string[] = [];
@@ -65,7 +65,17 @@ export function toolLocationsFor(input: unknown, rootPath: string): Array<{ path
       for (const entry of value) if (typeof entry === "string" && entry.trim()) found.push(entry);
     }
   }
-  return [...new Set(found)].map((p) => ({ path: toWirePath(p, rootPath) }));
+  // ACP's `locations[].line` is what a client uses for "follow-along" (jump to the spot the agent is
+  // working on). It is 1-based on the wire, and the two inputs that carry a position are 0-based:
+  // `read_file`'s `offset` (a line index) and the LSP tools' `line`. Only the primary path gets it —
+  // a multi-path input has no single position, and inventing one would point somewhere wrong.
+  const line =
+    typeof rec.offset === "number" || typeof rec.line === "number" ? Number(rec.offset ?? rec.line) + 1 : undefined;
+  const paths = [...new Set(found)];
+  return paths.map((p, index) => ({
+    path: toWirePath(p, rootPath),
+    ...(index === 0 && line !== undefined && Number.isFinite(line) ? { line } : {}),
+  }));
 }
 
 /** Human-readable title for a tool call: `Verb <path>` when a path is known. */

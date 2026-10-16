@@ -45,7 +45,7 @@ assistant 文本 SHALL 以 `agent_message_chunk` 逐段发送；同一条 `UIMes
 
 ### Requirement: 工具调用以 tool_call / tool_call_update 报告
 
-工具调用 SHALL 在其开始时以 `tool_call`（含 `toolCallId`、`title`、`kind`、`status: "pending"`、可选 `rawInput`、`locations`）报告，并在执行中以 `tool_call_update` 更新 `status`（`in_progress`/`completed`/`failed`）与 `content`/`rawOutput`。`kind` SHALL 由工具种类映射（如 `reads`→`read`、`edits`→`edit`、`searches`→`search`、`commands`→`execute`、web 工具→`fetch`，删除→`delete`，其余→`other`）。流式工具输出（`tool` 通道）SHOULD 作为 `tool_call_update` 的 `content` 增量转发。
+工具调用 SHALL 在其开始时以 `tool_call`（含 `toolCallId`、`title`、`kind`、`status: "pending"`、可选 `rawInput`、`locations`）报告，并在执行中以 `tool_call_update` 更新 `status`（`in_progress`/`completed`/`failed`）与 `content`/`rawOutput`。`kind` SHALL 由工具种类映射（如 `reads`→`read`、`edits`→`edit`、`searches`→`search`、`commands`→`execute`、web 工具→`fetch`，删除→`delete`，其余→`other`）。`locations[]` SHALL 携带绝对 `path`，并在输入含 0 基行位置时携带 1 基的 `line`（ACP 的 "Following the Agent"）。流式工具输出（`tool` 通道）SHOULD 作为 `tool_call_update` 的 `content` 增量转发。
 
 写/编辑类工具（`write_file` / `edit_file`）的编辑预览 SHALL 以 `content: [{ type: "diff" }]` 发给 client：参数一经可解析即发（MUST NOT 等到调用结束），且终态内容 SHALL 同时携带 `diff` 与结果文本。理由是 ACP 的 `content` 是**替换**语义：只带一半的写入方会擦掉另一半，而两个写入方（调用自身的终态迁移、结果 part）的执行顺序由引擎决定；若结果 part 先落地（它会把状态推到终态），调用自身的迁移会因状态未变而被跳过，预览就永远不会发出。
 
@@ -58,6 +58,12 @@ assistant 文本 SHALL 以 `agent_message_chunk` 逐段发送；同一条 `UIMes
 
 - **WHEN** `run_command` 在后台流式产出 stdout
 - **THEN** agent SHOULD 以 `tool_call_update` 的 `content` 转发这些片段（可节流）
+
+#### Scenario: locations 指向具体行
+
+- **WHEN** 工具输入带有 0 基的行位置（`read_file` 的 `offset`、LSP 工具的 `line`）
+- **THEN** 该 location SHALL 携带对应的 1 基 `line`
+- **AND** 多路径输入 SHALL 只给主路径附行号，无位置信息时 MUST NOT 编造 `line`
 
 #### Scenario: 失败工具
 
@@ -142,6 +148,13 @@ agent SHALL 在每轮结束（以及 `session/new`/`session/load`/模型切换�
 
 - **WHEN** 压缩过程中运行被中止，或压缩以错误收场
 - **THEN** 对应行 SHALL 分别以 `cancelled` / `failed`（携带原因）关闭，MUST NOT 停留在 `in_progress`
+
+#### Scenario: 恢复会话时摘要不是用户发言
+
+- **WHEN** `session/load` 回放一个含压缩摘要的会话
+- **THEN** 摘要 MUST NOT 作为 `user_message_chunk` 出现
+- **AND** client 声明 `session.compaction` 时 SHALL 作为 `compaction_update`（`completed`，`summary` 为去掉标记的正文，`compactionId` 取该消息 id）出现
+- **AND** 未声明时 SHALL 退化为一条说明性 agent message，MUST NOT 回放摘要正文
 
 #### Scenario: 两次压缩是两行
 

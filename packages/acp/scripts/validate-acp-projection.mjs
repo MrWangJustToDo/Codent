@@ -21,7 +21,9 @@
  * Run: pnpm --filter @codent/acp run validate:acp:projection
  */
 
-import { AcpProjector } from "../dist/index.mjs";
+import { formatCompactionSummaryContent } from "@codent/core";
+
+import { AcpProjector, toolLocationsFor } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 
@@ -52,6 +54,7 @@ function capture(client = { compaction: true, notices: true }) {
   projector.start();
   return {
     emitted,
+    projector,
     push: (channel, payload) => {
       for (const listener of listeners) listener({ channel, payload, ts: Date.now() });
     },
@@ -290,6 +293,121 @@ const compactKey = "compact:agent_1";
     JSON.stringify(orphan.updates("compaction_update"))
   );
   orphan.stop();
+}
+
+// ===========================================================================
+// 3. A compaction summary is not a user turn
+// ===========================================================================
+//
+// The summary lives on the channel as a `role: "user"` message because that is how the MODEL gets it.
+// Replaying it as one showed the whole body as if the user had typed it (reported for `session/load`),
+// so it is projected where the protocol puts compaction — the compaction row — and a client without
+// that capability gets one line instead of the body.
+{
+  const summaryMessage = {
+    id: "msg_summary_1",
+    role: "user",
+    parts: [{ type: "text", content: formatCompactionSummaryContent("Goal: ship the thing.") }],
+  };
+  const plainUser = { id: "msg_user_1", role: "user", parts: [{ type: "text", content: "hello" }] };
+  const snapshot = (messages) => ({ todos: [], mode: "normal", usage: undefined, name: "probe", messages });
+
+  const capable = capture();
+  capable.projector.replayFrom(snapshot([plainUser, summaryMessage]));
+  const userChunks = capable.updates("user_message_chunk");
+  check(
+    "a replayed compaction summary is NOT a user turn",
+    userChunks.every((u) => !(u.content?.text ?? "").includes("[CONVERSATION SUMMARY]")),
+    JSON.stringify(userChunks.map((u) => u.content?.text?.slice(0, 40)))
+  );
+  check(
+    "…an ordinary user turn still is",
+    userChunks.some((u) => u.messageId === "msg_user_1")
+  );
+  const rows = capable.updates("compaction_update");
+  check(
+    "…it is the compaction row, keyed by the message id (stable across reloads)",
+    rows.length === 1 && rows[0].compactionId === "msg_summary_1" && rows[0].status === "completed",
+    JSON.stringify(rows)
+  );
+  check(
+    "…carrying the body WITHOUT the markers (the row's summary is the text, not the wrapper)",
+    rows[0]?.summary?.[0]?.text === "Goal: ship the thing.",
+    JSON.stringify(rows[0]?.summary)
+  );
+  capable.stop();
+
+  // No capability: still not a user turn. One line, so the compaction is not invisible — the body is
+  // model context, and a reader needs the position, not thousands of tokens of summary.
+  const plain = capture({ compaction: false, notices: true });
+  plain.projector.replayFrom(snapshot([summaryMessage]));
+  check(
+    "without `session.compaction` the summary is a one-line notice, not a user turn",
+    plain.updates("user_message_chunk").length === 0 &&
+      plain.updates("agent_message_chunk").length === 1 &&
+      plain.updates("compaction_update").length === 0,
+    JSON.stringify(plain.emitted.map((u) => u.sessionUpdate))
+  );
+  plain.stop();
+}
+
+// ===========================================================================
+// 4. A live compaction is visible without the capability too
+// ===========================================================================
+
+{
+  const off = capture({ compaction: false, notices: true });
+  off.push("state", { status: "compacting", name: "probe", sessionId: "s1", error: "", pendingApprovalCount: 0 });
+  off.push("summary", {
+    type: "reset",
+    key: "compact:agent_1",
+    source: "compact",
+    compactId: "agent_1",
+    epoch: "e1",
+    seq: 1,
+  });
+  off.push("summary", { type: "append", key: "compact:agent_1", chunk: "body text", seq: 2 });
+  off.push("summary", { type: "end", key: "compact:agent_1", seq: 3 });
+  off.push("state", { status: "running", name: "probe", sessionId: "s1", error: "", pendingApprovalCount: 0 });
+  check(
+    "a non-rendering client gets exactly one notice, and no compaction updates",
+    off.updates("agent_message_chunk").length === 1 && off.updates("compaction_update").length === 0,
+    JSON.stringify(off.emitted.map((u) => u.sessionUpdate))
+  );
+  check(
+    "…and the notice stands in the transcript where the compaction happened",
+    (off.updates("agent_message_chunk")[0]?.content?.text ?? "").includes("Context compacted"),
+    JSON.stringify(off.updates("agent_message_chunk")[0]?.content)
+  );
+  off.stop();
+}
+
+// ===========================================================================
+// 5. `locations[].line` — what a client follows the agent with
+// ===========================================================================
+{
+  check(
+    "read_file's 0-based offset becomes a 1-based line",
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", offset: 10 }, "/ws")) ===
+      JSON.stringify([{ path: "/ws/src/a.ts", line: 11 }]),
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", offset: 10 }, "/ws"))
+  );
+  check(
+    "an LSP tool's 0-based line too",
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", line: 3 }, "/ws")) ===
+      JSON.stringify([{ path: "/ws/src/a.ts", line: 4 }]),
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", line: 3 }, "/ws"))
+  );
+  check(
+    "no position ⇒ no line (a fabricated one would jump somewhere wrong)",
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts" }, "/ws")) === JSON.stringify([{ path: "/ws/src/a.ts" }])
+  );
+  check(
+    "a multi-path input attaches the line only to the primary path",
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", paths: ["src/b.ts"], offset: 0 }, "/ws")) ===
+      JSON.stringify([{ path: "/ws/src/a.ts", line: 1 }, { path: "/ws/src/b.ts" }]),
+    JSON.stringify(toolLocationsFor({ path: "src/a.ts", paths: ["src/b.ts"], offset: 0 }, "/ws"))
+  );
 }
 
 finish(checker.failures);

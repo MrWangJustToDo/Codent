@@ -145,6 +145,25 @@ export {
  * replay both need it, and neither should re-spell the shell).
  */
 export { CONTEXT_OPEN_PREFIX, isContextUIMessage } from "./agent/turn-context";
+/**
+ * `isCompactionSummaryUIMessage` answers the same question for the OTHER synthetic row: the
+ * `[CONVERSATION SUMMARY]` message a compaction appends. It is model context, not conversation —
+ * a transcript must not render it as if the user had typed it (which is what ACP's `session/load`
+ * replay did), and the ACP compaction row wants the body without the markers.
+ * Exported so the app and the ACP host share ONE definition of that question instead of each
+ * keeping a copy of the markers and predicates (the app had a full copy, marked "must stay in sync").
+ */
+export {
+  CONVERSATION_SUMMARY_END,
+  CONVERSATION_SUMMARY_START,
+  extractCompactionSummaryBody,
+  formatCompactionSummaryContent,
+  hasOuterEndMarker,
+  isCompactionSummaryModelMessage,
+  isCompactionSummaryText,
+  isCompactionSummaryUIMessage,
+  isLatestDurableMessageCompactionSummary,
+} from "./agent/compaction";
 export { isUserVisibleTaskRow, type SubagentRowLike } from "./agent-session/subagent-row.js";
 export type { AgentL1State } from "./managers/managed-agent.js";
 export type { AgentRetryState, AgentRetryStrategy } from "./runtime-types/agent-retry.js";

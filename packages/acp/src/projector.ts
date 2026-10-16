@@ -15,14 +15,18 @@
  * `extension-ui` → notices, `interaction` → the caller's permission/elicitation hook.
  */
 
-import { isContextUIMessage, parseToolInput } from "@codent/core";
+import {
+  extractCompactionSummaryBody,
+  isCompactionSummaryUIMessage,
+  isContextUIMessage,
+  parseToolInput,
+} from "@codent/core";
 
 import { textBlock } from "./content.js";
 import { toolCallInfo, toolDiffFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
 import type {
   AcpCommands,
-  ContentBlock,
   PlanEntry,
   SessionUpdate,
   ToolCallContent,
@@ -40,6 +44,14 @@ import type {
 import type { UIMessage } from "@tanstack/ai";
 
 const STREAM_FLUSH_MS = 300;
+
+/**
+ * One line, sent to a client that cannot render a compaction row (no `session.compaction`).
+ *
+ * The summary itself is model context, not conversation, so the body is not what a reader needs — the
+ * position of the compaction is.
+ */
+const COMPACTION_NOTICE = "[Context compacted — earlier turns are summarized in the model's context.]";
 
 /**
  * The call's input: the parsed field when the engine has it, else the raw `arguments` JSON.
@@ -234,6 +246,10 @@ export class AcpProjector {
    */
   private emitUserMessage(message: UIMessage): void {
     if (isContextUIMessage(message)) return;
+    if (isCompactionSummaryUIMessage(message)) {
+      this.emitCompactionSummary(message);
+      return;
+    }
     if (this.emittedUserMessages.has(message.id)) return;
     const text = textOf(message);
     if (!text) return;
@@ -457,6 +473,34 @@ export class AcpProjector {
     });
   }
 
+  /**
+   * A compaction's `[CONVERSATION SUMMARY]` row.
+   *
+   * It is a `role: "user"` message on the channel because that is how the MODEL receives it, but it is
+   * not conversation: replaying it as a user turn showed the whole summary as if the user had typed it
+   * (reported for `session/load`). The protocol has the place for it — the compaction row — and its id is
+   * the message id, which is stable across reloads, so a client that already holds the row patches it
+   * rather than gaining another.
+   */
+  private emitCompactionSummary(message: UIMessage): void {
+    const body = extractCompactionSummaryBody(textOf(message) ?? "");
+    if (!this.options.client.compaction) {
+      // No row for this client; the line keeps the compaction from being invisible in the transcript.
+      this.options.emit({
+        sessionUpdate: "agent_message_chunk",
+        messageId: `compact:${message.id}`,
+        content: textBlock(COMPACTION_NOTICE),
+      });
+      return;
+    }
+    this.options.emit({
+      sessionUpdate: "compaction_update",
+      compactionId: message.id,
+      status: "completed",
+      ...(body ? { summary: [textBlock(body)] } : {}),
+    });
+  }
+
   // --------------------------------------------------------------------------
   // Plan / mode / usage / title / commands / compaction / notices
   // --------------------------------------------------------------------------
@@ -509,7 +553,6 @@ export class AcpProjector {
 
   /** Compaction completion → `compaction_update` (gated by the client capability). */
   private onLifecycle(event: { type: string; error?: unknown }): void {
-    if (!this.options.client.compaction) return;
     const type = event.type;
     if (type === "compaction:auto-complete" || type === "compaction:reactive-complete") {
       this.finishCompaction("completed");
@@ -528,7 +571,6 @@ export class AcpProjector {
    */
   private onState(state: AgentL1State): void {
     this.emitTitle(state.name);
-    if (!this.options.client.compaction) return;
     if (state.status === "compacting") {
       if (!this.compaction) {
         this.compaction = { id: this.nextCompactionId(), key: "", summary: "" };
@@ -550,7 +592,6 @@ export class AcpProjector {
    * `compaction_summary_chunk` contract verbatim ("a first-seen id creates an in-progress compaction").
    */
   private onSummary(event: SummaryStreamEvent): void {
-    if (!this.options.client.compaction) return;
     if (event.type === "reset") {
       if (event.source !== "compact") return;
       if (this.compaction) {
@@ -570,11 +611,15 @@ export class AcpProjector {
     if (!active || event.key !== active.key) return;
     if (event.type === "append") {
       active.summary += event.chunk;
-      this.options.emit({
-        sessionUpdate: "compaction_summary_chunk",
-        compactionId: active.id,
-        content: textBlock(event.chunk),
-      });
+      // Chunks are only for a client that renders the row; the text is accumulated either way, because
+      // the closing update (and the notice a non-rendering client gets) needs it.
+      if (this.options.client.compaction) {
+        this.options.emit({
+          sessionUpdate: "compaction_summary_chunk",
+          compactionId: active.id,
+          content: textBlock(event.chunk),
+        });
+      }
       return;
     }
     this.finishCompaction("completed");
@@ -590,16 +635,21 @@ export class AcpProjector {
     this.emitCompactionUpdate("in_progress");
   }
 
-  private emitCompactionUpdate(
-    status: "in_progress" | "completed" | "failed" | "cancelled",
-    extra?: { summary?: ContentBlock[]; error?: string }
-  ): void {
+  /** The one line a client without the compaction capability gets, instead of an open row. */
+  private emitCompactionNotice(id: string): void {
+    this.options.emit({
+      sessionUpdate: "agent_message_chunk",
+      messageId: `compact:${id}`,
+      content: textBlock(COMPACTION_NOTICE),
+    });
+  }
+
+  private emitCompactionUpdate(status: "in_progress" | "completed" | "failed" | "cancelled"): void {
     if (!this.options.client.compaction || !this.compaction) return;
     this.options.emit({
       sessionUpdate: "compaction_update",
       compactionId: this.compaction.id,
       status,
-      ...extra,
     });
   }
 
@@ -610,23 +660,25 @@ export class AcpProjector {
    * that dropped the chunks.
    */
   private finishCompaction(status: "completed" | "failed" | "cancelled", error?: string): void {
-    if (!this.compaction) {
-      // A completion with no row of ours (its summary stream was never seen) still has to tell the
-      // client what happened — one update, which is also what creates the row on the client's side.
-      this.options.emit({
-        sessionUpdate: "compaction_update",
-        compactionId: this.nextCompactionId(),
-        status,
-        ...(error ? { error } : {}),
-      });
+    const summary = this.compaction?.summary.trim();
+    // The id survives the row: a completion whose own summary stream was never seen still has to be
+    // reported, and reporting it is also what creates the row on the client's side.
+    const id = this.compaction?.id ?? this.nextCompactionId();
+    this.compaction = undefined;
+
+    if (!this.options.client.compaction) {
+      // Nothing to close for this client. One line at most, so a compaction is not invisible — and only
+      // for a success: a failure is reported by the run that failed, and a cancelled one by the abort.
+      if (status === "completed") this.emitCompactionNotice(id);
       return;
     }
-    const summary = this.compaction.summary.trim();
-    this.emitCompactionUpdate(status, {
+    this.options.emit({
+      sessionUpdate: "compaction_update",
+      compactionId: id,
+      status,
       ...(status === "completed" && summary ? { summary: [textBlock(summary)] } : {}),
       ...(error ? { error } : {}),
     });
-    this.compaction = undefined;
   }
 
   /** Extension notify → ACP `notice` (gated); otherwise leave it to the extension's own UI. */
