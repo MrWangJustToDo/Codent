@@ -221,21 +221,77 @@ export function toolCallInfo(
   return "in_progress";
 }
 
-/** Extract plain text from a tool result content value (string or ContentPart[]). */
-export function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        const p = asRecord(part);
-        if (!p) return "";
-        if (typeof p.content === "string") return p.content;
-        if (typeof p.text === "string") return p.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
+/**
+ * Parse a JSON string into a value, or undefined when it is not JSON.
+ *
+ * The counterpart to `JSON.stringify` on the persistence path: a tool result's `content` is a
+ * `ContentPart[]` while the run is live and a JSON STRING of that array once the session has been saved
+ * (see `hydrateToolResultContent` in core). Both doors have to be walked, and a tool result is not
+ * always JSON — a plain log line must survive as text rather than "parse" into nothing.
+ */
+export function tryParseJson(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
   }
+}
+
+/**
+ * The part types that mean "content a human reads", i.e. the ones whose text is worth showing.
+ *
+ * A `ContentPart[]` carries one entry per kind of content, and the media ones carry BYTES — a screenshot
+ * part holds a full base64 payload. Stringifying the whole array into the row is how a `read_file` of an
+ * image ended up as a wall of base64 next to a blank preview: the text extractor had no way to know
+ * which entries described the tool's work and which were the payload.
+ */
+const TEXT_PART_TYPES = new Set(["text", "reasoning", "thinking"]);
+/** Extract the readable text from one model-facing content part, or "" when it holds none. */
+function textPartOf(part: unknown): string {
+  const p = asRecord(part);
+  if (!p) return "";
+  if (typeof p.type === "string" && !TEXT_PART_TYPES.has(p.type)) return "";
+  if (typeof p.content === "string") return p.content;
+  if (typeof p.text === "string") return p.text;
+  return "";
+}
+
+/**
+ * Extract the text an object result declares, or undefined when it declares none.
+ */
+function textOfResultObject(value: unknown): string | undefined {
+  const rec = asRecord(value);
+  if (typeof rec?.text === "string") return rec.text;
+  if (typeof rec?.content === "string") return rec.content;
+  return undefined;
+}
+
+/**
+ * Extract plain text from a tool result content value (string, ContentPart[], or JSON of one).
+ *
+ * Nearly every result a session holds is a JSON STRING — `{"command":…,"stdout":…}` for `run_command`,
+ * `{"matches":[…]}` for `grep`, `{"type":"text","path":…,"content":…}` for `read_file` — and that
+ * JSON *is* the row's rendering, so the default path returns it whole. Making "an object result is not
+ * text" the rule would empty every one of those rows.
+ *
+ * @param hasMedia - the caller found an image in this result, so the projector is rendering its bytes as
+ * an image block. Then the payload must NOT also be prose: only genuine text parts are readable, and a
+ * bare media object (which declares no text) contributes nothing. This is the whole reason a `read_file`
+ * of a screenshot showed a wall of base64 beside a blank preview.
+ */
+export function toolResultText(content: unknown, hasMedia = false): string {
+  if (hasMedia) {
+    if (Array.isArray(content)) return content.map(textPartOf).filter(Boolean).join("\n");
+    if (typeof content === "string") {
+      const parsed = tryParseJson(content);
+      return Array.isArray(parsed) ? parsed.map(textPartOf).filter(Boolean).join("\n") : "";
+    }
+    return textOfResultObject(content) ?? "";
+  }
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map(textPartOf).filter(Boolean).join("\n");
   if (content && typeof content === "object") {
     try {
       return JSON.stringify(content);

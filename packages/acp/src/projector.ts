@@ -19,7 +19,6 @@
  */
 
 import {
-  extractBase64Content,
   extractCompactionSummaryBody,
   findBuiltinCommand,
   isCompactionSummaryUIMessage,
@@ -28,6 +27,7 @@ import {
 } from "@codent/core";
 
 import { textBlock } from "./content.js";
+import { imagesOfParts, imagesOfResult } from "./media.js";
 import { toolCallInfo, toolDiffFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
 import type {
@@ -68,36 +68,22 @@ const COMPACTION_NOTICE = "[Context compacted — earlier turns are summarized i
 const toolInputOf = (part: ToolCallPartLike): unknown => part.input ?? parseToolInput(part);
 
 /**
- * An image part as ACP's `image` content block, or undefined when this part is not one.
+ * A stand-in `ToolState` for a result whose call part has not been seen yet.
  *
- * Two shapes reach us, both from core: a tool result carries the bytes (`{ base64, mimeType }`), while a
- * message part carries `source.value` — a data URL once the session has hydrated it, and only a
- * `media://` ref before that (which this layer cannot read; a reader that has neither gets nothing
- * rather than a broken image). Stripping the data-URL prefix is core's `extractBase64Content`, because
- * parsing a data URL is a helper we keep in one place.
+ * Only the fields `toolContentFor` reads matter, and it reads the NAME only to derive a `diff` — which a
+ * nameless state cannot produce, so the row is the result and nothing else (correct for a result that
+ * arrived without its call). Sharing one object is safe: every field is either empty or never written.
  */
-function imageBlockOf(part: unknown): ContentBlock | undefined {
-  const rec = part as {
-    type?: string;
-    base64?: string;
-    mimeType?: string;
-    source?: { value?: string; mimeType?: string };
-  };
-  if (rec?.type !== "image") return undefined;
-  const raw =
-    typeof rec.base64 === "string" ? rec.base64 : typeof rec.source?.value === "string" ? rec.source.value : undefined;
-  if (!raw || raw.startsWith("media://")) return undefined;
+function blankToolState(): ToolState {
   return {
-    type: "image",
-    data: extractBase64Content(raw),
-    mimeType: rec.mimeType ?? rec.source?.mimeType ?? "image/png",
+    status: "completed",
+    name: "",
+    input: undefined,
+    streamBuffer: "",
+    lastStreamFlush: 0,
+    resultEmitted: true,
+    previewSent: true,
   };
-}
-
-/** Every image part of a part list, in order. */
-function imageBlocksOf(parts: unknown): ContentBlock[] {
-  if (!Array.isArray(parts)) return [];
-  return parts.map((part) => imageBlockOf(part)).filter((block): block is ContentBlock => Boolean(block));
 }
 
 export interface AcpProjectorOptions {
@@ -299,7 +285,7 @@ export class AcpProjector {
     }
     if (this.emittedUserMessages.has(message.id)) return;
     const text = textOf(message);
-    const images = imageBlocksOf(message.parts);
+    const images = imagesOfParts(message.parts);
     if (!text && images.length === 0) return;
     this.emittedUserMessages.add(message.id);
     if (text) {
@@ -388,7 +374,9 @@ export class AcpProjector {
       if (next !== state.status) {
         state.status = next;
         const terminal = next === "completed" || next === "failed";
-        const content = this.toolContentFor(state, terminal);
+        // `part.output` is the tool's own return value — where a `read_file` image actually lives, and
+        // the door this transition used to walk past (it read `part.content`, which holds a string).
+        const content = this.toolContentFor(state, terminal, undefined, [], part.output);
         if (terminal) state.streamBuffer = "";
         this.options.emit({
           sessionUpdate: "tool_call_update",
@@ -442,8 +430,20 @@ export class AcpProjector {
       state.resultEmitted = true;
       state.streamBuffer = "";
     }
-    const text = toolResultText(part.content) || (part.error ?? "");
     const resultState = this.tools.get(part.toolCallId);
+    // Both doors: `output` is the tool's own value, `content` the model-facing projection of it (a
+    // `ContentPart[]` live, its JSON once persisted). Deduped, so one screenshot arrives once. NOT gated
+    // on the call part being known: the image is on the result itself, and a result that landed before its
+    // call would otherwise drop the only copy of it the client will ever see.
+    const images = imagesOfResult(part.output, part.content);
+    // The row's text. When the bytes are being rendered as an image block they must not ALSO be prose,
+    // which is what `hasMedia` tells the extractor — a bare media object declares no text and so
+    // contributes none. Every other result keeps the JSON that IS its rendering.
+    const text = toolResultText(part.content, images.length > 0) || (part.error ?? "");
+    // The tool's own value goes out as content when there is content to show (the row says "what did this
+    // return"), and as the loose `rawOutput` when there is not. Not both: sending both rendered the same
+    // result twice — once as the row's body, once as raw.
+    const content = this.toolContentFor(resultState ?? blankToolState(), true, text, images, part.content);
     this.options.emit({
       sessionUpdate: "tool_call_update",
       toolCallId: part.toolCallId,
@@ -451,8 +451,8 @@ export class AcpProjector {
         ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
         : {}),
       status,
-      ...(resultState && this.toolContentFor(resultState, true, text, part.content)
-        ? { content: this.toolContentFor(resultState, true, text, part.content) }
+      ...(content
+        ? { content }
         : text
           ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] }
           : {}),
@@ -461,7 +461,8 @@ export class AcpProjector {
   }
 
   /**
-   * The content a tool row shows: the edit preview (a `diff`) and the result text, TOGETHER.
+   * The content a tool row shows: the edit preview (a `diff`), the result text, and any image the call
+   * produced — TOGETHER.
    *
    * Both halves describe the same call, and ACP's `content` on an update replaces what the client
    * holds — so a writer that sends only its own half erases the other's, and what the user ends up
@@ -472,18 +473,21 @@ export class AcpProjector {
     state: ToolState,
     terminal: boolean,
     text?: string,
-    parts?: unknown
+    images: ContentBlock[] = [],
+    result?: unknown
   ): ToolCallContent[] | undefined {
     if (!terminal) return undefined;
-    const content: ToolCallContent[] = [];
+    const parts: ToolCallContent[] = [];
     const diff = toolDiffFor(state.name, state.input, this.options.rootPath);
-    if (diff) content.push(diff);
+    if (diff) parts.push(diff);
     const body = text?.trim() ? text : state.streamBuffer;
-    if (body) content.push({ type: "content", content: textBlock(body) });
+    if (body) parts.push({ type: "content", content: textBlock(body) });
     // A tool that returned an image (a `read_file` of a screenshot, say) put one in the model's context;
-    // without this the client's row shows nothing for it.
-    for (const image of imageBlocksOf(parts)) content.push({ type: "content", content: image });
-    return content.length > 0 ? content : undefined;
+    // without this the client's row shows nothing for it. The images come from the RESULT part when it has
+    // one (both doors), else from the call part's own `output` — the transition writer's only source.
+    const blocks = images.length > 0 ? images : imagesOfResult(result, undefined);
+    for (const image of blocks) parts.push({ type: "content", content: image });
+    return parts.length > 0 ? parts : undefined;
   }
 
   /**

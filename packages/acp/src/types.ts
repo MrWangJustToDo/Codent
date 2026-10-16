@@ -26,6 +26,8 @@ export interface ToolResultPartLike {
   type: "tool-result";
   toolCallId: string;
   content?: unknown;
+  /** The tool's own return value — where a produced image's bytes live (`read_file` → an object). */
+  output?: unknown;
   state: string;
   outcome?: unknown;
   error?: string;

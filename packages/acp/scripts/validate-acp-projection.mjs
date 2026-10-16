@@ -442,22 +442,15 @@ const compactKey = "compact:agent_1";
 // screenshot) reached the client as an empty row, and a user attachment disappeared from history on
 // `session/load` (only the replay can carry it back — the live row is the client's own).
 {
-  const IMAGE_TOOL_RESULT = {
-    id: "r1",
-    role: "tool",
-    parts: [
-      {
-        id: "call-1",
-        type: "tool-result",
-        toolCallId: "call-1",
-        state: "complete",
-        content: [
-          { type: "text", text: "read src/shot.png" },
-          { type: "image", path: "src/shot.png", mimeType: "image/png", base64: "QUJD", size: 3 },
-        ],
-      },
-    ],
-  };
+  // The shapes below are COPIED FROM A REAL SESSION (`.agents/sessions/ses_mv153klh_d4xgti.session.jsonl`,
+  // a `read_file` of a screenshot), because this section's first version tested a shape nothing
+  // produces: a `tool-result.content` ARRAY. On the real path the result part carries
+  // `content: '<json string>'` — never an array — and the bytes live on the tool-CALL part's `output`.
+  // The assertion passed while the client's row stayed blank, which is exactly what a fixture that
+  // guesses gets you.
+  const IMAGE = { type: "image", path: "src/shot.png", mimeType: "image/png", base64: "QUJD", size: 3 };
+  // The call part, as persisted: `output` is the tool's own return value, with the engine's envelope
+  // (`durationMs`, `cachedOutputPath`) around it.
   const callPart = {
     id: "call-1",
     type: "tool-call",
@@ -465,24 +458,116 @@ const compactKey = "compact:agent_1";
     arguments: '{"path":"src/shot.png"}',
     state: "complete",
     input: { path: "src/shot.png" },
+    output: { ...IMAGE, durationMs: 12, cachedOutputPath: null },
+  };
+  // The result part, as persisted: `content` is the JSON STRING of what the tool returned.
+  const resultPart = {
+    id: "r1",
+    type: "tool-result",
+    toolCallId: "call-1",
+    state: "complete",
+    content: JSON.stringify(IMAGE),
   };
 
-  const tool = capture();
-  tool.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }]);
-  tool.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }, IMAGE_TOOL_RESULT]);
-  const content = tool.lastContent("call-1") ?? [];
-  const imageBlock = content.flatMap((c) => (c.type === "content" ? [c.content] : [])).find((b) => b.type === "image");
+  const imagesOf = (c) => c.flatMap((x) => (x.type === "content" ? [x.content] : [])).filter((b) => b.type === "image");
+  const textsOf = (c) => c.flatMap((x) => (x.type === "content" && x.content.type === "text" ? [x.content.text] : []));
+
+  // (a) The persisted shape — what a replayed/restored session gives the projector.
+  const persisted = capture();
+  persisted.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }]);
+  persisted.push("messages", [{ id: "a1", role: "assistant", parts: [callPart, resultPart] }]);
+  const pContent = persisted.lastContent("call-1") ?? [];
+  const pImage = imagesOf(pContent)[0];
   check(
-    "an image a tool produced reaches the client as an image block",
-    imageBlock?.type === "image" && imageBlock.data === "QUJD" && imageBlock.mimeType === "image/png",
-    JSON.stringify(content.map((c) => c.type))
+    "a persisted tool result (content is a JSON string) still carries its image",
+    pImage?.type === "image" && pImage.data === "QUJD" && pImage.mimeType === "image/png",
+    JSON.stringify(pContent.map((c) => c.type + "/" + (c.content?.type ?? "?")))
+  );
+  // The counter-assertion, and the one that would have caught the original bug: the bytes must NOT
+  // arrive as the row's text. `toolResultText` used to `JSON.stringify` an object result, so the whole
+  // base64 payload was rendered where a human reads — a wall of noise next to a blank preview.
+  check(
+    "…and its bytes are NOT leaked as the row's text",
+    !textsOf(pContent).some((t) => t.includes("QUJD")),
+    JSON.stringify(textsOf(pContent).map((t) => t.slice(0, 60)))
+  );
+  persisted.stop();
+
+  // (b) The live shape — `content` is a ContentPart[] here. Both doors have to work, and the same
+  // image arriving through BOTH must not land twice: the result's `output` and its `content` are two
+  // views of one tool call, and a client renders every chunk it is handed.
+  const live = capture();
+  const liveResult = {
+    ...resultPart,
+    output: { ...IMAGE, durationMs: 12 },
+    content: [{ type: "text", text: "read src/shot.png" }, IMAGE],
+  };
+  live.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }]);
+  live.push("messages", [{ id: "a1", role: "assistant", parts: [callPart, liveResult] }]);
+  const liveContent = live.lastContent("call-1") ?? [];
+  check(
+    "a live tool result (content is a ContentPart[]) carries its image",
+    imagesOf(liveContent)[0]?.data === "QUJD",
+    JSON.stringify(liveContent.map((c) => c.type + "/" + (c.content?.type ?? "?")))
   );
   check(
     "…alongside the text, not instead of it",
-    content.some((c) => c.type === "content" && c.content.type === "text"),
-    JSON.stringify(content.map((c) => c.type))
+    textsOf(liveContent).some((t) => t.includes("read src/shot.png")),
+    JSON.stringify(liveContent.map((c) => c.type + "/" + (c.content?.type ?? "?")))
   );
-  tool.stop();
+  check(
+    "…exactly once, though output and content both hold it",
+    imagesOf(liveContent).length === 1,
+    JSON.stringify(imagesOf(liveContent).map((b) => b.data))
+  );
+  live.stop();
+
+  // (c) The transition writer's path: the CALL part is the only thing that has run, and it already
+  // carries the result in `output` (the real shape — `read_file` puts the image there). This is the
+  // case the `output` door exists for, and it fires when the status MOVES, which is why the tick is
+  // driven twice: `pending` first, then the terminal state the tool actually reached.
+  const moved = capture();
+  const pending = { ...callPart, state: "input-complete", output: undefined };
+  const done = { ...callPart, state: "complete" };
+  moved.push("messages", [{ id: "a1", role: "assistant", parts: [pending] }]);
+  moved.push("messages", [{ id: "a1", role: "assistant", parts: [done] }]);
+  const movedContent = moved.lastContent("call-1") ?? [];
+  check(
+    "an image on the call's own output still reaches the client (no result part yet)",
+    imagesOf(movedContent)[0]?.data === "QUJD",
+    JSON.stringify(movedContent.map((c) => c.type + "/" + (c.content?.type ?? "?")))
+  );
+  moved.stop();
+
+  // (d) A result that carries no image must not grow one, and its text survives — as the JSON it is.
+  // `run_command` / `grep` / `read_file` results are JSON strings in every session on disk
+  // (`{"command":…,"stdout":…}`, `{"matches":[…]}`, `{"type":"text","content":…}`), so "an object
+  // result is not text" would empty those rows. The rule is narrower: bytes are not text.
+  const plain = capture();
+  const plainCall = { ...callPart, output: { success: true, content: "wrote 3 lines", durationMs: 1 } };
+  const plainResult = { ...resultPart, content: '{"command":"wc -l x.ts","stdout":"3 x.ts"}' };
+  plain.push("messages", [{ id: "a1", role: "assistant", parts: [plainCall] }]);
+  plain.push("messages", [{ id: "a1", role: "assistant", parts: [plainCall, plainResult] }]);
+  const plainContent = plain.lastContent("call-1") ?? [];
+  check(
+    "a result with no image keeps its text and gains no image block",
+    imagesOf(plainContent).length === 0 && textsOf(plainContent).some((t) => t.includes('"stdout":"3 x.ts"')),
+    JSON.stringify(plainContent.map((c) => c.type + "/" + (c.content?.type ?? "?")))
+  );
+  plain.stop();
+
+  // (e) A live `ContentPart[]` text result still renders its text entries (the array door).
+  const arr = capture();
+  const arrResult = { ...resultPart, content: [{ type: "text", text: "Fetched image: https://x/y.png" }] };
+  arr.push("messages", [{ id: "a1", role: "assistant", parts: [callPart] }]);
+  arr.push("messages", [{ id: "a1", role: "assistant", parts: [callPart, arrResult] }]);
+  const arrContent = arr.lastContent("call-1") ?? [];
+  check(
+    "an array result renders its text part, not its JSON",
+    textsOf(arrContent).some((t) => t.includes("Fetched image") && !t.includes('"type"')),
+    JSON.stringify(textsOf(arrContent))
+  );
+  arr.stop();
 
   // A user attachment, on replay. The hydrated shape is a data URL; the data-URL prefix is not part of
   // ACP's base64 payload, so it must be stripped (core owns that parsing).
