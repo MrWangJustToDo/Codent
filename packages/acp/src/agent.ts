@@ -10,14 +10,16 @@
  */
 
 import { agent as createAgentApp, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { isActiveStatus } from "@codent/core";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
 import { createInteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
 import { AcpProjector } from "./projector.js";
-import { applyMode, applyModel, MODE_IDS, MODE_META, sessionConfigOptions } from "./session-config-options.js";
+import { applyMode, applyModel, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
+import { diskSessionId, sessionModes, stopReasonFor } from "./session-status.js";
 import { paginateSessions } from "./sessions.js";
 
 import type { AcpClientEnv } from "./client-env.js";
@@ -30,8 +32,6 @@ import type {
   ClientCapabilities,
   McpServer,
   PromptRequest,
-  SessionMode,
-  SessionModeState,
   StopReason,
 } from "@agentclientprotocol/sdk";
 import type {
@@ -186,41 +186,6 @@ export interface AcpSessionRuntime {
 }
 
 const AGENT_NAME = "codent";
-
-/**
- * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
- *
- * The spec says agents with mode-like configuration SHOULD send both: `configOptions` for clients
- * that understand it, `modes` for those that only read the older API. The mode vocabulary itself
- * lives in `session-config-options.ts` (one home, shared with the `category: "mode"` option).
- */
-function sessionModes(current: AgentMode): SessionModeState {
-  const availableModes: SessionMode[] = MODE_IDS.map((id) => ({ id, ...MODE_META[id] }));
-  return { currentModeId: current, availableModes };
-}
-
-/**
- * The ACP session id for a live session: the **disk** session id (`ses_…`), never the agent id.
- *
- * `AgentSession.id` is the agent id (`agent_…`, `local-agent-session.ts`), and the two are not
- * interchangeable: `session/load` / `session/resume` address a PERSISTED conversation, and
- * `session/list` / `session/delete` hand out disk ids too. Exposing the agent id here (as this
- * did) made the id returned by `session/new` unusable for `session/load`, and made
- * `session/delete` / `session/fork`'s "find the live bridge" lookups miss every session
- * enumerated from disk.
- *
- * `host.create` mints one via `managed.ensureSessionData()` before returning, so this is always
- * present for a root session.
- */
-function diskSessionId(session: AgentSession): string {
-  const active = session.getSnapshot().activeSessionId;
-  if (!active) {
-    // Not expected for a root session (see above). Fail loudly rather than fall back to the
-    // agent id, which would silently reintroduce the two-id-spaces bug this guards against.
-    throw new Error(`ACP session has no disk session id (agent ${session.id})`);
-  }
-  return active;
-}
 
 /** Create the ACP agent app (handlers registered; call `connect(stream)` to serve). */
 export function createAcpAgent(options: AcpAgentOptions): AgentApp {
@@ -810,6 +775,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
     try {
       await bridge.session.dispatch({ type: "send", content: mapping.content });
+      // A turn can SUSPEND — an approval or an `ask_user` — and the pump RETURNS there: the client
+      // answers, `respondToToolApproval` starts a new pump, and the SAME turn keeps streaming.
+      // Resolving the prompt at that point told the client the turn was over while its continuation
+      // still arrived — messages updating under a "not running" status. Wait for the TURN instead:
+      // the status leaves the active set only when the turn really ends, since a wait is still active.
+      await waitForTurnEnd(bridge);
     } catch (error) {
       if (bridge.cancelled) return { stopReason: "cancelled" };
       throw error;
@@ -817,17 +788,31 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     return { stopReason: stopReasonFor(bridge) };
   };
 
-  return app;
-}
+  /**
+   * Resolve once the session is no longer ACTIVE — the turn is over, not merely suspended.
+   *
+   * Subscribes to the `state` channel rather than polling: a status change is the event, and the
+   * snapshot is read through `getSnapshot()` when it arrives. A client that neither answers nor
+   * cancels leaves the prompt pending, which is what the protocol expects of a turn awaiting input.
+   */
+  const waitForTurnEnd = (bridge: SessionBridge): Promise<void> =>
+    new Promise((resolve) => {
+      const isOver = (): boolean => !isActiveStatus(bridge.session.getSnapshot().status);
+      if (isOver()) {
+        resolve();
+        return;
+      }
+      const unsubscribe = bridge.session.subscribe(
+        () => {
+          if (!isOver()) return;
+          unsubscribe();
+          resolve();
+        },
+        { channels: ["state"] }
+      );
+    });
 
-function stopReasonFor(bridge: SessionBridge): StopReason {
-  const snapshot = bridge.session.getSnapshot();
-  if (bridge.cancelled || snapshot.status === "aborted") return "cancelled";
-  if (snapshot.status === "error") return "end_turn";
-  const { iteration } = snapshot;
-  if (iteration.max > 0 && iteration.current >= iteration.max) return "max_turn_requests";
-  if (bridge.lastFinishReason === "length") return "max_tokens";
-  return "end_turn";
+  return app;
 }
 
 /**

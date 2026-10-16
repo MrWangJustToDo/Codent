@@ -720,13 +720,19 @@ function makeApprovalSession(id) {
     dispatch: async (command) => {
       dispatched.push(command);
       if (command.type === "send") {
-        snap = baseSnapshot(id, { status: "running", messages: approvalMessages });
+        // A turn that SUSPENDS: `send` resolves with the session still ACTIVE (`waiting`), and only the
+        // approval answer resumes it — that is why the pump returns, and why the prompt must not resolve
+        // here (resolving told the client the turn was over while its continuation still streamed).
+        snap = baseSnapshot(id, { status: "waiting", messages: approvalMessages });
         emit({
           channel: "interaction",
           payload: { approvals: [{ approvalId: "ap1", toolName: "run_command", toolCallId: "tc1" }], askUser: [] },
         });
-        await new Promise((r) => setTimeout(r, 20));
+        emit({ channel: "state", payload: snap });
+      }
+      if (command.type === "respondApproval") {
         snap = baseSnapshot(id, { status: "completed", messages: approvalMessages });
+        emit({ channel: "state", payload: snap });
       }
       return { ok: true };
     },
@@ -736,8 +742,11 @@ function makeApprovalSession(id) {
 let permissionParams = null;
 const approvalClient = createClient({ name: "approval-client" }).onRequest(
   methods.client.session.requestPermission,
-  (ctx) => {
+  async (ctx) => {
     permissionParams = ctx.params;
+    // Answer LATE: the suspension window has to be observable, or "the prompt stayed pending" cannot
+    // be told apart from "the approval round-trip was simply fast" (the flake this check exists for).
+    await new Promise((r) => setTimeout(r, 80));
     return { outcome: { outcome: "selected", optionId: "allow-once" } };
   }
 );
@@ -756,11 +765,20 @@ const approvalApp = createAcpAgent({
 
 await approvalClient.connectWith(approvalApp, async (cx) => {
   const s = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
-  await cx.request(methods.agent.session.prompt, {
-    sessionId: s.sessionId,
-    prompt: [{ type: "text", text: "edit it" }],
-  });
+  let promptSettled = false;
+  const prompt = cx
+    .request(methods.agent.session.prompt, {
+      sessionId: s.sessionId,
+      prompt: [{ type: "text", text: "run it" }],
+    })
+    .then(() => {
+      promptSettled = true;
+    });
+  // The turn is in flight until the approval is answered, so the prompt must still be pending.
   await new Promise((r) => setTimeout(r, 30));
+  check("the prompt stays pending while the turn is suspended on an approval", promptSettled === false);
+  await prompt;
+  check("…and resolves once the turn actually ends", promptSettled === true);
   const approval = dispatched.find((c) => c.type === "respondApproval");
   check(
     "approval round-trip reaches respondApproval with approved=true",
