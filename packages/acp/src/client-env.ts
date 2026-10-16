@@ -33,6 +33,8 @@ import {
 } from "@agentclientprotocol/sdk";
 import { defaultPath, ExecutionError } from "@codent/core";
 
+import { toWirePath } from "./paths.js";
+
 import type {
   CoreEnv,
   CoreEnvFs,
@@ -72,7 +74,17 @@ const TERMINAL_DEADLINE_MS = 10 * 60 * 1000;
  * this invariant quietly rots.
  */
 export function isLocalOnlyPath(rootPath: string, target: string): boolean {
-  const resolved = target.startsWith("/") ? defaultPath.normalize(target) : defaultPath.resolve(rootPath, target);
+  // The SAME resolution the wire uses (`paths.ts`), not a third spelling of it: "is this absolute?"
+  // was being asked with `startsWith("/")` here and with `isAbsolute` on the wire.
+  //
+  // Scope, stated honestly because it is easy to overclaim: the two implementations were compared
+  // over every root/target shape we could think of (POSIX, `..`, `//`, drive-letter, UNC, `.agents/**`)
+  // and produced the SAME verdict in all of them, so this converges two spellings rather than fixing
+  // a reachable bug — and for that reason no behavioral assertion can pin it (an untestable claim in
+  // a validator is worse than a comment). The single divergence found needs `rootPath === ""`, which
+  // `bootstrapLocalAcp` normalizing the root makes unreachable. `toWirePath` also preserves the
+  // empty-root behaviour this function already had.
+  const resolved = toWirePath(target, rootPath);
   const root = defaultPath.normalize(rootPath);
   // Outside the workspace root (also catches `..` traversal).
   if (resolved !== root && !resolved.startsWith(`${root}/`)) return true;
@@ -249,7 +261,7 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     // returned text itself), so sending them would invent a second, differently-anchored window.
     const response = (await client().request(methods.client.fs.readTextFile, {
       sessionId: sessionId(),
-      path: target,
+      path: toWirePath(target, rootPath),
     })) as ReadTextFileResponse;
     return response.content;
   }
@@ -275,20 +287,50 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
         await fallback.fs.writeFile(target, content);
         return;
       }
-      await client().request(methods.client.fs.writeTextFile, { sessionId: sessionId(), path: target, content });
+      await client().request(methods.client.fs.writeTextFile, {
+        sessionId: sessionId(),
+        path: toWirePath(target, rootPath),
+        content,
+      });
     },
 
     // `readFileRange` is intentionally ABSENT: it is defined in terms of byte offsets on our own
     // storage, which never reaches the client, and callers already degrade to a full read.
 
-    // Optional members that always serve paths the client never sees (`.agents/**`, outside the
-    // root), so they are pure pass-throughs. They are NOT cosmetic: the log sink refuses to attach
-    // at all when `appendFile` is missing and degrades silently, so dropping this one would cost
-    // the session its log file — on a store that never leaves the process anyway.
+    // `appendFile` always serves paths the client never sees (`.agents/**`, outside the root), so it
+    // is a pure pass-through. It is NOT cosmetic: the log sink refuses to attach at all when
+    // `appendFile` is missing and degrades silently, so dropping it would cost the session its log
+    // file — on a store that never leaves the process anyway.
     ...(fallback.fs.appendFile
       ? { appendFile: (target: string, content: string) => fallback.fs.appendFile!(target, content) }
       : {}),
-    ...(fallback.fs.rename ? { rename: (from: string, to: string) => fallback.fs.rename!(from, to) } : {}),
+    //
+    // `rename` is NOT in that class, and forwarding it unconditionally was a latent defect this
+    // guard closes.
+    //
+    // A whole-file rewrite is `writeFile(<sibling tmp>)` then `rename(tmp, target)` — that is what
+    // `rename`'s own contract in `CoreEnvFs` is FOR. The write routes to the client (it is a
+    // workspace text file) while the rename, being local, executed against OUR filesystem. That
+    // "works" only while the client happens to write the same disk we do — a LOCAL editor. With a
+    // genuinely remote client (Zed over SSH, a dev container, a different machine) the temp file
+    // exists only on the client's disk, so the rename fails (ENOENT) or crosses devices (EXDEV) and
+    // the temp file is left behind.
+    //
+    // So the atomic-replace path becomes unreachable exactly when it cannot work: with the write
+    // routed away, `write_file` takes its documented direct-write branch and the client gets ONE
+    // write of the real path.
+    //
+    // Honest about the cost: this is a CAPABILITY-level gate, not a path-level one. `fs.rename` going
+    // away is visible to the whole env, so a LOCAL write under this flag also loses its atomic
+    // replace — `.agents/**` included. Core documents that degradation itself
+    // (`session-journal.ts`: "Without rename this degrades to a direct overwrite … best-effort"),
+    // and its else-branch is a plain `writeFile`, so nothing is dropped: a folded log rewrite is
+    // simply no longer crash-atomic. Doing better needs a path-aware question ("can this path be
+    // replaced atomically?") in the CoreEnv contract — a core API change, deliberately not smuggled
+    // in here.
+    ...(fallback.fs.rename && !caps.writeTextFile
+      ? { rename: (from: string, to: string) => fallback.fs.rename!(from, to) }
+      : {}),
     // The sync trio is deliberately NOT forwarded: they exist for crash/exit paths on a host that
     // can write synchronously, and the sink already degrades to an async flush without them. A
     // client-backed session therefore loses nothing but the last-resort sync write.
@@ -359,7 +401,7 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       sessionId: sessionId(),
       command: file,
       args,
-      ...(execOptions?.cwd ? { cwd: execOptions.cwd } : {}),
+      ...(execOptions?.cwd ? { cwd: toWirePath(execOptions.cwd, rootPath) } : {}),
       ...(execOptions?.env ? { env: toEnvVariables(execOptions.env) } : {}),
     })) as CreateTerminalResponse;
     const terminalId = created.terminalId;

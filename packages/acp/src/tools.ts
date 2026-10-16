@@ -10,6 +10,7 @@
 import { BUILTIN_TOOL_NAMES, formatToolInput, getToolPresentation } from "@codent/core";
 
 import { textBlock } from "./content.js";
+import { toWirePath } from "./paths.js";
 
 import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
 import type { ToolActivityCategory } from "@codent/core";
@@ -64,15 +65,7 @@ export function toolLocationsFor(input: unknown, rootPath: string): Array<{ path
       for (const entry of value) if (typeof entry === "string" && entry.trim()) found.push(entry);
     }
   }
-  return [...new Set(found)].map((p) => ({ path: toAbsolute(p, rootPath) }));
-}
-
-/** Resolve a possibly-relative path against the session root. */
-export function toAbsolute(path: string, rootPath: string): string {
-  if (!rootPath) return path;
-  if (path.startsWith("/")) return path;
-  const base = rootPath.endsWith("/") ? rootPath.slice(0, -1) : rootPath;
-  return `${base}/${path.replace(/^\.\//, "")}`;
+  return [...new Set(found)].map((p) => ({ path: toWirePath(p, rootPath) }));
 }
 
 /** Human-readable title for a tool call: `Verb <path>` when a path is known. */
@@ -115,7 +108,7 @@ export function toolDiffFor(name: string, input: unknown, rootPath: string): Too
   if (!path) return undefined;
 
   if (name === BUILTIN_TOOL_NAMES.writeFile && typeof rec.content === "string") {
-    return { type: "diff", path: toAbsolute(path, rootPath), oldText: null, newText: rec.content };
+    return { type: "diff", path: toWirePath(path, rootPath), oldText: null, newText: rec.content };
   }
 
   if (name === BUILTIN_TOOL_NAMES.editFile) {
@@ -131,7 +124,7 @@ export function toolDiffFor(name: string, input: unknown, rootPath: string): Too
     if (oldChunks.length > 0 && oldChunks.length === newChunks.length) {
       return {
         type: "diff",
-        path: toAbsolute(path, rootPath),
+        path: toWirePath(path, rootPath),
         oldText: oldChunks.join("\n"),
         newText: newChunks.join("\n"),
       };

@@ -22,6 +22,7 @@ import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from ".
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
 import { createInteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
+import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
 import { applyMode, applyModel, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
@@ -199,7 +200,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // `CODENT_ACP_TRACE=1` narrates every outgoing `session/update` on stderr (see `emit`).
   const TRACE_UPDATES = process.env.CODENT_ACP_TRACE === "1";
   const app = createAgentApp({ name: AGENT_NAME });
-  const rootPath = options.rootPath ?? process.cwd();
+  // Normalized because it reaches client-visible output (`tool_call.location.path`, `SessionInfo.cwd`).
+  const rootPath = resolveRoot(options.rootPath);
   const version = options.version ?? "0.0.1";
   const bridges = new Map<string, SessionBridge>();
   let connection: AgentConnection | null = null;

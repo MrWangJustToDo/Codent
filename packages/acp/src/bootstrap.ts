@@ -31,6 +31,7 @@ import {
 import { createNodeEnv } from "@codent/node";
 
 import { createAcpClientEnv } from "./client-env.js";
+import { resolveRoot } from "./paths.js";
 
 import type {
   AcpAgentDefaults,
@@ -92,7 +93,11 @@ export async function bootstrapLocalAcp(
     clientEnv?: boolean;
   } = {}
 ): Promise<LocalAcpBootstrap> {
-  const rootPath = options.cwd ?? process.cwd();
+  // Normalized to absolute HERE, at the boundary that accepts a caller-supplied `cwd`: everything
+  // downstream assumes an absolute root (see `paths.ts`), and a relative one would quietly make
+  // `toWirePath` resolve against `process.cwd()` — the very fallback that file forbids. The other
+  // boundary that takes a root is `createAcpAgent({ rootPath })`, which uses the same helper.
+  const rootPath = resolveRoot(options.cwd);
   const sandboxMode = options.sandbox ?? (process.env.SANDBOX_ENV === "native" ? "native" : "local");
   const env = createNodeEnv({ rootPath, sandbox: sandboxMode !== "native" });
   registerCoreEnv(env);

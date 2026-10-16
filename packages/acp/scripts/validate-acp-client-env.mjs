@@ -11,8 +11,10 @@
  */
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
+import fs from "node:fs/promises";
+import path from "node:path";
 
-import { createAcpAgent, createAcpClientEnv, isLocalOnlyPath } from "../dist/index.mjs";
+import { createAcpAgent, createAcpClientEnv, isLocalOnlyPath, resolveRoot, toWirePath } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 
@@ -616,7 +618,15 @@ function fakeSession(id, diskId) {
   // refuses to attach and the session loses its log file.
   const env = makeEnv(fullCaps);
   check("appendFile is forwarded from the fallback", typeof env.fs.appendFile === "function");
-  check("rename is forwarded from the fallback", typeof env.fs.rename === "function");
+  // `rename` is NOT in the always-local class: it is the second half of a whole-file rewrite, and
+  // with the write routed to the client that rename would run against OUR filesystem while the temp
+  // file lives on the client's (ENOENT/EXDEV under a genuinely remote client, plus a leaked temp).
+  // Withholding it makes `write_file` take its direct-write branch instead — one write, real path.
+  check("rename is NOT forwarded while writes route to the client", typeof env.fs.rename === "undefined");
+  check(
+    "rename IS forwarded when writes stay local (the atomic rewrite still has its card)",
+    typeof makeEnv({ readTextFile: true, writeTextFile: false, terminal: true }).fs.rename === "function"
+  );
   check("startCommand is forwarded from the fallback", typeof env.startCommand === "function");
   check("getShellInfo is forwarded (approval analysis needs the real shell)", typeof env.getShellInfo === "function");
 
@@ -631,6 +641,177 @@ function fakeSession(id, diskId) {
   // And a sink built over this env really does attach, which is the property that matters.
   const sinkEnv = { ...env, fs: { ...env.fs } };
   check("the env the sink sees still has appendFile", typeof sinkEnv.fs.appendFile === "function");
+}
+
+// ===========================================================================
+// 9. Every path on the wire is absolute (the contract ACP specifies)
+// ===========================================================================
+//
+// ACP requires absolute paths on every path-bearing request (`fs/*`: "Absolute path to the file",
+// `terminal/create.cwd`: "Must be an absolute path") while the tools hand us workspace-RELATIVE ones.
+// Sending them verbatim is the defect this file exists to pin: the client resolves them against ITS
+// OWN cwd, refuses them as outside the workspace, and the write's approval prompt then never resolves.
+{
+  reset();
+  await makeEnv().fs.readFile("packages/acp/README.md");
+  await makeEnv().fs.writeFile("packages/acp/README.md", "hello");
+  await makeEnv().execFile("cat", ["packages/acp/README.md"], { cwd: "packages/acp" });
+  const sent = requests.map((r) => r.params.path ?? r.params.cwd).filter((p) => typeof p === "string");
+  check("a relative read, write and execFile reached the client", sent.length === 3, sent.join(", "));
+  check(
+    "every path on the wire is absolute",
+    sent.every((p) => p.startsWith("/")),
+    sent.join(", ")
+  );
+  check(
+    "and resolved against rootPath, not process.cwd()",
+    sent.every((p) => p.startsWith("/ws/")),
+    sent.join(", ")
+  );
+  check(
+    "each keeps its own frame, so none collapses to the root",
+    sent.includes("/ws/packages/acp/README.md") && sent.includes("/ws/packages/acp")
+  );
+
+  reset();
+  await makeEnv().fs.writeFile("/ws/already/absolute.txt", "x");
+  check(
+    "an absolute path is passed through unchanged",
+    requests.length === 1 && requests[0].params.path === "/ws/already/absolute.txt"
+  );
+}
+
+// ===========================================================================
+// 10. One resolution: `locations` and the `fs/*` that follows describe ONE file
+// ===========================================================================
+//
+// `tool_call.location.path` and the `fs/*` request the tool then makes are two spellings of the same
+// file, so they must not disagree on how to spell it. They did: `locations` came from a
+// string-concatenation helper (`tools.ts`) that kept `..` and `//`, while the `fs/*` body came from a
+// `resolve`-based one, so a client that followed a location could ask for a path the file is not at.
+//
+// The assertions below deliberately do NOT reuse the implementation's own predicate — that is how a
+// POSIX-only `startsWith("/")` check survived a green suite. Absoluteness is asserted the way a
+// filesystem would judge it.
+{
+  const root = "/ws";
+
+  // --- idempotence: resolving an already-wire path is a no-op -------------------------------
+  const once = toWirePath("packages/acp/README.md", root);
+  check("a relative path resolves under the root", once === "/ws/packages/acp/README.md", once);
+  check("resolving a wire path again is a no-op (idempotent)", toWirePath(once, root) === once);
+
+  // --- normalization: one file, one string --------------------------------------------------
+  check(
+    "`..` segments collapse, so a location and the read that follows it agree",
+    toWirePath("packages/core/../acp/README.md", root) === "/ws/packages/acp/README.md",
+    toWirePath("packages/core/../acp/README.md", root)
+  );
+  check("a doubled separator collapses too", toWirePath("a//b.md", root) === "/ws/a/b.md", toWirePath("a//b.md", root));
+
+  // --- no process.cwd() fallback ------------------------------------------------------------
+  // `pathe.resolve("", t)` silently resolves against the process's cwd. An empty root means "no base
+  // to resolve against", and the honest answer is the path unchanged.
+  const previousCwd = process.cwd();
+  process.chdir("/tmp");
+  try {
+    check(
+      "an empty rootPath returns the path unchanged (no process.cwd() fallback)",
+      toWirePath("rel/only.md", "") === "rel/only.md",
+      toWirePath("rel/only.md", "")
+    );
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  // --- absoluteness judged as a filesystem judges it, not by `startsWith("/")` ---------------
+  for (const [label, input] of [
+    ["POSIX", "/abs/x.ts"],
+    ["Windows drive-letter", "C:\\dev\\x.ts"],
+    ["UNC", "\\\\srv\\share\\x.ts"],
+  ]) {
+    const out = toWirePath(input, root);
+    // The failure mode this catches: a Windows/UNC path treated as relative becomes
+    // `<root>/C:/dev/x.ts` — a path pointing at a file that does not exist.
+    check(`a ${label} absolute path is not re-based under the root`, !out.startsWith(`${root}/`), out);
+  }
+
+  // --- the two producers agree --------------------------------------------------------------
+  // The exact pair from the report: same file, same root, two spellings before this change.
+  const viaLocation = toWirePath("packages/core/../acp/README.md", root);
+  reset();
+  await makeEnv().fs.readFile("packages/core/../acp/README.md");
+  const viaFsRequest = requests[0]?.params?.path;
+  check(
+    "a location and its fs request spell the file identically",
+    viaLocation === viaFsRequest,
+    `location=${viaLocation} fs=${viaFsRequest}`
+  );
+}
+
+// ===========================================================================
+// 11. Rename's scope, and the root's absoluteness
+// ===========================================================================
+//
+// Two consequences of the resolution contract that are easy to state and easy to get wrong:
+// the `rename` gate is a CAPABILITY gate (so it removes the member for every path, including the
+// local-only ones core documents as degrading), and every root-accepting entry normalizes the root
+// so the `paths.ts` precondition (absolute root) actually holds for a caller-supplied `cwd`.
+{
+  // --- the rename gate's real scope ---------------------------------------------------------
+  // Asserted as a property of the env, not of one call: with writes routed away there is no
+  // `rename` for ANY path, which is exactly the degradation `session-journal.ts` documents
+  // ("degrades to a direct overwrite … best-effort"). Pinned so nobody reads the gate as
+  // path-selective.
+  const routed = makeEnv({ readTextFile: true, writeTextFile: true, terminal: true });
+  const local = makeEnv({ readTextFile: true, writeTextFile: false, terminal: true });
+  check("routed writes: rename is absent for every path, `.agents/**` included", routed.fs.rename === undefined);
+  check("local writes: rename is present again", typeof local.fs.rename === "function");
+  check(
+    "the gate is capability-level, not path-level: nothing about the target path changes it",
+    typeof routed.fs.rename === "undefined" && routed.routesWriteToClient(".agents/x") === false,
+    "a `.agents/**` path stays local for routing, yet rename is still gone"
+  );
+
+  // --- the root's absoluteness --------------------------------------------------------------
+  // The precondition `toWirePath` documents is enforced at the entries by ONE helper: `resolveRoot`
+  // may use `process.cwd()` (a relative caller root is only meaningful relative to it), while
+  // `toWirePath` may never reach it (a root that arrived relative would anchor every path of the
+  // session to whichever directory this process sits in).
+  //
+  // Asserted on the helper + the entries rather than by driving a whole bootstrap: a bootstrap call
+  // resolves a model, and with a stubbed one it still performs a models.dev lookup — a network call
+  // in a resolution test (0.8s cached / 4.9s uncached) and a dependency on the machine's own model
+  // config, which is what made this section fail on a fresh checkout.
+  const relativeRoot = resolveRoot("relative/workspace");
+  check(
+    "a relative root is normalized to absolute",
+    relativeRoot.startsWith("/") && relativeRoot.endsWith("/relative/workspace"),
+    relativeRoot
+  );
+  check("an absolute root is not re-based", resolveRoot("/abs/ws") === "/abs/ws", resolveRoot("/abs/ws"));
+  check(
+    "an omitted root is the process cwd (the one place it is the right base)",
+    resolveRoot(undefined) === process.cwd(),
+    resolveRoot(undefined)
+  );
+  check(
+    "the entry's root is what a wire path then resolves against",
+    toWirePath("a.ts", relativeRoot) === `${relativeRoot}/a.ts`,
+    toWirePath("a.ts", relativeRoot)
+  );
+
+  // Both entries are pinned at the source: the agent entry's root is only observable through a
+  // session listing (a store fixture), and the defect here is a raw fallback written AT an entry.
+  for (const file of ["../src/bootstrap.ts", "../src/agent.ts"]) {
+    const source = await fs.readFile(new URL(file, import.meta.url), "utf8");
+    check(`${path.basename(file)} normalizes its root through resolveRoot`, source.includes("resolveRoot("));
+    check(
+      `${path.basename(file)} keeps no raw root fallback`,
+      !/options\.(cwd|rootPath)\s*\?\?/.test(source),
+      "a raw `options.<root> ?? …` is what makes the precondition unenforced"
+    );
+  }
 }
 
 finish(checker.failures);
