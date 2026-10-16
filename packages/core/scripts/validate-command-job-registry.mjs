@@ -313,6 +313,15 @@ console.log("teardown log deletion OK");
 // 13. Runtime write failure: logging degrades and the path stops being advertised
 // ---------------------------------------------------------------------------
 {
+  /** Poll until the registry stops advertising a job's log path (the flush is debounced + async). */
+  const waitForLogPathCleared = async (id, timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (registry.get(id)?.logPath === null) return;
+      await sleep(25);
+    }
+  };
+
   const throwRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "command-job-throwing-"));
   clearCoreEnv();
   registerCoreEnv(createEnv(throwRoot, { withAppendFile: "throwing" }));
@@ -320,7 +329,12 @@ console.log("teardown log deletion OK");
   const failing = registry.create("echo failing");
   assert.equal(failing.logPath, `${COMMAND_JOB_LOG_DIR}/${failing.id}.log`, "path advertised while healthy");
   registry.appendStdout(failing.id, "boom\n");
-  await sleep(400); // let the failing flush settle
+  // The flush is DEBOUNCED (`JOB_LOG_FLUSH_INTERVAL_MS`) and then awaits real I/O, so the failure is
+  // observed on a timer rather than synchronously. A fixed 400 ms wait therefore raced a loaded CI
+  // runner (Windows) and read the path as still advertised, while the same code passed locally. Wait
+  // for the CONDITION: the assertion is unchanged, it just stops depending on how fast a machine gets
+  // through a 250 ms timer plus a write.
+  await waitForLogPathCleared(failing.id, 5_000);
   assert.equal(registry.get(failing.id)?.logPath, null, "path cleared after a write failure");
   assert.equal(registry.poll(failing.id).logPath, null, "poll stops advertising the path");
   assert.doesNotThrow(() => registry.appendStderr(failing.id, "more\n"));
