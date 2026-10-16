@@ -109,10 +109,7 @@ assert.ok(!lifecycleEvents.includes("subagent:ui-update"));
   //     and the per-case `as` both let through.
   for (const [type, meta] of Object.entries(AGENT_EVENT_META)) {
     if (!meta.channel) continue;
-    assert.ok(
-      AGENT_SESSION_CHANNELS.includes(meta.channel),
-      `${type} routes to unknown channel ${meta.channel}`
-    );
+    assert.ok(AGENT_SESSION_CHANNELS.includes(meta.channel), `${type} routes to unknown channel ${meta.channel}`);
   }
 }
 

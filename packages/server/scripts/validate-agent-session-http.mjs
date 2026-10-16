@@ -22,11 +22,8 @@ process.env.SANDBOX_ENV = "native";
 
 const { createServer } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
-const {
-  applyEventForTests,
-  parseAgentSessionSseBlockForTests,
-  RemoteSessionClient,
-} = await import("../dist/remote-session-client.mjs");
+const { applyEventForTests, parseAgentSessionSseBlockForTests, RemoteSessionClient } =
+  await import("../dist/remote-session-client.mjs");
 
 // ── 0. SSE parse helper still tolerates heartbeats ──
 assert.equal(parseAgentSessionSseBlockForTests(": ping\n\n"), null);
