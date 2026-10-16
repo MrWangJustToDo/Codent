@@ -93,6 +93,11 @@ interface SessionBridge {
   selectedModelEntryIndex: number | undefined;
   /** The entry index the client was last told about — the mirror that makes a silent change visible. */
   lastAdvertisedConfigEntryIndex: number | undefined;
+  /**
+   * Whether the stored transcript has been replayed to the client. `load` owes the history once; a
+   * repeat on the same live session must not replay it again (the client would render it twice).
+   */
+  replayed: boolean;
 }
 
 export interface AcpAgentDefaults {
@@ -285,6 +290,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // id but not the connection, so first-match resolution is the honest fallback there.
       selectedModelEntryIndex: seededModelEntryIndex(session.getSnapshot().model),
       lastAdvertisedConfigEntryIndex: undefined,
+      replayed: false,
       projector: undefined as unknown as AcpProjector,
     };
     bridge.projector = new AcpProjector(session, {
@@ -298,6 +304,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       onInteraction: (payload) => void handleInteractions(bridge, payload),
     });
     bridge.projector.start();
+    // No id may own two live bridges. The `set` below would ORPHAN a previous one: its projector
+    // keeps its subscription, so every later update is emitted twice under the SAME session id, while
+    // its stale cursors keep racing the new projector's (which is how a transcript comes out
+    // duplicated and out of order). Nothing else would ever stop it — only `close` runs `closeBridge`.
+    bridges.get(acpId)?.projector.stop();
     bridges.set(acpId, bridge);
     return bridge;
   };
@@ -465,6 +476,20 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (mapped.error) {
       throw new Error(mapped.error);
     }
+    // Already live in this process: REUSE it. Going on would build a second session over the same
+    // disk log (two writers) and attach a second projector over the same channels — and the first one
+    // would never be stopped, so every update (both tagged with this session id) arrives twice, with
+    // two sets of cursors racing each other.
+    const live = bridges.get(sessionId);
+    if (live) {
+      // `load` owes the client the transcript once. A repeat on the live session must not replay it
+      // again — the client would render the whole conversation a second time.
+      if (replay && !live.replayed) {
+        live.replayed = true;
+        live.projector.replayFrom(live.session.getSnapshot());
+      }
+      return;
+    }
     // The client told us the id here, so the client-backed env can carry it from the start.
     const runtime = await createRuntime();
     runtime.bind(sessionId);
@@ -483,7 +508,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
     const bridge = attach(session, clientCaps, sessionId, runtime);
-    if (replay) bridge.projector.replayFrom(session.getSnapshot());
+    if (replay) {
+      bridge.replayed = true;
+      bridge.projector.replayFrom(session.getSnapshot());
+    }
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {

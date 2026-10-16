@@ -324,8 +324,11 @@ function makeFakeSession(id, diskId, overrides = {}) {
     );
     check("session/resume still resumes the requested session", resume.params?.resumeSessionId === "ses_old");
 
+    // Each restore case needs an id that is NOT already live: `resume`/`load` on a live id REUSE it
+    // (re-creating would put two writers on one disk log and a second projector on its channels — see
+    // the catalog gate's reuse assertion), so no `create` happens and there is nothing to observe.
     const load = await attempt(methods.agent.session.load, {
-      sessionId: "ses_old",
+      sessionId: "ses_load",
       cwd: "/ws",
       mcpServers: [{ name: "local", command: "/bin/mcp", args: [], env: [] }],
     });
@@ -333,7 +336,7 @@ function makeFakeSession(id, diskId, overrides = {}) {
 
     // An empty list is the "I have no servers" case and must NOT suppress the workspace file.
     const empty = await attempt(methods.agent.session.resume, {
-      sessionId: "ses_old",
+      sessionId: "ses_empty",
       cwd: "/ws",
       mcpServers: [],
     });

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 /**
  * ACP session-catalog conformance: session/list, session/delete, session/fork.
  *
@@ -210,11 +211,27 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   // is the two-id-spaces bug this whole capability exists to close.
   check("session/new's id is not the agent runtime id", liveNew.sessionId !== liveFake.id);
   await cx.request(methods.agent.session.resume, { sessionId: liveNew.sessionId, cwd: "/ws", mcpServers: [] });
-  check("session/new's id is accepted by session/resume", hostCalls.resumeTargets.includes("ses_live"));
   await cx.request(methods.agent.session.load, { sessionId: liveNew.sessionId, cwd: "/ws", mcpServers: [] });
+  // `resume` / `load` on an id that is ALREADY LIVE must REUSE it, never re-enter `create`:
+  //  - the second session is a second writer over one disk log, and `attach` adds a second projector
+  //    while the first stays subscribed — every later update arrives TWICE under the same id, with
+  //    two sets of cursors racing (a duplicated, out-of-order transcript);
+  //  - the host refuses the second restore anyway ("already active in another live session"), so the
+  //    old path answered a client that re-loaded with an error.
   check(
-    "session/new's id is accepted by session/load",
-    hostCalls.resumeTargets.filter((id) => id === "ses_live").length >= 2
+    "resume/load on a live id reuse the session instead of re-creating it over the same log",
+    hostCalls.created === 1 && hostCalls.resumeTargets.length === 0 && liveNew.sessionId === "ses_live"
+  );
+  // The client-visible consequence: one change on that session → exactly one update.
+  catalogUpdates.length = 0;
+  await cx.request(methods.agent.session.setConfigOption, {
+    sessionId: liveNew.sessionId,
+    configId: "mode",
+    value: "auto",
+  });
+  check(
+    "a live session emits each update exactly once (no orphaned second projector)",
+    catalogUpdates.filter((p) => p.update.sessionUpdate === "config_option_update").length === 1
   );
   await cx.request(methods.agent.session.close, { sessionId: liveNew.sessionId });
   check("session/new's id is accepted by session/close", hostCalls.destroyed.includes("agent_c"));
