@@ -2,10 +2,12 @@
 
 Agent-side [Agent Client Protocol](https://agentclientprotocol.com) host for Codent.
 
-Exposes an `AgentSessionHost` over ACP on **stdio**, so an editor (Zed, JetBrains)
-or an ACP→IM bridge can drive the agent with no Codent-specific host code. Unlike
-`pi-acp`, which bridges to a subprocess RPC, this drives the in-process
-`AgentSession` directly.
+Exposes an `AgentSessionHost` over ACP on **stdio**, so an editor (Zed, JetBrains) or an ACP→IM
+bridge can drive the agent with no Codent-specific host code. Unlike a bridge that talks to a
+subprocess RPC, this drives the in-process `AgentSession` directly — the same session type the TUI
+hosts use. There is no editor-specific vocabulary here: tool identity, tool kinds and the command
+list are all derived from core's own presentation registry and command catalog, so this host cannot
+drift from the one that renders a terminal.
 
 ## Serve over stdio
 
@@ -13,62 +15,146 @@ or an ACP→IM bridge can drive the agent with no Codent-specific host code. Unl
 # from a built checkout
 pnpm --filter @codent/acp build && node packages/acp/dist/bin.mjs
 
-# or via the release host
-codent acp          # installed via: npm i -g codent-cli
+# or via the release host (intercepted before the TUI boots)
+codent acp
+codent --acp            # alias
+
+# or via the standalone bin published by this package
+codent-acp
 
 # configure the model directly (authoritative; skips .agents/config/models.json)
-codent acp  --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
-codent-acp  --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
+codent acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
+codent-acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/api/v1 --api-key sk-or-...
 ```
 
-The workspace root is the process `cwd` — the local CoreEnv is built from it
-(`createNodeEnv`) — so a client should spawn the agent **inside** the workspace it
-wants it to see.
+`codent acp` is intercepted in the release host **before** the terminal UI boots, because a headless
+protocol requires stdout to carry only JSON-RPC frames. The development host `@codent/cli` does
+**not** expose this subcommand (it has no `@codent/acp` dependency); the standalone `codent-acp` bin
+and the in-process API below are the other two ways in.
 
-### `--client-env` (opt-in)
+The workspace root is the process `cwd` — the local CoreEnv is built from it (`createNodeEnv`) — so a
+client should spawn the agent **inside** the workspace it wants it to see. The root is fixed at
+handshake: a request's `cwd` is only a hint (a differing one is noted on stderr, never obeyed and
+never an error).
 
-By default everything — file reads/writes and commands — runs on our own local CoreEnv,
-and the client's `clientCapabilities.fs` / `.terminal` are ignored. `--client-env` flips
-that for files and argv execution, so an editor's native facilities are used instead
-(diff views, its terminal, its permission prompts):
+## Model resolution
+
+Three sources, in priority order:
+
+1. explicit `--model` / `--style` / `--base-url` / `--api-key` flags — **authoritative**, the
+   on-disk `models.json` is skipped entirely (the same isolation as the TUI's `--model`);
+2. `.agents/config/models.json` (read through core's `loadModels({ kind: "file" })`);
+3. `.env` — `MODEL` / `MODEL_STYLE` / `BASE_URL` / `API_KEY`.
+
+With no model from any of them the process exits with a clear error rather than starting a session
+that cannot run.
+
+> `.env` loading is the **release host's** step (`codent` calls `loadEnv`), not this package's: the
+> standalone `codent-acp` bin sees the real process environment plus `models.json` only. Export the
+> variables, or run through `codent acp`, if you depend on a `.env` file.
+
+`bootstrapLocalAcp({ cwd, sandbox, model, clientEnv })` performs all of it and returns the host plus
+the resolved defaults, which is what an embedding host builds its `AcpAgentOptions` from.
+
+### The model selector
+
+ACP has **no `session/set_model`** — model selection is a `configOptions` entry with
+`category: "model"`, and its write-back is `session/set_config_option`. Declaration and write path
+are therefore one contract, and they live together in `src/session-config-options.ts`:
+
+- the option is advertised **only** when source 2 was used. On the explicit-flags path and on the
+  `.env` fallback a selector would offer exactly one value — a fake choice — so it is omitted rather
+  than advertised.
+- a value encodes the config **entry**, not just the model: `"<entryIndex>:<model>"`. A model id is
+  only unique *within* an entry, and switching a model may also switch the connection (`style` /
+  `baseURL` / `apiKey` of that entry). It is the same encoding the TUI's `/models` uses, so the two
+  hosts cannot drift on it. Credentials are **never** advertised — only the model id, its name, and
+  an entry description.
+- the session's current model is always a member of `options`, inserted unencoded if it is not in
+  the catalog, because the protocol requires a default for every option the agent advertises.
+- the entry a connection came from is **recorded** per session (seeded at `session/new`, updated by
+  every switch). A bare first-match lookup would name the wrong entry when one model id appears in
+  several — and re-selecting that advertised value would then dispatch the wrong credentials. A
+  resumed session that was never recorded keeps the first-match fallback rather than a wrong claim.
+- switching needs **no** model metadata: if models.dev is unreachable the switch still happens, it
+  just leaves capabilities unlabelled (`resolveModelInfoFromModelsDev` is best-effort by contract).
+- **no process-level model provider is registered.** One ACP process serves many sessions and the
+  provider registry is process-wide, so registering would let one session's switch change another's
+  connection. The connection travels in the `model.set` payload instead — which makes "one session's
+  switch is invisible to the others" a property of the design rather than of discipline.
+
+The `mode` select is the `configOptions` spelling of the legacy `modes` field; both are advertised
+together, sourced from the same `mode` channel. `session/set_mode` and
+`session/set_config_option(mode)` are two spellings of one behaviour with a single implementation.
+Every change re-sends the **whole** option set — the protocol's `ConfigOptionUpdate` has no
+incremental form — while a re-set of an unchanged value stays silent, because the client's cache is
+already correct.
+
+## `--client-env` (opt-in)
+
+By default everything — file reads/writes and commands — runs on our own local CoreEnv, and the
+client's `clientCapabilities.fs` / `.terminal` are ignored. `--client-env` flips that for files and
+argv execution, so an editor's native facilities are used instead (diff views, its terminal, its
+permission prompts):
 
 ```bash
 codent acp --client-env
+codent-acp --client-env
 ```
 
 What it does and does not change:
 
-- **Per session, not per process.** Every `fs/*` and `terminal/*` request carries a
-  `sessionId`, so each session gets its own env (and its own runtime — the existing
-  "one runtime owns one env" rule, not a second environment registry).
-- **`.agents/**` and anything outside the workspace root never reach the client.** Session
-  logs, media, memory, plans and config are ours; a client that declines to serve a hidden
-  directory would otherwise silently cost the agent its ability to persist a conversation.
+- **Per session, not per process.** Every `fs/*` and `terminal/*` request carries a `sessionId`, so
+  each session gets its own env (and its own runtime — the existing "one runtime owns one env" rule,
+  not a second environment registry).
+- **`.agents/**` and anything outside the workspace root never reach the client.** Session logs,
+  media, memory, plans and config are ours; a client that declines to serve a hidden directory would
+  otherwise silently cost the agent its ability to persist a conversation.
+- **Every path on the wire is absolute.** ACP's `fs/read_text_file` / `fs/write_text_file` take an
+  "Absolute path to the file" and `terminal/create.cwd` "Must be an absolute path", while the tools pass
+  workspace-*relative* paths. Those are resolved against the workspace root before sending, because a
+  relative path belongs to no root: the client resolves it against its own cwd, refuses it as outside the
+  workspace, and the write's approval prompt never resolves — every ACP-side write failed that way, as a
+  hang rather than an error. The local env never needed this step (`native-fs.ts` resolves internally);
+  this is the one layer that hands the filesystem to someone else, so it owes them a usable path.
+- **One path resolution, and an atomic rewrite knows whose disk it is on.** A `tool_call.location` and
+  the `fs/*` request that follows it describe the same file, so both come from one helper
+  (`src/paths.ts`) — two implementations spelled the same file differently, and a client that followed
+  a location could ask for a path the file is not at. Absoluteness is judged platform-aware (a Windows
+  or UNC path is absolute, not relative), and an empty root returns the path unchanged rather than
+  silently resolving against `process.cwd()`.
+  Because a whole-file rewrite is `writeFile(<sibling tmp>)` + `rename`, and the *write* routes to the
+  client while a `rename` could only ever run on **our** filesystem, `rename` is withheld whenever
+  writes route to the client. That makes `write_file` take its direct-write branch — one write of the
+  real path — instead of writing a temp file the client owns and renaming a local path that does not
+  exist (ENOENT, or EXDEV across a genuinely remote client). Local-only writers keep `rename`, so the
+  session journal's atomic rewrite is unaffected.
 - **Only argv-shaped execution goes to the client terminal.** ACP's `terminal/create` takes
-  `command` + `args` with no shell, so `execFile` (glob / grep / tree) routes there, while
-  `exec` and `run_command` — both free text — stay on the local shell. That keeps
-  command-safety's shell analysis and the shell that actually runs the command the same one;
-  inventing a `sh -c` wrapper would hand the command to a shell we cannot describe.
-- **Approval moves only where the operation actually goes.** A workspace `write_file` /
-  `edit_file` is now authorised by the client that serves the write, so `codent acp` does not ask
-  you a second time — the client already did. Three things deliberately keep their prompt:
-  writes that stayed local (`.agents/**`, outside the root, or a client without
-  `fs.writeTextFile`), `delete_file` / `kill_command` (ACP's `fs/*` covers reading and writing text
-  and nothing else — the write capability is not a licence to delete), and `run_command` (it runs
-  on our own shell). Plan mode also keeps them: the client authorises a file operation, not the
-  read-only phase.
-- **A session that does not exist yet also falls back.** `session/new` has no id to send until
-  core mints one inside `host.create`, and that call reads the workspace (your `AGENTS.md`, plus
+  `command` + `args` with no shell, so `execFile` (glob / grep / tree) routes there, while `exec` and
+  `run_command` — both free text — stay on the local shell. That keeps command-safety's shell
+  analysis and the shell that actually runs the command the same one; inventing a `sh -c` wrapper
+  would hand the command to a shell we cannot describe.
+- **Approval moves only where the operation actually goes.** A workspace `write_file` / `edit_file`
+  is now authorised by the client that serves the write, so the agent does not ask a second time —
+  the client already did. Three things deliberately keep their prompt: writes that stayed local
+  (`.agents/**`, outside the root, or a client without `fs.writeTextFile`), `delete_file` /
+  `kill_command` (ACP's `fs/*` covers reading and writing text and nothing else — the write
+  capability is not a licence to delete, and a signal we send ourselves cannot be credited to the
+  client), and `run_command` (it runs on our own shell). Plan mode keeps them too: the client
+  authorises a file operation, not the read-only phase.
+- **A session that does not exist yet also falls back.** `session/new` has no id to send until core
+  mints one inside `host.create`, and that call reads the workspace (your `AGENTS.md`, plus
   `.lsp.json` / `.mcp.json`). Those reads are served locally rather than refused, because refusing
   them is silent: the instruction loader catches a failed read and reports "no documentation file
-  found", so every new session would lose its project instructions.
-- **A missing capability falls back, it does not fail.** Read-only clients read remotely and
-  write locally; a client without `terminal` falls back for every command, and `execFile` is
-  simply absent (feature detection reads "unsupported" and degrades) rather than defined to
-  throw. The capability matrix and every fallback decision are logged to stderr.
-
-Model resolution order: `--model` / `--base-url` / `--api-key` flags (authoritative, skip
-`models.json`) > `.agents/config/models.json` > `.env` (`MODEL` / `BASE_URL` / `API_KEY`).
+  found", so every new session would lose its project instructions. The invariant is "this can never
+  fail", not "the ordering must hold".
+- **A missing capability falls back, it does not fail.** Read-only clients read remotely and write
+  locally; a client without `terminal` falls back for every command, and `execFile` is simply absent
+  (feature detection reads "unsupported" and degrades) rather than defined to throw. A terminal
+  result that was killed, timed out or truncated is reported as `killed: true` so its callers fall
+  back to their in-process implementation instead of reading partial output as "no matches". The
+  capability matrix and every fallback decision are logged to stderr, each actionable one once
+  rather than per request.
 
 ## Use in-process
 
@@ -79,28 +165,106 @@ const options = await bootstrapAcpAgent(); // CoreEnv + model provider + local h
 const app = createAcpAgent(options);       // register handlers, then `app.connect(stream)`
 ```
 
-`createAcpAgent({ host, defaults, rootPath })` accepts any `AgentSessionHost`, so a
-host that is remote (`--remote-session`) can be served over ACP too.
+`createAcpAgent({ host, defaults, rootPath })` accepts any `AgentSessionHost`, so a host that is
+remote (`--remote-session`) can be served over ACP too. `runAcpAgentStdio(options)` wires the stdio
+transport and returns the live connection (the caller owns process teardown). The rest of the
+package surface is the mapping helpers (`promptBlocksToContent`, `toolCallInfo`, `mapAcpMcpServers`,
+`createAcpClientEnv`, `paginateSessions`, …), exported so a validator or a sibling host can exercise
+them without a transport.
+
+## Sessions
+
+The ACP session id **is the disk session id** (`ses_…`), never the agent id: `session/load`,
+`session/list` and `session/delete` address a *persisted conversation*. `session/new` returns the
+disk id, `host.create` having minted it before returning. Exposing the agent id instead made the id
+from `session/new` unusable for `session/load` and made every disk-enumerated session miss its live
+bridge.
+
+| Request | Behaviour |
+|---|---|
+| `session/new` | `Host.create`; returns the disk id, `modes`, and `configOptions` |
+| `session/load` | restore **and** replay the stored transcript (no model call); replay once per live session |
+| `session/resume` | restore, no replay |
+| `session/close` | stop, unregister, release the runtime; tolerates an unknown id (the desired state is already true) |
+| `session/list` | the workspace's **persisted** sessions (disk catalog, cursor-paged); advertised only for a host that can enumerate them |
+| `session/delete` | success = "was live (already closed) **or** its file is gone" |
+| `session/fork` | clones the source's transcript into a new session and re-keys the same subscription |
+| `session/prompt` | serialized per session; resolves when the **turn** ends (see below) |
+| `session/cancel` | aborts in-flight requests and the run; the prompt answers `cancelled`, never an error |
+
+Four ordering facts are load-bearing, and each was a shipped bug before it was a rule:
+
+- **Replay happens before subscribing.** A session hands its retained values to a *new* subscriber,
+  so subscribing first emitted the whole conversation live and the replay emitted the assistant half
+  of it again — a duplicated, mis-ordered transcript. Replaying first also primes the cursors, which
+  is what makes the retained delivery idempotent.
+- **An already-live session is reused, never re-created.** A second `host.create` over the same disk
+  log means two writers, and the previous projector would keep its subscription, so every update
+  went out twice under one session id with two sets of cursors racing.
+- **The live path reports the user turn too**, deduplicated by message id. Assistant text alone left
+  nothing between two consecutive replies, which a client can only render as one merged run.
+- **A prompt resolves when the *turn* ends, not when a pump returns.** A turn can suspend on an
+  approval or an `ask_user`: the dispatch returns, the client answers, and a new pump resumes the
+  same turn. Resolving at that point would tell the client the turn was over while its continuation
+  still streamed.
+
+`session/list` pagination is cursor-based, and the cursor encodes the **`(updatedAt, id)` pair**:
+`Date.now()` has millisecond granularity and two scripted sessions can share it, so an
+`updatedAt`-only boundary would drop whichever of the pair fell on the far side of a page — a
+silently missing session rather than the tolerated repeat of a concurrent-write cursor. The token is
+opaque, and a malformed one degrades to the first page rather than throwing, because a client cannot
+fix a token it did not author.
+
+## Updates and interactions
+
+The `messages` channel delivers the full `UIMessage[]` on every change, so the projector keeps
+per-message and per-tool **cursors** and emits only the delta: appended text only, a stable
+`messageId` per message, `tool_call` on first sight then `tool_call_update` on transition. A single
+frame's size is proportional to the change, not to the conversation. Tool stdout from the `tool`
+channel is forwarded as `tool_call_update` content, throttled to 300 ms.
+
+Approvals become `session/request_permission` with the standard four options and the call's real
+description — the same `toolCallInfo` the transcript uses, because a prompt that cannot show *what*
+it is approving is not a decision anyone can make. `ask_user` becomes an `elicitation/create` form,
+and degrades to an agent message plus a cancelled tool result when the client does not advertise
+`elicitation.form`. Both round-trips register a controller that `session/cancel` and `close` abort,
+and neither ever throws — a closed connection is the session's problem to time out, not a reason to
+fail a run.
+
+`session/update` notifications are capability-gated where the protocol says so: `compaction_update`
+only for clients declaring `session.compaction`, `notice` only for `session.notices`.
+
+## Slash commands
+
+ACP has no "invoke command" method: a client sends `/name args` as an ordinary prompt. The host
+parses it, dispatches the matching built-in `AgentSessionCommand` (or an extension's
+`invokeCommand`), and returns any text the command produced — it never reaches the model as text.
+The advertised set is core's `BUILTIN_COMMAND_CATALOG` filtered to `scope !== "ui"` plus the
+session's extension commands, re-sent whenever the `extensions` channel moves. Dispatch keys off the
+catalog's `command` field, so this host never restates a command name.
 
 ## Coverage
 
 | ACP surface | Status |
 |---|---|
-| `initialize` / `authenticate` / `logout` | ✅ (capabilities negotiated; no interactive auth) |
-| `session/new` / `load` / `resume` / `close` | ✅ (load replays; resume does not) |
+| `initialize` / `authenticate` / `logout` | ✅ capabilities negotiated; `authMethods` is empty and both auth methods accept as no-ops (no interactive auth) |
+| `session/new` / `load` / `resume` / `close` | ✅ (load replays once; resume does not; a live id is reused) |
 | `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
 | client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local) |
 | `session/fork` | ✅ (`session.clone`; source must be live in-process) |
 | `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of both the `mode` and `model` selects we advertise, each sharing its own entry point) |
+| `user_message_chunk` | ✅ one per user turn, stable `messageId`; injected `<ctx>` rows are skipped |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
 | `tool_call` / `tool_call_update` | ✅ kind / title / locations / structured diff / streamed output |
-| `plan` (from todos) | ✅ |
+| `plan` (from todos) | ✅ always the complete entry list |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
-| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set — the protocol has no incremental form) |
+| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set) |
 | model selector (`configOptions`, `category: "model"`) | ✅ when `.agents/config/models.json` is the source (the protocol has no `session/set_model`) |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
 | `compaction_update` / `notice` | ✅ gated by the client capability |
+| per-session `mcpServers` | ✅ stdio / http / sse on `new` / `load` / `resume`; `acp` refused; fork refuses the field |
+| `additionalDirectories` | ⛔ deliberately undeclared, refused with one shared error on all four requests that can carry it |
 
 ## Editors (Zed)
 
@@ -112,28 +276,72 @@ host that is remote (`--remote-session`) can be served over ACP too.
 }
 ```
 
+## Package layout
+
+| Module | Responsibility |
+|---|---|
+| `agent.ts` | the ACP app: handler registration, the session-id → bridge map, prompt turns, stop reasons |
+| `bootstrap.ts` | local CoreEnv + model provider + runtime; builds `AcpAgentOptions` |
+| `bin.ts` | the standalone `codent-acp` entry (flag parsing + stdio) |
+| `projector.ts` | `AgentSession` channels → `session/update` (per-message / per-tool cursors; replay) |
+| `session-config-options.ts` | the `mode` / `model` selects and their write paths (`applyMode` / `applyModel`) |
+| `session-status.ts` | what a client is told about a session's state: the legacy `modes` field, the disk session id, and the `StopReason` for a finished turn |
+| `session-runtime.ts` | per-session runtime + late binding of the disk id (`--client-env`) |
+| `sessions.ts` | disk catalog → ACP `SessionInfo`, cursor paging |
+| `client-env.ts` | the client-backed `CoreEnv` |
+| `approvals.ts` | which pending approvals the client already owns |
+| `interactions.ts` | the two client round-trips: permission + elicitation |
+| `permissions.ts` | permission / elicitation request-response mapping |
+| `mcp.ts` | ACP `McpServer[]` → core `McpServerConfig` (with validation) |
+| `content.ts` | prompt `ContentBlock[]` ↔ `ContentPart` mapping |
+| `tools.ts` | tool kind / title / locations / structured diff |
+| `commands.ts` | slash-command parsing + dispatch |
+| `types.ts` | the small structural types the projector reads |
+
+`src/index.ts` is the public surface (`package.json#exports`); nothing above is reachable by deep
+import.
+
+## Validation
+
+```bash
+pnpm --filter @codent/acp run validate:acp            # build + the whole suite
+pnpm --filter @codent/acp run validate:acp:catalog    # config options, catalog, session ids
+pnpm --filter @codent/acp run validate:acp:mcp        # session/new + load/resume mcpServers
+pnpm --filter @codent/acp run validate:acp:client-env
+pnpm --filter @codent/acp run validate:acp:terminal
+pnpm --filter @codent/acp run validate:acp:bootstrap
+```
+
+The suites are an **in-process conformance run** — the official SDK's `client()` connects straight to
+our `agent()` app and drives real requests — alongside pure mapping units. `validate:acp:bootstrap`
+is the deliberate opposite shape: a real `createNodeEnv`, a real `CodentAgent` and a real
+`host.create`, because the class of failure it covers (work core does *before* a session exists) is
+invisible to a hand-built client env with a fake host. All of them run in CI through the repo-wide
+validator runner, which discovers `validate-*.mjs` by glob rather than by a list.
+
 ## Known limitations
 
 - stdio only (ACP remote HTTP/WS transports are still experimental).
-- Per-session `mcpServers` from `session/new` are connected over stdio, http, or sse; a
-  client-supplied list REPLACES `.agents/mcp.json` for that session (it is not merged). The
-  `acp` transport (a client-bridged server) is not supported and is rejected explicitly.
+- Per-session `mcpServers` REPLACE `.agents/mcp.json` for that session; they are not merged, and an
+  empty or absent list falls back to the file. The `acp` transport (a client-bridged server) has no
+  core entry point and is rejected explicitly rather than ignored.
 - `session/resume` / `session/load` accept `mcpServers` the same way `session/new` does (both build
   a fresh agent via `Host.create`). `session/fork` rejects it, because a fork reuses the source's
   live agent and genuinely cannot swap servers.
-- The ACP session id is the disk session id.
-- **Model switching may switch the provider.** A model option's value encodes its `models.json`
-  entry (`"<entryIndex>:<model>"`), and selecting one applies that entry's `style` / `baseURL` /
-  `apiKey` — the same thing `/models` does in the TUI. Credentials are never advertised (only the
-  model id, its display name, and an entry description).
-  The selector appears **only** when `.agents/config/models.json` is the source: explicit
-  `--model` / `--base-url` / `--api-key` flags skip that file, and a one-value selector would be a
-  fake choice. Switching needs no model metadata — if models.dev is unreachable the switch still
-  happens, it just leaves the model's capabilities/cap messages unlabelled.
+- `session/fork` requires the source to be live **in this process** — "list a session created by an
+  earlier process, then fork it" is not supported.
+- **Model switching may switch the provider.** Selecting a model option applies that entry's
+  `style` / `baseURL` / `apiKey`, the same thing `/models` does in the TUI. Because the selector only
+  exists on the `models.json` path, that is the only configuration in which it can happen.
 - `session/load` / `session/resume` responses carry **no** `configOptions` (their shape is frozen),
   so a client loses the mode and model selectors after reopening a session. Those responses do not
   carry the legacy `modes` field either. Fixing it is a separate change — it should add both at once
   rather than only the model.
+- No `authMethods`, and no `providers/*`: credentials are resolved locally by the process that owns
+  the workspace, so there is nothing for a client to configure or to authenticate against.
+  `providers/*` is an ACP v2 draft surface in the SDK and is not advertised.
+- Compaction reports through `compaction_update` (a single stable `compactionId`) only; the optional
+  `compaction_summary_chunk` stream is not emitted, and the `summary` channel is not projected.
 - `additionalDirectories` is not supported and is refused with a JSON-RPC error on every request
   that can carry it (`session/new`, `session/load`, `session/resume`, `session/fork`) — one shared
   check, one message. It is never silently ignored, so a client cannot end up talking to an agent
