@@ -57,6 +57,10 @@ function baseSnapshot(id, overrides = {}) {
   };
 }
 
+// What `model.set` actually delivered to the session — the only place a "did the switch move the
+// provider too?" assertion can look, since the snapshot carries the model name but not the creds.
+const modelConnections = [];
+
 function makeFakeSession(id, diskId = id, initial = {}) {
   const listeners = new Set();
   // `AgentSession.id` is the AGENT id and `activeSessionId` is the DISK id — two different
@@ -88,8 +92,22 @@ function makeFakeSession(id, diskId = id, initial = {}) {
       // `mode.set` must actually move the snapshot: the ACP layer re-reads the mode after the
       // dispatch, so a fake that swallowed it would make the config_option_update assertions
       // vacuous (they would pass even if the update echoed the request instead of the state).
+      // `model.set` must move the snapshot for the same reason `mode.set` must: the ACP layer
+      // re-reads the model after dispatching, so a fake that swallowed it would make "reads the
+      // state" and "echoes the request" indistinguishable. The CONNECTION is recorded too, because
+      // switching a model may switch the provider — the half a snapshot alone cannot show.
+      if (command.type === "model.set") {
+        state.model = command.model;
+        modelConnections.push({
+          model: command.model,
+          baseURL: command.modelBaseURL,
+          apiKey: command.modelApiKey,
+          style: command.modelStyle,
+        });
+        snap = baseSnapshot(id, { activeSessionId: diskId, ...state });
+        return { ok: true };
+      }
       if (command.type === "mode.set") {
-        // Real core RE-DERIVES the mode after applying it (`managed.setAgentMode()` returns
         // `getAgentMode()`, which reads the plan/auto flags) — so the resulting mode is not
         // necessarily the requested one: `plan` is refused while plan mode is unavailable, which
         // is what `planUnavailable` models. This matters because the ACP layer must advertise the
@@ -453,6 +471,203 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     check(
       "set_mode refuses an unknown session too (the two entry points agree)",
       /ses_ghost/i.test(ghostViaSetMode ?? "")
+    );
+  });
+}
+
+// --- the model select: the one model-selection path ACP has -------------------
+//
+// The protocol has no `session/set_model` (go-sdk v0.13.5 removed the never-stabilized surface
+// entirely), so a model selector exists ONLY if `configOptions` advertises a `category: "model"`
+// entry. Before this section existed the agent advertised `mode` alone: a client rendered no model
+// picker and every `configId: "model"` call came back "Internal error".
+//
+// Two things here are easy to get wrong and are asserted precisely for that reason:
+//   * the option VALUE encodes the catalog entry, because a model id is only unique within one
+//     entry and switching may switch the connection too (`"<entryIndex>:<model>"`, the same
+//     encoding `/models` uses),
+//   * the advertised `currentValue` must be a member of `options` — the protocol requires it, and a
+//     value the client cannot find in the list is one it cannot render.
+{
+  const catalog = [
+    { index: 0, style: "openai", baseURL: "https://one.example/v1", apiKey: "sk-one", models: ["alpha", "shared"] },
+    { index: 1, style: "openai", baseURL: "https://two.example/v1", apiKey: "sk-two", models: ["shared", "beta"] },
+  ];
+  const modelSession = makeFakeSession("agent_model", "ses_model", { model: "alpha" });
+  const modelHost = {
+    async create() {
+      return { session: modelSession };
+    },
+    connect: () => modelSession,
+    list: () => [],
+    async destroy() {},
+  };
+  const modelUpdates = [];
+  const modelClient = createClient({ name: "model-client" }).onNotification(methods.client.session.update, (ctx) =>
+    modelUpdates.push(ctx.params)
+  );
+  // Two apps: one with a catalog, one without. The difference between them IS the behaviour under
+  // test (advertise vs omit), so they cannot share an instance.
+  const withCatalog = createAcpAgent({
+    host: modelHost,
+    defaults: { model: "alpha" },
+    rootPath: "/ws",
+    modelCatalog: catalog,
+  });
+  const withoutCatalog = createAcpAgent({ host: modelHost, defaults: { model: "alpha" }, rootPath: "/ws" });
+
+  await modelClient.connectWith(withCatalog, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    let fresh = null;
+    try {
+      fresh = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    } catch {
+      // Left to the assertions below: a `session/new` that cannot build its options is a reported
+      // failure, not a reason to abort the file with a stack trace.
+    }
+    const modelOption = fresh?.configOptions?.find((o) => o.category === "model");
+
+    check("session/new advertises a category:model select", Boolean(modelOption));
+    check('the model select keeps `id: "model"` (singular, per the spec)', modelOption?.id === "model");
+    check(
+      "the mode select is still advertised alongside it",
+      fresh?.configOptions?.some((o) => o.category === "mode")
+    );
+    check(
+      "the model select offers every catalog model",
+      modelOption?.options?.length === 4 &&
+        modelOption.options
+          .map((o) => o.value)
+          .sort()
+          .join(",") === "0:alpha,0:shared,1:beta,1:shared"
+    );
+    check(
+      "its currentValue encodes the entry and appears in options",
+      modelOption?.currentValue === "0:alpha" &&
+        Boolean(modelOption.options.some((o) => o.value === modelOption.currentValue))
+    );
+    check(
+      "the advertised payload carries no credentials",
+      !JSON.stringify(modelOption).includes("sk-one") && !JSON.stringify(modelOption).includes("sk-two")
+    );
+
+    // The switch itself: the model really moves, and so does the connection. A snapshot assertion
+    // would pass for a `model.set` that dropped the baseURL, so the recorded connection is what
+    // makes "switching may also switch the provider" observable.
+    modelConnections.length = 0;
+    modelUpdates.length = 0;
+    let switchError = null;
+    let switched = null;
+    try {
+      switched = await cx.request(methods.agent.session.setConfigOption, {
+        sessionId: fresh?.sessionId,
+        configId: "model",
+        value: "1:beta",
+      });
+    } catch (error) {
+      switchError = `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+    }
+    check("set_config_option accepts the model select's value", switchError === null && switched !== null);
+    check("it really changed the session model", modelSession.getSnapshot().model === "beta");
+    check(
+      "it carried the target entry's connection to the session",
+      modelConnections.length === 1 &&
+        modelConnections[0].baseURL === "https://two.example/v1" &&
+        modelConnections[0].apiKey === "sk-two"
+    );
+    check(
+      "its response carries the full set with the new model",
+      switched?.configOptions?.find((o) => o.category === "model")?.currentValue === "1:beta"
+    );
+    const modelUpdate = modelUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").at(-1);
+    check(
+      "a model switch emits the WHOLE option set, not just the changed entry",
+      modelUpdate?.update.configOptions?.some((o) => o.category === "mode") &&
+        modelUpdate?.update.configOptions?.find((o) => o.category === "model")?.currentValue === "1:beta"
+    );
+
+    // Dispatch is by CATEGORY: a model configId must not be run through `mode.set`. The mode is the
+    // witness — `applyMode` would have accepted "beta" as a mode and moved the session, and the
+    // session here accepts no such mode, so a mode mutation would show up immediately.
+    check("a model write does not move the session mode", modelSession.getSnapshot().mode === "normal");
+
+    // An unknown value is refused and, crucially, changes nothing.
+    modelConnections.length = 0;
+    const refusedUnknown = await (async () => {
+      try {
+        await cx.request(methods.agent.session.setConfigOption, {
+          sessionId: fresh.sessionId,
+          configId: "model",
+          value: "9:ghost",
+        });
+        return null;
+      } catch (error) {
+        return `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+      }
+    })();
+    check("an unknown model entry is refused", /ghost|Unknown model/i.test(refusedUnknown ?? ""));
+    check(
+      "a refused model does not change the model or its connection",
+      modelSession.getSnapshot().model === "beta" && modelConnections.length === 0
+    );
+
+    // A model missing from the catalog (the file was edited under a live session) must still be
+    // renderable: the protocol requires `currentValue` to be one of `options`.
+    modelSession.state.model = "not-in-the-catalog";
+    let drifted = null;
+    try {
+      drifted = await cx.request(methods.agent.session.setConfigOption, {
+        sessionId: fresh.sessionId,
+        configId: "mode",
+        value: "auto",
+      });
+    } catch {
+      // A build that cannot advertise the drifted model throws here. Caught so the failure is
+      // reported by the assertion below rather than aborting the file as a stack trace.
+    }
+    const driftedOption = drifted?.configOptions?.find((o) => o.category === "model");
+    check(
+      "a current model outside the catalog is inserted into options",
+      driftedOption?.currentValue === "not-in-the-catalog" &&
+        Boolean(driftedOption.options.some((o) => o.value === "not-in-the-catalog"))
+    );
+  });
+
+  // No catalog (explicit `--model` flags skip models.json, or the `.env` fallback): the selector
+  // must be ABSENT rather than empty. An option offering one value is a fake choice, and the
+  // protocol lets a client degrade gracefully on a missing option.
+  const bareModelClient = createClient({ name: "bare-model-client" });
+  await bareModelClient.connectWith(withoutCatalog, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    let fresh = null;
+    try {
+      fresh = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    } catch {
+      // Same reason as above.
+    }
+    check(
+      "without a catalog the model select is omitted (not advertised empty)",
+      fresh !== null && !fresh.configOptions?.some((o) => o.category === "model")
+    );
+    check(
+      "the mode select survives that",
+      fresh?.configOptions?.some((o) => o.category === "mode")
+    );
+    const refusedNoCatalog = await (async () => {
+      try {
+        await cx.request(methods.agent.session.setConfigOption, {
+          sessionId: fresh?.sessionId,
+          configId: "model",
+          value: "0:alpha",
+        });
+        return null;
+      } catch (error) {
+        return `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+      }
+    })();
+    check(
+      "a model write with no catalog is refused (an error, never a crash)",
+      /Unknown configuration option/i.test(refusedNoCatalog ?? "")
     );
   });
 }
