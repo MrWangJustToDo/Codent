@@ -210,8 +210,35 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   // with no translation — and above all it must NOT be the agent runtime id (`agent_c`), which
   // is the two-id-spaces bug this whole capability exists to close.
   check("session/new's id is not the agent runtime id", liveNew.sessionId !== liveFake.id);
-  await cx.request(methods.agent.session.resume, { sessionId: liveNew.sessionId, cwd: "/ws", mcpServers: [] });
-  await cx.request(methods.agent.session.load, { sessionId: liveNew.sessionId, cwd: "/ws", mcpServers: [] });
+  const liveResume = await cx.request(methods.agent.session.resume, {
+    sessionId: liveNew.sessionId,
+    cwd: "/ws",
+    mcpServers: [],
+  });
+  const liveLoad = await cx.request(methods.agent.session.load, {
+    sessionId: liveNew.sessionId,
+    cwd: "/ws",
+    mcpServers: [],
+  });
+  // A reopened thread must offer the pickers a new one does. `load` / `resume` used to answer `{}`, so a
+  // client that restored a session silently lost them — the same response shape as `session/new` is the
+  // contract, and the legacy `modes` field rides along for clients that still read it.
+  const selectorsOf = (resp) => ({
+    modes: resp.modes?.availableModes?.length ?? 0,
+    options: resp.configOptions?.length ?? 0,
+    hasMode: (resp.configOptions ?? []).some((option) => option.category === "mode"),
+  });
+  for (const [label, resp] of [
+    ["session/resume", liveResume],
+    ["session/load", liveLoad],
+  ]) {
+    const sel = selectorsOf(resp);
+    check(
+      `${label} carries the mode and model selectors`,
+      sel.modes > 1 && sel.options > 0 && sel.hasMode,
+      JSON.stringify(sel)
+    );
+  }
   // `resume` / `load` on an id that is ALREADY LIVE must REUSE it, never re-enter `create`:
   //  - the second session is a second writer over one disk log, and `attach` adds a second projector
   //    while the first stays subscribed — every later update arrives TWICE under the same id, with
@@ -262,9 +289,10 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
 
 // --- configOptions stay in sync after session/set_mode ------------------------
 //
-// `configOptions` is only carried by `session/new` / `session/fork` responses, so without an
-// update the client's cached selector (the `category: "mode"` entry) would keep the value from
-// session creation forever. The spec scenario promises that entry tracks the current mode.
+// Every session-creating response carries `configOptions` (`new` / `load` / `resume` / `fork`), so the
+// client starts from the right value — but a cached selector would still keep that value forever
+// without an update, since a mode switch is not a new session. The spec scenario promises the
+// `category: "mode"` entry tracks the current mode.
 {
   const modeSession = makeFakeSession("agent_mode", "ses_mode", { mode: "plan" });
   const clampSession = modeSession;

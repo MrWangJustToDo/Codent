@@ -5,10 +5,11 @@
  * Split out of `agent.ts` (a subject of its own, and that file is at the line ceiling).
  */
 
-import { MODE_IDS, MODE_META } from "./session-config-options.js";
+import { MODE_IDS, MODE_META, sessionConfigOptions } from "./session-config-options.js";
 
-import type { SessionMode, SessionModeState, StopReason } from "@agentclientprotocol/sdk";
-import type { AgentMode, AgentSession } from "@codent/core";
+import type { AcpModelCatalogEntry } from "./session-config-options.js";
+import type { SessionConfigOption, SessionMode, SessionModeState, StopReason } from "@agentclientprotocol/sdk";
+import type { AgentMode, AgentSession, AgentSessionSnapshot } from "@codent/core";
 
 /**
  * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
@@ -17,6 +18,33 @@ import type { AgentMode, AgentSession } from "@codent/core";
  * that understand it, `modes` for those that only read the older API. The mode vocabulary itself
  * lives in `session-config-options.ts` (one home, shared with the `category: "mode"` option).
  */
+/**
+ * The `modes` + `configOptions` pair every session-creating response carries.
+ *
+ * `new`, `load`, `resume` and `fork` all answer the same question — "which mode and model may this
+ * client choose from?" — so they answer it with one builder. `load`/`resume` used to return `{}`: the
+ * selectors survived `session/new` and vanished on reopen, which is the client losing its model picker
+ * after a thread was restored (the legacy `modes` field goes along for clients that still read it).
+ */
+export function sessionSelectors(
+  snapshot: AgentSessionSnapshot,
+  catalog: AcpModelCatalogEntry[] | undefined,
+  selectedEntryIndex?: number
+): { modes: SessionModeState; configOptions: SessionConfigOption[] } {
+  return {
+    modes: sessionModes(snapshot.mode),
+    configOptions: sessionConfigOptions(snapshot, catalog, selectedEntryIndex),
+  };
+}
+
+/** {@link sessionSelectors} for a live bridge — the shape `load` / `resume` answer with. */
+export function sessionSelectorsFor(
+  bridge: { session: AgentSession; selectedModelEntryIndex?: number },
+  catalog: AcpModelCatalogEntry[] | undefined
+): { modes: SessionModeState; configOptions: SessionConfigOption[] } {
+  return sessionSelectors(bridge.session.getSnapshot(), catalog, bridge.selectedModelEntryIndex);
+}
+
 export function sessionModes(current: AgentMode): SessionModeState {
   const availableModes: SessionMode[] = MODE_IDS.map((id) => ({ id, ...MODE_META[id] }));
   return { currentModeId: current, availableModes };

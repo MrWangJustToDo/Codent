@@ -26,7 +26,7 @@ import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
 import { applyMode, applyModel, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
-import { diskSessionId, sessionModes, stopReasonFor } from "./session-status.js";
+import { diskSessionId, sessionSelectors, sessionSelectorsFor, stopReasonFor } from "./session-status.js";
 import { paginateSessions } from "./sessions.js";
 
 import type { AcpClientEnv } from "./client-env.js";
@@ -200,7 +200,6 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // `CODENT_ACP_TRACE=1` narrates every outgoing `session/update` on stderr (see `emit`).
   const TRACE_UPDATES = process.env.CODENT_ACP_TRACE === "1";
   const app = createAgentApp({ name: AGENT_NAME });
-  // Normalized because it reaches client-visible output (`tool_call.location.path`, `SessionInfo.cwd`).
   const rootPath = resolveRoot(options.rootPath);
   const version = options.version ?? "0.0.1";
   const bridges = new Map<string, SessionBridge>();
@@ -251,12 +250,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     acpId: string,
     runtime: SessionRuntime,
     /**
-     * Replay the stored transcript. Done HERE, before {@link AcpProjector.start} subscribes: a
-     * session delivers its current messages to a NEW subscriber, so subscribing first emitted the
-     * whole conversation live and the replay emitted the assistant half of it again (with every
-     * historical tool call created `pending` and then corrected) — the duplicated, mis-ordered
-     * transcript a `session/load` produced. Replaying first also primes the cursors, which is what
-     * makes that retained delivery idempotent.
+     * Replay the transcript. Done HERE, BEFORE {@link AcpProjector.start} subscribes — a session delivers
+     * its messages to a new subscriber, so subscribing first doubled the transcript — and priming the
+     * cursors first is what makes that retained delivery idempotent.
      */
     replay = false
   ): SessionBridge => {
@@ -300,10 +296,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       bridge.projector.replayFrom(session.getSnapshot());
     }
     bridge.projector.start();
-    // No id may own two live bridges. The `set` below would ORPHAN a previous one: its projector
-    // keeps its subscription, so every later update is emitted twice under the SAME session id, while
-    // its stale cursors keep racing the new projector's (which is how a transcript comes out
-    // duplicated and out of order). Nothing else would ever stop it — only `close` runs `closeBridge`.
+    // No id may own two live bridges: the `set` below would orphan a previous one, whose projector keeps its subscription — updates emitted twice under one id, and only `close` would ever stop it.
     bridges.get(acpId)?.projector.stop();
     bridges.set(acpId, bridge);
     return bridge;
@@ -448,8 +441,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: acpId,
-      modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
+      ...sessionSelectors(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -459,7 +451,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     clientCaps: ClientCapabilities | undefined,
     mcpServers: McpServer[] | undefined,
     additionalDirectories: string[] | undefined
-  ): Promise<void> => {
+  ): Promise<SessionBridge> => {
     // `additionalDirectories` is not a declared capability; see `rejectAdditionalDirectories`.
     rejectAdditionalDirectories(additionalDirectories);
     // Restoring a session runs the same `Host.create` as `session/new` (with `resumeSessionId`),
@@ -485,7 +477,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         live.replayed = true;
         live.projector.replayFrom(live.session.getSnapshot());
       }
-      return;
+      return live;
     }
     // The client told us the id here, so the client-backed env can carry it from the start.
     const runtime = await createRuntime();
@@ -504,17 +496,28 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
-    attach(session, clientCaps, sessionId, runtime, replay);
+    return attach(session, clientCaps, sessionId, runtime, replay);
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {
-    await resumeSession(ctx.params.sessionId, true, initCaps, ctx.params.mcpServers, ctx.params.additionalDirectories);
-    return {};
+    const bridge = await resumeSession(
+      ctx.params.sessionId,
+      true,
+      initCaps,
+      ctx.params.mcpServers,
+      ctx.params.additionalDirectories
+    );
+    return sessionSelectorsFor(bridge, options.modelCatalog);
   });
-
   app.onRequest(methods.agent.session.resume, async (ctx) => {
-    await resumeSession(ctx.params.sessionId, false, initCaps, ctx.params.mcpServers, ctx.params.additionalDirectories);
-    return {};
+    const bridge = await resumeSession(
+      ctx.params.sessionId,
+      false,
+      initCaps,
+      ctx.params.mcpServers,
+      ctx.params.additionalDirectories
+    );
+    return sessionSelectorsFor(bridge, options.modelCatalog);
   });
 
   app.onRequest(methods.agent.session.close, async (ctx) => {
@@ -533,11 +536,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // Not advertised in initialize for such a host — but a client may call anyway.
       throw new Error("This host cannot enumerate persisted sessions (no listPersistedSessions capability)");
     }
-    // `ListSessionsRequest` carries only `cwd`, `cursor` and `_meta` (no `additionalDirectories`,
-    // unlike the session-creating requests), so there is nothing here to refuse. `cwd` is purely
-    // an optional filter and is NOT forwarded: the root is fixed at handshake, and the catalog we
-    // answer from is already scoped to it, so echoing the client's value back would only pretend
-    // to filter.
+    // `cwd` is an optional filter here and is NOT forwarded: the root is fixed at handshake and the
+    // catalog is already scoped to it, so echoing the value back would only pretend to filter.
     if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
       process.stderr.write(
         `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
@@ -639,8 +639,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: newId,
-      modes: sessionModes(snapshot.mode),
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
+      ...sessionSelectors(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
     };
   });
 
