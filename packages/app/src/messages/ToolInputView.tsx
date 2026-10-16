@@ -3,7 +3,7 @@ import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { useTranscriptDisplayMode } from "../context/transcript-display-context.js";
 import { useSize } from "../hooks";
 import { useTask } from "../hooks/use-task.js";
-import { isToolExecuting } from "../utils/tool-part.js";
+import { isPreExecutionToolState, isToolExecuting } from "../utils/tool-part.js";
 
 import { EditFilePreview } from "./EditFilePreview.js";
 import { MessageDiffView } from "./MessageDiffView.js";
@@ -79,11 +79,12 @@ export const ToolInputView = ({
           path={content.path}
           edits={content.edits}
           bodyWidth={bodyWidth}
-          output={
-            uiState === "output-available"
-              ? (part.output as { oldFile?: string; newFile?: string } | undefined)
-              : undefined
-          }
+          // Pre-execution only: after the write, the full-file view is the tool's own output (when
+          // the part has it) and a recomputed preview would report a refusal for work already done.
+          canPreview={isPreExecutionToolState(uiState)}
+          // Passed whenever it exists, not only in `output-available`: the output IS the datum, and
+          // gating it on the state is what let a completed call fall through to the preview.
+          output={part.output as { oldFile?: string; newFile?: string } | undefined}
         />
       );
     }

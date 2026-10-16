@@ -75,7 +75,13 @@ export {
   normalizeToolPartsInMessages,
   shouldFlattenPart,
 } from "./utils/dedupe-tool-calls.js";
-export { getUiToolState, isToolCallPart, isToolExecuting, parseToolInput } from "./utils/tool-part.js";
+export {
+  getUiToolState,
+  isPreExecutionToolState,
+  isToolCallPart,
+  isToolExecuting,
+  parseToolInput,
+} from "./utils/tool-part.js";
 export { resolveSubagentRowDisplay } from "./utils/subagent-status.js";
 export { truncateTextToMaxLines, wrapTextToLines, textDisplayWidth } from "./utils/user-message-lines.js";
 export { resolveStopDecision, type StopDecision } from "./utils/stop-decision.js";
