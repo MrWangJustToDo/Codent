@@ -621,6 +621,11 @@ function makeRestoredSession(id, diskId = id) {
     getSummaryStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
+      // A real session delivers its retained values to a NEW subscriber. That is what makes the
+      // replay-vs-subscribe ORDER observable: subscribing first put the whole stored conversation on
+      // the wire as live chunks, and the replay then sent the assistant half again (creating every
+      // historical tool call `pending` and correcting it immediately after).
+      handler({ channel: "messages", payload: messages, ts: Date.now() });
       return () => listeners.delete(handler);
     },
     dispatch: async () => ({ ok: true }),

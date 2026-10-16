@@ -266,7 +266,16 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     session: AgentSession,
     clientCaps: ClientCapabilities | undefined,
     acpId: string,
-    runtime: SessionRuntime
+    runtime: SessionRuntime,
+    /**
+     * Replay the stored transcript. Done HERE, before {@link AcpProjector.start} subscribes: a
+     * session delivers its current messages to a NEW subscriber, so subscribing first emitted the
+     * whole conversation live and the replay emitted the assistant half of it again (with every
+     * historical tool call created `pending` and then corrected) — the duplicated, mis-ordered
+     * transcript a `session/load` produced. Replaying first also primes the cursors, which is what
+     * makes that retained delivery idempotent.
+     */
+    replay = false
   ): SessionBridge => {
     const bridge: SessionBridge = {
       session,
@@ -303,6 +312,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       },
       onInteraction: (payload) => void handleInteractions(bridge, payload),
     });
+    if (replay) {
+      bridge.replayed = true;
+      bridge.projector.replayFrom(session.getSnapshot());
+    }
     bridge.projector.start();
     // No id may own two live bridges. The `set` below would ORPHAN a previous one: its projector
     // keeps its subscription, so every later update is emitted twice under the SAME session id, while
@@ -507,11 +520,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
-    const bridge = attach(session, clientCaps, sessionId, runtime);
-    if (replay) {
-      bridge.replayed = true;
-      bridge.projector.replayFrom(session.getSnapshot());
-    }
+    attach(session, clientCaps, sessionId, runtime, replay);
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {
