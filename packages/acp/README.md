@@ -127,8 +127,13 @@ What it does and does not change:
   client while a `rename` could only ever run on **our** filesystem, `rename` is withheld whenever
   writes route to the client. That makes `write_file` take its direct-write branch — one write of the
   real path — instead of writing a temp file the client owns and renaming a local path that does not
-  exist (ENOENT, or EXDEV across a genuinely remote client). Local-only writers keep `rename`, so the
-  session journal's atomic rewrite is unaffected.
+  exist (ENOENT, or EXDEV across a genuinely remote client).
+  The gate is **capability-level, not path-level**: with writes routed to the client, *no* path keeps
+  `rename` — `.agents/**` included. So the session journal's atomic rewrite degrades to a direct
+  overwrite there. Core documents that degradation itself (`session-journal.ts`: "Without rename this
+  degrades to a direct overwrite … best-effort") and its fallback is a plain `writeFile`, so nothing
+  is dropped — a folded log rewrite is just no longer crash-atomic. Restoring atomicity for local
+  paths needs a path-aware replace in the CoreEnv contract, not a flag here.
 - **Only argv-shaped execution goes to the client terminal.** ACP's `terminal/create` takes
   `command` + `args` with no shell, so `execFile` (glob / grep / tree) routes there, while `exec` and
   `run_command` — both free text — stay on the local shell. That keeps command-safety's shell
