@@ -5,9 +5,9 @@
  * Split out of `agent.ts` (a subject of its own, and that file is at the line ceiling).
  */
 
-import { MODE_IDS, MODE_META, sessionConfigOptions } from "./session-config-options.js";
+import { MODE_IDS, MODE_META, legacySessionModelState, sessionConfigOptions } from "./session-config-options.js";
 
-import type { AcpModelCatalogEntry } from "./session-config-options.js";
+import type { AcpModelCatalogEntry, LegacySessionModelState } from "./session-config-options.js";
 import type { SessionConfigOption, SessionMode, SessionModeState, StopReason } from "@agentclientprotocol/sdk";
 import type { AgentMode, AgentSession, AgentSessionSnapshot } from "@codent/core";
 
@@ -30,10 +30,14 @@ export function sessionSelectors(
   snapshot: AgentSessionSnapshot,
   catalog: AcpModelCatalogEntry[] | undefined,
   selectedEntryIndex?: number
-): { modes: SessionModeState; configOptions: SessionConfigOption[] } {
+): { modes: SessionModeState; configOptions: SessionConfigOption[]; models?: LegacySessionModelState } {
+  const models = legacySessionModelState(catalog, snapshot.model, selectedEntryIndex);
   return {
     modes: sessionModes(snapshot.mode),
     configOptions: sessionConfigOptions(snapshot, catalog, selectedEntryIndex),
+    // Older clients read `models` and call `session/set_model`; newer ones read the `model` config
+    // option. Both are the same catalog, so the two surfaces cannot disagree.
+    ...(models ? { models } : {}),
   };
 }
 

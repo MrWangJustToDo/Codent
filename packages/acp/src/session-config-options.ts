@@ -176,6 +176,40 @@ export function sessionConfigOptions(
   return [modelConfigOption(catalog as AcpModelCatalogEntry[], snapshot.model, selectedEntryIndex), mode];
 }
 
+/**
+ * The legacy `models` field, for clients that predate `configOptions` (and for the removed
+ * `session/set_model`, which they call).
+ *
+ * The current protocol dropped it — model selection is a `configOptions` entry with
+ * `category: "model"` — but Zed's own adapters still ship `models`, and a client that only reads that
+ * field showed no picker at all. Both surfaces are built from the SAME catalog and the same
+ * `encodeModelChoice` values, so a client reading either one names the identical model.
+ */
+export interface LegacySessionModelState {
+  currentModelId: string;
+  availableModels: Array<{ modelId: string; name: string; description?: string }>;
+}
+
+export function legacySessionModelState(
+  catalog: AcpModelCatalogEntry[] | undefined,
+  current: string | undefined,
+  selectedEntryIndex?: number
+): LegacySessionModelState | undefined {
+  const selectable = catalog?.some((entry) => entry.models.length > 0) ?? false;
+  if (!selectable || !current || !catalog) return undefined;
+  const currentEntry = resolveCurrentEntry(catalog, current, selectedEntryIndex);
+  return {
+    currentModelId: currentEntry ? encodeModelChoice(currentEntry.index, current) : current,
+    availableModels: catalog.flatMap((entry) =>
+      entry.models.map((model) => ({
+        modelId: encodeModelChoice(entry.index, model),
+        name: model,
+        description: `entry ${entry.index} · ${entry.style}`,
+      }))
+    ),
+  };
+}
+
 /** What a write needs from the session it acts on — the bridge's session and its id. */
 export interface ConfigOptionTarget {
   session: AgentSession;

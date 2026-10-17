@@ -11,7 +11,7 @@
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
 
-import { createAcpAgent } from "../dist/index.mjs";
+import { createAcpAgent, legacySessionModelState, sessionConfigOptions } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 
@@ -286,6 +286,38 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   }
   check("a deleted live session is no longer promptable", promptRejected);
 });
+
+// --- the legacy `models` surface names the same catalog ----------------------
+//
+// Model selection is a `configOptions` entry (`category: "model"`) in this protocol version, but clients
+// that still speak the older API read `models` and call `session/set_model`. Both are built from the same
+// catalog, so a client reading either one picks the identical model — a divergence here would mean two
+// selectors that disagree about the current model.
+{
+  const snapshot = { todos: [], mode: "normal", usage: undefined, name: "p", model: "a/one", messages: [] };
+  const catalog = [
+    { index: 0, style: "anthropic", models: ["a/one", "b/two"] },
+    { index: 1, style: "openai", models: ["c/three"] },
+  ];
+  const option = sessionConfigOptions(snapshot, catalog, 0).find((entry) => entry.category === "model");
+  const legacy = legacySessionModelState(catalog, "a/one", 0);
+  check("the legacy `models` field is offered beside the model config option", Boolean(option) && Boolean(legacy));
+  check(
+    "…naming the same current value",
+    legacy?.currentModelId === option?.currentValue,
+    `${legacy?.currentModelId} vs ${option?.currentValue}`
+  );
+  check(
+    "…and the same model ids in the same order",
+    JSON.stringify(legacy?.availableModels?.map((m) => m.modelId)) ===
+      JSON.stringify(option?.options?.map((o) => o.value)),
+    JSON.stringify(legacy?.availableModels?.map((m) => m.modelId))
+  );
+  check(
+    "no catalog ⇒ no legacy field either (it must not invent a choice)",
+    legacySessionModelState(undefined, "a/one", 0) === undefined
+  );
+}
 
 // --- configOptions stay in sync after session/set_mode ------------------------
 //

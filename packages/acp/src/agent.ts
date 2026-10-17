@@ -1,4 +1,14 @@
 /**
+ * The ACP request table: `createAcpAgent` registers every agent method the protocol defines, wires each to
+ * the bridge map, and owns the prompt-turn sequencing and the legacy `session/set_model` shim.
+ */
+/* eslint-disable max-lines -- Justified ceiling exception: this file is the handler table, and everything
+ * that has a subject of its own is already extracted (`tools` / `content` / `paths` / `permissions` /
+ * `interactions` / `projector` / `sessions` / `session-config-options` / `session-status`). What remains is
+ * one registration block per protocol method over seven closures (`bridges`, `createRuntime`, `initCaps`,
+ * `options`, `emit`, `attach`, `handleInteractions`); moving it needs those threaded through a factory
+ * first, which is a change of its own. Tracks that extraction, not a licence to keep growing here. */
+/**
  * CodentAcpAgent — the agent side of ACP.
  *
  * Serves an {@link AgentSessionHost} over stdio: each ACP session maps to one
@@ -737,6 +747,36 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ),
     };
   });
+
+  // Legacy model selection. The current protocol dropped `session/set_model` in favour of a
+  // `configOptions` entry with `category: "model"`, but clients that still speak the older API call it
+  // — and one that only reads `models` had no picker at all. Same `applyModel` as
+  // `session/set_config_option`, so neither surface can drift from the other.
+  // Cast: this protocol version removed the method from its handler map, so there is no keyed entry to
+  // type against — but the SDK accepts a custom method with its own params parser, and the wire has no
+  // restriction at all. The clients that call it are exactly the ones this exists for.
+  const onLegacyRequest = app.onRequest.bind(app) as unknown as (
+    method: string,
+    parser: (params: unknown) => { sessionId: string; modelId: string },
+    handler: (ctx: { params: { sessionId: string; modelId: string } }) => Promise<Record<string, never>>
+  ) => void;
+  onLegacyRequest(
+    "session/set_model",
+    (params) => {
+      const rec = params as { sessionId?: unknown; modelId?: unknown };
+      if (typeof rec?.sessionId !== "string" || typeof rec?.modelId !== "string") {
+        throw RequestError.invalidParams(undefined, "session/set_model requires sessionId and modelId");
+      }
+      return { sessionId: rec.sessionId, modelId: rec.modelId };
+    },
+    async (ctx) => {
+      const bridge = bridges.get(ctx.params.sessionId);
+      if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
+      const applied = await applyModel(toTarget(bridge), ctx.params.modelId, options.modelCatalog);
+      if (applied.entryIndex !== undefined) bridge.selectedModelEntryIndex = applied.entryIndex;
+      return {};
+    }
+  );
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
