@@ -30,13 +30,28 @@
  * and the transcript UI — keeps the original media parts, so nothing in a
  * capability strip or a continuation prompt is ever durable.
  *
+ * ## Unhydrated media
+ *
+ * One input is not a per-run override: a restored transcript can still carry `media://` refs whose
+ * files are gone. Those are unfetchable by any provider and would fail every turn, so when the
+ * session reports hydration misses (`hasUnhydratedMedia`) they are replaced by identity-carrying
+ * text placeholders ({@link multimodalPartPlaceholder}). That pass runs **after** the strip: for a
+ * model that cannot take the part anyway, "omitted — no vision" is the actionable report (switch
+ * model), while "unavailable" would blame a file that may be perfectly fine. It stays wire-only
+ * for the same reason (`wire-abort`): restoring the media directory later must bring the image
+ * back.
+ *
  * Zero-overhead contract: with no override armed (the common case, and always the
- * case for subagents and for models with full capabilities) this returns `{}`, so
- * the pipeline behaves exactly as if the middleware did not exist.
+ * case for subagents and for models with full capabilities and a clean restore) this
+ * returns `{}`, so the pipeline behaves exactly as if the middleware did not exist.
+ * A hydration miss is a boolean the restore reports, not a scan — an always-on part walk
+ * would pay the cost on every call to detect a condition that is knowable one time.
  */
 
 import { parseStringifiedMultimodalContent } from "../../agent/media/repair-stringified-multimodal.js";
+import { isBinaryMediaPartType, isMediaRefValue } from "../../agent/media/types.js";
 import {
+  multimodalPartPlaceholder,
   stripMultimodalContentParts,
   stripMultimodalFromChatMessages,
 } from "../../models/adapter/capability-message-utils.js";
@@ -52,6 +67,14 @@ import type { ContentPart, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 export interface WireRecoveryMiddlewareDeps {
   /** Per-run override state (survives retries within one run). */
   getRun: () => RunCoordinator | undefined;
+  /**
+   * Whether the restored transcript still holds `media://` refs whose files could not be read.
+   *
+   * Optional and flag-gated on purpose: a hydration miss is only knowable at restore, so this is a
+   * cheap boolean far cheaper than scanning every part on every wire build just in case. Absent or
+   * false restores the zero-overhead contract below.
+   */
+  hasUnhydratedMedia?: () => boolean;
 }
 
 /**
@@ -86,6 +109,66 @@ function stripStringifiedToolMedia(messages: ModelMessage[], drop: Set<Multimoda
   });
 }
 
+/**
+ * Replace media parts whose `source.value` is still a `media://` ref.
+ *
+ * A `media://` value only survives into a runtime transcript when hydration could not read the
+ * file (media dir cleared, session copied from another machine/workspace). It is not a URL any
+ * provider can fetch, so sending it fails the whole request — and `isMultimodalUnsupportedError`
+ * does not recognise a CDN/loader failure, so the widened retry cannot rescue it either: every
+ * subsequent turn fails the same way. Replacing it with a text placeholder keeps the turn
+ * usable and tells the model what it is missing.
+ *
+ * Copy-on-write: the channel (and therefore the persisted session) keeps the `media://` part, so
+ * restoring the media directory later brings the image back instead of losing it to a placeholder.
+ */
+function replaceUnhydratedParts(parts: ContentPart[]): ContentPart[] {
+  let changed = false;
+  const next = parts.map((part) => {
+    if (!isBinaryMediaPartType(part.type)) return part;
+    const source = (part as { source?: { value?: unknown } }).source;
+    if (typeof source?.value !== "string" || !isMediaRefValue(source.value)) return part;
+    changed = true;
+    return { type: "text", content: multimodalPartPlaceholder(part.type, part, "missing-media") } as ContentPart;
+  });
+  return changed ? next : parts;
+}
+
+/**
+ * Apply {@link replaceUnhydratedParts} across a wire, including stringified tool results.
+ *
+ * String content is narrowed to `role: "tool"` for the same reason as
+ * {@link stripStringifiedToolMedia}: that is the encoding TanStack produces by stringifying an
+ * array result, and a user message is the user's text even when it happens to parse as parts. The
+ * array branch is role-agnostic — a real content part is media wherever it appears.
+ */
+function replaceUnhydratedMedia(messages: ModelMessage[]): ModelMessage[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.role === "tool" && typeof message.content === "string") {
+      const parts = parseStringifiedMultimodalContent(message.content);
+      if (!parts) return message;
+      const asParts = parts as ContentPart[];
+      const replaced = replaceUnhydratedParts(asParts);
+      if (replaced === asParts) return message;
+      changed = true;
+      // Stays a string: string `tool` content is the only form that wire format accepts.
+      return { ...message, content: JSON.stringify(replaced) } as ModelMessage;
+    }
+
+    if (Array.isArray(message.content)) {
+      const asParts = message.content as ContentPart[];
+      const replaced = replaceUnhydratedParts(asParts);
+      if (replaced === asParts) return message;
+      changed = true;
+      return { ...message, content: replaced } as ModelMessage;
+    }
+
+    return message;
+  });
+  return changed ? next : messages;
+}
+
 export function createWireRecoveryMiddleware(deps: WireRecoveryMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   return defineMiddleware("context-transform", {
     name: "wire-recovery",
@@ -95,13 +178,20 @@ export function createWireRecoveryMiddleware(deps: WireRecoveryMiddlewareDeps): 
 
       const drop = run.getWireDropPartTypes();
       const armed = run.isWireContinuationArmed();
-      if (!drop?.size && !armed) return {};
+      const unhydrated = deps.hasUnhydratedMedia?.() === true;
+      if (!drop?.size && !armed && !unhydrated) return {};
 
       let messages = config.messages as ModelMessage[];
 
       if (drop?.size) {
         messages = stripMultimodalFromChatMessages(messages, drop);
         messages = stripStringifiedToolMedia(messages, drop);
+      }
+
+      // After the strip: for a model that cannot take the part anyway, "omitted — no vision" is the
+      // actionable report (switch model); "unavailable" would blame a file that is perfectly fine.
+      if (unhydrated) {
+        messages = replaceUnhydratedMedia(messages);
       }
 
       if (armed) {

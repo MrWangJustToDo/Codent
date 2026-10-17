@@ -831,4 +831,55 @@ async function persistAndReload(channel) {
   );
 }
 
+// ============================================================================
+// 11. Ordering: each omitted attachment keeps its own identity on the wire
+//     The placeholder exists so the model can tell WHICH attachment of a session
+//     was dropped. Merging them into one trailing constant (the old behaviour)
+//     lost the count and the position, so the pairing with the `[Image #N]` text
+//     ref was unrecoverable.
+// ============================================================================
+
+{
+  const attachment = (base64, imageIndex, filename) => ({
+    type: "image",
+    source: { type: "url", value: `data:image/png;base64,${base64}` },
+    metadata: { imageIndex, filename },
+  });
+  const channel = new AgentUIChannel();
+  channel.addUserMessage([
+    { type: "text", content: "[Image #1: a.png] first" },
+    attachment("aaa", 1, "a.png"),
+    { type: "text", content: "then" },
+    attachment("bbb", 2, "b.png"),
+    { type: "document", source: { type: "data", value: "JVBERi0x", mimeType: "application/pdf" } },
+  ]);
+
+  const run = new TestRun();
+  run.setWireDropPartTypes(new Set(["image", "document"]));
+  const { runner, calls } = makeRunner(channel, run);
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  const wire = JSON.stringify(calls[0]);
+  assert.equal(wire.includes('"image"'), false, "no image part may reach a vision-less adapter");
+
+  // Each placeholder must sit where its media was, naming the same index/file as the text ref.
+  const first = wire.indexOf("[Image #1: a.png omitted");
+  const middle = wire.indexOf("then");
+  const second = wire.indexOf("[Image #2: b.png omitted");
+  assert.ok(first >= 0 && second >= 0, "each dropped image must name its index and file");
+  assert.ok(
+    first < middle && middle < second,
+    "a merged trailing placeholder would lose the ordering the [Image #N] refs describe: " + wire
+  );
+  assert.ok(
+    wire.indexOf(MULTIMODAL_OMITTED_PLACEHOLDER) > second,
+    "a part without identity keeps the generic placeholder, after the named ones"
+  );
+  assert.equal(
+    channel.getMessages()[0].parts.filter((part) => part.type === "image").length,
+    2,
+    "the channel must still carry both images — the placeholder is wire-only"
+  );
+}
+
 console.log("wire-override-reaches-adapter validation passed");

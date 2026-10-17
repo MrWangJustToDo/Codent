@@ -85,6 +85,73 @@ assert.equal(
   null
 );
 
+// ============================================================================
+// Ordering: each dropped attachment keeps its own identity and position
+// ============================================================================
+// The placeholder exists so a model on a non-vision model can still tell WHICH of the
+// session's attachments was omitted. A single trailing constant destroyed both the count and
+// the position, so a message with two attachments (one carrying app-level identity, one not)
+// and text between them must come out as: text, placeholder(#1), text, placeholder(#2).
+const ordered = [
+  {
+    id: "u2",
+    role: "user",
+    parts: [
+      { type: "text", content: "[Image #1: a.png] first" },
+      {
+        type: "image",
+        source: { type: "url", value: "data:image/png;base64,aaa" },
+        metadata: { imageIndex: 1, filename: "a.png" },
+      },
+      { type: "text", content: "then" },
+      {
+        type: "image",
+        source: { type: "url", value: "data:image/png;base64,bbb" },
+        metadata: { imageIndex: 2, filename: "b.png" },
+      },
+      { type: "document", source: { type: "data", value: "JVBERi0x", mimeType: "application/pdf" } },
+    ],
+  },
+];
+const orderedStripped = stripMultimodalFromChatMessages(ordered, new Set(["image", "document"]));
+const orderedParts = orderedStripped[0].parts;
+assert.deepEqual(
+  orderedParts.map((p) => p.type),
+  ["text", "text", "text", "text", "text"],
+  "every dropped part becomes a text part in place"
+);
+assert.equal(orderedParts[1].content, "[Image #1: a.png omitted — current model has no vision input.]");
+assert.equal(orderedParts[3].content, "[Image #2: b.png omitted — current model has no vision input.]");
+// A part with no identity cannot invent an index — it keeps the generic placeholder.
+assert.equal(orderedParts[4].content, MULTIMODAL_OMITTED_PLACEHOLDER);
+// Position is preserved: the text between the two images stays between them.
+assert.equal(orderedParts[2].content, "then");
+// Ordering information must not leak into the runtime messages.
+assert.equal(ordered[0].parts[1].type, "image");
+assert.equal(ordered[0].parts[1].metadata.filename, "a.png");
+
+// A filename without an index still identifies the part, and vice versa.
+const partialIdentity = stripMultimodalFromChatMessages(
+  [
+    {
+      id: "u3",
+      role: "user",
+      parts: [
+        {
+          type: "image",
+          source: { type: "url", value: "data:image/png;base64,x" },
+          metadata: { filename: "only-name.png" },
+        },
+      ],
+    },
+  ],
+  new Set(["image"])
+);
+assert.equal(
+  partialIdentity[0].parts[0].content,
+  "[Image: only-name.png omitted — current model has no vision input.]"
+);
+
 // Optimistic probe (empty capabilities semantics via always-true) → no preemptive strip.
 const optimistic = { hasCapability: () => true };
 assert.equal(sanitizeMessagesForCapabilities(withMedia, optimistic), withMedia);

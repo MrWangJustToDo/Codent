@@ -166,6 +166,7 @@ async function testHydrateReportsMisses() {
 
 async function testRestoreReportsMediaMissing() {
   const events = [];
+  const missCounts = [];
   const restored = { id: "ses_m", name: "Media Session", uiMessages: [], approvals: [] };
 
   await restoreManagedSession(
@@ -190,6 +191,7 @@ async function testRestoreReportsMediaMissing() {
       syncInteractionStateFromUIMessages: () => {},
       emitEvent: (type, payload) => events.push({ type, payload }),
       setDisplayName: () => {},
+      setMediaHydrationMisses: (count) => missCounts.push(count),
     },
     "ses_m"
   );
@@ -197,9 +199,13 @@ async function testRestoreReportsMediaMissing() {
   const restore = events.find((e) => e.type === "session:restore");
   assert.ok(restore, "session:restore must be emitted");
   assert.equal(restore.payload.mediaMissing, 2, "miss count must surface on the payload");
+  // The count is not only a diagnostic: it arms the wire seam that substitutes a text placeholder
+  // for a `media://` ref no provider can fetch (`wire-recovery` + `hasUnhydratedMedia`).
+  assert.deepEqual(missCounts, [2], "the restore must arm the wire fallback with the miss count");
 
   // No misses → field omitted (keeps the common log line unchanged).
   const clean = [];
+  const cleanMissCounts = [];
   await restoreManagedSession(
     {
       toolCompactCache: { clear: () => {} },
@@ -216,11 +222,14 @@ async function testRestoreReportsMediaMissing() {
       syncInteractionStateFromUIMessages: () => {},
       emitEvent: (type, payload) => clean.push({ type, payload }),
       setDisplayName: () => {},
+      setMediaHydrationMisses: (count) => cleanMissCounts.push(count),
     },
     "ses_m"
   );
   const cleanRestore = clean.find((e) => e.type === "session:restore");
   assert.equal("mediaMissing" in cleanRestore.payload, false);
+  // A clean restore clears the flag, so the wire seam keeps its zero-overhead path.
+  assert.deepEqual(cleanMissCounts, [0], "a clean restore must clear the wire fallback");
 
   console.log("  ✓ restoreManagedSession surfaces mediaMissing on session:restore");
 }

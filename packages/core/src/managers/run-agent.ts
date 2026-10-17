@@ -191,6 +191,8 @@ export function buildAgentRunner(
     // part from an extension transformer.
     createWireRecoveryMiddleware({
       getRun: () => run,
+      // Read live: a restore can report misses while the agent stays alive (mid-session switch).
+      hasUnhydratedMedia: () => managed.hasUnhydratedMedia(),
     }),
     createTurnContextMiddleware({
       getFrozenSystemPrompt: deps.getFrozenSystemPrompt,

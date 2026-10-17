@@ -97,6 +97,10 @@ export class AgentChatController {
     this.managed.resetAdmittedTurnContext();
     this.managed.resetSessionSyncTracker();
     this.managed.statusController.resetToIdle();
+    // The unhydratable `media://` refs lived in the transcript just dropped, so the wire seam's arm
+    // goes with it — `/clear` does not run `reset()`, and a stale arm would keep the per-call part
+    // walk alive for the rest of the agent's life. A later restore re-arms it from its own misses.
+    this.managed.setMediaHydrationMisses(0);
     // The cleared transcript must also leave disk, or a later resume brings the
     // conversation the user just discarded back.
     this.persistEmpty();

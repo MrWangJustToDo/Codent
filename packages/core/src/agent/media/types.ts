@@ -34,6 +34,17 @@ export function isBinaryMediaPartType(type: string | undefined): type is BinaryM
 export const MEDIA_PROTOCOL = "media://";
 
 /**
+ * Whether a value is a dehydrated `media://` reference rather than fetchable content.
+ *
+ * The one definition of "this is a media ref": hydrate (`media-utils`) and the wire seam that
+ * substitutes a placeholder for an unreadable ref (`wire-recovery`) must agree, because a value
+ * hydrate declines to load is exactly a value no provider can fetch.
+ */
+export function isMediaRefValue(value: string): boolean {
+  return value.startsWith(MEDIA_PROTOCOL);
+}
+
+/**
  * Content-addressed media reference stored in part metadata after dehydrate.
  * On hydrate, the file is read back and `source.value` is reconstructed
  * as a data URL (or raw base64, matching the original source type).
@@ -117,7 +128,7 @@ export function buildMediaRefPath(ref: MediaRef): string {
  * Returns `{ hash, ext }` or `null` if the string is not a valid media reference.
  */
 export function parseMediaRefPath(ref: string): { hash: string; ext: string } | null {
-  if (!ref.startsWith(MEDIA_PROTOCOL)) return null;
+  if (!isMediaRefValue(ref)) return null;
   const rest = ref.slice(MEDIA_PROTOCOL.length);
   const dot = rest.lastIndexOf(".");
   if (dot === -1) return null;

@@ -55,6 +55,12 @@ export interface SessionHost {
    */
   applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => void;
   resetAdmittedTurnContext?: () => void;
+  /**
+   * Record how many `media://` refs the restore could not hydrate (`0` clears it).
+   * The wire seam uses this to substitute text placeholders for refs no provider can fetch;
+   * optional so hosts without a wire path keep compiling.
+   */
+  setMediaHydrationMisses?: (count: number) => void;
   /** Drop steer/follow-up queues without clearing the transcript (no-op before initChat). */
   clearQueuedMessages: () => void;
   /**
@@ -180,6 +186,9 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
     autoMode: host.isAutoModeEnabled(),
     ...(mediaMissing > 0 ? { mediaMissing } : {}),
   });
+  // A miss is not only a diagnostic: the transcript still holds a `media://` ref no provider can
+  // fetch, so the wire seam must substitute a placeholder from the next run on. `0` clears it.
+  host.setMediaHydrationMisses?.(mediaMissing);
   // The on-disk session (and thus `AgentL1State.sessionId`) just changed while the
   // agent kept its identity — re-emit state so live subscribers see the switch.
   host.refreshState?.();

@@ -37,10 +37,10 @@ import {
   repairStringifiedMultimodalUIMessages,
 } from "./repair-stringified-multimodal.js";
 import {
-  MEDIA_PROTOCOL,
   buildMediaRefPath,
   extensionToMime,
   isBinaryMediaPartType,
+  isMediaRefValue,
   parseMediaRefPath,
 } from "./types.js";
 
@@ -262,10 +262,6 @@ export async function dehydrateUIMessages(
 // ============================================================================
 // Hydrate
 // ============================================================================
-
-function isMediaRefValue(value: string): boolean {
-  return value.startsWith(MEDIA_PROTOCOL);
-}
 
 // ============================================================================
 // Hydration diagnostics

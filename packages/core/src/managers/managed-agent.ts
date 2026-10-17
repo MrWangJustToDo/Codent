@@ -1908,6 +1908,26 @@ export class ManagedAgent {
     );
   }
 
+  /**
+   * Count of `media://` refs the most recent restore could not hydrate (0 = none).
+   *
+   * The transcript keeps those refs — the files may come back — but the wire cannot carry them:
+   * `wire-recovery` swaps each one for a text placeholder so a provider never receives a scheme it
+   * cannot fetch. Agent-scoped rather than run-scoped because the condition belongs to the restored
+   * history, not to one turn.
+   */
+  private unhydratedMediaCount = 0;
+
+  /** @internal Record the hydration misses of a restore (`0` clears the flag). */
+  setMediaHydrationMisses(count: number): void {
+    this.unhydratedMediaCount = Number.isFinite(count) && count > 0 ? count : 0;
+  }
+
+  /** @internal Whether the current transcript still holds un-hydratable `media://` refs. */
+  hasUnhydratedMedia(): boolean {
+    return this.unhydratedMediaCount > 0;
+  }
+
   async restoreSession(sessionId: string): Promise<SessionData> {
     const manager = this.manager;
     // Disk-session ownership check: refuse to resume a session already held by
@@ -2019,6 +2039,7 @@ export class ManagedAgent {
     this.memory.resetState();
     this.pendingExtensionTurnContextSections = undefined;
     this.usage.reset();
+    this.unhydratedMediaCount = 0;
     this.getTodoManager()?.reset();
     this.run.resetTurnLifecycle();
     // Keep chatController + uiChannel alive — /clear calls clearMessages() separately.

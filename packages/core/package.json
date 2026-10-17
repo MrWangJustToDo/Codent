@@ -225,6 +225,7 @@
     "validate:run-abort-ownership": "pnpm run build && node scripts/validate-run-abort-ownership.mjs",
     "validate:middleware-order": "pnpm run build && node scripts/validate-middleware-order.mjs",
     "validate:wire-override-reaches-adapter": "pnpm run build && node scripts/validate-wire-override-reaches-adapter.mjs",
+    "validate:wire-unhydrated-media": "pnpm run build && node scripts/validate-wire-unhydrated-media.mjs",
     "validate:message-ops-purity": "pnpm run build && node scripts/validate-message-ops-purity.mjs",
     "validate:extension-message-transform": "pnpm run build && node scripts/validate-extension-message-transform.mjs",
     "validate:extension-event-observation": "pnpm run build && node scripts/validate-extension-event-observation.mjs",
