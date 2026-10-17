@@ -69,6 +69,15 @@ function walk(dir, out = []) {
 
 const files = walk(srcRoot);
 const rel = (file) => relative(srcRoot, file).split("\\").join("/");
+/**
+ * Last path segment, independent of the platform's separator.
+ *
+ * `lastIndexOf("/")` is -1 on a Windows checkout (the paths come from `readdirSync` with `\`), where
+ * it silently returned the WHOLE path — the placeholder rule then matched nothing, and the tools-root
+ * rule reported `D:\a\...\create-tools.ts` as a stray helper. Both rules were dead or wrong on the
+ * Windows CI job and correct on Linux, which is the worst way for a gate to be wrong.
+ */
+const fileName = (file) => file.slice(Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\")) + 1);
 
 // ============================================================================
 // Rule 1 — module names state their responsibility
@@ -83,7 +92,7 @@ const PLACEHOLDER_NAMES = new Set(["helpers.ts", "misc.ts", "utils.ts", "common.
 
 check("no placeholder module names", () => {
   return files
-    .filter((file) => PLACEHOLDER_NAMES.has(file.slice(file.lastIndexOf("/") + 1)))
+    .filter((file) => PLACEHOLDER_NAMES.has(fileName(file)))
     .map((file) => `${rel(file)} — rename it after the responsibility it holds (see AGENTS.md "Files")`);
 });
 
@@ -104,7 +113,7 @@ const TOOLS_ROOT_ALLOWED = new Set(["create-tools.ts", "tool-config.ts", "tool-n
 check("agent/tools root holds only tool factories and the assembler", () => {
   return files
     .filter((file) => dirname(file) === TOOLS_ROOT)
-    .map((file) => file.slice(file.lastIndexOf("/") + 1))
+    .map((file) => fileName(file))
     .filter((name) => !name.endsWith("-tool.ts") && !TOOLS_ROOT_ALLOWED.has(name))
     .map(
       (name) =>
