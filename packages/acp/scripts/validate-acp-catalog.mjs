@@ -313,9 +313,24 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
       JSON.stringify(option?.options?.map((o) => o.value)),
     JSON.stringify(legacy?.availableModels?.map((m) => m.modelId))
   );
+  // No catalog (remote provider / explicit flags): the model is decided outside this process. Both
+  // surfaces name it as ONE fixed value — omitting them left the client with no model at all, which is
+  // the "model selection unavailable under --remote-provider" report.
+  const fixedOption = sessionConfigOptions({ ...snapshot, model: "a/one" }, undefined, 0).find(
+    (entry) => entry.category === "model"
+  );
+  const fixedLegacy = legacySessionModelState(undefined, "a/one", 0);
   check(
-    "no catalog ⇒ no legacy field either (it must not invent a choice)",
-    legacySessionModelState(undefined, "a/one", 0) === undefined
+    "no catalog but a known model ⇒ one fixed model value on BOTH surfaces",
+    fixedOption?.currentValue === "a/one" &&
+      fixedOption.options.length === 1 &&
+      fixedLegacy?.currentModelId === "a/one" &&
+      fixedLegacy.availableModels.length === 1,
+    JSON.stringify({ option: fixedOption?.currentValue, models: fixedLegacy?.currentModelId })
+  );
+  check(
+    "no catalog and no model ⇒ neither surface invents one",
+    legacySessionModelState(undefined, undefined, 0) === undefined
   );
 }
 
@@ -762,9 +777,10 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     );
   });
 
-  // No catalog (explicit `--model` flags skip models.json, or the `.env` fallback): the selector
-  // must be ABSENT rather than empty. An option offering one value is a fake choice, and the
-  // protocol lets a client degrade gracefully on a missing option.
+  // No catalog (explicit `--model` flags, the `.env` fallback, or the REMOTE PROVIDER plane — whose model
+  // is owned by the provider server): the model is still known, so both surfaces name it as ONE fixed
+  // value. Omitting the option left a client with no model at all, reported as "model selection is
+  // unavailable under --remote-provider"; a single value at least says which model is running.
   const bareModelClient = createClient({ name: "bare-model-client" });
   await bareModelClient.connectWith(withoutCatalog, async (cx) => {
     await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
@@ -774,9 +790,16 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     } catch {
       // Same reason as above.
     }
+    const fixed = fresh?.configOptions?.find((o) => o.category === "model");
     check(
-      "without a catalog the model select is omitted (not advertised empty)",
-      fresh !== null && !fresh.configOptions?.some((o) => o.category === "model")
+      "without a catalog the model is advertised as one fixed value",
+      Boolean(fixed) && fixed.options.length === 1 && fixed.currentValue === fixed.options[0].value,
+      JSON.stringify(fixed)
+    );
+    check(
+      "…and the legacy `models` field names the same value",
+      fresh?.models?.currentModelId === fixed?.currentValue && fresh.models.availableModels.length === 1,
+      JSON.stringify(fresh?.models)
     );
     check(
       "the mode select survives that",
@@ -796,7 +819,8 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     })();
     check(
       "a model write with no catalog is refused (an error, never a crash)",
-      /Unknown configuration option/i.test(refusedNoCatalog ?? "")
+      /No models are configured/i.test(refusedNoCatalog ?? ""),
+      refusedNoCatalog ?? ""
     );
   });
 }

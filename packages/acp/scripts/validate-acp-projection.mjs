@@ -701,10 +701,16 @@ const compactKey = "compact:agent_1";
     withCatalogParsed.success,
     withCatalogParsed.success ? "" : JSON.stringify(withCatalogParsed.error.issues.slice(0, 3))
   );
+  // No catalog: the model is host/remote-owned (`--remote-provider`, explicit flags, `.env`), so the
+  // option names it as ONE fixed value instead of disappearing — a client with no model option showed no
+  // model at all, reported as "model selection is unavailable under --remote-provider".
+  const noCatalogModel = withoutCatalog.configOptions.find((o) => o.category === "model");
   check(
-    "…and with no catalog it drops the model option rather than advertising a fake choice",
-    withoutCatalogParsed.success && withoutCatalog.configOptions.length === 1,
-    JSON.stringify(withoutCatalog.configOptions.map((o) => o.id))
+    "…and with no catalog the model is one fixed value, not a missing option",
+    withoutCatalogParsed.success &&
+      noCatalogModel?.options.length === 1 &&
+      noCatalogModel.currentValue === snapshot.model,
+    JSON.stringify({ options: noCatalogModel?.options?.length, current: noCatalogModel?.currentValue })
   );
 }
 
