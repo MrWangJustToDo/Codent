@@ -1,3 +1,4 @@
+import { useConfig } from "@codent/app";
 import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
@@ -55,9 +56,14 @@ export class LocalAgentAdapter implements AgentAdapter {
       const host = this._createRemoteSessionHost({ baseUrl: config.remoteSession });
       this.agent = await CodentAgent.create({ env: this._env, host });
     } else {
+      // The model read comes from the SAME `loadModels` run the app's config load did (`initConfig` runs
+      // before this) — carried onto the runtime so the TUI, `/models` and any ACP host on this process all
+      // project one instance-level read instead of re-deriving it.
+      const loaded = useConfig.getState().modelsConfig;
       this.agent = await CodentAgent.create({
         env: this._env,
         ...(this._provider ? { provider: this._provider } : {}),
+        ...(loaded ? { models: { entries: loaded.entries, active: loaded.active } } : {}),
         ...(this._ownsEnv ? { ownsEnv: true } : {}),
       });
     }

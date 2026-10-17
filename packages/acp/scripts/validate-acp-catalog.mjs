@@ -10,6 +10,7 @@
  */
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
+import { loadModels } from "@codent/core";
 
 import { createAcpAgent, legacySessionModelState, sessionConfigOptions } from "../dist/index.mjs";
 
@@ -337,6 +338,56 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
     sessionConfigOptions(snapshot, undefined, 0).every((entry) => entry.category !== "model")
   );
   check("no read ⇒ no legacy field either", legacySessionModelState(undefined, "a/one", 0) === undefined);
+}
+
+// --- the provider plane's read lists what it serves -------------------------
+//
+// `--remote-provider` was the plane with no catalog: the bootstrap asked for a connection only, so the ACP
+// client had no model at all. The pipeline's `provider` kind builds the entry WITH its selectable list (the
+// server's models.json ids + its recorded active + the model it serves), and that list MUST contain the
+// active model — the invariant every reader now projects.
+{
+  const { createServer } = await import("node:http");
+  const info = {
+    mode: "remote",
+    style: "openai",
+    model: "served/model",
+    basePath: "/v1",
+    config: {
+      models: [{ type: "direct", style: "openai", baseURL: "https://up.example/v1", models: ["a/one", "b/two"] }],
+      active: { entryIndex: 0, model: "b/two" },
+    },
+  };
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(info));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const read = await loadModels({ kind: "provider", serverUrl: `http://127.0.0.1:${server.address().port}` });
+    const entry = read?.entries[read.active.entryIndex];
+    check(
+      "the provider plane's read lists the server's models AND the one it serves",
+      Boolean(entry) && ["a/one", "b/two", "served/model"].every((model) => entry.models.includes(model)),
+      JSON.stringify(entry?.models)
+    );
+    check(
+      "…and its active model is a member of that list (the invariant readers rely on)",
+      Boolean(entry) && entry.models.includes(read.active.model),
+      `${read?.active.model} ∉ ${JSON.stringify(entry?.models)}`
+    );
+    const modelOption = sessionConfigOptions(
+      { todos: [], mode: "normal", usage: undefined, name: "p", model: read.active.model, messages: [] },
+      read
+    ).find((option) => option.category === "model");
+    check(
+      "…so the ACP selector offers them (the plane that used to offer nothing)",
+      modelOption?.options.length === 3,
+      JSON.stringify(modelOption?.options?.map((option) => option.value))
+    );
+  } finally {
+    server.close();
+  }
 }
 
 // --- configOptions stay in sync after session/set_mode ------------------------

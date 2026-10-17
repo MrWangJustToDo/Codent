@@ -39,15 +39,27 @@ never an error).
 
 ## Model resolution
 
-Three sources, in priority order:
+Four sources, read through **one pipeline** (`loadModels`) and carried on the runtime:
 
 1. explicit `--model` / `--style` / `--base-url` / `--api-key` flags — **authoritative**, the
    on-disk `models.json` is skipped entirely (the same isolation as the TUI's `--model`);
 2. `.agents/config/models.json` (read through core's `loadModels({ kind: "file" })`);
-3. `.env` — `MODEL` / `MODEL_STYLE` / `BASE_URL` / `API_KEY`.
+3. `--remote-provider` / `REMOTE_PROVIDER` (`loadModels({ kind: "provider" })` — the provider server
+   supplies the connection **and** its selectable list: its `models.json` ids, its active model, and the
+   model it serves);
+4. `.env` — `MODEL` / `MODEL_STYLE` / `BASE_URL` / `API_KEY`.
 
 With no model from any of them the process exits with a clear error rather than starting a session
 that cannot run.
+
+The result is **carried on the runtime** (`CodentAgent.readModels()` — entries + active, never the
+credential-bearing config) and the host only projects it: the `configOptions` model select, the legacy
+`models` field, and both write paths (`session/set_config_option`, `session/set_model`) read that one
+value. `AcpAgentOptions.modelCatalog` / `modelCatalogActiveIndex` are gone — a host that builds its own
+runtime gets the list from `readModels()` instead.
+
+A plane that names exactly one model (flags, `.env`, a provider serving one model) still advertises it, as
+a single fixed value: which model is running is information, not a choice.
 
 > `.env` loading is the **release host's** step (`codent` calls `loadEnv`), not this package's: the
 > standalone `codent-acp` bin sees the real process environment plus `models.json` only. Export the
