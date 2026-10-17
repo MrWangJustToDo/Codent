@@ -56,14 +56,16 @@ export class LocalAgentAdapter implements AgentAdapter {
       const host = this._createRemoteSessionHost({ baseUrl: config.remoteSession });
       this.agent = await CodentAgent.create({ env: this._env, host });
     } else {
-      // The model read comes from the SAME `loadModels` run the app's config load did (`initConfig` runs
+      // The model CATALOG comes from the SAME `loadModels` run the app's config load did (`initConfig` runs
       // before this) — carried onto the runtime so the TUI, `/models` and any ACP host on this process all
-      // project one instance-level read instead of re-deriving it.
+      // project one instance-level read instead of re-deriving it. `loaded.active` is NOT part of it: it is
+      // the persisted DEFAULT, already applied to `config.model`/style/baseURL/apiKey above; the running
+      // session's own model lives on the session.
       const loaded = useConfig.getState().modelsConfig;
       this.agent = await CodentAgent.create({
         env: this._env,
         ...(this._provider ? { provider: this._provider } : {}),
-        ...(loaded ? { models: { entries: loaded.entries, active: loaded.active } } : {}),
+        ...(loaded ? { models: { entries: loaded.entries } } : {}),
         ...(this._ownsEnv ? { ownsEnv: true } : {}),
       });
     }
