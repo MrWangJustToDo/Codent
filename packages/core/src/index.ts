@@ -266,6 +266,16 @@ export type {
   ResolvedModelConfig,
 } from "./models";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
+export { isReasoningEffort, REASONING_EFFORT_VALUES, supportedReasoningEfforts } from "./models/types.js";
+export {
+  parseEffortCommand,
+  parseModeCommand,
+  type EffortCommandIntent,
+  type ModeCommandIntent,
+} from "./agent/commands/arguments.js";
+export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/session-reference.js";
+export { askUserOutputSchema } from "./agent/tools/ask-user-tool.js";
+export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/ask-user-output.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS } from "./managers/agent-types.js";
 export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent";

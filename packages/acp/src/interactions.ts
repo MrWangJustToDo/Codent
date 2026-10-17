@@ -11,7 +11,7 @@
  */
 
 import { methods } from "@agentclientprotocol/sdk";
-import { BUILTIN_TOOL_NAMES } from "@codent/core";
+import { buildAskUserOutput } from "@codent/core";
 
 import { shouldSuppressApproval, toolInputFor, toolPartFor } from "./approvals.js";
 import {
@@ -84,32 +84,6 @@ export interface InteractionHandlers {
   handleInteractions: (bridge: InteractionBridge, payload: unknown) => Promise<void>;
 }
 
-/**
- * `ask_user` result shaped for `askUserOutputSchema` (the client tool's contract).
- *
- * Moved here verbatim from `agent.ts`: the shape is the tool's, not this module's, and `ask_user`
- * failing to parse would resurface as "Edited undefined"-style renderers reading fields that are
- * not there.
- */
-function askUserOutput(
-  ask: { question: string; options?: string[] },
-  answer: { answer: string; selected?: string[]; draft?: string } | null,
-  cancelled: boolean
-): Record<string, unknown> {
-  return {
-    question: ask.question,
-    answer: answer?.answer ?? "",
-    hasOptions: Boolean(ask.options?.length),
-    durationMs: 0,
-    cachedOutputPath: null,
-    success: true,
-    tool: BUILTIN_TOOL_NAMES.askUser,
-    ...(answer?.selected ? { selected: answer.selected, multiSelect: true } : {}),
-    ...(answer?.draft !== undefined ? { draft: answer.draft } : {}),
-    ...(cancelled ? { cancelled: true } : {}),
-  };
-}
-
 export function createInteractionHandlers(context: InteractionHandlerContext): InteractionHandlers {
   const { client, emit, rootPath } = context;
 
@@ -159,6 +133,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
 
   const requestElicitation = async (bridge: InteractionBridge, ask: AskUserRequest): Promise<void> => {
     const controller = new AbortController();
+    const startedAt = Date.now();
     bridge.pending.add(controller);
     try {
       if (!bridge.elicitation) {
@@ -170,7 +145,12 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         await bridge.session.dispatch({
           type: "addToolResult",
           toolCallId: ask.toolCallId,
-          output: askUserOutput(ask, null, true),
+          output: buildAskUserOutput({
+            question: ask.question,
+            hasOptions: Boolean(ask.options?.length),
+            cancelled: true,
+            durationMs: Date.now() - startedAt,
+          }),
         });
         return;
       }
@@ -179,10 +159,19 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         buildElicitationRequest(bridge.acpId, ask),
         { cancellationSignal: controller.signal }
       );
+      const answer = mapElicitationResponse(response);
       await bridge.session.dispatch({
         type: "addToolResult",
         toolCallId: ask.toolCallId,
-        output: askUserOutput(ask, mapElicitationResponse(response), false),
+        // Core owns the result shape and the multi-select + free-text merge; the host only reports
+        // which labels were ticked and what was typed.
+        output: buildAskUserOutput({
+          question: ask.question,
+          hasOptions: Boolean(ask.options?.length),
+          ...(answer?.selected?.length ? { selected: answer.selected } : { answer: answer?.answer ?? "" }),
+          ...(answer?.draft ? { draft: answer.draft } : {}),
+          durationMs: Date.now() - startedAt,
+        }),
       });
     } catch {
       // connection closed / cancelled — leave the interaction to time out

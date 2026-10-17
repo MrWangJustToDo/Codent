@@ -56,8 +56,36 @@ export const MODEL_CAPABILITIES = [
  */
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
+/**
+ * Reasoning effort levels a model may accept.
+ *
+ * A runtime list, with {@link ReasoningEffort} derived from it — the same shape as
+ * {@link MODEL_CAPABILITIES}: the hosts that validate `/effort` input and the adapters that forward it
+ * both need the values, and a hand-written copy in a host is how a level added here goes missing there.
+ */
+export const REASONING_EFFORT_VALUES = ["none", "low", "medium", "high", "xhigh", "max", "minimal"] as const;
+
 /** Reasoning effort values a model may accept. */
-export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "minimal";
+export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number];
+
+/** Whether a string is one of {@link REASONING_EFFORT_VALUES}. */
+export function isReasoningEffort(value: string): value is ReasoningEffort {
+  return (REASONING_EFFORT_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * The effort values to offer for a model: what it advertises (`reasoning_options` via models.dev), or
+ * the full known set when it advertises nothing.
+ *
+ * One definition: the TUI and the ACP host both validate `/effort <value>` against this, and a
+ * hand-rolled fallback in one host is how the two lists drift apart.
+ */
+export function supportedReasoningEfforts(
+  modelInfo: Pick<ModelInfo, "reasoningConfig"> | undefined
+): readonly ReasoningEffort[] {
+  const values = modelInfo?.reasoningConfig?.effortValues;
+  return values && values.length > 0 ? values : REASONING_EFFORT_VALUES;
+}
 
 /**
  * Wire field a model echoes its reasoning back on.

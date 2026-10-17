@@ -433,6 +433,13 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   list, or `Set` of tool names. A host's tool classification (row treatment, editor tool kind)
   derives from core's `present` descriptors / catalog; only a host-owned view may be *selected* by a
   core identifier. Adding or renaming a built-in is then a core-only edit.
+- A command's **argument grammar** is core too (`agent/commands/arguments.ts`): `parseModeCommand` /
+  `parseEffortCommand` return an intent, and each host maps that intent to its `AgentSessionCommand`s
+  plus its own message text. A host that re-parses the raw string is how ACP's `/mode execute` became
+  `mode.toggle` while the catalog advertised `execute`. `/resume`'s id-or-name rule is
+  `resolveSessionRef` (`agent-session/session-reference.ts`), and `ask_user` result assembly (including
+  the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/ask-user-tool.ts`).
+  Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:ask-user-output`.
 - Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
   `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
   (app/acp/im-bridge keep no built-in name literals in tool-identity positions).

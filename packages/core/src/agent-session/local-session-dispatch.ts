@@ -336,7 +336,10 @@ export async function dispatchLocalAgentSessionCommand(
  * (Shift+Tab) did not do it even in the TUI. One definition: the policy decides, the chat controller
  * settles.
  */
-function settleApprovalsIfAutoApproved(managed: ManagedAgent, chat: ReturnType<ManagedAgent["getChatController"]>): void {
+function settleApprovalsIfAutoApproved(
+  managed: ManagedAgent,
+  chat: ReturnType<ManagedAgent["getChatController"]>
+): void {
   if (!chat || !managed.shouldAutoApprovePendingTools()) return;
   // Not awaited: the returned promise is the PUMP, which runs the approved tools and the model turn
   // after them. A mode switch must return as soon as the decisions are recorded, or every caller of

@@ -1,3 +1,5 @@
+import { resolveSessionRef } from "@codent/core";
+
 import { bumpAgentUsage } from "../hooks/use-agent-usage.js";
 import { useDynamic } from "../hooks/use-dynamic.js";
 import { getActiveHost, getActiveSession } from "../utils/session-resolve.js";
@@ -58,15 +60,13 @@ registerBuiltinCommand("resume", {
     const sessions =
       (listed.data as { sessions?: Array<{ id: string; name: string; model: string }> } | undefined)?.sessions ?? [];
 
-    let sessionId = query;
-    const byId = sessions.find((s) => s.id === query);
-    if (!byId) {
-      const byName = sessions.find((s) => s.name === query || s.name.includes(query));
-      if (!byName) {
-        return { ok: false, error: `No session found matching "${query}"` };
-      }
-      sessionId = byName.id;
+    // `id` → exact name → name contains, in list order — core's rule, so `/resume <name>` means the
+    // same thing here and in every other host (the ACP slash command used to require an id).
+    const match = resolveSessionRef(sessions, query);
+    if (!match) {
+      return { ok: false, error: `No session found matching "${query}"` };
     }
+    const sessionId = match.id;
 
     const result = await session.dispatch({ type: "session.resume", sessionId });
     if (!result.ok) return { ok: false, error: result.error };

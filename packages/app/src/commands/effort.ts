@@ -1,25 +1,23 @@
+import {
+  parseEffortCommand,
+  REASONING_EFFORT_VALUES,
+  supportedReasoningEfforts,
+  type ReasoningEffort,
+} from "@codent/core";
+
 import { useThinkingLine } from "../hooks/use-thinking-line.js";
 import { getActiveSession } from "../utils/session-resolve.js";
 
 import { registerBuiltinCommand } from "./utils/registry.js";
 
-import type { ReasoningEffort } from "@codent/core";
-
-const EFFORT_VALUES: readonly ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh", "max", "minimal"];
-
-function isEffort(value: string): value is ReasoningEffort {
-  return (EFFORT_VALUES as readonly string[]).includes(value);
-}
-
 /**
  * Resolve the effort values the active model advertises (models.dev
- * `reasoning_options`), falling back to the known set.
+ * `reasoning_options`), falling back to the known set. Core owns both the list and the fallback
+ * (`supportedReasoningEfforts`) — the TUI and the ACP host must not offer different values.
  */
 function getModelEffortValues(): readonly ReasoningEffort[] {
   const session = getActiveSession();
-  const modelInfo = session?.getSnapshot()?.modelInfo;
-  const values = modelInfo?.reasoningConfig?.effortValues;
-  return values && values.length > 0 ? values : EFFORT_VALUES;
+  return supportedReasoningEfforts(session?.getSnapshot()?.modelInfo);
 }
 
 function getCurrentEffort(): ReasoningEffort | undefined {
@@ -57,73 +55,68 @@ registerBuiltinCommand("effort", {
     return options;
   },
   execute: async (args) => {
-    const trimmed = args.trim().toLowerCase();
     const displayActions = useThinkingLine.getActions();
+    // The `/effort` grammar lives in core: `display` is UI state, not an effort level, and a headless
+    // host that re-parsed it would either forward "display" to the model or reject a valid command.
+    const intent = parseEffortCommand(args);
 
-    // Display toggle (kept from the old /thinking command).
-    if (
-      trimmed === "display" ||
-      trimmed === "display on" ||
-      trimmed === "display off" ||
-      trimmed === "display toggle"
-    ) {
-      const sub = trimmed.split(/\s+/)[1] ?? "toggle";
-      let next: boolean;
-      if (sub === "on") next = true;
-      else if (sub === "off") next = false;
-      else next = displayActions.toggle();
-      displayActions.setEnabled(next);
-      return { ok: true, message: `Thinking display: ${next ? "on" : "off"}` };
+    switch (intent.kind) {
+      case "display": {
+        if (intent.action === "status") {
+          return { ok: true, message: `Thinking display: ${displayActions.getEnabled() ? "on" : "off"}` };
+        }
+        let next: boolean;
+        if (intent.action === "on") next = true;
+        else if (intent.action === "off") next = false;
+        else next = displayActions.toggle();
+        displayActions.setEnabled(next);
+        return { ok: true, message: `Thinking display: ${next ? "on" : "off"}` };
+      }
+
+      case "status": {
+        const session = getActiveSession();
+        if (!session) return { ok: false, error: "Agent not initialized" };
+        const effort = getCurrentEffort();
+        const supported = getModelEffortValues();
+        const model = session.getSnapshot().modelInfo?.name ?? session.getSnapshot().model;
+        return {
+          ok: true,
+          message:
+            `Model: ${model}\n` +
+            `Reasoning effort: ${effort ?? "default (unset)"}\n` +
+            `Supported: ${supported.join(", ")}\n` +
+            `Thinking display: ${displayActions.getEnabled() ? "on" : "off"}`,
+        };
+      }
+
+      case "clear": {
+        const session = getActiveSession();
+        if (!session) return { ok: false, error: "Agent not initialized" };
+        const result = await session.dispatch({ type: "effort.set", effort: undefined });
+        if (!result.ok) return { ok: false, error: result.error };
+        return { ok: true, message: "Reasoning effort: model default" };
+      }
+
+      case "invalid":
+        return {
+          ok: false,
+          error: `Unknown effort "${intent.value}". Use one of: ${REASONING_EFFORT_VALUES.join(", ")} or "off"/"status".`,
+        };
+
+      case "set": {
+        const session = getActiveSession();
+        if (!session) return { ok: false, error: "Agent not initialized" };
+        const supported = getModelEffortValues();
+        if (!supported.includes(intent.effort)) {
+          return {
+            ok: false,
+            error: `Model does not support effort "${intent.effort}". Supported: ${supported.join(", ") || "none"}`,
+          };
+        }
+        const result = await session.dispatch({ type: "effort.set", effort: intent.effort });
+        if (!result.ok) return { ok: false, error: result.error };
+        return { ok: true, message: `Reasoning effort: ${intent.effort}` };
+      }
     }
-
-    if (trimmed === "display?") {
-      return { ok: true, message: `Thinking display: ${displayActions.getEnabled() ? "on" : "off"}` };
-    }
-
-    const session = getActiveSession();
-    if (!session) {
-      return { ok: false, error: "Agent not initialized" };
-    }
-
-    if (trimmed === "" || trimmed === "status") {
-      const effort = getCurrentEffort();
-      const supported = getModelEffortValues();
-      const display = displayActions.getEnabled();
-      const model = session.getSnapshot().modelInfo?.name ?? session.getSnapshot().model;
-      return {
-        ok: true,
-        message:
-          `Model: ${model}\n` +
-          `Reasoning effort: ${effort ?? "default (unset)"}\n` +
-          `Supported: ${supported.join(", ")}\n` +
-          `Thinking display: ${display ? "on" : "off"}`,
-      };
-    }
-
-    // off = clear to model default
-    if (trimmed === "off") {
-      const result = await session.dispatch({ type: "effort.set", effort: undefined });
-      if (!result.ok) return { ok: false, error: result.error };
-      return { ok: true, message: "Reasoning effort: model default" };
-    }
-
-    if (!isEffort(trimmed)) {
-      return {
-        ok: false,
-        error: `Unknown effort "${trimmed}". Use one of: ${EFFORT_VALUES.join(", ")} or "off"/"status".`,
-      };
-    }
-
-    const supported = getModelEffortValues();
-    if (!supported.includes(trimmed)) {
-      return {
-        ok: false,
-        error: `Model does not support effort "${trimmed}". Supported: ${supported.join(", ") || "none"}`,
-      };
-    }
-
-    const result = await session.dispatch({ type: "effort.set", effort: trimmed });
-    if (!result.ok) return { ok: false, error: result.error };
-    return { ok: true, message: `Reasoning effort: ${trimmed}` };
   },
 });

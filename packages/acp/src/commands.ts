@@ -7,7 +7,15 @@
  * command produced.
  */
 
-import { findBuiltinCommand, listAdvertisableCommands } from "@codent/core";
+import {
+  findBuiltinCommand,
+  listAdvertisableCommands,
+  parseEffortCommand,
+  parseModeCommand,
+  REASONING_EFFORT_VALUES,
+  resolveSessionRef,
+  supportedReasoningEfforts,
+} from "@codent/core";
 
 import type { AcpCommands } from "./types.js";
 import type { AgentSession, AgentSessionSnapshot } from "@codent/core";
@@ -84,23 +92,24 @@ export async function dispatchSlashCommand(
           : await session.dispatch({ type: "rename.generate" })
       );
     case "session.resume": {
-      if (!parsed.args[0]) return { handled: true, message: "Usage: /resume <session-id>" };
-      return finish(await session.dispatch({ type: "session.resume", sessionId: parsed.args[0] }));
+      const query = parsed.raw.trim();
+      if (!query) return { handled: true, message: "Usage: /resume <session-id or name>" };
+      const listed = await session.dispatch({ type: "session.list" });
+      if (!listed.ok) return finish(listed);
+      const sessions = (listed.data as { sessions?: Array<{ id: string; name: string }> } | undefined)?.sessions ?? [];
+      // `/resume <name>` is what the catalog advertises; resolving the query is core's rule
+      // (`resolveSessionRef`), not this host's, so the id-vs-name grammar cannot drift.
+      const match = resolveSessionRef(sessions, query);
+      if (!match) return { handled: true, message: `No session found matching "${query}"` };
+      return finish(await session.dispatch({ type: "session.resume", sessionId: match.id }));
     }
     case "session.clone":
       await session.dispatch({ type: "session.clone", ...(parsed.raw ? { name: parsed.raw } : {}) });
       return { handled: true };
-    case "mode.set": {
-      const mode = mapModeArg(parsed.args[0]);
-      if (mode === "toggle") await session.dispatch({ type: "mode.toggle" });
-      else await session.dispatch({ type: "mode.set", mode });
-      return { handled: true };
-    }
-    case "effort.set": {
-      const effort = parsed.args[0] === "off" ? undefined : (parsed.args[0] as never);
-      await session.dispatch({ type: "effort.set", effort });
-      return { handled: true };
-    }
+    case "mode.set":
+      return dispatchModeCommand(session, parsed.raw);
+    case "effort.set":
+      return dispatchEffortCommand(session, parsed.raw);
     case "usage.history":
       return finish(await session.dispatch({ type: "usage.history" }));
     default:
@@ -115,9 +124,121 @@ function finish(result: { ok: boolean; data?: unknown; error?: string }): SlashR
   return { handled: true, message: data?.message };
 }
 
-function mapModeArg(arg: string | undefined): "normal" | "auto" | "plan" | "toggle" {
-  if (arg === "plan") return "plan";
-  if (arg === "auto") return "auto";
-  if (arg === "off" || arg === "normal") return "normal";
-  return "toggle";
+const MODE_USAGE =
+  "Usage: /mode [plan|auto|off|switch plan|switch auto|status|execute|done|cancel|save [name]|load <name>|list]";
+
+/**
+ * `/mode <args>` — the grammar is core's ({@link parseModeCommand}), so this host and the TUI dispatch
+ * the same intent. It used to recognise only `plan|auto|off` and treat everything else as a toggle,
+ * which made the advertised `/mode execute|done|cancel|status|save|load|list` flip the mode instead.
+ */
+async function dispatchModeCommand(session: AgentSession, rawArgs: string): Promise<SlashResult> {
+  const intent = parseModeCommand(rawArgs);
+  if (!intent) return { handled: true, message: MODE_USAGE };
+
+  switch (intent.kind) {
+    case "set":
+      await session.dispatch({ type: "mode.set", mode: intent.mode });
+      return { handled: true };
+    case "toggle":
+      await session.dispatch({ type: "mode.toggle" });
+      return { handled: true };
+    case "status":
+      return { handled: true, message: modeStatusLine(session.getSnapshot()) };
+    case "execute": {
+      const result = await session.dispatch({ type: "plan.execute" });
+      if (!result.ok) return finish(result);
+      const data = result.data as { queued?: boolean } | undefined;
+      return {
+        handled: true,
+        message: data?.queued ? "Plan queued — starts after the current run finishes" : "Building approved plan…",
+      };
+    }
+    case "done": {
+      const result = await session.dispatch({ type: "plan.complete" });
+      return result.ok ? { handled: true, message: "Plan complete — plan mode off" } : finish(result);
+    }
+    case "cancel": {
+      const result = await session.dispatch({ type: "plan.cancel" });
+      return result.ok ? { handled: true, message: "Building paused — back to review" } : finish(result);
+    }
+    case "save": {
+      const result = await session.dispatch({ type: "plan.save", nameHint: intent.name });
+      if (!result.ok) return finish(result);
+      const path = (result.data as { path?: string } | undefined)?.path;
+      return { handled: true, message: `Plan saved to ${path ?? "workspace"}` };
+    }
+    case "load": {
+      const result = await session.dispatch({ type: "plan.load", name: intent.name });
+      if (!result.ok) return finish(result);
+      const data = result.data as { path?: string; stepCount?: number } | undefined;
+      return {
+        handled: true,
+        message: `Loaded ${data?.path ?? intent.name} (${data?.stepCount ?? 0} steps) — review, then /mode execute`,
+      };
+    }
+    case "list": {
+      const result = await session.dispatch({ type: "plan.list" });
+      if (!result.ok) return finish(result);
+      const files = (result.data as { files?: string[] } | undefined)?.files ?? [];
+      return {
+        handled: true,
+        message: files.length > 0 ? `Saved plans:\n${files.map((file) => `- ${file}`).join("\n")}` : "No saved plans",
+      };
+    }
+    default:
+      return { handled: true, message: MODE_USAGE };
+  }
+}
+
+/** `/effort <args>` — core's grammar; `display` is UI state a headless host cannot keep. */
+async function dispatchEffortCommand(session: AgentSession, rawArgs: string): Promise<SlashResult> {
+  const intent = parseEffortCommand(rawArgs);
+
+  switch (intent.kind) {
+    case "display":
+      return { handled: true, message: "Thinking display is a terminal-UI setting; it has no ACP equivalent" };
+    case "status": {
+      const effort = session.getSnapshot().reasoningEffort;
+      return { handled: true, message: `Reasoning effort: ${effort ?? "model default"}` };
+    }
+    case "clear":
+      await session.dispatch({ type: "effort.set", effort: undefined });
+      return { handled: true, message: "Reasoning effort: model default" };
+    case "set": {
+      const supported = supportedReasoningEfforts(session.getSnapshot().modelInfo);
+      if (!supported.includes(intent.effort)) {
+        return {
+          handled: true,
+          message: `Model does not support effort "${intent.effort}". Supported: ${supported.join(", ") || "none"}`,
+        };
+      }
+      await session.dispatch({ type: "effort.set", effort: intent.effort });
+      return { handled: true, message: `Reasoning effort: ${intent.effort}` };
+    }
+    case "invalid":
+      return {
+        handled: true,
+        message: `Unknown effort "${intent.value}". Use one of: ${REASONING_EFFORT_VALUES.join(", ")} or "off"/"status"`,
+      };
+    default:
+      return { handled: true };
+  }
+}
+
+/** One line for `/mode status`; the plan phase is what a client cannot infer. */
+function modeStatusLine(snapshot: AgentSessionSnapshot): string {
+  if (snapshot.plan.phase !== "off") {
+    const phase =
+      snapshot.plan.phase === "ready"
+        ? "review"
+        : snapshot.plan.phase === "executing"
+          ? "building"
+          : snapshot.plan.phase;
+    const steps = snapshot.plan.steps.length > 0 ? ` — ${snapshot.plan.steps.length} steps` : "";
+    return `Mode: plan (${phase})${steps}`;
+  }
+  return snapshot.autoMode
+    ? "Mode: auto — tools run without approval"
+    : "Mode: normal — tools require approval when configured";
 }

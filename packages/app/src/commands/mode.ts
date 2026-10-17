@@ -1,11 +1,62 @@
+import { parseModeCommand } from "@codent/core";
+
 import { getActiveSession } from "../utils/session-resolve.js";
 
 import { registerBuiltinCommand } from "./utils/registry.js";
 
 import type { CommandOption, CommandResult } from "./utils/types.js";
-import type { AgentMode } from "@codent/core";
+import type { AgentMode, AgentSession } from "@codent/core";
 
 const PLAN_LOAD_LIMIT = 15;
+
+const MODE_USAGE =
+  "Usage: /mode | /mode plan | /mode auto | /mode off | /mode status | /mode execute | /mode done | /mode cancel | /mode save [name] | /mode load <name> | /mode list";
+
+/** `/mode status` — composed from the session snapshot, so it never reports a stale mode. */
+function formatModeStatus(session: AgentSession): CommandResult {
+  const snapshot = session.getSnapshot();
+  const mode: AgentMode = snapshot.mode;
+
+  if (mode === "plan") {
+    const state = snapshot.plan;
+    const todos = snapshot.todos ?? [];
+    let completed = 0;
+    for (const item of todos) if (item.status === "completed") completed += 1;
+    const displayPhase =
+      state.phase === "ready"
+        ? "review"
+        : state.phase === "executing"
+          ? "building"
+          : state.phase === "planning"
+            ? "planning"
+            : state.phase;
+    const progress =
+      state.phase === "executing" && todos.length > 0
+        ? ` (${completed}/${todos.length} todos)`
+        : state.steps.length > 0
+          ? ` (${state.steps.length} steps)`
+          : "";
+    const path = state.planFilePath ? ` · ${state.planFilePath}` : "";
+    const preserved =
+      state.preservedExistingTodos && state.phase === "ready"
+        ? " — existing todos kept; /mode execute will replace them"
+        : "";
+    const next =
+      state.phase === "ready"
+        ? " — run /mode execute to Build"
+        : state.phase === "executing"
+          ? " — /mode cancel to pause"
+          : state.phase === "retro"
+            ? " — complete_plan or /mode done"
+            : state.phase === "planning"
+              ? " — explore with task/read tools, then create_plan (or ## Plan)"
+              : "";
+    return { ok: true, message: `Mode: plan (${displayPhase})${progress}${path}${preserved}${next}` };
+  }
+
+  if (mode === "auto") return { ok: true, message: "Mode: auto — tools run without approval" };
+  return { ok: true, message: "Mode: normal — tools require approval when configured" };
+}
 
 registerBuiltinCommand("mode", {
   immediate: false,
@@ -80,11 +131,11 @@ registerBuiltinCommand("mode", {
       return { ok: false, error: "Agent not initialized" };
     }
 
-    const trimmed = args.trim();
-    const [headRaw = "", secondRaw = ""] = trimmed.toLowerCase().split(/\s+/);
-    const head = headRaw;
-    const second = secondRaw;
-    const nameArg = trimmed.split(/\s+/).slice(1).join(" ").trim();
+    // The grammar lives in core (`parseModeCommand`): the same `/mode execute` must mean the same thing
+    // here and in every other host, and a host that restates it is how ACP ended up treating every
+    // subcommand it did not recognise as a toggle.
+    const intent = parseModeCommand(args);
+    if (!intent) return { ok: false, error: MODE_USAGE };
     const mode: AgentMode = session.getSnapshot().mode;
 
     /** Single dispatch: core handles mutual exclusivity; message reflects the resulting mode. */
@@ -112,133 +163,78 @@ registerBuiltinCommand("mode", {
       };
     };
 
-    if (head === "" || head === "toggle") {
-      // Same cycle as Shift+Tab: normal → auto → plan → off
-      const result = await session.dispatch({ type: "mode.toggle" });
-      if (!result.ok) return { ok: false, error: result.error };
-      const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? "normal";
-      if (applied === "auto") {
-        return { ok: true, message: "Auto mode on — tools run without approval" };
+    switch (intent.kind) {
+      case "toggle": {
+        // Same cycle as Shift+Tab: normal → auto → plan → off
+        const result = await session.dispatch({ type: "mode.toggle" });
+        if (!result.ok) return { ok: false, error: result.error };
+        const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? "normal";
+        if (applied === "auto") {
+          return { ok: true, message: "Auto mode on — tools run without approval" };
+        }
+        if (applied === "plan") {
+          return {
+            ok: true,
+            message: "Plan mode on — explore read-only (prefer task), then create_plan when ready",
+          };
+        }
+        return { ok: true, message: "Mode off — tools require approval when configured" };
       }
-      if (applied === "plan") {
+
+      case "set":
+        return applyMode(intent.mode);
+
+      case "status":
+        return formatModeStatus(session);
+
+      case "execute": {
+        const result = await session.dispatch({ type: "plan.execute" });
+        if (!result.ok) return { ok: false, error: result.error ?? "Cannot execute plan" };
+        const data = result.data as { queued?: boolean; replacedExistingTodos?: boolean } | undefined;
+        const parts = ["Building approved plan…"];
+        if (data?.queued) parts.push("(queued — starts after the current run finishes)");
+        if (data?.replacedExistingTodos) parts.push("(replaced existing todos with plan steps)");
+        return { ok: true, message: parts.join(" ") };
+      }
+
+      case "done": {
+        const result = await session.dispatch({ type: "plan.complete" });
+        if (!result.ok) return { ok: false, error: result.error };
+        return { ok: true, message: "Plan complete — plan mode off" };
+      }
+
+      case "cancel": {
+        const result = await session.dispatch({ type: "plan.cancel" });
+        if (!result.ok) return { ok: false, error: result.error || "Not building a plan — nothing to cancel" };
+        return { ok: true, message: "Building paused — back to review (read-only). Run /mode execute to Build." };
+      }
+
+      case "save": {
+        const result = await session.dispatch({ type: "plan.save", nameHint: intent.name });
+        if (!result.ok) return { ok: false, error: result.error ?? "Save failed" };
+        const path = (result.data as { path?: string } | undefined)?.path;
+        return { ok: true, message: `Plan saved to ${path ?? "workspace"}` };
+      }
+
+      case "load": {
+        const result = await session.dispatch({ type: "plan.load", name: intent.name });
+        if (!result.ok) return { ok: false, error: result.error ?? "Load failed" };
+        const data = result.data as { path?: string; stepCount?: number } | undefined;
         return {
           ok: true,
-          message: "Plan mode on — explore read-only (prefer task), then create_plan when ready",
+          message: `Loaded ${data?.path ?? intent.name} (${data?.stepCount ?? 0} steps) — review. Run /mode execute to Build.`,
         };
       }
-      return { ok: true, message: "Mode off — tools require approval when configured" };
-    }
 
-    if (head === "plan") return applyMode(second === "off" ? "normal" : "plan");
-    if (head === "auto") return applyMode(second === "off" ? "normal" : "auto");
-
-    if (head === "switch") {
-      if (second === "plan") return applyMode("plan");
-      if (second === "auto") return applyMode("auto");
-      return { ok: false, error: "Usage: /mode switch plan | /mode switch auto" };
-    }
-
-    if (head === "off") return applyMode("normal");
-
-    if (head === "status") {
-      if (mode === "plan") {
-        const state = session.getSnapshot().plan;
-        // Todo progress straight from the session snapshot (no store projection).
-        const todos = session.getSnapshot().todos ?? [];
-        let completed = 0;
-        for (const item of todos) if (item.status === "completed") completed += 1;
-        const stats = { total: todos.length, completed };
-        const displayPhase =
-          state.phase === "ready"
-            ? "review"
-            : state.phase === "executing"
-              ? "building"
-              : state.phase === "planning"
-                ? "planning"
-                : state.phase;
-        const progress =
-          state.phase === "executing" && stats.total > 0
-            ? ` (${stats.completed}/${stats.total} todos)`
-            : state.steps.length > 0
-              ? ` (${state.steps.length} steps)`
-              : "";
-        const path = state.planFilePath ? ` · ${state.planFilePath}` : "";
-        const preserved =
-          state.preservedExistingTodos && state.phase === "ready"
-            ? " — existing todos kept; /mode execute will replace them"
-            : "";
-        const next =
-          state.phase === "ready"
-            ? " — run /mode execute to Build"
-            : state.phase === "executing"
-              ? " — /mode cancel to pause"
-              : state.phase === "retro"
-                ? " — complete_plan or /mode done"
-                : state.phase === "planning"
-                  ? " — explore with task/read tools, then create_plan (or ## Plan)"
-                  : "";
-        return {
-          ok: true,
-          message: `Mode: plan (${displayPhase})${progress}${path}${preserved}${next}`,
-        };
+      case "list": {
+        const result = await session.dispatch({ type: "plan.list" });
+        if (!result.ok) return { ok: false, error: result.error };
+        const files = (result.data as { files?: string[] } | undefined)?.files ?? [];
+        if (files.length === 0) return { ok: true, message: "No saved plans in .agents/plans/" };
+        return { ok: true, message: `Saved plans:\n${files.map((file) => `- ${file}`).join("\n")}` };
       }
-      if (mode === "auto") return { ok: true, message: "Mode: auto — tools run without approval" };
-      return { ok: true, message: "Mode: normal — tools require approval when configured" };
     }
 
-    if (head === "execute" || head === "run" || head === "build") {
-      const result = await session.dispatch({ type: "plan.execute" });
-      if (!result.ok) return { ok: false, error: result.error ?? "Cannot execute plan" };
-      const data = result.data as { queued?: boolean; replacedExistingTodos?: boolean } | undefined;
-      const parts = ["Building approved plan…"];
-      if (data?.queued) parts.push("(queued — starts after the current run finishes)");
-      if (data?.replacedExistingTodos) parts.push("(replaced existing todos with plan steps)");
-      return { ok: true, message: parts.join(" ") };
-    }
-
-    if (head === "done" || head === "complete") {
-      const result = await session.dispatch({ type: "plan.complete" });
-      if (!result.ok) return { ok: false, error: result.error };
-      return { ok: true, message: "Plan complete — plan mode off" };
-    }
-
-    if (head === "cancel") {
-      const result = await session.dispatch({ type: "plan.cancel" });
-      if (!result.ok) return { ok: false, error: result.error || "Not building a plan — nothing to cancel" };
-      return { ok: true, message: "Building paused — back to review (read-only). Run /mode execute to Build." };
-    }
-
-    if (head === "save") {
-      const saveName = nameArg || undefined;
-      const result = await session.dispatch({ type: "plan.save", nameHint: saveName });
-      if (!result.ok) return { ok: false, error: result.error ?? "Save failed" };
-      const path = (result.data as { path?: string } | undefined)?.path;
-      return { ok: true, message: `Plan saved to ${path ?? "workspace"}` };
-    }
-
-    if (head === "load") {
-      if (!nameArg) return { ok: false, error: "Usage: /mode load <name>" };
-      const result = await session.dispatch({ type: "plan.load", name: nameArg });
-      if (!result.ok) return { ok: false, error: result.error ?? "Load failed" };
-      const data = result.data as { path?: string; stepCount?: number } | undefined;
-      return {
-        ok: true,
-        message: `Loaded ${data?.path ?? nameArg} (${data?.stepCount ?? 0} steps) — review. Run /mode execute to Build.`,
-      };
-    }
-
-    if (head === "list") {
-      const result = await session.dispatch({ type: "plan.list" });
-      if (!result.ok) return { ok: false, error: result.error };
-      const files = (result.data as { files?: string[] } | undefined)?.files ?? [];
-      if (files.length === 0) return { ok: true, message: "No saved plans in .agents/plans/" };
-      return { ok: true, message: `Saved plans:\n${files.map((f) => `- ${f}`).join("\n")}` };
-    }
-
-    return {
-      ok: false,
-      error:
-        "Usage: /mode | /mode plan | /mode auto | /mode off | /mode status | /mode execute | /mode done | /mode cancel | /mode save [name] | /mode load <name> | /mode list",
-    };
+    return { ok: false, error: MODE_USAGE };
   },
 });

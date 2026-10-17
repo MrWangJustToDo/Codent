@@ -18,6 +18,12 @@ export const askUserOutputSchema = z.object({
   selected: z.array(z.string()).optional().describe("The selected option labels, one per entry (multi-select)."),
   draft: z.string().optional().describe("Free-form custom answer typed by the user, if any."),
   durationMs: z.number().describe("Execution duration in milliseconds."),
+  /**
+   * The question was never answered (declined, cancelled, or the client could not ask). Part of the
+   * contract rather than a host extra: a host that emitted it outside the schema had it stripped by
+   * any parse, so "cancelled" and "answered with an empty string" looked identical downstream.
+   */
+  cancelled: z.boolean().optional().describe("The question was declined or cancelled without an answer."),
   ...toolOutputBaseSchema.shape,
 });
 

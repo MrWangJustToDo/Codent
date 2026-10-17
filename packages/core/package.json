@@ -68,6 +68,8 @@
     "validate:accessor-convention": "node scripts/validate-accessor-convention.mjs",
     "validate:layer-boundaries": "node scripts/validate-layer-boundaries.mjs",
     "validate:auto-mode-approvals": "pnpm run build && node scripts/validate-auto-mode-approvals.mjs",
+    "validate:builtin-command-arguments": "node scripts/validate-builtin-command-arguments.mjs",
+    "validate:ask-user-output": "pnpm run build && node scripts/validate-ask-user-output.mjs",
     "validate:module-organization": "node scripts/validate-module-organization.mjs",
     "validate:no-inline-byte-truncation": "node scripts/validate-no-inline-byte-truncation.mjs",
     "validate:no-inline-char-truncation": "node scripts/validate-no-inline-char-truncation.mjs",
