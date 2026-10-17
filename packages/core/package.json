@@ -93,6 +93,7 @@
     "validate:lift-tool-media": "pnpm run build && node scripts/validate-lift-tool-media.mjs",
     "validate:estimate-image-tokens": "pnpm run build && node scripts/validate-estimate-image-tokens.mjs",
     "validate:read-file-model-output": "pnpm run build && node scripts/validate-read-file-model-output.mjs",
+    "validate:code-mode-model-output": "pnpm run build && node scripts/validate-code-mode-model-output.mjs",
     "validate:agent-ui-channel": "pnpm run build && node scripts/validate-agent-ui-channel.mjs",
     "validate:suppress-replayed-tool-chunks": "pnpm run build && node scripts/validate-suppress-replayed-tool-chunks.mjs",
     "validate:suppress-messages-snapshot": "pnpm run build && node scripts/validate-suppress-messages-snapshot.mjs",

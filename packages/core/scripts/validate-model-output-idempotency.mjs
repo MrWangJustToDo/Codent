@@ -193,6 +193,11 @@ const DELEGATES = [
     to: "agent/tools/util/format-read-file-result.ts",
     why: "the projection delegates to the shared formatter, which owns its guard",
   },
+  {
+    file: "agent/code-mode/extension.ts",
+    to: "agent/code-mode/model-output.ts",
+    why: "the projection delegates to the code-mode media lifter, which owns its guard",
+  },
 ];
 
 {

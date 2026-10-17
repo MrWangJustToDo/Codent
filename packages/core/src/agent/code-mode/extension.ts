@@ -27,6 +27,7 @@ import { createCodeMode } from "@tanstack/ai-code-mode";
 import { errorMessage } from "../../utils/errors.js";
 
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
+import { projectCodeModeModelOutput } from "./model-output.js";
 
 import type { ExtensionAPI, ExtensionContext, ExtensionToolDefinition, ToolCallResult } from "../extension/types.js";
 import type { AnyServerTool, LazyToolsConfig, SchemaInput } from "@tanstack/ai";
@@ -211,7 +212,13 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
         lazyToolsConfig: options.lazyToolsConfig,
       });
 
-      ctx.registerTool(toExtensionTool(tool, ctx.logger));
+      // `external_*` bindings call a tool's RAW execute, bypassing its own `toModelOutput`, so
+      // media a script returns arrives wrapped as `{ success, result: { type: "image", base64 } }`.
+      // Lift it back to multimodal parts here or the model only ever sees base64 text.
+      ctx.registerTool({
+        ...toExtensionTool(tool, ctx.logger),
+        toModelOutput: ({ output }) => projectCodeModeModelOutput(output),
+      });
       if (discoveryTool) {
         ctx.registerTool(toExtensionTool(discoveryTool, ctx.logger));
       }

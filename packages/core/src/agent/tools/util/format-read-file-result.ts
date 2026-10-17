@@ -3,6 +3,59 @@ import { isProjectedModelContent } from "../runtime/projected-model-content.js";
 
 import type { ReadFileOutput } from "../read-file-tool.js";
 import type { ModelToolContent } from "../runtime/to-model-output-registry.js";
+import type { ContentPart } from "@tanstack/ai";
+
+/**
+ * The fields the model-facing rendering needs from a media output.
+ *
+ * Deliberately structural rather than `Extract<ReadFileOutput, { type: "image" | "pdf" }>`: the
+ * second consumer is code-mode's `execute_typescript` lift, which holds the same media but not the
+ * read-file envelope (`cachedOutputPath`, `durationMs`). Naming the fields once here is what lets
+ * both paths render a file identically instead of keeping two copies of the wording.
+ */
+export interface MediaRenderInput {
+  type: "image" | "pdf";
+  path: string;
+  base64: string;
+  /** Byte size; omitted when the producer did not record one (the line then has no size). */
+  size?: number;
+  /** Image MIME type; defaults to `image/png` when the source did not record one. */
+  mimeType?: string;
+  extractedText?: string;
+  pageCount?: number;
+}
+
+/** Shown when a PDF has no extractable text layer (scanned or empty), so the model is told why. */
+const PDF_NO_TEXT_LAYER =
+  "No extractable text layer (scanned or empty PDF). Document binary is attached for providers that accept multimodal tool documents.";
+
+/**
+ * The text line and multimodal part for one media file.
+ *
+ * `read_file` projects through this directly; code-mode's `execute_typescript` collects the lines
+ * into one text part and appends the parts, because a script may return several files. Sharing the
+ * rendering is the point: the same file must not be described two different ways to the model
+ * depending on whether it was read directly or from inside the sandbox.
+ */
+export function describeReadFileMedia(output: MediaRenderInput): { line: string; part: ContentPart } {
+  const size = output.size != null ? ` (${formatByteSize(output.size)})` : "";
+  if (output.type === "image") {
+    return {
+      line: `Image read: ${output.path}${size}`,
+      part: {
+        type: "image",
+        source: { type: "data", value: output.base64, mimeType: output.mimeType ?? "image/png" },
+      },
+    };
+  }
+
+  const header = `PDF read: ${output.path}${size}${output.pageCount != null ? `, ${output.pageCount} pages` : ""}`;
+  const body = output.extractedText?.trim() || PDF_NO_TEXT_LAYER;
+  return {
+    line: `${header}\n\n${body}`,
+    part: { type: "document", source: { type: "data", value: output.base64, mimeType: "application/pdf" } },
+  };
+}
 
 /**
  * Convert read_file execute output for the model via TanStack {@link normalizeToolResult}.
@@ -19,30 +72,9 @@ export function formatReadFileToolResult(output: ReadFileOutput): ModelToolConte
   // breaking the `image_url` lift.
   if (isProjectedModelContent(output)) return output;
 
-  if (output.type === "image") {
-    return [
-      { type: "text", content: `Image read: ${output.path} (${formatByteSize(output.size)})` },
-      {
-        type: "image",
-        source: { type: "data", value: output.base64, mimeType: output.mimeType },
-      },
-    ];
-  }
-
-  if (output.type === "pdf") {
-    const header = `PDF read: ${output.path} (${formatByteSize(output.size)}${
-      output.pageCount != null ? `, ${output.pageCount} pages` : ""
-    })`;
-    const body =
-      output.extractedText?.trim() ||
-      "No extractable text layer (scanned or empty PDF). Document binary is attached for providers that accept multimodal tool documents.";
-    return [
-      { type: "text", content: `${header}\n\n${body}` },
-      {
-        type: "document",
-        source: { type: "data", value: output.base64, mimeType: "application/pdf" },
-      },
-    ];
+  if (output.type === "image" || output.type === "pdf") {
+    const { line, part } = describeReadFileMedia(output);
+    return [{ type: "text", content: line }, part];
   }
 
   return JSON.stringify(output);

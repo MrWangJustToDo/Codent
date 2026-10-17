@@ -40,6 +40,9 @@ export {
 } from "../agent/stream/stream-errors.js";
 export { AgentConfigSchema } from "../managers/agent-types.js";
 export { formatReadFileToolResult } from "../agent/tools/util/format-read-file-result.js";
+// Code-mode's `execute_typescript` projection: a script that returns a media result from an
+// `external_*` binding must reach the model as multimodal parts, not base64 text.
+export { projectCodeModeModelOutput } from "../agent/code-mode/model-output.js";
 export {
   estimateImageInputTokens,
   estimateImageTokensFromDimensions,
