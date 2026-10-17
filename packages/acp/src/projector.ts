@@ -131,6 +131,10 @@ export class AcpProjector {
   private readonly emittedUserMessages = new Set<string>();
   private priorTitle: string | undefined;
   private priorMode: string | undefined;
+  /** The ACP message id of the turn being emitted, and source-message → turn-id map (`syncTurnIds`).
+   *  Cursors stay per SOURCE message; only the emitted id is the turn's. */
+  private turnId: string | undefined;
+  private readonly turnIds = new Map<string, string>();
   private unsubscribe: (() => void) | null = null;
   /**
    * The compaction currently on the wire, if any. Its id is the protocol's upsert key, so every
@@ -174,6 +178,7 @@ export class AcpProjector {
    * cursors so the first post-load delta does not re-send already-replayed text.
    */
   replayFrom(snapshot: AgentSessionSnapshot): void {
+    this.syncTurnIds(snapshot.messages);
     for (const message of snapshot.messages) {
       // Synthetic `<ctx kind=…>` rows are persisted for the model, not for the reader: replaying one
       // would show the injected context as if the user had typed it.
@@ -194,13 +199,13 @@ export class AcpProjector {
         if (part.type === "thinking") {
           this.options.emit({
             sessionUpdate: "agent_thought_chunk",
-            messageId: message.id,
+            messageId: this.acpIdOf(message),
             content: textBlock(part.content),
           });
         } else if (part.type === "text") {
           this.options.emit({
             sessionUpdate: "agent_message_chunk",
-            messageId: message.id,
+            messageId: this.acpIdOf(message),
             content: textBlock(part.content),
           });
         } else if (part.type === "tool-call") {
@@ -255,7 +260,37 @@ export class AcpProjector {
   // Messages: text, thinking, tool calls
   // --------------------------------------------------------------------------
 
+  /**
+   * One ACP `messageId` per TURN, not per model step.
+   *
+   * The protocol: "a changed `messageId` indicates a new message". Core gives each model step its own
+   * message id (`chat-completions-…`, `anthropic-…`), so passing them through told a client that one turn
+   * was several messages — two reasoning-only rows and then the answer, which reads as duplicated
+   * thinking (and is what arrives out of order on a replay). The adapters Zed ships never send an id at
+   * all, landing every chunk on the current message; one id per turn is that same grouping with an
+   * explicit key, so a replay can patch a message instead of appending blind.
+   *
+   * A user message opens a turn; the turn's first assistant message names it, and every later assistant
+   * message of that turn maps onto the same id. Stable across ticks and replays, because those ids are.
+   */
+  private syncTurnIds(messages: UIMessage[]): void {
+    for (const message of messages) {
+      if (message.role === "user") {
+        this.turnId = undefined;
+        continue;
+      }
+      if (message.role !== "assistant") continue;
+      this.turnId ??= message.id;
+      this.turnIds.set(message.id, this.turnId);
+    }
+  }
+
+  private acpIdOf(message: UIMessage): string {
+    return this.turnIds.get(message.id) ?? message.id;
+  }
+
   private emitMessages(messages: UIMessage[]): void {
+    this.syncTurnIds(messages);
     for (const message of messages) {
       if (message.role === "assistant") {
         this.emitAssistantText(message);
@@ -322,7 +357,7 @@ export class AcpProjector {
     if (text.length > cursor.text) {
       this.options.emit({
         sessionUpdate: "agent_message_chunk",
-        messageId: message.id,
+        messageId: this.acpIdOf(message),
         content: textBlock(text.slice(cursor.text)),
       });
       cursor.text = text.length;
@@ -346,7 +381,7 @@ export class AcpProjector {
     if (thought.length > cursor.thought) {
       this.options.emit({
         sessionUpdate: "agent_thought_chunk",
-        messageId: message.id,
+        messageId: this.acpIdOf(message),
         content: textBlock(thought.slice(cursor.thought)),
       });
       cursor.thought = thought.length;
