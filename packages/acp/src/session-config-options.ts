@@ -26,7 +26,7 @@ import { RequestError } from "@agentclientprotocol/sdk";
 import { resolveModelInfoFromModelsDev } from "@codent/core";
 
 import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
-import type { AgentSessionSnapshot, AgentMode, AgentSession, ModelStyle } from "@codent/core";
+import type { AgentSessionSnapshot, AgentMode, AgentSession, ModelCatalogRead, ModelStyle } from "@codent/core";
 
 export const MODE_IDS: AgentMode[] = ["normal", "auto", "plan"];
 export const MODE_META: Record<AgentMode, { name: string; description: string }> = {
@@ -106,6 +106,20 @@ function modeConfigOption(current: AgentMode): SessionConfigOption {
  * a resumed session: its snapshot carries the model id but not the connection, so this is the best
  * available answer rather than a claim.
  */
+/**
+ * The read → the entry list this module projects. The read is the runtime's (`readModels()`, one
+ * `loadModels` result); index = position, which is exactly what `encodeModelChoice` encodes.
+ */
+function entriesOf(read: ModelCatalogRead | undefined): AcpModelCatalogEntry[] | undefined {
+  return read?.entries.map((entry, index) => ({
+    index,
+    style: entry.style,
+    baseURL: entry.baseURL,
+    ...(entry.apiKey ? { apiKey: entry.apiKey } : {}),
+    models: entry.models,
+  }));
+}
+
 function resolveCurrentEntry(
   catalog: AcpModelCatalogEntry[],
   current: string,
@@ -126,19 +140,6 @@ function resolveCurrentEntry(
  * list. A current model missing from the catalog (the file was edited under a live session, or a
  * restored session predates it) is therefore inserted, unencoded, rather than dropped.
  */
-/** The model option when there is no catalog to choose from — one value, naming what runs. */
-function fixedModelOption(current: string): SessionConfigOption {
-  return {
-    id: "model",
-    name: "Model",
-    description: "Fixed by the host (remote provider or explicit flags) — not switchable here",
-    category: "model",
-    type: "select",
-    currentValue: current,
-    options: [{ value: current, name: current }],
-  };
-}
-
 function modelConfigOption(
   catalog: AcpModelCatalogEntry[],
   current: string,
@@ -177,18 +178,16 @@ function modelConfigOption(
  */
 export function sessionConfigOptions(
   snapshot: AgentSessionSnapshot,
-  catalog: AcpModelCatalogEntry[] | undefined,
+  read: ModelCatalogRead | undefined,
   selectedEntryIndex?: number
 ): SessionConfigOption[] {
   const mode = modeConfigOption(snapshot.mode);
+  const catalog = entriesOf(read);
   const selectable = catalog?.some((entry) => entry.models.length > 0) ?? false;
   if (!snapshot.model) return [mode];
-  // No catalog, but a model IS in use — the remote provider plane and the explicit-flags path both land
-  // here (the model is decided outside this process). Omitting the option left the client with no model
-  // at all, which reads as "model selection is unavailable" (reported under `--remote-provider`), so it
-  // is advertised as a single fixed value: which model is running is information, even when there is
-  // nothing to switch to.
-  if (!selectable) return [fixedModelOption(snapshot.model), mode];
+  // The read always contains the active model (the pipeline's invariant), so a readable list is also a
+  // switchable-or-informing selector: one entry means "this is the model", several mean "choose".
+  if (!selectable) return [mode];
   // Model first: it is the option users reach for most often, and the spec makes array order the
   // agent's declared priority. The mode option stays either way — it is the `configOptions`
   // counterpart of the legacy `modes` field some clients still read.
@@ -210,17 +209,14 @@ export interface LegacySessionModelState {
 }
 
 export function legacySessionModelState(
-  catalog: AcpModelCatalogEntry[] | undefined,
+  read: ModelCatalogRead | undefined,
   current: string | undefined,
   selectedEntryIndex?: number
 ): LegacySessionModelState | undefined {
+  const catalog = entriesOf(read);
   if (!current) return undefined;
   const selectable = catalog?.some((entry) => entry.models.length > 0) ?? false;
-  // Same rule as the config option: a known model is worth naming even with nothing to switch to (the
-  // remote provider / explicit-flags paths), because the alternative is a client showing no model.
-  if (!selectable || !catalog) {
-    return { currentModelId: current, availableModels: [{ modelId: current, name: current }] };
-  }
+  if (!selectable || !catalog) return undefined;
   const currentEntry = resolveCurrentEntry(catalog, current, selectedEntryIndex);
   return {
     currentModelId: currentEntry ? encodeModelChoice(currentEntry.index, current) : current,
@@ -278,10 +274,10 @@ export async function applyMode(target: ConfigOptionTarget, mode: AgentMode): Pr
 export async function applyModel(
   target: ConfigOptionTarget,
   value: string,
-  catalog: AcpModelCatalogEntry[] | undefined
+  read: ModelCatalogRead | undefined
 ): Promise<ModelSwitchOutcome> {
-  // No catalog = the model is host/remote-owned (remote provider, explicit flags, `.env`), so there is
-  // nothing to switch TO: any write is refused. The advertised single value only names what runs.
+  const catalog = entriesOf(read);
+  // No read = this host was never given a model list; nothing can be validated (or switched).
   if (!catalog?.length)
     throw RequestError.invalidParams(undefined, "No models are configured (no `.agents/config/models.json`)");
 

@@ -66,6 +66,7 @@ export {
 // ============================================================================
 
 export { CodentAgent } from "./runtime/codent-agent.js";
+export type { ModelCatalogRead } from "./runtime/codent-agent.js";
 export type { CodentAgentOptions, CodentAgentDefaults } from "./runtime/codent-agent.js";
 
 export { agentManager, AgentManager } from "./managers/agent-manager.js";

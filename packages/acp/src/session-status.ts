@@ -7,9 +7,9 @@
 
 import { MODE_IDS, MODE_META, legacySessionModelState, sessionConfigOptions } from "./session-config-options.js";
 
-import type { AcpModelCatalogEntry, LegacySessionModelState } from "./session-config-options.js";
+import type { LegacySessionModelState } from "./session-config-options.js";
 import type { SessionConfigOption, SessionMode, SessionModeState, StopReason } from "@agentclientprotocol/sdk";
-import type { AgentMode, AgentSession, AgentSessionSnapshot } from "@codent/core";
+import type { AgentMode, AgentSession, AgentSessionSnapshot, ModelCatalogRead } from "@codent/core";
 
 /**
  * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
@@ -28,13 +28,13 @@ import type { AgentMode, AgentSession, AgentSessionSnapshot } from "@codent/core
  */
 export function sessionSelectors(
   snapshot: AgentSessionSnapshot,
-  catalog: AcpModelCatalogEntry[] | undefined,
+  read: ModelCatalogRead | undefined,
   selectedEntryIndex?: number
 ): { modes: SessionModeState; configOptions: SessionConfigOption[]; models?: LegacySessionModelState } {
-  const models = legacySessionModelState(catalog, snapshot.model, selectedEntryIndex);
+  const models = legacySessionModelState(read, snapshot.model, selectedEntryIndex);
   return {
     modes: sessionModes(snapshot.mode),
-    configOptions: sessionConfigOptions(snapshot, catalog, selectedEntryIndex),
+    configOptions: sessionConfigOptions(snapshot, read, selectedEntryIndex),
     // Older clients read `models` and call `session/set_model`; newer ones read the `model` config
     // option. Both are the same catalog, so the two surfaces cannot disagree.
     ...(models ? { models } : {}),
@@ -44,9 +44,9 @@ export function sessionSelectors(
 /** {@link sessionSelectors} for a live bridge — the shape `load` / `resume` answer with. */
 export function sessionSelectorsFor(
   bridge: { session: AgentSession; selectedModelEntryIndex?: number },
-  catalog: AcpModelCatalogEntry[] | undefined
+  read: ModelCatalogRead | undefined
 ): { modes: SessionModeState; configOptions: SessionConfigOption[] } {
-  return sessionSelectors(bridge.session.getSnapshot(), catalog, bridge.selectedModelEntryIndex);
+  return sessionSelectors(bridge.session.getSnapshot(), read, bridge.selectedModelEntryIndex);
 }
 
 export function sessionModes(current: AgentMode): SessionModeState {

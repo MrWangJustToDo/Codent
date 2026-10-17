@@ -275,4 +275,42 @@ const fakeEnv = (root) => ({
   rmSync(rootB, TEMP_RM_OPTIONS);
 }
 
+// ---------------------------------------------------------------------------
+// N. The runtime carries the model read (and never resolves it again)
+// ---------------------------------------------------------------------------
+//
+// "Which models are available?" is read by every host (TUI, ACP). The runtime is the one object both hold,
+// so it carries the pipeline's result (`loadModels`) and exposes it — a host projecting this cannot disagree
+// with another host, and no read triggers a second resolution (which is how the ACP host ended up with no
+// catalog on the remote-provider plane while the TUI had one).
+{
+  const read = {
+    entries: [
+      {
+        type: "direct",
+        style: "openai",
+        baseURL: "https://example.test/v1",
+        apiKey: "sk-secret",
+        models: ["a/one", "b/two"],
+      },
+    ],
+    active: { entryIndex: 0, model: "b/two" },
+  };
+  const agent = await CodentAgent.create({ env: fakeEnv("/workspaces/models"), models: read });
+  assert.equal(agent.readModels(), read, "readModels() returns the SAME read it was created with");
+  assert.equal(agent.readModels().active.model, "b/two", "the active model travels unchanged");
+  assert.deepEqual(
+    agent.readModels().entries[0].models,
+    ["a/one", "b/two"],
+    "entry lists travel unchanged (readers project them, never repair them)"
+  );
+
+  const bare = await CodentAgent.create({ env: fakeEnv("/workspaces/models") });
+  assert.equal(bare.readModels(), undefined, "no read supplied ⇒ undefined, never an invented list");
+  assert.notEqual(agent.readModels(), bare.readModels(), "two runtimes do not share one read");
+
+  await agent.dispose();
+  await bare.dispose();
+}
+
 console.log("agent-runtime-instances validation passed");

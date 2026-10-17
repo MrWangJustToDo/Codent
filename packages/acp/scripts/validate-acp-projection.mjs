@@ -687,12 +687,13 @@ const compactKey = "compact:agent_1";
     model: "anthropic/claude-3.5-sonnet",
     messages: [],
   };
-  const withCatalog = {
-    sessionId: "s1",
-    configOptions: sessionConfigOptions(snapshot, [
-      { index: 0, style: "anthropic", models: ["anthropic/claude-3.5-sonnet"] },
-    ]),
+  const read = {
+    entries: [
+      { type: "direct", style: "anthropic", baseURL: "https://a.test/v1", models: ["anthropic/claude-3.5-sonnet"] },
+    ],
+    active: { entryIndex: 0, model: "anthropic/claude-3.5-sonnet" },
   };
+  const withCatalog = { sessionId: "s1", configOptions: sessionConfigOptions(snapshot, read) };
   const withoutCatalog = { sessionId: "s1", configOptions: sessionConfigOptions(snapshot, undefined) };
   const withCatalogParsed = zod.zNewSessionResponse.safeParse(withCatalog);
   const withoutCatalogParsed = zod.zNewSessionResponse.safeParse(withoutCatalog);
@@ -701,16 +702,13 @@ const compactKey = "compact:agent_1";
     withCatalogParsed.success,
     withCatalogParsed.success ? "" : JSON.stringify(withCatalogParsed.error.issues.slice(0, 3))
   );
-  // No catalog: the model is host/remote-owned (`--remote-provider`, explicit flags, `.env`), so the
-  // option names it as ONE fixed value instead of disappearing — a client with no model option showed no
-  // model at all, reported as "model selection is unavailable under --remote-provider".
-  const noCatalogModel = withoutCatalog.configOptions.find((o) => o.category === "model");
+  // A host that supplies NO read names no model (nothing to project) — the read is where the list comes
+  // from, so its absence must not be papered over with an invented single value.
+  const noReadModel = withoutCatalog.configOptions.find((o) => o.category === "model");
   check(
-    "…and with no catalog the model is one fixed value, not a missing option",
-    withoutCatalogParsed.success &&
-      noCatalogModel?.options.length === 1 &&
-      noCatalogModel.currentValue === snapshot.model,
-    JSON.stringify({ options: noCatalogModel?.options?.length, current: noCatalogModel?.currentValue })
+    "…and a host with no model read advertises no model option at all",
+    withoutCatalogParsed.success && noReadModel === undefined,
+    JSON.stringify({ options: noReadModel?.options?.map((o) => o.value) })
   );
 }
 

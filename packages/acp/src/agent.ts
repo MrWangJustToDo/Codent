@@ -41,7 +41,7 @@ import { diskSessionId, sessionSelectors, sessionSelectorsFor, stopReasonFor } f
 import { createSessionCatalog } from "./sessions.js";
 
 import type { AcpClientEnv } from "./client-env.js";
-import type { AcpModelCatalogEntry, ConfigOptionTarget } from "./session-config-options.js";
+import type { ConfigOptionTarget } from "./session-config-options.js";
 import type { SessionUpdate } from "./types.js";
 import type {
   AgentApp,
@@ -57,6 +57,7 @@ import type {
   AgentSession,
   AgentSessionHost,
   AgentSessionSnapshot,
+  ModelCatalogRead,
   ModelInfo,
   ModelStyle,
   AgentMode,
@@ -133,17 +134,11 @@ export interface AcpAgentOptions {
   rootPath?: string;
   version?: string;
   /**
-   * Selectable models, when the workspace's `models.json` was the source. Absent on the explicit
-   * `--model` flags path (which skips that file) and on the `.env` fallback — both of which is what
-   * makes the ACP model selector disappear there.
+   * The runtime's model read — the ONE `loadModels(...)` result, carried by the runtime this host serves.
+   * The host projects it (selectors, legacy `models`, both write paths) and never derives a list of its
+   * own. Absent only for an embedder that supplies no read, which means "no model list".
    */
-  modelCatalog?: AcpModelCatalogEntry[];
-  /**
-   * The config entry `modelCatalog`'s active model came from — the seed for a session's recorded
-   * entry, so `session/new` can advertise the right one when a model id appears in several entries.
-   * Absent whenever {@link modelCatalog} is (nothing to disambiguate).
-   */
-  modelCatalogActiveIndex?: number;
+  models?: ModelCatalogRead;
   /**
    * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
    *
@@ -256,9 +251,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    * guessed — see {@link SessionBridge.selectedModelEntryIndex}.
    */
   const seededModelEntryIndex = (model: string | undefined): number | undefined => {
-    if (!model || options.modelCatalogActiveIndex === undefined) return undefined;
-    const active = options.modelCatalog?.find((entry) => entry.index === options.modelCatalogActiveIndex);
-    return active?.models.includes(model) ? active.index : undefined;
+    const active = options.models?.active;
+    if (!model || !active) return undefined;
+    return options.models?.entries[active.entryIndex]?.models.includes(model) ? active.entryIndex : undefined;
   };
 
   const attach = (
@@ -458,7 +453,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: acpId,
-      ...sessionSelectors(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
+      ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -524,7 +519,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ctx.params.mcpServers,
       ctx.params.additionalDirectories
     );
-    return sessionSelectorsFor(bridge, options.modelCatalog);
+    return sessionSelectorsFor(bridge, options.models);
   });
   app.onRequest(methods.agent.session.resume, async (ctx) => {
     const bridge = await resumeSession(
@@ -534,7 +529,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ctx.params.mcpServers,
       ctx.params.additionalDirectories
     );
-    return sessionSelectorsFor(bridge, options.modelCatalog);
+    return sessionSelectorsFor(bridge, options.models);
   });
 
   app.onRequest(methods.agent.session.close, async (ctx) => {
@@ -630,7 +625,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     return {
       sessionId: newId,
-      ...sessionSelectors(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
+      ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -666,7 +661,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     emit(bridge.acpId, {
       sessionUpdate: "config_option_update",
-      configOptions: sessionConfigOptions(snapshot, options.modelCatalog, bridge.selectedModelEntryIndex),
+      configOptions: sessionConfigOptions(snapshot, options.models, bridge.selectedModelEntryIndex),
     });
   };
 
@@ -706,7 +701,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // option later must not leave this check behind (a hardcoded id would reject the new one).
     const option = sessionConfigOptions(
       bridge.session.getSnapshot(),
-      options.modelCatalog,
+      options.models,
       bridge.selectedModelEntryIndex
     ).find((entry) => entry.id === ctx.params.configId);
     if (!option) throw RequestError.invalidParams(undefined, `Unknown configuration option: ${ctx.params.configId}`);
@@ -721,7 +716,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         await applyMode(toTarget(bridge), ctx.params.value as AgentMode);
         break;
       case "model": {
-        const applied = await applyModel(toTarget(bridge), ctx.params.value as string, options.modelCatalog);
+        const applied = await applyModel(toTarget(bridge), ctx.params.value as string, options.models);
         // Record the entry the connection came from, so every later advertisement names it instead
         // of first-matching a model id that several entries may share. A bare re-selection of the
         // current model reports no entry and leaves the recorded one alone.
@@ -740,11 +735,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
     // Protocol requires the FULL set back (there is no incremental form), read after the change.
     return {
-      configOptions: sessionConfigOptions(
-        bridge.session.getSnapshot(),
-        options.modelCatalog,
-        bridge.selectedModelEntryIndex
-      ),
+      configOptions: sessionConfigOptions(bridge.session.getSnapshot(), options.models, bridge.selectedModelEntryIndex),
     };
   });
 
@@ -772,7 +763,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     async (ctx) => {
       const bridge = bridges.get(ctx.params.sessionId);
       if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
-      const applied = await applyModel(toTarget(bridge), ctx.params.modelId, options.modelCatalog);
+      const applied = await applyModel(toTarget(bridge), ctx.params.modelId, options.models);
       if (applied.entryIndex !== undefined) bridge.selectedModelEntryIndex = applied.entryIndex;
       return {};
     }

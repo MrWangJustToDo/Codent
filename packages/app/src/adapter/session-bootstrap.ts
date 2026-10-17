@@ -22,6 +22,7 @@ import type {
   AgentSessionCreateResult,
   AgentSessionHost,
   CoreEnv,
+  ModelCatalogRead,
   ModelProvider,
 } from "@codent/core";
 
@@ -41,6 +42,12 @@ export interface AgentRuntimePort {
   getEnv(): CoreEnv;
   /** The runtime's model provider, or `undefined` (remote-session / no local provider). */
   getModelProvider(): ModelProvider | undefined;
+  /**
+   * The models this runtime may run — the read it was created with (one `loadModels` result). Optional so a
+   * host that cannot supply it keeps its previous behaviour instead of inventing a list; when present it is
+   * the ONLY source for model lists (`/models`, the selector), so no second pipeline runs.
+   */
+  readModels?(): ModelCatalogRead | undefined;
 }
 
 /** Wire the runtime's root AgentSession (+ Host) into the app store. */

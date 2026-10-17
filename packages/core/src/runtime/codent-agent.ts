@@ -26,6 +26,7 @@ import type {
 } from "../agent-session/host-types.js";
 import type { AgentSession } from "../agent-session/types.js";
 import type { CoreEnv, ResolvedCoreEnv } from "../env";
+import type { LoadedModelsState } from "../models/config/models-config.js";
 import type { ModelStyle } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 
@@ -38,6 +39,13 @@ export interface CodentAgentDefaults {
   extensionDirs?: string[];
   toolConfig?: AgentToolConfig;
 }
+
+/**
+ * What the runtime knows about models: the pipeline's entries (each with its selectable `models`, style and
+ * connection) plus the active entry/model. `config` is deliberately dropped — hosts have no use for the full
+ * on-disk config, and it carries credentials.
+ */
+export type ModelCatalogRead = Pick<LoadedModelsState, "entries" | "active">;
 
 export interface CodentAgentOptions {
   /** Workspace runtime (filesystem, shell, fetch). Required. */
@@ -57,6 +65,15 @@ export interface CodentAgentOptions {
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
   host?: AgentSessionHost;
   /**
+   * The resolved model read — the result of ONE `loadModels(...)` call (or a synthesised single-entry read
+   * for the flags/`.env` planes). The runtime **carries** it and never resolves it again, so two sessions
+   * cannot disagree about which models exist and no read can re-fetch a provider.
+   *
+   * Optional: a runtime with no model plane (tests, `--remote-session` handed no list) reports
+   * `readModels()` as `undefined` rather than inventing a list.
+   */
+  models?: ModelCatalogRead;
+  /**
    * Whether this runtime owns the env lifecycle (dispose destroys it). Default `false` —
    * pass `true` only when this runtime built a local env; borrowed/remote envs must not be
    * destroyed by dispose (a remote `destroy()` tears down the server's CoreEnv).
@@ -68,6 +85,7 @@ export class CodentAgent {
   private readonly runtime: AgentRuntime;
   private readonly manager?: AgentManager;
   private readonly defaults: CodentAgentDefaults;
+  private readonly models?: ModelCatalogRead;
   /** Guards {@link dispose} against re-running (double session destroy / env destroy). */
   private disposed = false;
 
@@ -78,12 +96,14 @@ export class CodentAgent {
     runtime: AgentRuntime,
     host: AgentSessionHost,
     manager: AgentManager | undefined,
-    defaults: CodentAgentDefaults
+    defaults: CodentAgentDefaults,
+    models: ModelCatalogRead | undefined
   ) {
     this.runtime = runtime;
     this.host = host;
     this.manager = manager;
     this.defaults = defaults;
+    this.models = models;
   }
 
   /**
@@ -105,7 +125,7 @@ export class CodentAgent {
     const runtime = new AgentRuntime(runtimeOptions);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
     const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
-    return new CodentAgent(runtime, host, manager, options.defaults ?? {});
+    return new CodentAgent(runtime, host, manager, options.defaults ?? {}, options.models);
   }
 
   /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */
@@ -126,6 +146,14 @@ export class CodentAgent {
   /** The runtime's model provider (undefined for remote-session runtimes). */
   getModelProvider(): ModelProvider | undefined {
     return this.runtime.modelProvider;
+  }
+
+  /**
+   * The models this runtime may run: the read it was created with, unchanged (`undefined` when it was
+   * created without one). A host projects this instead of deriving an available-model list of its own.
+   */
+  readModels(): ModelCatalogRead | undefined {
+    return this.models;
   }
 
   /** Create a root session, applying the runtime defaults. */

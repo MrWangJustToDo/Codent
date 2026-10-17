@@ -287,20 +287,24 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   check("a deleted live session is no longer promptable", promptRejected);
 });
 
-// --- the legacy `models` surface names the same catalog ----------------------
+// --- the legacy `models` surface names the same read ------------------------
 //
-// Model selection is a `configOptions` entry (`category: "model"`) in this protocol version, but clients
-// that still speak the older API read `models` and call `session/set_model`. Both are built from the same
-// catalog, so a client reading either one picks the identical model — a divergence here would mean two
-// selectors that disagree about the current model.
+// Model selection is a `configOptions` entry (`category: "model"`) in this protocol version, but clients that
+// still speak the older API read `models` and call `session/set_model`. Both project ONE runtime read
+// (entries + active), so a client reading either surface picks the identical model. A single-entry read
+// (flags / `.env` / a provider that serves one model) is the informing case: one value, not a missing
+// selector. No read at all means an embedder supplied none — then neither surface names anything.
 {
   const snapshot = { todos: [], mode: "normal", usage: undefined, name: "p", model: "a/one", messages: [] };
-  const catalog = [
-    { index: 0, style: "anthropic", models: ["a/one", "b/two"] },
-    { index: 1, style: "openai", models: ["c/three"] },
-  ];
-  const option = sessionConfigOptions(snapshot, catalog, 0).find((entry) => entry.category === "model");
-  const legacy = legacySessionModelState(catalog, "a/one", 0);
+  const read = {
+    entries: [
+      { type: "direct", style: "anthropic", baseURL: "https://a.test/v1", models: ["a/one", "b/two"] },
+      { type: "direct", style: "openai", baseURL: "https://b.test/v1", models: ["c/three"] },
+    ],
+    active: { entryIndex: 0, model: "a/one" },
+  };
+  const option = sessionConfigOptions(snapshot, read, 0).find((entry) => entry.category === "model");
+  const legacy = legacySessionModelState(read, "a/one", 0);
   check("the legacy `models` field is offered beside the model config option", Boolean(option) && Boolean(legacy));
   check(
     "…naming the same current value",
@@ -313,25 +317,26 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
       JSON.stringify(option?.options?.map((o) => o.value)),
     JSON.stringify(legacy?.availableModels?.map((m) => m.modelId))
   );
-  // No catalog (remote provider / explicit flags): the model is decided outside this process. Both
-  // surfaces name it as ONE fixed value — omitting them left the client with no model at all, which is
-  // the "model selection unavailable under --remote-provider" report.
-  const fixedOption = sessionConfigOptions({ ...snapshot, model: "a/one" }, undefined, 0).find(
-    (entry) => entry.category === "model"
-  );
-  const fixedLegacy = legacySessionModelState(undefined, "a/one", 0);
+
+  const singleRead = {
+    entries: [{ type: "direct", style: "anthropic", baseURL: "https://a.test/v1", models: ["a/one"] }],
+    active: { entryIndex: 0, model: "a/one" },
+  };
+  const fixedOption = sessionConfigOptions(snapshot, singleRead, 0).find((entry) => entry.category === "model");
+  const fixedLegacy = legacySessionModelState(singleRead, "a/one", 0);
   check(
-    "no catalog but a known model ⇒ one fixed model value on BOTH surfaces",
-    fixedOption?.currentValue === "a/one" &&
+    "a single-entry read ⇒ one fixed model value on BOTH surfaces",
+    fixedOption?.currentValue === "0:a/one" &&
       fixedOption.options.length === 1 &&
-      fixedLegacy?.currentModelId === "a/one" &&
+      fixedLegacy?.currentModelId === "0:a/one" &&
       fixedLegacy.availableModels.length === 1,
     JSON.stringify({ option: fixedOption?.currentValue, models: fixedLegacy?.currentModelId })
   );
   check(
-    "no catalog and no model ⇒ neither surface invents one",
-    legacySessionModelState(undefined, undefined, 0) === undefined
+    "no read ⇒ no model option (nothing to name)",
+    sessionConfigOptions(snapshot, undefined, 0).every((entry) => entry.category !== "model")
   );
+  check("no read ⇒ no legacy field either", legacySessionModelState(undefined, "a/one", 0) === undefined);
 }
 
 // --- configOptions stay in sync after session/set_mode ------------------------
@@ -581,10 +586,32 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
 //   * the advertised `currentValue` must be a member of `options` — the protocol requires it, and a
 //     value the client cannot find in the list is one it cannot render.
 {
-  const catalog = [
-    { index: 0, style: "openai", baseURL: "https://one.example/v1", apiKey: "sk-one", models: ["alpha", "shared"] },
-    { index: 1, style: "openai", baseURL: "https://two.example/v1", apiKey: "sk-two", models: ["shared", "beta"] },
-  ];
+  // The runtime read the host projects (one `loadModels` result): entries + the active selection.
+  const read = {
+    entries: [
+      {
+        type: "direct",
+        style: "openai",
+        baseURL: "https://one.example/v1",
+        apiKey: "sk-one",
+        models: ["alpha", "shared"],
+      },
+      {
+        type: "direct",
+        style: "openai",
+        baseURL: "https://two.example/v1",
+        apiKey: "sk-two",
+        models: ["shared", "beta"],
+      },
+    ],
+    active: { entryIndex: 0, model: "alpha" },
+  };
+  const single = {
+    entries: [
+      { type: "direct", style: "openai", baseURL: "https://one.example/v1", apiKey: "sk-one", models: ["alpha"] },
+    ],
+    active: { entryIndex: 0, model: "alpha" },
+  };
   const modelSession = makeFakeSession("agent_model", "ses_model", { model: "alpha" });
   const modelHost = {
     async create() {
@@ -598,15 +625,16 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   const modelClient = createClient({ name: "model-client" }).onNotification(methods.client.session.update, (ctx) =>
     modelUpdates.push(ctx.params)
   );
-  // Two apps: one with a catalog, one without. The difference between them IS the behaviour under
-  // test (advertise vs omit), so they cannot share an instance.
-  const withCatalog = createAcpAgent({
+  // Three apps, because the read IS the behaviour under test: several models (choose), one entry
+  // (inform), no read at all (nothing to name). They cannot share an instance.
+  const withCatalog = createAcpAgent({ host: modelHost, defaults: { model: "alpha" }, rootPath: "/ws", models: read });
+  const withoutCatalog = createAcpAgent({
     host: modelHost,
     defaults: { model: "alpha" },
     rootPath: "/ws",
-    modelCatalog: catalog,
+    models: single,
   });
-  const withoutCatalog = createAcpAgent({ host: modelHost, defaults: { model: "alpha" }, rootPath: "/ws" });
+  const noModelRead = createAcpAgent({ host: modelHost, defaults: { model: "alpha" }, rootPath: "/ws" });
 
   await modelClient.connectWith(withCatalog, async (cx) => {
     await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
@@ -791,9 +819,12 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
       // Same reason as above.
     }
     const fixed = fresh?.configOptions?.find((o) => o.category === "model");
+    // A single-entry read advertises the model it names (plus the session's current one when that is
+    // outside the read — the "not in models.json" case); either way the current value is a member, which
+    // is what the protocol requires.
     check(
-      "without a catalog the model is advertised as one fixed value",
-      Boolean(fixed) && fixed.options.length === 1 && fixed.currentValue === fixed.options[0].value,
+      "a single-entry read advertises the running model",
+      Boolean(fixed) && fixed.options.some((option) => option.value === fixed.currentValue),
       JSON.stringify(fixed)
     );
     check(
@@ -810,7 +841,7 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
         await cx.request(methods.agent.session.setConfigOption, {
           sessionId: fresh?.sessionId,
           configId: "model",
-          value: "0:alpha",
+          value: "0:beta",
         });
         return null;
       } catch (error) {
@@ -818,10 +849,20 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
       }
     })();
     check(
-      "a model write with no catalog is refused (an error, never a crash)",
-      /No models are configured/i.test(refusedNoCatalog ?? ""),
+      "a write naming a model outside the read is refused (an error, never a crash)",
+      /Unknown model/i.test(refusedNoCatalog ?? ""),
       refusedNoCatalog ?? ""
     );
+    // No read at all: an embedder supplied none, so neither surface names a model.
+    await createClient({ name: "no-read-client" }).connectWith(noModelRead, async (cx) => {
+      await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+      const bare = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+      check(
+        "no model read ⇒ no model option and no legacy field",
+        !bare.configOptions?.some((o) => o.category === "model") && bare.models === undefined,
+        JSON.stringify({ opts: bare.configOptions?.map((o) => o.category), models: bare.models })
+      );
+    });
   });
 }
 

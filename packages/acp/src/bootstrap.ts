@@ -20,7 +20,6 @@ import {
   buildDefaultSystemPrompt,
   CodentAgent,
   createDirectModelProvider,
-  createRemoteProvider,
   getModelProvider,
   loadModels,
   registerCoreEnv,
@@ -34,14 +33,8 @@ import { createNodeEnv } from "@codent/node";
 import { createAcpClientEnv } from "./client-env.js";
 import { resolveRoot } from "./paths.js";
 
-import type {
-  AcpAgentDefaults,
-  AcpAgentOptions,
-  AcpModelCatalogEntry,
-  AcpSessionRuntime,
-  AcpClientEnvFactoryContext,
-} from "./agent.js";
-import type { AgentSessionHost, ModelProvider, ModelStyle } from "@codent/core";
+import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
+import type { AgentSessionHost, ModelProvider, ModelStyle, ModelCatalogRead } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
@@ -75,12 +68,8 @@ export interface LocalAcpBootstrap {
    * a fake choice. The list is process-wide (one config file), while the *current* model is
    * per-session — see `sessionConfigOptions` in `agent.ts`.
    */
-  modelCatalog?: AcpModelCatalogEntry[];
-  /**
-   * The entry `modelCatalog`'s active model came from. Carried so a session's connection can be
-   * attributed to the right entry when a model id appears in several of them.
-   */
-  modelCatalogActiveIndex?: number;
+  /** The runtime's model read (the ONE `loadModels` result) — the host projects it. */
+  models?: ModelCatalogRead;
   /**
    * Present only under `--client-env`: builds the per-session runtime whose env borrows the
    * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
@@ -115,19 +104,45 @@ export async function bootstrapLocalAcp(
   let modelInfo: AcpAgentDefaults["modelInfo"];
   // Built only on the `models.json` path: the flags path deliberately skips that file, and the
   // `.env` fallback has no list at all — so neither can offer a choice.
-  let modelCatalog: AcpModelCatalogEntry[] | undefined;
-  /** The entry that model came from — a model id shared by several entries stays resolvable. */
-  let modelCatalogActiveIndex: number | undefined;
+  /** The one model read every plane produces; carried by the runtime and projected by the host. */
+  let models: ModelCatalogRead | undefined;
+  /**
+   * The flags / `.env` planes: the model is decided outside `models.json`, so the read is ONE entry naming
+   * it. That is what lets both model surfaces exist (single fixed value) instead of vanishing.
+   */
+  const singleModelRead = (c: {
+    model: string;
+    style: ModelStyle;
+    baseURL?: string;
+    apiKey?: string;
+  }): ModelCatalogRead => ({
+    entries: [
+      {
+        type: "direct",
+        style: c.style,
+        baseURL: c.baseURL ?? "",
+        ...(c.apiKey ? { apiKey: c.apiKey } : {}),
+        models: [c.model],
+      },
+    ],
+    active: { entryIndex: 0, model: c.model },
+  });
 
   if (options.model?.remoteProvider) {
     // Remote provider plane: the server holds the keys and supplies the model,
     // so no explicit `--model` is needed. Mirrors the TUI's remote-provider
     // branch in the release host — CoreEnv stays local, only the provider is
     // remote. `createRemoteProvider` lives in core (global fetch only).
-    const remoteProvider = await createRemoteProvider(options.model.remoteProvider);
-    provider = remoteProvider;
-    registerModelProvider(provider);
+    // ONE pipeline: `loadModels({ kind: "provider" })` asks `/api/provider/info` and builds the entry the
+    // client needs (proxy baseURL + sentinel key) *with its selectable list*. The previous branch called
+    // `createRemoteProvider` directly, got a connection and no list — which is why this plane had no model
+    // selector at all until the host grew a fallback.
+    const loaded = await loadModels({ kind: "provider", serverUrl: options.model.remoteProvider });
+    if (!loaded) throw new Error(`The provider server at ${options.model.remoteProvider} returned no model info`);
+    await registerModelProviderForEntry(loaded);
+    provider = getModelProvider();
     const fromProvider = await resolveModelConfigFromProvider({}, provider);
+    models = loaded;
     model = fromProvider.connection.model;
     style = fromProvider.connection.style;
     baseURL = fromProvider.connection.baseURL;
@@ -153,6 +168,12 @@ export async function bootstrapLocalAcp(
     style = connection.style;
     baseURL = connection.baseURL;
     apiKey = connection.apiKey;
+    models = singleModelRead({
+      model: connection.model,
+      style: connection.style,
+      baseURL: connection.baseURL,
+      apiKey: connection.apiKey,
+    });
   } else {
     try {
       const loaded = await loadModels({ kind: "file" });
@@ -168,16 +189,7 @@ export async function bootstrapLocalAcp(
           baseURL = fromProvider.connection.baseURL;
           apiKey = fromProvider.connection.apiKey;
           modelInfo = fromProvider.modelInfo;
-          // The catalog is the reason this file was read: keep the whole list, not just the
-          // active entry, so `session/new` can advertise the models the user may switch to.
-          modelCatalog = loaded.entries.map((loadedEntry, index) => ({
-            index,
-            style: loadedEntry.style,
-            baseURL: loadedEntry.baseURL,
-            ...(loadedEntry.apiKey ? { apiKey: loadedEntry.apiKey } : {}),
-            models: [...loadedEntry.models],
-          }));
-          modelCatalogActiveIndex = loaded.active.entryIndex;
+          models = loaded;
         }
       }
     } catch {
@@ -204,6 +216,12 @@ export async function bootstrapLocalAcp(
         baseURL = connection.baseURL;
         apiKey = connection.apiKey;
         modelInfo = undefined;
+        models = singleModelRead({
+          model: connection.model,
+          style: connection.style,
+          baseURL: connection.baseURL,
+          apiKey: connection.apiKey,
+        });
       }
     }
   }
@@ -214,7 +232,12 @@ export async function bootstrapLocalAcp(
     );
   }
 
-  const agent = await CodentAgent.create({ env, ...(provider ? { provider } : {}), ownsEnv: true });
+  const agent = await CodentAgent.create({
+    env,
+    ...(provider ? { provider } : {}),
+    ...(models ? { models } : {}),
+    ownsEnv: true,
+  });
 
   // `--client-env`: one runtime per session, each over a client-backed env whose fallback is the
   // local env above (which the boot runtime keeps alive — a per-session env only borrows it, so it
@@ -245,6 +268,7 @@ export async function bootstrapLocalAcp(
         const sessionAgent = await CodentAgent.create({
           env: clientEnv,
           ...(provider ? { provider } : {}),
+          ...(models ? { models } : {}),
           // Borrowed fallback env: disposing this runtime must not tear down the local env that
           // every other session's fallback still depends on.
           ownsEnv: false,
@@ -262,8 +286,8 @@ export async function bootstrapLocalAcp(
   return {
     host: agent.host,
     rootPath,
-    ...(modelCatalog ? { modelCatalog } : {}),
-    ...(modelCatalogActiveIndex !== undefined ? { modelCatalogActiveIndex } : {}),
+    // Read back from the runtime: the ONE source, not the local variable that fed it.
+    ...(agent.readModels() ? { models: agent.readModels()! } : {}),
     ...(createSessionHost ? { createSessionHost } : {}),
     defaults: {
       model,
@@ -292,8 +316,7 @@ export async function bootstrapAcpAgent(
     host: boot.host,
     defaults: boot.defaults,
     rootPath: boot.rootPath,
-    ...(boot.modelCatalog ? { modelCatalog: boot.modelCatalog } : {}),
-    ...(boot.modelCatalogActiveIndex !== undefined ? { modelCatalogActiveIndex: boot.modelCatalogActiveIndex } : {}),
+    ...(boot.models ? { models: boot.models } : {}),
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
   };
