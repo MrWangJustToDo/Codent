@@ -42,10 +42,12 @@ export interface CodentAgentDefaults {
 
 /**
  * What the runtime knows about models: the pipeline's entries (each with its selectable `models`, style and
- * connection) plus the active entry/model. `config` is deliberately dropped — hosts have no use for the full
+ * connection). The **catalog**, not a selection — which model a session runs on belongs to that SESSION
+ * (`SessionData.model`, the session snapshot), and "which entry" is per session too; the runtime only
+ * supplies the list a session chooses from. `config` is deliberately dropped: hosts have no use for the
  * on-disk config, and it carries credentials.
  */
-export type ModelCatalogRead = Pick<LoadedModelsState, "entries" | "active">;
+export type ModelCatalogRead = Pick<LoadedModelsState, "entries">;
 
 export interface CodentAgentOptions {
   /** Workspace runtime (filesystem, shell, fetch). Required. */
@@ -65,9 +67,10 @@ export interface CodentAgentOptions {
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
   host?: AgentSessionHost;
   /**
-   * The resolved model read — the result of ONE `loadModels(...)` call (or a synthesised single-entry read
-   * for the flags/`.env` planes). The runtime **carries** it and never resolves it again, so two sessions
-   * cannot disagree about which models exist and no read can re-fetch a provider.
+   * The resolved model **catalog** — the result of ONE `loadModels(...)` call (or a synthesised single-entry
+   * read for the flags/`.env` planes). The runtime carries it and never resolves it again, so two sessions
+   * cannot disagree about which models exist and no read can re-fetch a provider. The active model/entry is
+   * NOT here: it is the session's, and the list is what a session chooses from.
    *
    * Optional: a runtime with no model plane (tests, `--remote-session` handed no list) reports
    * `readModels()` as `undefined` rather than inventing a list.
@@ -149,8 +152,9 @@ export class CodentAgent {
   }
 
   /**
-   * The models this runtime may run: the read it was created with, unchanged (`undefined` when it was
-   * created without one). A host projects this instead of deriving an available-model list of its own.
+   * The model catalog this runtime may run: the read it was created with, unchanged (`undefined` when it
+   * was created without one). A host projects it instead of deriving an available-model list of its own;
+   * the selected entry/model is read from the SESSION, never from here.
    */
   readModels(): ModelCatalogRead | undefined {
     return this.models;

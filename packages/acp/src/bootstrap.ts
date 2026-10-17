@@ -34,7 +34,7 @@ import { createAcpClientEnv } from "./client-env.js";
 import { resolveRoot } from "./paths.js";
 
 import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
-import type { AgentSessionHost, ModelProvider, ModelStyle, ModelCatalogRead } from "@codent/core";
+import type { AgentSessionHost, ModelProvider, ModelStyle, ModelCatalogRead, LoadedModelEntry } from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
@@ -70,6 +70,8 @@ export interface LocalAcpBootstrap {
    */
   /** The runtime's model read (the ONE `loadModels` result) — the host projects it. */
   models?: ModelCatalogRead;
+  /** The entry the resolved default model came from — seeds a new session's recorded entry. */
+  modelsDefaultEntryIndex?: number;
   /**
    * Present only under `--client-env`: builds the per-session runtime whose env borrows the
    * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
@@ -104,8 +106,12 @@ export async function bootstrapLocalAcp(
   let modelInfo: AcpAgentDefaults["modelInfo"];
   // Built only on the `models.json` path: the flags path deliberately skips that file, and the
   // `.env` fallback has no list at all — so neither can offer a choice.
-  /** The one model read every plane produces; carried by the runtime and projected by the host. */
+  /** The one model CATALOG every plane produces; carried by the runtime and projected by the host. */
   let models: ModelCatalogRead | undefined;
+  /** The entry that plane's DEFAULT model came from — a seed for a new session, not a selection. */
+  let modelsDefaultEntryIndex: number | undefined;
+  /** The runtime's read is the catalog; `loaded.active` is only the default a new session is seeded with. */
+  const catalogOf = (loaded: { entries: LoadedModelEntry[] }): ModelCatalogRead => ({ entries: loaded.entries });
   /**
    * The flags / `.env` planes: the model is decided outside `models.json`, so the read is ONE entry naming
    * it. That is what lets both model surfaces exist (single fixed value) instead of vanishing.
@@ -125,7 +131,6 @@ export async function bootstrapLocalAcp(
         models: [c.model],
       },
     ],
-    active: { entryIndex: 0, model: c.model },
   });
 
   if (options.model?.remoteProvider) {
@@ -142,7 +147,8 @@ export async function bootstrapLocalAcp(
     await registerModelProviderForEntry(loaded);
     provider = getModelProvider();
     const fromProvider = await resolveModelConfigFromProvider({}, provider);
-    models = loaded;
+    models = catalogOf(loaded);
+    modelsDefaultEntryIndex = loaded.active.entryIndex;
     model = fromProvider.connection.model;
     style = fromProvider.connection.style;
     baseURL = fromProvider.connection.baseURL;
@@ -174,6 +180,8 @@ export async function bootstrapLocalAcp(
       baseURL: connection.baseURL,
       apiKey: connection.apiKey,
     });
+    modelsDefaultEntryIndex = 0;
+    modelsDefaultEntryIndex = 0;
   } else {
     try {
       const loaded = await loadModels({ kind: "file" });
@@ -189,7 +197,8 @@ export async function bootstrapLocalAcp(
           baseURL = fromProvider.connection.baseURL;
           apiKey = fromProvider.connection.apiKey;
           modelInfo = fromProvider.modelInfo;
-          models = loaded;
+          models = catalogOf(loaded);
+          modelsDefaultEntryIndex = loaded.active.entryIndex;
         }
       }
     } catch {
@@ -288,6 +297,7 @@ export async function bootstrapLocalAcp(
     rootPath,
     // Read back from the runtime: the ONE source, not the local variable that fed it.
     ...(agent.readModels() ? { models: agent.readModels()! } : {}),
+    ...(modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex } : {}),
     ...(createSessionHost ? { createSessionHost } : {}),
     defaults: {
       model,
@@ -317,6 +327,7 @@ export async function bootstrapAcpAgent(
     defaults: boot.defaults,
     rootPath: boot.rootPath,
     ...(boot.models ? { models: boot.models } : {}),
+    ...(boot.modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex: boot.modelsDefaultEntryIndex } : {}),
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
   };

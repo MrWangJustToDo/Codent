@@ -294,11 +294,14 @@ const fakeEnv = (root) => ({
         models: ["a/one", "b/two"],
       },
     ],
-    active: { entryIndex: 0, model: "b/two" },
   };
   const agent = await CodentAgent.create({ env: fakeEnv("/workspaces/models"), models: read });
   assert.equal(agent.readModels(), read, "readModels() returns the SAME read it was created with");
-  assert.equal(agent.readModels().active.model, "b/two", "the active model travels unchanged");
+  assert.equal(
+    Object.hasOwn(agent.readModels(), "active"),
+    false,
+    "the read is the CATALOG — which model runs is the session's, not the runtime's"
+  );
   assert.deepEqual(
     agent.readModels().entries[0].models,
     ["a/one", "b/two"],

@@ -139,6 +139,8 @@ export interface AcpAgentOptions {
    * own. Absent only for an embedder that supplies no read, which means "no model list".
    */
   models?: ModelCatalogRead;
+  /** The entry the default model came from — seeds a new session's recorded entry (a seed, not a selection). */
+  modelsDefaultEntryIndex?: number;
   /**
    * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
    *
@@ -251,9 +253,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    * guessed — see {@link SessionBridge.selectedModelEntryIndex}.
    */
   const seededModelEntryIndex = (model: string | undefined): number | undefined => {
-    const active = options.models?.active;
-    if (!model || !active) return undefined;
-    return options.models?.entries[active.entryIndex]?.models.includes(model) ? active.entryIndex : undefined;
+    const seeded = options.modelsDefaultEntryIndex;
+    if (!model || seeded === undefined) return undefined;
+    return options.models?.entries[seeded]?.models.includes(model) ? seeded : undefined;
   };
 
   const attach = (

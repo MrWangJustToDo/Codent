@@ -52,8 +52,8 @@ Four sources, read through **one pipeline** (`loadModels`) and carried on the ru
 With no model from any of them the process exits with a clear error rather than starting a session
 that cannot run.
 
-The result is **carried on the runtime** (`CodentAgent.readModels()` — entries + active, never the
-credential-bearing config) and the host only projects it: the `configOptions` model select, the legacy
+The result is **carried on the runtime** as a CATALOG (`CodentAgent.readModels()` — entries, never the
+credential-bearing config; which model a session runs on is the session's) and the host only projects it: the `configOptions` model select, the legacy
 `models` field, and both write paths (`session/set_config_option`, `session/set_model`) read that one
 value. `AcpAgentOptions.modelCatalog` / `modelCatalogActiveIndex` are gone — a host that builds its own
 runtime gets the list from `readModels()` instead.
