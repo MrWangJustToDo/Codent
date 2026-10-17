@@ -88,6 +88,31 @@ check("no placeholder module names", () => {
 });
 
 // ============================================================================
+// Rule 1b — the tools root holds factories, not per-tool helpers
+// ============================================================================
+//
+// `openspec/specs/core-tool-layout`: "Non-factory helpers that only support a single tool MUST NOT
+// sit as peer files of `*-tool.ts` at the `tools/` root when they can live under `util/` or a feature
+// subfolder." The rule had no gate, and a client-tool result builder landed at
+// `agent/tools/ask-user-output.ts` — reading like a tool factory beside its real factory. The root is
+// a roster of tool definitions; anything else belongs under `util/` or its feature directory.
+
+const TOOLS_ROOT = join(srcRoot, "agent/tools");
+/** Root files that are not `*-tool.ts` but still belong to the tool layer. */
+const TOOLS_ROOT_ALLOWED = new Set(["create-tools.ts", "tool-config.ts", "tool-names.ts", "index.ts"]);
+
+check("agent/tools root holds only tool factories and the assembler", () => {
+  return files
+    .filter((file) => dirname(file) === TOOLS_ROOT)
+    .map((file) => file.slice(file.lastIndexOf("/") + 1))
+    .filter((name) => !name.endsWith("-tool.ts") && !TOOLS_ROOT_ALLOWED.has(name))
+    .map(
+      (name) =>
+        `agent/tools/${name} — a single-tool helper belongs under tools/util/ (or its domain), not beside the factories`
+    );
+});
+
+// ============================================================================
 // Rule 2 — a barrel that exists is consumed
 // ============================================================================
 //

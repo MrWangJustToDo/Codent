@@ -7,7 +7,7 @@
  * definition file) so the definition site stays schema + factory.
  */
 
-import type { AskUserOutput } from "./ask-user-tool.js";
+import type { AskUserOutput } from "../ask-user-tool.js";
 
 /**
  * What a host collected for an `ask_user` answer — the raw material, not the wire shape.

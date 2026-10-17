@@ -438,7 +438,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   plus its own message text. A host that re-parses the raw string is how ACP's `/mode execute` became
   `mode.toggle` while the catalog advertised `execute`. `/resume`'s id-or-name rule is
   `resolveSessionRef` (`agent-session/session-reference.ts`), and `ask_user` result assembly (including
-  the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/ask-user-tool.ts`).
+  the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/util/ask-user-output.ts`).
   Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:ask-user-output`.
 - Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
   `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
