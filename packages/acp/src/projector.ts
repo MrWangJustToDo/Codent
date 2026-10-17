@@ -474,7 +474,8 @@ export class AcpProjector {
     const text = toolResultText(part.content, images.length > 0) || (part.error ?? "");
     // The tool's own value goes out as content when there is content to show (the row says "what did this
     // return"), and as the loose `rawOutput` when there is not. Not both: sending both rendered the same
-    // result twice — once as the row's body, once as raw.
+    // result twice — a diff (or an image) next to the tool's raw JSON, which a reader reports as the edit
+    // row showing its diff twice.
     const content = this.toolContentFor(resultState ?? blankToolState(), true, text, images, part.content);
     this.options.emit({
       sessionUpdate: "tool_call_update",
@@ -488,7 +489,7 @@ export class AcpProjector {
         : text
           ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] }
           : {}),
-      ...(part.content !== undefined ? { rawOutput: part.content } : {}),
+      ...(content === undefined && part.content !== undefined ? { rawOutput: part.content } : {}),
     });
   }
 

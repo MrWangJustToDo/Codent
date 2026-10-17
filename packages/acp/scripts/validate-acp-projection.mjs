@@ -113,6 +113,18 @@ const check = checker.check;
   // `messages` re-emits the whole array on every tick, so an unguarded preview would be re-sent per tick.
   const before = a.emitted.length;
   a.push("messages", [...assistant(callPart({ input: INPUT, output: { bytesWritten: 19, created: true } })), result]);
+  // The RESULT writer must follow the terminal transition's rule: content OR rawOutput, never both.
+  // Sending both put the tool's raw JSON (path / oldString / newString) under the diff the client had
+  // already rendered — reported as "the edit row shows its diff twice".
+  const lastUpdate = a.updates("tool_call_update").at(-1);
+  check(
+    "a result that carries content does not also dump rawOutput",
+    lastUpdate?.content !== undefined && lastUpdate?.rawOutput === undefined,
+    JSON.stringify({
+      content: lastUpdate?.content?.map((c) => c.type),
+      hasRawOutput: lastUpdate?.rawOutput !== undefined,
+    })
+  );
   check("re-reporting the same tick emits nothing new", a.emitted.length === before, `${before} → ${a.emitted.length}`);
   a.stop();
   b.stop();
