@@ -17,6 +17,7 @@ import {
   RequestError,
 } from "@agentclientprotocol/sdk";
 import { isActiveStatus } from "@codent/core";
+import { createHash } from "node:crypto";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
@@ -221,9 +222,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // One line per outgoing update (id + text snippet): "the client shows something we did not send"
       // is settled by reading what WAS sent.
       const key = update as { messageId?: string; toolCallId?: string; content?: { text?: string } };
+      // `len` and `sha` are what make "the same text twice" decidable: two similar thoughts share a
+      // 40-character prefix, identical ones share a length AND a hash. Without them a duplicated
+      // reasoning block reads exactly like a repeated sentence in the model's output.
       const text =
         typeof key.content?.text === "string"
-          ? ` ${JSON.stringify(key.content.text.slice(0, 40))} (${key.content.text.length})`
+          ? ` ${JSON.stringify(key.content.text.slice(0, 40))} len=${key.content.text.length} sha=${createHash("sha1").update(key.content.text).digest("hex").slice(0, 8)}`
           : "";
       process.stderr.write(`[codent-acp] → ${update.sessionUpdate} ${key.messageId ?? key.toolCallId ?? ""}${text}\n`);
     }
