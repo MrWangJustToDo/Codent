@@ -70,14 +70,16 @@ export function buildElicitationRequest(sessionId: string, ask: AskUserInteracti
       message: ask.question,
       requestedSchema: {
         type: "object",
-        properties: { answer: { type: "string", title: ask.question } },
+        properties: { answer: { type: "string", title: "Answer" } },
         required: ["answer"],
       },
     };
   }
+  // The question is the form's `message`; repeating it as the field's title rendered it twice (reported
+  // from Zed as a duplicated title). Each field gets a label instead.
   const choice = ask.multiSelect
-    ? { type: "array" as const, items: { type: "string" as const, enum: options }, title: ask.question }
-    : { type: "string" as const, enum: options, title: ask.question };
+    ? { type: "array" as const, items: { type: "string" as const, enum: options }, title: "Select all that apply" }
+    : { type: "string" as const, enum: options, title: "Choose one" };
   return {
     mode: "form",
     sessionId,
@@ -104,16 +106,23 @@ export interface ElicitedAnswer {
 export function mapElicitationResponse(response: CreateElicitationResponse): ElicitedAnswer | null {
   if (response.action !== "accept") return null;
   const content = (response as { content?: Record<string, unknown> }).content ?? {};
-  // A typed answer outranks the buttons (see `buildElicitationRequest`): it is the one case the form
-  // cannot express as a selection, and the model should see it as the user's own words.
   const custom = typeof content.custom === "string" ? content.custom.trim() : "";
-  if (custom) return { answer: custom, draft: custom };
   const value = content.answer;
+  // Multi-select and the free-form field are BOTH answers, not alternatives: a user who ticks two options
+  // and types one more expects all three. Dropping the ticks when `custom` was filled was reported as
+  // "only my typing was sent" — the typed text is one more entry in the list, kept separately as `draft`.
   if (Array.isArray(value)) {
     const selected = value.map(String);
-    return { answer: selected.join(", "), selected };
+    const parts = [...selected, ...(custom ? [custom] : [])];
+    return {
+      answer: parts.join(", "),
+      ...(selected.length > 0 ? { selected } : {}),
+      ...(custom ? { draft: custom } : {}),
+    };
   }
+  // Single select: typing overrides the radio choice, so the typed text is the answer (and a draft).
+  if (custom) return { answer: custom, draft: custom };
   // A selection is not a "custom answer": `draft` is documented as the free-form text the user typed, and
-  // an answer without options already IS that text. Only `custom` (above) is a draft.
+  // an answer without options already IS that text.
   return { answer: value == null ? "" : String(value) };
 }

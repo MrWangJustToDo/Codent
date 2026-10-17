@@ -829,6 +829,20 @@ const compactKey = "compact:agent_1";
     JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"] } })) ===
       JSON.stringify({ answer: "a, b", selected: ["a", "b"] })
   );
+  // Ticking options AND typing is not either/or: dropping the ticks was reported as "only my typing was
+  // sent", and the model then cannot tell which predefined answers were chosen.
+  check(
+    "…and a typed answer is an ADDITIONAL entry, not a replacement",
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"], custom: "mine" } })) ===
+      JSON.stringify({ answer: "a, b, mine", selected: ["a", "b"], draft: "mine" }),
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"], custom: "mine" } }))
+  );
+  // The question is the form's `message`; a field title repeating it rendered the question twice in Zed.
+  check(
+    "the question is not repeated in the field labels",
+    withOptions.message === "Pick" && properties.answer?.title !== "Pick" && properties.custom?.title !== "Pick",
+    JSON.stringify({ message: withOptions.message, labels: [properties.answer?.title, properties.custom?.title] })
+  );
   const noOptions = buildElicitationRequest("s1", { toolCallId: "c2", question: "Why?" });
   const plain = noOptions.requestedSchema.properties?.answer ?? {};
   check(
