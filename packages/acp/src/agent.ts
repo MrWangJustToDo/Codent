@@ -734,18 +734,33 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
+    // A prompt that arrives while the turn is SUSPENDED on the client (approval / `ask_user`) is the
+    // client's force-submit, not a queued follow-up: the interaction it waits on was answered by the
+    // user TYPING instead of approving, so queueing behind it waits on a turn that waits on the client
+    // — a deadlock nothing can break, because the answer is never sent. Denying what is pending (which
+    // is what cancelling does) lets that turn finish as `cancelled` and this prompt run.
+    if (bridge.pending.size > 0) interruptBridge(bridge);
     const run = bridge.chain.then(() => runPrompt(bridge, ctx.params));
     bridge.chain = run.catch(() => undefined);
     return run;
   });
 
-  app.onNotification(methods.agent.session.cancel, (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
-    if (!bridge) return;
+  /**
+   * End the turn that is running or suspended. `session/cancel` is the explicit request; a prompt that
+   * arrives while the turn waits on the CLIENT (an approval or `ask_user`) reuses it, because the answer
+   * it is waiting for is never coming (see `session/prompt`).
+   */
+  const interruptBridge = (bridge: SessionBridge): void => {
     bridge.cancelled = true;
     for (const controller of bridge.pending) controller.abort();
     bridge.pending.clear();
     void bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
+  };
+
+  app.onNotification(methods.agent.session.cancel, (ctx) => {
+    const bridge = bridges.get(ctx.params.sessionId);
+    if (!bridge) return;
+    interruptBridge(bridge);
   });
 
   const runPrompt = async (bridge: SessionBridge, params: PromptRequest): Promise<{ stopReason: StopReason }> => {
