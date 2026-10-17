@@ -741,22 +741,23 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
     const bridge = bridges.get(ctx.params.sessionId);
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
-    // A prompt that arrives while the turn is SUSPENDED on the client (approval / `ask_user`) is the
-    // client's force-submit, not a queued follow-up: the interaction it waits on was answered by the
-    // user TYPING instead of approving, so queueing behind it waits on a turn that waits on the client
-    // — a deadlock nothing can break, because the answer is never sent. Denying what is pending (which
-    // is what cancelling does) lets that turn finish as `cancelled` and this prompt run.
+    // A prompt arriving while the turn is SUSPENDED on the client (approval / `ask_user`) is force-submit:
+    // the answer it waits for was replaced by typing, so queueing waits on a client that will never answer.
+    // Denying what is pending (what cancelling does) ends that turn as `cancelled`; this prompt then runs.
     if (bridge.pending.size > 0) interruptBridge(bridge);
-    const run = bridge.chain.then(() => runPrompt(bridge, ctx.params));
+    const run = bridge.chain.then(async () => {
+      if (TRACE_UPDATES) process.stderr.write(`[codent-acp] <- session/prompt ${ctx.params.sessionId}\n`);
+      const startedAt = Date.now();
+      const result = await runPrompt(bridge, ctx.params);
+      if (TRACE_UPDATES) process.stderr.write(`[codent-acp] -> ${result.stopReason} ${Date.now() - startedAt}ms\n`);
+      return result;
+    });
     bridge.chain = run.catch(() => undefined);
     return run;
   });
 
   /**
-   * End the turn that is running or suspended. `session/cancel` is the explicit request; a prompt that
-   * arrives while the turn waits on the CLIENT (an approval or `ask_user`) reuses it, because the answer
-   * it is waiting for is never coming (see `session/prompt`).
-   */
+  /** End the running or suspended turn: `session/cancel`, or a prompt that arrives while it waits. */
   const interruptBridge = (bridge: SessionBridge): void => {
     bridge.cancelled = true;
     for (const controller of bridge.pending) controller.abort();

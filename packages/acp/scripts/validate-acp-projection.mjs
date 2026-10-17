@@ -26,7 +26,13 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { AcpProjector, sessionConfigOptions, toolLocationsFor } from "../dist/index.mjs";
+import {
+  AcpProjector,
+  buildElicitationRequest,
+  mapElicitationResponse,
+  sessionConfigOptions,
+  toolLocationsFor,
+} from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 
@@ -782,6 +788,58 @@ const compactKey = "compact:agent_1";
     JSON.stringify(after.map((u) => u.content.text))
   );
   c.stop();
+}
+
+// ===========================================================================
+// 10. `ask_user` keeps the free-form answer the TUI offers
+// ===========================================================================
+//
+// The tool's contract is "the user can still provide a free-form answer", and the TUI gives them a text
+// field next to the options. A form whose only field is an `enum` takes that away — the client can render
+// buttons and nothing else — so the options carry a companion string, and a typed answer outranks the
+// selection (and is reported as the answer's `draft`).
+{
+  const withOptions = buildElicitationRequest("s1", { toolCallId: "c1", question: "Pick", options: ["a", "b"] });
+  const properties = withOptions.requestedSchema.properties ?? {};
+  check(
+    "an options question also offers a free-form field",
+    properties.custom?.type === "string" && Array.isArray(properties.answer?.enum),
+    JSON.stringify(Object.keys(properties))
+  );
+  check(
+    "…and passes the protocol's own elicitation schema",
+    (() => {
+      const parsed = zod.zCreateElicitationRequest.safeParse(withOptions);
+      return parsed.success ? true : JSON.stringify(parsed.error.issues.slice(0, 2));
+    })() === true
+  );
+  check(
+    "a typed answer becomes the answer AND the draft (not the selected option)",
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a", custom: "my own" } })) ===
+      JSON.stringify({ answer: "my own", draft: "my own" }),
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a", custom: "my own" } }))
+  );
+  check(
+    "a selection still maps to the option, with no draft",
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a" } })) ===
+      JSON.stringify({ answer: "a" })
+  );
+  check(
+    "a multi-select answer keeps its selected list",
+    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"] } })) ===
+      JSON.stringify({ answer: "a, b", selected: ["a", "b"] })
+  );
+  const noOptions = buildElicitationRequest("s1", { toolCallId: "c2", question: "Why?" });
+  const plain = noOptions.requestedSchema.properties?.answer ?? {};
+  check(
+    "a question with no options is plain free text",
+    plain.type === "string" && !Array.isArray(plain.enum),
+    JSON.stringify(plain)
+  );
+  check(
+    "declining an elicitation is a null answer, not an empty string",
+    mapElicitationResponse({ action: "decline" }) === null
+  );
 }
 
 finish(checker.failures);

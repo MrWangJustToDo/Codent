@@ -58,12 +58,26 @@ export interface AskUserInteraction {
  */
 export function buildElicitationRequest(sessionId: string, ask: AskUserInteraction): CreateElicitationRequest {
   const options = ask.options ?? [];
-  const property =
-    options.length > 0
-      ? ask.multiSelect
-        ? { type: "array" as const, items: { type: "string" as const, enum: options }, title: ask.question }
-        : { type: "string" as const, enum: options, title: ask.question }
-      : { type: "string" as const, title: ask.question };
+  // The question is never a closed set: the tool's own contract says "the user can still provide a
+  // free-form answer", and the TUI gives them a text field next to the options. A form whose only field
+  // is an `enum` takes that away — the client can render the buttons and nothing else — so the options
+  // get a companion string. `custom` wins when filled, and is reported as the answer's `draft`.
+  if (options.length === 0) {
+    return {
+      mode: "form",
+      sessionId,
+      toolCallId: ask.toolCallId,
+      message: ask.question,
+      requestedSchema: {
+        type: "object",
+        properties: { answer: { type: "string", title: ask.question } },
+        required: ["answer"],
+      },
+    };
+  }
+  const choice = ask.multiSelect
+    ? { type: "array" as const, items: { type: "string" as const, enum: options }, title: ask.question }
+    : { type: "string" as const, enum: options, title: ask.question };
   return {
     mode: "form",
     sessionId,
@@ -71,7 +85,10 @@ export function buildElicitationRequest(sessionId: string, ask: AskUserInteracti
     message: ask.question,
     requestedSchema: {
       type: "object",
-      properties: { answer: property },
+      properties: {
+        answer: choice,
+        custom: { type: "string", title: "Or type your own answer", description: "Optional." },
+      },
       required: ["answer"],
     },
   };
@@ -87,11 +104,16 @@ export interface ElicitedAnswer {
 export function mapElicitationResponse(response: CreateElicitationResponse): ElicitedAnswer | null {
   if (response.action !== "accept") return null;
   const content = (response as { content?: Record<string, unknown> }).content ?? {};
+  // A typed answer outranks the buttons (see `buildElicitationRequest`): it is the one case the form
+  // cannot express as a selection, and the model should see it as the user's own words.
+  const custom = typeof content.custom === "string" ? content.custom.trim() : "";
+  if (custom) return { answer: custom, draft: custom };
   const value = content.answer;
   if (Array.isArray(value)) {
     const selected = value.map(String);
     return { answer: selected.join(", "), selected };
   }
-  const answer = value == null ? "" : String(value);
-  return { answer, draft: answer };
+  // A selection is not a "custom answer": `draft` is documented as the free-form text the user typed, and
+  // an answer without options already IS that text. Only `custom` (above) is a draft.
+  return { answer: value == null ? "" : String(value) };
 }
