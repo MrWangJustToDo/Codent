@@ -155,7 +155,17 @@ const throwingManager = {
   },
 };
 
-const failed = await summarizeProgress(traceMessages, "agent-a", throwingManager, "Find the testing framework");
+const unusedSpawn = async () => {
+  throw new Error("the summarizer must not be spawned when the budget lookup already failed");
+};
+
+const failed = await summarizeProgress(
+  traceMessages,
+  "agent-a",
+  throwingManager,
+  unusedSpawn,
+  "Find the testing framework"
+);
 assert.equal(failed, null, "summarizeProgress must return null when the summarizer manager throws");
 console.log("(c) summarizeProgress silent failure returns null OK");
 

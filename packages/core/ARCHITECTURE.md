@@ -6,7 +6,7 @@ For monorepo-wide context see [AGENTS.md](../../AGENTS.md). For public exports s
 
 ---
 
-## Completion status (as of 2026-09)
+## Completion status (as of 2026-10)
 
 | Area                                      | Status           | Notes                                                                                                                   |
 | ----------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -15,6 +15,7 @@ For monorepo-wide context see [AGENTS.md](../../AGENTS.md). For public exports s
 | TanStack agent loop                       | **Done**         | `AgentRunner` + middleware stack                                                                                        |
 | Event protocol + log extension              | **Done**         | Unified `AgentEventBus` (one bus, emit/intercept, retain/scope); the built-in log extension is its only `"*"` consumer                     |
 | Model config (`openai` / `anthropic`)     | **Done**         | `resolveModelConfig`, `createTextAdapter`                                                                               |
+| Model catalog read                        | **Done**         | ONE `loadModels` per host plane, carried on the runtime (`readModels()` — entries only); the selected model is the **session's** |
 | Session persistence                       | **Done**         | Unified `persistSession`; save failures reject + emit `session:save-error`                                              |
 | Agent Session API                         | **Done**         | Snapshot/commands + Local/Remote Host; **app is Session-only** (no ManagedAgent in UI)                                  |
 | Compaction (micro / auto / reactive)      | **Done**         | + manual compact via ManagedAgent / Session `compact`                                                                   |
@@ -96,7 +97,7 @@ packages/app/src/adapter/create-agent.ts
 
 | Symbol                                                            | Exported from `@codent/core`?                                                     |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `CodentAgent`, `CodentAgentOptions`                               | Yes — **preferred runtime entry** (`CodentAgent.create({ env, provider | direct, host? })`); `AgentRuntime` is internal (`dev.ts`) |
+| `CodentAgent`, `CodentAgentOptions`                               | Yes — **preferred runtime entry** (`CodentAgent.create({ env, provider | direct, host? })`); `AgentRuntime` is internal (`dev.ts`). `readModels()` reports the **catalog** the runtime was built with (entries, no active selection) |
 | `agentManager`, `AgentManager`                                    | Yes — **deprecated ambient fallback**; UI hosts must use AgentSession              |
 | `ManagedAgent`, `ManagedAgentConfig`                              | Yes — bootstrap only; app forbids importing ManagedAgent                            |
 | `AgentChatController`                                             | **No** — package-internal (`dev.ts` / validate); reached via ManagedAgent bootstrap |
@@ -125,10 +126,25 @@ lists/registers an entry's provider — a known, bounded cycle (both edges are n
 
 **Rules (enforced by `validate:layer-boundaries`):**
 
-That gate derives the edges from the imports rather than from a pattern: it resolves
-every relative specifier to its top-level layer and checks the pair against an edge
-table. Each entry carries a reason, and a `type-only` entry additionally forbids a
-runtime value from crossing — a re-exported type is an edge, but a weaker one.
+That gate derives the edges from the imports rather than from a pattern: it reads each
+file as one text (a multi-line `import { … } from "…"` is an edge too — the earlier
+line-at-a-time parser silently missed 16 of the `managers → agent` imports), resolves
+every relative specifier to its top-level layer, and checks the pair against an edge
+table. It enforces **three** properties:
+
+1. **Declared edges** — every used edge is in the table, each with a reason; a `type-only`
+   entry additionally forbids a runtime value from crossing. A re-exported type is an
+   edge, but a weaker one.
+2. **No dead grants** — every table entry is exercised by at least one import. A grant
+   nobody uses reads as a boundary while nothing tests it, and it hides the fact that the
+   module it was written for no longer crosses it (`env → runtime-types` and
+   `runtime → utils` were exactly that and were deleted).
+3. **Acyclic module graph** — the runtime-value import graph between **files** has no
+   cycle. This is the property the layer diagram cannot state: `models` ↔ `provider` and
+   `agent` ↔ `models` cross at layer granularity by design (config entries construct
+   providers; side-text-query reuses two leaf helpers), but the modules underneath form a
+   DAG. Type-only imports erase and may cycle freely — `runtime-types/hosts.ts` is a port
+   hub and does.
 
 - `agent/**` MUST NOT import `managers/**` (the manager-side ports it needs are declared in `runtime-types/hosts.ts`)
 - `models/**` MUST NOT import `managers/**`
@@ -139,6 +155,12 @@ runtime value from crossing — a re-exported type is an edge, but a weaker one.
 - UI channel lives in `agent/ui/ui-channel.ts`
 - Run middleware lives in `managers/middleware/` (wired by `run-agent`); plan-mode middleware stays in `agent/plan/`
 - The LSP transport port lives in `env/lsp.ts`, beside the `CoreEnv.createLspConnection` that names it
+- A value cycle is broken by **moving the shared function down or injecting the dependency**, never by
+  adding an edge. Both shipped fixes are worked examples: `getMessageContentSize` (renamed from its tool-only spelling) moved down into
+  `token-estimator.ts` (so `message-utils` → `token-estimator` is the only direction, and the
+  duplicated `estimateContentChars` disappeared with it), and `progress-summary` takes its summarizer
+  spawner as a `SummarizerSpawn` argument (`run-subagent` passes `runSubagent`, and
+  `SubagentRunDeps` moved to `types.ts` so no type edge is needed either).
 
 > History: this replaced two gates that shared one regex (a specifier containing `/managers/`), so `models → agent`, `runtime-types → *`, `env → agent` and `agent → agent-session` had no coverage at all. Two gates covering two of six edges reads as coverage and is not.
 

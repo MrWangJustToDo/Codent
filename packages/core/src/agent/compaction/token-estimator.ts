@@ -7,8 +7,6 @@
 
 import { estimateImageInputTokens } from "../../models/estimate-image-tokens.js";
 
-import { getToolMessageContentSize } from "./message-utils.js";
-
 import type { ContentPart, ModelMessage } from "@tanstack/ai";
 
 const CHARS_PER_TOKEN = 4;
@@ -49,19 +47,30 @@ export function estimateContentPartChars(part: ContentPart): number {
   }
 }
 
-function estimateContentChars(content: ModelMessage["content"]): number {
+/**
+ * Approximate character size of message content (tool result or any other role).
+ *
+ * The ONE content-size reading: `estimateContentPartChars` above decides what a part costs, and every
+ * caller that needs "how big is this content" (a tool message's result, or a non-tool message's parts)
+ * goes through here. Two implementations of this walked apart once — the local one omitted the
+ * non-array `JSON.stringify` fallback, so an object-shaped content contributed 0 chars.
+ */
+export function getMessageContentSize(content: ModelMessage["content"]): number {
   if (typeof content === "string") return content.length;
   if (content === null) return 0;
-
-  if (Array.isArray(content)) {
-    let total = 0;
-    for (const part of content) {
-      total += estimateContentPartChars(part);
+  if (!Array.isArray(content)) {
+    try {
+      return JSON.stringify(content).length;
+    } catch {
+      return 0;
     }
-    return total;
   }
 
-  return getStringLength(content);
+  let size = 0;
+  for (const part of content) {
+    size += estimateContentPartChars(part);
+  }
+  return size;
 }
 
 function estimateToolCallsChars(toolCalls: ModelMessage["toolCalls"]): number {
@@ -88,10 +97,10 @@ export function estimateMessageTokens(message: ModelMessage): number {
   let chars = message.role.length + 10;
 
   if (message.role === "tool") {
-    chars += getToolMessageContentSize(message.content);
+    chars += getMessageContentSize(message.content);
     chars += getStringLength(message.toolCallId);
   } else {
-    chars += estimateContentChars(message.content);
+    chars += getMessageContentSize(message.content);
     if (message.role === "assistant") {
       chars += estimateToolCallsChars(message.toolCalls);
       chars += estimateThinkingChars(message.thinking);

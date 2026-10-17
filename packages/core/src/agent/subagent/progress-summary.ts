@@ -29,9 +29,9 @@ import { errorMessage } from "../../utils/errors.js";
 import { serializeConversation } from "../compaction/serialize-conversation.js";
 import { resolveSummarizationInputBudget, splitMessagesByTokenBudget } from "../compaction/summarization-budget.js";
 
-import { runSubagent } from "./run-subagent.js";
 import { SUBAGENT_STOP_NOTICES } from "./subagent-stop-reason.js";
 
+import type { SubagentConfig, SubagentResult, SubagentRunDeps } from "./types.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
 
 // ============================================================================
@@ -43,6 +43,14 @@ export const PROGRESS_SUMMARY_MARKER = "[progress summary from incomplete subage
 
 /** Maximum characters for a single progress summary batch output. */
 const PROGRESS_BATCH_MAX_OUTPUT_LENGTH = 12_000;
+
+/**
+ * Spawns one summarizer subagent and resolves with its terminal result.
+ *
+ * The runner is INJECTED (`run-subagent` passes its own `runSubagent`) instead of imported here: the
+ * fallback is called from the runner, so importing it back would make the two modules a runtime cycle.
+ */
+export type SummarizerSpawn = (config: SubagentConfig, deps: SubagentRunDeps) => Promise<SubagentResult>;
 
 /** System prompt for the progress-summary subagent (parent-spawned, no tools). */
 const PROGRESS_SUMMARY_SYSTEM_PROMPT = `You are a helpful assistant tasked with summarizing the progress of an interrupted exploration subagent.
@@ -198,6 +206,7 @@ export interface ProgressSummaryStream {
  * @param messages - Subagent UIMessage[] execution trace (the preview messages)
  * @param parentAgentId - Parent agent ID (spawns the summarizer)
  * @param manager - Agent manager
+ * @param spawn - The runner used to spawn the summarizer (injected; see {@link SummarizerSpawn})
  * @param taskPrompt - Optional original task prompt, included for context
  * @param stream - Optional hooks to observe the report while it generates
  * @returns The progress summary (already truncated), or `null` if summarization failed
@@ -206,6 +215,7 @@ export async function summarizeProgress(
   messages: UIMessage[],
   parentAgentId: string,
   manager: AgentManager,
+  spawn: SummarizerSpawn,
   taskPrompt?: string,
   stream?: ProgressSummaryStream,
   emitError?: (error: string) => void
@@ -220,9 +230,9 @@ export async function summarizeProgress(
 
     let summary: string;
     if (batches.length <= 1) {
-      summary = await summarizeProgressBatch(modelMessages, parentAgentId, manager, taskPrompt, stream);
+      summary = await summarizeProgressBatch(modelMessages, parentAgentId, manager, spawn, taskPrompt, stream);
     } else {
-      summary = await summarizeProgressBatched(batches, parentAgentId, manager, taskPrompt, stream);
+      summary = await summarizeProgressBatched(batches, parentAgentId, manager, spawn, taskPrompt, stream);
     }
 
     const trimmed = summary.trim();
@@ -243,13 +253,14 @@ async function summarizeProgressBatch(
   messages: ModelMessage[],
   parentAgentId: string,
   manager: AgentManager,
+  spawn: SummarizerSpawn,
   taskPrompt?: string,
   stream?: ProgressSummaryStream
 ): Promise<string> {
   // Rebuild UIMessage-free prompt: the batch is already ModelMessage[], but
   // buildProgressSummaryPrompt takes UIMessage[]. We serialize directly.
   const prompt = buildProgressSummaryPromptFromModel(messages, taskPrompt);
-  return runSummarizerSubagent(prompt, parentAgentId, manager, stream);
+  return runSummarizerSubagent(prompt, parentAgentId, manager, spawn, stream);
 }
 
 /** Summarize multiple batches, then merge partial reports with a final pass. */
@@ -257,6 +268,7 @@ async function summarizeProgressBatched(
   batches: ModelMessage[][],
   parentAgentId: string,
   manager: AgentManager,
+  spawn: SummarizerSpawn,
   taskPrompt?: string,
   stream?: ProgressSummaryStream
 ): Promise<string> {
@@ -267,12 +279,12 @@ async function summarizeProgressBatched(
       taskPrompt != null
         ? `${taskPrompt} (segment ${i + 1} of ${batches.length})`
         : `Segment ${i + 1} of ${batches.length} of the subagent's execution trace`;
-    const partial = await summarizeProgressBatch(batch, parentAgentId, manager, batchLabel, stream);
+    const partial = await summarizeProgressBatch(batch, parentAgentId, manager, spawn, batchLabel, stream);
     partials.push(partial);
   }
 
   const mergedInput = partials.map((text, index) => `## Segment ${index + 1}\n\n${text}`).join("\n\n");
-  return runSummarizerSubagent(`${mergedInput}\n\n${PROGRESS_MERGE_PROMPT}`, parentAgentId, manager, stream);
+  return runSummarizerSubagent(`${mergedInput}\n\n${PROGRESS_MERGE_PROMPT}`, parentAgentId, manager, spawn, stream);
 }
 
 /** Serialize a ModelMessage[] batch directly (avoids a UIMessage round-trip). */
@@ -288,9 +300,10 @@ async function runSummarizerSubagent(
   prompt: string,
   parentAgentId: string,
   manager: AgentManager,
+  spawn: SummarizerSpawn,
   stream?: ProgressSummaryStream
 ): Promise<string> {
-  const result = await runSubagent(
+  const result = await spawn(
     {
       prompt,
       parentAgentId,

@@ -1,5 +1,5 @@
 /**
- * Layer-boundary gate (generalized).
+ * Layer-boundary + module-graph gate.
  *
  * `validate-agent-managers-boundary` and `validate-models-managers-boundary` each
  * matched one literal pattern — a specifier containing `/managers/`. Two gates, one
@@ -19,6 +19,22 @@
  * because it re-exports manager classes as types, and that has to be a registered
  * choice rather than a loophole — but it is a weaker coupling than a runtime value,
  * so the table records which of the two it permits.
+ *
+ * ## Three properties, three checks
+ *
+ * 1. **Declared edges** — every used edge is in the table, with its mode and (where
+ *    narrowed) its `onlySources` / `onlyTargets` restriction honoured.
+ * 2. **No dead grants** — every edge in the table is exercised by at least one import.
+ *    A grant nobody uses reads as a boundary that exists while nothing tests it, and
+ *    the next module to cross it inherits an approval it never had to argue for.
+ * 3. **Acyclic at MODULE granularity** — the graph of *runtime-value* imports between
+ *    files has no cycle. This is the property the layer table cannot state: `models`
+ *    and `provider` legitimately import each other (config entries construct providers,
+ *    providers resolve connections from config), and `agent`/`models` share a pair of
+ *    leaf helpers — the layer diagram is not a DAG. What must hold is that the
+ *    underlying module graph is: a cycle between files means one module observes
+ *    another half-initialized at import time. Type-only imports are erased and may
+ *    cycle freely (the `runtime-types` ports do exactly that).
  *
  * Run: pnpm --filter @codent/core run validate:layer-boundaries
  */
@@ -88,7 +104,7 @@ function splitLayer(relPath) {
  * - `onlyTargets` — only these targets *within the target layer* may be imported.
  *
  * An unlisted pair fails the gate, and so does a listed pair that violates its
- * restriction.
+ * restriction. A listed pair that nothing exercises also fails (no dead grants).
  */
 const ALLOWED_EDGES = {
   // managers is the orchestration layer: it composes every domain module.
@@ -117,8 +133,9 @@ const ALLOWED_EDGES = {
   //
   // `side-text-query` reuses two leaf modules that live under `agent/`: the stream
   // error helper (pure chunk → message) and the global usage history (whose IO layer
-  // depends only on env + TokenUsage). Neither imports `models/`, so there is no
-  // cycle — and the allowlist names both files so a third one fails the gate.
+  // depends only on env + TokenUsage). Neither imports `models/`, so the MODULE graph
+  // stays acyclic even though the layer graph has an `agent ↔ models` pair — which is
+  // exactly why the cycle check below runs at module granularity.
   "models → agent": {
     mode: "allow",
     reason:
@@ -154,7 +171,8 @@ const ALLOWED_EDGES = {
 
   // env is the runtime abstraction at the bottom of the stack. It declares the LSP
   // transport port (hosts implement `createLspConnection`) but must not reach up.
-  "env → runtime-types": { mode: "allow", reason: "shared payload types" },
+  // (`env → runtime-types` was an unused grant: env types itself. It is deliberately
+  // NOT here — a declared edge with no importer is what the dead-grant check rejects.)
   "env → utils": { mode: "allow", reason: "ids" },
 
   // agent-session is the host-facing control surface. It is a host layer: it holds
@@ -187,13 +205,13 @@ const ALLOWED_EDGES = {
   "runtime → managers": { mode: "allow", reason: "owns the AgentManager" },
   "runtime → agent-session": { mode: "allow", reason: "owns / creates the AgentSessionHost" },
   "runtime → agent": { mode: "type-only", reason: "AgentToolConfig type for session defaults" },
-  "runtime → utils": { mode: "allow", reason: "ids" },
   "managers → runtime": { mode: "type-only", reason: "ManagedAgent / manager name the owning AgentRuntime" },
 
   // models (config + metadata) and provider (the LLM connection plane) are a coupled pair:
   // `provider→models` resolves a connection from config + models.dev types, and
   // `models→provider` lists an entry's provider / registers it. The dependency is a known,
-  // bounded cycle, not a DAG; both edges are narrowed so it cannot widen into a blanket.
+  // bounded pair at LAYER granularity, not a module cycle; both edges are narrowed so it
+  // cannot widen into a blanket.
   "provider → models": {
     mode: "allow",
     reason: "resolveModelConnection/resolveModelConfig + models.dev metadata types",
@@ -215,27 +233,22 @@ const ALLOWED_EDGES = {
  */
 const EXEMPT_SOURCE_LAYERS = new Set(["dev", "index"]);
 
-/** Resolved specifier → `{ layer, within }`, or `null` for a bare package / escaped path. */
-function resolveTarget(fromFileRel, specifier) {
-  const rel = relative(srcRoot, resolve(srcRoot, dirname(fromFileRel), specifier));
-  if (rel.startsWith("..")) return null; // escaped src/ (e.g. a relative import out of the package)
-  return splitLayer(rel);
-}
-
 // ============================================================================
-// Import extraction
+// Import extraction (whole-file, so a multi-line import is an edge too)
 // ============================================================================
-
-/** `import ... from "x"` / `import("x")` / `require("x")` / `export ... from "x"`. */
-const IMPORT_RE =
-  /(?:^|\s)(?:import|export)\s(?:[\s\S]*?)\sfrom\s*["']([^"']+)["']|(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 /**
- * `import type { X } from "..."` and `export type { X } from "..."` are the only
- * forms that erase at compile time. A bare `import { type X }` is still a runtime
- * import (the statement is emitted), so it is deliberately not counted here.
+ * `import type { … } from "x"` / `import { … } from "x"` / `export type { … } from "x"` /
+ * `import("x")` / `require("x")` / side-effect `import "x"`, across line breaks.
+ *
+ * Group 1 is the `type` marker, group 2 the imported binding list, group 3 the specifier.
+ * The previous implementation matched one LINE at a time, so every import formatted across
+ * lines (`import {\n  a,\n  b,\n} from "./x.js";`) was invisible to the gate: 14 of the
+ * `managers → agent` imports were missing from its count while the gate printed a clean
+ * pass. Reading the file as one text is what makes the count the real one.
  */
-const TYPE_ONLY_RE = /(?:^|\s)(?:import|export)\s+type\s/;
+const IMPORT_RE =
+  /(?:^|\s)(?:import|export)\s+(type\s+)?([\s\S]*?)\s+from\s*["']([^"']+)["']|(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)|(?:^|\s)import\s*["']([^"']+)["']/g;
 
 function walkTsFiles(dir) {
   const out = [];
@@ -247,15 +260,55 @@ function walkTsFiles(dir) {
   return out;
 }
 
-function extractSpecifiers(line) {
-  const specs = [];
-  IMPORT_RE.lastIndex = 0;
-  let m;
-  while ((m = IMPORT_RE.exec(line)) !== null) {
-    const spec = m[1] ?? m[2];
-    if (spec.startsWith(".")) specs.push(spec);
+/** Resolve a relative specifier from `fromFile` to an on-disk module, or `null`. */
+function resolveModule(fromFile, specifier) {
+  if (!specifier.startsWith(".")) return null;
+  let target = resolve(srcRoot, dirname(relative(srcRoot, fromFile)), specifier);
+  if (target.endsWith(".js")) target = target.slice(0, -3) + ".ts";
+  else if (!target.endsWith(".ts") && !target.endsWith(".tsx")) target += ".ts";
+  try {
+    statSync(target);
+  } catch {
+    target = target.replace(/\.tsx?$/, "/index.ts");
   }
-  return specs;
+  try {
+    statSync(target);
+  } catch {
+    return null;
+  }
+  return target.startsWith(srcRoot) ? target : null;
+}
+
+/**
+ * One file's imports.
+ *
+ * @returns `{ layerEdges, valueEdges }` — the layer edges this file exercises (with the
+ *   value/type split restricted to that pair), and the runtime-value module targets.
+ */
+function readImports(file) {
+  const text = readFileSync(file, "utf8");
+  const rel = relative(srcRoot, file);
+  const source = splitLayer(rel);
+  const layerEdges = [];
+  /** @type {Set<string>} absolute paths this module imports for its runtime values. */
+  const valueEdges = new Set();
+
+  IMPORT_RE.lastIndex = 0;
+  let match;
+  while ((match = IMPORT_RE.exec(text)) !== null) {
+    const specifier = match[3] ?? match[4] ?? match[5];
+    if (!specifier) continue;
+    const targetFile = resolveModule(file, specifier);
+    if (!targetFile) continue;
+    const typeOnly = Boolean(match[1]);
+    if (!typeOnly && targetFile !== file) valueEdges.add(targetFile);
+
+    const target = splitLayer(relative(srcRoot, targetFile));
+    if (target.layer === source.layer) continue;
+    layerEdges.push({ source, target, typeOnly, specifier, line: text.slice(0, match.index).split("\n").length });
+  }
+
+  return { layerEdges, valueEdges };
 }
 
 // ============================================================================
@@ -265,59 +318,51 @@ function extractSpecifiers(line) {
 const unlistedLayer = [];
 const unlistedEdge = [];
 const wrongMode = [];
+const deadEdges = [];
+const valueCycles = [];
 const edges = new Map();
+const files = walkTsFiles(srcRoot);
+const valueGraph = new Map();
 
-for (const file of walkTsFiles(srcRoot)) {
-  const sourceLayer = splitLayer(relative(srcRoot, file)).layer;
-  if (EXEMPT_SOURCE_LAYERS.has(sourceLayer)) continue;
+for (const file of files) {
+  const { layerEdges, valueEdges } = readImports(file);
+  valueGraph.set(file, valueEdges);
+  if (EXEMPT_SOURCE_LAYERS.has(splitLayer(relative(srcRoot, file)).layer)) continue;
 
-  // `rel` still needs the posix-ish separators the specifier resolver expects.
-  const rel = relative(srcRoot, file);
-  const lines = readFileSync(file, "utf8").split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const typeOnly = TYPE_ONLY_RE.test(line);
-    for (const spec of extractSpecifiers(line)) {
-      const target = resolveTarget(rel, spec);
-      if (target === null || target.layer === sourceLayer) continue;
+  for (const edge of layerEdges) {
+    const edgeKey = `${edge.source.layer} → ${edge.target.layer}`;
+    let record = edges.get(edgeKey);
+    if (!record) {
+      record = { runtime: [], typeOnly: [] };
+      edges.set(edgeKey, record);
+    }
+    const where = {
+      file: relative(join(scriptDir, ".."), file),
+      line: edge.line,
+      specifier: edge.specifier,
+      within: edge.target.within,
+    };
+    (edge.typeOnly ? record.typeOnly : record.runtime).push(where);
 
-      const edgeKey = `${sourceLayer} → ${target.layer}`;
-      let record = edges.get(edgeKey);
-      if (!record) {
-        record = { runtime: [], typeOnly: [] };
-        edges.set(edgeKey, record);
-      }
-      const where = {
-        file: relative(join(scriptDir, ".."), file),
-        line: i + 1,
-        specifier: spec,
-        within: target.within,
-      };
-      (typeOnly ? record.typeOnly : record.runtime).push(where);
-
-      const allowed = ALLOWED_EDGES[edgeKey];
-      if (!allowed) {
-        unlistedEdge.push({ edgeKey, ...where, typeOnly });
-      } else if (allowed.mode === "type-only" && !typeOnly) {
-        wrongMode.push({ edgeKey, ...where, allowed });
-      } else {
-        const sourceWithin = splitLayer(relative(srcRoot, file)).within;
-        if (allowed.onlySources && !allowed.onlySources.includes(sourceWithin)) {
-          unlistedEdge.push({
-            edgeKey,
-            ...where,
-            typeOnly,
-            restriction: `only these source files: ${allowed.onlySources.join(", ")}`,
-          });
-        } else if (allowed.onlyTargets && !allowed.onlyTargets.includes(target.within)) {
-          unlistedEdge.push({
-            edgeKey,
-            ...where,
-            typeOnly,
-            restriction: `only these targets: ${allowed.onlyTargets.join(", ")}`,
-          });
-        }
-      }
+    const allowed = ALLOWED_EDGES[edgeKey];
+    if (!allowed) {
+      unlistedEdge.push({ edgeKey, ...where, typeOnly: edge.typeOnly });
+    } else if (allowed.mode === "type-only" && !edge.typeOnly) {
+      wrongMode.push({ edgeKey, ...where, allowed });
+    } else if (allowed.onlySources && !allowed.onlySources.includes(edge.source.within)) {
+      unlistedEdge.push({
+        edgeKey,
+        ...where,
+        typeOnly: edge.typeOnly,
+        restriction: `only these source files: ${allowed.onlySources.join(", ")}`,
+      });
+    } else if (allowed.onlyTargets && !allowed.onlyTargets.includes(edge.target.within)) {
+      unlistedEdge.push({
+        edgeKey,
+        ...where,
+        typeOnly: edge.typeOnly,
+        restriction: `only these targets: ${allowed.onlyTargets.join(", ")}`,
+      });
     }
   }
 }
@@ -335,14 +380,69 @@ const knownLayers = new Set([
   "runtime-types",
   "utils",
 ]);
-for (const file of walkTsFiles(srcRoot)) {
+for (const file of files) {
   if (file.endsWith(".d.ts")) continue;
   const layer = splitLayer(relative(srcRoot, file)).layer;
   if (EXEMPT_SOURCE_LAYERS.has(layer)) continue;
   if (!knownLayers.has(layer)) unlistedLayer.push(layer);
 }
 
-const problems = [...unlistedLayer, ...unlistedEdge, ...wrongMode];
+// No dead grants: a table entry that no import exercises is an approval nobody uses.
+for (const edgeKey of Object.keys(ALLOWED_EDGES)) {
+  if (!edges.has(edgeKey)) deadEdges.push(edgeKey);
+}
+
+// No runtime-value module cycles (type-only imports are erased and exempt).
+valueCycles.push(...findCycles(valueGraph));
+
+/**
+ * Tarjan's strongly-connected components over the runtime-value module graph; every
+ * component with more than one member is a cycle.
+ *
+ * @param {Map<string, Set<string>>} graph
+ * @returns {string[][]}
+ */
+function findCycles(graph) {
+  let counter = 0;
+  const index = new Map();
+  const low = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const components = [];
+
+  const visit = (node) => {
+    index.set(node, counter);
+    low.set(node, counter);
+    counter += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    for (const next of graph.get(node) ?? []) {
+      if (!index.has(next)) {
+        visit(next);
+        low.set(node, Math.min(low.get(node), low.get(next)));
+      } else if (onStack.has(next)) {
+        low.set(node, Math.min(low.get(node), index.get(next)));
+      }
+    }
+
+    if (low.get(node) === index.get(node)) {
+      const component = [];
+      let member;
+      do {
+        member = stack.pop();
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== node);
+      if (component.length > 1) components.push(component);
+    }
+  };
+
+  for (const node of graph.keys()) if (!index.has(node)) visit(node);
+  return components;
+}
+
+const problems = [...unlistedLayer, ...unlistedEdge, ...wrongMode, ...deadEdges, ...valueCycles];
 
 if (problems.length > 0) {
   if (unlistedLayer.length > 0) {
@@ -371,6 +471,26 @@ if (problems.length > 0) {
     console.error("");
   }
 
+  if (deadEdges.length > 0) {
+    console.error("layer-boundary: declared edge(s) that no import exercises (dead grant):");
+    for (const edgeKey of deadEdges) {
+      console.error(`  [dead-edge] ${edgeKey}  — ${ALLOWED_EDGES[edgeKey].reason}`);
+    }
+    console.error("  Delete the grant, or import through it. An edge nobody uses is not a boundary.");
+    console.error("");
+  }
+
+  if (valueCycles.length > 0) {
+    console.error("layer-boundary: runtime-value module cycle(s) — a module observes another half-initialized:");
+    for (const component of valueCycles) {
+      const members = component.map((f) => relative(srcRoot, f)).sort();
+      console.error(`  [value-cycle] ${members.join("  <->  ")}`);
+    }
+    console.error("  Break the cycle (move the shared function down, or inject the dependency).");
+    console.error("  A TYPE-ONLY cycle is fine — `import type` erases at compile time.");
+    console.error("");
+  }
+
   console.error("Layer diagram (ARCHITECTURE.md §1.5): managers → agent → models → env, with");
   console.error("runtime-types as the shared leaf. Fix the import, or register the edge in");
   console.error("ALLOWED_EDGES with a reason. A type-only edge is still an edge.");
@@ -380,7 +500,6 @@ if (problems.length > 0) {
 // ============================================================================
 // Report (always printed — the gate should be readable, not just silent)
 // ============================================================================
-
 console.log("layer boundaries validated. Edges in use:");
 for (const [edgeKey, record] of [...edges.entries()].sort()) {
   const allowed = ALLOWED_EDGES[edgeKey];
@@ -391,3 +510,4 @@ for (const [edgeKey, record] of [...edges.entries()].sort()) {
   const mode = allowed.mode === "type-only" ? "type-only" : "allow";
   console.log(`  ${edgeKey}  [${mode}]  ${count} import(s): ${parts.join(", ")}`);
 }
+console.log(`module graph: ${files.length} modules, 0 runtime-value cycles`);

@@ -3,6 +3,7 @@
  */
 
 import type { SubagentStopReason } from "./subagent-stop-reason.js";
+import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { ToolsRecord } from "../tools/runtime/tools-record.js";
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -29,6 +30,17 @@ export const SUBAGENT_NO_TRUNCATE = Infinity;
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Dependencies a subagent run needs from its caller.
+ *
+ * Declared here (the leaf types module) rather than in `run-subagent.ts` so the progress-summary
+ * fallback can name a spawner's signature without importing the runner that calls it — that edge was
+ * a real runtime cycle (`run-subagent → progress-summary → run-subagent`).
+ */
+export interface SubagentRunDeps {
+  manager: AgentManager;
+}
 
 export interface SubagentConfig {
   /** Optional custom ID for the subagent (auto-generated if not provided) */

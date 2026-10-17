@@ -6,6 +6,7 @@ export {
   resolveSubagentBridgeUI,
   type SubagentConfig,
   type SubagentResult,
+  type SubagentRunDeps,
 } from "./types.js";
 
 // System prompt
@@ -22,6 +23,6 @@ export { createSubagentTools } from "./subagent-tools.js";
 export { truncateSummary } from "./subagent-output.js";
 
 // Runner
-export { runSubagent, getSubagent, destroySubagent, type SubagentRunDeps } from "./run-subagent.js";
+export { runSubagent, getSubagent, destroySubagent } from "./run-subagent.js";
 
 export { countSubagentIterations, deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";

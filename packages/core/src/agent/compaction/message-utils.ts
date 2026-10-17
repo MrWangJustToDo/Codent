@@ -9,8 +9,6 @@
 
 import { convertMessagesToModelMessages, type ContentPart, type ModelMessage, type UIMessage } from "@tanstack/ai";
 
-import { estimateContentPartChars } from "./token-estimator";
-
 /** Build toolCallId → tool name from assistant `toolCalls`. */
 export function buildToolCallNameMap(messages: ModelMessage[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -73,25 +71,6 @@ export function serializeToolMessageContent(content: ModelMessage["content"]): s
     }
   }
   return parts.join("\n");
-}
-
-/** Approximate character size of tool-message content. */
-export function getToolMessageContentSize(content: ModelMessage["content"]): number {
-  if (typeof content === "string") return content.length;
-  if (content === null) return 0;
-  if (!Array.isArray(content)) {
-    try {
-      return JSON.stringify(content).length;
-    } catch {
-      return 0;
-    }
-  }
-
-  let size = 0;
-  for (const part of content) {
-    size += estimateContentPartChars(part);
-  }
-  return size;
 }
 
 function describeContentPart(part: ContentPart): string {

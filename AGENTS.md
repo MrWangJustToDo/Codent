@@ -149,6 +149,8 @@ The exclusivity is a **client** rule: a server (`pnpm start:server`) may itself 
 
 `createAgentSessionFromConfig` uses `resolveModelConfigFromProvider()` with the runtime's `getModelProvider()` (the runtime's provider; ambient only for runtimes that omit it). All hosts share one model-config pipeline (`models-config.ts`): a local `.agents/config/models.json` (file), a remote provider (`/api/provider/info`), or a remote-session server (`/api/agent/models`) — `/models` switches the active entry/model. Remote mode forces `baseURL`/`apiKey` from the provider (re-forced after models.dev so upstream URLs cannot bypass). Remote mode forces the **model** too, so a remote entry's effective model is the one its provider serves (`/api/provider/info.model`, i.e. the server's `MODEL` env): `loadModels` reports it as `active.model` and guarantees it is in the entry's selectable list, because the recorded selection (a file's `active.model`, or the server's own models.json `active`) is never what a request carries. The serving side keeps the same invariant — `/api/provider/info` advertises the served model first and as `active`, `/api/agent/models` always offers the server's `.env` model. Validate: `pnpm --filter @codent/core run validate:provider-model-list`. `/api/env/vars` strips `API_KEY` / `*_API_KEY`. The footer prints the model id; the remote PLANES are shown in the Header (`remotePlanesFromConfig` → `remote-env` / `remote-provider` / `remote-session`), and `providerMode` itself is only surfaced in `/help`. Explicit model flags (`--model` / `--style` / `--base-url` / `--api-key`) set `AppConfig.modelExplicit`, which **isolates** the session from the on-disk `models.json` — `initConfig` skips loading it (so the flags are authoritative and `/models` lists nothing) and the first-run config editor is skipped; remote provider/session hosts keep their server-owned list.
 
+**One model-catalog read per runtime.** `loadModels(...)` runs once per host plane (flags / `.env` / `.agents/config/models.json` / remote provider); the result is carried on the runtime as a **catalog** (`CodentAgentOptions.models` → `CodentAgent.readModels()`, type `ModelCatalogRead = { entries }`) and every consumer projects that one read — ACP's config options + legacy `models`, the app's `/models`, the CLI seed. The read deliberately carries **no active selection**: which entry/model a session runs on is the session's (`SessionData.model`, the session snapshot; ACP additionally records the selected entry index per session), and a runtime-level `active` would be a second answer that only agrees while one runtime has one session. The plane's resolved default travels with the session-creation defaults (`defaults.model` / `modelStyle` / `baseURL` / `apiKey`) plus a host-side seed for the entry index — never inside the read. Validate: `pnpm --filter @codent/core run validate:agent-runtime-instances`.
+
 **Model capabilities** have one source of truth — `MODEL_CAPABILITIES` in `packages/core/src/models/types.ts`, from which the `ModelCapability` union and the extension `MODEL_CAPABILITY_FLAGS` are both derived. **Every member must be evidenceable** from metadata `deriveCapabilities` actually reads (`streaming` was granted to all entries with no field behind it, and `computer_use` had no source at all — both removed). `parseModelsDevModel` fills the list: `modalities.input` is authoritative per modality (`image`→`vision`, `audio`, `video`, `pdf`→`document`); `attachment` is a fallback used only when `modalities` is absent and grants `vision` alone (it cannot distinguish modalities, so it never implies `document`); `reasoning` / `tool_call` / `structured_output` map one-to-one; cache pricing implies `prompt_caching`. **Reasoning echo** is a separate `ModelInfo` concern, not a capability: `interleaved` (models.dev) sets `reasoningInterleaved` (the **adapter routing** signal — `capabilities.includes("reasoning")` alone is not enough) and `reasoningEchoField` (**only** the non-default `reasoning_details`; 15 of 7842 entries). The field is not consumed yet — TanStack's `extractReasoning` seam is `{ text: string }`, so structured/signed blocks cannot be carried. **`undefined` means "unknown" (permissive) and `[]` means "declared, none apply" (strict)** — `UsageTracker` holds `null` for the former, and a successful parse must return `[]`, never `undefined`, for a plain text model, so its modalities are stripped instead of sent to an endpoint that rejects them. Three hops preserve the distinction (`deriveCapabilities`, `mergeModelInfo`, `setCapabilities`). Validate: `pnpm --filter @codent/core run validate:model-capabilities`, `validate:capability-unknown-vs-none`, and `validate:reasoning-echo`.
 
 ### AgentAdapter — Host Abstraction
@@ -209,7 +211,7 @@ The same shape applies to the other hosts: `codent` (local release host), `acp` 
 |----------|----------|
 | CoreEnv | `registerCoreEnv`, `getEnv`, `CoreEnv` types |
 | ModelProvider | `registerModelProvider`, `createDirectModelProvider`, `resolveModelConfigFromProvider` |
-| Runtime | `CodentAgent` (+ `CodentAgentOptions`) — the instantiable runtime; `AgentSession` / `AgentSessionHost`. `agentManager` / `AgentManager` / `ManagedAgent` are the **deprecated** ambient-manager surface |
+| Runtime | `CodentAgent` (+ `CodentAgentOptions`) — the instantiable runtime; `AgentSession` / `AgentSessionHost`; `readModels()` reports the model **catalog** the runtime was created with (entries only — the selected model belongs to the session). `agentManager` / `AgentManager` / `ManagedAgent` are the **deprecated** ambient-manager surface |
 | UI / state | Session-safe types (`TodoItem`, `LogEntry`, …); `AgentLog`/`TodoManager`/`SessionStore` classes are package-private (AgentLog is the emission seam — the built-in log extension owns policy and writes `.agents/logs/<sessionId>/agent.log`) |
 | Compaction | Session `compact` command; executors (`autoCompact`, …) stay on `dev.ts` |
 | Bootstrap | `buildDefaultSystemPrompt`, `resolveModelConfig`, `resolveModelConfigFromProvider` |
@@ -393,6 +395,20 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
 - Domain directories expose `index.ts`; import from the directory root when consuming 2+
   symbols from it. The top-level `src/agent/` namespace is intentionally barrel-free —
   cross-domain imports use direct module paths there.
+
+**Import layering** (`packages/core/scripts/validate-layer-boundaries.mjs`)
+
+- Every relative import is resolved to its top-level layer (`env`, `agent`, `agent-session`,
+  `managers`, `models`, `provider`, `runtime`, `runtime-types`, `utils`) and checked against one edge
+  table. An unlisted pair fails, and so does a new top-level directory — adding a layer is a decision.
+- **The module graph must be acyclic for runtime values.** A directory boundary groups modules by
+  subject, so the *layer* diagram can contain a declared, narrowed cycle (`models` ↔ `provider`, the
+  `agent` ↔ `models` leaf helpers); what must never happen is a value cycle between **files**, where a
+  module observes another half-initialized. `import type` / `export type` erase at compile time and may
+  cycle freely (`runtime-types/hosts.ts` is the port hub).
+- A declared edge that no import exercises fails (dead grant), and an edge declared `type-only` fails
+  the moment a runtime value crosses it. Break a value cycle by moving the shared function down or
+  injecting the dependency — not by widening the allowlist.
 
 **File size**
 
@@ -1154,17 +1170,23 @@ packages/
 ├── core/src/                          # @codent/core — runtime-agnostic core
 │   ├── env/                          # CoreEnv interface + registry (index.ts, types.ts, lsp.ts, teardown.ts)
 │   ├── agent/
+│   │   ├── agent-event-bus/           # One event registry + scoped buses (observer emit / interceptor intercept); session projects every observer event
 │   │   ├── agent-log/                 # AgentLog — the emission seam only: level filter, run stamp, envelope
 │   │   ├── log/                       # Log policy: createLogExtension, entry schema, JSONL sink + rotation, "*" consumer
 │   │   ├── approval/                  # Auto-mode controller + tool-approval table
+│   │   ├── code-mode/                 # Built-in code-mode extension (sandboxed TypeScript behind CoreEnv.createIsolateDriver)
+│   │   ├── commands/                  # Core-side builtin command catalog (`BUILTIN_COMMAND_CATALOG`)
 │   │   ├── compaction/                # Append SUMMARY + summary-first wire projection
 │   │   ├── extension/                 # Extension API (loader, runner, EventBus interception, dispatch order)
+│   │   ├── jobs/                      # Background command jobs extension (durable per-job logs)
 │   │   ├── lsp/                       # Built-in LSP extension (extension.ts) + LSP/tree-sitter tools
 │   │   ├── mcp/                       # MCP integration
 │   │   ├── media/                     # Multimodal media store (media:// refs) + repair helpers
 │   │   ├── memory/                    # Memory management + built-in Memory extension
 │   │   ├── plan/                      # Plan domain + plan tool factories
 │   │   ├── persistence/               # Disk session persistence (SessionStore)
+│   │   ├── prompt/                    # System prompt builder, agent-doc loader, instruction files
+│   │   ├── queue/                     # Mid-run deferred messages (defer queue vs pending approval)
 │   │   ├── run/                       # runAgentOnce / consumeAgentStream (run skeleton)
 │   │   ├── runner/                    # AgentRunner + run context
 │   │   ├── skills/                    # Skill loading + built-in Skills extension
@@ -1175,7 +1197,7 @@ packages/
 │   │   ├── tools/                     # Universal AI tools (fs, shell, web) + runtime/util
 │   │   ├── turn-context/              # Per-turn dynamic context (<ctx kind=...> payload)
 │   │   ├── ui/                        # AgentUIChannel (chat / subagent preview) + channel-write
-│   │   └── prompt/                    # System prompt builder, agent-doc loader, instruction files
+│   │   └── usage/                     # Global usage history + per-call pricing records
 │   ├── agent-session/                 # Host-facing AgentSession / Host API
 │   ├── managers/                      # AgentManager, ManagedAgent, RunCoordinator, services/, middleware
 │   │   ├── run-coordinator.ts          # Run lifecycle flags/timing (prepare/run/finalize)

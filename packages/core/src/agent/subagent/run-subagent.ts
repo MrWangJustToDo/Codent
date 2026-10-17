@@ -23,13 +23,9 @@ import {
 import { beginTaskRun, enterTaskPhase } from "./task-run-state.js";
 import { resolveSubagentBridgeUI, SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
 
-import type { SubagentConfig, SubagentResult } from "./types.js";
+import type { SubagentConfig, SubagentResult, SubagentRunDeps } from "./types.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { ModelMessage, StreamChunk, UIMessage as TanStackUIMessage, UIMessage } from "@tanstack/ai";
-
-export interface SubagentRunDeps {
-  manager: AgentManager;
-}
 
 /**
  * Runs a subagent with fresh context to complete a delegated task.
@@ -371,6 +367,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         previewMessages,
         parentAgentId,
         manager,
+        runSubagent,
         prompt,
         onDelta ? { onDelta } : undefined,
         (error) =>

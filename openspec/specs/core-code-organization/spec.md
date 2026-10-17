@@ -143,27 +143,44 @@ scope, as are globs and paths whose target is stated as planned.
 - **WHEN** a requirement lists a directory that no longer exists and is not marked as planned
 - **THEN** the gate fails, and the requirement is corrected rather than the directory recreated
 
-### Requirement: The layer graph is acyclic and every allowed edge is exercised
+### Requirement: The module value graph is acyclic and every declared edge is exercised
 
-The layer-boundary gate SHALL treat the top-level layers as a DAG: it SHALL reject an import cycle
-between two layers, SHALL reject a declared edge that no import exercises, and SHALL declare an edge
-`type-only` when every import across it is a type import. Every allowlisted edge SHALL carry a reason
-that states the real import it permits (not a stale or generic one).
+The layer-boundary gate SHALL derive the graph from the imports and SHALL enforce three properties:
+every used edge is declared in the edge table; every declared edge is exercised by at least one import
+(a dead grant fails); and the graph of **runtime-value** imports between modules is acyclic. Every
+allowlisted edge SHALL carry a reason that states the real import it permits (not a stale or generic
+one).
 
-#### Scenario: A cycle is rejected
+The **layer** graph MAY contain a cycle between two layers that are a declared, narrowed pair (for
+example `models` and `provider`, or the `agent`/`models` leaf helpers): a directory groups modules by
+subject, while the ordering constraint lives at module granularity. A cycle between **files** is a
+defect and SHALL fail. Type-only imports (`import type` / `export type`) erase at compile time and MAY
+form cycles; an edge declared `type-only` SHALL carry no runtime value.
 
-- **WHEN** two layers import each other (e.g. `models ↔ provider`)
-- **THEN** the gate fails and the change makes the edge one-directional
+The gate SHALL read each file as one text so a multi-line import is counted; a line-at-a-time parser
+under-counts edges and reports a clean pass over an unchecked import.
+
+#### Scenario: A runtime-value module cycle is rejected
+
+- **WHEN** `progress-summary.ts` imports `runSubagent` while `run-subagent.ts` imports `summarizeProgress`
+- **THEN** the gate fails naming both modules
+- **AND** the change breaks the cycle by moving the shared code down or injecting the dependency, not by widening the allowlist
+
+#### Scenario: A type-only cycle is permitted
+
+- **WHEN** two modules import each other only through `import type`
+- **THEN** the gate passes, because the imports erase at compile time
 
 #### Scenario: A dead edge is rejected
 
-- **WHEN** `ALLOWED_EDGES` declares an edge that no source file exercises
+- **WHEN** `ALLOWED_EDGES` declares an edge that no import exercises
 - **THEN** the gate fails and the unused grant is deleted
 
 #### Scenario: A type-only edge is declared type-only
 
 - **WHEN** every import across an edge is `import type`
 - **THEN** the edge is registered with `mode: "type-only"` rather than `allow`
+- **AND** a runtime-value import across a `type-only` edge fails the gate
 
 ### Requirement: The module-organization gate covers every top-level layer
 
