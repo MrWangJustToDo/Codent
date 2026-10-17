@@ -67,6 +67,7 @@
     "validate:managed-agent-accessors": "pnpm run build && node scripts/validate-managed-agent-accessors.mjs",
     "validate:accessor-convention": "node scripts/validate-accessor-convention.mjs",
     "validate:layer-boundaries": "node scripts/validate-layer-boundaries.mjs",
+    "validate:auto-mode-approvals": "pnpm run build && node scripts/validate-auto-mode-approvals.mjs",
     "validate:module-organization": "node scripts/validate-module-organization.mjs",
     "validate:no-inline-byte-truncation": "node scripts/validate-no-inline-byte-truncation.mjs",
     "validate:no-inline-char-truncation": "node scripts/validate-no-inline-char-truncation.mjs",

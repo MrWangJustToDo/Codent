@@ -87,6 +87,8 @@ interface SessionBridge {
   seenAskUser: Set<string>;
   /** In-flight permission/elicitation request controllers (cancelled on cancel/close). */
   pending: Set<AbortController>;
+  /** The in-flight `request_permission` per approval id (see `interactions.ts`). */
+  pendingApprovals: Map<string, AbortController>;
   elicitation: boolean;
   promptCaps: PromptCaps;
   /**
@@ -282,6 +284,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       clientOwnedApprovals: 0,
       seenAskUser: new Set(),
       pending: new Set(),
+      pendingApprovals: new Map(),
       elicitation: Boolean(clientCaps?.elicitation?.form),
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
@@ -326,6 +329,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const closeBridge = async (bridge: SessionBridge): Promise<void> => {
     for (const controller of bridge.pending) controller.abort();
     bridge.pending.clear();
+    bridge.pendingApprovals.clear();
     await bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
     bridge.projector.stop();
     for (const [id, b] of bridges) if (b === bridge) bridges.delete(id);
@@ -795,6 +799,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.cancelled = true;
     for (const controller of bridge.pending) controller.abort();
     bridge.pending.clear();
+    bridge.pendingApprovals.clear();
     void bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
   };
 

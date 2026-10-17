@@ -1,5 +1,4 @@
 import { getActiveSession } from "../utils/session-resolve.js";
-import { isPendingToolApproval, isToolCallPart } from "../utils/tool-part.js";
 
 import { registerBuiltinCommand } from "./utils/registry.js";
 
@@ -88,28 +87,12 @@ registerBuiltinCommand("mode", {
     const nameArg = trimmed.split(/\s+/).slice(1).join(" ").trim();
     const mode: AgentMode = session.getSnapshot().mode;
 
-    const approveAllPending = async () => {
-      if (!ctx.addToolApprovalResponse || !ctx.getMessages) return;
-      const messages = ctx.getMessages();
-      for (const msg of messages) {
-        if (msg.role !== "assistant") continue;
-        for (const part of msg.parts) {
-          if (!isToolCallPart(part)) continue;
-          if (!isPendingToolApproval(part)) continue;
-          const approvalId = part.approval?.id;
-          if (!approvalId) continue;
-          await ctx.addToolApprovalResponse({ id: approvalId, approved: true });
-        }
-      }
-    };
-
     /** Single dispatch: core handles mutual exclusivity; message reflects the resulting mode. */
     const applyMode = async (target: AgentMode): Promise<CommandResult> => {
       const result = await session.dispatch({ type: "mode.set", mode: target });
       if (!result.ok) return { ok: false, error: result.error };
       const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? target;
       if (applied === "auto") {
-        await approveAllPending();
         return { ok: true, message: "Auto mode on — tools run without approval" };
       }
       if (applied === "plan") {
@@ -135,7 +118,6 @@ registerBuiltinCommand("mode", {
       if (!result.ok) return { ok: false, error: result.error };
       const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? "normal";
       if (applied === "auto") {
-        await approveAllPending();
         return { ok: true, message: "Auto mode on — tools run without approval" };
       }
       if (applied === "plan") {

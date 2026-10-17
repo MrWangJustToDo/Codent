@@ -248,6 +248,12 @@ and degrades to an agent message plus a cancelled tool result when the client do
 and neither ever throws — a closed connection is the session's problem to time out, not a reason to
 fail a run.
 
+The host also **reconciles** its open requests against each `interaction` snapshot: an approval that is
+no longer pending was answered without the client — core answers every pending approval when auto mode
+turns on — so its outstanding `request_permission` is cancelled. Without that the client keeps a dialog
+for a tool that already ran, and its late answer re-decides the approval (a `deny` after the call
+completed).
+
 `session/update` notifications are capability-gated where the protocol says so: `compaction_update`
 only for clients declaring `session.compaction`, `notice` only for `session.notices`.
 

@@ -128,14 +128,19 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "mode.set": {
         const mode = managed.setAgentMode(command.mode);
+        settleApprovalsIfAutoApproved(managed, chat);
         return { ok: true, data: { mode } };
       }
       case "mode.toggle": {
         const mode = managed.cycleAgentMode();
+        settleApprovalsIfAutoApproved(managed, chat);
         return { ok: true, data: { mode } };
       }
       case "plan.execute": {
         const result = managed.beginPlanExecution({ sendSteer: command.sendSteer });
+        // Entering plan execution turns the same auto-approve policy on (`todosSeeded`), so a run
+        // parked on an approval must be released by the same rule — not only by a mode switch.
+        if (result.ok) settleApprovalsIfAutoApproved(managed, chat);
         return result.ok
           ? { ok: true, data: result }
           : { ok: false, code: "failed", error: result.error ?? "plan execute failed" };
@@ -318,4 +323,23 @@ export async function dispatchLocalAgentSessionCommand(
     const message = errorMessage(error);
     return { ok: false, code: "failed", error: message };
   }
+}
+
+/**
+ * Anything that switches the session's auto-approve policy ON answers the approvals the run is
+ * currently parked on. Two commands can do it: a mode change (`mode.set` / `mode.toggle` → auto) and
+ * entering plan execution (`todosSeeded` turns the plan's own auto-approve on).
+ *
+ * The rule lives here — the ONE path every host shares — rather than in a host command. The TUI's
+ * `/mode` used to approve pending approvals itself, which is why ACP and remote sessions (same
+ * `mode.set` dispatch, no app layer) silently left the run suspended, and why `mode.toggle`
+ * (Shift+Tab) did not do it even in the TUI. One definition: the policy decides, the chat controller
+ * settles.
+ */
+function settleApprovalsIfAutoApproved(managed: ManagedAgent, chat: ReturnType<ManagedAgent["getChatController"]>): void {
+  if (!chat || !managed.shouldAutoApprovePendingTools()) return;
+  // Not awaited: the returned promise is the PUMP, which runs the approved tools and the model turn
+  // after them. A mode switch must return as soon as the decisions are recorded, or every caller of
+  // `mode.set` (ACP's `set_config_option`, the TUI's `/mode`) would block for the rest of the run.
+  void chat.approvePendingApprovals().catch(() => undefined);
 }

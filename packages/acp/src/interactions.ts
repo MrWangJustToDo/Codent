@@ -41,6 +41,15 @@ export interface InteractionBridge {
   seenAskUser: Set<string>;
   /** In-flight requests, aborted on cancel/close. */
   pending: Set<AbortController>;
+  /**
+   * The in-flight `session/request_permission` per approval id.
+   *
+   * `pending` alone cannot answer "which request belongs to this approval", and an approval can be
+   * settled by something other than the client — turning on auto mode resolves every pending approval
+   * in the session. That request must be cancelled, or the client keeps a dialog for a tool that
+   * already ran and a late answer re-decides it.
+   */
+  pendingApprovals: Map<string, AbortController>;
   /** Counted so close can report how many approvals the client granted itself. */
   clientOwnedApprovals: number;
 }
@@ -107,6 +116,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
   const requestApproval = async (bridge: InteractionBridge, approval: ApprovalRequest): Promise<void> => {
     const controller = new AbortController();
     bridge.pending.add(controller);
+    bridge.pendingApprovals.set(approval.approvalId, controller);
     try {
       // The prompt has to carry WHAT is being approved. It used to send the tool NAME as the title
       // and nothing else, so a `run_command` arrived as a bare "Run": the client had no command to
@@ -142,6 +152,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     } catch {
       // connection closed / cancelled — the session's own approval timeout settles it
     } finally {
+      bridge.pendingApprovals.delete(approval.approvalId);
       bridge.pending.delete(controller);
     }
   };
@@ -185,6 +196,18 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
       approvals?: ApprovalRequest[];
       askUser?: AskUserRequest[];
     };
+
+    // Settle the requests whose question no longer exists. An approval is normally answered by the
+    // client's own response, but the session can resolve it first — switching to auto mode answers
+    // every pending approval, and plan execution auto-approves too. Without this the client keeps
+    // the dialog open for a tool that already ran, and its late answer re-decides the approval.
+    const liveApprovals = new Set((snapshot.approvals ?? []).map((approval) => approval.approvalId));
+    for (const [approvalId, controller] of bridge.pendingApprovals) {
+      if (liveApprovals.has(approvalId)) continue;
+      bridge.pendingApprovals.delete(approvalId);
+      controller.abort();
+    }
+
     for (const approval of snapshot.approvals ?? []) {
       if (bridge.seenApprovals.has(approval.approvalId)) continue;
       bridge.seenApprovals.add(approval.approvalId);

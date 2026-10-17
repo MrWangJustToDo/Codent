@@ -15,6 +15,7 @@ import {
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
 import {
+  collectPendingApprovals,
   hasPendingAskUser,
   hasPendingToolApprovals,
   needsAgentResponseAfterTools,
@@ -302,6 +303,38 @@ export class AgentChatController {
     this.persistMessages("pump-complete");
     // Join a queued pump when one exists rather than scheduling a second for the
     // same decision (see `enqueueRunOnce`).
+    return this.enqueueRunOnce();
+  }
+
+  /**
+   * Approve every pending tool approval, then resume the pump.
+   *
+   * A pending approval is a QUESTION, and turning on auto mode (or entering plan execution, which
+   * auto-approves) has just answered it. Leaving it pending is not neutral: the pump is parked on
+   * it, so the session looks like it is running auto mode while nothing runs. The TUI used to answer
+   * these from its `/mode` command — a host-side workaround that the protocol hosts (ACP, remote
+   * sessions) never had, which is why switching to auto mid-approval did nothing there.
+   *
+   * One channel write per approval (the channel is the SoT) with the approval table kept in step,
+   * then ONE pump enqueue: `enqueueRunOnce` joins, so N decisions do not schedule N pumps.
+   */
+  approvePendingApprovals(): Promise<void> {
+    const pending = collectPendingApprovals(this.channel.getMessages());
+    if (pending.length === 0) return Promise.resolve();
+
+    for (const approval of pending) {
+      const decidedAt = this.channel.addToolApprovalResponse(approval.approvalId, true);
+      this.managed.approvals.upsert({
+        id: approval.approvalId,
+        toolCallId: approval.toolCallId,
+        status: "approved",
+        toolName: approval.toolName,
+        updatedAt: decidedAt,
+      });
+    }
+
+    this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
+    this.persistMessages("pump-complete");
     return this.enqueueRunOnce();
   }
 
