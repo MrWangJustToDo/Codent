@@ -334,15 +334,12 @@ export class AcpProjector {
     const thought = thoughtOf(message);
     const cursor = this.cursors.get(message.id) ?? { text: 0, thought: 0 };
     if (thought.length < cursor.thought) {
-      cursor.thought = 0;
+      // The engine replaced the reasoning with a shorter (final) version. ACP chunks are APPEND-ONLY —
+      // there is no retraction — so re-sending it under this message's id appends the whole text a
+      // second time, which a client renders as duplicated thinking the moment the thinking phase ends
+      // (reported exactly that way). Replacing is not expressible, so the client keeps what it already
+      // has and the cursor catches up in silence.
       cursor.thought = thought.length;
-      if (thought) {
-        this.options.emit({
-          sessionUpdate: "agent_thought_chunk",
-          messageId: message.id,
-          content: textBlock(thought),
-        });
-      }
       this.cursors.set(message.id, cursor);
       return;
     }

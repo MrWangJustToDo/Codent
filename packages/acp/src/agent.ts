@@ -221,7 +221,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // One line per outgoing update (id + text snippet): "the client shows something we did not send"
       // is settled by reading what WAS sent.
       const key = update as { messageId?: string; toolCallId?: string; content?: { text?: string } };
-      const text = typeof key.content?.text === "string" ? ` ${JSON.stringify(key.content.text.slice(0, 40))}` : "";
+      const text =
+        typeof key.content?.text === "string"
+          ? ` ${JSON.stringify(key.content.text.slice(0, 40))} (${key.content.text.length})`
+          : "";
       process.stderr.write(`[codent-acp] → ${update.sessionUpdate} ${key.messageId ?? key.toolCallId ?? ""}${text}\n`);
     }
     try {

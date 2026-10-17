@@ -753,4 +753,35 @@ const compactKey = "compact:agent_1";
   );
 }
 
+// ===========================================================================
+// 9. A replaced (shorter) thought is NOT re-sent
+// ===========================================================================
+//
+// When the thinking phase ends, the engine replaces the streamed reasoning with its final (shorter)
+// version. ACP chunks are append-only — a chunk cannot be retracted — so re-sending the replacement
+// under the same `messageId` appends the whole text a second time, which is the duplicated thinking a
+// client showed at exactly that moment. Reported from Zed after a session restore: a new turn's
+// thinking arrived twice, once as it streamed and once when it finished.
+{
+  const c = capture();
+  const message = (thinking) => [{ id: "a1", role: "assistant", parts: [{ type: "thinking", content: thinking }] }];
+  c.push("messages", message("streamed reasoning that turned out longer"));
+  c.push("messages", message("final reasoning"));
+  const thoughts = c.updates("agent_thought_chunk");
+  check(
+    "a shrinking thought is not re-sent (append-only chunks cannot replace)",
+    thoughts.length === 1 && thoughts[0].content.text === "streamed reasoning that turned out longer",
+    JSON.stringify(thoughts.map((u) => u.content.text))
+  );
+  // The cursor caught up: growth after the replacement streams only the new tail, never the whole text.
+  c.push("messages", message("final reasoning plus more"));
+  const after = c.updates("agent_thought_chunk");
+  check(
+    "…and growth after it streams only the tail",
+    after.length === 2 && after[1].content.text === " plus more",
+    JSON.stringify(after.map((u) => u.content.text))
+  );
+  c.stop();
+}
+
 finish(checker.failures);
