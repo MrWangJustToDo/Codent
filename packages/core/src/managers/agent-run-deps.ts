@@ -67,6 +67,14 @@ export interface AgentRunDeps {
   getModelInfo: () => ModelInfo | null;
   getToolCompactCache: () => ToolCompactCache;
   getWireProjectionCache: () => WireProjectionCache;
+  /**
+   * Whether the restored transcript still holds `media://` refs hydration could not read.
+   *
+   * Live read, not a captured boolean: a restore can report misses while the cached runner stays
+   * alive (mid-session switch), and `clearMessages` disarms it — either captured once would hand
+   * `wire-recovery` a stale answer for the life of the cache.
+   */
+  hasUnhydratedMedia: () => boolean;
   getSystemPrompt: () => string | undefined;
   getFrozenSystemPrompt: () => string | undefined;
   /**
@@ -131,6 +139,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getModelInfo: () => managed.getModelInfo(),
     getToolCompactCache: () => managed.getToolCompactCache(),
     getWireProjectionCache: () => managed.getWireProjectionCache(),
+    hasUnhydratedMedia: () => managed.hasUnhydratedMedia(),
     getSystemPrompt: () => managed.getSystemPrompt(),
     getFrozenSystemPrompt: () => managed.getFrozenSystemPrompt(),
     getUIChannel: () => managed.getUI() ?? null,
