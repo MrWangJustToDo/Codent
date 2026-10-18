@@ -170,7 +170,6 @@ Client planes combine per the boundary rules below; every row is a working confi
 | `@codent/extension` | Chrome extension host (WXT); requires a running server |
 | `@codent/playground` | In-browser WebContainer host (Vite); see [packages/playground/README.md](packages/playground/README.md) |
 | `@codent/mcp-server` | Standalone MCP server for external tool integration |
-| `@codent/im-bridge` | Generic IM bridge — connects chat platforms (Telegram, …) to an AgentSession server; per-chat sessions, streaming replies, ask_user/approval buttons, allowlist |
 
 > **Deep dive:** See [AGENTS.md](AGENTS.md) for full architecture, code conventions, and detailed guidelines. See [packages/core/ARCHITECTURE.md](packages/core/ARCHITECTURE.md) for the core runtime startup, initialization, session, memory, compaction, and approval flows.
 
@@ -383,53 +382,23 @@ pnpm dev:playground
 
 # MCP server
 pnpm start:mcp-server
-
-# IM bridge (Telegram) — requires a running agent server (pnpm start:server)
-pnpm start:im-bridge
 ```
 
-### IM Bridge (Telegram)
+### IM (through ACP)
 
-`@codent/im-bridge` is a generic chat bridge — each platform is a `ChatAdapter`
-(Telegram ships first; Slack/Discord/飞书 adapters can reuse the same contract).
-It is an AgentSession client with two modes:
-
-- **Remote (default):** `REMOTE_SESSION` points at an agent server — the bridge
-  registers no CoreEnv/ModelProvider; the **server resolves the model from its
-  own `.env`** (`MODEL` / `API_KEY` / `BASE_URL`).
-- **Local:** leave `REMOTE_SESSION` unset — the bridge boots an in-process agent
-  (like the CLI local mode), resolving the model through the unified models.json
-  pipeline (`.agents/config/models.json`, then `.env`); `SANDBOX_ENV` selects
-  the sandbox.
-
-Setup:
+Codent reaches chat platforms through an **external ACP client** — the same stdio surface an editor
+uses. The supported recipe is [cc-connect](https://github.com/chenhg5/cc-connect):
 
 ```bash
-# 1. Start the agent server (its .env must configure MODEL + API_KEY) — remote mode only
-pnpm start:server
-
-# 2. Create a bot with @BotFather and configure the bridge (.env)
-TELEGRAM_BOT_TOKEN=123456:ABC…      # from @BotFather /newbot
-# REMOTE_SESSION=http://localhost:3100 # agent server (absent = local mode)
-IM_BRIDGE_ALLOW_USERS=123456789      # comma-separated user ids (empty = allow all)
-# IM_BRIDGE_ALLOW_CHATS=…            # optional chat allowlist
-# IM_BRIDGE_MODEL=…                  # optional model override (remote: sent to server; local: overrides MODEL)
-# IM_BRIDGE_DATA_DIR=.agents/im-bridge
-# IM_BRIDGE_EDIT_INTERVAL_MS=2000    # progress-row edit throttle
-# IM_BRIDGE_APPROVAL_TTL_MS=300000   # approval/ask_user auto-deny TTL (5 min)
-
-# 3. Start the bridge (long-polling, no public endpoint needed)
-pnpm start:im-bridge
+npm i -g codent-cli cc-connect
+# configure the project + platforms from docs/cc-connect.example.toml, then:
+cc-connect
 ```
 
-Behavior: one agent session per chat (persisted under `IM_BRIDGE_DATA_DIR`,
-restored on restart); while the agent runs, a single progress row streams tool
-lines in place and a 💭 thinking row shows while the model reasons — the final
-**answer is delivered once complete** as fresh message(s); pending tool
-approvals and `ask_user` questions render as inline buttons (TTL auto-deny);
-`/new` resets the chat's session and `/stop` stops the agent (both registered in
-the Telegram command menu). Message the bot privately — group chats are
-mention-only.
+cc-connect owns the platform connections (Telegram, Feishu/Lark, DingTalk, WeCom, Slack, Discord,
+QQ, …), access control and delivery; `codent acp` owns the agent. There is no Codent-specific IM
+bridge. See [docs/acp-im.md](docs/acp-im.md) and
+[docs/cc-connect.example.toml](docs/cc-connect.example.toml).
 
 ---
 
@@ -525,6 +494,9 @@ pnpm clean        # Remove build artifacts
 | [AGENTS.md](AGENTS.md) | Full architecture, code conventions, and detailed guidelines |
 | [packages/core/ARCHITECTURE.md](packages/core/ARCHITECTURE.md) | Core runtime deep-dive: startup, session, compaction, approval |
 | [packages/app/README.md](packages/app/README.md) | App Session-only import allowlist |
+| [packages/acp/README.md](packages/acp/README.md) | ACP agent host: coverage, model/mode selectors, IM usage |
+| [docs/acp-im.md](docs/acp-im.md) | ACP → IM integration recipe (cc-connect) |
+| [docs/cc-connect.example.toml](docs/cc-connect.example.toml) | cc-connect example configuration for `codent acp` |
 | [packages/playground/README.md](packages/playground/README.md) | WebContainer playground + GitHub Pages deploy |
 
 ---

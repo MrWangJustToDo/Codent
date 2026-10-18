@@ -23,7 +23,7 @@ This file provides guidelines for AI coding agents working in this repository.
 
 ## Project Overview
 
-A pnpm monorepo with eleven packages organized in a layered architecture.
+A pnpm monorepo with ten packages organized in a layered architecture.
 
 **Core runtime deep-dive:** [packages/core/ARCHITECTURE.md](packages/core/ARCHITECTURE.md) — startup, initialization, session/memory/compaction/approval flows.
 
@@ -37,7 +37,6 @@ A pnpm monorepo with eleven packages organized in a layered architecture.
 | `@codent/extension` | Chrome extension host using WXT framework |
 | `@codent/playground` | In-browser WebContainer host (Vite) |
 | `@codent/mcp-server` | MCP server for external tool integration |
-| `@codent/im-bridge` | Generic IM bridge (Telegram adapter) — a headless AgentSession client like the remote CLI; no CoreEnv/ModelProvider of its own in remote mode, in-process local mode otherwise |
 | `@codent/acp` | Agent-side Agent Client Protocol host. Serves an `AgentSessionHost` over ACP (stdio) via `@agentclientprotocol/sdk`, so editors (Zed/JetBrains) and ACP→IM bridges drive the agent without host-specific code. `codent acp` / `codent-acp` entry; also used in-process (`createAcpAgent`). See `packages/acp/README.md`. |
 | `codent-cli` | **Release host.** Local-only terminal CLI (no remote planes) published as one fully bundled, self-contained tarball — `@codent/app` / `core` / `node` / `acp` are inlined, so no sibling has to be on the registry. The npm name is `codent-cli` (plain `codent` is rejected as too similar to `code` / `dedent`); the installed command is still `codent`. `codent acp` serves ACP over stdio. See `packages/codent/tsdown.config.ts`. |
 
@@ -124,7 +123,7 @@ hasCoreEnv();           // Check if registered
 
 LLM credentials are **not** part of CoreEnv. Hosts register a `ModelProvider` separately so local/remote workspace and local/remote keys combine freely. The provider is carried on the runtime: pass it to `CodentAgent.create({ provider })` (or `{ direct }`), and model resolution reads it back through the runtime — `resolveModelConfigFromProvider(input, provider?)` takes the runtime's provider and only falls back to the ambient registry when none is passed. `CodentAgent.getModelProvider()` exposes the runtime's provider (surfaced to the app as the `AgentRuntimePort` it consumes) so `createAgentSessionFromConfig` resolves per runtime (remote-session runtimes omit it).
 
-**models.dev is the one documented ambient-env exception on the run path.** `provider/models-dev.ts` reads `getEnv()` (not a runtime-injected env): the dataset is identical across workspaces, so the in-memory memo is process-global and there is no runtime in scope. It is **allowlisted** in `validate:runtime-env-guard` (which now scans `provider/`), so the exception is a recorded decision, not a blind spot. Consequence: its disk cache (`<root>/.agents/cache/models-dev.json`) is workspace-scoped and follows the **ambient** root — harmless for the single-runtime hosts (CLI / ACP / im-bridge), and the one place a second runtime in a process would bind to the last-registered env. The cache lives on the CoreEnv plane and is orthogonal to the provider plane: with `--remote-provider` and a local workspace, models.dev is fetched/cached **locally**; the provider server's `/api/provider/info` carries only the connection (`mode`/`style`/`model`/`basePath`), no metadata. The lookup is best-effort (`resolveModelConfig` catches it), so a models.dev failure just leaves `modelInfo` unset.
+**models.dev is the one documented ambient-env exception on the run path.** `provider/models-dev.ts` reads `getEnv()` (not a runtime-injected env): the dataset is identical across workspaces, so the in-memory memo is process-global and there is no runtime in scope. It is **allowlisted** in `validate:runtime-env-guard` (which now scans `provider/`), so the exception is a recorded decision, not a blind spot. Consequence: its disk cache (`<root>/.agents/cache/models-dev.json`) is workspace-scoped and follows the **ambient** root — harmless for the single-runtime hosts (CLI / ACP), and the one place a second runtime in a process would bind to the last-registered env. The cache lives on the CoreEnv plane and is orthogonal to the provider plane: with `--remote-provider` and a local workspace, models.dev is fetched/cached **locally**; the provider server's `/api/provider/info` carries only the connection (`mode`/`style`/`model`/`basePath`), no metadata. The lookup is best-effort (`resolveModelConfig` catches it), so a models.dev failure just leaves `modelInfo` unset.
 
 ```typescript
 import { CodentAgent, createDirectModelProvider } from "@codent/core";
@@ -203,7 +202,7 @@ ConnectionGuard(/health) → env = createRemoteEnv(url); provider = apiKey ? dir
   → adapter.initialize → CodentAgent.create({ env, provider }) → createAgentSessionFromConfig
 ```
 
-The same shape applies to the other hosts: `codent` (local release host), `acp` / `im-bridge` (local bootstrap), `playground` (WebContainer env), and `server` (one server-owned `CodentAgent` over its CoreEnv; the `/api/agent/*` plane drives its manager).
+The same shape applies to the other hosts: `codent` (local release host), `acp` (local bootstrap), `playground` (WebContainer env), and `server` (one server-owned `CodentAgent` over its CoreEnv; the `/api/agent/*` plane drives its manager). IM reaches the agent through an external ACP client (cc-connect → `codent acp`); see `docs/acp-im.md`.
 
 ### @codent/core Public API
 
@@ -247,7 +246,6 @@ pnpm build:app:release # Build app with every third-party dep inlined (release p
 pnpm build:cli        # Build CLI package only
 pnpm build:server     # Build server package only
 pnpm build:extension  # Build extension only
-pnpm build:im-bridge  # Build im-bridge package only
 pnpm build:codent      # Build the release host (fully bundled, self-contained)
                        # → core, then app:release, then node, then codent
 
@@ -259,7 +257,6 @@ pnpm dev:server       # Watch server package
 pnpm dev:extension    # Run extension dev server
 pnpm start:cli        # Run CLI after build
 pnpm start:server     # Run CoreEnv HTTP server
-pnpm start:im-bridge  # Run the IM bridge (Telegram)
 pnpm publish:codent   # Build + publish the release host (no sibling packages needed)
 
 pnpm typecheck        # Type check all packages
@@ -430,7 +427,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
 
 - A built-in's name is written in core exactly once: a tool in its `defineServerTool({ name })`
   (and the exported `BUILTIN_TOOL_NAMES` registry), a command in `BUILTIN_COMMAND_CATALOG`.
-- Hosts (`@codent/app`, `@codent/acp`, `@codent/im-bridge`, …) MUST compare, route, and label a
+- Hosts (`@codent/app`, `@codent/acp`, …) MUST compare, route, and label a
   built-in through `BUILTIN_TOOL_NAMES` / the command catalog — never a private name table, `case`
   list, or `Set` of tool names. A host's tool classification (row treatment, editor tool kind)
   derives from core's `present` descriptors / catalog; only a host-owned view may be *selected* by a
@@ -444,7 +441,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:ask-user-output`.
 - Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
   `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
-  (app/acp/im-bridge keep no built-in name literals in tool-identity positions).
+  (app/acp keep no built-in name literals in tool-identity positions).
 
 ### Error Handling
 ```typescript

@@ -1,0 +1,82 @@
+# cc-connect → Codent (ACP) — example configuration.
+#
+# Copy to ~/.cc-connect/config.toml, fill the credentials, then run `cc-connect`.
+# Full reference: https://github.com/chenhg5/cc-connect/blob/main/config.example.toml
+# Codent-side guide: docs/acp-im.md
+#
+# The agent block below is the whole integration: cc-connect spawns `codent acp`
+# in `work_dir` and speaks ACP over stdio. No Codent-specific adapter exists.
+#
+# `${VAR}` placeholders resolve from the environment. An UNSET variable becomes an
+# empty string (with a warning), so export these or replace them with real values.
+
+[log]
+level = "info"
+
+# Optional: quieter tool/thinking rendering in chat.
+# [display]
+# mode = "compact"      # full | compact | quiet
+# thinking_messages = false
+# tool_messages = true
+
+[[projects]]
+name = "codent"
+
+# Privileged commands (/dir, /shell, /restart, /upgrade, /commands addexec,
+# /cron addexec) are blocked unless listed here. Never use "*" unless every
+# allowed user may run shell commands on this host.
+# admin_from = "123456789"
+
+# Hide sessions created by the Codent TUI in the same work_dir from /list/switch.
+# filter_external_sessions = true
+
+[projects.agent]
+type = "acp"
+
+[projects.agent.options]
+# The ACP workspace root. `codent acp` uses its process cwd as the workspace root,
+# so this directory is also where `.agents/` (sessions, logs, memory) lives.
+work_dir = "/absolute/path/to/workspace"
+
+# Release host (loads `.env`). Use the absolute path if `codent` is not on the
+# service's PATH. Alternatives: `codent-acp` (built from source; does NOT load `.env`).
+cmd = "codent"
+args = ["acp"]
+display_name = "Codent"
+
+# Optional: environment for the ACP process when you do not use `.env` / models.json.
+# This key belongs under `[projects.agent.options]` — a project has no top-level `env`.
+# env = { MODEL = "anthropic/claude-sonnet-4", BASE_URL = "https://openrouter.ai/api/v1", API_KEY = "sk-..." }
+
+# ---------------------------------------------------------------------------
+# Foreign platform example — Telegram (long polling, no public endpoint needed)
+# ---------------------------------------------------------------------------
+[[projects.platforms]]
+type = "telegram"
+
+[projects.platforms.options]
+token = "${TELEGRAM_BOT_TOKEN}"
+# Allowed Telegram user ids, comma-separated; "*" = all (default). Use /whoami.
+# Set this explicitly in production.
+# allow_from = "*"
+# Reply to every group message instead of requiring an @mention.
+# group_reply_all = false
+
+# ---------------------------------------------------------------------------
+# Domestic platform example — Feishu / Lark (WebSocket long connection)
+# ---------------------------------------------------------------------------
+[[projects.platforms]]
+type = "feishu"
+
+[projects.platforms.options]
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+# domain = "https://open.feishu.cn"   # for Lark use type = "lark" (or this domain)
+# allow_from = "*"                    # allowed open_ids; /whoami
+# allow_chat = "*"                    # allowed group chat_ids (Feishu/Lark only)
+# group_only = false                  # Feishu/Lark only; ignored by Telegram
+# enable_feishu_card = true           # rich cards (default); false forces plain text
+
+# Add more platforms as additional [[projects.platforms]] blocks on the same
+# project (DingTalk, WeCom, Slack, Discord, Matrix, QQ, LINE, Weibo, …).
+# A second workspace is a second [[projects]] entry with its own work_dir.

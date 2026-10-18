@@ -19,7 +19,7 @@ pnpm --filter @codent/acp build && node packages/acp/dist/bin.mjs
 codent acp
 codent --acp            # alias
 
-# or via the standalone bin published by this package
+# or the standalone bin (build this package from source; it is not published on its own)
 codent-acp
 
 # configure the model directly (authoritative; skips .agents/config/models.json)
@@ -28,9 +28,9 @@ codent-acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/
 ```
 
 `codent acp` is intercepted in the release host **before** the terminal UI boots, because a headless
-protocol requires stdout to carry only JSON-RPC frames. The development host `@codent/cli` does
-**not** expose this subcommand (it has no `@codent/acp` dependency); the standalone `codent-acp` bin
-and the in-process API below are the other two ways in.
+protocol requires stdout to carry only JSON-RPC frames. The development host `@codent/cli` intercepts
+the same subcommand; the standalone `codent-acp` bin (built from this package) and the in-process API
+below are the other two ways in.
 
 The workspace root is the process `cwd` — the local CoreEnv is built from it (`createNodeEnv`) — so a
 client should spawn the agent **inside** the workspace it wants it to see. The root is fixed at
@@ -74,9 +74,10 @@ ACP has **no `session/set_model`** — model selection is a `configOptions` entr
 `category: "model"`, and its write-back is `session/set_config_option`. Declaration and write path
 are therefore one contract, and they live together in `src/session-config-options.ts`:
 
-- the option is advertised **only** when source 2 was used. On the explicit-flags path and on the
-  `.env` fallback a selector would offer exactly one value — a fake choice — so it is omitted rather
-  than advertised.
+- the option is advertised whenever a model catalog is readable. A `.agents/config/models.json`
+  catalog (or a multi-model remote provider) yields a **switchable** list; the explicit-flags and
+  `.env` planes yield a single-entry catalog, so the same option is advertised with one fixed value —
+  information, not a fake choice, and not an absent selector.
 - a value encodes the config **entry**, not just the model: `"<entryIndex>:<model>"`. A model id is
   only unique *within* an entry, and switching a model may also switch the connection (`style` /
   `baseURL` / `apiKey` of that entry). It is the same encoding the TUI's `/models` uses, so the two
@@ -302,7 +303,7 @@ the model command (and to the `thought_level` selector above).
 | `plan` (from todos) | ✅ always the complete entry list |
 | `available_commands_update` | ✅ built-in catalog + extension commands |
 | `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set) |
-| model selector (`configOptions`, `category: "model"`) | ✅ when `.agents/config/models.json` is the source (the protocol has no `session/set_model`) |
+| model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list (the protocol has no `session/set_model`) |
 | thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
@@ -319,6 +320,24 @@ the model command (and to the `thought_level` selector above).
   }
 }
 ```
+
+## IM clients (cc-connect)
+
+The same stdio ACP host is the IM integration surface: an external ACP client (for example
+[cc-connect](https://github.com/chenhg5/cc-connect), `[projects.agent] type = "acp"`) spawns
+`codent acp` in the workspace and drives sessions, streaming, permissions and `ask_user` over ACP.
+There is no Codent-specific IM bridge; the integration is configuration plus this protocol.
+
+- The process `cwd` is the workspace root (`work_dir` on the bridge side), fixed at handshake.
+- cc-connect starts one ACP process per chat/session (idle processes may be recycled); every process
+  uses the project's `work_dir`, so platforms under one project share the workspace and its persisted
+  sessions — not one live session.
+- `.env` is loaded by the release host (`codent acp`), not by the standalone `codent-acp` bin.
+- A **switchable** model list needs `.agents/config/models.json` (or a multi-model remote provider);
+  the flags / `.env` planes advertise a single fixed value.
+
+Full recipe and verification checklist:
+[docs/acp-im.md](https://github.com/MrWangJustToDo/MyAgent/blob/main/docs/acp-im.md).
 
 ## Package layout
 
@@ -375,12 +394,9 @@ validator runner, which discovers `validate-*.mjs` by glob rather than by a list
 - `session/fork` requires the source to be live **in this process** — "list a session created by an
   earlier process, then fork it" is not supported.
 - **Model switching may switch the provider.** Selecting a model option applies that entry's
-  `style` / `baseURL` / `apiKey`, the same thing `/models` does in the TUI. Because the selector only
-  exists on the `models.json` path, that is the only configuration in which it can happen.
-- `session/load` / `session/resume` responses carry **no** `configOptions` (their shape is frozen),
-  so a client loses the mode and model selectors after reopening a session. Those responses do not
-  carry the legacy `modes` field either. Fixing it is a separate change — it should add both at once
-  rather than only the model.
+  `style` / `baseURL` / `apiKey`, the same thing `/models` does in the TUI. Because a switchable list
+  only exists on the `models.json` (or multi-model remote-provider) paths, those are the only
+  configurations in which it can happen.
 - No `authMethods`, and no `providers/*`: credentials are resolved locally by the process that owns
   the workspace, so there is nothing for a client to configure or to authenticate against.
   `providers/*` is an ACP v2 draft surface in the SDK and is not advertised.

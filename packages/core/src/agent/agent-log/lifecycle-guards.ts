@@ -101,7 +101,7 @@ let guardsInstalled = false;
  *   `process.exit`).
  *
  * Idempotent, and a no-op in runtimes without a `process` (browser hosts).
- * Hosts that run the agent in-process (CLI / server / im-bridge) should call it
+ * Hosts that run the agent in-process (CLI / server) should call it
  * once at startup.
  */
 export function installAgentLogProcessGuards(): void {

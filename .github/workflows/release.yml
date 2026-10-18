@@ -5,7 +5,7 @@ name: Release to npm
 # This is deliberate. `codent` inlines `@codent/app` / `core` / `node` into its
 # `dist` (asserted by `validate:self-contained`), so a release needs no other
 # package on the registry — not the `@codent/*` libraries, and not the sibling
-# hosts (cli / server / extension / playground / mcp-server / im-bridge).
+# hosts (cli / server / extension / playground / mcp-server).
 # `pnpm run publish:packages` still exists for the monorepo libraries if they
 # ever need releasing independently; it is not part of this workflow.
 

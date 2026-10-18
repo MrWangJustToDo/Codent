@@ -24,7 +24,7 @@
  * is process-global too) and there is no runtime in scope here. Caveat: the disk path is
  * workspace-scoped, so with MORE THAN ONE runtime in a process the ambient env is the last
  * `registerCoreEnv`, and the disk cache binds to that runtime's root. Single-runtime hosts
- * (CLI / ACP / im-bridge) are unaffected.
+ * (CLI / ACP) are unaffected.
  */
 
 import { getEnv } from "../env";
@@ -284,7 +284,7 @@ async function fetchModelsDevFromNetwork(): Promise<boolean> {
     const env = getEnv();
     const response = await env.fetch(MODELS_DEV_URL, {
       // An unreachable models.dev must not hang model resolution (CLI startup,
-      // `POST /api/agent`, im-bridge bootstrap) — fail over to the disk cache.
+      // `POST /api/agent`, ACP bootstrap) — fail over to the disk cache.
       signal: AbortSignal.timeout(MODELS_DEV_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) {

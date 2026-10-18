@@ -91,8 +91,9 @@ codent --resume             # pick a session
 on stdio, so editors such as Zed or JetBrains can drive it. It is headless — stdout carries only
 JSON-RPC frames, never the TUI — and is intercepted before the terminal UI boots.
 
-An ACP client must spawn it with **cwd = the workspace root**. The model is resolved three ways, in
-priority order: flags on the command (`codent acp --model … --base-url … --api-key …`, which are
+An ACP client must spawn it with **cwd = the workspace root**. The model is resolved four ways:
+`--remote-provider` (a provider server supplies the connection and its model list; it wins when
+present), explicit flags on the command (`codent acp --model … --base-url … --api-key …`, which are
 authoritative and skip `models.json`), the on-disk `.agents/config/models.json`, or `MODEL` /
 `BASE_URL` / `API_KEY` in `.env`. Without any of them it exits with a clear error.
 
@@ -105,9 +106,9 @@ codent acp --model anthropic/claude-3.5-sonnet --base-url https://openrouter.ai/
 { "agent_servers": { "codent": { "command": "codent", "args": ["acp"] } } }
 ```
 
-The development host `@codent/cli` does not expose this subcommand. The `@codent/acp` package also
-publishes a standalone `codent-acp` bin (bootstrapping the same local runtime) if you prefer to
-depend on it directly instead of the bundled `codent acp`.
+The development host `@codent/cli` intercepts the same `acp` subcommand. The `@codent/acp` package
+also has a standalone `codent-acp` bin (build it from source; the package is not published on its
+own) if you prefer to depend on it directly instead of the bundled `codent acp`.
 
 ## Difference from `@codent/cli`
 

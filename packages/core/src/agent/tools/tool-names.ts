@@ -3,7 +3,7 @@
  *
  * This is the single list of the names a host may need to reference — the names
  * `createTools` and the built-in extensions register. Hosts (`@codent/app`,
- * `@codent/acp`, `@codent/im-bridge`, …) import these instead of writing the name
+ * `@codent/acp`, …) import these instead of writing the name
  * as a literal, so renaming or adding a built-in tool is a core-only edit.
  *
  * The registry is metadata, not a second tool definition: the actual tool is

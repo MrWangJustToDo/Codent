@@ -11,13 +11,12 @@ See @AGENTS.md for full architecture, code conventions, and detailed guidelines.
 - **`@codent/core`** — Runtime-agnostic core: ManagedAgent, AgentSession, tools, models, CoreEnv
 - **`@codent/app`** — Shared UI: React, hooks, commands. Session-only for agent control
 - **`@codent/cli`** — Terminal host using @my-react/react-terminal
-- **`@codent/acp`** — Agent-side Agent Client Protocol host — serves the agent over ACP (stdio) so editors (Zed/JetBrains) and ACP→IM bridges drive it without host-specific code; `codent acp`
+- **`@codent/acp`** — Agent-side Agent Client Protocol host — serves the agent over ACP (stdio) so editors (Zed/JetBrains) and ACP→IM bridges (cc-connect) drive it without host-specific code; `codent acp`
 - **`@codent/node`** — Node.js CoreEnv implementation (filesystem, shell, OS sandbox, code-mode `createIsolateDriver` via `isolated-vm`)
 - **`@codent/server`** — CoreEnv HTTP + provider proxy + Agent Session routes
 - **`@codent/extension`** — Chrome extension host using WXT (needs a server)
 - **`@codent/playground`** — In-browser WebContainer host
 - **`@codent/mcp-server`** — MCP server for external tool integration
-- **`@codent/im-bridge`** — Generic IM bridge (Telegram adapter); AgentSession client — remote mode (server resolves model) or in-process local mode
 - **`codent-cli`** — Release host: local-only terminal CLI published as one fully bundled tarball (app / core / node / acp inlined); installed command is `codent`
 
 ## Commands
@@ -29,7 +28,6 @@ pnpm dev                  # Watch mode for all packages
 pnpm start:cli            # Run CLI after build
 pnpm start:server         # Run CoreEnv HTTP server (default :3100)
 pnpm dev:playground       # WebContainer playground (Vite)
-pnpm start:im-bridge      # Telegram bridge (REMOTE_SESSION set = remote mode; absent = local mode)
 pnpm typecheck            # Type check all packages
 pnpm lint                 # ESLint
 pnpm format               # Prettier

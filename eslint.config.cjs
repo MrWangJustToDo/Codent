@@ -116,7 +116,6 @@ module.exports = [
       "packages/core/scripts/**",
       "packages/node/scripts/**",
       "packages/server/scripts/**",
-      "packages/im-bridge/scripts/**",
     ],
     languageOptions: {
       globals: {
