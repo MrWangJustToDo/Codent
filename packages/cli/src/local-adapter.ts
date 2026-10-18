@@ -2,7 +2,7 @@ import { useConfig } from "@codent/app";
 import { CodentAgent } from "@codent/core";
 
 import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
-import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
+import type { AgentSessionHost, CoreEnv, LoadedModelsState, ModelProvider } from "@codent/core";
 
 /**
  * Local adapter — shared by the development host (`@codent/cli`) and the
@@ -61,7 +61,7 @@ export class LocalAgentAdapter implements AgentAdapter {
       // project one instance-level read instead of re-deriving it. `loaded.active` is NOT part of it: it is
       // the persisted DEFAULT, already applied to `config.model`/style/baseURL/apiKey above; the running
       // session's own model lives on the session.
-      const loaded = useConfig.getState().modelsConfig;
+      const loaded = useConfig.getReadonlyState().modelsConfig as LoadedModelsState | null;
       this.agent = await CodentAgent.create({
         env: this._env,
         ...(this._provider ? { provider: this._provider } : {}),
