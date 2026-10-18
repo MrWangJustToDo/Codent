@@ -93,6 +93,18 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
     if (resolvedDefaultTimeout === undefined) resolvedDefaultTimeout = await resolveDefaultCommandTimeout(env);
     return resolvedDefaultTimeout;
   };
+  // Background execution is a MAIN-AGENT capability: the subagent tool set has neither
+  // `get_command_output` nor `kill_command`, so a background command it starts could never be
+  // polled or stopped (the execute path denies it). Describing that offer to the subagent was
+  // false advertising — it invited a `run_in_background: true` call that could only throw, and it
+  // named two tools the subagent does not have.
+  const backgroundCopy = subagentSafe
+    ? "Background commands are NOT available to subagents: there is no get_command_output or kill_command " +
+      "to poll or stop a job, so run_in_background is denied. "
+    : "Set run_in_background=true for long-lived processes (dev servers, watchers); then poll with get_command_output and stop with kill_command. " +
+      `get_command_output and kill_command are lazy tools — discover them via ${DISCOVERY_TOOL_NAME} before calling. ` +
+      "Background jobs also append their output to a durable log file (cachedOutputPath) that can be read with read_file. ";
+
   return defineServerTool({
     name: "run_command",
     present: {
@@ -102,12 +114,10 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
     description:
       "Executes a shell command in the workspace environment. Returns stdout, stderr, exit code, and execution duration. " +
       "Foreground commands have a default deadline (~5 min) when no timeout is given; pass timeout to change it. " +
-      "Set run_in_background=true for long-lived processes (dev servers, watchers); then poll with get_command_output and stop with kill_command. " +
-      `get_command_output and kill_command are lazy tools — discover them via ${DISCOVERY_TOOL_NAME} before calling. ` +
-      "Background jobs also append their output to a durable log file (cachedOutputPath) that can be read with read_file. " +
+      backgroundCopy +
       "Large outputs are saved to disk — use read_file with the cachedOutputPath to read specific sections. " +
       (subagentSafe
-        ? "Subagent commands are restricted: only read-only, project-internal commands are allowed; write or external-path commands are denied."
+        ? "Subagent commands are restricted: only read-only, project-internal commands are allowed; write, background, or external-path commands are denied."
         : "Commands are safety-checked before approval: read-only commands run automatically, while write or external-path commands require user approval."),
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute."),
@@ -131,12 +141,15 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
         .boolean()
         .optional()
         .describe(
-          "When true, start the command in the background and return a jobId immediately. " +
-            "Use get_command_output to read output/status and kill_command to stop it (both lazy — " +
-            `discover them via ${DISCOVERY_TOOL_NAME} first). ` +
-            "The job's output is also appended to a durable log file returned as cachedOutputPath — read it with read_file " +
-            '(no trailing "[exit ...]" footer means the job is still running). ' +
-            "Prefer for long-lived servers (e.g. npm run dev)."
+          subagentSafe
+            ? "Not available to subagents: background commands are denied (there is no get_command_output or " +
+                "kill_command to poll or stop the job)."
+            : "When true, start the command in the background and return a jobId immediately. " +
+                "Use get_command_output to read output/status and kill_command to stop it (both lazy — " +
+                `discover them via ${DISCOVERY_TOOL_NAME} first). ` +
+                "The job's output is also appended to a durable log file returned as cachedOutputPath — read it with read_file " +
+                '(no trailing "[exit ...]" footer means the job is still running). ' +
+                "Prefer for long-lived servers (e.g. npm run dev)."
         ),
     }),
     outputSchema: runCommandOutputSchema,

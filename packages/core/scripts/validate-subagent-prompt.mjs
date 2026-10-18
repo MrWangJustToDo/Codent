@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { buildExploreSystemPrompt, createSubagentTools, createTaskTool } from "../dist/dev.mjs";
+import { buildExploreSystemPrompt, createRunCommandTool, createSubagentTools, createTaskTool } from "../dist/dev.mjs";
 
 {
   const prompt = buildExploreSystemPrompt(5);
@@ -47,8 +47,9 @@ import { buildExploreSystemPrompt, createSubagentTools, createTaskTool } from ".
 
 {
   const description = createTaskTool({ parentAgentId: "a", manager: { getAgent: () => undefined } }).description;
+  const subagentTools = createSubagentTools();
   // `begin_summary` is the subagent's own completion marker, not a capability the parent delegates.
-  const registered = Object.keys(createSubagentTools()).filter((name) => name !== "begin_summary");
+  const registered = Object.keys(subagentTools).filter((name) => name !== "begin_summary");
 
   assert.ok(registered.length >= 8, `expected the subagent tool set, found ${registered.join(", ")}`);
   for (const name of registered) {
@@ -56,6 +57,35 @@ import { buildExploreSystemPrompt, createSubagentTools, createTaskTool } from ".
   }
   assert.ok(!/cannot .*run shell commands/i.test(description), "…and must not deny the shell access it has");
   assert.match(description, /read-only, project-internal commands/, "it states which commands are allowed");
+
+  // The subagent's OWN run_command must not advertise background execution. It has no
+  // get_command_output / kill_command, and `execute` denies `run_in_background` outright — so the
+  // main-agent copy ("Set run_in_background=true … poll with … stop with …") was an offer the tool
+  // could only refuse, naming two tools the subagent does not have.
+  const subagentRun = subagentTools.run_command;
+  assert.ok(subagentRun?.description, "the subagent tool set exposes run_command");
+  assert.match(
+    subagentRun.description,
+    /Background commands are NOT available to subagents/,
+    "the subagent run_command description says background is unavailable"
+  );
+  assert.ok(
+    !/Set run_in_background=true/.test(subagentRun.description),
+    "…and does not advertise the main-agent background flow"
+  );
+  assert.ok(!/discover them via/.test(subagentRun.description), "…nor the lazy discovery of tools it does not have");
+  assert.match(
+    subagentRun.inputSchema.shape.run_in_background.description,
+    /Not available to subagents/,
+    "the field description agrees with the tool description"
+  );
+
+  // The main agent keeps the capability — this is a subagent variant, not a removal.
+  assert.match(
+    createRunCommandTool().description,
+    /Set run_in_background=true/,
+    "the main-agent run_command still documents background execution"
+  );
 }
 
 console.log("subagent-prompt validation passed");
