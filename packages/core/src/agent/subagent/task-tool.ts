@@ -147,8 +147,7 @@ The subagent:
 - Starts with fresh context (doesn't see your conversation history)
 - Has read-only tools: read_file, glob, grep, list_file, tree, websearch, webfetch, plus
   run_command restricted to read-only, project-internal commands (ls, cat, git status/log/diff) —
-  writes, background commands (the subagent has no get_command_output / kill_command), paths outside
-  the project, and any command the safety policy cannot classify are denied
+  writes, paths outside the project, and any command the safety policy cannot classify are denied
 - Cannot modify files or spawn additional subagents
 - Returns a summary plus status flags (reachedLimit, incomplete, aborted; stopReason when aborted)
 - A long summary is a PREVIEW: it keeps the head and tail and ends with 'Full output saved to:
