@@ -356,8 +356,20 @@ assert.equal(noBudget.maxIterations, 0, "an unknown budget stays 0 so the readou
     "the description must not advertise `maxIterations` either"
   );
   assert.ok(
-    /status flags \(reachedLimit, incomplete, aborted, truncated\)/.test(taskTool.description),
+    /status flags \(reachedLimit, incomplete, aborted; stopReason when aborted\)/.test(taskTool.description),
     "and it must still name the status flags the model does receive"
+  );
+  assert.ok(
+    !/truncated=false preferred/.test(taskTool.description),
+    "the description must not present the always-false `truncated` flag as a trust signal"
+  );
+  assert.ok(
+    /Full output saved to:/.test(taskTool.description),
+    "a cached summary is a preview — the description must say to read the saved file"
+  );
+  assert.ok(
+    /Keep each task narrow/.test(taskTool.description) && /step\s+budget/.test(taskTool.description),
+    "the description must warn that a broad task can exhaust the subagent's step budget"
   );
 
   const projected = project({
@@ -384,6 +396,35 @@ assert.equal(noBudget.maxIterations, 0, "an unknown budget stays 0 so the readou
   );
   assert.ok(text.includes("reachedLimit=false"), "but the verdict itself must still reach the model");
   assert.ok(text.includes("incomplete=false"), "along with the other completion flags");
+  assert.ok(
+    !text.includes("truncated="),
+    "`truncated` must not reach the model: the task tool never truncates by length, so the flag is dead"
+  );
+
+  // An aborted run names WHO stopped it — the schema documents the three reasons as the whole
+  // point of `stopReason`, so the projection must carry it when present.
+  const abortedText = JSON.stringify(
+    project({
+      toolCallId: "t2",
+      input: {},
+      output: {
+        subagentId: "s2",
+        summary: "partial work\n\n[Task cancelled by user.]",
+        truncated: false,
+        iterations: 4,
+        maxIterations: 50,
+        durationMs: 12,
+        usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+        reachedLimit: false,
+        incomplete: false,
+        aborted: true,
+        stopReason: "user",
+        success: true,
+      },
+    })
+  );
+  assert.ok(abortedText.includes("aborted=true"), "an aborted run is flagged");
+  assert.ok(abortedText.includes("stopReason=user"), "…and says who stopped it");
 }
 
 console.log("subagent-run-stats validation passed");

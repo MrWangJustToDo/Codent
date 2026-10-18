@@ -139,17 +139,25 @@ Parallelism: independent tasks SHOULD be emitted together as multiple tool calls
 in the same message — they run concurrently and the results arrive as one batch.
 Only sequence tasks when one depends on another's findings.
 
+Keep each task narrow: one question, or one file set, per call. The subagent has a fixed step
+budget, and a broad audit can exhaust it before it summarizes — you then get a flagged partial
+report instead of the answer.
+
 The subagent:
 - Starts with fresh context (doesn't see your conversation history)
 - Has read-only tools: read_file, glob, grep, list_file, tree, websearch, webfetch, plus
   run_command restricted to read-only, project-internal commands (ls, cat, git status/log/diff) —
-  writes, paths outside the project, and any command the safety policy cannot classify are denied
+  writes, background commands, paths outside the project, and any command the safety policy cannot
+  classify are denied
 - Cannot modify files or spawn additional subagents
-- Returns a summary plus status flags (reachedLimit, incomplete, aborted, truncated)
+- Returns a summary plus status flags (reachedLimit, incomplete, aborted; stopReason when aborted)
+- A long summary is a PREVIEW: it keeps the head and tail and ends with 'Full output saved to:
+  <path>'. Read that file before treating the findings as complete — the middle is not in the summary.
 
 How to use the result:
 - Treat findings as trustworthy and extendable only when the run completed cleanly
-  (incomplete=false, aborted=false, reachedLimit=false; truncated=false preferred).
+  (incomplete=false, aborted=false, reachedLimit=false) and the summary is not a preview whose
+  middle you still need.
 - If any of those flags indicate a partial/forced stop, treat the summary as incomplete —
   re-run with a narrower prompt or continue exploring before finalizing decisions (e.g. create_plan).
 
@@ -249,11 +257,15 @@ Example use cases:
     // persisted on the output for a restored `used/budget` readout.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: TaskOutput }) {
       if (isProjectedModelContent(output)) return output;
+      // `truncated` is NOT here: the task tool runs with `SUBAGENT_NO_TRUNCATE`, so it is always
+      // false, while the summary the model actually receives may still be a cached PREVIEW. Listing
+      // a dead flag beside the live ones invited a model to read `truncated=false` as "complete".
+      // The preview announces itself in the text (`Full output saved to …`), which is the honest signal.
       const status = [
         `reachedLimit=${output.reachedLimit}`,
         `incomplete=${output.incomplete}`,
         `aborted=${output.aborted}`,
-        `truncated=${output.truncated}`,
+        ...(output.stopReason ? [`stopReason=${output.stopReason}`] : []),
       ].join(" ");
       return [
         {

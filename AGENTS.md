@@ -772,11 +772,11 @@ The project supports **subagents** — context-isolated agents spawned to handle
 | Feature | Behavior |
 |---------|----------|
 | Context | Fresh (starts with empty messages) |
-| Tools | Read-only: `read_file`, `glob`, `grep`, `list_file`, `tree`, `websearch`, `webfetch`, plus marker `begin_summary` (no `run_command` / write tools) |
+| Tools | Read-only: `read_file`, `glob`, `grep`, `list_file`, `tree`, `websearch`, `webfetch`, `run_command` (restricted: read-only, project-internal commands only — writes, background commands and external paths are denied by `subagentSafe`), plus marker `begin_summary` (no write tools) |
 | Return | Summary only to parent LLM context; UI keeps a read-only UIMessage preview when `bridgeUI` is enabled |
 | Iteration Limit | 50 steps max (TanStack `maxIterations`; cutoff leaves `finishReason: tool_calls`) |
-| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` / `truncated`; explore runs require `begin_summary` for a complete result. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error, and it takes the same progress-summary fallback (`isProgressSummaryEligible` accepts `failed` as a terminal cause) |
-| Summary Limit | 5000 characters max |
+| Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` (plus `stopReason` when aborted); explore runs require `begin_summary` for a complete result. `truncated` stays on the output for other callers but is NOT handed to the parent: the `task` tool runs with `SUBAGENT_NO_TRUNCATE`, so it is always false there. A long summary is a head+tail PREVIEW ending with `Full output saved to: <path>` — the model is told to read that file. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error, and it takes the same progress-summary fallback (`isProgressSummaryEligible` accepts `failed` as a terminal cause) |
+| Summary Limit | `task`: none (`SUBAGENT_NO_TRUNCATE`). Summaries over the tool-output cache threshold become a head+tail preview in the model context with the full text at `.agents/cache/tool-output/<id>.txt`. Other `runSubagent` callers default to `SUBAGENT_DEFAULT_MAX_OUTPUT_LENGTH` (5000 chars). |
 
 | UI Preview | `bridgeUI: true` (default when `parentTaskToolCallId` is set): parent panel + task-tool streaming via the subagent’s `AgentUIChannel` |
 | No parent bridge | `bridgeUI: false` (default otherwise): still has an internal `AgentUIChannel` (message SoT); skips parent task-tool streaming / preview bridging — used by compaction |
