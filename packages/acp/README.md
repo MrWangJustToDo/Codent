@@ -102,6 +102,20 @@ Every change re-sends the **whole** option set — the protocol's `ConfigOptionU
 incremental form — while a re-set of an unchanged value stays silent, because the client's cache is
 already correct.
 
+### The thinking-depth selector
+
+Thinking depth is a property of the **model**, so it is a `configOptions` entry beside it
+(`category: "thought_level"`) rather than a separate slash command — the TUI merges the two into one
+`/models` menu for the same reason. The wire value is the effort level, or `off` for "let the model
+decide"; `off` is the **absence** of an effort, never a level stored under that name.
+
+- the option exists only when the model **evidences** depth (`capabilities` includes `reasoning`
+  **and** `reasoningConfig.effortValues` is non-empty — core's `offerableReasoningEfforts`). A model
+  without metadata offers nothing: one fake value would be worse than no selector;
+- switching to a model without depth makes the option disappear from the next advertisement, so a
+  stale cache cannot offer levels the new model cannot honour;
+- a level the model does not advertise is refused with an error and changes nothing.
+
 ## `--client-env` (opt-in)
 
 By default everything — file reads/writes and commands — runs on our own local CoreEnv, and the
@@ -266,6 +280,12 @@ The advertised set is core's `BUILTIN_COMMAND_CATALOG` filtered to `scope !== "u
 session's extension commands, re-sent whenever the `extensions` channel moves. Dispatch keys off the
 catalog's `command` field, so this host never restates a command name.
 
+`/models` is the one command with two effects: it switches the model **and**, when a level follows
+(`/models 0:gpt-5.1 high`, or `off`), the thinking depth. The switch happens first and the level is
+validated against the model it switched **to** — the previous model's advertisement says nothing
+about the new one. `/effort` is not advertised: depth is a property of the model, so it belongs to
+the model command (and to the `thought_level` selector above).
+
 ## Coverage
 
 | ACP surface | Status |
@@ -275,7 +295,7 @@ catalog's `command` field, so this host never restates a command name.
 | `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
 | client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local) |
 | `session/fork` | ✅ (`session.clone`; source must be live in-process) |
-| `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of both the `mode` and `model` selects we advertise, each sharing its own entry point) |
+| `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of the `mode`, `model` and `thought_level` selects we advertise, each sharing its own entry point) |
 | `user_message_chunk` | ✅ one per user turn, stable `messageId`; injected `<ctx>` rows are skipped |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
 | `tool_call` / `tool_call_update` | ✅ kind / title / locations / streamed output; a write or edit carries its `diff` — sent as soon as the input is resolvable, and again with the result text, since an update replaces what the client holds |
@@ -283,6 +303,7 @@ catalog's `command` field, so this host never restates a command name.
 | `available_commands_update` | ✅ built-in catalog + extension commands |
 | `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set) |
 | model selector (`configOptions`, `category: "model"`) | ✅ when `.agents/config/models.json` is the source (the protocol has no `session/set_model`) |
+| thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
 | `session/request_permission` | ✅ approvals → four-option round-trip |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
@@ -307,7 +328,7 @@ catalog's `command` field, so this host never restates a command name.
 | `bootstrap.ts` | local CoreEnv + model provider + runtime; builds `AcpAgentOptions` |
 | `bin.ts` | the standalone `codent-acp` entry (flag parsing + stdio) |
 | `projector.ts` | `AgentSession` channels → `session/update` (per-message / per-tool cursors; replay) |
-| `session-config-options.ts` | the `mode` / `model` selects and their write paths (`applyMode` / `applyModel`) |
+| `session-config-options.ts` | the `mode` / `model` / `thought_level` selects and their write paths (`applyMode` / `applyModel` / `applyThoughtLevel`) |
 | `session-status.ts` | what a client is told about a session's state: the legacy `modes` field, the disk session id, and the `StopReason` for a finished turn |
 | `session-runtime.ts` | per-session runtime + late binding of the disk id (`--client-env`) |
 | `sessions.ts` | disk catalog → ACP `SessionInfo`, cursor paging |

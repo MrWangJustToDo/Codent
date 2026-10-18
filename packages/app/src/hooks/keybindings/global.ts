@@ -115,6 +115,13 @@ export function useGlobalKeybindings(ctx: KeybindingContext): void {
         return;
       }
       if (useAutocomplete.getReadonlyState().visible) {
+        // A nested menu retreats one level at a time (Esc inside `/models`' effort list goes back to
+        // the model list, and the input is rewritten to that level's prefix). Only the root closes.
+        const parent = autocompleteActions.back();
+        if (parent !== null) {
+          inputActions.setValue(parent);
+          return;
+        }
         autocompleteActions.dismiss();
         return;
       }

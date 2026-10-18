@@ -7,7 +7,7 @@
  * picked `/mode execute` flipped the mode instead of building the plan. `/resume <name>` (documented)
  * only accepted an id, and `/effort display` forwarded `display` as a reasoning level.
  *
- * The grammar now lives in core (`parseModeCommand` / `parseEffortCommand` / `resolveSessionRef`);
+ * The grammar now lives in core (`parseModeCommand` / `parseModelsCommand` / `resolveSessionRef`);
  * this gate asserts the host DISPATCHES what the intent says, not just that the parser works (the
  * parser has its own gate: `validate:builtin-command-arguments`).
  *
@@ -29,13 +29,19 @@ const SAVED_PLAN = ".agents/plans/my-plan.md";
 function makeSession(id) {
   const listeners = new Set();
   let dispatched = [];
+  // Mutable so `model.set` / `effort.set` are visible to later reads, exactly as a real session
+  // behaves — `/models` validates the depth against the model it just switched TO.
+  let snapshot = baseSnapshot(id, {
+    modelInfo: {
+      name: "test-model",
+      capabilities: ["reasoning", "tool_calling"],
+      reasoningConfig: { effortValues: ["low", "medium", "high"] },
+    },
+    reasoningEffort: "medium",
+  });
   const session = {
     id,
-    getSnapshot: () =>
-      baseSnapshot(id, {
-        modelInfo: { name: "test-model", reasoningConfig: { effortValues: ["low", "medium", "high"] } },
-        reasoningEffort: "medium",
-      }),
+    getSnapshot: () => snapshot,
     getSummaryStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
@@ -44,6 +50,19 @@ function makeSession(id) {
     dispatch: async (command) => {
       dispatched.push(command);
       switch (command.type) {
+        case "model.set":
+          // The switch must MOVE the snapshot: the slash path re-advertises from state afterwards, so a
+          // fake that swallowed `model.set` would make "reads the state" and "echoes the request"
+          // indistinguishable.
+          snapshot = {
+            ...snapshot,
+            model: command.model,
+            ...(command.modelInfo !== undefined ? { modelInfo: command.modelInfo ?? undefined } : {}),
+          };
+          return { ok: true, data: { model: command.model } };
+        case "effort.set":
+          snapshot = { ...snapshot, reasoningEffort: command.effort };
+          return { ok: true, data: { effort: command.effort } };
         case "session.list":
           return {
             ok: true,
@@ -73,11 +92,13 @@ function makeSession(id) {
 
 const session = makeSession("s-commands");
 const commandMessages = [];
+const commandUpdates = [];
 const client = createClient({ name: "command-client" }).onNotification(methods.client.session.update, (ctx) => {
   const update = ctx.params.update;
   if (update.sessionUpdate === "agent_message_chunk" && update.content?.type === "text") {
     commandMessages.push(update.content.text);
   }
+  commandUpdates.push(ctx.params);
 });
 
 const app = createAcpAgent({
@@ -91,6 +112,20 @@ const app = createAcpAgent({
   },
   defaults: { model: "fake-model" },
   rootPath: "/ws",
+  // One runtime read, projected by both the selectors and `/models` — the fixture is what makes
+  // "switch then validate the depth against the NEW model" observable at all.
+  models: {
+    entries: [
+      {
+        type: "direct",
+        style: "openai",
+        baseURL: "https://upstream.test/v1",
+        apiKey: "sk-test",
+        models: ["test-model", "other-model"],
+      },
+    ],
+  },
+  modelsDefaultEntryIndex: 0,
 });
 
 await client.connectWith(app, async (cx) => {
@@ -159,28 +194,119 @@ await client.connectWith(app, async (cx) => {
   const missing = await run("/resume nope");
   check("an unknown name does not dispatch a resume", !missing.commands.some((c) => c.type === "session.resume"));
 
-  // --- /effort: display is UI state, values are validated against the model ---------------------
+  // --- /models: one command for the model AND its thinking depth -------------------------------
+  //
+  // `/effort` is gone from the catalog, so a headless client reaches depth through `/models` (and
+  // through the `thought_level` config option, which has its own gate). The dispatch order matters:
+  // the model switch happens FIRST, and the depth is validated against the model it switched to.
 
-  const display = await run("/effort display");
+  const listed = await run("/models");
   check(
-    "/effort display is not forwarded as a reasoning level",
-    !display.commands.some((c) => c.type === "effort.set"),
-    JSON.stringify(display.commands)
+    "/models with no argument lists the entries and dispatches nothing",
+    listed.commands.length === 0 && /^Models:/m.test(listed.message),
+    listed.message
   );
 
-  const unsupported = await run("/effort max");
+  // One command, two effects — and the ORDER is the contract: the model switch happens first, then
+  // the depth is validated against the model it switched TO (the old model's list says nothing about
+  // the new one). The fake session records both dispatches, so the order is observable.
+  const both = await run("/models 0:other-model high");
   check(
-    "a level the model does not advertise is refused",
-    !unsupported.commands.some((c) => c.type === "effort.set") && /does not support/.test(unsupported.message),
-    unsupported.message
+    "/models dispatches model.set then effort.set",
+    both.commands.length === 2 &&
+      both.commands[0].type === "model.set" &&
+      both.commands[0].model === "other-model" &&
+      both.commands[0].modelBaseURL === "https://upstream.test/v1" &&
+      both.commands[1].type === "effort.set" &&
+      both.commands[1].effort === "high",
+    JSON.stringify(both.commands)
   );
 
-  const supported = await run("/effort high");
+  const cleared = await run("/models 0:other-model off");
   check(
-    "a supported level is dispatched",
-    supported.commands.some((c) => c.type === "effort.set" && c.effort === "high"),
-    JSON.stringify(supported.commands)
+    "/models … off clears the depth instead of setting a level called off",
+    cleared.commands.some((c) => c.type === "effort.set" && c.effort === undefined),
+    JSON.stringify(cleared.commands)
   );
+
+  const badLevel = await run("/models 0:other-model turbo");
+  check(
+    "an unknown level is refused before any dispatch",
+    badLevel.commands.length === 0 && /Unknown \/models argument/.test(badLevel.message),
+    `${JSON.stringify(badLevel.commands)} ${badLevel.message}`
+  );
+
+  const noDepth = await run("/models 0:other-model");
+  check(
+    "a model-only switch leaves the depth alone",
+    noDepth.commands.length === 1 && noDepth.commands[0].type === "model.set",
+    JSON.stringify(noDepth.commands)
+  );
+
+  // The slash path must re-advertise too. `set_config_option` does it from its own handler, but a
+  // prompt-issued command returns early with the command's text — so without an explicit advertise
+  // the client keeps rendering the OLD model and depth in its selectors until something else moves.
+  session.take();
+  commandUpdates.length = 0;
+  const viaSlash = await run("/models 0:other-model high");
+  check(
+    "a slash-issued /models switch emits config_option_update",
+    commandUpdates.some((u) => u.update.sessionUpdate === "config_option_update"),
+    `${JSON.stringify(viaSlash.commands.map((c) => c.type))} updates=${commandUpdates.length}`
+  );
+  const slashOptions = commandUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").at(-1)
+    ?.update.configOptions;
+  check(
+    "…and it names the NEW model",
+    slashOptions?.find((o) => o.category === "model")?.currentValue === "0:other-model",
+    JSON.stringify(slashOptions?.find((o) => o.category === "model")?.currentValue)
+  );
+  check(
+    "…and carries the whole option set (no incremental form exists)",
+    Boolean(slashOptions?.some((o) => o.category === "mode")),
+    JSON.stringify(slashOptions?.map((o) => o.category))
+  );
+
+  // A command that changes NOTHING must stay silent — the client's cache is already correct and a
+  // re-broadcast is noise the user cannot act on.
+  commandUpdates.length = 0;
+  await run("/models");
+  check(
+    "a read-only command emits no config_option_update",
+    commandUpdates.filter((u) => u.update.sessionUpdate === "config_option_update").length === 0,
+    `updates=${commandUpdates.length}`
+  );
+
+  // A bare id is the natural way to type it; the parser accepts it and the host resolves it against
+  // the catalog. `applyModel` alone only accepts a bare value equal to the CURRENT model (the
+  // "current model missing from the catalog" case), so without the resolution step this failed with
+  // "Unknown model" for an id that is right there in the catalog.
+  const bare = await run("/models other-model high");
+  check(
+    "a bare model id resolves to its entry before applyModel",
+    bare.commands.some(
+      (c) => c.type === "model.set" && c.model === "other-model" && c.modelBaseURL === "https://upstream.test/v1"
+    ) && bare.commands.some((c) => c.type === "effort.set" && c.effort === "high"),
+    JSON.stringify(bare.commands)
+  );
+
+  // `/effort` must not be advertised (and so must not resolve): the catalog is the single source.
+  // An unadvertised slash command falls through to the model as an ordinary prompt — the point is
+  // that nothing dispatches `effort.set`, not which wording the fallthrough uses.
+  const effort = await run("/effort high");
+  check(
+    "/effort no longer dispatches effort.set (it is not a builtin)",
+    !effort.commands.some((c) => c.type === "effort.set"),
+    JSON.stringify(effort.commands.map((c) => c.type))
+  );
+  {
+    const { BUILTIN_COMMAND_CATALOG } = await import("@codent/core");
+    check(
+      "the catalog no longer advertises /effort",
+      !BUILTIN_COMMAND_CATALOG.some((entry) => entry.name === "effort"),
+      BUILTIN_COMMAND_CATALOG.map((entry) => entry.name).join(",")
+    );
+  }
 });
 
 finish(checker.failures);

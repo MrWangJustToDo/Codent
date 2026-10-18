@@ -11,6 +11,12 @@ command's metadata. A host registers or advertises a built-in command by sourcin
 the catalog and supplying only host-local behavior (an executable handler) or nothing (a headless host
 dispatches through the session).
 
+The catalog SHALL carry **one** command for choosing the model and its thinking depth: `/models`.
+A separate thinking-depth command SHALL NOT be advertised, because the depth is a property of the
+chosen model — advertising it twice lets a host offer a depth the model being switched to cannot
+honour, and forces a user to visit two menus for one decision. `/models`' usage SHALL therefore
+document the depth argument, and every level that usage advertises SHALL parse.
+
 #### Scenario: App registers a built-in command
 
 - **WHEN** the terminal app registers a built-in command
@@ -31,4 +37,20 @@ dispatches through the session).
 
 - **WHEN** the host parity check runs
 - **THEN** it asserts every catalog command is registered by the app and that app commands carry no catalog-owned metadata of their own, rather than comparing two restated strings
+
+#### Scenario: Thinking depth has no command of its own
+
+- **WHEN** a host enumerates the advertised commands
+- **THEN** the set contains `/models` and NOT a separate thinking-depth command
+- **AND** `/models`' advertised usage names the depth argument, and every level it names parses into a `set` intent
+
+#### Scenario: The model command's argument grammar is core's
+
+- **WHEN** a host parses `/models <args>`
+- **THEN** it uses core's `parseModelsCommand`: no argument is `list`, `"<entryIndex>:<model>"` is a
+  `set` naming that entry, a bare token is a `set` the host resolves against its own entries, and a
+  second token is an effort level or `off`
+- **AND** an unrecognised second token is `invalid` rather than being forwarded to the model
+- **AND** the host applies the model switch BEFORE the depth, so the depth is validated against the
+  model it switched to
 

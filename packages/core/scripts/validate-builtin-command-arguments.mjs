@@ -1,7 +1,7 @@
 /**
  * Builtin command ARGUMENT grammar — one definition, asserted against every host's needs.
  *
- * The grammar lives in core (`parseModeCommand` / `parseEffortCommand`) because it is the command
+ * The grammar lives in core (`parseModeCommand` / `parseModelsCommand`) because it is the command
  * contract, not a surface detail. It used to live in the TUI's handlers alone: the ACP slash handler
  * recognised `plan|auto|off` and treated everything else as a toggle, so the advertised
  * `/mode execute|done|cancel|status|save|load|list` flipped the mode instead of building the plan.
@@ -16,9 +16,9 @@ import assert from "node:assert/strict";
 
 import {
   BUILTIN_COMMAND_CATALOG,
-  isReasoningEffort,
-  parseEffortCommand,
+  offerableReasoningEfforts,
   parseModeCommand,
+  parseModelsCommand,
   REASONING_EFFORT_VALUES,
   resolveSessionRef,
   supportedReasoningEfforts,
@@ -73,38 +73,71 @@ for (const alternative of usageBody.split("|")) {
 }
 
 // ============================================================================
-// /effort
+// /models — one command for the model AND its thinking depth
 // ============================================================================
 
-const effortCases = [
-  ["", { kind: "status" }],
-  ["status", { kind: "status" }],
-  ["display", { kind: "display", action: "toggle" }],
-  ["display toggle", { kind: "display", action: "toggle" }],
-  ["display on", { kind: "display", action: "on" }],
-  ["display off", { kind: "display", action: "off" }],
-  ["display?", { kind: "display", action: "status" }],
-  ["off", { kind: "clear" }],
-  ["low", { kind: "set", effort: "low" }],
-  ["minimal", { kind: "set", effort: "minimal" }],
+const modelsCases = [
+  ["", { kind: "list" }, "no argument lists the entries"],
+  ["0:gpt-5.1", { kind: "set", model: "gpt-5.1", entryIndex: 0 }],
+  ["0:gpt-5.1 high", { kind: "set", model: "gpt-5.1", entryIndex: 0, effort: "high" }],
+  ["0:gpt-5.1 off", { kind: "set", model: "gpt-5.1", entryIndex: 0, clearEffort: true }],
+  ["0:a:b", { kind: "set", model: "a:b", entryIndex: 0 }, "the model id may contain a colon"],
+  ["bare-model", { kind: "set", model: "bare-model" }, "no entry → the host resolves it"],
+  ["bare-model high", { kind: "set", model: "bare-model", effort: "high" }, "a bare model + depth"],
+  ["0:x turbo", { kind: "invalid", value: "0:x turbo" }, "an unknown level is not forwarded"],
+  ["a b c", { kind: "invalid", value: "a b c" }, "more than two arguments is not a command"],
+  ["0:", { kind: "invalid", value: "0:" }, "an entry without a model names nothing"],
 ];
 
-for (const [raw, expected] of effortCases) {
-  assert.deepEqual(parseEffortCommand(raw), expected, `/effort ${raw}`);
+for (const [raw, expected, note] of modelsCases) {
+  assert.deepEqual(parseModelsCommand(raw), expected, note ? `/models ${raw} — ${note}` : `/models ${raw}`);
 }
+assert.deepEqual(
+  parseModelsCommand("0:X HIGH"),
+  { kind: "set", model: "X", entryIndex: 0, effort: "high" },
+  "the level is case-insensitive and the model id is not"
+);
 
-assert.deepEqual(parseEffortCommand("DISPLAY ON"), { kind: "display", action: "on" }, "case-insensitive");
-assert.deepEqual(parseEffortCommand("bogus"), { kind: "invalid", value: "bogus" });
-
-// Every value the union exposes is accepted, and the guard agrees with the list.
+// Every level the catalog advertises as an argument parses — the same drift check as /mode.
+const modelsUsage = BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "models")?.usage ?? "";
+assert.ok(modelsUsage.includes("effort"), "the /models usage advertises the depth argument");
 for (const value of REASONING_EFFORT_VALUES) {
-  assert.equal(isReasoningEffort(value), true, `${value} is an effort value`);
-  assert.deepEqual(parseEffortCommand(value), { kind: "set", effort: value });
+  assert.deepEqual(
+    parseModelsCommand(`0:m ${value}`),
+    { kind: "set", model: "m", entryIndex: 0, effort: value },
+    `/models 0:m ${value}`
+  );
 }
-assert.equal(isReasoningEffort("display"), false);
 
-// A value outside the union is invalid, not forwarded to the model.
-assert.deepEqual(parseEffortCommand("turbo"), { kind: "invalid", value: "turbo" });
+// `/effort` is gone from the catalog: a headless host cannot advertise what does not exist.
+assert.equal(
+  BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "effort"),
+  undefined,
+  "/effort is not a built-in command any more — /models owns the thinking depth"
+);
+
+// ============================================================================
+// offerableReasoningEfforts — what a MENU may offer (stricter than validation)
+// ============================================================================
+
+assert.deepEqual(
+  offerableReasoningEfforts({ capabilities: ["reasoning"], reasoningConfig: { effortValues: ["low", "high"] } }),
+  ["low", "high"],
+  "a reasoning model's advertised levels are the menu"
+);
+assert.deepEqual(
+  offerableReasoningEfforts({ capabilities: [], reasoningConfig: { effortValues: ["low"] } }),
+  [],
+  "no `reasoning` capability means no depth menu, even if levels leaked in"
+);
+assert.deepEqual(
+  offerableReasoningEfforts({ capabilities: ["reasoning"] }),
+  [],
+  "reasoning without advertised levels offers nothing — the list is evidence, not a guess"
+);
+assert.deepEqual(offerableReasoningEfforts(undefined), [], "an unknown model offers nothing");
+// The validation rule stays permissive, which is the deliberate asymmetry.
+assert.deepEqual(supportedReasoningEfforts(undefined), REASONING_EFFORT_VALUES, "validation keeps the fallback");
 
 // ============================================================================
 // supportedReasoningEfforts

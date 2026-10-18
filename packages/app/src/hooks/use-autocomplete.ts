@@ -1,11 +1,9 @@
 import { createState } from "reactivity-store";
 
 import { getAllCommands } from "../commands";
-import {
-  COMMAND_FREEFORM_VALUE,
-  typedArgsAfterCommand,
-  withFreeformOption,
-} from "../commands/utils/command-options.js";
+import { COMMAND_FREEFORM_VALUE, typedArgsAfterCommand } from "../commands/utils/command-options.js";
+
+import { applyOptionsToState, closeMenu, descend, openLevel } from "./option-levels.js";
 
 import type { Command, CommandOption } from "../commands";
 
@@ -30,6 +28,10 @@ export interface AutocompleteSuggestion {
   freeform?: boolean;
   /** Divider row — rendered as a rule line, skipped by selection */
   separator?: boolean;
+  /** Submenu row — selecting it opens a deeper level instead of executing */
+  hasSubmenu?: boolean;
+  /** The row this suggestion came from (its `getOptions` opens the next level). */
+  option?: CommandOption;
 }
 
 export interface AutocompleteState {
@@ -43,6 +45,27 @@ export interface AutocompleteState {
   visible: boolean;
   /** Current command when in options mode */
   currentCommand: Command | null;
+  /**
+   * The option rows chosen so far, root level first — the menu's stack.
+   *
+   * `optionPath` is the same chain as values (what the input shows), and `levels` keeps the rows of
+   * each level opened, so `Esc` can restore the parent list verbatim instead of re-resolving it (a
+   * re-resolution could return different rows — metadata arriving, an entry edited mid-menu — and
+   * the retreat would then land somewhere the user never was).
+   */
+  optionPath: string[];
+  levels: CommandOption[][];
+  /**
+   * Identifies the current level load, so a resolver that answers late cannot write into a level the
+   * user already left.
+   *
+   * Levels are resolved asynchronously (a model's depth list needs a metadata lookup), and the user
+   * may press `Esc` — or dismiss entirely — while one is in flight. Comparing a captured token is what
+   * makes the continuation a no-op in that case: without it the late rows land at the END of the
+   * stack (`slice(0, -1)` is positional, not keyed), so after a retreat they would replace the PARENT
+   * level and leave `levels.length` and `optionPath.length` describing different depths.
+   */
+  loadToken: number;
 }
 
 // ============================================================================
@@ -55,6 +78,9 @@ const initialState: AutocompleteState = {
   selectedIndex: 0,
   visible: false,
   currentCommand: null,
+  optionPath: [],
+  levels: [],
+  loadToken: 0,
 };
 
 // ============================================================================
@@ -71,59 +97,13 @@ function commandToSuggestion(cmd: Command): AutocompleteSuggestion {
 }
 
 /**
- * The command a fully-typed name refers to, including aliases. Autocomplete
- * matches on the typed prefix only, so without this a user typing the alias
- * (`/appearance`) would land in options mode with no options to filter.
+ * The command a fully-typed name refers to, including aliases. Autocomplete matches on the typed prefix
+ * only, so without this a user typing the alias (`/appearance`) would land in options mode with no
+ * options to filter.
  */
 function resolveCommandByName(name: string): Command | undefined {
   const commands = getAllCommands();
   return commands.find((c) => c.name === name) ?? commands.find((c) => c.aliases?.includes(name));
-}
-
-function optionToSuggestion(opt: CommandOption, command: Command): AutocompleteSuggestion {
-  return {
-    label: opt.label,
-    usage: opt.freeform ? `/${command.name} <custom>` : `/${command.name} ${opt.label}`,
-    description: opt.description || "",
-    optionValue: opt.value,
-    freeform: opt.freeform === true,
-    separator: opt.separator === true,
-  };
-}
-
-function normalizeOptions(command: Command, options: CommandOption[]): CommandOption[] {
-  const hasFreeform = options.some((o) => o.freeform);
-  if (command.allowCustomInput && !hasFreeform) {
-    return withFreeformOption(options);
-  }
-  return options;
-}
-
-function filterOptions(options: CommandOption[], optionPrefix: string): CommandOption[] {
-  const filtered = options.filter((o) => {
-    if (o.separator) return !optionPrefix; // drop dividers while filtering
-    if (o.freeform) return true;
-    if (!optionPrefix) return true;
-    return o.label.toLowerCase().includes(optionPrefix) || o.value.toLowerCase().includes(optionPrefix);
-  });
-  const presets = filtered.filter((o) => !o.freeform);
-  const freeform = filtered.filter((o) => o.freeform);
-  return [...presets, ...freeform];
-}
-
-function applyOptionsToState(
-  state: AutocompleteState,
-  command: Command,
-  options: CommandOption[],
-  optionPrefix: string
-): void {
-  const normalized = normalizeOptions(command, options);
-  const filtered = filterOptions(normalized, optionPrefix);
-  state.suggestions = filtered.map((o) => optionToSuggestion(o, command));
-  // Auto-select default — prefer option with defaultSelected, then first non-freeform
-  const defaultIndex = filtered.findIndex((o) => o.defaultSelected && !o.freeform);
-  state.selectedIndex = defaultIndex >= 0 ? defaultIndex : Math.min(0, filtered.length - 1);
-  state.visible = filtered.length > 0;
 }
 
 // ============================================================================
@@ -138,36 +118,33 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
      */
     update: (input: string) => {
       if (!input.startsWith("/")) {
-        state.mode = "commands";
-        state.suggestions = [];
-        state.selectedIndex = 0;
-        state.visible = false;
-        state.currentCommand = null;
+        closeMenu(state);
         return;
       }
 
-      // Extract the command name portion (before first space)
       const spaceIndex = input.indexOf(" ");
+      const optionPrefix =
+        spaceIndex === -1
+          ? ""
+          : input
+              .slice(spaceIndex + 1)
+              .toLowerCase()
+              .trim();
 
-      if (spaceIndex !== -1 && state.mode === "options" && state.currentCommand) {
-        // In options mode, filter options based on input after command
-        const optionPrefix = input
-          .slice(spaceIndex + 1)
-          .toLowerCase()
-          .trim();
-        const command = state.currentCommand;
-
-        if (command.getOptions) {
-          const options = command.getOptions();
-          if (options instanceof Promise) {
-            options.then((opts) => {
-              if (state.currentCommand !== command) return;
-              applyOptionsToState(state, command, opts, optionPrefix);
-            });
-          } else {
-            applyOptionsToState(state, command, options, optionPrefix);
-          }
+      const opened = state.mode === "options" ? state.currentCommand : null;
+      if (opened) {
+        // Already in the menu: the rows are the level we are on, so only re-filter when the typed
+        // text still sits inside it. Typing past the level means the user is writing args by hand
+        // (`/models 0:x high`), and the menu steps aside rather than match against a level it no
+        // longer describes.
+        // Lowercased for the same reason as the filter: the path keeps the option's spelling.
+        const pathPrefix = state.optionPath.join(" ").toLowerCase();
+        if (pathPrefix && !optionPrefix.startsWith(pathPrefix)) {
+          closeMenu(state);
+          return;
         }
+        const level = state.levels[state.levels.length - 1] ?? [];
+        applyOptionsToState(state, opened, level, optionPrefix);
         return;
       }
 
@@ -180,19 +157,9 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
         if (command?.getOptions) {
           state.mode = "options";
           state.currentCommand = command;
-          const optionPrefix = input
-            .slice(spaceIndex + 1)
-            .toLowerCase()
-            .trim();
-          const options = command.getOptions();
-          if (options instanceof Promise) {
-            options.then((opts) => {
-              if (state.currentCommand !== command) return;
-              applyOptionsToState(state, command, opts, optionPrefix);
-            });
-          } else {
-            applyOptionsToState(state, command, options, optionPrefix);
-          }
+          state.optionPath = [];
+          state.levels = [];
+          openLevel(state, command, optionPrefix);
           return;
         }
         // Command with no options (e.g. a fully-typed `/help <args>`).
@@ -205,6 +172,8 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
       // Commands mode - filter by prefix (name or alias)
       state.mode = "commands";
       state.currentCommand = null;
+      state.optionPath = [];
+      state.levels = [];
       const prefix = input.slice(1).toLowerCase();
       const commands = getAllCommands();
       const filtered = prefix
@@ -241,6 +210,27 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
     },
 
     /**
+     * Retreat one level: a nested menu goes back to its parent instead of closing.
+     *
+     * Returns the input text the parent level expects, or `null` when there is no parent (the caller
+     * then closes the menu, as `Esc` always did).
+     */
+    back: (): string | null => {
+      const command = state.currentCommand;
+      if (state.mode !== "options" || !command || state.levels.length === 0) return null;
+
+      state.optionPath = state.optionPath.slice(0, -1);
+      state.levels = state.levels.slice(0, -1);
+      const parent = state.levels[state.levels.length - 1];
+      if (!parent) {
+        // The root level itself: there is no parent to retreat to.
+        return null;
+      }
+      applyOptionsToState(state, command, parent, state.optionPath.join(" "));
+      return `/${[command.name, ...state.optionPath].join(" ")} `;
+    },
+
+    /**
      * Accept the currently selected suggestion.
      * Pass `currentInput` so freeform options can use the typed suffix.
      */
@@ -253,15 +243,11 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
 
       if (state.mode === "options") {
         const command = state.currentCommand;
-        state.mode = "commands";
-        state.suggestions = [];
-        state.selectedIndex = 0;
-        state.visible = false;
-        state.currentCommand = null;
-
         if (!command) return null;
+        const path = state.optionPath;
 
         if (selected.freeform || selected.optionValue === COMMAND_FREEFORM_VALUE) {
+          closeMenu(state);
           const typed = typedArgsAfterCommand(currentInput ?? "", command.name);
           return {
             type: "execute",
@@ -270,20 +256,24 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
         }
 
         const value = selected.optionValue ?? selected.label;
-        // `insertOnSelect` commands keep the input editable after selecting an
-        // option (fill `/cmd <option> `) so the user can append follow-up text
-        // before submitting — e.g. /skill <name> + instructions. Other commands
-        // (e.g. /resume) execute immediately on selection.
-        if (command.insertOnSelect) {
-          return {
-            type: "input",
-            value: `/${command.name} ${value} `,
-          };
+
+        // A submenu row descends instead of executing. A level the resolver answers with no rows is
+        // treated as a leaf (it executes): descending into an empty list would strand the user one
+        // level deep with nothing to pick.
+        if (selected.option?.getOptions) {
+          const nextPath = [...path, value];
+          const next = descend(state, command, selected.option.getOptions(undefined, nextPath), nextPath);
+          if (next) return { type: "input", value: `/${[command.name, ...nextPath].join(" ")} ` };
         }
-        return {
-          type: "execute",
-          value: value ? `/${command.name} ${value}` : `/${command.name}`,
-        };
+
+        closeMenu(state);
+        const suffix = [command.name, ...path, value].filter(Boolean).join(" ");
+        // `insertOnSelect` commands keep the input editable after selecting an
+        // option (fill `/cmd <path…> <value> `) so the user can append follow-up
+        // text before submitting — e.g. /skill <name> + instructions. Other
+        // commands (e.g. /resume) execute immediately on selection.
+        if (command.insertOnSelect) return { type: "input", value: `/${suffix} ` };
+        return { type: "execute", value: `/${suffix}` };
       }
 
       // Commands mode
@@ -292,10 +282,7 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
 
       // If command is immediate (like /help), execute it directly
       if (command.immediate) {
-        state.suggestions = [];
-        state.selectedIndex = 0;
-        state.visible = false;
-        state.currentCommand = null;
+        closeMenu(state);
         return { type: "execute", value: `/${command.name}` };
       }
 
@@ -303,25 +290,15 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
       if (command.getOptions) {
         state.mode = "options";
         state.currentCommand = command;
+        state.optionPath = [];
+        state.levels = [];
         state.selectedIndex = 0;
-
-        const options = command.getOptions();
-        if (options instanceof Promise) {
-          options.then((opts) => {
-            if (state.currentCommand !== command) return;
-            applyOptionsToState(state, command, opts, "");
-          });
-          return { type: "input", value: `/${command.name} ` };
-        }
-        applyOptionsToState(state, command, options, "");
+        openLevel(state, command, "");
         return { type: "input", value: `/${command.name} ` };
       }
 
       // Default: set input to command with trailing space
-      state.suggestions = [];
-      state.selectedIndex = 0;
-      state.visible = false;
-      state.currentCommand = null;
+      closeMenu(state);
 
       return { type: "input", value: `/${command.name} ` };
     },
@@ -330,11 +307,7 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
      * Dismiss suggestions
      */
     dismiss: () => {
-      state.mode = "commands";
-      state.suggestions = [];
-      state.selectedIndex = 0;
-      state.visible = false;
-      state.currentCommand = null;
+      closeMenu(state);
     },
   }),
 

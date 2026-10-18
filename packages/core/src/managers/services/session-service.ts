@@ -242,7 +242,7 @@ export class SessionService {
       this.data.autoMode = autoMode;
     }
 
-    // `in` check: explicit undefined (e.g. `/effort off`) also clears the field.
+    // `in` check: explicit undefined (e.g. `/models <model> off`) also clears the field.
     if ("reasoningEffort" in input) {
       this.data.reasoningEffort = reasoningEffort;
     }

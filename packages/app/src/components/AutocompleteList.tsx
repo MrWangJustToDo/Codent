@@ -40,6 +40,8 @@ export const AutocompleteList = () => {
     const isSelected = index === selectedIndex;
     const label = suggestion.label.padEnd(maxLabelWidth + 2);
     const labelColor = suggestion.freeform ? COLORS.muted : COLORS.primary;
+    // A submenu row is marked with a chevron so it reads as "opens a level", not "runs".
+    const shown = suggestion.hasSubmenu ? `${label}›` : label;
 
     return (
       <Box flexDirection="row" width="100%">
@@ -51,7 +53,7 @@ export const AutocompleteList = () => {
             dimColor={!isSelected && suggestion.freeform}
             wrap="truncate"
           >
-            {label}
+            {shown}
           </Text>
         </Box>
         <Text color={isSelected ? "white" : COLORS.muted} dimColor={!isSelected} wrap="truncate">

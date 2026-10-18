@@ -35,7 +35,7 @@ import { createInteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
 import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
-import { applyMode, applyModel, sessionConfigOptions } from "./session-config-options.js";
+import { applyMode, applyModel, applyThoughtLevel, effortOf, sessionConfigOptions } from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
 import { diskSessionId, sessionSelectors, sessionSelectorsFor, stopReasonFor } from "./session-status.js";
 import { createSessionCatalog } from "./sessions.js";
@@ -114,6 +114,13 @@ interface SessionBridge {
   selectedModelEntryIndex: number | undefined;
   /** The entry index the client was last told about — the mirror that makes a silent change visible. */
   lastAdvertisedConfigEntryIndex: number | undefined;
+  /**
+   * The thinking depth the client was last told about (`reasoningEffort`, or `"off"` when unset).
+   *
+   * Its own mirror for the same reason as the model: a depth change must re-send the whole set, and
+   * `advertise` compares it against what the client's cache says rather than against the request.
+   */
+  lastAdvertisedConfigEffort: string | undefined;
   /**
    * Whether the stored transcript has been replayed to the client. `load` owes the history once; a
    * repeat on the same live session must not replay it again (the client would render it twice).
@@ -295,6 +302,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // id but not the connection, so first-match resolution is the honest fallback there.
       selectedModelEntryIndex: seededModelEntryIndex(session.getSnapshot().model),
       lastAdvertisedConfigEntryIndex: undefined,
+      lastAdvertisedConfigEffort: undefined,
       replayed: false,
       projector: undefined as unknown as AcpProjector,
     };
@@ -457,6 +465,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
+    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
     return {
       sessionId: acpId,
       ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
@@ -629,6 +638,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
+    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
     return {
       sessionId: newId,
       ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
@@ -652,19 +662,21 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    */
   const advertise = (
     bridge: SessionBridge,
-    previous: { mode: AgentMode; model?: string; entryIndex?: number }
+    previous: { mode: AgentMode; model?: string; entryIndex?: number; effort?: string }
   ): void => {
     const snapshot = bridge.session.getSnapshot();
     if (
       snapshot.mode === previous.mode &&
       snapshot.model === previous.model &&
-      bridge.selectedModelEntryIndex === previous.entryIndex
+      bridge.selectedModelEntryIndex === previous.entryIndex &&
+      effortOf(snapshot) === previous.effort
     ) {
       return;
     }
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
+    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
     emit(bridge.acpId, {
       sessionUpdate: "config_option_update",
       configOptions: sessionConfigOptions(snapshot, options.models, bridge.selectedModelEntryIndex),
@@ -676,12 +688,16 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    *
    * The entry index is compared too: switching between two entries that offer the SAME model id
    * (`0:shared` → `1:shared`) changes the connection while the model string stands still, and a
-   * client whose cache said `0:shared` must be told.
+   * client whose cache said `0:shared` must be told. The same holds for the thinking depth, which is
+   * a separate `configOptions` entry and moves independently of both.
    */
-  const advertised = (bridge: SessionBridge): { mode: AgentMode; model?: string; entryIndex?: number } => ({
+  const advertised = (
+    bridge: SessionBridge
+  ): { mode: AgentMode; model?: string; entryIndex?: number; effort?: string } => ({
     mode: bridge.lastAdvertisedConfigMode ?? bridge.session.getSnapshot().mode,
     model: bridge.lastAdvertisedConfigModel,
     entryIndex: bridge.lastAdvertisedConfigEntryIndex,
+    effort: bridge.lastAdvertisedConfigEffort,
   });
 
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
@@ -729,6 +745,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         if (applied.entryIndex !== undefined) bridge.selectedModelEntryIndex = applied.entryIndex;
         break;
       }
+      case "thought_level":
+        await applyThoughtLevel(toTarget(bridge), ctx.params.value as string);
+        break;
       default:
         // No third option is advertised, so an unhandled category is a real gap. Swallow it and the
         // client's selector silently stops meaning anything.
@@ -817,8 +836,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     const text = typeof mapping.content === "string" ? mapping.content : undefined;
     const parsed = text ? parseSlashCommand(text) : null;
     if (parsed && text) {
-      const result = await dispatchSlashCommand(bridge.session, bridge.session.getSnapshot(), parsed);
+      // A slash command can change what the client's `configOptions` cache says — `/models` moves the
+      // model AND the thinking depth, and `/mode …` moves the mode. The write handlers
+      // (`set_config_option` / `set_mode`) re-advertise themselves, so this path must do it too:
+      // without it the client keeps rendering the old selector values until something else happens.
+      const before = advertised(bridge);
+      const result = await dispatchSlashCommand(bridge.session, bridge.session.getSnapshot(), parsed, options.models);
       if (result.handled) {
+        advertise(bridge, before);
         if (result.message) {
           emit(bridge.acpId, {
             sessionUpdate: "agent_message_chunk",

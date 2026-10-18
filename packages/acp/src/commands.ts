@@ -8,17 +8,19 @@
  */
 
 import {
+  encodeModelChoice,
   findBuiltinCommand,
   listAdvertisableCommands,
-  parseEffortCommand,
   parseModeCommand,
-  REASONING_EFFORT_VALUES,
+  parseModelsCommand,
   resolveSessionRef,
-  supportedReasoningEfforts,
 } from "@codent/core";
 
+import { applyModel, applyThoughtLevel, THOUGHT_LEVEL_DEFAULT } from "./session-config-options.js";
+
+import type { ModelSwitchOutcome } from "./session-config-options.js";
 import type { AcpCommands } from "./types.js";
-import type { AgentSession, AgentSessionSnapshot } from "@codent/core";
+import type { AgentSession, AgentSessionSnapshot, ModelCatalogRead } from "@codent/core";
 
 /** Advertizable command set: built-ins (non-UI) + the session's extension commands. */
 export function commandsFromSnapshot(snapshot: AgentSessionSnapshot): AcpCommands {
@@ -63,7 +65,8 @@ export interface SlashResult {
 export async function dispatchSlashCommand(
   session: AgentSession,
   snapshot: AgentSessionSnapshot,
-  parsed: ParsedCommand
+  parsed: ParsedCommand,
+  read?: ModelCatalogRead
 ): Promise<SlashResult> {
   const entry = findBuiltinCommand(parsed.name);
 
@@ -108,8 +111,8 @@ export async function dispatchSlashCommand(
       return { handled: true };
     case "mode.set":
       return dispatchModeCommand(session, parsed.raw);
-    case "effort.set":
-      return dispatchEffortCommand(session, parsed.raw);
+    case "model.set":
+      return dispatchModelsCommand(session, parsed.raw, read);
     case "usage.history":
       return finish(await session.dispatch({ type: "usage.history" }));
     default:
@@ -191,39 +194,81 @@ async function dispatchModeCommand(session: AgentSession, rawArgs: string): Prom
   }
 }
 
-/** `/effort <args>` — core's grammar; `display` is UI state a headless host cannot keep. */
-async function dispatchEffortCommand(session: AgentSession, rawArgs: string): Promise<SlashResult> {
-  const intent = parseEffortCommand(rawArgs);
+/**
+ * `/models <args>` — core's grammar, one command for the model AND its thinking depth.
+ *
+ * The write goes through {@link applyModel}, the same function `session/set_config_option` uses, so
+ * the slash command and the client's model selector cannot drift. Depth is applied through
+ * `effort.set` and only after the switch, because the level is validated against the NEW model's
+ * advertisement — the current model's list says nothing about the one being switched to.
+ */
+async function dispatchModelsCommand(
+  session: AgentSession,
+  rawArgs: string,
+  read: ModelCatalogRead | undefined
+): Promise<SlashResult> {
+  const intent = parseModelsCommand(rawArgs);
 
-  switch (intent.kind) {
-    case "display":
-      return { handled: true, message: "Thinking display is a terminal-UI setting; it has no ACP equivalent" };
-    case "status": {
-      const effort = session.getSnapshot().reasoningEffort;
-      return { handled: true, message: `Reasoning effort: ${effort ?? "model default"}` };
-    }
-    case "clear":
-      await session.dispatch({ type: "effort.set", effort: undefined });
-      return { handled: true, message: "Reasoning effort: model default" };
-    case "set": {
-      const supported = supportedReasoningEfforts(session.getSnapshot().modelInfo);
-      if (!supported.includes(intent.effort)) {
-        return {
-          handled: true,
-          message: `Model does not support effort "${intent.effort}". Supported: ${supported.join(", ") || "none"}`,
-        };
-      }
-      await session.dispatch({ type: "effort.set", effort: intent.effort });
-      return { handled: true, message: `Reasoning effort: ${intent.effort}` };
-    }
-    case "invalid":
-      return {
-        handled: true,
-        message: `Unknown effort "${intent.value}". Use one of: ${REASONING_EFFORT_VALUES.join(", ")} or "off"/"status"`,
-      };
-    default:
-      return { handled: true };
+  if (intent.kind === "invalid") {
+    return {
+      handled: true,
+      message:
+        `Unknown /models argument "${intent.value}". ` +
+        `Usage: /models [entryIndex:modelId [effort|off]] (no argument lists the entries)`,
+    };
   }
+  if (intent.kind === "list") {
+    const entries = read?.entries ?? [];
+    if (entries.length === 0) return { handled: true, message: "No models are configured" };
+    const lines = entries.map(
+      (entry, index) => `${index}: ${entry.style}@${entry.baseURL} — ${entry.models.join(", ") || "(no models)"}`
+    );
+    return { handled: true, message: `Models:\n${lines.join("\n")}` };
+  }
+
+  // A bare id names no entry, so it is resolved against the catalog the same way the TUI's menu
+  // does — `applyModel` only accepts a bare value that is already the session's model (that is how a
+  // current model missing from the catalog is advertised). Without this, `/models <id>` fails with
+  // "Unknown model" even when the id is right there in the catalog.
+  const value =
+    intent.entryIndex !== undefined
+      ? encodeModelChoice(intent.entryIndex, intent.model)
+      : resolveBareModel(intent.model, read);
+
+  let applied: ModelSwitchOutcome;
+  try {
+    applied = await applyModel({ session, acpId: session.id }, value, read);
+  } catch (error) {
+    return { handled: true, message: error instanceof Error ? error.message : String(error) };
+  }
+
+  const switched = applied.snapshot.model ?? intent.model;
+  if (intent.effort === undefined && intent.clearEffort !== true) {
+    return { handled: true, message: `Switched to ${switched}` };
+  }
+
+  // Depth goes through the ONE write path (`applyThoughtLevel`) — the same function the
+  // `thought_level` selector calls. It validates against the metadata the switch just installed and
+  // clears the effort for the `off` marker, so the two routes cannot disagree about either.
+  const level = intent.clearEffort ? THOUGHT_LEVEL_DEFAULT : intent.effort!;
+  try {
+    await applyThoughtLevel({ session, acpId: session.id }, level);
+  } catch (error) {
+    return {
+      handled: true,
+      message: `Switched to ${switched}, but ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  return {
+    handled: true,
+    message: `Switched to ${switched}, thinking: ${level === THOUGHT_LEVEL_DEFAULT ? "model default" : level}`,
+  };
+}
+
+/** A bare model id → the catalog's encoded choice; unchanged when no entry lists it. */
+function resolveBareModel(model: string, read: ModelCatalogRead | undefined): string {
+  const index = read?.entries.findIndex((entry) => entry.models.includes(model)) ?? -1;
+  return index >= 0 ? encodeModelChoice(index, model) : model;
 }
 
 /** One line for `/mode status`; the plan phase is what a client cannot infer. */

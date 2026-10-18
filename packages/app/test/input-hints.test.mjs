@@ -46,7 +46,6 @@ const required = [
   "/help",
   "/mode",
   "/models",
-  "/effort",
   "/resume",
   "/compact",
   "/settings",

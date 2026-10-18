@@ -7,7 +7,6 @@ import "./compact.js";
 import "./rename.js";
 import "./settings.js";
 import "./mode.js";
-import "./effort.js";
 import "./models.js";
 import "./help.js";
 import "./quit.js";

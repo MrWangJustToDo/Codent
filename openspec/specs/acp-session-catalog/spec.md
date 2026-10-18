@@ -160,6 +160,16 @@ agent SHALL 在 `session/new`、`session/load`、`session/resume` 与 `session/f
 模型项的 `currentValue` SHALL 恒等于该会话的当前模型，且 SHALL **始终**出现在该选项的 `options` 中
 （协议要求 agent 为每个已提供的选项给出可用默认值）：会话当前模型不在读取的列表内时 SHALL 把它作为首项补入。
 
+当且仅当该会话当前模型**有推理能力的证据**（能力列表含 `reasoning` 且模型广告了档位列表）时，
+`configOptions` SHALL 另有一个 `category: "thought_level"` 的 `select`：
+
+- 选项 SHALL 为模型广告的档位外加一个「模型默认」项（取其值为 `"off"`）；
+- `currentValue` SHALL 是 `options` 中的成员（未显式设定时即「模型默认」项的取值）；
+- 写回取值为「模型默认」项时 SHALL 清除会话的强度（`effort.set` 的 `effort` 为 `undefined`），
+  MUST NOT 把一个名为 `off` 的档位记录进会话；
+- 模型没有推理证据时该选项 SHALL 被**省略**，MUST NOT 广告只有一个假值的伪选择器；
+- 切换到没有推理证据的模型后，下一次广告 SHALL 不再包含该选项（不得保留会让新模型无法履行的旧档位）。
+
 同一份读取 SHALL 同时供**旧的模型表面**使用：响应中的 `models`（`{ currentModelId, availableModels:
 [{ modelId, name, description? }] }`）与 `session/set_model` SHALL 与 `configOptions` 的模型项**同源**——
 相同的 `modelId`、相同的顺序、相同的当前值。MUST NOT 出现两个表面各自回答一次的情况。
@@ -174,15 +184,25 @@ agent SHALL 在 `session/new`、`session/load`、`session/resume` 与 `session/f
 广告了 `configOptions` 即 SHALL 接受 `session/set_config_option`：`configOptions` 是声明，
 `session/set_config_option` 是该声明的写回路径，二者 MUST 同时存在。该方法 SHALL
 以 `configId` 在**当前声明的选项集**中查找（而非硬编码某个 id），未找到时返回 JSON-RPC 错误；
-随后 SHALL 按**该选项的 `category`** 分派到对应通路（`mode` → `mode.set`，`model` → `model.set`），
+随后 SHALL 按**该选项的 `category`** 分派到对应通路（`mode` → `mode.set`，`model` → `model.set`，
+`thought_level` → `effort.set`），
 MUST NOT 假定「唯一选项是 mode」而把任意取值当作模式。
 
-两个选项各自的语义 SHALL 与既有通路一致，MUST NOT 成为第二个真源：
+三个选项各自的语义 SHALL 与既有通路一致，MUST NOT 成为第二个真源：
 
 - `mode`：经既有 `mode.set` 分发并回读会话实际状态，MUST NOT 另建一套模式逻辑。
 - `model`：经 `model.set` 分发（随该模型所属 entry 的 `style` / `baseURL` / `apiKey` 与解析出的
   `modelInfo` 一并下发），并回读会话实际状态。切换后该会话后续的出网连接 SHALL 使用所选 entry。
   写入的合法值 SHALL 以**同一份 runtime 读取**校验（展示与写入同源），MUST NOT 用另一份列表校验。
+- `thought_level`：经既有 `effort.set` 分发并回读会话实际状态；取值不在该模型广告的档位内时
+  SHALL 以 JSON-RPC 错误拒绝且不改变会话。
+
+`thought_level` 的变更 SHALL 与其他选项一样触发 `config_option_update`，且该更新 MUST 携带**完整**的
+选项集（协议没有增量形态）；值未实际变化时 MUST NOT 广播。
+
+`/models` 斜杠命令 SHALL 与选择器共用同一写回实现（`applyModel` / `effort.set`），
+MUST NOT 出现第二套模型切换路径；强度 SHALL 在模型切换**之后**按新模型的广告校验，且该路径同样 SHALL
+在切换成功后广播 `config_option_update`（客户端缓存不会自行刷新）。
 
 agent MUST NOT 为支持模型切换而注册进程级 model provider：连接由会话自身的 config 承载，
 在 ACP 一进程多会话的形状下，注册全局 provider 会让一个会话的切换污染另一个会话。
@@ -255,6 +275,35 @@ agent MUST NOT 为支持模型切换而注册进程级 model provider：连接�
 - **AND** 该更新 SHALL 取自会话状态而非请求参数：会话**拒绝**某模式（如 plan 不可用时）时
       MUST NOT 广播一个并未生效的当前值
 - **AND** 重设同一模式 SHALL NOT 重复广播（客户端缓存已正确）
+
+#### Scenario: 推理模型的档位选择器
+
+- **WHEN** 会话当前模型广告了推理档位
+- **THEN** `configOptions` 含一个 `category: "thought_level"` 的 `select`，选项为「模型默认」加各档位
+- **AND** 其 `currentValue` 出现在 `options` 中
+- **AND** 写回「模型默认」的取值 SHALL 清除会话强度，且会话记录的强度 MUST NOT 是名为 `off` 的档位
+
+#### Scenario: 无推理证据的模型没有档位选择器
+
+- **WHEN** 模型的能力列表不含 `reasoning`，或没有广告任何档位
+- **THEN** `configOptions` 不含 `thought_level` 选项
+
+#### Scenario: 模型切换后档位选择器随之消失
+
+- **WHEN** 一次 `set_config_option(model)` 把会话切到没有推理证据的模型
+- **THEN** 随后的 `config_option_update` 与响应都不再包含 `thought_level` 选项
+
+#### Scenario: 未广告的档位被拒绝
+
+- **WHEN** 客户端为 `thought_level` 提交一个该模型未广告的取值
+- **THEN** 请求以 JSON-RPC 错误拒绝，且会话的强度不变
+
+#### Scenario: 斜杠命令切换后选择器同步
+
+- **WHEN** 客户端以 `prompt` 发送 `/models 0:some-model high`
+- **THEN** agent SHALL 切到该模型、再按**新模型**校验并应用 `high`
+- **AND** SHALL 广播一条完整选项集的 `config_option_update`，其 model 与 thought_level 的
+      `currentValue` 均等于会话的实际状态
 
 备注：完整选项集同时随 `new` / `load` / `resume` / `fork` 响应下发，且会话内变化必须再经
 `config_option_update` 广播 —— 客户端缓存在没有该更新时不会自行刷新。发送的永远是完整集合（协议的

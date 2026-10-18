@@ -236,7 +236,7 @@ function applyEvent(
         pendingApprovalCount: event.payload.pendingApprovalCount,
         retry: event.payload.retry ?? undefined,
         // Model / effort travel on the retained state channel so a live switch
-        // refreshes the cached snapshot (e.g. `/effort` reads `modelInfo`).
+        // refreshes the cached snapshot (e.g. `/models` reads `modelInfo` to offer depths).
         model: event.payload.model,
         modelInfo: event.payload.modelInfo ?? undefined,
         reasoningEffort: event.payload.reasoningEffort ?? undefined,

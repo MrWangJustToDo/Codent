@@ -2,6 +2,7 @@ import { useConfigEditor } from "../hooks/use-config-editor.js";
 import { useConfig } from "../hooks/use-config.js";
 import { useDiffRenderer } from "../hooks/use-diff-renderer.js";
 import { useTheme } from "../hooks/use-theme.js";
+import { useThinkingLine } from "../hooks/use-thinking-line.js";
 import { useTranscriptDisplay } from "../hooks/use-transcript-display.js";
 import { isThemeName, THEME_NAMES } from "../theme/colors.js";
 
@@ -41,11 +42,20 @@ registerBuiltinCommand("settings", {
     const theme = useTheme.getActions().getTheme();
     const display = useTranscriptDisplay.getActions().getMode();
     const diff = useDiffRenderer.getActions().getMode();
+    // The footer's thinking line is display-only state, which is why it lives here rather than beside
+    // the model switch: `/models` changes what the agent thinks with, `/settings` changes what the
+    // terminal shows. The two used to share `/effort`, where a UI toggle sat next to model levels.
+    const thinking = useThinkingLine.getActions().getEnabled();
     const blocked = configEditBlockedReason();
     return [
       { label: "theme", value: "theme", description: `Switch color theme (current: ${theme})` },
       { label: "display", value: "display", description: `Switch transcript density (current: ${display})` },
       { label: "diff", value: "diff", description: `Switch diff renderer (current: ${diff})` },
+      {
+        label: "thinking",
+        value: "thinking",
+        description: `Show the live thinking line in the footer (current: ${thinking ? "on" : "off"})`,
+      },
       { separator: true, label: "", value: "" },
       {
         label: "config",
@@ -58,13 +68,16 @@ registerBuiltinCommand("settings", {
     const theme = useTheme.getActions();
     const display = useTranscriptDisplay.getActions();
     const diff = useDiffRenderer.getActions();
+    const thinking = useThinkingLine.getActions();
 
     const usageError = () => ({
       ok: false as const,
       error:
-        `Usage: /settings theme|display|diff (each toggles) or /settings config — explicit values also accepted: ` +
-        `theme ${THEME_NAMES.join("|")} · display ${DISPLAY_MODES.join("|")} · diff lite|full | ` +
-        `now: theme ${theme.getTheme()} · display ${display.getMode()} · diff ${diff.getMode()}`,
+        `Usage: /settings theme|display|diff|thinking (each toggles) or /settings config — ` +
+        `explicit values also accepted: ` +
+        `theme ${THEME_NAMES.join("|")} · display ${DISPLAY_MODES.join("|")} · diff lite|full · thinking on|off | ` +
+        `now: theme ${theme.getTheme()} · display ${display.getMode()} · diff ${diff.getMode()} · ` +
+        `thinking ${thinking.getEnabled() ? "on" : "off"}`,
     });
 
     const trimmed = args.trim().toLowerCase();
@@ -104,6 +117,18 @@ registerBuiltinCommand("settings", {
       if (rest === "lite" || rest === "full") {
         diff.setMode(rest);
         return { ok: true, message: `Diff renderer: ${rest}` };
+      }
+      return usageError();
+    }
+
+    if (head === "thinking") {
+      const rest = tail || "toggle";
+      if (rest === "toggle") {
+        return { ok: true, message: `Thinking line: ${thinking.toggle() ? "on" : "off"}` };
+      }
+      if (rest === "on" || rest === "off") {
+        thinking.setEnabled(rest === "on");
+        return { ok: true, message: `Thinking line: ${rest}` };
       }
       return usageError();
     }

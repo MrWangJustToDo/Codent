@@ -15,7 +15,12 @@ export {
 } from "./agent.js";
 export { DEFAULT_SESSION_PAGE_SIZE, decodeCursor, encodeCursor, paginateSessions, toSessionInfo } from "./sessions.js";
 export { resolveRoot, toWirePath } from "./paths.js";
-export { legacySessionModelState, sessionConfigOptions } from "./session-config-options.js";
+export {
+  effortOf,
+  legacySessionModelState,
+  sessionConfigOptions,
+  THOUGHT_LEVEL_DEFAULT,
+} from "./session-config-options.js";
 export { mapAcpMcpServers } from "./mcp.js";
 export { isClientOwnedApproval, type PendingApproval, type ApprovalToolInput } from "./approvals.js";
 export {

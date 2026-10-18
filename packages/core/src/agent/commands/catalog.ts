@@ -39,8 +39,8 @@ export interface BuiltinCommandInfo {
    * The primary `AgentSessionCommand` this command dispatches (its type name, e.g.
    * `"session.new"`), so a host can route without restating the command name. A command
    * may dispatch more than one session command (e.g. `/mode` also toggles, `/rename` also
-   * generates, `/effort` also clears) — this is the entry's primary and the host handles
-   * the rest. `undefined` means the command is handled entirely in the host UI
+   * generates, `/models` also sets the thinking depth) — this is the entry's primary and the
+   * host handles the rest. `undefined` means the command is handled entirely in the host UI
    * (e.g. `/settings`, `/quit`).
    *
    * Typed as the `AgentSessionCommand` discriminant so a headless host's dispatch switch
@@ -102,17 +102,10 @@ export const BUILTIN_COMMAND_CATALOG: readonly BuiltinCommandInfo[] = [
     command: "mode.set",
   },
   {
-    name: "effort",
-    description: "Configure reasoning effort for the current model (thinking depth)",
-    usage: "/effort [low|medium|high|...|off] | /effort display [on|off]",
-    scope: "both",
-    command: "effort.set",
-  },
-  {
     name: "models",
-    description: "Switch the model for the current session (models.json entries)",
-    usage: "/models [entryIndex:modelId] | /models",
-    scope: "ui",
+    description: "Switch model and thinking depth (models.json entries)",
+    usage: "/models [entryIndex:modelId [effort|off]]",
+    scope: "both",
     command: "model.set",
   },
   {
@@ -131,8 +124,9 @@ export const BUILTIN_COMMAND_CATALOG: readonly BuiltinCommandInfo[] = [
   {
     name: "settings",
     aliases: ["appearance"],
-    description: "Toggle UI appearance — color theme, transcript density, diff renderer — and edit the model config",
-    usage: "/settings [theme|display|diff|config]",
+    description:
+      "Toggle UI appearance — color theme, transcript density, diff renderer, thinking line — and edit the model config",
+    usage: "/settings [theme|display|diff|thinking|config]",
     scope: "ui",
   },
   {

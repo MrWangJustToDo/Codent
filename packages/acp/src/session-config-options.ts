@@ -23,12 +23,28 @@
  */
 
 import { RequestError } from "@agentclientprotocol/sdk";
-import { resolveModelInfoFromModelsDev } from "@codent/core";
+import {
+  decodeModelChoice,
+  encodeModelChoice,
+  offerableReasoningEfforts,
+  resolveModelInfoFromModelsDev,
+  supportedReasoningEfforts,
+} from "@codent/core";
 
 import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
-import type { AgentSessionSnapshot, AgentMode, AgentSession, ModelCatalogRead, ModelStyle } from "@codent/core";
+import type {
+  AgentSessionSnapshot,
+  AgentMode,
+  AgentSession,
+  ModelCatalogRead,
+  ModelStyle,
+  ReasoningEffort,
+} from "@codent/core";
 
 export const MODE_IDS: AgentMode[] = ["normal", "auto", "plan"];
+
+/** The wire value meaning "no explicit effort" — the model's own default. */
+export const THOUGHT_LEVEL_DEFAULT = "off";
 export const MODE_META: Record<AgentMode, { name: string; description: string }> = {
   normal: { name: "Normal", description: "Ask before risky actions" },
   auto: { name: "Auto", description: "Skip tool approvals (YOLO)" },
@@ -50,37 +66,6 @@ export interface AcpModelCatalogEntry {
   models: string[];
 }
 
-/**
- * The option value for one catalog model.
- *
- * It encodes the ENTRY, not just the model, because switching a model can also switch the
- * connection: a model id is only unique within an entry (`entry.models` holds bare names like
- * `deepseek/deepseek-v4-flash-0731`), and `model.set` needs that entry's `style` / `baseURL`.
- *
- * `"<entryIndex>:<model>"` is the same encoding `@codent/app`'s `/models` uses, so the two hosts
- * cannot drift on it. A client only ever echoes it back as an opaque id.
- */
-function encodeModelChoice(entryIndex: number, model: string): string {
-  return `${entryIndex}:${model}`;
-}
-
-/**
- * Split a model option value back into its entry index and model id.
- *
- * Splits on the FIRST colon: the entry index never contains one while a model id may (`a:b`).
- * Returns `undefined` for a value that is not in the encoded form — which is how a current model
- * missing from the catalog is advertised, so the caller treats a bare value as "the session's
- * current model" rather than an error.
- */
-export function decodeModelChoice(value: string): { entryIndex: number; model: string } | undefined {
-  const separator = value.indexOf(":");
-  if (separator <= 0) return undefined;
-  const entryIndex = Number(value.slice(0, separator));
-  const model = value.slice(separator + 1);
-  if (!Number.isInteger(entryIndex) || entryIndex < 0 || !model) return undefined;
-  return { entryIndex, model };
-}
-
 function modeConfigOption(current: AgentMode): SessionConfigOption {
   return {
     id: "mode",
@@ -90,6 +75,44 @@ function modeConfigOption(current: AgentMode): SessionConfigOption {
     type: "select",
     currentValue: current,
     options: MODE_IDS.map((id) => ({ value: id, name: MODE_META[id].name, description: MODE_META[id].description })),
+  };
+}
+
+/**
+ * The `category: "thought_level"` select — the model's thinking depth.
+ *
+ * This is the ACP counterpart of the TUI's second `/models` level, and it exists for the same
+ * reason: depth belongs to the model, so both must be reachable from one place. The protocol has a
+ * category for exactly this, and clients (Zed among them) render it as a picker beside the model.
+ *
+ * The wire value is the effort level itself, or `off` (back to the model default — an absent effort,
+ * not a level called "off"). The list comes from `offerableReasoningEfforts`, which answers `[]` for
+ * a model with no thinking depth: an option with a single fake value would be worse than no option,
+ * so the selector is omitted entirely.
+ */
+function thoughtLevelConfigOption(snapshot: AgentSessionSnapshot): SessionConfigOption | undefined {
+  const levels = offerableReasoningEfforts(snapshot.modelInfo);
+  if (levels.length === 0) return undefined;
+  const current = snapshot.reasoningEffort ?? THOUGHT_LEVEL_DEFAULT;
+  return {
+    id: "thought_level",
+    name: "Thinking",
+    description: "Reasoning depth for this model",
+    category: "thought_level",
+    type: "select",
+    currentValue: current,
+    options: [
+      {
+        value: THOUGHT_LEVEL_DEFAULT,
+        name: "Model default",
+        description: "Let the model decide how much to think",
+      },
+      ...levels.map((level) => ({
+        value: level,
+        name: level,
+        description: level === snapshot.reasoningEffort ? "current" : `Think with ${level} effort`,
+      })),
+    ],
   };
 }
 
@@ -130,6 +153,11 @@ function resolveCurrentEntry(
     if (recorded?.models.includes(current)) return recorded;
   }
   return catalog.find((entry) => entry.models.includes(current));
+}
+
+/** The advertised `thought_level` value for a snapshot — the effort, or the "model default" marker. */
+export function effortOf(snapshot: AgentSessionSnapshot): string {
+  return snapshot.reasoningEffort ?? THOUGHT_LEVEL_DEFAULT;
 }
 
 /**
@@ -182,16 +210,22 @@ export function sessionConfigOptions(
   selectedEntryIndex?: number
 ): SessionConfigOption[] {
   const mode = modeConfigOption(snapshot.mode);
+  const thought = thoughtLevelConfigOption(snapshot);
   const catalog = entriesOf(read);
   const selectable = catalog?.some((entry) => entry.models.length > 0) ?? false;
-  if (!snapshot.model) return [mode];
+  if (!snapshot.model) return [mode, ...(thought ? [thought] : [])];
   // The read always contains the active model (the pipeline's invariant), so a readable list is also a
   // switchable-or-informing selector: one entry means "this is the model", several mean "choose".
-  if (!selectable) return [mode];
+  if (!selectable) return [mode, ...(thought ? [thought] : [])];
   // Model first: it is the option users reach for most often, and the spec makes array order the
-  // agent's declared priority. The mode option stays either way — it is the `configOptions`
-  // counterpart of the legacy `modes` field some clients still read.
-  return [modelConfigOption(catalog as AcpModelCatalogEntry[], snapshot.model, selectedEntryIndex), mode];
+  // agent's declared priority. Thinking depth follows it because it is a property of that model. The
+  // mode option stays either way — it is the `configOptions` counterpart of the legacy `modes` field
+  // some clients still read.
+  return [
+    modelConfigOption(catalog as AcpModelCatalogEntry[], snapshot.model, selectedEntryIndex),
+    ...(thought ? [thought] : []),
+    mode,
+  ];
 }
 
 /**
@@ -312,6 +346,34 @@ export async function applyModel(
   if (!result.ok) throw new Error(result.error ?? `Failed to switch model: ${model}`);
 
   return { snapshot: target.session.getSnapshot(), ...(entry ? { entryIndex: entry.index } : {}) };
+}
+
+/**
+ * Apply a thinking depth — the ONE place an effort change happens.
+ *
+ * Two routes reach it: the `thought_level` config option a client renders, and `/models <model> <effort>`
+ * (which calls `effort.set` directly after validating against the new model). The level is validated
+ * with the same rule `/models` uses (`supportedReasoningEfforts`) — a model whose metadata does not
+ * list levels is "unknown", not "accepts nothing", so refusing there would make the selector stricter
+ * than the command for the same operation.
+ *
+ * `THOUGHT_LEVEL_DEFAULT` clears the effort — the model default is the ABSENCE of a level, and
+ * storing a made-up `"off"` effort would forward it to the adapter.
+ */
+export async function applyThoughtLevel(target: ConfigOptionTarget, value: string): Promise<AgentSessionSnapshot> {
+  const current = target.session.getSnapshot();
+  const supported = supportedReasoningEfforts(current.modelInfo);
+  if (value !== THOUGHT_LEVEL_DEFAULT && !supported.includes(value as ReasoningEffort)) {
+    throw RequestError.invalidParams(
+      undefined,
+      `Model does not support thinking level "${value}". Supported: ${supported.join(", ") || "none"}`
+    );
+  }
+  await target.session.dispatch({
+    type: "effort.set",
+    effort: value === THOUGHT_LEVEL_DEFAULT ? undefined : (value as ReasoningEffort),
+  });
+  return target.session.getSnapshot();
 }
 
 /** What {@link applyModel} reports back: the session after the change, and the entry it used. */

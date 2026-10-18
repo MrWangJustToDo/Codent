@@ -91,6 +91,7 @@ import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
+import { offerableReasoningEfforts } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 
@@ -947,8 +948,8 @@ export class ManagedAgent {
    * run rebuilds {@link AgentRunner} with the new `modelOptions`.
    *
    * The persisted value is a *record* of the state a message was produced under (see
-   * `SessionData.reasoningEffort`), not a session-owned setting: `/effort` is expected to
-   * move into the config flow, after which this only stamps the transcript being written.
+   * `SessionData.reasoningEffort`), not a session-owned setting: `/models` chooses it together
+   * with the model, and this only stamps the transcript being written.
    */
   setReasoningEffort(effort: AgentConfig["reasoningEffort"]): void {
     this.updateConfig({ reasoningEffort: effort });
@@ -1016,6 +1017,23 @@ export class ManagedAgent {
       // `undefined` restores the permissive default.
       this.setModelInfo(null);
       this.usage.setCapabilities(undefined);
+    }
+
+    // A reasoning level belongs to the model it was chosen for: an explicit `high` carried onto a
+    // model that advertises no levels is forwarded to the adapter anyway (`run-agent` passes
+    // `config.reasoningEffort ?? defaultEffort`), so the request either fails upstream or silently
+    // means something else. `/models` exists to make model + depth ONE decision; a switch that keeps
+    // the old depth defeats that. Only an EXPLICIT level is dropped — `undefined` (the model default)
+    // is already correct, and clearing it would be a no-op.
+    //
+    // The predicate is the STRICT rule (`offerableReasoningEfforts`): `supportedReasoningEfforts`
+    // falls back to every known level when a model advertises none, which is right for validating a
+    // hand-typed level but would report "supports high" for a model with no thinking depth at all.
+    if (
+      this.config.reasoningEffort !== undefined &&
+      !offerableReasoningEfforts(this.modelInfo ?? undefined).includes(this.config.reasoningEffort)
+    ) {
+      this.updateConfig({ reasoningEffort: undefined });
     }
 
     // Keep new on-disk sessions (`/clear`, session.new) on the switched model.

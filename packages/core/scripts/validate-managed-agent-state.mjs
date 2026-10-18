@@ -110,6 +110,53 @@ registerCoreEnv({
 }
 
 // ---------------------------------------------------------------------------
+// 1b. A reasoning level does not survive a switch to a model without it
+// ---------------------------------------------------------------------------
+// Same shape as the capability bug above, one field over: an explicit `high` was forwarded to the
+// adapter (`run-agent` passes `config.reasoningEffort ?? defaultEffort`) no matter which model it had
+// been chosen for, so switching to a model that advertises no levels carried a level that model does
+// not accept — exactly the "stale level survives a model switch" defect that merging `/models` with
+// the depth menu exists to close. The reset must happen in `setModel` (the one place both hosts
+// switch through); asserting it here is what keeps a host from having to remember.
+{
+  const manager = new AgentManager();
+  const levelAgent = await manager.createManagedAgent({ name: "effort-reset", model: "deep-model" });
+
+  const reasoning = {
+    id: "deep-model",
+    capabilities: ["reasoning"],
+    reasoningConfig: { effortValues: ["low", "high"] },
+  };
+  levelAgent.setModel({ model: "deep-model", modelInfo: reasoning });
+  levelAgent.setReasoningEffort("high");
+  assert.equal(levelAgent.getReasoningEffort(), "high", "an explicit level is recorded");
+
+  // A model that does NOT advertise levels: the explicit level must be dropped.
+  levelAgent.setModel({
+    model: "plain-model",
+    modelInfo: { id: "plain-model", capabilities: ["tool_calling"], reasoningConfig: {} },
+  });
+  assert.equal(
+    levelAgent.getReasoningEffort(),
+    undefined,
+    "an explicit level does not survive a switch to a model without thinking depth"
+  );
+
+  // A level the new model DOES advertise is kept — the reset is not a blanket clear.
+  levelAgent.setModel({ model: "deep-model", modelInfo: reasoning });
+  levelAgent.setReasoningEffort("low");
+  levelAgent.setModel({
+    model: "other-reasoning",
+    modelInfo: {
+      id: "other-reasoning",
+      capabilities: ["reasoning"],
+      reasoningConfig: { effortValues: ["low", "max"] },
+    },
+  });
+  assert.equal(levelAgent.getReasoningEffort(), "low", "a level the new model advertises is preserved");
+}
+
+// ---------------------------------------------------------------------------
 // 2. restoreSession stops an in-flight run (P0-3)
 // ---------------------------------------------------------------------------
 {

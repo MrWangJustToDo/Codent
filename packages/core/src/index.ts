@@ -266,13 +266,19 @@ export type {
   ResolvedModelConfig,
 } from "./models";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
-export { isReasoningEffort, REASONING_EFFORT_VALUES, supportedReasoningEfforts } from "./models/types.js";
 export {
-  parseEffortCommand,
+  isReasoningEffort,
+  offerableReasoningEfforts,
+  REASONING_EFFORT_VALUES,
+  supportedReasoningEfforts,
+} from "./models/types.js";
+export {
   parseModeCommand,
-  type EffortCommandIntent,
+  parseModelsCommand,
   type ModeCommandIntent,
+  type ModelsCommandIntent,
 } from "./agent/commands/arguments.js";
+export { decodeModelChoice, encodeModelChoice } from "./agent/commands/arguments.js";
 export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/session-reference.js";
 export { askUserOutputSchema } from "./agent/tools/ask-user-tool.js";
 export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/util/ask-user-output.js";

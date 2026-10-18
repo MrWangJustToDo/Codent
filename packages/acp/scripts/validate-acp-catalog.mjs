@@ -1,4 +1,11 @@
-/* eslint-disable max-lines */
+/* eslint-disable max-lines -- Justified: this file is the one conformance suite for the session-catalog
+ * plane, and its sections are independent scenarios over the same fake host (catalog list/delete/fork,
+ * the mode/model/thought_level selectors and their write paths, and the legacy `models` surface).
+ * Splitting it re-creates the very problem the ceiling exists to prevent here: each section would need
+ * its own copy of the fake session + host + ACP client wiring, and a fake that drifts from production's
+ * shape is how a validator quietly stops testing anything (see `session-fixture.mjs`). The parts that
+ * could be extracted without duplication already were — the session double lives in
+ * `session-fixture.mjs`, and the check/finish helpers in `acp-report.mjs`. */
 /**
  * ACP session-catalog conformance: session/list, session/delete, session/fork.
  *
@@ -100,6 +107,10 @@ function makeFakeSession(id, diskId = id, initial = {}) {
       // switching a model may switch the provider — the half a snapshot alone cannot show.
       if (command.type === "model.set") {
         state.model = command.model;
+        // The model's metadata travels with the switch; a fake that dropped it would make the
+        // `thought_level` selector's re-advertisement unobservable (the depth list is a property of
+        // the model, so a switch can add or remove that option entirely).
+        if (command.modelInfo !== undefined) state.modelInfo = command.modelInfo ?? undefined;
         modelConnections.push({
           model: command.model,
           baseURL: command.modelBaseURL,
@@ -108,6 +119,11 @@ function makeFakeSession(id, diskId = id, initial = {}) {
         });
         snap = baseSnapshot(id, { activeSessionId: diskId, ...state });
         return { ok: true };
+      }
+      if (command.type === "effort.set") {
+        state.reasoningEffort = command.effort;
+        snap = baseSnapshot(id, { activeSessionId: diskId, ...state });
+        return { ok: true, data: { effort: command.effort } };
       }
       if (command.type === "mode.set") {
         // `getAgentMode()`, which reads the plan/auto flags) — so the resulting mode is not
@@ -914,6 +930,146 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
         JSON.stringify({ opts: bare.configOptions?.map((o) => o.category), models: bare.models })
       );
     });
+  });
+}
+
+// --- the thinking-depth select: `category: "thought_level"` -------------------
+//
+// Thinking depth used to be a separate slash command (`/effort`), which meant the depth could only be
+// changed by typing — a client with a picker UI could switch the model but not how hard it thinks.
+// The protocol has a category for exactly this, so the agent advertises it next to the model.
+//
+// Three properties are asserted, each of which is easy to get wrong:
+//   * the option only exists when the model EVIDENCES depth (`capabilities: ["reasoning"]` AND an
+//     advertised list) — an option with one fake value is worse than none;
+//   * `currentValue` is always a member of `options`, including the "model default" case;
+//   * the write path clears the effort for the default marker instead of storing a level called `off`.
+{
+  const DEPTHS = ["low", "medium", "high"];
+  const reasoningInfo = {
+    name: "deep",
+    capabilities: ["reasoning", "tool_calling"],
+    reasoningConfig: { effortValues: DEPTHS },
+  };
+  const plainInfo = { name: "plain", capabilities: [], reasoningConfig: {} };
+  const depthRead = {
+    entries: [{ type: "direct", style: "openai", baseURL: "https://one.example/v1", models: ["deep", "plain"] }],
+    active: { entryIndex: 0, model: "deep" },
+  };
+  const depthSession = makeFakeSession("agent_depth", "ses_depth", {
+    model: "deep",
+    modelInfo: reasoningInfo,
+    reasoningEffort: "medium",
+  });
+  const depthHost = {
+    async create() {
+      return { session: depthSession };
+    },
+    connect: () => depthSession,
+    list: () => [],
+    async destroy() {},
+  };
+  const depthUpdates = [];
+  const depthClient = createClient({ name: "depth-client" }).onNotification(methods.client.session.update, (ctx) =>
+    depthUpdates.push(ctx.params)
+  );
+  const depthApp = createAcpAgent({
+    host: depthHost,
+    defaults: { model: "deep" },
+    rootPath: "/ws",
+    models: depthRead,
+  });
+
+  await depthClient.connectWith(depthApp, async (cx) => {
+    await cx.request(methods.agent.initialize, { protocolVersion: 1, clientCapabilities: {} });
+    const fresh = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
+    const depthOption = (resp) => resp?.configOptions?.find((o) => o.category === "thought_level");
+
+    const advertisedDepth = depthOption(fresh);
+    check("session/new advertises a category:thought_level select for a reasoning model", Boolean(advertisedDepth));
+    check(
+      "its levels are what the model advertises, plus the model default",
+      advertisedDepth?.options?.map((o) => o.value).join(",") === `off,${DEPTHS.join(",")}`,
+      JSON.stringify(advertisedDepth?.options?.map((o) => o.value))
+    );
+    check(
+      "its currentValue is a member of options",
+      advertisedDepth?.currentValue === "medium" && Boolean(advertisedDepth.options.some((o) => o.value === "medium")),
+      JSON.stringify(advertisedDepth?.currentValue)
+    );
+    check(
+      "it is advertised beside the model, not instead of it",
+      fresh?.configOptions?.some((o) => o.category === "model")
+    );
+
+    // The write path: a level really reaches the session.
+    depthUpdates.length = 0;
+    const setLevel = await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "thought_level",
+      value: "high",
+    });
+    check("set_config_option applies a thinking level", depthSession.getSnapshot().reasoningEffort === "high");
+    check(
+      "its response re-reads the level",
+      depthOption(setLevel)?.currentValue === "high",
+      JSON.stringify(depthOption(setLevel)?.currentValue)
+    );
+    check(
+      "a depth change emits the WHOLE option set (the protocol has no incremental form)",
+      depthUpdates
+        .filter((u) => u.update.sessionUpdate === "config_option_update")
+        .at(-1)
+        ?.update.configOptions?.some((o) => o.category === "mode") === true
+    );
+
+    // `off` is the model DEFAULT — the effort must be cleared, not stored as a level called "off".
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "thought_level",
+      value: "off",
+    });
+    check(
+      "the default marker clears the effort instead of storing it as a level",
+      depthSession.getSnapshot().reasoningEffort === undefined,
+      JSON.stringify(depthSession.getSnapshot().reasoningEffort)
+    );
+
+    // A level the model does not advertise is refused and changes nothing.
+    const beforeRefusal = depthSession.getSnapshot().reasoningEffort;
+    const refused = await (async () => {
+      try {
+        await cx.request(methods.agent.session.setConfigOption, {
+          sessionId: fresh.sessionId,
+          configId: "thought_level",
+          value: "turbo",
+        });
+        return null;
+      } catch (error) {
+        return `${error?.message ?? ""} ${error?.data?.details ?? ""}`;
+      }
+    })();
+    check("an unadvertised level is refused", /thinking level|support/i.test(refused ?? ""), refused ?? "");
+    check("a refused level does not change the session", depthSession.getSnapshot().reasoningEffort === beforeRefusal);
+
+    // Switching to a model WITHOUT depth must drop the option entirely — a stale selector would offer
+    // levels the new model cannot honour.
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "model",
+      value: "0:plain",
+    });
+    depthSession.state.modelInfo = plainInfo;
+    const afterPlain = await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: fresh.sessionId,
+      configId: "mode",
+      value: "auto",
+    });
+    check(
+      "a model without thinking depth advertises no thought_level option",
+      depthOption(afterPlain) === undefined,
+      JSON.stringify(afterPlain?.configOptions?.map((o) => o.category))
+    );
   });
 }
 

@@ -60,7 +60,7 @@ export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
  * Reasoning effort levels a model may accept.
  *
  * A runtime list, with {@link ReasoningEffort} derived from it — the same shape as
- * {@link MODEL_CAPABILITIES}: the hosts that validate `/effort` input and the adapters that forward it
+ * {@link MODEL_CAPABILITIES}: the hosts that validate `/models` depth input and the adapters that forward it
  * both need the values, and a hand-written copy in a host is how a level added here goes missing there.
  */
 export const REASONING_EFFORT_VALUES = ["none", "low", "medium", "high", "xhigh", "max", "minimal"] as const;
@@ -77,7 +77,7 @@ export function isReasoningEffort(value: string): value is ReasoningEffort {
  * The effort values to offer for a model: what it advertises (`reasoning_options` via models.dev), or
  * the full known set when it advertises nothing.
  *
- * One definition: the TUI and the ACP host both validate `/effort <value>` against this, and a
+ * One definition: the TUI and the ACP host both validate a `/models` depth against this, and a
  * hand-rolled fallback in one host is how the two lists drift apart.
  */
 export function supportedReasoningEfforts(
@@ -85,6 +85,29 @@ export function supportedReasoningEfforts(
 ): readonly ReasoningEffort[] {
   const values = modelInfo?.reasoningConfig?.effortValues;
   return values && values.length > 0 ? values : REASONING_EFFORT_VALUES;
+}
+
+/**
+ * The effort levels a model should be OFFERED in a picker — `[]` when it has no thinking depth.
+ *
+ * Deliberately stricter than {@link supportedReasoningEfforts}, which is the *validation* rule: that one
+ * falls back to every known level so a hand-typed level is not refused for a model whose metadata is
+ * missing. A menu has the opposite obligation — an empty submenu means "this model has nothing to
+ * choose", and offering seven levels for a plain text model would be a fake choice. So this requires
+ * positive evidence, in metadata:
+ *
+ * - `capabilities` includes `reasoning` (models.dev `reasoning`), **and**
+ * - `reasoningConfig.effortValues` is non-empty — a level it does not advertise would be accepted by
+ *   validation and then rejected upstream.
+ *
+ * `capabilities === undefined` (unknown model, offline) is not evidence either, so it offers nothing:
+ * guessing "all levels" here is what makes a menu whose selection fails at request time.
+ */
+export function offerableReasoningEfforts(
+  modelInfo: Pick<ModelInfo, "capabilities" | "reasoningConfig"> | undefined
+): readonly ReasoningEffort[] {
+  if (!modelInfo?.capabilities?.includes("reasoning")) return [];
+  return modelInfo.reasoningConfig?.effortValues ?? [];
 }
 
 /**

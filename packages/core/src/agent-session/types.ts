@@ -212,7 +212,7 @@ export type AgentSessionCommand =
   | { type: "session.resume"; sessionId: DiskSessionId }
   /** List on-disk sessions for the resume picker. */
   | { type: "session.list" }
-  /** Set reasoning-effort level for the current session (`/effort`). */
+  /** Set reasoning-effort level for the current session (chosen via `/models <model> [effort|off]`). */
   | { type: "effort.set"; effort?: ReasoningEffort }
   /** Switch the model for the current session without rebuilding it (`/model`). */
   | {

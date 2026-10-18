@@ -92,43 +92,94 @@ export function parseModeCommand(rawArgs = ""): ModeCommandIntent | undefined {
 }
 
 // ============================================================================
-// /effort
+// /models
 // ============================================================================
 
 /**
- * What `/effort <args>` asks for.
+ * What `/models <args>` asks for.
  *
- * `display` is UI state (the terminal footer's thinking line) that a headless host has no way to keep;
- * classifying it as an intent lets such a host say so instead of forwarding `display` as an effort
- * level to the model (`effort.set` accepted it, so the session recorded an unsupported value).
+ * One command switches the model **and** its thinking depth (`/models` used to be accompanied by a
+ * separate `/effort`, which meant the same decision was made in two places and a level could survive a
+ * model switch that does not accept it). The model argument is `"<entryIndex>:<model>"` — the encoding
+ * `@codent/app`'s menu and ACP's `category: "model"` option both use — or a bare model id, which the
+ * host resolves against the loaded entries.
+ *
+ * A second argument is an effort level (`high` …) or `off` (explicitly back to the model default):
+ *
+ * ```text
+ * /models                 → list the entries and their models
+ * /models 0:gpt-5.1       → switch the model (effort untouched)
+ * /models 0:gpt-5.1 high  → switch the model, then set its reasoning effort
+ * /models 0:gpt-5.1 off   → switch the model, then clear the effort
+ * ```
  */
-export type EffortCommandIntent =
-  | { kind: "display"; action: "on" | "off" | "toggle" | "status" }
-  | { kind: "status" }
-  | { kind: "clear" }
-  | { kind: "set"; effort: ReasoningEffort }
-  | { kind: "invalid"; value: string };
+export type ModelsCommandIntent =
+  | { kind: "list" }
+  | { kind: "invalid"; value: string }
+  | {
+      kind: "set";
+      model: string;
+      /** Absent when the argument was a bare model id — the host resolves the entry. */
+      entryIndex?: number;
+      /** Effort to apply after the switch. */
+      effort?: ReasoningEffort;
+      /** `off`: clear the effort (back to the model default) after the switch. */
+      clearEffort?: boolean;
+    };
 
-/** Parse `/effort` arguments into an intent. */
-export function parseEffortCommand(rawArgs = ""): EffortCommandIntent {
-  const value = rawArgs.trim().toLowerCase();
+/**
+ * The wire form of a model choice: `"<entryIndex>:<model>"`.
+ *
+ * Encodes the ENTRY, not just the model, because a model id is only unique within an entry and
+ * switching a model can also switch the connection. This is a **protocol value**, not a display
+ * detail: the TUI's `/models` menu, ACP's `category: "model"` option, and `parseModelsCommand`'s
+ * argument all use it, so the encode/decode pair lives here — one definition, next to the parser that
+ * consumes it. Three private copies (one per host) is how the two hosts would drift on a format that
+ * has to round-trip between them.
+ */
+export function encodeModelChoice(entryIndex: number, model: string): string {
+  return `${entryIndex}:${model}`;
+}
 
-  switch (value) {
-    case "":
-    case "status":
-      return { kind: "status" };
-    case "display":
-    case "display toggle":
-      return { kind: "display", action: "toggle" };
-    case "display on":
-      return { kind: "display", action: "on" };
-    case "display off":
-      return { kind: "display", action: "off" };
-    case "display?":
-      return { kind: "display", action: "status" };
-    case "off":
-      return { kind: "clear" };
-    default:
-      return isReasoningEffort(value) ? { kind: "set", effort: value } : { kind: "invalid", value };
+/**
+ * Split a model choice back into its entry index and model id, or `undefined` when `value` is not in
+ * the encoded form (a bare model id names no entry — the host resolves it by search).
+ *
+ * Splits on the FIRST colon: the entry index never contains one while a model id may (`a:b`).
+ */
+export function decodeModelChoice(value: string): { entryIndex: number; model: string } | undefined {
+  const separator = value.indexOf(":");
+  if (separator <= 0) return undefined;
+  const entryIndex = Number(value.slice(0, separator));
+  const model = value.slice(separator + 1);
+  if (!Number.isInteger(entryIndex) || entryIndex < 0 || !model) return undefined;
+  return { entryIndex, model };
+}
+
+/** Parse `/models` arguments into an intent. */
+export function parseModelsCommand(rawArgs = ""): ModelsCommandIntent {
+  const tokens = rawArgs.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { kind: "list" };
+  if (tokens.length > 2) return { kind: "invalid", value: rawArgs.trim() };
+
+  const [head, tail] = tokens as [string, string?];
+  const decoded = decodeModelChoice(head);
+  // A token carrying a separator MUST be a valid encoding: `"0:"` is a malformed choice. A bare id
+  // that itself contains a colon (`vendor/model:free`) is therefore not accepted unencoded — the
+  // encoded form (`0:vendor/model:free`) is, and that is what every host's menu emits.
+  if (head.includes(":") && !decoded) return { kind: "invalid", value: head };
+  // A bare token is a model id the host resolves against its own entries.
+  const entryIndex = decoded?.entryIndex;
+  const model = decoded?.model ?? head;
+  if (!model) return { kind: "invalid", value: head };
+
+  if (tail === undefined) {
+    return { kind: "set", model, ...(entryIndex !== undefined ? { entryIndex } : {}) };
   }
+  const effort = tail.toLowerCase();
+  if (effort === "off") {
+    return { kind: "set", model, ...(entryIndex !== undefined ? { entryIndex } : {}), clearEffort: true };
+  }
+  if (!isReasoningEffort(effort)) return { kind: "invalid", value: `${head} ${tail}` };
+  return { kind: "set", model, ...(entryIndex !== undefined ? { entryIndex } : {}), effort };
 }

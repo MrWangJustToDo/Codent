@@ -21,6 +21,19 @@ export interface CommandContext {
 
 export type { CommandResult };
 
+/**
+ * Resolves the option list of a **nested** level.
+ *
+ * `path` is the chain of option values chosen so far, ending with the value of the option that owns
+ * this resolver (e.g. `["0:gpt-5.1"]` for the effort level under that model). A resolver may close
+ * over what it needs, but the path is what lets one generic menu walk several levels without the
+ * option objects having to be rebuilt per keystroke.
+ */
+export type CommandOptionResolver = (
+  ctx?: CommandContext,
+  path?: readonly string[]
+) => CommandOption[] | Promise<CommandOption[]>;
+
 export interface CommandOption {
   label: string;
   value: string;
@@ -32,6 +45,15 @@ export interface CommandOption {
    * filtering. Label/value are ignored; AutocompleteList renders a rule line.
    */
   separator?: boolean;
+  /**
+   * Present = selecting this row opens a **submenu** instead of executing the command.
+   *
+   * The menu is generic: `Esc` retreats one level (it does not close the menu until the root
+   * level), and a selection that has no `getOptions` executes as before (`/cmd <path…> <value>`).
+   * A row whose submenu would be empty must NOT declare this — an empty level is indistinguishable
+   * from a broken one, and the user would be stuck one level deep with nothing to pick.
+   */
+  getOptions?: CommandOptionResolver;
 }
 
 export interface Command {
@@ -46,7 +68,13 @@ export interface Command {
   usage: string;
   execute: (args: string, ctx: CommandContext) => CommandResult | Promise<CommandResult>;
   immediate?: boolean;
-  getOptions?: (ctx?: CommandContext) => CommandOption[] | Promise<CommandOption[]>;
+  /**
+   * The option list for one level of the menu.
+   *
+   * `path` is the chain of values already chosen (empty at the root), so a command that nests can
+   * serve every level from one resolver — see {@link CommandOption.getOptions}.
+   */
+  getOptions?: (ctx?: CommandContext, path?: readonly string[]) => CommandOption[] | Promise<CommandOption[]>;
   allowCustomInput?: boolean;
   /**
    * Selecting a secondary-menu option fills `/cmd <option> ` into the input

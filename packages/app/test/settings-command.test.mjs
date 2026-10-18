@@ -29,7 +29,7 @@ assert.equal(
 // ---------------------------------------------------------------------------
 const options = settings.getOptions();
 const rows = options.filter((o) => !o.separator).map((o) => o.label);
-assert.deepEqual(rows, ["theme", "display", "diff", "config"], "one row per setting");
+assert.deepEqual(rows, ["theme", "display", "diff", "thinking", "config"], "one row per setting");
 assert.equal(options.filter((o) => o.separator).length, 1, "settings grouped above the config entry");
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,15 @@ assert.match(diff.message, /^Diff renderer: (lite|full)$/);
 assert.equal(settings.execute("diff lite").ok, true);
 assert.equal(settings.execute("diff full").ok, true);
 assert.equal(settings.execute("diff bogus").ok, false);
+
+// The thinking line moved here from `/effort display` — the model commands no longer carry a UI toggle.
+const thinking = settings.execute("thinking");
+assert.match(thinking.message, /^Thinking line: (on|off)$/, thinking.error ?? thinking.message);
+assert.equal(settings.execute("thinking on").ok, true);
+assert.equal(settings.execute("thinking off").ok, true);
+assert.equal(settings.execute("THINKING ON").ok, true, "args are case-insensitive");
+assert.equal(settings.execute("thinking bogus").ok, false);
+assert.match(settings.execute("thinking on").message, /^Thinking line: on$/);
 
 // ---------------------------------------------------------------------------
 // 4. `config` opens the editor (store-side effect only — no write happens here)

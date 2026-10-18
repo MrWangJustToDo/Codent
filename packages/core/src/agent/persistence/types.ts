@@ -169,8 +169,8 @@ export interface SessionData {
    * `effort`).
    *
    * Same contract as {@link model}: a record of the state a message was produced under, not a
-   * session-owned toggle. `/effort` is expected to move into the config flow; this field then
-   * only reflects how a given transcript's turns were generated.
+   * session-owned toggle. The live value is chosen through `/models` (model + depth as one
+   * decision); this field reflects how a given transcript's turns were generated.
    */
   reasoningEffort?: ReasoningEffort;
   /**
