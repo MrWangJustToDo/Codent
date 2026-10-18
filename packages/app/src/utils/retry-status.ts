@@ -21,24 +21,31 @@ export function retryRemainingMs(retry: AgentRetryState, now: number = retry.sta
   return Math.max(0, Math.min(retry.delayMs, retry.delayMs - (now - retry.startedAt)));
 }
 
+/** In-flight marker: the backoff elapsed (or there was none) and the request is out. */
+export const RETRY_IN_FLIGHT_LABEL = "awaiting response";
+
 /**
  * Single-line retry status.
  *
- * The trailing segment is always the strategy reason, so it swaps per strategy
- * (`provider busy` / `content stripped` / `context compacted` / `output limit`) and keeps
- * naming *why* we are retrying into the request phase. The phase itself is the countdown's
- * presence: `~Ns` while the backoff is still running, gone once the request is out — no
- * second "awaiting" phrase, which only restated the reason and stretched the line.
+ * The two phases a retry can be in share ONE trailing segment, never two: while the
+ * backoff is still running the line carries the countdown plus the strategy reason for
+ * waiting (`provider busy` / `content stripped` / `context compacted` / `output limit`);
+ * once it elapses (or for a strategy that retries immediately) the request is already
+ * out, so the countdown and the reason are replaced by a single in-flight marker. The
+ * reason explains the *wait*, not the request phase, so it must not linger once the
+ * request is running.
  *
  * Pass `now` from a live ticker (`useRetryTicker`) to animate the countdown; omit it to
  * render the scheduled wait as a static value.
  *
  * @example `Retrying (2/3) ~4s · provider busy`  (backoff counting down)
- * @example `Retrying (2/3) · provider busy`      (request in flight)
+ * @example `Retrying (2/3) · awaiting response`  (request in flight)
  */
 export function formatRetryStatus(retry: AgentRetryState, now?: number): string {
   const head = `Retrying (${retry.attempt}/${retry.maxAttempts})`;
   const remaining = retryRemainingMs(retry, now ?? retry.startedAt);
-  const wait = retry.delayMs != null && remaining > 0 ? ` ~${Math.ceil(remaining / 1000)}s` : "";
-  return `${head}${wait} · ${RETRY_STRATEGY_LABEL[retry.strategy]}`;
+  if (retry.delayMs == null || remaining <= 0) {
+    return `${head} · ${RETRY_IN_FLIGHT_LABEL}`;
+  }
+  return `${head} ~${Math.ceil(remaining / 1000)}s · ${RETRY_STRATEGY_LABEL[retry.strategy]}`;
 }
