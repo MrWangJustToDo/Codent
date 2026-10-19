@@ -337,7 +337,7 @@ There is no Codent-specific IM bridge; the integration is configuration plus thi
   the flags / `.env` planes advertise a single fixed value.
 
 Full recipe and verification checklist:
-[docs/acp-im.md](https://github.com/MrWangJustToDo/MyAgent/blob/main/docs/acp-im.md).
+[docs/acp-im.md](https://github.com/MrWangJustToDo/Codent/blob/main/docs/acp-im.md).
 
 ## Package layout
 

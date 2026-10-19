@@ -16,13 +16,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/MrWangJustToDo/MyAgent.git",
+    "url": "https://github.com/MrWangJustToDo/Codent.git",
     "directory": "packages/node"
   },
   "bugs": {
-    "url": "https://github.com/MrWangJustToDo/MyAgent/issues"
+    "url": "https://github.com/MrWangJustToDo/Codent/issues"
   },
-  "homepage": "https://github.com/MrWangJustToDo/MyAgent#readme",
+  "homepage": "https://github.com/MrWangJustToDo/Codent#readme",
   "engines": {
     "node": ">=24"
   },

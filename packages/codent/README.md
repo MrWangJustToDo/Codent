@@ -3,7 +3,7 @@
 AI coding agent for your terminal. Local workspace, local model keys, one install.
 
 > Published on npm as **`codent-cli`** — the installed *command* is **`codent`**.
-> Currently **0.0.1-beta.5**, a pre-release. Source: [MrWangJustToDo/MyAgent](https://github.com/MrWangJustToDo/MyAgent).
+> Currently **0.0.1-beta.5**, a pre-release. Source: [MrWangJustToDo/Codent](https://github.com/MrWangJustToDo/Codent).
 
 `codent` is the **release host** for this monorepo: a local-only terminal CLI that ships as a
 single fully bundled, self-contained tarball. `@codent/app`, `@codent/core` and

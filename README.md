@@ -258,7 +258,7 @@ Built with [myreact-devtools](https://github.com/MrWangJustToDo/myreact-devtools
 
 ### Playground
 
-Check the link https://mrwangjusttodo.github.io/MyAgent/, you can create your own site
+Check the link https://mrwangjusttodo.github.io/Codent/, you can create your own site
 ![Playground start](playground-start.png)
 ![Playground end](playground-end.png)
 ![Playground devtool](playground-devtool.png)
@@ -296,8 +296,8 @@ Runtime data (sessions, memory, plans, …) is written to `./.agents/` in the di
 - Node.js 24+, pnpm 9+
 
 ```bash
-git clone https://github.com/MrWangJustToDo/MyAgent.git
-cd MyAgent
+git clone https://github.com/MrWangJustToDo/Codent.git
+cd Codent
 pnpm install
 pnpm build
 ```

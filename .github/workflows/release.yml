@@ -26,14 +26,17 @@ permissions:
   # package's page on npmjs.com must list it (Settings → Trusted publishing → GitHub Actions):
   #
   #   Organization or user   MrWangJustToDo
-  #   Repository             MyAgent
+  #   Repository             Codent
   #   Workflow filename      release.yml
   #
-  # All three are matched exactly and case-sensitively against the *running* workflow. Get one
-  # wrong and the publish fails with ENEEDAUTH — npm does not validate the fields when they are
-  # saved, so a typo surfaces only at release time. `packages/codent/package.json`'s
-  # `repository.url` must also keep matching this GitHub repository, which is a second way to
-  # reach the same error.
+  # The repository was renamed from `MyAgent` to `Codent` (GitHub redirects the old name, so git
+  # operations kept working while this line still named it — which is exactly how it would have
+  # gone unnoticed until a release failed). All three fields are matched exactly and
+  # case-sensitively against the *running* workflow. Get one wrong and the publish fails with
+  # ENEEDAUTH — npm does not validate the fields when they are saved, so a typo surfaces only at
+  # release time. `packages/codent/package.json`'s `repository.url` must also keep matching this
+  # GitHub repository, which is a second way to reach the same error (and it must be the NEW name:
+  # the redirect that saves git push does not apply to that comparison).
   #
   # This requires npm CLI >= 11.5.1 and Node >= 22.14.0; the job pins Node 26.4.0, whose bundled
   # npm is newer. pnpm also has to be >= 11.1.3 — `pnpm publish` treated the
