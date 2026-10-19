@@ -1,6 +1,6 @@
 {
   "name": "codent-cli",
-  "version": "0.0.1-beta.5",
+  "version": "0.0.1-beta.6",
   "description": "AI coding agent for your terminal — local workspace, local model keys, one install",
   "keywords": [
     "ai",
