@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 
 const { registerCoreEnv } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
-const { clearGitStatusCache, fetchGitStatus } = await import("../dist/utils/workspace-git-status.mjs");
+const { clearGitStatusCache, fetchGitStatusSnapshot } = await import("../dist/utils/workspace-git-status.mjs");
 const { clearWorkspaceDiffStatsCache, fetchWorkspaceDiffStats } =
   await import("../dist/utils/workspace-diff-stats.mjs");
 
@@ -41,7 +41,7 @@ registerCoreEnv(env);
   commands.length = 0;
   payload.stdout = ` M src/a.ts${NUL}`;
   clearGitStatusCache();
-  const status = await fetchGitStatus(env, "/repo");
+  const { status } = await fetchGitStatusSnapshot(env, "/repo");
 
   const cmd = commands[0];
   assert.match(cmd, /git status/, "the status query");

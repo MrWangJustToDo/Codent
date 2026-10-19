@@ -6,6 +6,8 @@ import { useCoreEnv } from "../context/core-env-context.js";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatFolderGlyph, formatIconGlyph, getFileIconStyle, getFolderIconStyle } from "../utils/file-icons.js";
 import { buildDiffTreeItems, type FlatTreeItem } from "../utils/workspace-diff-tree.js";
+import { type DirStatusSummary } from "../utils/workspace-dir-status.js";
+import { classifyGitStatus } from "../utils/workspace-git-status.js";
 import { joinWorkspacePath, workspaceRelativePath } from "../utils/workspace-path.js";
 import { visibleWindow } from "../utils/workspace-scroll.js";
 
@@ -54,71 +56,31 @@ interface StatusStyle {
 }
 
 function getStatusStyle(status: string): StatusStyle | null {
-  const s = status.trim();
-  if (s.startsWith("M") || s.endsWith("M")) return { label: "M", color: COLORS.warning };
-  if (s === "??") return { label: "?", color: COLORS.success };
-  if (s.startsWith("A")) return { label: "A", color: COLORS.success };
-  if (s.startsWith("D")) return { label: "D", color: COLORS.danger };
-  if (s.startsWith("R")) return { label: "R", color: COLORS.primary };
-  if (s.startsWith("C")) return { label: "C", color: COLORS.primary };
-  return null;
+  // Delegated to `classifyGitStatus` so the badge cannot disagree with the directory counts.
+  // The badge LETTER comes from the kind, not from re-reading the raw status here — that would
+  // be re-deciding what `classifyGitStatus` already decided (see its doc).
+  switch (classifyGitStatus(status)) {
+    case "renamed":
+      return { label: "R", color: COLORS.primary };
+    case "copied":
+      return { label: "C", color: COLORS.primary };
+    case "modified":
+      return { label: "M", color: COLORS.warning };
+    case "untracked":
+      return { label: "?", color: COLORS.success };
+    case "added":
+      return { label: "A", color: COLORS.success };
+    case "deleted":
+      return { label: "D", color: COLORS.danger };
+    default:
+      return null;
+  }
 }
 
 // ============================================================================
 // Directory Status Aggregation
 // ============================================================================
 
-interface DirStatusSummary {
-  modified: number;
-  added: number;
-  deleted: number;
-  untracked: number;
-  renamed: number;
-  total: number;
-}
-
-/**
- * Compute aggregated git status for all directories by walking the git status map.
- * A directory's status is the summary of all files under it (recursively).
- */
-export function computeDirStatuses(
-  env: CoreEnv,
-  gitStatus: Map<string, string>,
-  rootPath: string
-): Map<string, DirStatusSummary> {
-  const dirStatuses = new Map<string, DirStatusSummary>();
-
-  const ensureDir = (dir: string): DirStatusSummary => {
-    if (!dirStatuses.has(dir)) {
-      dirStatuses.set(dir, { modified: 0, added: 0, deleted: 0, untracked: 0, renamed: 0, total: 0 });
-    }
-    return dirStatuses.get(dir)!;
-  };
-
-  for (const [filepath, status] of gitStatus) {
-    const parts = toPosixPath(filepath).split("/");
-    // Accumulate status into every ancestor directory, using absolute paths
-    for (let i = 1; i < parts.length; i++) {
-      const relativeDir = parts.slice(0, i).join("/");
-      const dir = joinWorkspacePath(env, rootPath, relativeDir);
-      const summary = ensureDir(dir);
-      const s = status.trim();
-      if (s.startsWith("M") || s.endsWith("M")) summary.modified++;
-      else if (s.startsWith("A")) summary.added++;
-      else if (s.startsWith("D")) summary.deleted++;
-      else if (s === "??") summary.untracked++;
-      else if (s.startsWith("R")) summary.renamed++;
-      summary.total++;
-    }
-  }
-
-  return dirStatuses;
-}
-
-/**
- * Format directory status summary for display.
- * Example: "3M 1A" or "2? 1D"
- */
 function formatDirStatus(summary: DirStatusSummary | undefined): string | null {
   if (!summary || summary.total === 0) return null;
   const parts: string[] = [];

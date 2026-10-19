@@ -143,18 +143,12 @@ const names = (items) => items.map((i) => `${i.name}${i.type === "directory" ? "
   );
 }
 
-// Renamed paths (old -> new) render both sides as rows.
+// A rename reaches this builder as ONE path (the destination) — the parse no longer indexes the
+// source, so there is no "old side" row to build. This pins that the tree renders a single row
+// for a move, which is what lets the row's own diff carry the edit.
 {
-  const items = buildDiffTreeItems(
-    env,
-    status([
-      ["old/name.ts", "R"],
-      ["new/name.ts", "R"],
-    ]),
-    "/repo",
-    new Set()
-  );
-  assert.deepEqual(names(items), ["new/@0", "name.ts@1", "old/@0", "name.ts@1"]);
+  const items = buildDiffTreeItems(env, status([["new/name.ts", "R"]]), "/repo", new Set());
+  assert.deepEqual(names(items), ["new/@0", "name.ts@1"]);
 }
 
 // orderedChangedFiles: `[` / `]` order must match the rendered tree

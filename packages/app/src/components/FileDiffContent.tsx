@@ -12,7 +12,31 @@ import { fetchWorkspaceFileDiff } from "../utils/workspace-git-diff.js";
 type DiffPreviewState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; fileName: string; hasChanges: boolean; diffId: string };
+  | {
+      status: "ready";
+      fileName: string;
+      /** Workspace-relative path — the label's other half, so both sides read in one frame. */
+      relativePath: string;
+      hasChanges: boolean;
+      diffId: string;
+      /** Set for a rename: the path the file came from, shown as `old → new`. */
+      renamedFrom?: string;
+    };
+
+/**
+ * The header's one-line summary of what changed.
+ *
+ * A rename needs its own wording. `hasChanges` answers "does the content differ", which is
+ * false for a pure move — but the row is still a change, and it carries an `R` badge saying so.
+ * Saying "no changes vs HEAD" next to that badge reads as a bug. The distinction that matters
+ * to the reader is "moved, contents identical" versus "moved and edited".
+ */
+function diffSummary(state: Extract<DiffPreviewState, { status: "ready" }>): string {
+  if (state.renamedFrom) {
+    return state.hasChanges ? "renamed, contents changed" : "renamed, contents identical";
+  }
+  return state.hasChanges ? "changes vs HEAD" : "no changes vs HEAD";
+}
 
 interface FileDiffContentProps {
   rootPath: string;
@@ -20,11 +44,13 @@ interface FileDiffContentProps {
   width: number;
   /** Viewport height in terminal rows, including the header line. */
   height?: number;
+  /** For a rename row: the source path, so the old side is read from where the file was. */
+  renamedFrom?: string;
   onScrollChange?: (state: ScrollState) => void;
 }
 
 export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(function FileDiffContent(
-  { rootPath, filePath, width, height, onScrollChange },
+  { rootPath, filePath, width, height, renamedFrom, onScrollChange },
   ref
 ) {
   const env = useCoreEnv();
@@ -44,15 +70,19 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
       return;
     }
 
-    fetchWorkspaceFileDiff(env, rootPath, filePath)
+    fetchWorkspaceFileDiff(env, rootPath, filePath, renamedFrom)
       .then((payload) => {
         if (cancelled) return;
         setDiffPayload(payload);
         setState({
           status: "ready",
           fileName: payload.fileName,
+          relativePath: payload.relativePath,
           hasChanges: payload.hasChanges,
-          diffId: `${rootPath}\0${filePath}`,
+          // Both the cache identity and the label read the PARSED pairing, so they cannot
+          // disagree when the caller's argument and the parse differ (e.g. an unusable source).
+          diffId: `${rootPath}\0${filePath}\0${payload.renamedFrom ?? ""}`,
+          ...(payload.renamedFrom !== undefined ? { renamedFrom: payload.renamedFrom } : {}),
         });
       })
       .catch((error: unknown) => {
@@ -64,7 +94,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
     return () => {
       cancelled = true;
     };
-  }, [env, filePath, rootPath]);
+  }, [env, filePath, rootPath, renamedFrom]);
 
   const diffFile = useMemo(() => {
     if (!diffPayload) return null;
@@ -112,12 +142,12 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
   return (
     <Box flexDirection="column" flexShrink={0}>
       <Box flexShrink={0} paddingY={0} borderBottom>
-        <Text bold color={COLORS.primary}>
-          {state.fileName}
+        <Text bold color={COLORS.primary} wrap="truncate">
+          {state.renamedFrom ? `${state.renamedFrom} → ${state.relativePath}` : state.fileName}
         </Text>
         <Text color={COLORS.muted} dimColor>
           {" "}
-          — {state.hasChanges ? "changes vs HEAD" : "no changes vs HEAD"}
+          — {diffSummary(state)}
           {scrollState && scrollState.startLine > 1 ? ` · L${scrollState.startLine}+` : ""}
         </Text>
       </Box>

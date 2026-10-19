@@ -35,7 +35,7 @@ import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
 import { useSize } from "./dist/hooks/use-size.mjs";
 import { useWorkspaceGit } from "./dist/hooks/use-workspace-git.mjs";
 import { useWorkspacePanel } from "./dist/hooks/use-workspace-panel.mjs";
-import { parseGitStatus } from "./dist/utils/workspace-git-status.mjs";
+import { parseGitStatusZ } from "./dist/utils/workspace-git-paths.mjs";
 
 configureEnv({ allowNonBrowserUpdates: true });
 
@@ -189,7 +189,7 @@ const press = async (seq, wait = 250) => {
 const selected = () => useWorkspacePanel.getReadonlyState().selectedPath;
 const paneFocus = () => useWorkspacePanel.getReadonlyState().paneFocus;
 const mode = () => useWorkspacePanel.getReadonlyState().mode;
-const statusEntries = () => parseGitStatus(statusPayload()).size;
+const statusEntries = () => parseGitStatusZ(statusPayload()).size;
 
 /**
  * Read back the tree cursor by its row: `←` puts the focus on the tree pane (a no-op there) and

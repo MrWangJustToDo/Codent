@@ -9,14 +9,16 @@ import { COLORS } from "../theme/colors.js";
 import { workspacePanelHint } from "../utils/keyboard-labels.js";
 import { clearWorkspaceDiffStatsCache } from "../utils/workspace-diff-stats.js";
 import { changedFileJumpTarget } from "../utils/workspace-diff-tree.js";
+import { computeDirStatuses } from "../utils/workspace-dir-status.js";
 import { clearWorkspaceFileListCache } from "../utils/workspace-file-search.js";
 import { clearWorkspaceDiffCache } from "../utils/workspace-git-diff.js";
 import { clearGitStatusCache } from "../utils/workspace-git-status.js";
+import { workspaceRelativePath } from "../utils/workspace-path.js";
 import { decideReveal } from "../utils/workspace-reveal.js";
 import { clampScrollTop, ensureIndexVisible } from "../utils/workspace-scroll.js";
 
 import { clearContentCache } from "./FileContent.js";
-import { clearDirCache, computeDirStatuses, FileTree, useDiffFileTree, useFileTree } from "./FileTree.js";
+import { clearDirCache, FileTree, useDiffFileTree, useFileTree } from "./FileTree.js";
 import { HEADER_LINES, WorkspaceModeHeader } from "./WorkspaceModeHeader.js";
 import { PANE_TITLE_LINES, WorkspacePane } from "./WorkspacePane.js";
 import { WorkspacePreviewPane } from "./WorkspacePreviewPane.js";
@@ -73,7 +75,7 @@ export const WorkspaceFileMode = () => {
    */
   const alignedSelectionRef = useRef<string | null>(null);
 
-  const { gitStatus, gitInfo, diffStats, statusVersion, refreshGit } = useWorkspaceGit(rootPath);
+  const { gitStatus, gitRenames, gitInfo, diffStats, statusVersion, refreshGit } = useWorkspaceGit(rootPath);
 
   const screenWidth = useSize((s) => s.state.screenWidth);
   const screenHeight = useSize((s) => s.state.screenHeight) || 24;
@@ -84,6 +86,14 @@ export const WorkspaceFileMode = () => {
   const previewWidth = Math.max(MIN_PREVIEW_WIDTH, screenWidth - treeWidth - 2);
 
   const isDiffMode = mode === "diff";
+
+  // The rename source for the selected row, if it is one. `gitRenames` is keyed by relative
+  // path and `selectedPath` is absolute, so the lookup goes through the same conversion the
+  // tree used to build the row.
+  const selectedRenamedFrom = useMemo(() => {
+    if (!selectedPath || gitRenames.size === 0) return undefined;
+    return gitRenames.get(workspaceRelativePath(rootPath, selectedPath));
+  }, [selectedPath, gitRenames, rootPath]);
 
   const {
     items: fullItems,
@@ -407,6 +417,7 @@ export const WorkspaceFileMode = () => {
               mode={mode}
               rootPath={rootPath}
               selectedPath={selectedPath}
+              {...(selectedRenamedFrom !== undefined ? { renamedFrom: selectedRenamedFrom } : {})}
               refreshToken={refreshToken}
               width={previewWidth - 2}
               height={paneBodyLines}

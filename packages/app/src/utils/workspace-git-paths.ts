@@ -111,11 +111,15 @@ export function parseGitPathList(raw: string): string[] {
  * Each record is `XY <path>`. A rename or copy emits **two** records with the same status
  * — the new path first, then the old path — rather than one record with an ` -> `
  * separator. That separator cannot be parsed reliably anyway: it can occur inside a path.
- * Both sides are indexed, which is what lets the tree render the old path as deleted and
- * the new one as added.
+ *
+ * **The OLD path is not a key here** (see {@link parseGitStatusRenamesZ} for the pairing).
+ * Indexing both sides was the earlier behaviour and it is what made a rename render as one
+ * deletion plus one addition: the old path is not a file the view can open (it is gone from
+ * the worktree), so its row showed the whole file as deleted. A rename is one change, so it
+ * gets one row, keyed by the destination — the file that exists.
  *
  * @example
- * parseGitStatusZ("R  new file\0old file\0") // Map { "new file" => "R", "old file" => "R" }
+ * parseGitStatusZ("R  new file\0old file\0") // Map { "new file" => "R" }
  */
 export function parseGitStatusZ(raw: string): Map<string, string> {
   const map = new Map<string, string>();
@@ -127,20 +131,57 @@ export function parseGitStatusZ(raw: string): Map<string, string> {
     const status = record.slice(0, 2).trim();
     const path = filePathFromRecord(record.slice(3));
 
-    // A rename/copy consumes the following record, which holds the source path.
+    // A rename/copy consumes the following record, which holds the source path. The pair is
+    // recovered separately by `parseGitStatusRenamesZ`; here the source is simply skipped so
+    // it does not become a row of its own.
     if (status.startsWith("R") || status.startsWith("C")) {
-      const source = records[i + 1];
-      if (source !== undefined) {
-        i += 1;
-        const sourcePath = filePathFromRecord(source);
-        if (sourcePath !== null) map.set(sourcePath, status);
-      }
+      if (records[i + 1] !== undefined) i += 1;
     }
 
     if (path !== null) map.set(path, status);
   }
 
   return map;
+}
+
+/**
+ * The rename/copy pairs in a `git status --porcelain -z` payload: destination → source.
+ *
+ * Separate from {@link parseGitStatusZ} because the two answer different questions. That one
+ * answers "which paths are changed" (one entry per change), this one answers "which of those
+ * were moved from where" — and only the diff and its label need the second. Keeping the pair
+ * out of the path→status map is what stops the source from being rendered as its own row.
+ *
+ * Keyed by DESTINATION, matching `parseGitStatusZ`: in `status -z` the new path comes first,
+ * and the source is the following record. (`git diff --numstat -z` uses the opposite order —
+ * see `parseGitNumstatZ`; the two commands are not interchangeable.)
+ *
+ * @example
+ * parseGitStatusRenamesZ("R  new file\0old file\0") // Map { "new file" => "old file" }
+ */
+export function parseGitStatusRenamesZ(raw: string): Map<string, string> {
+  const renames = new Map<string, string>();
+  const records = splitGitRecords(raw);
+
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i]!;
+    if (record.length < 4) continue;
+    const status = record.slice(0, 2).trim();
+    if (!status.startsWith("R") && !status.startsWith("C")) continue;
+
+    const destination = filePathFromRecord(record.slice(3));
+    const sourceRecord = records[i + 1];
+    // Consume the source record even when either side is unusable, so the next iteration does
+    // not read a source path as if it were a `<status> <path>` record of its own.
+    if (sourceRecord === undefined) continue;
+    i += 1;
+
+    const source = filePathFromRecord(sourceRecord);
+    if (destination === null || source === null) continue;
+    renames.set(destination, source);
+  }
+
+  return renames;
 }
 
 /**

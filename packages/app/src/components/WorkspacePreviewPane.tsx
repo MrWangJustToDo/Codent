@@ -17,6 +17,7 @@ export const WorkspacePreviewPane = ({
   mode,
   rootPath,
   selectedPath,
+  renamedFrom,
   refreshToken,
   width,
   height,
@@ -26,6 +27,8 @@ export const WorkspacePreviewPane = ({
   mode: WorkspaceMode;
   rootPath: string;
   selectedPath: string | null;
+  /** Selection's rename source, when that row is a rename (see `useWorkspaceGit`). */
+  renamedFrom?: string;
   refreshToken: number;
   width: number;
   height: number;
@@ -48,12 +51,18 @@ export const WorkspacePreviewPane = ({
 
   return (
     <FileDiffContent
+      // Keyed by the refresh token ONLY. `renamedFrom` deliberately is not part of it: the inner
+      // `DiffView` is keyed by `state.diffId`, which already carries the parsed pairing, so the
+      // content resets when a move appears or disappears. Adding it here would remount this
+      // component too — discarding the header (and its label) during the re-fetch, which is the
+      // one thing that should stay stable while only the pairing changed.
       key={refreshToken}
       ref={diffRef}
       rootPath={rootPath}
       filePath={selectedPath}
       width={width}
       height={height}
+      {...(renamedFrom !== undefined ? { renamedFrom } : {})}
     />
   );
 };

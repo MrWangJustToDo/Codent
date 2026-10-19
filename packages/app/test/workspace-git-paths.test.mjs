@@ -15,7 +15,7 @@
  */
 import assert from "node:assert/strict";
 
-const { parseGitStatusZ, parseGitNumstatZ, namesAFile, normalizeGitPath, splitGitRecords } =
+const { parseGitStatusZ, parseGitStatusRenamesZ, parseGitNumstatZ, namesAFile, normalizeGitPath, splitGitRecords } =
   await import("../dist/utils/workspace-git-paths.mjs");
 
 const NUL = "\0";
@@ -77,26 +77,63 @@ assert.deepEqual(splitGitRecords(z("a", "b")), ["a", "b"], "the NUL-terminated t
   assert.equal(m.get("src/line\nbreak.ts"), "??");
 }
 
-// Rename: two records sharing a status — NEW first, then OLD. Both are indexed so the tree
-// can render the source as deleted and the destination as added.
+// Rename: two records sharing a status — NEW first, then OLD. Only the DESTINATION becomes a
+// row. The source is not a file the view can open (it is gone from the worktree), so indexing
+// it produced a second row that rendered as a whole-file deletion — that pairing is what
+// `parseGitStatusRenamesZ` now carries instead.
 {
-  const m = parseGitStatusZ(z("R  src/ren-new.ts", "src/ren-old.ts"));
+  const raw = z("R  src/ren-new.ts", "src/ren-old.ts");
+  const m = parseGitStatusZ(raw);
+  assert.deepEqual([...m.keys()], ["src/ren-new.ts"], "a rename is ONE row, keyed by the destination");
   assert.equal(m.get("src/ren-new.ts"), "R");
-  assert.equal(m.get("src/ren-old.ts"), "R");
+  assert.deepEqual(
+    [...parseGitStatusRenamesZ(raw)],
+    [["src/ren-new.ts", "src/ren-old.ts"]],
+    "the pairing is available separately, destination → source"
+  );
 }
 
 // Rename where the source path contains a space — the old `^(.*) -> (.*)$` split could not
 // represent this, and the order must not be inferred from a separator at all.
 {
-  const m = parseGitStatusZ(z("R  src/ren new name.ts", "src/ren old name.ts"));
-  assert.equal(m.get("src/ren new name.ts"), "R");
-  assert.equal(m.get("src/ren old name.ts"), "R");
+  const raw = z("R  src/ren new name.ts", "src/ren old name.ts");
+  assert.deepEqual([...parseGitStatusZ(raw).keys()], ["src/ren new name.ts"]);
+  assert.equal(parseGitStatusRenamesZ(raw).get("src/ren new name.ts"), "src/ren old name.ts");
 }
 
-// A copy (`C`) carries a source record too.
+// A rename that was then edited reads `RM` — one row, and the row's status must keep the
+// `R` or the tree would report a plain modification and lose the fact that the file moved.
 {
-  const m = parseGitStatusZ(z("C  src/copy.ts", "src/origin.ts"));
-  assert.deepEqual([...m.keys()].sort(), ["src/copy.ts", "src/origin.ts"]);
+  const raw = z("RM src/ren-edit-new.ts", "src/ren-edit-old.ts");
+  const m = parseGitStatusZ(raw);
+  assert.deepEqual([...m.keys()], ["src/ren-edit-new.ts"]);
+  assert.equal(m.get("src/ren-edit-new.ts"), "RM");
+  assert.equal(parseGitStatusRenamesZ(raw).get("src/ren-edit-new.ts"), "src/ren-edit-old.ts");
+}
+
+// A copy (`C`) carries a source record too — same one-row rule, same pairing.
+{
+  const raw = z("C  src/copy.ts", "src/origin.ts");
+  assert.deepEqual([...parseGitStatusZ(raw).keys()], ["src/copy.ts"]);
+  assert.equal(parseGitStatusRenamesZ(raw).get("src/copy.ts"), "src/origin.ts");
+}
+
+// A rename followed by an ordinary record: the source record is consumed, so the next entry
+// must still be read as `<status> <path>` and not as a stray source path.
+{
+  const raw = z("R  src/new.ts", "src/old.ts", " M src/after.ts");
+  const m = parseGitStatusZ(raw);
+  assert.deepEqual([...m.keys()], ["src/new.ts", "src/after.ts"]);
+  assert.equal(m.get("src/after.ts"), "M");
+  assert.deepEqual([...parseGitStatusRenamesZ(raw)], [["src/new.ts", "src/old.ts"]]);
+}
+
+// A truncated rename (status record with no source) must not become a pairing keyed to a
+// nonexistent source, and must not swallow the next record.
+{
+  const raw = z("R  src/new.ts");
+  assert.deepEqual([...parseGitStatusZ(raw).keys()], ["src/new.ts"]);
+  assert.deepEqual([...parseGitStatusRenamesZ(raw)], [], "no source record means no pair");
 }
 
 // A directory-shaped path is rejected here, which is what stops the nameless row upstream.

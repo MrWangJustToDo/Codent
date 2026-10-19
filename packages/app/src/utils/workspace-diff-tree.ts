@@ -158,7 +158,7 @@ function flattenDiffTree(
  * - Directories default to expanded; pass their relative paths in `collapsed`
  *   to hide them.
  *
- * @param gitStatus relative path → status code map (see `parseGitStatus`)
+ * @param gitStatus relative path → status code map (see `parseGitStatusZ`)
  * @param rootPath workspace root
  * @param collapsed relative paths of directories the user collapsed
  */
