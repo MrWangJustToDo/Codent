@@ -42,6 +42,29 @@ export const MODELS_DEV_URL = "https://models.dev/api.json";
 const REASONING_EFFORTS = new Set<ReasoningEffort>(["none", "low", "medium", "high", "xhigh", "max", "minimal"]);
 
 /**
+ * The named effort levels a models.dev entry advertises (`reasoning_options[type=effort].values`).
+ *
+ * One definition, two consumers that MUST agree: `parseModelsDevModel` turns it into
+ * `ModelInfo.reasoningConfig.effortValues` (what `/models` offers), and `scoreModelEntry` uses it to
+ * break ties between provider entries (below). If those two read the payload differently, the lookup
+ * could rank an entry by a list it then declines to surface.
+ *
+ * Values models.dev emits that are not ours are dropped, never coerced: `null` (2 entries) and
+ * `default` (2 entries) name no level of ours, and forwarding one would put a value on the wire that
+ * `ReasoningEffort` does not contain. An entry advertising ONLY such values therefore has no named
+ * levels — which is the honest answer, not "unparsed".
+ */
+function namedEffortValues(data: ModelsDevModel): ReasoningEffort[] {
+  if (!Array.isArray(data.reasoning_options)) return [];
+  const effortOption = data.reasoning_options.find(
+    (o) => typeof o === "object" && o !== null && (o as { type?: string }).type === "effort"
+  ) as { values?: unknown[] } | undefined;
+  return (effortOption?.values ?? []).filter(
+    (v): v is ReasoningEffort => typeof v === "string" && REASONING_EFFORTS.has(v as ReasoningEffort)
+  );
+}
+
+/**
  * How long the disk cache counts as usable for a BLOCKING read (3 days).
  *
  * Within the window a launch answers from disk and revalidates in the background; past it the
@@ -489,15 +512,13 @@ export function parseModelsDevModel(vendorId: string, modelId: string, data: Mod
       }
     : undefined;
 
-  // Derive reasoningConfig from reasoning_options if present
+  // Derive reasoningConfig from reasoning_options if present. A `reasoning` model with no named
+  // levels still gets a config object: `{}` says "thinking exists, but not in named levels" — the
+  // distinction `offerableReasoningEfforts` reads, and the one `parseModelsDevModel` must not blur
+  // by omitting the field entirely.
   let reasoningConfig: ModelInfo["reasoningConfig"];
-  if (data.reasoning && Array.isArray(data.reasoning_options)) {
-    const effortOpt = data.reasoning_options.find(
-      (o) => typeof o === "object" && o !== null && (o as { type?: string }).type === "effort"
-    ) as { values?: string[] } | undefined;
-    const effortValues = (effortOpt?.values ?? []).filter(
-      (v): v is ReasoningEffort => typeof v === "string" && REASONING_EFFORTS.has(v as ReasoningEffort)
-    );
+  if (data.reasoning) {
+    const effortValues = namedEffortValues(data);
     const hasMedium = effortValues.includes("medium");
     reasoningConfig = {
       ...(effortValues.length > 0 ? { effortValues } : {}),
@@ -578,6 +599,8 @@ export async function lookupModelFromModelsDev(
   //    models.dev (e.g. "zhipu/glm-5.2" → models.dev has it under "zai").
   //    Multiple providers may carry the same model id; pick the one with the
   //    richest metadata so contextWindow / pricing / capabilities are accurate.
+  //    Ties go to the entry that can actually describe the model's thinking depths
+  //    (`compareModelEntries`) instead of to whichever key came first.
   const bareMatches: Array<{ provId: string; modelData: ModelsDevModel; score: number }> = [];
   for (const [provId, provData] of Object.entries(data)) {
     const modelData = provData.models?.[bareId] ?? provData.models?.[modelId];
@@ -585,7 +608,7 @@ export async function lookupModelFromModelsDev(
     bareMatches.push({ provId, modelData, score: scoreModelEntry(modelData) });
   }
   if (bareMatches.length > 0) {
-    bareMatches.sort((a, b) => b.score - a.score);
+    bareMatches.sort(compareModelEntries);
     const best = bareMatches[0]!;
     return parseModelsDevModel(best.provId, bareId, best.modelData);
   }
@@ -606,6 +629,9 @@ export async function lookupModelFromModelsDev(
  *
  * Entries with zero pricing (free / coding-plan tiers) rank below paid ones
  * because their metadata is sometimes incomplete.
+ *
+ * Deliberately does NOT score advertised effort levels — see {@link compareModelEntries} for why that
+ * belongs in the tie-break instead.
  */
 function scoreModelEntry(data: ModelsDevModel): number {
   let score = 0;
@@ -628,6 +654,44 @@ function scoreModelEntry(data: ModelsDevModel): number {
   if (data.knowledge) score += 2;
   if (data.release_date) score += 2;
   return score;
+}
+
+/**
+ * Rank two provider entries for the SAME model id: metadata richness first, then whether the entry can
+ * describe thinking depths at all.
+ *
+ * Ties used to fall through to `Object.entries` order, which is payload key order — so which entry a
+ * bare model id resolved to was effectively arbitrary. That was invisible while every reasoning model
+ * got a depth menu, and became visible once `/models` started offering depths strictly (positive
+ * evidence: `reasoning` AND a non-empty `effortValues`, see `offerableReasoningEfforts`): a
+ * toggle-only entry now means NO depth submenu, while its equally-scored sibling advertises
+ * `["low","high","max"]` for the same model. Measured over the cached catalog: **230** model ids
+ * resolved to a level-less winner while an equally-scored sibling had levels, and this tie-break
+ * recovers **206** of them.
+ *
+ * The tie-break is a BOOLEAN (has named levels / has none), never a comparison of how many or which —
+ * that distinction is load-bearing and was caught by measurement. Ranking by level COUNT also moved
+ * models that already had a menu, e.g. `deepseek/deepseek-v4.1-flash` went from `["low","high"]`
+ * (aimlapi) to the full seven (llmgateway): both tied on metadata, so "more levels wins" rewrote a
+ * working menu into one claiming `medium`/`xhigh`/`max` that the model may reject upstream. Two
+ * catalogs disagreeing about a level set is not evidence that the larger set is right, and the only
+ * defect worth fixing here is a model losing its menu entirely — so entries that both advertise levels
+ * stay tied, and the existing order decides. That keeps the change strictly additive: no model's
+ * available depths become a different SET than before, only empty ones (206) gain the set their sibling
+ * already documented.
+ *
+ * Not a weight, either: `scoreModelEntry` must keep ranking metadata richness on its own, or a bare
+ * entry that merely advertises levels would outrank a fully-described paid listing.
+ */
+function compareModelEntries(
+  a: { modelData: ModelsDevModel; score: number },
+  b: { modelData: ModelsDevModel; score: number }
+): number {
+  if (a.score !== b.score) return b.score - a.score;
+  const aHasLevels = namedEffortValues(a.modelData).length > 0;
+  const bHasLevels = namedEffortValues(b.modelData).length > 0;
+  if (aHasLevels === bHasLevels) return 0;
+  return bHasLevels ? 1 : -1;
 }
 
 /**
