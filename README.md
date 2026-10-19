@@ -280,7 +280,7 @@ codent --version                        # print installed version
 ```
 
 > Published as **`codent-cli`** on npm (the command is still `codent`). Currently a
-> **pre-release** — `0.0.1-beta.5`. Requires **Node.js 24+**.
+> **pre-release** — `0.0.1-beta.6`. Requires **Node.js 24+**.
 
 **Editor integration (ACP).** `codent acp` serves the agent over the
 [Agent Client Protocol](https://agentclientprotocol.com) on stdio, so editors such as Zed or
