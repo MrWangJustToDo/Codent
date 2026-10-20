@@ -30,7 +30,7 @@ export default defineConfig({
     `${src}/hooks/use-workspace-panel.ts`,
     `${src}/hooks/use-workspace-git.ts`,
     `${src}/hooks/use-size.ts`,
-    `${src}/utils/workspace-git-status.ts`,
+    `${src}/utils/workspace-git-paths.ts`,
   ],
   outDir: resolve(here, "dist"),
   format: ["esm"],
