@@ -242,6 +242,45 @@ function globPrefix(text: string): string | undefined {
 const PATTERN_FIRST_COMMANDS = new Set(["grep", "rg", "ag", "ack"]);
 
 /**
+ * The STARTING POINTS of a `find` invocation — the only arguments that are filesystem operands.
+ *
+ * `find`'s grammar is `find [starting-point…] [expression]`: from the first token that begins with
+ * `-` (or is a standalone `(`, `!`, `,`) everything is the expression, and its values are predicates
+ * or patterns (`-name "*.d.mts"`, `-path ./x`, `-type f`), not paths. The generic path extractor
+ * treated those values as operands: `-name "*.d.mts"` became a glob with no prefix to resolve, which
+ * the analyzer reports as an unresolvable external path, so an ordinary read-only traversal demanded
+ * approval. GNU's leading global options (`-L` / `-H` / `-P`, `-D debugopts`, `-O0..3`) are not
+ * starting points either — skipping them keeps `find -L /etc` classified as external.
+ */
+function findStartingPoints(tokens: string[]): string[] {
+  let i = 1;
+  while (i < tokens.length) {
+    const token = tokens[i]!;
+    if (token === "-L" || token === "-H" || token === "-P") {
+      i += 1;
+      continue;
+    }
+    if (token === "-D") {
+      i += 2;
+      continue;
+    }
+    if (/^-O[0-9]?$/.test(token)) {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+
+  const paths: string[] = [];
+  for (; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (token.startsWith("-") || token === "(" || token === "!" || token === ",") break;
+    paths.push(token);
+  }
+  return paths;
+}
+
+/**
  * Collect path arguments for a command, dropping flags (opencode `pathArgs`).
  *
  * `grep`-family commands are also skipped over their leading *pattern* argument, which is not a
@@ -253,6 +292,10 @@ const PATTERN_FIRST_COMMANDS = new Set(["grep", "rg", "ag", "ack"]);
  */
 function pathArgs(tokens: string[]): string[] {
   const name = tokens[0]?.toLowerCase() ?? "";
+  // `find` is the one command whose remaining arguments are a small expression language: only the
+  // leading starting points are paths (see {@link findStartingPoints}).
+  if (name === "find") return findStartingPoints(tokens);
+
   const args = tokens.slice(1).filter((item) => {
     if (item.startsWith("-")) return false;
     if (name === "chmod" && item.startsWith("+")) return false;

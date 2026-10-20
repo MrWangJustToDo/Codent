@@ -165,6 +165,14 @@ const READ_ONLY_COMMANDS = [
   // and forced an approval for an ordinary search.
   'grep -rn "\\.todoManager\\b" packages/core/src',
   'grep -rn --include="*.ts" "x" packages/core/src',
+  // `find` PREDICATE values are patterns, not paths. `-name "*.d.mts"` used to be extracted as a
+  // path operand, and a glob with no prefix to resolve is reported as an unresolvable external
+  // path — so an ordinary read-only traversal demanded approval.
+  'find . -name "*.d.mts" -print',
+  'find . -path ./node_modules -prune -o -name "*.d.mts" -print',
+  'find . -type f -name "*.ts"',
+  // GNU's leading global options are not starting points either.
+  'find -L . -name "*.ts"',
 ];
 for (const command of READ_ONLY_COMMANDS) {
   const { action } = await decide(command);
@@ -190,6 +198,34 @@ const MUTATING_COMMANDS = [
 for (const command of MUTATING_COMMANDS) {
   const { action } = await decide(command);
   assert.notEqual(action, "allow", `expected approval for: ${command}`);
+}
+
+// `find`: only the starting points are paths, and the write predicates still decide "not read-only".
+{
+  const predicate = await decide('find . -name "*.d.mts" -print');
+  assert.deepEqual(
+    predicate.report.commands[0].fileOps.map((op) => op.arg),
+    ["."],
+    "only find's starting point is a path; -name's value is a pattern"
+  );
+  assert.equal(predicate.report.anyExternalDir, false, "an internal starting point is not external");
+
+  // The external check must still see a starting point behind a leading global option…
+  for (const command of ["find /etc -name passwd", "find -L /etc -name passwd"]) {
+    const { action, report } = await decide(command);
+    assert.notEqual(action, "allow", `external find traversal must ask: ${command}`);
+    assert.equal(report.anyExternalDir, true, `the starting point is external: ${command}`);
+  }
+  // …and the write predicates keep classifying the invocation as a write at all.
+  for (const command of ["find . -delete", "find . -exec rm {} \\;"]) {
+    const { action, report } = await decide(command);
+    assert.notEqual(action, "allow", `write predicate must ask: ${command}`);
+    assert.equal(
+      report.commands.some((c) => c.isReadOnly === false),
+      true,
+      `not read-only: ${command}`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
