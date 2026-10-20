@@ -7,6 +7,7 @@
  */
 
 import { client as createAcpClient, methods } from "@agentclientprotocol/sdk";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 
 import { AcpProjector, createAcpAgent } from "../dist/index.mjs";
 
@@ -224,8 +225,16 @@ export async function hostScenario(
       destroyed,
       deleted,
       connected,
-      /** Notifications are sent asynchronously; one macrotask flushes the frames. */
-      settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
+      /**
+       * Flush BOTH queues: `session/new` defers its seed (and any child attach) to a `setImmediate`,
+       * while SDK notifications land on the stream. A single `setTimeout(0)` races the immediate
+       * (the timer can win), which made the first host block flaky; wait for the immediate first,
+       * then a timer turn.
+       */
+      settle: async () => {
+        await nextImmediate();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
       /** Poll a value produced by an async handler (elicitation round-trip, text answer). */
       waitFor: async (probe, attempts = 100) => {
         for (let index = 0; index < attempts; index += 1) {
