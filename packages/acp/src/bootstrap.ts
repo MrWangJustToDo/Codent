@@ -16,6 +16,7 @@
  * (every client request carries a `sessionId`), so the runtime is per-session too.
  */
 
+import { RequestError } from "@agentclientprotocol/sdk";
 import {
   buildDefaultSystemPrompt,
   CodentAgent,
@@ -29,12 +30,20 @@ import {
   resolveModelConfigFromProvider,
 } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
+import { stat as statPath } from "node:fs/promises";
 
 import { createAcpClientEnv } from "./client-env.js";
 import { resolveRoot } from "./paths.js";
 
 import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
-import type { AgentSessionHost, ModelProvider, ModelStyle, ModelCatalogRead, LoadedModelEntry } from "@codent/core";
+import type {
+  AgentSessionHost,
+  ModelProvider,
+  ModelStyle,
+  ModelCatalogRead,
+  LoadedModelEntry,
+  SessionMeta,
+} from "@codent/core";
 
 function parseModelStyle(value: string | undefined): ModelStyle | undefined {
   return value === "openai" || value === "anthropic" ? value : undefined;
@@ -73,10 +82,12 @@ export interface LocalAcpBootstrap {
   /** The entry the resolved default model came from — seeds a new session's recorded entry. */
   modelsDefaultEntryIndex?: number;
   /**
-   * Present only under `--client-env`: builds the per-session runtime whose env borrows the
-   * client's fs/terminal. Its presence is what turns the flag on in `createAcpAgent`.
+   * Build a runtime for one session's workspace root. Always present: `cwd` is the session root in
+   * ACP, so even without `--client-env` a session whose `cwd` differs needs its own CoreEnv.
    */
   createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
+  /** Enumerate persisted sessions for a `session/list` root other than the process default. */
+  listPersistedSessionsAt?: (rootPath: string) => Promise<SessionMeta[]>;
 }
 
 /** Register CoreEnv + model provider and return a local host + defaults. */
@@ -181,7 +192,6 @@ export async function bootstrapLocalAcp(
       apiKey: connection.apiKey,
     });
     modelsDefaultEntryIndex = 0;
-    modelsDefaultEntryIndex = 0;
   } else {
     try {
       const loaded = await loadModels({ kind: "file" });
@@ -248,47 +258,113 @@ export async function bootstrapLocalAcp(
     ownsEnv: true,
   });
 
-  // `--client-env`: one runtime per session, each over a client-backed env whose fallback is the
-  // local env above (which the boot runtime keeps alive — a per-session env only borrows it, so it
-  // must NOT be destroyed by `dispose`).
-  const createSessionHost = options.clientEnv
-    ? async (context: AcpClientEnvFactoryContext): Promise<AcpSessionRuntime> => {
-        const caps = {
-          readTextFile: Boolean(context.clientCapabilities?.fs?.readTextFile),
-          writeTextFile: Boolean(context.clientCapabilities?.fs?.writeTextFile),
-          terminal: Boolean(context.clientCapabilities?.terminal),
-        };
-        // The capability matrix and every fallback decision are logged (no values, just the shape):
-        // a tool route that looks wrong is nearly always a capability the client never declared.
-        process.stderr.write(
-          `[codent-acp] client-env capabilities: ` +
-            `readTextFile=${caps.readTextFile} writeTextFile=${caps.writeTextFile} terminal=${caps.terminal}\n`
-        );
-        const clientEnv = createAcpClientEnv({
-          client: context.client,
-          sessionId: context.sessionId,
-          rootPath,
-          // The boot runtime's own env, already resolved (`getEnv()` applies the defaults), so the
-          // per-session env inherits the exact fs/path/exec behaviour this process would have used.
-          fallback: agent.getEnv(),
-          caps,
-          log: (message) => process.stderr.write(`[codent-acp] ${message}\n`),
-        });
-        const sessionAgent = await CodentAgent.create({
-          env: clientEnv,
+  // One runtime per session. Without `--client-env` it is still needed when the session's `cwd`
+  // differs from the process default: ACP's `cwd` is the session workspace root, so its `.agents`,
+  // relative paths and tools must be rooted there. The default root reuses the boot runtime, so a
+  // client that never sends another `cwd` pays nothing.
+  const createSessionHost = async (context: AcpClientEnvFactoryContext): Promise<AcpSessionRuntime> => {
+    const isDefaultRoot = context.rootPath === rootPath;
+
+    // ACP's `cwd` is a real directory. Refuse an unusable one here, before any session or env is
+    // created: a root that does not exist would otherwise produce a session whose every read
+    // fails later (and whose instruction loader silently reports "no docs").
+    if (!isDefaultRoot) {
+      let info;
+      try {
+        info = await statPath(context.rootPath);
+      } catch {
+        throw RequestError.invalidParams(undefined, `cwd is not an accessible directory: ${context.rootPath}`);
+      }
+      if (!info.isDirectory()) {
+        throw RequestError.invalidParams(undefined, `cwd is not a directory: ${context.rootPath}`);
+      }
+    }
+
+    // No per-session env needed: the default root and no client-backed fs.
+    if (!options.clientEnv && isDefaultRoot) return { host: agent.host, dispose: async () => undefined };
+
+    // A non-default root needs its own runtime even without `--client-env`. Build it first so
+    // `getEnv()` gives us the resolved fallback the client-backed env (when enabled) borrows.
+    const localAgent =
+      options.clientEnv && isDefaultRoot
+        ? undefined
+        : await CodentAgent.create({
+            env: createNodeEnv({ rootPath: context.rootPath, sandbox: sandboxMode !== "native" }),
+            ...(provider ? { provider } : {}),
+            ...(models ? { models } : {}),
+            ownsEnv: true,
+          });
+
+    if (!options.clientEnv) {
+      // `localAgent` is defined here: the default-root case returned above.
+      return {
+        host: localAgent!.host,
+        dispose: () => localAgent!.dispose(),
+      };
+    }
+
+    const caps = {
+      readTextFile: Boolean(context.clientCapabilities?.fs?.readTextFile),
+      writeTextFile: Boolean(context.clientCapabilities?.fs?.writeTextFile),
+      terminal: Boolean(context.clientCapabilities?.terminal),
+    };
+    // The capability matrix and every fallback decision are logged (no values, just the shape):
+    // a tool route that looks wrong is nearly always a capability the client never declared.
+    process.stderr.write(
+      `[codent-acp] client-env capabilities: ` +
+        `readTextFile=${caps.readTextFile} writeTextFile=${caps.writeTextFile} terminal=${caps.terminal}\n`
+    );
+    const fallback = localAgent ? localAgent.getEnv() : agent.getEnv();
+    const clientEnv = createAcpClientEnv({
+      client: context.client,
+      sessionId: context.sessionId,
+      // The SESSION root, not the process default: `.agents/**` and out-of-workspace routing are
+      // judged against the workspace this session actually serves.
+      rootPath: context.rootPath,
+      // The session's local env (the boot env for the default root), already resolved (`getEnv()`
+      // applies the defaults), so the client-backed env inherits this process's fs/path/exec
+      // behaviour for everything it does not delegate.
+      fallback,
+      caps,
+      log: (message) => process.stderr.write(`[codent-acp] ${message}\n`),
+    });
+    const sessionAgent = await CodentAgent.create({
+      env: clientEnv,
+      ...(provider ? { provider } : {}),
+      ...(models ? { models } : {}),
+      // The client-backed env borrows its fallback: disposing this runtime must not tear down an
+      // env another session (or the boot runtime) still depends on. `localAgent` is ours.
+      ownsEnv: false,
+    });
+    return {
+      host: sessionAgent.host,
+      dispose: async () => {
+        await sessionAgent.dispose();
+        if (localAgent) await localAgent.dispose();
+      },
+      // Surfaced so the approval policy can ask this env the only question that matters:
+      // would a write to this path actually leave the process?
+      clientEnv,
+    };
+  };
+
+  // `session/list` for a root other than the default. A list request has no session, so there is
+  // no per-session runtime to borrow: build a short-lived one over that root and release it.
+  const listPersistedSessionsAt = agent.host.listPersistedSessions
+    ? async (root: string): Promise<SessionMeta[]> => {
+        if (root === rootPath) return (await agent.host.listPersistedSessions?.()) ?? [];
+        const rootEnv = createNodeEnv({ rootPath: root, sandbox: sandboxMode !== "native" });
+        const rootAgent = await CodentAgent.create({
+          env: rootEnv,
           ...(provider ? { provider } : {}),
           ...(models ? { models } : {}),
-          // Borrowed fallback env: disposing this runtime must not tear down the local env that
-          // every other session's fallback still depends on.
-          ownsEnv: false,
+          ownsEnv: true,
         });
-        return {
-          host: sessionAgent.host,
-          dispose: () => sessionAgent.dispose(),
-          // Surfaced so the approval policy can ask this env the only question that matters:
-          // would a write to this path actually leave the process?
-          clientEnv,
-        };
+        try {
+          return (await rootAgent.host.listPersistedSessions?.()) ?? [];
+        } finally {
+          await rootAgent.dispose();
+        }
       }
     : undefined;
 
@@ -298,7 +374,8 @@ export async function bootstrapLocalAcp(
     // Read back from the runtime: the ONE source, not the local variable that fed it.
     ...(agent.readModels() ? { models: agent.readModels()! } : {}),
     ...(modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex } : {}),
-    ...(createSessionHost ? { createSessionHost } : {}),
+    createSessionHost,
+    ...(listPersistedSessionsAt ? { listPersistedSessionsAt } : {}),
     defaults: {
       model,
       ...(style ? { modelStyle: style } : {}),
@@ -330,5 +407,6 @@ export async function bootstrapAcpAgent(
     ...(boot.modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex: boot.modelsDefaultEntryIndex } : {}),
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
+    ...(boot.listPersistedSessionsAt ? { listPersistedSessionsAt: boot.listPersistedSessionsAt } : {}),
   };
 }

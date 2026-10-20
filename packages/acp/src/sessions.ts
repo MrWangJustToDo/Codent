@@ -17,6 +17,7 @@
  */
 
 import { RequestError } from "@agentclientprotocol/sdk";
+import { defaultPath } from "@codent/core";
 
 import type { DeleteSessionRequest, ListSessionsRequest, SessionInfo } from "@agentclientprotocol/sdk";
 import type { SessionMeta } from "@codent/core";
@@ -85,8 +86,12 @@ export function paginateSessions(
   const pageSize = options.pageSize ?? DEFAULT_SESSION_PAGE_SIZE;
   const boundary = decodeCursor(options.cursor);
   // `SessionStore.list()` already returns `updatedAt` desc, but a host is not bound to that and
-  // the cursor's correctness depends on the ordering, so it is re-established here.
-  const ordered = [...metas].sort(compareSessions);
+  // the cursor's correctness depends on the ordering, so it is re-established here. A row with a
+  // malformed timestamp is skipped rather than allowed to throw `RangeError` and fail the whole
+  // page: one corrupt session file must not hide every other session in the picker.
+  const ordered = metas
+    .filter((meta) => Number.isFinite(meta.updatedAt) && Number.isFinite(new Date(meta.updatedAt).getTime()))
+    .sort(compareSessions);
   // Resume strictly after the boundary row, which also skips its same-`updatedAt` siblings
   // (they sort before it or after it by id — never on both sides of the cut).
   const remaining = boundary ? ordered.filter((meta) => compareSessions(meta, boundary) > 0) : ordered;
@@ -111,9 +116,25 @@ export function paginateSessions(
 export interface SessionCatalogDeps {
   /** `undefined` when the host cannot enumerate (then `session/list` is not advertised either). */
   listPersistedSessions?: () => Promise<SessionMeta[]>;
+  /**
+   * Enumerate a workspace root other than the process default.
+   *
+   * `cwd` is the session's workspace root in ACP, so a list request for another root is a real
+   * filter, not a hint. A host that can build a runtime for that root supplies this; without it a
+   * foreign `cwd` returns no rows rather than rows from the wrong workspace.
+   */
+  listPersistedSessionsAt?: (rootPath: string) => Promise<SessionMeta[]>;
   /** `undefined` when the host cannot delete. */
   deleteSession?: (sessionId: string) => Promise<boolean>;
-  /** The workspace root; a `cwd` in the request is only ever compared against it. */
+  /**
+   * The live bridge behind an id, when there is one.
+   *
+   * `session/delete` addresses DISK ids. A stable ACP handle may equal a *former* disk id after a
+   * rebind; resolving it blindly would close the live conversation and delete the current file
+   * instead of the listed one. Only an id that IS the live disk id may be closed.
+   */
+  lookupLive?: (sessionId: string) => { handle: string; diskId: string } | undefined;
+  /** The workspace root used when the request omits `cwd`. */
   rootPath: string;
   /** Stop a live session before its log is removed — deleting under a running agent would leave an
    *  append stream writing to a removed file. Returns whether one was closed: a session that was live
@@ -126,17 +147,30 @@ export interface SessionCatalogDeps {
 export function createSessionCatalog(deps: SessionCatalogDeps) {
   return {
     async list(params: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> {
-      if (!deps.listPersistedSessions) {
+      if (!deps.listPersistedSessions && !deps.listPersistedSessionsAt) {
         // Not advertised in initialize for such a host — but a client may call anyway.
         throw new Error("This host cannot enumerate persisted sessions (no listPersistedSessions capability)");
       }
-      // `cwd` is an optional filter here and is NOT forwarded: the root is fixed at handshake and the
-      // catalog is already scoped to it, so echoing the value back would only pretend to filter.
-      if (params.cwd && params.cwd !== deps.rootPath) {
-        deps.note(`[codent-acp] note: session cwd ${params.cwd} differs from workspace root ${deps.rootPath}\n`);
+      const requested = params.cwd
+        ? defaultPath.isAbsolute(params.cwd)
+          ? defaultPath.resolve(params.cwd)
+          : (() => {
+              throw RequestError.invalidParams(undefined, `session/list cwd must be absolute: ${params.cwd}`);
+            })()
+        : deps.rootPath;
+      let listed: SessionMeta[];
+      if (requested === deps.rootPath) {
+        listed = (await deps.listPersistedSessions?.()) ?? [];
+      } else if (deps.listPersistedSessionsAt) {
+        listed = await deps.listPersistedSessionsAt(requested);
+      } else {
+        // A foreign root is a real filter, not a hint. Returning the default root's rows while
+        // stamping them with the requested `cwd` would hand the client sessions from the wrong
+        // workspace; empty is the honest answer for a host that cannot reach that root.
+        deps.note(`[codent-acp] note: session/list cwd ${requested} is not reachable by this host\n`);
+        listed = [];
       }
-      const listed = await deps.listPersistedSessions();
-      const page = paginateSessions(listed, deps.rootPath, { cursor: params.cursor });
+      const page = paginateSessions(listed, requested, { cursor: params.cursor });
       return {
         sessions: page.sessions,
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
@@ -147,14 +181,18 @@ export function createSessionCatalog(deps: SessionCatalogDeps) {
       if (!deps.deleteSession) {
         throw new Error("This host cannot delete persisted sessions (no deleteSession capability)");
       }
-      // `DeleteSessionRequest` carries only `sessionId` — nothing else to check.
+      // `DeleteSessionRequest` carries only `sessionId`.
       const sessionId = params.sessionId;
-      const wasLive = await deps.closeLive(sessionId);
-      // Success is "was live, or its file is gone" — a session created by `session/new` and deleted
-      // immediately has NO file yet (`ensureSessionData` only mints the id in memory), so a bare
-      // `delete` returning false must not be reported as "not found".
-      const removed = await deps.deleteSession(sessionId);
-      if (!removed && !wasLive) throw RequestError.invalidParams(undefined, `Unknown session: ${sessionId}`);
+      const live = deps.lookupLive?.(sessionId);
+      if (live && live.diskId === sessionId) {
+        // The requested id IS the live conversation: stop it before removing its log.
+        await deps.closeLive(sessionId);
+        await deps.deleteSession(sessionId);
+        return {};
+      }
+      // A stable handle may equal a FORMER disk id (after `/clear`/`/clone`/`/resume`). It is not a
+      // disk id now: delete that persisted conversation if it exists, but never close the live one.
+      await deps.deleteSession(sessionId);
       return {};
     },
   };

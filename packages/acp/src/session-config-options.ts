@@ -201,8 +201,8 @@ function modelConfigOption(
  *
  * `mode` reads the same `mode` channel state as `session/set_mode` / `current_mode_update`, so it is
  * a projection of that truth, not a second source. `model` is present only when a catalog exists:
- * explicit `--model` flags skip `.agents/config/models.json`, and a selector offering exactly one
- * value would be a fake choice — the protocol lets a client degrade gracefully on a missing option.
+ * explicit `--model` flags skip `.agents/config/models.json` but bootstrap builds a one-entry catalog,
+ * so those planes advertise one fixed value (information, not a fake choice).
  */
 export function sessionConfigOptions(
   snapshot: AgentSessionSnapshot,
@@ -279,12 +279,9 @@ export function isModeId(value: string): value is AgentMode {
  * Apply a mode — the ONE place a mode change happens.
  *
  * ACP reaches this by two routes (`session/set_mode`, and `session/set_config_option` via the `mode`
- * option it advertises), and they must not grow into two mode systems.
- *
- * `onAdvertised` is called when the value actually changed, with the freshly read snapshot: the
- * caller owns the emitter, and the update must be sent as the WHOLE option set (the protocol's
- * `ConfigOptionUpdate` carries `configOptions` and has no incremental form, so sending only the mode
- * entry would wipe the model entry out of the client's cache).
+ * option it advertises), and they must not grow into two mode systems. The caller owns the emitter;
+ * the update must be the WHOLE option set (the protocol's `ConfigOptionUpdate` has no incremental
+ * form, so sending only the mode entry would wipe the model entry out of the client's cache).
  */
 export async function applyMode(target: ConfigOptionTarget, mode: AgentMode): Promise<AgentSessionSnapshot> {
   if (!isModeId(mode)) throw RequestError.invalidParams(undefined, `Unknown mode: ${mode}`);
@@ -308,27 +305,40 @@ export async function applyMode(target: ConfigOptionTarget, mode: AgentMode): Pr
 export async function applyModel(
   target: ConfigOptionTarget,
   value: string,
-  read: ModelCatalogRead | undefined
+  read: ModelCatalogRead | undefined,
+  currentEntryIndex?: number
 ): Promise<ModelSwitchOutcome> {
   const catalog = entriesOf(read);
   // No read = this host was never given a model list; nothing can be validated (or switched).
   if (!catalog?.length)
     throw RequestError.invalidParams(undefined, "No models are configured (no `.agents/config/models.json`)");
 
+  const current = target.session.getSnapshot();
   const decoded = decodeModelChoice(value);
   const entry = decoded ? catalog.find((candidate) => candidate.index === decoded.entryIndex) : undefined;
   const model = decoded?.model ?? value;
   if (decoded && !entry) throw RequestError.invalidParams(undefined, `Unknown model entry: ${decoded.entryIndex}`);
-  if (!decoded && model !== target.session.getSnapshot().model)
-    throw RequestError.invalidParams(undefined, `Unknown model: ${value}`);
+  if (!decoded && model !== current.model) throw RequestError.invalidParams(undefined, `Unknown model: ${value}`);
   if (entry && !entry.models.includes(model)) throw RequestError.invalidParams(undefined, `Unknown model: ${model}`);
+
+  // Re-selecting the current model is a no-op: re-sending the whole `configOptions` set for a value
+  // the client already holds is noise, and it also re-resolves metadata (a network round-trip) for
+  // nothing. A DIFFERENT entry with the same model id is not a no-op — the connection changes.
+  // When the session's entry was never recorded, resolve the current entry the same way the
+  // advertisement did (first match) and treat THAT as the current connection; an explicit other
+  // entry then switches instead of being silently mislabelled.
+  const currentEntry = resolveCurrentEntry(catalog, current.model ?? "", currentEntryIndex);
+  const sameEntry = !entry || entry.index === currentEntry?.index;
+  if (model === current.model && sameEntry) {
+    return { snapshot: current, ...(entry ? { entryIndex: entry.index } : {}) };
+  }
 
   // Metadata is best-effort and must NOT be able to fail the switch: `resolveModelInfoFromModelsDev`
   // THROWS when models.dev is unreachable with no cache ("No cached data available"), and a model
   // change needs no metadata — it only labels the model for the UI. Core's own convention is the
   // same ("the lookup is best-effort, so a models.dev failure just leaves modelInfo unset").
   // `undefined` means "unknown" to core, which restores its permissive capability default rather
-  // than keeping the previous model's.
+  // than keeping the previous model's. Never send `null`: the wire has no null modelInfo.
   let modelInfo: Awaited<ReturnType<typeof resolveModelInfoFromModelsDev>>;
   if (entry) {
     try {
@@ -341,7 +351,7 @@ export async function applyModel(
     type: "model.set",
     model,
     ...(entry && { modelStyle: entry.style, modelBaseURL: entry.baseURL, modelApiKey: entry.apiKey }),
-    modelInfo: modelInfo ?? null,
+    ...(modelInfo ? { modelInfo } : {}),
   });
   if (!result.ok) throw new Error(result.error ?? `Failed to switch model: ${model}`);
 

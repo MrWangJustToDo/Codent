@@ -30,15 +30,19 @@ export interface PromptMapping {
  */
 export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps): PromptMapping {
   const parts: ContentPart[] = [];
-  const textParts: string[] = [];
+  // Parts are appended in the client's block order. The previous implementation collected text
+  // separately and prepended it, so `[text, image, text]` reached the model as `text+text, image` —
+  // the model read a paragraph the user had placed after the screenshot before seeing the image.
+  let hasNonText = false;
 
   for (const block of blocks) {
     switch (block.type) {
       case "text":
-        textParts.push(block.text);
+        parts.push({ type: "text", content: block.text });
         break;
       case "image":
         if (!caps.image) return { content: "", error: "image prompts are not supported by this agent" };
+        hasNonText = true;
         parts.push({
           type: "image",
           source: { type: "data", value: block.data, mimeType: block.mimeType },
@@ -46,6 +50,7 @@ export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps):
         break;
       case "audio":
         if (!caps.audio) return { content: "", error: "audio prompts are not supported by this agent" };
+        hasNonText = true;
         parts.push({
           type: "audio",
           source: { type: "data", value: block.data, mimeType: block.mimeType },
@@ -57,8 +62,9 @@ export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps):
         }
         const res = block.resource;
         if ("text" in res && typeof res.text === "string") {
-          textParts.push(`<resource uri="${res.uri}">\n${res.text}\n</resource>`);
+          parts.push({ type: "text", content: `<resource uri="${res.uri}">\n${res.text}\n</resource>` });
         } else if ("blob" in res && typeof res.blob === "string") {
+          hasNonText = true;
           parts.push({
             type: "document",
             source: {
@@ -71,21 +77,25 @@ export function promptBlocksToContent(blocks: ContentBlock[], caps: PromptCaps):
         break;
       }
       case "resource_link":
-        textParts.push(`[resource: ${block.name} <${block.uri}>]`);
+        parts.push({ type: "text", content: `[resource: ${block.name} <${block.uri}>]` });
         break;
       default:
         // Unknown block kind (newer ACP): keep it as inert text rather than dropping.
-        textParts.push(`[unsupported content block: ${(block as { type?: string }).type ?? "unknown"}]`);
+        parts.push({
+          type: "text",
+          content: `[unsupported content block: ${(block as { type?: string }).type ?? "unknown"}]`,
+        });
         break;
     }
   }
 
-  const text = textParts.join("\n\n");
-  if (parts.length === 0) return { content: text };
-  const content: ContentPart[] = [];
-  if (text.length > 0) content.push({ type: "text", content: text });
-  content.push(...parts);
-  return { content };
+  // A text-only prompt keeps the string form (the session API accepts it, and the model wire is
+  // smaller). Multiple text blocks join exactly as before; the order is already the client's.
+  if (!hasNonText) {
+    const text = parts.map((part) => (part.type === "text" ? part.content : "")).join("\n\n");
+    return { content: text };
+  }
+  return { content: parts };
 }
 
 /** Outbound agent text as a Markdown content block. */

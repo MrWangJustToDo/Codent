@@ -1,3 +1,6 @@
+/* eslint-disable max-lines -- One suite for the client-backed env: routing, fallbacks, metadata,
+ * terminal and whole-app behaviour share the same recording client/fallback harness; splitting the
+ * file would duplicate that harness. */
 /**
  * `--client-env` conformance: the client-backed CoreEnv and everything it must NOT do.
  *
@@ -132,6 +135,81 @@ function makeEnv(caps = fullCaps, rootPath = "/ws") {
     fallback: fallbackEnv,
     caps,
   });
+}
+
+// --- metadata derived from the client read --------------------------------
+{
+  const remotePath = "/ws/remote-only.ts";
+  // A remote-only path: the local fallback does not have it, so metadata must ask the client.
+  const remoteFallback = {
+    ...fallbackEnv,
+    fs: {
+      ...fallbackEnv.fs,
+      stat: async (p) => {
+        if (p === remotePath) throw new Error("ENOENT");
+        return fallbackEnv.fs.stat(p);
+      },
+      exists: async (p) => (p === remotePath ? false : fallbackEnv.fs.exists(p)),
+    },
+  };
+  const remoteEnv = createAcpClientEnv({
+    client: recordingClient,
+    sessionId,
+    rootPath: "/ws",
+    fallback: remoteFallback,
+    caps: fullCaps,
+  });
+
+  reset();
+  check("exists asks the client for a remote-only file", (await remoteEnv.fs.exists(remotePath)) === true);
+  check(
+    "…and the answer came from fs/read_text_file, not local stat",
+    requests.some((r) => r.method === methods.client.fs.readTextFile && r.params.path === remotePath)
+  );
+  reset();
+  const stat = await remoteEnv.fs.stat(remotePath);
+  check(
+    "stat derives a file size from the client read",
+    stat.isFile === true && stat.size === `remote:${remotePath}`.length
+  );
+  check(
+    "a client-served stat reports an UNKNOWN mtime (epoch), never a fabricated now",
+    stat.mtime instanceof Date && stat.mtime.getTime() === 0
+  );
+  reset();
+  check("exists answers locally when the host has the file", (await remoteEnv.fs.exists("/ws/src/a.ts")) === true);
+  check("…without asking the client", requests.length === 0);
+  reset();
+  const localOnly = await remoteEnv.fs.exists("/ws/.agents/sessions/a.jsonl");
+  check("metadata for `.agents/**` never reaches the client", localOnly === true && requests.length === 0);
+}
+
+// --- write-only clients never get a read request --------------------------
+{
+  reset();
+  const env = makeEnv({ readTextFile: false, writeTextFile: true, terminal: false });
+  await env.fs.readFile("/ws/src/a.ts");
+  check(
+    "a write-only client is not asked to read",
+    requests.length === 0 && fallbackCalls.some((call) => call[0] === "readFile")
+  );
+  reset();
+  await env.fs.writeFile("/ws/src/a.ts", "x");
+  check(
+    "…while its writes still route to the client",
+    requests.some((request) => request.method === methods.client.fs.writeTextFile)
+  );
+}
+
+// --- readdir stays local even when text reads are client-served -----------
+{
+  reset();
+  const env = makeEnv({ readTextFile: true, writeTextFile: false, terminal: false });
+  const entries = await env.fs.readdir("/ws/src");
+  check(
+    "readdir stays local even when the client can read text",
+    entries.length === 1 && requests.length === 0 && fallbackCalls.some((call) => call[0] === "readdir")
+  );
 }
 
 // ===========================================================================

@@ -4,14 +4,15 @@
  * Both are fire-and-forget from the projector's point of view — the session's own channels carry the
  * result, so nothing here returns a value. What they share is the shape: register a controller in
  * `bridge.pending` (so cancel/close can abort it), ask the client, dispatch the answer back, and
- * never throw (a closed connection is the session's problem to time out, not a reason to fail a run).
+ * never leave the session parked. Every suspend point settles: a client cancel, a timeout, a
+ * transport failure and `session/cancel` all resolve the corresponding approval/question.
  *
  * Split out of `agent.ts` for size, which is also why the bridge state arrives as a narrow interface
- * rather than the app's own `SessionBridge`: these handlers touch six fields and nothing else.
+ * rather than the app's own `SessionBridge`: these handlers touch a handful of fields.
  */
 
 import { methods } from "@agentclientprotocol/sdk";
-import { buildAskUserOutput } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, buildAskUserOutput } from "@codent/core";
 
 import { shouldSuppressApproval, toolInputFor, toolPartFor } from "./approvals.js";
 import {
@@ -27,15 +28,22 @@ import type { SessionUpdate } from "./types.js";
 import type { AgentContext, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import type { AgentSession } from "@codent/core";
 
+/** Default window for a human to answer before the interaction is settled as denied/cancelled. */
+export const DEFAULT_INTERACTION_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** What an interaction handler reads and writes on a live session. */
 export interface InteractionBridge {
   session: AgentSession;
   /** The external ACP session id every request/notification is tagged with. */
   acpId: string;
+  /** The session's workspace root, for the absolute paths a tool call's `locations` carry. */
+  rootPath: string;
   /** Client-backed env, when `--client-env` is on — decides who owns a write approval. */
   clientEnv?: AcpClientEnv;
   /** Client advertises `elicitation.form`, so `ask_user` can be a real question. */
   elicitation: boolean;
+  /** Client advertises `session.notices`, so a cancelled/timed-out interaction can be announced. */
+  notices: boolean;
   /** Already-asked approvals / questions, so a replayed channel snapshot asks once. */
   seenApprovals: Set<string>;
   seenAskUser: Set<string>;
@@ -50,6 +58,15 @@ export interface InteractionBridge {
    * already ran and a late answer re-decides it.
    */
   pendingApprovals: Map<string, AbortController>;
+  /** The in-flight `elicitation/create` per `ask_user` tool call (with its question for settlement). */
+  pendingAskUser: Map<string, { controller: AbortController; ask: AskUserRequest }>;
+  /**
+   * Session-scoped "always" decisions, keyed by tool identity.
+   *
+   * `true` = allow, `false` = reject. The key is the tool name, or for `run_command` the leading
+   * program, so an `allow_always` on `git` does not auto-approve `rm -rf`.
+   */
+  approvalPolicy: Map<string, boolean>;
   /** Counted so close can report how many approvals the client granted itself. */
   clientOwnedApprovals: number;
 }
@@ -74,23 +91,89 @@ export interface InteractionHandlerContext {
   client: () => AgentContext;
   /** Send a `session/update` for one session. */
   emit: (acpId: string, update: SessionUpdate) => void;
-  /** Workspace root, for the absolute paths a tool call's `locations` carry. */
-  rootPath: string;
+  /** How long a client has to answer. Defaults to {@link DEFAULT_INTERACTION_TIMEOUT_MS}. */
+  timeoutMs?: number;
   onClientOwnedApproval: () => void;
 }
 
 /** What {@link createInteractionHandlers} hands back — the projector's `onInteraction` entry points. */
 export interface InteractionHandlers {
   handleInteractions: (bridge: InteractionBridge, payload: unknown) => Promise<void>;
+  /**
+   * Resolve every outstanding approval/question as denied/cancelled.
+   *
+   * Called by `session/cancel`, a force-submit prompt and connection close: the client is no longer
+   * going to answer, and leaving the approval pending parks the next prompt forever.
+   */
+  settlePendingInteractions: (bridge: InteractionBridge) => Promise<void>;
+}
+
+/**
+ * The identity an "always" decision applies to.
+ *
+ * Most tools are approved by name. A shell command is not: `allow_always` on `git status` must not
+ * approve `rm -rf /`, so the leading program is part of the key.
+ */
+export function approvalPolicyKey(
+  approval: Pick<ApprovalRequest, "toolName" | "toolCallId">,
+  messages: ReadonlyArray<{ parts?: ReadonlyArray<unknown> }>
+): string {
+  if (approval.toolName !== BUILTIN_TOOL_NAMES.runCommand) return approval.toolName;
+  const input = toolInputFor(messages, approval.toolCallId) as { command?: unknown } | undefined;
+  const command = typeof input?.command === "string" ? input.command.trim() : "";
+  const program = command.split(/\s+/)[0] ?? "";
+  return `${approval.toolName}:${program}`;
 }
 
 export function createInteractionHandlers(context: InteractionHandlerContext): InteractionHandlers {
-  const { client, emit, rootPath } = context;
+  const { client, emit } = context;
+  // A zero/negative timeout would fire on the next tick and cancel every interaction; clamp to a
+  // positive window. The default is the documented five minutes.
+  const timeoutMs = Math.max(1, context.timeoutMs ?? DEFAULT_INTERACTION_TIMEOUT_MS);
+
+  const notify = (bridge: InteractionBridge, message: string, level: "info" | "warning" | "error"): void => {
+    if (bridge.notices) {
+      emit(bridge.acpId, { sessionUpdate: "notice", severity: level, title: message });
+      return;
+    }
+    emit(bridge.acpId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: `${bridge.acpId}-interaction-${Date.now()}`,
+      content: { type: "text", text: message },
+    });
+  };
 
   const requestApproval = async (bridge: InteractionBridge, approval: ApprovalRequest): Promise<void> => {
     const controller = new AbortController();
     bridge.pending.add(controller);
     bridge.pendingApprovals.set(approval.approvalId, controller);
+    let settled = false;
+    let timedOut = false;
+    let rejectTimeout: ((error: Error) => void) | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      rejectTimeout?.(new Error("interaction timed out"));
+    }, timeoutMs);
+    // `unref` so a pending question never keeps a one-shot process alive.
+    timer.unref?.();
+
+    const stillOurs = (): boolean => bridge.pendingApprovals.get(approval.approvalId) === controller;
+    const settle = async (approved: boolean): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      // The approval disappeared first (auto mode / plan execution answered it): do not re-decide a
+      // call that already ran. `handleInteractions` deletes the map entry before aborting, so this
+      // check is what keeps that path from denying a completed tool.
+      if (!stillOurs()) return;
+      await bridge.session
+        .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved })
+        .catch(() => undefined);
+    };
+
     try {
       // The prompt has to carry WHAT is being approved. It used to send the tool NAME as the title
       // and nothing else, so a `run_command` arrived as a bare "Run": the client had no command to
@@ -99,7 +182,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
       const info = toolCallInfo(
         approval.toolName,
         toolInputFor(messages, approval.toolCallId),
-        rootPath,
+        bridge.rootPath,
         toolPartFor(messages, approval.toolCallId)?.display?.text
       );
       // Named at the boundary so a field the client's schema rejects is reported here, on the
@@ -113,19 +196,35 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         },
         options: permissionOptions(),
       };
-      const response = await client().request(methods.client.session.requestPermission, params, {
-        cancellationSignal: controller.signal,
-      });
+      const response = await Promise.race([
+        client().request(methods.client.session.requestPermission, params, {
+          cancellationSignal: controller.signal,
+        }),
+        timeoutPromise,
+      ]);
       const decision = mapPermissionOutcome(response);
-      if (!decision) return;
-      await bridge.session.dispatch({
-        type: "respondApproval",
-        approvalId: approval.approvalId,
-        approved: decision.approved,
-      });
+      // A client-cancelled permission is a DENIAL, not a no-op. Doing nothing left the approval
+      // pending, `hasPendingToolApprovals` true, and the next prompt parked in `waiting` forever.
+      if (!decision) {
+        await settle(false);
+        return;
+      }
+      // Remember the decision BEFORE dispatching it: the dispatch can synchronously surface the
+      // next approval (a session that queues two calls), and that approval must see the policy.
+      if (decision.always && stillOurs()) {
+        const key = approvalPolicyKey(approval, messages);
+        bridge.approvalPolicy.set(key, decision.approved);
+      }
+      await settle(decision.approved);
     } catch {
-      // connection closed / cancelled — the session's own approval timeout settles it
+      // Cancelled / timed out / connection closed. All settle as a denial; the map check above
+      // keeps a request that was already answered elsewhere from being re-decided.
+      if (bridge.pendingApprovals.has(approval.approvalId)) {
+        await settle(false);
+        if (timedOut) notify(bridge, "The permission request timed out and was denied.", "warning");
+      }
     } finally {
+      clearTimeout(timer);
       bridge.pendingApprovals.delete(approval.approvalId);
       bridge.pending.delete(controller);
     }
@@ -135,6 +234,37 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     const controller = new AbortController();
     const startedAt = Date.now();
     bridge.pending.add(controller);
+    bridge.pendingAskUser.set(ask.toolCallId, { controller, ask });
+    let settled = false;
+    let timedOut = false;
+    let rejectTimeout: ((error: Error) => void) | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      rejectTimeout?.(new Error("interaction timed out"));
+    }, timeoutMs);
+    timer.unref?.();
+
+    const stillOurs = (): boolean => bridge.pendingAskUser.get(ask.toolCallId)?.controller === controller;
+    const settle = async (output: Record<string, unknown>): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      if (!stillOurs()) return;
+      await bridge.session
+        .dispatch({ type: "addToolResult", toolCallId: ask.toolCallId, output })
+        .catch(() => undefined);
+    };
+    const cancelledOutput = (): Record<string, unknown> =>
+      buildAskUserOutput({
+        question: ask.question,
+        hasOptions: Boolean(ask.options?.length),
+        cancelled: true,
+        durationMs: Date.now() - startedAt,
+      });
+
     try {
       if (!bridge.elicitation) {
         emit(bridge.acpId, {
@@ -142,41 +272,69 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
           messageId: `${bridge.acpId}-ask-${ask.toolCallId}`,
           content: { type: "text", text: `The agent asked: ${ask.question}` },
         });
-        await bridge.session.dispatch({
+        await settle(cancelledOutput());
+        return;
+      }
+      const response = await Promise.race([
+        client().request(methods.client.elicitation.create, buildElicitationRequest(bridge.acpId, ask), {
+          cancellationSignal: controller.signal,
+        }),
+        timeoutPromise,
+      ]);
+      const answer = mapElicitationResponse(response);
+      // `decline` / `cancel` are answers, not failures: settle the tool as cancelled instead of
+      // dispatching an empty-string answer (which looked like the user had typed nothing).
+      if (!answer) {
+        await settle(cancelledOutput());
+        return;
+      }
+      await settle(
+        buildAskUserOutput({
+          question: ask.question,
+          hasOptions: Boolean(ask.options?.length),
+          ...(answer.selected?.length ? { selected: answer.selected } : { answer: answer.answer ?? "" }),
+          ...(answer.draft ? { draft: answer.draft } : {}),
+          durationMs: Date.now() - startedAt,
+        })
+      );
+    } catch {
+      if (stillOurs()) {
+        await settle(cancelledOutput());
+        if (timedOut) notify(bridge, "The question timed out and was cancelled.", "warning");
+      }
+    } finally {
+      clearTimeout(timer);
+      bridge.pendingAskUser.delete(ask.toolCallId);
+      bridge.pending.delete(controller);
+    }
+  };
+
+  const settlePendingInteractions = async (bridge: InteractionBridge): Promise<void> => {
+    // Snapshot + delete BEFORE dispatching/aborting: the in-flight handler checks the map to decide
+    // whether it still owns the approval, so removing first makes it a no-op instead of a duplicate
+    // decision on a tool that already ran.
+    const approvals = [...bridge.pendingApprovals.entries()];
+    for (const [approvalId, controller] of approvals) {
+      bridge.pendingApprovals.delete(approvalId);
+      controller.abort();
+      await bridge.session.dispatch({ type: "respondApproval", approvalId, approved: false }).catch(() => undefined);
+    }
+    const questions = [...bridge.pendingAskUser.entries()];
+    for (const [toolCallId, { controller, ask }] of questions) {
+      bridge.pendingAskUser.delete(toolCallId);
+      controller.abort();
+      await bridge.session
+        .dispatch({
           type: "addToolResult",
-          toolCallId: ask.toolCallId,
+          toolCallId,
           output: buildAskUserOutput({
             question: ask.question,
             hasOptions: Boolean(ask.options?.length),
             cancelled: true,
-            durationMs: Date.now() - startedAt,
+            durationMs: 0,
           }),
-        });
-        return;
-      }
-      const response = await client().request(
-        methods.client.elicitation.create,
-        buildElicitationRequest(bridge.acpId, ask),
-        { cancellationSignal: controller.signal }
-      );
-      const answer = mapElicitationResponse(response);
-      await bridge.session.dispatch({
-        type: "addToolResult",
-        toolCallId: ask.toolCallId,
-        // Core owns the result shape and the multi-select + free-text merge; the host only reports
-        // which labels were ticked and what was typed.
-        output: buildAskUserOutput({
-          question: ask.question,
-          hasOptions: Boolean(ask.options?.length),
-          ...(answer?.selected?.length ? { selected: answer.selected } : { answer: answer?.answer ?? "" }),
-          ...(answer?.draft ? { draft: answer.draft } : {}),
-          durationMs: Date.now() - startedAt,
-        }),
-      });
-    } catch {
-      // connection closed / cancelled — leave the interaction to time out
-    } finally {
-      bridge.pending.delete(controller);
+        })
+        .catch(() => undefined);
     }
   };
 
@@ -195,6 +353,16 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
       if (liveApprovals.has(approvalId)) continue;
       bridge.pendingApprovals.delete(approvalId);
       controller.abort();
+    }
+
+    // Same reconciliation for elicitation: core can resolve an `ask_user` out of band (run stopped,
+    // `/clear`, tool cancelled). Leaving the dialog pending makes the next prompt believe the
+    // session is still suspended and cancel it.
+    const liveAskUser = new Set((snapshot.askUser ?? []).map((ask) => ask.toolCallId));
+    for (const [toolCallId, entry] of bridge.pendingAskUser) {
+      if (liveAskUser.has(toolCallId)) continue;
+      bridge.pendingAskUser.delete(toolCallId);
+      entry.controller.abort();
     }
 
     for (const approval of snapshot.approvals ?? []) {
@@ -219,6 +387,17 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
           .catch(() => undefined);
         continue;
       }
+      // A remembered `allow_always` / `reject_always` answers without another dialog. The tool row
+      // still goes through the transcript, so the user can see what was auto-decided.
+      const policy = bridge.approvalPolicy.get(
+        approvalPolicyKey(approval, bridge.session.getSnapshot().messages ?? [])
+      );
+      if (policy !== undefined) {
+        void bridge.session
+          .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved: policy })
+          .catch(() => undefined);
+        continue;
+      }
       void requestApproval(bridge, approval);
     }
     for (const ask of snapshot.askUser ?? []) {
@@ -228,5 +407,5 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     }
   };
 
-  return { handleInteractions };
+  return { handleInteractions, settlePendingInteractions };
 }

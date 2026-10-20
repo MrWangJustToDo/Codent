@@ -27,17 +27,25 @@ const ALLOW_OPTION_IDS = new Set(["allow-once", "allow-always"]);
 
 export interface ApprovalDecision {
   approved: boolean;
-  /** Present on a rejection when the client supplied a reason. */
-  reason?: string;
+  /** The selected option survives this turn: remember it for the session (allow/reject always). */
+  always?: boolean;
 }
 
-/** Map a `session/request_permission` outcome to a `respondApproval` decision. `null` = cancelled. */
+/**
+ * Map a `session/request_permission` outcome to a `respondApproval` decision. `null` = cancelled.
+ *
+ * ACP v1's `SelectedPermissionOutcome` carries only `optionId` — there is no rejection reason on
+ * the wire, which is why {@link ApprovalDecision} has no `reason` field.
+ */
 export function mapPermissionOutcome(response: RequestPermissionResponse): ApprovalDecision | null {
   const outcome = response.outcome;
   if (outcome.outcome === "cancelled") return null;
   if (outcome.outcome === "selected") {
     // Any option we did not offer (custom extension) is treated as a rejection.
-    return { approved: ALLOW_OPTION_IDS.has(outcome.optionId) };
+    return {
+      approved: ALLOW_OPTION_IDS.has(outcome.optionId),
+      ...(outcome.optionId === "allow-always" || outcome.optionId === "reject-always" ? { always: true } : {}),
+    };
   }
   return null;
 }

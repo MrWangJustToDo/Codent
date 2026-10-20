@@ -37,6 +37,13 @@ export interface AgentL1State {
   /** Current reasoning-effort level (null = model default). */
   reasoningEffort: ReasoningEffort | null;
   /**
+   * The last run's model finish reason (`stop`, `length`, `tool_calls`, …), or null before one.
+   *
+   * Travels on the state channel because it is only known when the run finishes — the same moment
+   * the status flips — and a host needs it to distinguish a `max_tokens` stop from a natural end.
+   */
+  lastFinishReason: string | null;
+  /**
    * Wall-clock duration of the last completed run, in ms (0 before any run finishes).
    *
    * Travels here for the same reason `model` and `reasoningEffort` do: a remote client caches a

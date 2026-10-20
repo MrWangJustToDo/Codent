@@ -7,12 +7,12 @@
 
 export {
   createAcpAgent,
-  runAcpAgentStdio,
   type AcpAgentOptions,
   type AcpAgentDefaults,
   type AcpClientEnvFactoryContext,
   type AcpSessionRuntime,
 } from "./agent.js";
+export { runAcpAgentStdio } from "./stdio.js";
 export { DEFAULT_SESSION_PAGE_SIZE, decodeCursor, encodeCursor, paginateSessions, toSessionInfo } from "./sessions.js";
 export { resolveRoot, toWirePath } from "./paths.js";
 export {
@@ -39,6 +39,7 @@ export {
   toolTitleFor,
   toolLocationsFor,
   toolDiffFor,
+  toolDiffsFor,
   toolStatusFor,
   toolResultText,
 } from "./tools.js";
@@ -58,3 +59,4 @@ export {
   type AskUserInteraction,
   type ElicitedAnswer,
 } from "./permissions.js";
+export { DEFAULT_INTERACTION_TIMEOUT_MS, approvalPolicyKey } from "./interactions.js";

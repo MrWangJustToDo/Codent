@@ -1,10 +1,12 @@
 /**
- * Per-session runtimes: the one place `--client-env` changes how a session is built.
+ * Per-session runtimes: the one place a session's workspace root (and, with `--client-env`, the
+ * client-backed env) changes how a session is built.
  *
- * Without the flag there is nothing per-session — every session borrows the process-wide host. With
- * it, the session's env is client-backed, and because every client request carries a `sessionId`
- * that env can only serve one session. So the runtime (and its env) is built per session here, and
- * released when the session closes.
+ * ACP's `cwd` is the session's workspace root, so even without `--client-env` a session whose `cwd`
+ * differs from the process default needs its own CoreEnv. With `--client-env` the session's env is
+ * also client-backed, and because every client request carries a `sessionId` that env can only serve
+ * one session. So the runtime (and its env) is built per session here, and released when the session
+ * closes.
  *
  * The subtle part is the id. `session/load` and `session/resume` are told the id by the client, but
  * `session/new` is not: core mints it inside `host.create`, which is also the call that needs this
@@ -41,6 +43,8 @@ export interface BuildSessionRuntimeContext {
   client: () => AgentContext;
   /** Client capabilities observed during `initialize` (read lazily: they arrive before any session). */
   getClientCapabilities: () => ClientCapabilities | undefined;
+  /** The session's workspace root (`cwd` from the ACP request). */
+  rootPath: string;
 }
 
 /**
@@ -50,13 +54,14 @@ export interface BuildSessionRuntimeContext {
  * every call site reads the same whether or not `--client-env` is on.
  */
 export async function buildSessionRuntime(context: BuildSessionRuntimeContext): Promise<SessionRuntime> {
-  const { options, client, getClientCapabilities } = context;
+  const { options, client, getClientCapabilities, rootPath } = context;
   if (!options.createSessionHost) {
     return { host: options.host, bind: () => undefined, dispose: async () => undefined };
   }
 
   let sessionId = "";
   const factoryContext: AcpClientEnvFactoryContext = {
+    rootPath,
     client,
     // `undefined` until `host.create` has produced a session — see the module header.
     sessionId: () => (sessionId ? sessionId : undefined),

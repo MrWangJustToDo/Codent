@@ -6,8 +6,8 @@
 
 import { parseModelStyle } from "@codent/core";
 
-import { runAcpAgentStdio } from "./agent.js";
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
+import { runAcpAgentStdio } from "./stdio.js";
 
 /** Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`, `--api-key/-k`, `--remote-provider`). */
 function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
@@ -56,12 +56,30 @@ async function main(): Promise<void> {
     } catch {
       // ignore
     }
-    process.exit(0);
+    // Let the JSON-RPC transport flush its last frame before exiting. `process.exit()` truncates
+    // stdout, which a client can see as a dropped final response.
+    let exited = false;
+    const exit = (): void => {
+      if (exited) return;
+      exited = true;
+      process.exit(0);
+    };
+    try {
+      process.stdout.write("", exit);
+      // The callback is not guaranteed when stdout is already destroyed; do not hang on it.
+      setTimeout(exit, 50).unref?.();
+    } catch {
+      exit();
+    }
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.stdin.on("end", shutdown);
   process.stdin.on("close", shutdown);
+  process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+    // The client closed its end. Nothing can be delivered; exit quietly rather than crash.
+    if (error.code === "EPIPE") shutdown();
+  });
 
   await connection.closed.catch(() => undefined);
 }

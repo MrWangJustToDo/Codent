@@ -42,6 +42,8 @@ export interface AgentStatusControllerDeps {
   getError: () => string;
   setError: (error: string) => void;
   setPendingApprovalCount: (count: number) => void;
+  /** Record the run's model finish reason (null when a new run starts). */
+  setFinishReason?: (reason: string | null) => void;
   emitEvent?: EmitAgentTelemetryFn;
 }
 
@@ -116,6 +118,7 @@ export class AgentStatusController {
   }
 
   onRunStart(): void {
+    this.deps.setFinishReason?.(null);
     const status = this.deps.getStatus();
     if (status === "aborted") return;
     if (status !== "waiting" && status !== "awaiting_user") {
@@ -130,7 +133,9 @@ export class AgentStatusController {
   }
 
   onRunFinish(finishReason?: string | null): void {
-    void finishReason;
+    // Record it BEFORE the status flip: the status change is what emits the state payload that
+    // carries it, and a host reading the final state must see the reason.
+    this.deps.setFinishReason?.(finishReason ?? null);
     this.deps.setStatus(resolveFinishStatus(this.deps.getStatus(), this.deps.getError()), "run-finish");
   }
 

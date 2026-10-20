@@ -266,6 +266,26 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     return response.content;
   }
 
+  /**
+   * Read a workspace text file through the client, or `undefined` when it cannot serve the path
+   * (local-only path, no capability, no session yet, or the client rejected the read).
+   *
+   * `exists` / `stat` are derived from this because ACP exposes no metadata method: a successful
+   * text read is proof the file exists, and its length is the best size we can get without one.
+   */
+  const clientReadText = async (target: string): Promise<string | undefined> => {
+    if (mustFallback(target) || !caps.readTextFile || !hasSession()) return undefined;
+    try {
+      const response = (await client().request(methods.client.fs.readTextFile, {
+        sessionId: sessionId(),
+        path: toWirePath(target, rootPath),
+      })) as ReadTextFileResponse;
+      return response.content;
+    } catch {
+      return undefined;
+    }
+  };
+
   const fs: CoreEnvFs = {
     readFile,
 
@@ -336,12 +356,33 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     // client-backed session therefore loses nothing but the last-resort sync write.
 
     async stat(target: string) {
-      // Required member: the client has no stat method at all, and directory/search tools depend on
-      // it across the whole workspace, so it always delegates.
+      // Local metadata first: it is cheap and carries a REAL mtime. A client-served read is only
+      // needed for a file that exists solely on the client (a remote workspace).
+      try {
+        return await fallback.fs.stat(target);
+      } catch {
+        // Remote-only path: fall through to the client read.
+      }
+      const content = await clientReadText(target);
+      if (content !== undefined) {
+        return {
+          isDirectory: false,
+          isFile: true,
+          // ACP v1 exposes no metadata method. The size is the length of the text we had to read;
+          // the mtime is UNKNOWN, so use epoch rather than `new Date()` — a fabricated "now" would
+          // make every freshness/TTL check believe the file was just updated.
+          size: fallback.byteLength(content),
+          mtime: new Date(0),
+        };
+      }
+      // Preserve the local error (missing path / not a directory), like the old unconditional path.
       return await fallback.fs.stat(target);
     },
 
     async readdir(target: string) {
+      // No client-side directory listing exists in ACP v1. A remote workspace therefore still
+      // needs a local (or client-terminal) answer for `list_file` / `tree`; this is the documented
+      // remaining local-only metadata operation.
       return await fallback.fs.readdir(target);
     },
 
@@ -352,7 +393,10 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     },
 
     async exists(target: string) {
-      return await fallback.fs.exists(target);
+      // Local answer first (no wire round-trip); ask the client only when the host does not have it.
+      if (await fallback.fs.exists(target)) return true;
+      const content = await clientReadText(target);
+      return content !== undefined;
     },
 
     async remove(target: string) {
@@ -411,9 +455,10 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
       let truncated = false;
       const deadline = Date.now() + (execOptions?.timeout ?? TERMINAL_DEADLINE_MS);
       let exitCode: number | null = null;
+      let exitSignal: string | null = null;
       // Why the loop ended, when it did not end because the process did. Each of these produces a
       // result the caller must NOT read as a real one — see the return below.
-      let endedBy: "exit" | "aborted" | "timeout" | "truncated" = "exit";
+      let endedBy: "exit" | "signal" | "aborted" | "timeout" | "truncated" = "exit";
       for (;;) {
         // Cancellation is checked every turn, not just at entry: this loop can run for the whole
         // deadline, and `execArgs` documents that a host which cannot be told the signal runs the
@@ -433,6 +478,14 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
         truncated = Boolean(snapshot.truncated);
         if (snapshot.exitStatus) {
           exitCode = snapshot.exitStatus.exitCode ?? null;
+          exitSignal = snapshot.exitStatus.signal ?? null;
+          // A signal-terminated process is not a normal exit even though the client sends an exit
+          // status. Report it as killed so `execArgs` degrades instead of treating the partial
+          // buffer as a complete result.
+          if (exitSignal) {
+            endedBy = "signal";
+            break;
+          }
           // A finished process is normally the end of it — but `truncated` is independent and can
           // be set on the same response (the process exited AND its buffer was clipped by the
           // client's byte limit). Running out of one byte limit is not the same as running out of
@@ -454,6 +507,16 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
 
       if (endedBy === "exit") {
         return { stdout: output, stderr: "", code: exitCode };
+      }
+      if (endedBy === "signal") {
+        // The process is already gone; only release it (in `finally`). Say WHY it was killed, like
+        // the timeout/truncation branches and the local env's own failure text.
+        return {
+          stdout: output,
+          stderr: `terminal process terminated by signal${exitSignal ? ` ${exitSignal}` : ""}`,
+          code: exitCode,
+          killed: true,
+        };
       }
 
       // Everything else ended without the process telling us it finished, so `killed: true` is the

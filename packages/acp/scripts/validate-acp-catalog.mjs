@@ -285,14 +285,10 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
   await cx.request(methods.agent.session.delete, { sessionId: liveNew.sessionId });
   check("session/delete succeeds for a live session with no file yet", deletedIds.includes("ses_live"));
 
-  // A session that is neither live nor on disk is a hard not-found.
-  let notFound = false;
-  try {
-    await cx.request(methods.agent.session.delete, { sessionId: "ses_ghost" });
-  } catch {
-    notFound = true;
-  }
-  check("session/delete of an unknown session is a JSON-RPC error", notFound);
+  // A session that is neither live nor on disk is already in the target state: ACP defines
+  // delete as idempotent (the desired state holds), not "not found".
+  const ghostDelete = await cx.request(methods.agent.session.delete, { sessionId: "ses_ghost" });
+  check("session/delete of an unknown session is idempotent (success)", JSON.stringify(ghostDelete) === "{}");
 
   // Unknown session after deletion is no longer promptable.
   let promptRejected = false;
@@ -804,8 +800,8 @@ await catalogClient.connectWith(catalogApp, async (cx) => {
       value: toldValue,
     });
     check(
-      "re-selecting the advertised value keeps the SAME connection",
-      modelConnections.length === 1 && modelConnections[0].baseURL === "https://two.example/v1"
+      "re-selecting the advertised value is a no-op (no new connection, no metadata round-trip)",
+      modelConnections.length === 0
     );
 
     // The same id on the other entry IS a different connection: the model string stands still, so

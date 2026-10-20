@@ -321,6 +321,8 @@ export class ManagedAgent {
   /** Lifecycle — hosts read via getter; mutate through {@link setStatus}. */
   private currentStatus: AgentStatus;
   private error: string;
+  /** The last run's model finish reason, projected on the state channel. */
+  private lastFinishReason: string | null = null;
   /** Tools awaiting user approval in the current run (set by approval middleware). */
   private pendingApprovalCount: number;
   /** Agent-loop progress for the current run; null until the first iteration. */
@@ -515,6 +517,9 @@ export class ManagedAgent {
       getError: () => this.error,
       setError: (error) => this.setError(error),
       setPendingApprovalCount: (count) => this.setPendingApprovalCount(count),
+      setFinishReason: (reason) => {
+        this.lastFinishReason = reason;
+      },
       emitEvent: (type, data) => this.emitEvent(type, data),
     });
 
@@ -757,6 +762,7 @@ export class ManagedAgent {
       model: this.config.model,
       modelInfo: this.modelInfo,
       reasoningEffort: this.config.reasoningEffort ?? null,
+      lastFinishReason: this.lastFinishReason,
       // Set at the end of a run, so it has to ride the state event that follows the status flip.
       lastStreamDurationMs: this.getLastStreamDurationMs(),
     };

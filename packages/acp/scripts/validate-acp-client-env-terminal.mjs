@@ -12,6 +12,7 @@
 
 import { client as createClient, methods } from "@agentclientprotocol/sdk";
 
+import { execArgsCapture } from "../../core/dist/dev.mjs";
 import { createAcpAgent, createAcpClientEnv } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
@@ -289,6 +290,34 @@ void fakeSession;
     const result = await env.execFile("grep", ["-r", "x", "/ws"]);
     check("an exited-but-truncated buffer is not presented as a complete result", result.killed === true);
     check("and it says the output was clipped", /truncat/i.test(result.stderr));
+  }
+
+  // --- signal-terminated exit ---------------------------------------------
+  {
+    const env = createAcpClientEnv({
+      client: () => ({
+        request: async (method) => {
+          if (method === methods.client.terminal.create) return { terminalId: "t_signal" };
+          if (method === methods.client.terminal.output) {
+            // A process killed by a signal reports no exit code but DOES report the signal.
+            return { output: "partial", truncated: false, exitStatus: { exitCode: null, signal: "SIGTERM" } };
+          }
+          return {};
+        },
+      }),
+      sessionId: () => "ses_signal",
+      rootPath: "/ws",
+      fallback: fallbackEnv,
+      caps: fullCaps,
+      log: () => {},
+    });
+    const result = await env.execFile("grep", ["-r", "x", "/ws"]);
+    check("a signal-terminated terminal is marked killed", result.killed === true);
+    check("and does not claim a clean exit code", result.code === null);
+    check("and says the process was terminated by a signal", /signal/i.test(result.stderr));
+    // The caller's contract: a killed search is "no answer", not "zero matches".
+    const captured = await execArgsCapture(env, "grep", ["-r", "x", "/ws"]);
+    check("a killed search is not read as an empty match set", captured === undefined);
   }
 
   // --- truncation ----------------------------------------------------------

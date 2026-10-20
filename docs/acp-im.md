@@ -94,13 +94,19 @@ in chat**; use the agent's `/models` command instead (see below).
 
 ## Workspace and process model
 
-- `work_dir` is the ACP process `cwd`, which is the **workspace root** (fixed at handshake). A
-  request `cwd` is only a hint and never changes it.
+- `work_dir` is sent as each session request's `cwd`, which is that session's **workspace root**
+  (required and absolute). The ACP process `cwd` only supplies the default for `session/list` when
+  the request omits a `cwd`.
 - One `[[projects]]` = one workspace. cc-connect starts an ACP process **per chat/session** (idle
   processes may be recycled) with that `work_dir`; platforms under one project share the **workspace
   and its persisted sessions**, not one live session.
-- ACP sessions are the on-disk session ids (`ses_…`). cc-connect's `/new`, `/list`, `/switch` map to
-  ACP `session/new`, `session/list`, `session/load`. It does not call `session/resume`.
+- A session starts with an ACP handle equal to its on-disk session id (`ses_…`). cc-connect's
+  `/new`, `/list`, `/switch` map to ACP `session/new`, `session/list`, `session/load`. It does
+  not call `session/resume`.
+- `session/new` returns a **stable ACP handle** (initially the disk id). An in-session `/clear`,
+  `/clone` or `/resume` keeps the handle and reports the new disk id in
+  `session_info_update._meta.diskSessionId`; `session/list` / `session/delete` use disk ids, and
+  `session/load` accepts either.
 - `/list` pages at 50 sessions by default and cc-connect reads only the first page; a workspace with
   more sessions needs `/switch <id>` or a narrower workspace.
 - `session/load` replayed history includes assistant/tool records; cc-connect suppresses the replayed

@@ -112,36 +112,54 @@ const TITLE_VERBS: Record<string, string> = {
  * the operation cannot be reconstructed faithfully.
  */
 export function toolDiffFor(name: string, input: unknown, rootPath: string): ToolCallContent | undefined {
+  return toolDiffsFor(name, input, rootPath)[0];
+}
+
+/**
+ * Every reconstructable replacement in one call.
+ *
+ * `edit_file` can carry several edits; ACP's `content` is a list, so each replacement becomes its
+ * own diff entry (a single synthetic old/new pair hiding which replacements ran is not a faithful
+ * preview). `replaceAll` is one replacement pair — the diff shows the text, and the tool's own
+ * output reports how many occurrences changed.
+ */
+export function toolDiffsFor(name: string, input: unknown, rootPath: string, writeOldText?: string): ToolCallContent[] {
   const rec = asRecord(input);
-  if (!rec) return undefined;
+  if (!rec) return [];
   const path = typeof rec.path === "string" ? rec.path : undefined;
-  if (!path) return undefined;
+  if (!path) return [];
 
   if (name === BUILTIN_TOOL_NAMES.writeFile && typeof rec.content === "string") {
-    return { type: "diff", path: toWirePath(path, rootPath), oldText: null, newText: rec.content };
+    return [
+      {
+        type: "diff",
+        path: toWirePath(path, rootPath),
+        // A new file has no old text. On an overwrite the projector reads the real content and
+        // passes it here, so the client shows the edit instead of "whole file added".
+        oldText: writeOldText ?? null,
+        newText: rec.content,
+      },
+    ];
   }
 
   if (name === BUILTIN_TOOL_NAMES.editFile) {
     const edits = Array.isArray(rec.edits) ? rec.edits : [rec];
-    const oldChunks: string[] = [];
-    const newChunks: string[] = [];
+    const diffs: ToolCallContent[] = [];
     for (const edit of edits) {
       const e = asRecord(edit);
       if (!e) continue;
-      if (typeof e.oldString === "string") oldChunks.push(e.oldString);
-      if (typeof e.newString === "string") newChunks.push(e.newString);
-    }
-    if (oldChunks.length > 0 && oldChunks.length === newChunks.length) {
-      return {
+      if (typeof e.oldString !== "string" || typeof e.newString !== "string") continue;
+      diffs.push({
         type: "diff",
         path: toWirePath(path, rootPath),
-        oldText: oldChunks.join("\n"),
-        newText: newChunks.join("\n"),
-      };
+        oldText: e.oldString,
+        newText: e.newString,
+      });
     }
+    return diffs;
   }
 
-  return undefined;
+  return [];
 }
 
 /** The command line a shell tool carries, when it carries one. */
@@ -191,15 +209,16 @@ export function toolCallInfo(
   rawInput?: unknown;
   content?: ToolCallContent[];
 } {
-  const diff = toolDiffFor(name, input, rootPath);
+  const diffs = toolDiffsFor(name, input, rootPath);
   const command = shellCommandOf(name, input);
-  const content: ToolCallContent[] | undefined = diff
-    ? [diff]
-    : command
-      ? [{ type: "content", content: textBlock(command) }]
-      : displayText
-        ? [{ type: "content", content: textBlock(displayText) }]
-        : undefined;
+  const content: ToolCallContent[] | undefined =
+    diffs.length > 0
+      ? diffs
+      : command
+        ? [{ type: "content", content: textBlock(command) }]
+        : displayText
+          ? [{ type: "content", content: textBlock(displayText) }]
+          : undefined;
   return {
     title: toolTitleOf(name, input),
     kind: toolKindFor(name),
@@ -215,9 +234,13 @@ export function toolCallInfo(
 ): "pending" | "in_progress" | "completed" | "failed" {
   if (hasError || state === "error") return "failed";
   if (state === "complete") return "completed";
+  // `input-streaming` / `awaiting-input` mean the arguments are still arriving: the row is waiting
+  // for them, not executing. The old mapping reported `in_progress`, which a client draws as a
+  // spinner for a call that has not started.
+  if (state === "input-streaming" || state === "awaiting-input") return "pending";
   // `approval-responded` means approved-but-not-yet-run: still in progress, not done.
-  if (state === "approval-responded" || state === "input-streaming") return "in_progress";
-  if (state === "awaiting-input" || state === "input-complete" || state === "approval-requested") return "pending";
+  if (state === "approval-responded") return "in_progress";
+  if (state === "input-complete" || state === "approval-requested") return "pending";
   return "in_progress";
 }
 

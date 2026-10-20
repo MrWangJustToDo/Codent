@@ -3,11 +3,12 @@
  * the bridge map, and owns the prompt-turn sequencing and the legacy `session/set_model` shim.
  */
 /* eslint-disable max-lines -- Justified ceiling exception: this file is the handler table, and everything
- * that has a subject of its own is already extracted (`tools` / `content` / `paths` / `permissions` /
- * `interactions` / `projector` / `sessions` / `session-config-options` / `session-status`). What remains is
- * one registration block per protocol method over seven closures (`bridges`, `createRuntime`, `initCaps`,
- * `options`, `emit`, `attach`, `handleInteractions`); moving it needs those threaded through a factory
- * first, which is a change of its own. Tracks that extraction, not a licence to keep growing here. */
+ * that has a subject of its own is already extracted (`stdio` / `tools` / `content` / `paths` /
+ * `permissions` / `interactions` / `projector` / `sessions` / `session-config-options` /
+ * `session-status`). What remains is one registration block per protocol method over the bridge map and
+ * the per-session lifecycle (`attach` / `close` / rebind). The next extraction is `session-bridge.ts`
+ * (SessionBridge + attach/close/rebind), which needs those closures threaded through a factory first —
+ * a change of its own. Tracks that extraction, not a licence to keep growing here. */
 /**
  * CodentAcpAgent — the agent side of ACP.
  *
@@ -19,19 +20,13 @@
  * `elicitation/create` round-trips.
  */
 
-import {
-  agent as createAgentApp,
-  methods,
-  ndJsonStream,
-  PROTOCOL_VERSION,
-  RequestError,
-} from "@agentclientprotocol/sdk";
-import { isActiveStatus } from "@codent/core";
+import { agent as createAgentApp, methods, PROTOCOL_VERSION, RequestError } from "@agentclientprotocol/sdk";
+import { buildDefaultSystemPrompt, defaultPath, findBuiltinCommand, isActiveStatus } from "@codent/core";
 import { createHash } from "node:crypto";
 
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
-import { createInteractionHandlers } from "./interactions.js";
+import { createInteractionHandlers, type InteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
 import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
@@ -61,6 +56,7 @@ import type {
   ModelInfo,
   ModelStyle,
   AgentMode,
+  SessionMeta,
 } from "@codent/core";
 
 // Re-exported so a host builds `AcpAgentOptions` from one import site rather than reaching into the
@@ -70,12 +66,22 @@ export type { AcpModelCatalogEntry } from "./session-config-options.js";
 /** Per-session bookkeeping. */
 interface SessionBridge {
   session: AgentSession;
-  /** The runtime that owns this session (per-session under `--client-env`). */
+  /** The runtime that owns this session (per-session under `--client-env` / per-`cwd`). */
   runtime: SessionRuntime;
   /** Client-backed env for this session, when the flag is on. */
   clientEnv?: AcpClientEnv;
-  /** The external ACP session id all updates/requests are tagged with. */
+  /**
+   * The stable ACP handle all updates/requests are tagged with.
+   *
+   * This is NOT the disk session id: `/clear`, `/clone` and `/resume` replace the underlying
+   * conversation while the client keeps talking on this handle (ACP has no "id changed"
+   * notification). It starts equal to the disk id.
+   */
   acpId: string;
+  /** The conversation the session is currently attached to (`activeSessionId`). */
+  diskSessionId: string;
+  /** This session's workspace root — `cwd` from `new`/`load`/`resume`/`fork`. */
+  rootPath: string;
   projector: AcpProjector;
   /** Serializes prompt turns: one in-flight prompt per session. */
   chain: Promise<unknown>;
@@ -89,8 +95,24 @@ interface SessionBridge {
   pending: Set<AbortController>;
   /** The in-flight `request_permission` per approval id (see `interactions.ts`). */
   pendingApprovals: Map<string, AbortController>;
+  /** The in-flight `elicitation/create` per `ask_user` tool call (with its question). */
+  pendingAskUser: Map<
+    string,
+    {
+      controller: AbortController;
+      ask: { toolCallId: string; question: string; options?: string[]; multiSelect?: boolean };
+    }
+  >;
+  /** Session-scoped `allow_always` / `reject_always` decisions, keyed by tool identity. */
+  approvalPolicy: Map<string, boolean>;
   elicitation: boolean;
+  /** Client advertises `session.notices` — failures/cancellations are reported that way. */
+  notices: boolean;
   promptCaps: PromptCaps;
+  /** Canonical snapshot of the MCP server list this session was created with. */
+  mcpKey: string;
+  /** `closeBridge` is idempotent: `conn.closed` and `session/close` can race. */
+  closed: boolean;
   /**
    * The mode the client was last told about (via `configOptions`). Its `category: "mode"` entry
    * is the client's cached selector state, so it is only re-sent when it actually changed.
@@ -151,20 +173,29 @@ export interface AcpAgentOptions {
   /** The entry the default model came from — seeds a new session's recorded entry (a seed, not a selection). */
   modelsDefaultEntryIndex?: number;
   /**
-   * Build a per-session runtime whose env is backed by the ACP client (`--client-env`).
+   * Build a per-session runtime whose env is backed by this session's workspace root (and, under
+   * `--client-env`, by the ACP client).
    *
    * Absent by default, in which case every session goes through `host` exactly as before. When
-   * present, `session/new` / `load` / `resume` ask it for a host **bound to that session's env**
-   * and use that host instead, which is what keeps "one runtime owns one env" intact (the runtime
-   * carries its own env, and tools read it from `ToolRunContext.coreEnv`).
-   *
-   * It receives the disk session id because every client request must carry it.
+   * present, `session/new` / `load` / `resume` ask it for a host **bound to that session's root**
+   * and use that host instead, which is what makes ACP's `cwd` the session workspace root.
    */
   createSessionHost?: (context: AcpClientEnvFactoryContext) => Promise<AcpSessionRuntime>;
+  /** Enumerate persisted sessions for a `session/list` `cwd` other than the process default. */
+  listPersistedSessionsAt?: (rootPath: string) => Promise<SessionMeta[]>;
+  /** How long a permission/elicitation request waits for the client before being settled. */
+  interactionTimeoutMs?: number;
 }
 
-/** What {@link AcpAgentOptions.createSessionHost} needs to build one session's client-backed env. */
+/** What {@link AcpAgentOptions.createSessionHost} needs to build one session's runtime. */
 export interface AcpClientEnvFactoryContext {
+  /**
+   * The session's workspace root (`cwd` from the ACP request), already absolute.
+   *
+   * Each session owns one CoreEnv rooted here; `.agents/**`, relative tool paths and `session/list`
+   * all follow it.
+   */
+  rootPath: string;
   /**
    * The ACP session id as the client knows it (the disk id — see {@link diskSessionId}), or
    * `undefined` before the session exists.
@@ -222,9 +253,20 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const bridges = new Map<string, SessionBridge>();
   let connection: AgentConnection | null = null;
   let initCaps: ClientCapabilities | undefined;
+  let sessionSeq = 0;
 
   app.onConnect((conn) => {
     connection = conn;
+    // The client is gone: no pending dialog can be answered. Settle them, end the turns and
+    // release the per-session runtimes rather than leaving sessions parked on an approval nobody
+    // will ever send.
+    void conn.closed
+      .then(async () => {
+        for (const bridge of [...bridges.values()]) {
+          await closeBridge(bridge).catch(() => undefined);
+        }
+      })
+      .catch(() => undefined);
   });
 
   const client = (): AgentContext => {
@@ -267,23 +309,95 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     return options.models?.entries[seeded]?.models.includes(model) ? seeded : undefined;
   };
 
+  /** A `cwd` from an ACP request, normalized; `fallback` when the request omitted it. */
+  const resolveCwd = (cwd: string | undefined, fallback: string): string => {
+    if (!cwd) return fallback;
+    if (!defaultPath.isAbsolute(cwd)) {
+      throw RequestError.invalidParams(undefined, `cwd must be an absolute path: ${cwd}`);
+    }
+    return resolveRoot(cwd);
+  };
+
+  const sessionSystemPrompt = async (sessionRoot: string, runtime: SessionRuntime): Promise<string | undefined> => {
+    if (sessionRoot === rootPath) return options.defaults.systemPrompt;
+    const env = runtime.host.getEnv?.();
+    // A host that cannot expose its env (an embedder) cannot rebuild the prompt; the boot prompt is
+    // the only honest fallback. The real bootstrap host always exposes it.
+    if (!env) return options.defaults.systemPrompt;
+    try {
+      return await buildDefaultSystemPrompt(undefined, env);
+    } catch {
+      return options.defaults.systemPrompt;
+    }
+  };
+
+  /**
+   * A host without a per-session runtime serves exactly one root. Refuse a foreign `cwd` instead of
+   * silently running the session in the wrong workspace — the failure mode ACP's "cwd is the session
+   * root" rule exists to prevent.
+   */
+  const assertSessionRoot = (sessionRoot: string): void => {
+    if (sessionRoot !== rootPath && !options.createSessionHost) {
+      throw RequestError.invalidParams(
+        undefined,
+        `This host cannot serve session cwd ${sessionRoot}: it was built for ${rootPath} and has no per-session runtime`
+      );
+    }
+  };
+
+  /** The MCP list a session was created with, as a stable comparison key. */
+  const mcpKeyOf = (servers: Record<string, McpServerConfig> | undefined): string =>
+    JSON.stringify(Object.entries(servers ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
+  /** Find a bridge by its stable ACP handle OR its current disk session id. */
+  const findBridge = (id: string): SessionBridge | undefined => {
+    const found = lookupBridge(id);
+    // Any request that reaches a session is followed by updates the client must see in order; a
+    // deferred `session/new` seed must not be reordered behind them.
+    found?.projector.flushDeferred();
+    return found;
+  };
+
+  const lookupBridge = (id: string): SessionBridge | undefined => {
+    const direct = bridges.get(id);
+    if (direct) return direct;
+    for (const bridge of bridges.values()) {
+      if (bridge.diskSessionId === id) return bridge;
+      try {
+        if (diskSessionId(bridge.session) === id) return bridge;
+      } catch {
+        // A bridge between replacements may have no active id; skip it.
+      }
+    }
+    return undefined;
+  };
+
   const attach = (
     session: AgentSession,
     clientCaps: ClientCapabilities | undefined,
     acpId: string,
     runtime: SessionRuntime,
-    /**
-     * Replay the transcript. Done HERE, BEFORE {@link AcpProjector.start} subscribes — a session delivers
-     * its messages to a new subscriber, so subscribing first doubled the transcript — and priming the
-     * cursors first is what makes that retained delivery idempotent.
-     */
-    replay = false
+    opts: {
+      rootPath: string;
+      diskSessionId: string;
+      mcpKey?: string;
+      /**
+       * Replay the transcript. Done HERE, BEFORE {@link AcpProjector.start} subscribes — a session
+       * delivers its messages to a new subscriber, so subscribing first doubled the transcript — and
+       * priming the cursors first is what makes that retained delivery idempotent.
+       */
+      replay?: boolean;
+      /** `session/new`: queue every update until the response frame has gone out. */
+      deferEmits?: boolean;
+    }
   ): SessionBridge => {
     const bridge: SessionBridge = {
       session,
       runtime,
       clientEnv: runtime.clientEnv,
       acpId,
+      diskSessionId: opts.diskSessionId,
+      rootPath: opts.rootPath,
       chain: Promise.resolve(),
       cancelled: false,
       lastFinishReason: undefined,
@@ -292,7 +406,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       seenAskUser: new Set(),
       pending: new Set(),
       pendingApprovals: new Map(),
+      pendingAskUser: new Map(),
+      approvalPolicy: new Map(),
       elicitation: Boolean(clientCaps?.elicitation?.form),
+      notices: Boolean(clientCaps?.session?.notices),
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
       lastAdvertisedConfigModel: undefined,
@@ -304,23 +421,47 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       lastAdvertisedConfigEntryIndex: undefined,
       lastAdvertisedConfigEffort: undefined,
       replayed: false,
+      mcpKey: opts.mcpKey ?? "",
+      closed: false,
       projector: undefined as unknown as AcpProjector,
     };
     bridge.projector = new AcpProjector(session, {
-      rootPath,
+      rootPath: opts.rootPath,
       emit: (update) => emit(bridge.acpId, update),
       commands: () => commandsFromSnapshot(session.getSnapshot()),
       client: {
         compaction: Boolean(clientCaps?.session?.compaction),
         notices: Boolean(clientCaps?.session?.notices),
       },
-      onInteraction: (payload) => void handleInteractions(bridge, payload),
+      onInteraction: (payload) => void handleInteractions(bridge, payload).catch(() => undefined),
+      // The finish reason travels on the state payload at run end (core records it with the status
+      // flip), so the host reads it from the one channel every session already subscribes to.
+      onState: (state) => {
+        if (state.lastFinishReason) bridge.lastFinishReason = state.lastFinishReason;
+      },
+      // Best-effort old content for `write_file`'s diff. `null` means "not readable / new file",
+      // which keeps the whole-file preview rather than inventing an edit.
+      readFile: async (absolutePath) => {
+        const env = runtime.host.getEnv?.();
+        if (!env) return null;
+        try {
+          return await env.fs.readFile(absolutePath);
+        } catch {
+          return null;
+        }
+      },
     });
+    const replay = opts.replay === true;
     if (replay) {
       bridge.replayed = true;
+      // Replay BEFORE subscribing: the replay primes every cursor, so the retained `messages`
+      // delivery that `start()` triggers emits nothing.
       bridge.projector.replayFrom(session.getSnapshot());
     }
-    bridge.projector.start();
+    bridge.projector.start({
+      primeOnly: !replay,
+      ...(opts.deferEmits ? { deferEmits: true } : {}),
+    });
     // No id may own two live bridges: the `set` below would orphan a previous one, whose projector keeps its subscription — updates emitted twice under one id, and only `close` would ever stop it.
     bridges.get(acpId)?.projector.stop();
     bridges.set(acpId, bridge);
@@ -331,13 +472,58 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const toTarget = (bridge: SessionBridge): ConfigOptionTarget => ({ session: bridge.session, acpId: bridge.acpId });
 
   /** Build this session's runtime (see `session-runtime.ts`). */
-  const createRuntime = (): Promise<SessionRuntime> =>
-    buildSessionRuntime({ options, client, getClientCapabilities: () => initCaps });
+  const createRuntime = (sessionRoot: string): Promise<SessionRuntime> =>
+    buildSessionRuntime({ options, client, getClientCapabilities: () => initCaps, rootPath: sessionRoot });
+
+  const notify = (bridge: SessionBridge, message: string, level: "info" | "warning" | "error"): void => {
+    if (bridge.notices) {
+      emit(bridge.acpId, { sessionUpdate: "notice", severity: level, title: message });
+      return;
+    }
+    emit(bridge.acpId, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: `${bridge.acpId}-notice-${Date.now()}`,
+      content: { type: "text", text: message },
+    });
+  };
+
+  /**
+   * Rebind a stable ACP handle after the underlying conversation changed (`/clear`, `/clone`,
+   * `/resume`). The client keeps using `bridge.acpId`; `session_info_update._meta.diskSessionId`
+   * tells a client that can use it which conversation it now is.
+   */
+  const rebindAfterReplacement = (bridge: SessionBridge, command: string): void => {
+    const next = bridge.session.getSnapshot().activeSessionId;
+    if (!next || next === bridge.diskSessionId) return;
+    bridge.diskSessionId = next;
+    bridge.runtime.bind(next);
+    bridge.replayed = false;
+    emit(bridge.acpId, {
+      sessionUpdate: "session_info_update",
+      _meta: { diskSessionId: next },
+    } as SessionUpdate);
+    // ACP's transcript is append-only; the client cannot retract what it already rendered. Say so
+    // instead of letting `/clear` / `/resume` look like a no-op in a client that keeps the thread.
+    if (command === "session.new" || command === "session.clone" || command === "session.resume") {
+      notify(
+        bridge,
+        `This session now refers to conversation ${next}. ACP clients cannot clear the rendered transcript; ` +
+          `start a new thread if you need a clean view.`,
+        "info"
+      );
+    }
+  };
 
   const closeBridge = async (bridge: SessionBridge): Promise<void> => {
+    if (bridge.closed) return;
+    bridge.closed = true;
+    // Settle before stopping: an approval is a question the client can no longer answer.
+    await settlePendingInteractions(bridge);
     for (const controller of bridge.pending) controller.abort();
     bridge.pending.clear();
     bridge.pendingApprovals.clear();
+    bridge.pendingAskUser.clear();
+    bridge.approvalPolicy.clear();
     await bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
     bridge.projector.stop();
     for (const [id, b] of bridges) if (b === bridge) bridges.delete(id);
@@ -347,10 +533,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     await bridge.runtime.dispose().catch(() => undefined);
   };
 
-  const { handleInteractions } = createInteractionHandlers({
+  const { handleInteractions, settlePendingInteractions }: InteractionHandlers = createInteractionHandlers({
     client,
     emit,
-    rootPath,
+    ...(options.interactionTimeoutMs !== undefined ? { timeoutMs: options.interactionTimeoutMs } : {}),
     onClientOwnedApproval: () => undefined,
   });
 
@@ -374,7 +560,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         // local store). Declaring a capability we cannot serve is exactly what the
         // "capabilities are truthful" rule forbids.
         sessionCapabilities: {
-          ...(options.host.listPersistedSessions ? { list: {} } : {}),
+          ...(options.host.listPersistedSessions || options.listPersistedSessionsAt ? { list: {} } : {}),
           ...(options.host.deleteSession ? { delete: {} } : {}),
           resume: {},
           close: {},
@@ -382,8 +568,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
           // makes a precondition of declaring `fork`: `mcpServers` is refused loudly (a fork
           // reuses the source's live agent, so its servers genuinely cannot change − unlike
           // `session/new`/`load`/`resume`, which each build a fresh agent and therefore obey it),
-          // `additionalDirectories` is refused too, and `cwd` is only a hint (the root is fixed at
-          // handshake). Nothing here is silently dropped.
+          // `additionalDirectories` is refused too, and for a live source `cwd` must match its
+          // workspace root (a cold source has no persisted root, so the request's `cwd` is the root
+          // it is restored into). Nothing here is silently dropped.
           fork: {},
         },
         auth: { logout: {} },
@@ -396,18 +583,26 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   app.onRequest(methods.agent.authenticate, () => ({}));
   app.onRequest(methods.agent.logout, () => ({}));
 
-  const createOptions = (mcpServers?: Record<string, McpServerConfig>): Parameters<AgentSessionHost["create"]>[0] => ({
-    name: `${AGENT_NAME}-${bridges.size + 1}`,
-    model: options.defaults.model,
-    ...(options.defaults.modelStyle ? { modelStyle: options.defaults.modelStyle } : {}),
-    ...(options.defaults.modelBaseURL ? { modelBaseURL: options.defaults.modelBaseURL } : {}),
-    ...(options.defaults.modelApiKey ? { modelApiKey: options.defaults.modelApiKey } : {}),
-    ...(options.defaults.modelInfo ? { modelInfo: options.defaults.modelInfo } : {}),
-    ...(options.defaults.systemPrompt ? { systemPrompt: options.defaults.systemPrompt } : {}),
-    // Session-supplied servers REPLACE the workspace `.agents/mcp.json` (see
-    // `AgentSessionCreateOptions.mcpServers`); absent ⇒ the file is the source, as before.
-    ...(mcpServers ? { mcpServers } : {}),
-  });
+  const createOptions = (
+    mcpServers?: Record<string, McpServerConfig>,
+    systemPrompt = options.defaults.systemPrompt
+  ): Parameters<AgentSessionHost["create"]>[0] => {
+    sessionSeq += 1;
+    return {
+      name: `${AGENT_NAME}-${sessionSeq}`,
+      model: options.defaults.model,
+      ...(options.defaults.modelStyle ? { modelStyle: options.defaults.modelStyle } : {}),
+      ...(options.defaults.modelBaseURL ? { modelBaseURL: options.defaults.modelBaseURL } : {}),
+      ...(options.defaults.modelApiKey ? { modelApiKey: options.defaults.modelApiKey } : {}),
+      ...(options.defaults.modelInfo ? { modelInfo: options.defaults.modelInfo } : {}),
+      // A different `cwd` gets the default prompt built from ITS workspace (the boot prompt was
+      // built from the process root, so reusing it would embed the wrong project instructions).
+      ...(systemPrompt ? { systemPrompt } : {}),
+      // Session-supplied servers REPLACE the workspace `.agents/mcp.json` (see
+      // `AgentSessionCreateOptions.mcpServers`); absent ⇒ the file is the source, as before.
+      ...(mcpServers ? { mcpServers } : {}),
+    };
+  };
 
   /**
    * Refuse a request that asks for `additionalDirectories`.
@@ -435,23 +630,23 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // Checked FIRST, so a refused request creates nothing (same ordering as the malformed-MCP
     // check below).
     rejectAdditionalDirectories(ctx.params.additionalDirectories);
-    if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
-      process.stderr.write(
-        `[codent-acp] note: session cwd ${ctx.params.cwd} differs from workspace root ${rootPath}\n`
-      );
-    }
+    // ACP: `cwd` is the session's workspace root, not a hint. Every relative path, `.agents/**`
+    // and `session/list` for this session follow it.
+    const sessionRoot = resolveCwd(ctx.params.cwd, rootPath);
+    assertSessionRoot(sessionRoot);
     // Mapped (and validated) BEFORE the session exists: a malformed entry must not leave a
     // half-configured session behind, and a client cannot retract one it was never told about.
     const mapped = mapAcpMcpServers(ctx.params.mcpServers);
     if (mapped.error) {
       throw new Error(mapped.error);
     }
-    // With `--client-env` the session's env is client-backed and therefore per-session, so the
-    // runtime is built here rather than borrowed from the process-wide host.
-    const runtime = await createRuntime();
+    // The runtime owns this session's env (client-backed under `--client-env`), so it is built here
+    // rather than borrowed from the process-wide host.
+    const runtime = await createRuntime(sessionRoot);
+    const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
     let session: AgentSession;
     try {
-      ({ session } = await runtime.host.create(createOptions(mapped.servers)));
+      ({ session } = await runtime.host.create(createOptions(mapped.servers, systemPrompt)));
     } catch (error) {
       // The runtime owns a per-session env; if the session never came to exist, nothing else will
       // ever release it (only `closeBridge` disposes, and there is no bridge yet).
@@ -460,12 +655,25 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     const acpId = diskSessionId(session);
     runtime.bind(acpId);
-    const bridge = attach(session, initCaps, acpId, runtime);
+    const bridge = attach(session, initCaps, acpId, runtime, {
+      rootPath: sessionRoot,
+      diskSessionId: acpId,
+      mcpKey: mcpKeyOf(mapped.servers),
+      // The response frame must carry the id before ANY update keyed by it arrives. `start()` queues
+      // the retained values and the seed, and the tick below flushes them after the response.
+      deferEmits: true,
+    });
     const snapshot = session.getSnapshot();
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
     bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
     bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
+    setImmediate(() => {
+      // The client may have closed the session between the response and this tick; do not emit
+      // seed notifications for an id nobody owns any more.
+      if (bridges.get(acpId) !== bridge) return;
+      bridge.projector.flushDeferred();
+    });
     return {
       sessionId: acpId,
       ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
@@ -477,7 +685,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     replay: boolean,
     clientCaps: ClientCapabilities | undefined,
     mcpServers: McpServer[] | undefined,
-    additionalDirectories: string[] | undefined
+    additionalDirectories: string[] | undefined,
+    cwd: string | undefined
   ): Promise<SessionBridge> => {
     // `additionalDirectories` is not a declared capability; see `rejectAdditionalDirectories`.
     rejectAdditionalDirectories(additionalDirectories);
@@ -496,8 +705,26 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // disk log (two writers) and attach a second projector over the same channels — and the first one
     // would never be stopped, so every update (both tagged with this session id) arrives twice, with
     // two sets of cursors racing each other.
-    const live = bridges.get(sessionId);
+    //
+    // The id may be the stable handle or the disk id: a client can hand back either after a
+    // `/clear`-style replacement, when the two deliberately diverge.
+    const live = findBridge(sessionId);
     if (live) {
+      if (cwd && resolveCwd(cwd, live.rootPath) !== live.rootPath) {
+        throw RequestError.invalidParams(
+          undefined,
+          `cwd ${cwd} does not match the live session's workspace root ${live.rootPath}`
+        );
+      }
+      // A live session's MCP servers are fixed at creation. Silently ignoring a different list
+      // would let the client believe it is connected to servers it never reached. `load`/`resume`
+      // always carry the field; an empty list is a real value (the file fallback), not "unspecified".
+      if (mcpServers !== undefined && mcpKeyOf(mapped.servers) !== live.mcpKey) {
+        throw RequestError.invalidParams(
+          undefined,
+          "mcpServers cannot change for a session that is already live in this process"
+        );
+      }
       // `load` owes the client the transcript once. A repeat on the live session must not replay it
       // again — the client would render the whole conversation a second time.
       if (replay && !live.replayed) {
@@ -506,13 +733,17 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       }
       return live;
     }
-    // The client told us the id here, so the client-backed env can carry it from the start.
-    const runtime = await createRuntime();
+    // `cwd` is the session's workspace root (ACP requires it on load/resume). The client told us
+    // the id here, so the per-session env can carry both from the start.
+    const sessionRoot = resolveCwd(cwd, rootPath);
+    assertSessionRoot(sessionRoot);
+    const runtime = await createRuntime(sessionRoot);
+    const systemPrompt = await sessionSystemPrompt(sessionRoot, runtime);
     runtime.bind(sessionId);
     let session: AgentSession;
     try {
       ({ session } = await runtime.host.create({
-        ...createOptions(mapped.servers),
+        ...createOptions(mapped.servers, systemPrompt),
         resumeSessionId: sessionId,
       }));
     } catch (error) {
@@ -523,7 +754,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     // The requested disk id is authoritative here (it is what the client will keep using);
     // `diskSessionId` is the same value after the restore, so assert rather than diverge.
-    return attach(session, clientCaps, sessionId, runtime, replay);
+    return attach(session, clientCaps, sessionId, runtime, {
+      rootPath: sessionRoot,
+      diskSessionId: diskSessionId(session),
+      mcpKey: mcpKeyOf(mapped.servers),
+      replay,
+    });
   };
 
   app.onRequest(methods.agent.session.load, async (ctx) => {
@@ -532,9 +768,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       true,
       initCaps,
       ctx.params.mcpServers,
-      ctx.params.additionalDirectories
+      ctx.params.additionalDirectories,
+      ctx.params.cwd
     );
-    return sessionSelectorsFor(bridge, options.models);
+    return {
+      ...sessionSelectorsFor(bridge, options.models),
+      // The request may have named a disk id while the live bridge uses a stable handle; tell the
+      // client which id its updates will carry (ACP has no other place to say it).
+      _meta: { sessionId: bridge.acpId },
+    };
   });
   app.onRequest(methods.agent.session.resume, async (ctx) => {
     const bridge = await resumeSession(
@@ -542,13 +784,17 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       false,
       initCaps,
       ctx.params.mcpServers,
-      ctx.params.additionalDirectories
+      ctx.params.additionalDirectories,
+      ctx.params.cwd
     );
-    return sessionSelectorsFor(bridge, options.models);
+    return {
+      ...sessionSelectorsFor(bridge, options.models),
+      _meta: { sessionId: bridge.acpId },
+    };
   });
 
   app.onRequest(methods.agent.session.close, async (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
+    const bridge = findBridge(ctx.params.sessionId);
     if (bridge) await closeBridge(bridge);
     return {};
   });
@@ -561,10 +807,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     ...(options.host.listPersistedSessions
       ? { listPersistedSessions: options.host.listPersistedSessions.bind(options.host) }
       : {}),
+    ...(options.listPersistedSessionsAt ? { listPersistedSessionsAt: options.listPersistedSessionsAt } : {}),
     ...(options.host.deleteSession ? { deleteSession: options.host.deleteSession.bind(options.host) } : {}),
+    lookupLive: (id) => {
+      const bridge = lookupBridge(id);
+      return bridge ? { handle: bridge.acpId, diskId: bridge.diskSessionId } : undefined;
+    },
     rootPath,
     closeLive: async (sessionId) => {
-      const live = bridges.get(sessionId);
+      const live = findBridge(sessionId);
       if (!live) return false;
       await closeBridge(live);
       return true;
@@ -584,17 +835,22 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // A fork of a session this process has not opened is NORMAL for a client forking from
     // `session/list`: restore it first, exactly like `load`, then clone (no replay — the client
     // watches the NEW id from here on).
-    const wasLive = bridges.has(sourceId);
-    let bridge = bridges.get(sourceId);
+    const wasLive = Boolean(findBridge(sourceId));
+    let bridge = findBridge(sourceId);
     if (!bridge) {
-      await resumeSession(sourceId, false, initCaps, ctx.params.mcpServers, undefined);
-      bridge = bridges.get(sourceId);
+      bridge = await resumeSession(sourceId, false, initCaps, ctx.params.mcpServers, undefined, ctx.params.cwd);
     }
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${sourceId}`);
 
-    // Informational only: the root is fixed at handshake (a fork cannot move the conversation).
-    if (ctx.params.cwd && ctx.params.cwd !== rootPath) {
-      process.stderr.write(`[codent-acp] note: fork cwd ${ctx.params.cwd} differs from root ${rootPath}\n`);
+    // `cwd` must match the source for a LIVE source (the conversation continues in that workspace).
+    // A cold source was just restored at the request's `cwd` (SessionMeta carries no root), so this
+    // is an equality check of the root we restored it into.
+    const forkRoot = resolveCwd(ctx.params.cwd, bridge.rootPath);
+    if (forkRoot !== bridge.rootPath) {
+      throw RequestError.invalidParams(
+        undefined,
+        `fork cwd ${forkRoot} does not match the source session's workspace root ${bridge.rootPath}`
+      );
     }
 
     // Fork-only rule: this path REUSES the source's live agent (no `Host.create`), so it cannot swap
@@ -609,16 +865,25 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // Captured BEFORE the dispatch: a successful clone re-points the session to a NEW disk id,
     // so reading `activeSessionId` afterwards (or inside the re-key below) would key the map by
     // the new id twice and leave the source key behind — a second key for one bridge.
-    const sourceDiskId = diskSessionId(bridge.session);
+    const sourceDiskId = bridge.diskSessionId;
+    const sourceHandle = bridge.acpId;
 
+    // Pause projection while the clone runs: the session switches ids mid-dispatch, and an update
+    // emitted during that window would still be tagged with the SOURCE id (the client would see
+    // it twice — once on the source, once after the rebind).
+    bridge.projector.stop();
     // `session.clone` copies the whole transcript (ACP's fork request carries no fork point).
     // The source session is left intact on disk; core also refuses while a run is active.
-    const result = (await bridge.session.dispatch({ type: "session.clone" })) as {
-      ok: boolean;
-      error?: string;
-      data?: { sessionId?: string };
-    };
+    let result: { ok: boolean; error?: string; data?: { sessionId?: string } };
+    try {
+      result = (await bridge.session.dispatch({ type: "session.clone" })) as typeof result;
+    } catch (error) {
+      // Never leave the source bridge without a subscription just because the clone threw.
+      bridge.projector.start({ primeOnly: true });
+      throw error;
+    }
     if (!result?.ok) {
+      bridge.projector.start({ primeOnly: true });
       throw new Error(result?.error ?? "session/fork failed");
     }
     const newId = result.data?.sessionId ?? diskSessionId(bridge.session);
@@ -627,12 +892,29 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // session, so a second bridge would double-subscribe and double-send every update. Set the
     // new key before dropping the old one so no frame lands in a gap, and refresh `acpId`
     // because `emit` closes over `bridge.acpId`.
-    bridges.set(newId, bridge);
-    if (newId !== sourceId) bridges.delete(sourceId);
-    // The dispatch may also have changed the disk id without producing a new ACP id; drop the
-    // stale key either way so `bridges` never maps two ids to one bridge.
-    if (sourceDiskId !== newId && sourceDiskId !== sourceId) bridges.delete(sourceDiskId);
     bridge.acpId = newId;
+    bridge.diskSessionId = newId;
+    bridge.runtime.bind(newId);
+    bridge.replayed = false;
+    // A fork is a new conversation: approvals/answers from the source do not carry over.
+    bridge.seenApprovals.clear();
+    bridge.seenAskUser.clear();
+    bridge.approvalPolicy.clear();
+    bridges.set(newId, bridge);
+    // Drop every id that pointed at the SOURCE conversation: the handle (which may differ from the
+    // disk id after an earlier rebind), the requested source id, and its disk id.
+    if (sourceHandle !== newId) bridges.delete(sourceHandle);
+    if (newId !== sourceId) bridges.delete(sourceId);
+    if (sourceDiskId !== newId && sourceDiskId !== sourceId && sourceDiskId !== sourceHandle) {
+      bridges.delete(sourceDiskId);
+    }
+    // Prime + subscribe on the SAME handle: the cloned messages are already in the snapshot, so a
+    // plain replay would duplicate the source transcript under the new id. The fork response carries
+    // the new id, so queue its seed until the frame has gone out.
+    bridge.projector.start({ primeOnly: true, deferEmits: true });
+    setImmediate(() => {
+      if (bridges.get(newId) === bridge) bridge.projector.flushDeferred();
+    });
 
     const snapshot = bridge.session.getSnapshot();
     bridge.lastAdvertisedConfigMode = snapshot.mode;
@@ -701,7 +983,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   });
 
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
+    const bridge = findBridge(ctx.params.sessionId);
     // Reject, like every other handler that must CHANGE something: reporting success for a session
     // we never touched is a lie the client cannot detect. (`close` is allowed to tolerate absence —
     // there the desired state is already true, so "ok" is honest. Here it is not.)
@@ -716,7 +998,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   // request that sets it. Without this a client renders the selector and then gets "Method not
   // found" (-32601) the moment anyone touches it.
   app.onRequest(methods.agent.session.setConfigOption, async (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
+    const bridge = findBridge(ctx.params.sessionId);
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
 
     // Look the id up in the SET WE ADVERTISE rather than comparing against a literal: adding an
@@ -738,7 +1020,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         await applyMode(toTarget(bridge), ctx.params.value as AgentMode);
         break;
       case "model": {
-        const applied = await applyModel(toTarget(bridge), ctx.params.value as string, options.models);
+        const applied = await applyModel(
+          toTarget(bridge),
+          ctx.params.value as string,
+          options.models,
+          bridge.selectedModelEntryIndex
+        );
         // Record the entry the connection came from, so every later advertisement names it instead
         // of first-matching a model id that several entries may share. A bare re-selection of the
         // current model reports no entry and leaves the recorded one alone.
@@ -786,21 +1073,33 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       return { sessionId: rec.sessionId, modelId: rec.modelId };
     },
     async (ctx) => {
-      const bridge = bridges.get(ctx.params.sessionId);
+      const bridge = findBridge(ctx.params.sessionId);
       if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
-      const applied = await applyModel(toTarget(bridge), ctx.params.modelId, options.models);
+      const before = advertised(bridge);
+      const applied = await applyModel(
+        toTarget(bridge),
+        ctx.params.modelId,
+        options.models,
+        bridge.selectedModelEntryIndex
+      );
       if (applied.entryIndex !== undefined) bridge.selectedModelEntryIndex = applied.entryIndex;
+      // Older clients only read `models` / call `session/set_model`; they still need the
+      // `configOptions` cache refreshed, or a client rendering both surfaces shows the old value.
+      advertise(bridge, before);
       return {};
     }
   );
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
+    const bridge = findBridge(ctx.params.sessionId);
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
+    // A prompt can follow `session/new` before the deferred seed tick ran. Flush the seed first so
+    // the client gets `available_commands_update` etc. before this turn's tool/text updates.
+    bridge.projector.flushDeferred();
     // A prompt arriving while the turn is SUSPENDED on the client (approval / `ask_user`) is force-submit:
     // the answer it waits for was replaced by typing, so queueing waits on a client that will never answer.
-    // Denying what is pending (what cancelling does) ends that turn as `cancelled`; this prompt then runs.
-    if (bridge.pending.size > 0) interruptBridge(bridge);
+    // Settling what is pending (what cancelling does) ends that turn as `cancelled`; this prompt then runs.
+    if (bridge.pending.size > 0) await interruptBridge(bridge);
     const run = bridge.chain.then(async () => {
       if (TRACE_UPDATES) process.stderr.write(`[codent-acp] <- session/prompt ${ctx.params.sessionId}\n`);
       const startedAt = Date.now();
@@ -813,23 +1112,32 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   });
 
   /**
-  /** End the running or suspended turn: `session/cancel`, or a prompt that arrives while it waits. */
-  const interruptBridge = (bridge: SessionBridge): void => {
+   * End the running or suspended turn: `session/cancel`, or a prompt that arrives while it waits.
+   *
+   * Settling the approvals BEFORE `stop` is what bounds the turn: core's `stop` deliberately skips
+   * an approval the user has not answered (`needsApproval && approved === undefined`), so without
+   * this the session stays in `waiting` and the next prompt parks behind it forever.
+   */
+  const interruptBridge = async (bridge: SessionBridge): Promise<void> => {
     bridge.cancelled = true;
+    await settlePendingInteractions(bridge);
     for (const controller of bridge.pending) controller.abort();
     bridge.pending.clear();
     bridge.pendingApprovals.clear();
-    void bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
+    bridge.pendingAskUser.clear();
+    await bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
   };
 
-  app.onNotification(methods.agent.session.cancel, (ctx) => {
-    const bridge = bridges.get(ctx.params.sessionId);
+  app.onNotification(methods.agent.session.cancel, async (ctx) => {
+    const bridge = findBridge(ctx.params.sessionId);
     if (!bridge) return;
-    interruptBridge(bridge);
+    await interruptBridge(bridge);
   });
 
   const runPrompt = async (bridge: SessionBridge, params: PromptRequest): Promise<{ stopReason: StopReason }> => {
     bridge.cancelled = false;
+    // The finish reason belongs to the run that just ended; a new prompt must not inherit it.
+    bridge.lastFinishReason = undefined;
     const mapping = promptBlocksToContent(params.prompt, bridge.promptCaps);
     if (mapping.error) throw new Error(mapping.error);
 
@@ -841,8 +1149,34 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // (`set_config_option` / `set_mode`) re-advertise themselves, so this path must do it too:
       // without it the client keeps rendering the old selector values until something else happens.
       const before = advertised(bridge);
-      const result = await dispatchSlashCommand(bridge.session, bridge.session.getSnapshot(), parsed, options.models);
+      // The catalog's `command` is the contract, not the slash token: a rename/alias must keep
+      // dispatch and rebinding working. `compact` needs its row opened before the dispatch so the
+      // projector can wait for the command result instead of the restored status.
+      const command = findBuiltinCommand(parsed.name)?.command;
+      if (command === "compact") bridge.projector.beginManualCompaction();
+      const result = await dispatchSlashCommand(
+        bridge.session,
+        bridge.session.getSnapshot(),
+        parsed,
+        options.models,
+        bridge.selectedModelEntryIndex
+      );
+      if (command === "compact") {
+        bridge.projector.finishManualCompaction(
+          result.compact?.ok ? "completed" : "failed",
+          result.compact?.error ?? (result.compact ? undefined : "compaction did not run")
+        );
+      }
+      if (result.entryIndex !== undefined) bridge.selectedModelEntryIndex = result.entryIndex;
       if (result.handled) {
+        // `/clear` / `/clone` / `/resume` replace the underlying conversation while the client keeps
+        // the same handle. Rebind before advertising, so the next update is tagged correctly.
+        if (command === "session.new" || command === "session.clone" || command === "session.resume") {
+          bridge.seenApprovals.clear();
+          bridge.seenAskUser.clear();
+          if (command === "session.new") bridge.approvalPolicy.clear();
+          rebindAfterReplacement(bridge, command);
+        }
         advertise(bridge, before);
         if (result.message) {
           emit(bridge.acpId, {
@@ -856,13 +1190,22 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
 
     try {
-      await bridge.session.dispatch({ type: "send", content: mapping.content });
+      const dispatched = await bridge.session.dispatch({ type: "send", content: mapping.content });
+      // A rejected dispatch (queue full, run refused, ...) must reach the client as an error. The
+      // old `await` ignored `ok`, so the prompt resolved `end_turn` having done nothing.
+      if (!dispatched.ok) throw new Error(dispatched.error ?? "The agent could not start the turn");
       // A suspended turn (approval / ask_user) returns the pump while the SAME turn keeps streaming:
       // resolving here told the client the turn was over. Wait for the TURN. */
       await waitForTurnEnd(bridge);
     } catch (error) {
       if (bridge.cancelled) return { stopReason: "cancelled" };
       throw error;
+    }
+    // A failed run has no ACP error stop reason. Emit the text before resolving, or the client
+    // shows a completed turn with no explanation of what went wrong.
+    const snapshot = bridge.session.getSnapshot();
+    if (snapshot.status === "error") {
+      notify(bridge, snapshot.error?.trim() ? snapshot.error : "The run failed.", "error");
     }
     return { stopReason: stopReasonFor(bridge) };
   };
@@ -887,31 +1230,6 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     });
 
   return app;
-}
-
-/**
- * Serve an ACP agent over stdio. Returns the live connection.
- *
- * The caller (a bin entry) owns process teardown; this only wires the transport.
- */
-export function runAcpAgentStdio(options: AcpAgentOptions): AgentConnection {
-  const app = createAcpAgent(options);
-  const input = new ReadableStream<Uint8Array>({
-    start(controller) {
-      process.stdin.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-      process.stdin.on("end", () => controller.close());
-      process.stdin.on("error", (err) => controller.error(err));
-    },
-  });
-  const output = new WritableStream<Uint8Array>({
-    write(chunk) {
-      return new Promise<void>((resolve) => {
-        if ((process.stdout as unknown as { destroyed?: boolean }).destroyed) return resolve();
-        process.stdout.write(chunk, () => resolve());
-      });
-    },
-  });
-  return app.connect(ndJsonStream(output, input));
 }
 
 /** Re-exported for tests / callers that need the snapshot type. */

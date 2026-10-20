@@ -56,6 +56,10 @@ export interface SlashResult {
   handled: boolean;
   /** Text the command produced (for the client), if any. */
   message?: string;
+  /** A manual compaction's outcome, so the projector can close its row with the truth. */
+  compact?: { ok: boolean; error?: string };
+  /** The catalog entry a model switch landed on, so the host records the connection. */
+  entryIndex?: number;
 }
 
 /**
@@ -66,7 +70,8 @@ export async function dispatchSlashCommand(
   session: AgentSession,
   snapshot: AgentSessionSnapshot,
   parsed: ParsedCommand,
-  read?: ModelCatalogRead
+  read?: ModelCatalogRead,
+  currentEntryIndex?: number
 ): Promise<SlashResult> {
   const entry = findBuiltinCommand(parsed.name);
 
@@ -86,8 +91,15 @@ export async function dispatchSlashCommand(
     case "session.new":
       await session.dispatch({ type: "session.new" });
       return { handled: true };
-    case "compact":
-      return finish(await session.dispatch({ type: "compact", focus: parsed.raw || undefined }));
+    case "compact": {
+      const result = await session.dispatch({ type: "compact", focus: parsed.raw || undefined });
+      return {
+        ...finish(result),
+        // The summary stream's `end` always fires (core closes it in `finally`) and cannot tell a
+        // failed manual compaction from a successful one; the command result is authoritative.
+        compact: { ok: result.ok, ...(result.ok ? {} : { error: result.error ?? "compaction failed" }) },
+      };
+    }
     case "rename":
       return finish(
         parsed.raw
@@ -112,7 +124,7 @@ export async function dispatchSlashCommand(
     case "mode.set":
       return dispatchModeCommand(session, parsed.raw);
     case "model.set":
-      return dispatchModelsCommand(session, parsed.raw, read);
+      return dispatchModelsCommand(session, parsed.raw, read, currentEntryIndex);
     case "usage.history":
       return finish(await session.dispatch({ type: "usage.history" }));
     default:
@@ -205,7 +217,8 @@ async function dispatchModeCommand(session: AgentSession, rawArgs: string): Prom
 async function dispatchModelsCommand(
   session: AgentSession,
   rawArgs: string,
-  read: ModelCatalogRead | undefined
+  read: ModelCatalogRead | undefined,
+  currentEntryIndex?: number
 ): Promise<SlashResult> {
   const intent = parseModelsCommand(rawArgs);
 
@@ -237,14 +250,15 @@ async function dispatchModelsCommand(
 
   let applied: ModelSwitchOutcome;
   try {
-    applied = await applyModel({ session, acpId: session.id }, value, read);
+    applied = await applyModel({ session, acpId: session.id }, value, read, currentEntryIndex);
   } catch (error) {
     return { handled: true, message: error instanceof Error ? error.message : String(error) };
   }
 
   const switched = applied.snapshot.model ?? intent.model;
+  const entry = applied.entryIndex !== undefined ? { entryIndex: applied.entryIndex } : {};
   if (intent.effort === undefined && intent.clearEffort !== true) {
-    return { handled: true, message: `Switched to ${switched}` };
+    return { handled: true, message: `Switched to ${switched}`, ...entry };
   }
 
   // Depth goes through the ONE write path (`applyThoughtLevel`) — the same function the
@@ -257,11 +271,13 @@ async function dispatchModelsCommand(
     return {
       handled: true,
       message: `Switched to ${switched}, but ${error instanceof Error ? error.message : String(error)}`,
+      ...entry,
     };
   }
   return {
     handled: true,
     message: `Switched to ${switched}, thinking: ${level === THOUGHT_LEVEL_DEFAULT ? "model default" : level}`,
+    ...entry,
   };
 }
 

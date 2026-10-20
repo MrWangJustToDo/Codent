@@ -236,10 +236,12 @@ await client.connectWith(app, async (cx) => {
     `${JSON.stringify(badLevel.commands)} ${badLevel.message}`
   );
 
-  const noDepth = await run("/models 0:other-model");
+  const noDepth = await run("/models 0:test-model");
   check(
-    "a model-only switch leaves the depth alone",
-    noDepth.commands.length === 1 && noDepth.commands[0].type === "model.set",
+    "a model-only switch (different model) leaves the depth alone",
+    noDepth.commands.length === 1 &&
+      noDepth.commands[0].type === "model.set" &&
+      noDepth.commands[0].model === "test-model",
     JSON.stringify(noDepth.commands)
   );
 
@@ -277,15 +279,24 @@ await client.connectWith(app, async (cx) => {
     `updates=${commandUpdates.length}`
   );
 
+  // A re-selection of the CURRENT model is a no-op: the client already holds that value and a
+  // metadata re-resolution for nothing is the bug task 3.3 fixed.
+  const reselect = await run("/models 0:other-model");
+  check(
+    "re-selecting the current model dispatches nothing",
+    reselect.commands.length === 0,
+    JSON.stringify(reselect.commands)
+  );
+
   // A bare id is the natural way to type it; the parser accepts it and the host resolves it against
   // the catalog. `applyModel` alone only accepts a bare value equal to the CURRENT model (the
   // "current model missing from the catalog" case), so without the resolution step this failed with
   // "Unknown model" for an id that is right there in the catalog.
-  const bare = await run("/models other-model high");
+  const bare = await run("/models test-model high");
   check(
     "a bare model id resolves to its entry before applyModel",
     bare.commands.some(
-      (c) => c.type === "model.set" && c.model === "other-model" && c.modelBaseURL === "https://upstream.test/v1"
+      (c) => c.type === "model.set" && c.model === "test-model" && c.modelBaseURL === "https://upstream.test/v1"
     ) && bare.commands.some((c) => c.type === "effort.set" && c.effort === "high"),
     JSON.stringify(bare.commands)
   );

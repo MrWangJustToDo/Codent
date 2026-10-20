@@ -32,10 +32,11 @@ protocol requires stdout to carry only JSON-RPC frames. The development host `@c
 the same subcommand; the standalone `codent-acp` bin (built from this package) and the in-process API
 below are the other two ways in.
 
-The workspace root is the process `cwd` — the local CoreEnv is built from it (`createNodeEnv`) — so a
-client should spawn the agent **inside** the workspace it wants it to see. The root is fixed at
-handshake: a request's `cwd` is only a hint (a differing one is noted on stderr, never obeyed and
-never an error).
+The workspace root for a session is the ACP request's **`cwd`** (`session/new`, `load`, `resume`
+and `fork` carry one; when absent it falls back to the process root). It is normalized and must be
+absolute; each session builds its own CoreEnv rooted there, so relative tool paths, `.agents/**`
+and `session/list` follow the session's workspace. The process `cwd` is only the default for
+`session/list` without a `cwd` and for reads that happen before a session exists.
 
 ## Model resolution
 
@@ -91,10 +92,11 @@ are therefore one contract, and they live together in `src/session-config-option
   resumed session that was never recorded keeps the first-match fallback rather than a wrong claim.
 - switching needs **no** model metadata: if models.dev is unreachable the switch still happens, it
   just leaves capabilities unlabelled (`resolveModelInfoFromModelsDev` is best-effort by contract).
-- **no process-level model provider is registered.** One ACP process serves many sessions and the
-  provider registry is process-wide, so registering would let one session's switch change another's
-  connection. The connection travels in the `model.set` payload instead — which makes "one session's
-  switch is invisible to the others" a property of the design rather than of discipline.
+- **The runtime provider is registered once; model switching never re-registers it.** One ACP
+  process serves many sessions and the provider registry is process-wide, so a switch must not
+  change another session's connection. The connection travels in the `model.set` payload instead —
+  which makes "one session's switch is invisible to the others" a property of the design rather
+  than of discipline.
 
 The `mode` select is the `configOptions` spelling of the legacy `modes` field; both are advertised
 together, sourced from the same `mode` channel. `session/set_mode` and
@@ -206,35 +208,41 @@ them without a transport.
 
 ## Sessions
 
-The ACP session id **is the disk session id** (`ses_…`), never the agent id: `session/load`,
-`session/list` and `session/delete` address a *persisted conversation*. `session/new` returns the
-disk id, `host.create` having minted it before returning. Exposing the agent id instead made the id
-from `session/new` unusable for `session/load` and made every disk-enumerated session miss its live
+`session/new` returns a **stable ACP handle**. It starts equal to the disk session id (`ses_…`), so
+existing clients are unaffected, but it is not the same identity: `/clear`, `/clone` and `/resume`
+replace the underlying conversation while the client keeps using the same handle (ACP has no
+"session id changed" notification). `session_info_update._meta.diskSessionId` reports the current
+disk id; `session/list` and `session/delete` address disk ids, and `session/load` accepts either a
+handle or a disk id. The agent id is never exposed — `session/load` / `list` / `delete` address a
+*persisted conversation*, and using the agent id made every disk-enumerated session miss its live
 bridge.
 
 | Request | Behaviour |
 |---|---|
-| `session/new` | `Host.create`; returns the disk id, `modes`, and `configOptions` |
-| `session/load` | restore **and** replay the stored transcript (no model call); replay once per live session |
-| `session/resume` | restore, no replay |
-| `session/close` | stop, unregister, release the runtime; tolerates an unknown id (the desired state is already true) |
-| `session/list` | the workspace's **persisted** sessions (disk catalog, cursor-paged); advertised only for a host that can enumerate them |
-| `session/delete` | success = "was live (already closed) **or** its file is gone" |
-| `session/fork` | clones the source's transcript into a new session and re-keys the same subscription |
+| `session/new` | `Host.create` in `cwd`; returns the stable handle, `modes`, and `configOptions`; seeds state **after** the response |
+| `session/load` | restore **and** replay the stored transcript including tool results (no model call); replay once per live session |
+| `session/resume` | restore and prime cursors from the snapshot; **no** transcript replay |
+| `session/close` | stop, settle pending interactions, release the runtime; tolerates an unknown id (the desired state is already true) |
+| `session/list` | the persisted sessions for the request's `cwd` (default root when omitted), cursor-paged; advertised only for a host that can enumerate them |
+| `session/delete` | idempotent: success whether the session was live, removed, or already gone |
+| `session/fork` | clones the source's transcript into a new session and re-keys the same subscription; restores a cold source first |
 | `session/prompt` | serialized per session; resolves when the **turn** ends (see below) |
-| `session/cancel` | aborts in-flight requests and the run; the prompt answers `cancelled`, never an error |
+| `session/cancel` | settles pending approvals/questions and aborts the run; the prompt answers `cancelled`, never an error |
 
 Four ordering facts are load-bearing, and each was a shipped bug before it was a rule:
 
-- **Replay happens before subscribing.** A session hands its retained values to a *new* subscriber,
-  so subscribing first emitted the whole conversation live and the replay emitted the assistant half
-  of it again — a duplicated, mis-ordered transcript. Replaying first also primes the cursors, which
-  is what makes the retained delivery idempotent.
+- **Replay happens before subscribing; resume primes instead.** A session hands its retained values
+  to a *new* subscriber, so subscribing first emitted the whole conversation live and the replay
+  emitted the assistant half of it again — a duplicated, mis-ordered transcript. `load` replays
+  first; `resume` primes every cursor from the snapshot before subscribing, so the retained delivery
+  emits nothing.
 - **An already-live session is reused, never re-created.** A second `host.create` over the same disk
   log means two writers, and the previous projector would keep its subscription, so every update
-  went out twice under one session id with two sets of cursors racing.
-- **The live path reports the user turn too**, deduplicated by message id. Assistant text alone left
-  nothing between two consecutive replies, which a client can only render as one merged run.
+  went out twice under one session id with two sets of cursors racing. A live `load`/`resume` with a
+  different `mcpServers` list is refused (servers are fixed at creation).
+- **The replay reports the user turn; the live path does not.** A client that submitted a prompt
+  renders it itself, so echoing it live duplicates the turn. On `load` the client has nothing, so
+  the replay emits `user_message_chunk` for the stored user turns and their attachments.
 - **A prompt resolves when the *turn* ends, not when a pump returns.** A turn can suspend on an
   approval or an `ask_user`: the dispatch returns, the client answers, and a new pump resumes the
   same turn. Resolving at that point would tell the client the turn was over while its continuation
@@ -257,11 +265,18 @@ channel is forwarded as `tool_call_update` content, throttled to 300 ms.
 
 Approvals become `session/request_permission` with the standard four options and the call's real
 description — the same `toolCallInfo` the transcript uses, because a prompt that cannot show *what*
-it is approving is not a decision anyone can make. `ask_user` becomes an `elicitation/create` form,
-and degrades to an agent message plus a cancelled tool result when the client does not advertise
-`elicitation.form`. Both round-trips register a controller that `session/cancel` and `close` abort,
-and neither ever throws — a closed connection is the session's problem to time out, not a reason to
-fail a run.
+it is approving is not a decision anyone can make. `allow_always` / `reject_always` are remembered
+per session and keyed by tool identity (for `run_command`, the leading program, so allowing `git`
+does not allow `rm`); a matching future approval is answered without another dialog. `ask_user`
+becomes an `elicitation/create` form, and degrades to an agent message plus a cancelled tool result
+when the client does not advertise `elicitation.form`.
+
+Every suspend point settles. A client-cancelled permission dispatches `respondApproval(false)`; a
+declined/cancelled/failed elicitation settles the tool as `cancelled`; `session/cancel` and
+connection close settle every outstanding approval/question before stopping the run; and an
+unanswered interaction times out (5 minutes by default, `interactionTimeoutMs` on `AcpAgentOptions`)
+with a notice. This is what makes `session/prompt` bounded — core's `stop` deliberately skips an
+approval the user has not answered, so leaving it pending parked the next prompt forever.
 
 The host also **reconciles** its open requests against each `interaction` snapshot: an approval that is
 no longer pending was answered without the client — core answers every pending approval when auto mode
@@ -292,21 +307,21 @@ the model command (and to the `thought_level` selector above).
 | ACP surface | Status |
 |---|---|
 | `initialize` / `authenticate` / `logout` | ✅ capabilities negotiated; `authMethods` is empty and both auth methods accept as no-ops (no interactive auth) |
-| `session/new` / `load` / `resume` / `close` | ✅ (load replays once; resume does not; a live id is reused) |
-| `session/list` / `session/delete` | ✅ (disk catalog; only when the host provides the store) |
-| client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local) |
-| `session/fork` | ✅ (`session.clone`; source must be live in-process) |
+| `session/new` / `load` / `resume` / `close` | ✅ (`cwd` is the session root; load replays once incl. tool results; resume primes without replay; a live id is reused) |
+| `session/list` / `session/delete` | ✅ (disk catalog filtered by `cwd`; delete is idempotent; only when the host provides the store) |
+| client `fs/*` / `terminal/*` | ✅ with `--client-env` (opt-in; `.agents/**` and free-text commands stay local; `exists`/`stat` use local metadata first, remote-only files via the client read, `readdir` local) |
+| `session/fork` | ✅ (`session.clone`; restores a cold source; rebinding keeps updates off the source id) |
 | `session/prompt` / `cancel` / `set_mode` / `set_config_option` | ✅ (StopReason mapped; cancel → `cancelled`; `set_config_option` dispatches on the option's `category` — the write side of the `mode`, `model` and `thought_level` selects we advertise, each sharing its own entry point) |
-| `user_message_chunk` | ✅ one per user turn, stable `messageId`; injected `<ctx>` rows are skipped |
+| `user_message_chunk` | ✅ replay only (one per stored user turn, stable `messageId`, attachments included); the live path does not echo the prompt |
 | `agent_message_chunk` / `agent_thought_chunk` | ✅ incremental (stable `messageId`) |
-| `tool_call` / `tool_call_update` | ✅ kind / title / locations / streamed output; a write or edit carries its `diff` — sent as soon as the input is resolvable, and again with the result text, since an update replaces what the client holds |
+| `tool_call` / `tool_call_update` | ✅ kind / title / locations / streamed output; a write or edit carries its `diff` — sent as soon as the input is resolvable, and again with the result text, since an update replaces what the client holds; a denied call is `failed`, not `completed` |
 | `plan` (from todos) | ✅ always the complete entry list |
-| `available_commands_update` | ✅ built-in catalog + extension commands |
-| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode` **and** `set_config_option`, always carrying the WHOLE option set) |
+| `available_commands_update` | ✅ built-in catalog + extension commands, re-sent when the extension set changes |
+| `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode`, `set_config_option` and legacy `set_model`, always carrying the WHOLE option set; `session_info_update._meta.diskSessionId` follows a rebind) |
 | model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list (the protocol has no `session/set_model`) |
 | thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
-| `session/request_permission` | ✅ approvals → four-option round-trip |
-| `elicitation/create` | ✅ `ask_user` (with an agent-message fallback) |
+| `session/request_permission` | ✅ approvals → four-option round-trip; cancel/timeout/disconnect settle as a denial; `allow_always` / `reject_always` are remembered per session |
+| `elicitation/create` | ✅ `ask_user` (with an agent-message fallback); decline/cancel/failure settle as a cancelled tool result |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
 | per-session `mcpServers` | ✅ stdio / http / sse on `new` / `load` / `resume`; `acp` refused; fork refuses the field |
 | `additionalDirectories` | ⛔ deliberately undeclared, refused with one shared error on all four requests that can carry it |
@@ -328,7 +343,8 @@ The same stdio ACP host is the IM integration surface: an external ACP client (f
 `codent acp` in the workspace and drives sessions, streaming, permissions and `ask_user` over ACP.
 There is no Codent-specific IM bridge; the integration is configuration plus this protocol.
 
-- The process `cwd` is the workspace root (`work_dir` on the bridge side), fixed at handshake.
+- The `cwd` each session request carries is that session's workspace root (`work_dir` on the bridge
+  side); the process `cwd` is only the default when `session/list` omits one.
 - cc-connect starts one ACP process per chat/session (idle processes may be recycled); every process
   uses the project's `work_dir`, so platforms under one project share the workspace and its persisted
   sessions — not one live session.
@@ -343,7 +359,8 @@ Full recipe and verification checklist:
 
 | Module | Responsibility |
 |---|---|
-| `agent.ts` | the ACP app: handler registration, the session-id → bridge map, prompt turns, stop reasons |
+| `agent.ts` | the ACP app: handler registration, the session-id → bridge map, prompt turns, stop reasons, bridge lifecycle |
+| `stdio.ts` | the stdio transport (stdin backpressure, stdout EPIPE/flush) |
 | `bootstrap.ts` | local CoreEnv + model provider + runtime; builds `AcpAgentOptions` |
 | `bin.ts` | the standalone `codent-acp` entry (flag parsing + stdio) |
 | `projector.ts` | `AgentSession` channels → `session/update` (per-message / per-tool cursors; replay) |
@@ -373,6 +390,7 @@ pnpm --filter @codent/acp run validate:acp:mcp        # session/new + load/resum
 pnpm --filter @codent/acp run validate:acp:client-env
 pnpm --filter @codent/acp run validate:acp:terminal
 pnpm --filter @codent/acp run validate:acp:bootstrap
+pnpm --filter @codent/acp run validate:acp:conformance # cancel/timeout/resume/load/fork/cwd regressions
 ```
 
 The suites are an **in-process conformance run** — the official SDK's `client()` connects straight to
@@ -389,10 +407,17 @@ validator runner, which discovers `validate-*.mjs` by glob rather than by a list
   empty or absent list falls back to the file. The `acp` transport (a client-bridged server) has no
   core entry point and is rejected explicitly rather than ignored.
 - `session/resume` / `session/load` accept `mcpServers` the same way `session/new` does (both build
-  a fresh agent via `Host.create`). `session/fork` rejects it, because a fork reuses the source's
-  live agent and genuinely cannot swap servers.
-- `session/fork` requires the source to be live **in this process** — "list a session created by an
-  earlier process, then fork it" is not supported.
+  a fresh agent via `Host.create`). A live `load`/`resume` with a different list is refused, because
+  a live session's servers are fixed at creation. `session/fork` rejects the field for a live source
+  (it reuses that agent), but restores a cold source first.
+- **ACP v1 has no directory listing or metadata method.** `exists` / `stat` use local metadata first;
+  for a file that exists only on the client, `stat` derives `size` from one `fs/read_text_file` (the
+  whole file crosses the wire) and reports `mtime` as epoch (`new Date(0)`) because the real mtime is
+  unknown — freshness/TTL consumers treat that as stale, never as "just updated". `readdir` (used by
+  `list_file` / `tree`) always uses the local fallback, even under `--client-env`. A genuinely remote
+  workspace therefore needs those directory tools to run where the files are.
+- `session/fork` restores a source created by an earlier process (it is no longer limited to a
+  session live in this process), but the forked conversation still runs in this process.
 - **Model switching may switch the provider.** Selecting a model option applies that entry's
   `style` / `baseURL` / `apiKey`, the same thing `/models` does in the TUI. Because a switchable list
   only exists on the `models.json` (or multi-model remote-provider) paths, those are the only
@@ -409,5 +434,6 @@ validator runner, which discovers `validate-*.mjs` by glob rather than by a list
 - `additionalDirectories` is not supported and is refused with a JSON-RPC error on every request
   that can carry it (`session/new`, `session/load`, `session/resume`, `session/fork`) — one shared
   check, one message. It is never silently ignored, so a client cannot end up talking to an agent
-  that cannot see the roots it asked for. `cwd` is only a hint (the root is fixed at handshake) and
-  is not forwarded.
+  that cannot see the roots it asked for. `cwd` is the session's workspace root when present
+  (normalized, absolute); an absent value falls back to the process root and a relative one is
+  refused.

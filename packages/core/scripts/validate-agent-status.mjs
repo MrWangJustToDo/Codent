@@ -97,6 +97,27 @@ assert.equal(managed.getStatus(), "completed");
   assert.equal(setStatusCalls, 1); // false path still transitions awaiting_user → completed
 }
 
+// The run's finish reason rides the state payload; the ACP host maps `length` → max_tokens from it.
+{
+  let reason;
+  const controller = createAgentStatusController({
+    getStatus: () => "running",
+    setStatus: () => {},
+    getError: () => "",
+    setError: () => {},
+    setPendingApprovalCount: () => {},
+    setFinishReason: (value) => {
+      reason = value;
+    },
+    emitEvent: () => {},
+  });
+  controller.onRunFinish("length");
+  assert.equal(reason, "length");
+  controller.onRunStart();
+  assert.equal(reason, null);
+}
+assert.equal(managed.getL1State().lastFinishReason, null);
+
 managed.setStatus("running");
 managed.syncRunStatusFromUIMessages([
   {
