@@ -4,6 +4,7 @@ import { Text } from "ink";
 import { forwardRef, memo } from "react";
 
 import { useDiffFileCache } from "../hooks/use-diff-file-cache.js";
+import { useDiffHighlighter } from "../hooks/use-diff-highlighter.js";
 import { COLORS } from "../theme/colors.js";
 import { MIN_SPLIT_DIFF_WIDTH } from "../utils/diff-layout.js";
 
@@ -35,6 +36,7 @@ export const EditDiff = memo(
     { id, width, height, oldFile, newFile, oldPath, newPath, startLine },
     ref
   ) {
+    const highlighter = useDiffHighlighter();
     const paddedOld = padContent(oldFile, startLine);
     const paddedNew = padContent(newFile, startLine);
 
@@ -58,6 +60,7 @@ export const EditDiff = memo(
           diffFile={diffFile}
           diffViewHideOperator
           diffViewHighlight
+          {...(highlighter ? { registerHighlighter: highlighter } : {})}
           // diffViewNoBG
           diffViewTheme="dark"
         />

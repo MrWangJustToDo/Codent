@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import { forwardRef, useEffect, useMemo, useState } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
+import { useDiffHighlighter } from "../hooks/use-diff-highlighter.js";
 import { COLORS } from "../theme/colors.js";
 import { isLikelyBinaryPath } from "../utils/file-icons.js";
 
@@ -55,6 +56,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
   ref
 ) {
   const env = useCoreEnv();
+  const highlighter = useDiffHighlighter();
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [scrollState, setScrollState] = useState<ScrollState | null>(null);
   const fileName = useMemo(() => filePath.split("/").pop() || filePath, [filePath]);
@@ -156,6 +158,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
           height={codeHeight}
           codeViewTheme="dark"
           codeViewHighlight
+          {...(highlighter ? { registerHighlighter: highlighter } : {})}
           codeViewNoBG
           onScrollChange={handleScrollChange}
         />

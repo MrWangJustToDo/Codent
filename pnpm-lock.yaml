@@ -132,8 +132,8 @@ importers:
         specifier: ^9.0.0
         version: 9.0.0
       ink-stream-markdown:
-        specifier: ^0.0.12
-        version: 0.0.12(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        specifier: ^0.0.14
+        version: 0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       reactivity-store:
         specifier: ^0.4.0
         version: 0.4.0(react@19.3.0)
@@ -329,8 +329,8 @@ importers:
         specifier: ^5.6.2
         version: 5.6.2
       ink-stream-markdown:
-        specifier: ^0.0.12
-        version: 0.0.12(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        specifier: ^0.0.14
+        version: 0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       reactivity-store:
         specifier: ^0.4.0
         version: 0.4.0(react@19.3.0)
@@ -489,8 +489,8 @@ importers:
         specifier: ^0.8.2
         version: 0.8.3
       ink-stream-markdown:
-        specifier: ^0.0.12
-        version: 0.0.12(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        specifier: ^0.0.14
+        version: 0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       monaco-editor:
         specifier: ^0.56.0
         version: 0.56.0
@@ -3616,8 +3616,8 @@ packages:
   ini@1.3.8:
     resolution: {integrity: sha512-JV/yugV2uzW5iMRSiZAyDtQd+nxtUnjeLt0acNdw98kKLrvuRVyB80tsREOE7yvGVgalhZ6RNXCmEHkUKBKxew==}
 
-  ink-stream-markdown@0.0.12:
-    resolution: {integrity: sha512-/34eUOd0jBJOZ/WRoQcNPSGU7KGiOrYtwGa4/x2faWP80JFRUy6DYX5cxmv4Ty+zUUdwYG9fWRHGEtEqLIZ5HA==}
+  ink-stream-markdown@0.0.14:
+    resolution: {integrity: sha512-YWtTBpT2tgI7Zn7GsLe57cBtinGx00VeOhYHiZltLtXD+HESPYRlCiH3TWf33Fiy0S9RycIV2wMM+YA3Kpcphg==}
     engines: {node: '>=18'}
     peerDependencies:
       ink: '>=5.0.0'
@@ -4112,8 +4112,8 @@ packages:
   markdown-it-task-checkbox@1.0.6:
     resolution: {integrity: sha512-7pxkHuvqTOu3iwVGmDPeYjQg+AIS9VQxzyLP9JCg9lBjgPAJXGEkChK6A2iFuj3tS0GV3HG2u5AMNhcQqwxpJw==}
 
-  markdown-it-ts@1.1.2:
-    resolution: {integrity: sha512-17qO3LQLK+JXom5Zt6Z9l7OGWWv9eYquTxdj3xIPGe1OBHdYXrzNYA3xCgCyIj1uItv4jkqbQf6FkaqifKkySw==}
+  markdown-it-ts@1.1.3:
+    resolution: {integrity: sha512-SbESZWanQt/SLspTRPnzi2mKXatM35KHjkIy9QF0w2LZX8Gxu/37n9jiYccolE2OaMf8ikc0BK7LcFSNY/1GHQ==}
     engines: {node: '>=20.19'}
 
   marked@14.0.0:
@@ -4941,8 +4941,8 @@ packages:
     resolution: {integrity: sha512-eLoXW/DHyl62zxY4SCaIgnRhuMr6ri4juEYARS8E6sCEqzKpOiE521Ucofdx+KnDZl5xmvGYaaKCk5FEOxJCoQ==}
     engines: {node: '>= 0.4'}
 
-  stream-markdown-parser@1.2.16:
-    resolution: {integrity: sha512-5MEAPd3zxbwvpr8jimBMaptNOPoALvKwUOAVIzXk/92SmOppEN+ZWTinNeFcS219qFjlt08mDLGHW0MDTIlXNA==}
+  stream-markdown-parser@1.2.21:
+    resolution: {integrity: sha512-KxR+1MKx+8KU60pWrEPKZKWoze9GAu/hfaawZQRqFdpFUSE2L38FvxZROkdPZpmArQwaJntzM0eiv94+ITxQxQ==}
 
   string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
@@ -8375,14 +8375,14 @@ snapshots:
 
   ini@1.3.8: {}
 
-  ink-stream-markdown@0.0.12(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
+  ink-stream-markdown@0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0):
     dependencies:
       beautiful-mermaid: 1.1.3
       chalk: 5.6.2
       ink: 6.8.0(@types/react@19.3.0)(react@19.3.0)
       react: 19.3.0
       shiki: 4.4.3
-      stream-markdown-parser: 1.2.16
+      stream-markdown-parser: 1.2.21
       string-width: 8.2.2
       strip-ansi: 7.2.0
       terminal-link: 5.0.0
@@ -8834,7 +8834,7 @@ snapshots:
 
   markdown-it-task-checkbox@1.0.6: {}
 
-  markdown-it-ts@1.1.2:
+  markdown-it-ts@1.1.3:
     dependencies:
       entities: 8.1.0
       linkify-it: 6.1.0
@@ -9751,7 +9751,7 @@ snapshots:
       es-errors: 1.3.0
       internal-slot: 1.1.0
 
-  stream-markdown-parser@1.2.16:
+  stream-markdown-parser@1.2.21:
     dependencies:
       markdown-it-container: 4.0.0
       markdown-it-footnote: 4.0.0
@@ -9759,7 +9759,7 @@ snapshots:
       markdown-it-mark: 4.0.0
       markdown-it-sup: 2.0.0
       markdown-it-task-checkbox: 1.0.6
-      markdown-it-ts: 1.1.2
+      markdown-it-ts: 1.1.3
 
   string-width@4.2.3:
     dependencies:

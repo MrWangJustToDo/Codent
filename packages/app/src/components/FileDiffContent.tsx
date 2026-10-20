@@ -4,6 +4,7 @@ import { Box, Text } from "ink";
 import { forwardRef, useEffect, useMemo, useState } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
+import { useDiffHighlighter } from "../hooks/use-diff-highlighter.js";
 import { COLORS } from "../theme/colors.js";
 import { MIN_SPLIT_DIFF_WIDTH } from "../utils/diff-layout.js";
 import { isLikelyBinaryPath } from "../utils/file-icons.js";
@@ -54,6 +55,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
   ref
 ) {
   const env = useCoreEnv();
+  const highlighter = useDiffHighlighter();
   const [state, setState] = useState<DiffPreviewState>({ status: "loading" });
   const [scrollState, setScrollState] = useState<ScrollState | null>(null);
   const [diffPayload, setDiffPayload] = useState<Awaited<ReturnType<typeof fetchWorkspaceFileDiff>> | null>(null);
@@ -162,6 +164,7 @@ export const FileDiffContent = forwardRef<DiffViewRef, FileDiffContentProps>(fun
           diffViewMode={diffMode}
           diffViewHideOperator
           diffViewHighlight
+          {...(highlighter ? { registerHighlighter: highlighter } : {})}
           diffViewNoBG
           diffViewTheme="dark"
           onScrollChange={handleScrollChange}

@@ -99,7 +99,14 @@ export {
 // Types
 export type { Attachment } from "./types/attachment.js";
 
-export { initHighlighter } from "ink-stream-markdown";
+export {
+  ensureLanguage,
+  getHighlighter,
+  getHighlighterSync,
+  initHighlighter,
+  type Highlighter,
+  type InitHighlighterOptions,
+} from "./utils/shared-highlighter.js";
 export { configureEnv } from "reactivity-store";
 
 export { mergeModelsConfig, type MergeModelsConfigOptions } from "./utils/merge-models-config.js";
