@@ -48,7 +48,9 @@ export const sessionSearchOutputSchema = z.object({
   withheld: z.number().describe("Matches not returned because of `limit`."),
   truncated: z
     .boolean()
-    .describe("True when the scan itself was bounded (session cap or an oversized log), so `total` is a floor."),
+    .describe(
+      "True when the result was cut short (session cap, match/content cap, or an unreadable log), so `total` may be a floor."
+    ),
   durationMs: z.number().describe("Execution duration in milliseconds."),
   ...toolOutputBaseSchema.shape,
 });
@@ -126,11 +128,19 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
         };
       });
     },
-    toModelOutput({ output }: { toolCallId: string; input: unknown; output: SessionSearchOutput }) {
+    toModelOutput({ input, output }: { toolCallId: string; input: unknown; output: SessionSearchOutput }) {
       if (isProjectedModelContent(output)) return output;
       if (output.matches.length === 0) {
-        const note = output.truncated ? " (scan was bounded, so this is not guaranteed complete)" : "";
-        return [{ type: "text" as const, content: `session search "${output.query}": no matches${note}.` }];
+        const note = output.truncated ? " (results may be incomplete: match/content bound reached)" : "";
+        const currentId = managed?.getSessionData()?.id;
+        const asked = (input as { sessionId?: unknown } | undefined)?.sessionId;
+        // The default excludes the live session. Say so with the id, or a model that searched for
+        // something it just discussed reads "no matches" as "this tool is broken".
+        const hint =
+          !asked && currentId
+            ? ` The current session (${currentId}) is excluded by default; pass sessionId to search it.`
+            : "";
+        return [{ type: "text" as const, content: `session search "${output.query}": no matches${note}.${hint}` }];
       }
 
       const lines = output.matches.map((match) => {
@@ -141,14 +151,22 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
       });
       const withheldNote =
         output.withheld > 0 ? `\n(${output.withheld} more withheld — raise limit or narrow the query)` : "";
-      const truncatedNote = output.truncated ? "\n(scan bounded; results may be incomplete)" : "";
+      const truncatedNote = output.truncated ? "\n(results may be incomplete: match/content bound reached)" : "";
+      const first = output.matches.find((match) => match.messageIndex !== undefined);
+      // `#N` is a message index, not a physical JSONL line. Make the next action explicit: the
+      // model should follow a hit with `session_read` (which paginates), never `readFile` the log.
+      const readHint = first
+        ? `\n\nEach #N is a 0-based message index. To read around the first hit:\n` +
+          `session_read({ sessionId: "${first.sessionId}", offset: ${Math.max(0, (first.messageIndex ?? 0) - 5)}, limit: 11 })\n` +
+          `(subtract a few messages for context; do not readFile the .session.jsonl log).`
+        : "";
 
       return [
         {
           type: "text" as const,
           content: `session search "${output.query}": ${output.returned} of ${output.total} matches\n${lines.join(
             "\n"
-          )}${withheldNote}${truncatedNote}`,
+          )}${withheldNote}${truncatedNote}${readHint}`,
         },
       ];
     },

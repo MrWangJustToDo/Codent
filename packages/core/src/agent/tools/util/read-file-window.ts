@@ -9,7 +9,7 @@
  * offset-out-of-range error both need it) without retaining the lines it passes over.
  *
  * Pieces must never split a multi-byte character: a mangled character is unrecoverable once
- * decoded, and the caller reads byte windows whose edges can land inside one (see `read_text`'s
+ * decoded, and the caller reads byte windows whose edges can land inside one (see the shared
  * chunker, which only consumes through the last newline it decoded). A piece may still end
  * mid-line; its tail is carried into the next piece.
  *

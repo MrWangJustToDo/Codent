@@ -10,19 +10,26 @@
  * not readable; folding is delegated to the persistence module (`readLog` + `foldLog`).
  *
  * Everything is read through `CoreEnv.fs` (relative workspace paths, like `SessionStore`), so the
- * tools work unchanged against a remote workspace. Every scan is bounded — per-file size, file
- * count, and collected matches — so a large history cannot blow the model context or the turn.
+ * tools work unchanged against a remote workspace. Scans are bounded by session count, collected
+ * matches and rendered content; logs are streamed line by line, so file size is not a search bound.
  */
 
 import { truncateText } from "../../../utils/text-truncation.js";
 import { isCompactionSummaryUIMessage } from "../../compaction/compaction-summary.js";
-import { foldLog, getJournalPath, readLog } from "../../persistence/session-journal.js";
+import {
+  foldLog,
+  getJournalPath,
+  iterateLogLines,
+  mergeFoldedMessage,
+  readLog,
+} from "../../persistence/session-journal.js";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../../persistence/types.js";
 import { isToolCallPart, partTextContent } from "../../stream/message-parts.js";
 import { OUTPUT_LIMITS } from "../util/output-limits.js";
 
 import type { ResolvedCoreEnv } from "../../../env";
 import type { PersistedUIMessage } from "../../persistence/types.js";
+import type { UIMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Limits
@@ -30,10 +37,6 @@ import type { PersistedUIMessage } from "../../persistence/types.js";
 
 /** Maximum session logs scanned per call (newest first). */
 export const MAX_SESSIONS_SCANNED = 200;
-/** Maximum size of one session log before it is skipped as too large to read. */
-export const MAX_SESSION_FILE_BYTES = 8 * 1024 * 1024;
-/** Cumulative bytes read across the whole search, so many large logs cannot blow up a turn. */
-export const MAX_SCAN_BYTES = 32 * 1024 * 1024;
 /** Hard ceiling on collected matches (before the tool's own limit is applied). */
 export const MAX_MATCHES_COLLECTED = 500;
 /** Maximum length of a match snippet (kept within the shared per-line limit). */
@@ -103,7 +106,7 @@ export interface SearchHistoryResult {
   matches: HistoryMatch[];
   /** Total matches found within the scanned scope, before `limit`. */
   total: number;
-  /** Whether the scan itself was cut short (session/file cap or an oversized file). */
+  /** Whether the result was cut short (session cap, match/content cap, or a skipped unreadable log). */
   truncated: boolean;
 }
 
@@ -222,11 +225,68 @@ export async function listSessionIds(env: ResolvedCoreEnv): Promise<string[]> {
 }
 
 /**
+ * One contiguous window of a session's messages, folded without materializing the whole log.
+ *
+ * `offset` is a 0-based MESSAGE index (the same value `session_search` reports), not a file line.
+ * The scan still walks the log once — updates for an earlier message can be appended later — but
+ * it keeps only the unique-id order and the messages inside the requested window, so memory is
+ * bounded by the number of messages plus `limit`, not by the file's rendered content.
+ */
+export async function readSessionMessageWindow(
+  env: ResolvedCoreEnv,
+  sessionId: string,
+  offset: number,
+  limit: number
+): Promise<{ messages: SessionMessage[]; total: number }> {
+  const path = getJournalPath(sessionId);
+  try {
+    if (!(await env.fs.exists(path))) return { messages: [], total: 0 };
+  } catch {
+    return { messages: [], total: 0 };
+  }
+
+  const indexById = new Map<string, number>();
+  const windowMessages = new Map<number, PersistedUIMessage>();
+  let nextIndex = 0;
+  let summaryBoundaryIndex = 0;
+  const end = offset + limit;
+
+  try {
+    for await (const line of iterateLogLines(env.fs, path)) {
+      const message = line.message;
+      if (!message) continue;
+      let index = indexById.get(message.id);
+      if (index === undefined) {
+        index = nextIndex++;
+        indexById.set(message.id, index);
+      }
+      if (isCompactionSummaryUIMessage(message as unknown as UIMessage)) {
+        summaryBoundaryIndex = Math.max(summaryBoundaryIndex, index);
+      }
+      if (index >= offset && index < end) {
+        const previous = windowMessages.get(index);
+        windowMessages.set(index, mergeFoldedMessage(previous, message, line.messageUpdatedAt));
+      }
+    }
+  } catch {
+    // A log that vanished or became unreadable is an empty window rather than a raw IO error.
+    return { messages: [], total: 0 };
+  }
+
+  const messages: SessionMessage[] = [];
+  for (let index = offset; index < end && index < indexById.size; index++) {
+    const message = windowMessages.get(index);
+    if (!message) continue;
+    messages.push(toSessionMessage(sessionId, index, message, index >= summaryBoundaryIndex ? "current" : "shadowed"));
+  }
+  return { messages, total: indexById.size };
+}
+
+/**
  * All messages of one session, folded and in order. Empty when the log is missing.
  *
- * Reads the whole log: `searchHistory` bounds *scanning* by per-file size, but a direct
- * `session_read` folds whatever the file holds — bounding the model-visible result is the
- * tool's job (message-count + rendered-size caps, then the output cache/preview spill).
+ * A legacy whole-log helper used by validators and ad-hoc callers; the tools themselves use the
+ * streaming window/search paths. It folds the whole log, so its memory is O(messages), not O(file).
  */
 export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: string): Promise<SessionMessage[]> {
   const path = getJournalPath(sessionId);
@@ -240,24 +300,6 @@ export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: strin
     );
   } catch {
     return [];
-  }
-}
-
-/**
- * Size in bytes of one session's log, or `null` when it is absent or unstathable.
- *
- * `readSessionMessages` folds the WHOLE log — rendering needs every message, so it cannot window
- * the read the way `session_read` windows the result — which means a log larger than
- * {@link MAX_SESSION_FILE_BYTES} would be materialized in full. `searchHistory` already skips an
- * oversized log while scanning; a direct `session_read` had no equivalent gate, the same OOM class
- * `read_file` guards with its pre-read `stat.size` check. This is that gate's input. A host without
- * `fs.stat` (or a missing log) yields `null`, and the caller proceeds as before.
- */
-export async function sessionLogSize(env: ResolvedCoreEnv, sessionId: string): Promise<number | null> {
-  try {
-    return (await env.fs.stat(getJournalPath(sessionId))).size;
-  } catch {
-    return null;
   }
 }
 
@@ -300,40 +342,81 @@ function inTimeWindow(ts: number | undefined, since?: number, until?: number): b
   return true;
 }
 
-/** Collect literal, case-insensitive matches from one session's messages. */
-function searchSession(
+/** Collect literal, case-insensitive matches from one session's log, without folding it. */
+async function searchSessionStream(
+  env: ResolvedCoreEnv,
   sessionId: string,
-  messages: SessionMessage[],
   query: string,
   roles: readonly string[],
-  window: { since?: number; until?: number },
+  timeWindow: { since?: number; until?: number },
   collect: (match: HistoryMatch) => boolean
-): number {
-  let found = 0;
-  for (const message of messages) {
-    if (!roles.includes(message.role)) continue;
-    if (!message.text) continue;
-    if (!inTimeWindow(message.timestamp, window.since, window.until)) continue;
-    if (!message.text.toLowerCase().includes(query)) continue;
-    found += 1;
+): Promise<{ total: number; collected: number }> {
+  const path = getJournalPath(sessionId);
+  if (!(await env.fs.exists(path))) return { total: 0, collected: 0 };
+
+  const indexById = new Map<string, number>();
+  const matchedIds = new Set<string>();
+  // Only the first bounded candidates need a body; `matchedIds` keeps the exact total. Messages
+  // are visited in first-seen order, so a later update to a candidate replaces its body.
+  const candidates = new Map<number, PersistedUIMessage>();
+  let nextIndex = 0;
+  let summaryBoundaryIndex = 0;
+
+  for await (const line of iterateLogLines(env.fs, path)) {
+    const message = line.message;
+    if (!message) continue;
+    let index = indexById.get(message.id);
+    if (index === undefined) {
+      index = nextIndex++;
+      indexById.set(message.id, index);
+    }
+    if (isCompactionSummaryUIMessage(message as unknown as UIMessage)) {
+      summaryBoundaryIndex = Math.max(summaryBoundaryIndex, index);
+    }
+
+    const text = messageText(message);
+    const role = typeof message.role === "string" ? message.role : "unknown";
+    const timestamp = messageTimestamp(message);
+    const matches =
+      text.length > 0 &&
+      roles.includes(role) &&
+      inTimeWindow(timestamp, timeWindow.since, timeWindow.until) &&
+      text.toLowerCase().includes(query);
+
+    if (matches) {
+      matchedIds.add(message.id);
+      // Keep updating an existing candidate even after the cap; only a NEW candidate is refused.
+      if (candidates.has(index) || candidates.size < MAX_MATCHES_COLLECTED) {
+        candidates.set(index, mergeFoldedMessage(candidates.get(index), message, line.messageUpdatedAt));
+      }
+    } else if (matchedIds.delete(message.id)) {
+      // A later line can change a previously matching message (approval state, rewritten text).
+      candidates.delete(index);
+    }
+  }
+
+  for (const [index, message] of [...candidates.entries()].sort(([a], [b]) => a - b)) {
+    const text = messageText(message);
+    if (!text) continue;
     collect({
       sessionId,
-      role: message.role,
-      timestamp: message.timestamp,
-      surface: message.surface,
-      messageIndex: message.index,
-      snippet: makeSnippet(message.text, query),
+      role: typeof message.role === "string" ? message.role : "unknown",
+      timestamp: messageTimestamp(message),
+      surface: index >= summaryBoundaryIndex ? "current" : "shadowed",
+      messageIndex: index,
+      snippet: makeSnippet(text, query),
     });
   }
-  return found;
+  return { total: matchedIds.size, collected: candidates.size };
 }
 
 /**
  * Search past conversation.
  *
  * Matches come from the session logs — the complete conversation — newest session first, then
- * message order. The scan is bounded by {@link MAX_SESSIONS_SCANNED}, {@link MAX_SCAN_BYTES} and
- * {@link MAX_MATCHES_COLLECTED}; when a bound is hit `truncated` is true so the caller can say so.
+ * message order. The scan is bounded by {@link MAX_SESSIONS_SCANNED} and
+ * {@link MAX_MATCHES_COLLECTED}/the content ceiling; when a bound is hit `truncated` is true so the
+ * caller can say so. File size is not a search bound: the log is streamed line by line.
  */
 export async function searchHistory(env: ResolvedCoreEnv, options: SearchHistoryOptions): Promise<SearchHistoryResult> {
   const query = options.query.toLowerCase();
@@ -368,27 +451,25 @@ export async function searchHistory(env: ResolvedCoreEnv, options: SearchHistory
   const scanned = sessionIds.slice(0, MAX_SESSIONS_SCANNED);
   if (sessionIds.length > scanned.length) truncated = true;
 
-  let scannedBytes = 0;
   for (const id of scanned) {
-    const path = getJournalPath(id);
     try {
-      const stat = await env.fs.stat(path);
-      if (stat.size > MAX_SESSION_FILE_BYTES) {
-        truncated = true;
-        continue;
-      }
-      // Stop before reading past the cumulative budget: a history of many large logs would
-      // otherwise be read in full on every search.
-      if (scannedBytes + stat.size > MAX_SCAN_BYTES) {
-        truncated = true;
-        break;
-      }
-      scannedBytes += stat.size;
+      const found = await searchSessionStream(
+        env,
+        id,
+        query,
+        roles,
+        { since: options.since, until: options.until },
+        collect
+      );
+      total += found.total;
+      // A session with more matches than the candidate cap means the result list is incomplete,
+      // even when the caller's own `limit` is smaller than the cap.
+      if (found.total > found.collected) truncated = true;
     } catch {
-      continue;
+      // A log can vanish or become unreadable between enumeration and read (remote/HTTP, delete
+      // race). Skip that session rather than failing the whole search.
+      truncated = true;
     }
-    const messages = await readSessionMessages(env, id);
-    total += searchSession(id, messages, query, roles, { since: options.since, until: options.until }, collect);
   }
 
   return {

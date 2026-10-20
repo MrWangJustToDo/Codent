@@ -101,11 +101,11 @@ export function resolveKeepPolicy(
 ): KeepPolicy {
   const resolved = createCompactionConfig(config ?? undefined);
   const explicit = resolved.keepRecentTokens;
-  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_SUMMARIZATION_CONTEXT_WINDOW;
+  const contextBudget = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_SUMMARIZATION_CONTEXT_WINDOW;
   return {
     kind: "tokens",
     keepRecentTokens:
-      explicit && explicit > 0 ? explicit : deriveKeepRecentTokens(window, resolveReserveTokens(resolved)),
+      explicit && explicit > 0 ? explicit : deriveKeepRecentTokens(contextBudget, resolveReserveTokens(resolved)),
   };
 }
 

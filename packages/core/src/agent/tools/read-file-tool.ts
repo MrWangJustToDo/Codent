@@ -3,6 +3,7 @@ import { z } from "zod";
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../models/estimate-image-tokens.js";
 import { formatByteSize } from "../../utils/byte-size.js";
 import { utf8ByteLength } from "../../utils/bytes.js";
+import { readTextPieces } from "../../utils/read-text-pieces.js";
 
 import { defineServerTool } from "./runtime/define-tool.js";
 import { extractPdfText } from "./util/extract-pdf-text.js";
@@ -14,7 +15,6 @@ import { getFile, withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
 import type { TextWindowResult } from "./util/read-file-window.js";
-import type { CoreEnvFs } from "../../env";
 import type { FileStat } from "../../env/types";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
 
@@ -94,48 +94,6 @@ export type ReadFileOutput = z.infer<typeof readFileOutputSchema>;
 // ============================================================================
 // Streamed text reading
 // ============================================================================
-
-/**
- * Window size for a streamed text read, in bytes.
- *
- * Only decides how often we ask the host for more: the retained memory is the output caps (see
- * `read-file-window`), not this. Big enough that a normal source file is one read, small enough
- * that the transient buffer is irrelevant next to the model's output budget.
- */
-const READ_CHUNK_BYTES = 64 * 1024;
-
-/**
- * Read a text file as decoded, line-aligned pieces: each window is a byte range, but only the part
- * through its last newline is yielded — the rest is re-read in the next window.
- *
- * The alignment is load-bearing, not cosmetic. `readFileRange` decodes each range independently, so
- * a window boundary landing inside a multi-byte character turns it into U+FFFD, which is
- * unrecoverable — and a 64 KB boundary inside non-ASCII text is routine. A newline is a single
- * byte, so the consumed prefix always ends on a character boundary, and advancing by its BYTE
- * length keeps the next window aligned. A full window with no newline at all is a single line
- * longer than the window: every line cap is already behind such a line, so it is yielded and the
- * scan discards it.
- */
-async function* readTextPieces(fsys: CoreEnvFs, filePath: string): AsyncGenerator<string> {
-  let from = 0;
-  for (;;) {
-    const window = await fsys.readFileRange!(filePath, from, from + READ_CHUNK_BYTES);
-    if (utf8ByteLength(window) < READ_CHUNK_BYTES) {
-      // A short read is EOF.
-      yield window;
-      return;
-    }
-    const lastNewline = window.lastIndexOf("\n");
-    if (lastNewline === -1) {
-      yield window;
-      from += READ_CHUNK_BYTES;
-      continue;
-    }
-    const consumed = window.slice(0, lastNewline + 1);
-    yield consumed;
-    from += utf8ByteLength(consumed);
-  }
-}
 
 /** Re-yield the pieces already consumed for the binary probe, then the rest of the read. */
 async function* withPrefix(consumed: string[], rest: AsyncIterator<string>): AsyncGenerator<string> {
@@ -424,7 +382,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           // line-aligned piece normally IS the whole first window (any window whose last newline is
           // late), but a window whose last newline sits early yields a short piece — and the bytes
           // just past it would otherwise go unexamined. The loop is bounded in practice: a window
-          // with no newline at all yields all `READ_CHUNK_BYTES`, and EOF ends it.
+          // with no newline at all yields a full chunk, and EOF ends it.
           const probed: string[] = [];
           let probePrefix = "";
           while (utf8ByteLength(probePrefix) < BINARY_PROBE_BYTES) {

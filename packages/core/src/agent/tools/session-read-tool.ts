@@ -2,23 +2,19 @@
  * `session_read` — render one past session's messages as text.
  *
  * The append-only session log is one JSON object per line, so it has no readable form without a
- * parser; `grep` can locate a session but cannot show the conversation. This tool folds a session
- * and renders it windowed, so the model can walk a long conversation a page at a time. Pair it
- * with `session_search` (which returns the `sessionId` and message index to read from).
+ * parser; `grep` can locate a session but cannot show the conversation. This tool scans the log
+ * once and materializes only the requested message window, so the model can walk a long
+ * conversation a page at a time — including logs larger than the old fold-everything ceiling. Pair
+ * it with `session_search` (which returns the `sessionId` and message index to read from).
  */
 
 import { z } from "zod";
 
 import { FileError } from "../../env/types";
-import { formatByteSize } from "../../utils/byte-size.js";
+import { truncateText } from "../../utils/text-truncation.js";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
-import {
-  MAX_SESSION_FILE_BYTES,
-  readSessionMessages,
-  sessionExists,
-  sessionLogSize,
-} from "./session-search/session-reader.js";
+import { readSessionMessageWindow, sessionExists } from "./session-search/session-reader.js";
 import { OUTPUT_LIMITS } from "./util/output-limits.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { withDuration } from "./util/tool-result.js";
@@ -33,12 +29,8 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 /** Maximum characters of one message's text kept in the result. */
 const MAX_MESSAGE_CHARS = 8000;
-
-/** Truncate one message's text, marking what was dropped so the model knows to read on. */
-function truncateMessageText(text: string): string {
-  if (text.length <= MAX_MESSAGE_CHARS) return text;
-  return `${text.slice(0, MAX_MESSAGE_CHARS)}…[truncated ${text.length - MAX_MESSAGE_CHARS} chars]`;
-}
+/** The omission marker for a message cut at {@link MAX_MESSAGE_CHARS}. */
+const MESSAGE_TRUNCATION_MARKER = "…[truncated]";
 
 /** Render one message as a text block (role + time, then text and a tool summary line). */
 function renderMessage(message: SessionMessage): string {
@@ -100,7 +92,9 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
         .int({ message: "offset: must be an integer" })
         .min(0, { message: "offset: must be >= 0 (0-indexed)" })
         .optional()
-        .describe("Message index to start from. Defaults to 0."),
+        .describe(
+          "Message index to start from (0-based). Use the `messageIndex` from `session_search`; subtract a few for context."
+        ),
       limit: z
         .number()
         .int({ message: "limit: must be an integer" })
@@ -115,21 +109,11 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
         const start = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
 
-        // Bound the READ, not only the rendered page. Folding a session is inherently whole-file
-        // (`readSessionMessages`), so an oversized log would be materialized in full before any of
-        // the page/text caps apply — the same OOM class `read_file` rejects with a pre-read
-        // `stat.size` check, and the same bound `session_search` already applies while scanning.
-        // `session_search` can still find the session; the message names that alternative.
-        const logSize = await sessionLogSize(coreEnv, sessionId);
-        if (logSize !== null && logSize > MAX_SESSION_FILE_BYTES) {
-          throw new Error(
-            `Session log too large to read: ${formatByteSize(logSize)} ` +
-              `(max ${formatByteSize(MAX_SESSION_FILE_BYTES)}). Use session_search to locate a specific message.`
-          );
-        }
-
-        const all = await readSessionMessages(coreEnv, sessionId);
-        if (all.length === 0 && !(await sessionExists(coreEnv, sessionId))) {
+        // A true windowed read: the log is scanned once for the folded message order (memory is
+        // O(unique message ids + this window), not O(file)), and only [start, start+take) is
+        // materialized. `offset` therefore does not require folding/rejecting the whole log.
+        const messageWindow = await readSessionMessageWindow(coreEnv, sessionId, start, take);
+        if (messageWindow.total === 0 && !(await sessionExists(coreEnv, sessionId))) {
           throw new FileError("not_found", `Session "${sessionId}" has no log on disk`, sessionId);
         }
 
@@ -138,17 +122,20 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
         // truncated individually, and the page stops once the shared content ceiling is reached.
         const page: SessionMessage[] = [];
         let pageChars = 0;
-        for (let i = start; i < all.length && page.length < take; i++) {
+        for (const message of messageWindow.messages) {
+          if (page.length >= take) break;
           const remaining = OUTPUT_LIMITS.MAX_CONTENT_CHARS - pageChars;
-          if (remaining <= 0) break;
-          let text = truncateMessageText(all[i]!.text);
-          if (text.length > remaining) text = `${text.slice(0, remaining)}…[truncated]`;
-          page.push({ ...all[i]!, text });
+          if (remaining <= MESSAGE_TRUNCATION_MARKER.length) break;
+          let text = truncateText(message.text, MAX_MESSAGE_CHARS, { marker: MESSAGE_TRUNCATION_MARKER });
+          if (text.length > remaining) {
+            text = truncateText(text, remaining, { marker: MESSAGE_TRUNCATION_MARKER });
+          }
+          page.push({ ...message, text });
           pageChars += text.length;
         }
 
-        const hasMore = start + page.length < all.length;
-        const content = renderPage(sessionId, page, start, all.length, hasMore);
+        const hasMore = start + page.length < messageWindow.total;
+        const content = renderPage(sessionId, page, start, messageWindow.total, hasMore);
         // Spill the rendered page when large, so the model gets a head+tail preview plus a path.
         const cached = await maybeCacheOutput(coreEnv, content, `${toolCallId}-session-read`);
 
@@ -159,7 +146,7 @@ text ends with the exact \`offset\` to call again — use that number, do not ad
           offset: start,
           limit: take,
           returned: page.length,
-          total: all.length,
+          total: messageWindow.total,
           hasMore,
           cachedOutputPath: cached.cachedOutputPath,
         };

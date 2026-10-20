@@ -8,9 +8,9 @@
  *   1. both shapes are searched, and a session hit is parsed (session id + role + snippet), not raw
  *   2. the current session is excluded by default and re-included by an explicit sessionId
  *   3. the role filter narrows results
- *   4. results are bounded (a limit withholds the rest, and says so)
- *   5. `session_read` renders a session, paginates, refuses an oversized log before folding it, and
- *      fails clearly on an unknown id
+ *   4. results are bounded (a limit withholds the rest, and a candidate-cap overflow says so)
+ *   5. `session_read` renders a session window, paginates, works on oversized/multi-window logs,
+ *      and fails clearly on an unknown id
  *   6. the tools are read-only and root-only (absent from the subagent tool set)
  *   7. the retrieval guidance no longer describes the stale single-line `.session.json` format
  *
@@ -28,12 +28,12 @@ import {
   listSessionIds,
   makeSnippet,
   readSessionMessages,
+  readSessionMessageWindow,
   getEnv,
   registerCoreEnv,
   clearCoreEnv,
   searchHistory,
   sessionExists,
-  MAX_SESSION_FILE_BYTES,
 } from "../dist/dev.mjs";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
@@ -46,8 +46,10 @@ const line = (message) => JSON.stringify({ t: "message", message, state: {} });
 const text = (content) => ({ type: "text", content });
 const toolCall = (name, args) => ({ type: "tool-call", name, arguments: args });
 
-/** Path of the (logically) oversized log — its reported `stat.size` is forced below. */
+/** Path of a log whose `stat.size` is forced large; contents stay small. */
 const OVERSIZE_LOG = ".agents/sessions/ses_oversize.session.jsonl";
+/** A second large-size fixture (same point: size no longer gates search/read). */
+const READ_OVERSIZE_LOG = ".agents/sessions/ses_read_oversize.session.jsonl";
 
 const FILES = {
   ".agents/sessions/ses_old.session.jsonl": [
@@ -96,10 +98,21 @@ const FILES = {
     }),
     line({ id: "p3", role: "user", parts: [text("SURFACE_PROBE recent note")], updatedAt: 3000 }),
   ].join("\n"),
-  // An oversized log. The contents are SMALL on purpose: only `stat` reports it over the limit, so
-  // the read gate is pinned without allocating megabytes — and the marker text proves the file was
-  // never folded.
-  [OVERSIZE_LOG]: [line({ id: "xo1", role: "user", parts: [text("SHOULD_NEVER_BE_FOLDED")] })].join("\n"),
+  // Oversized logs. The contents are SMALL on purpose: only `stat` reports them large, so the
+  // streaming paths are exercised without allocating megabytes. Both are searchable/readable now —
+  // file size is not a search/read bound.
+  [OVERSIZE_LOG]: [line({ id: "xo1", role: "user", parts: [text("STREAMED_OVERSIZE_MARKER")] })].join("\n"),
+  [READ_OVERSIZE_LOG]: [line({ id: "ro1", role: "user", parts: [text("READ_OVERSIZE_MARKER")] })].join("\n"),
+  // A single JSONL line larger than one 64 KiB read window, with CJK text at the chunk boundary.
+  // This is the shape that must stay byte-aligned while streaming (the previous chunker advanced
+  // by a decoded-string length and could drop the next record).
+  ".agents/sessions/ses_multiwindow.session.jsonl": [
+    line({ id: "mw1", role: "user", parts: [text(`${"一".repeat(70000)} MULTI_WINDOW_MARKER`)] }),
+  ].join("\n"),
+  // More matches than the collection cap; `truncated` must be true even though `total` is exact.
+  ".agents/sessions/ses_many.session.jsonl": Array.from({ length: 600 }, (_, i) =>
+    line({ id: `many${i}`, role: "user", parts: [text(`MANY_MATCH ${i}`)] })
+  ).join("\n"),
 };
 
 function readdirOf(dir) {
@@ -127,13 +140,28 @@ registerCoreEnv({
     stat: async (path) => ({
       isDirectory: readdirOf(path).length > 0,
       isFile: path in FILES,
-      // `OVERSIZE_LOG` reports over the read limit despite its small contents — see FILES.
-      size: path === OVERSIZE_LOG ? MAX_SESSION_FILE_BYTES + 1 : path in FILES ? FILES[path].length : 0,
+      // The two oversized paths report large sizes despite small contents: search/read no longer
+      // gate on file size, so these fixtures prove the streaming paths still work.
+      size:
+        path === OVERSIZE_LOG
+          ? 8 * 1024 * 1024 + 1
+          : path === READ_OVERSIZE_LOG
+            ? 64 * 1024 * 1024 + 1
+            : path in FILES
+              ? Buffer.byteLength(FILES[path], "utf8")
+              : 0,
       mtime: new Date(0),
     }),
     readFile: async (path) => {
       if (!(path in FILES)) throw new Error(`no such file: ${path}`);
       return FILES[path];
+    },
+    // Mirrors native-fs: byte range, decoded independently. This is the path session readers use
+    // now; without it the validator silently exercises only the whole-file fallback.
+    readFileRange: async (path, start, end) => {
+      if (!(path in FILES)) throw new Error(`no such file: ${path}`);
+      const bytes = Buffer.from(FILES[path], "utf8");
+      return bytes.subarray(start, end).toString("utf8");
     },
     // Writes are only expected for the tool-output spill (.agents/cache/tool-output/); the
     // session logs and transcripts are never written (asserted structurally in section 7).
@@ -158,7 +186,18 @@ try {
     const ids = await listSessionIds(getEnv());
     assert.deepEqual(
       ids.sort(),
-      ["ses_big", "ses_compacted", "ses_current", "ses_old", "ses_other", "ses_oversize", "ses_spill"],
+      [
+        "ses_big",
+        "ses_compacted",
+        "ses_current",
+        "ses_many",
+        "ses_multiwindow",
+        "ses_old",
+        "ses_other",
+        "ses_oversize",
+        "ses_read_oversize",
+        "ses_spill",
+      ],
       "all session logs enumerated"
     );
 
@@ -169,6 +208,25 @@ try {
     assert.equal(messages[2].toolSummary, 'run_command({"command":"deploy --blue"})', "tool calls render as a summary");
     assert.equal(await sessionExists(getEnv(), "ses_old"), true);
     assert.equal(await sessionExists(getEnv(), "nope"), false);
+    const windowed = await readSessionMessageWindow(getEnv(), "ses_old", 1, 2);
+    assert.deepEqual(
+      windowed.messages.map((message) => message.text),
+      messages.slice(1, 3).map((message) => message.text),
+      "the windowed reader agrees with the full fold at the requested offset"
+    );
+    assert.equal(windowed.total, messages.length, "the windowed reader reports the full message count");
+    const multi = await readSessionMessageWindow(getEnv(), "ses_multiwindow", 0, 1);
+    assert.match(
+      multi.messages[0]?.text ?? "",
+      /MULTI_WINDOW_MARKER/,
+      "a line spanning >1 chunk survives the range reader"
+    );
+    assert.ok(
+      !(multi.messages[0]?.text ?? "").includes("\uFFFD"),
+      "a multi-byte character split at the chunk edge is not corrupted"
+    );
+    const multiHit = await searchHistory(getEnv(), { query: "MULTI_WINDOW_MARKER", limit: 5 });
+    assert.equal(multiHit.matches.length, 1, "search streams a multi-chunk line and finds its tail");
   }
 
   // ==========================================================================
@@ -263,6 +321,9 @@ try {
     const result = await searchHistory(getEnv(), { query: "cache", limit: 1 });
     assert.equal(result.matches.length, 1, "at most `limit` matches are returned");
     assert.ok(result.total >= 2, "the total counts matches beyond the limit");
+    const many = await searchHistory(getEnv(), { query: "MANY_MATCH", limit: 50 });
+    assert.equal(many.total, 600, "total is exact beyond the candidate cap");
+    assert.equal(many.truncated, true, "exceeding the candidate cap marks the result truncated");
   }
   assert.match(
     makeSnippet(`${"x".repeat(200)} needle ${"y".repeat(200)}`, "needle", 100),
@@ -281,6 +342,51 @@ try {
     );
     assert.equal(managedResult.total, 0, "the tool excludes the live session (from `managed`)");
     assert.equal(managedResult.returned, 0);
+    const noMatch = {
+      query: "no-such-token",
+      matches: [],
+      total: 0,
+      returned: 0,
+      withheld: 0,
+      truncated: false,
+      durationMs: 1,
+    };
+    const { toModelOutputRegistry } = await import("../dist/dev.mjs");
+    const renderNoMatch = toModelOutputRegistry.get("session_search");
+    const rendered = await renderNoMatch({ toolCallId: "s0", input: { query: "no-such-token" }, output: noMatch });
+    assert.match(
+      rendered[0].content,
+      /current session \(ses_current\) is excluded by default/,
+      "a no-match result tells the model how to include the live session"
+    );
+    const matchOutput = {
+      query: "blue-green",
+      matches: [
+        {
+          sessionId: "ses_old",
+          role: "user",
+          surface: "shadowed",
+          messageIndex: 3,
+          snippet: "blue-green strategy",
+        },
+      ],
+      total: 1,
+      returned: 1,
+      withheld: 0,
+      truncated: false,
+      durationMs: 1,
+    };
+    const renderedMatch = await renderNoMatch({
+      toolCallId: "s1b",
+      input: { query: "blue-green" },
+      output: matchOutput,
+    });
+    assert.match(
+      renderedMatch[0].content,
+      /session_read\(\{ sessionId: "ses_old", offset: 0, limit: 11 \}\)/,
+      "a match tells the model the concrete session_read follow-up (including context offset)"
+    );
+    assert.match(renderedMatch[0].content, /0-based message index/, "the hit index is explained");
 
     const bounded = await searchTool.execute({ query: "cache", limit: 1 }, { toolCallId: "s2", context: {} });
     assert.equal(bounded.returned, 1);
@@ -339,17 +445,20 @@ try {
       "an unknown session id fails with a clear error"
     );
 
-    // The READ is gated, not only the rendered page: `session_read` folds the whole log, so an
-    // oversized one is refused before it is materialized (the same pre-read `stat.size` gate
-    // `read_file` uses), and the message names the alternative. Search skips it rather than failing,
-    // so the session is not lost.
-    await assert.rejects(
-      () => readTool.execute({ sessionId: "ses_oversize" }, { toolCallId: "r4" }),
-      (error) => /too large to read/.test(error.message) && /session_search/.test(error.message),
-      "an oversized session log is refused before it is folded, naming the alternative"
-    );
-    const skipped = await searchHistory(getEnv(), { query: "SHOULD_NEVER_BE_FOLDED", limit: 10 });
-    assert.equal(skipped.matches.length, 0, "search skips an oversized log instead of failing");
+    // The read is windowed: a log beyond the old whole-fold ceiling is readable because only the
+    // requested message window is materialized.
+    const readableOversize = await readTool.execute({ sessionId: "ses_read_oversize" }, { toolCallId: "r4a" });
+    assert.equal(readableOversize.returned, 1, "a windowed read works on a log beyond the old fold limit");
+    const readableBroadOversize = await readTool.execute({ sessionId: "ses_oversize" }, { toolCallId: "r4b" });
+    assert.equal(readableBroadOversize.returned, 1, "a windowed read works above the old broad-scan cap");
+    const broad = await searchHistory(getEnv(), { query: "STREAMED_OVERSIZE_MARKER", limit: 10 });
+    assert.equal(broad.matches.length, 1, "a broad search streams an oversized log instead of skipping it");
+    const explicit = await searchHistory(getEnv(), {
+      query: "STREAMED_OVERSIZE_MARKER",
+      limit: 10,
+      sessionId: "ses_oversize",
+    });
+    assert.equal(explicit.matches.length, 1, "an explicit sessionId searches the oversized session");
   }
 
   // ==========================================================================

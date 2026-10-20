@@ -10,6 +10,7 @@
  * A torn trailing line (crash mid-append) is skipped on read.
  */
 
+import { readTextPieces } from "../../utils/read-text-pieces.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
 import { SESSION_DIR, SESSION_LOG_MESSAGE, SESSION_LOG_SUFFIX } from "./types.js";
@@ -60,6 +61,51 @@ export async function readLog(fs: CoreEnvFs, path: string): Promise<SessionLogLi
     if (parsed) lines.push(parsed);
   }
   return lines;
+}
+
+/**
+ * Session logs are much larger than source files and every `readFileRange` may be one HTTP
+ * round-trip on a remote host; 1 MiB keeps the window buffer small while cutting the request count
+ * 16x compared with the generic 64 KiB text chunk.
+ */
+const SESSION_LOG_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Yield valid log lines one at a time, without materializing the whole file.
+ *
+ * Uses the shared line-aligned `readTextPieces` chunker, so the session reader and `read_file`
+ * cannot disagree about newline alignment, multi-byte boundaries or EOF. Hosts without the range
+ * primitive fall back to one `readFile`; the caller still never keeps all parsed messages.
+ */
+export async function* iterateLogLines(fs: CoreEnvFs, path: string): AsyncGenerator<SessionLogLine> {
+  if (!(await fs.exists(path))) return;
+
+  if (fs.readFileRange) {
+    let pending = "";
+    for await (const piece of readTextPieces(fs, path, SESSION_LOG_CHUNK_BYTES)) {
+      let start = 0;
+      for (;;) {
+        const newline = piece.indexOf("\n", start);
+        if (newline === -1) break;
+        const parsed = parseLine(pending + piece.slice(start, newline));
+        pending = "";
+        if (parsed) yield parsed;
+        start = newline + 1;
+      }
+      if (start < piece.length) pending += piece.slice(start);
+    }
+    if (pending) {
+      const parsed = parseLine(pending);
+      if (parsed) yield parsed;
+    }
+    return;
+  }
+
+  const content = await fs.readFile(path);
+  for (const raw of content.split("\n")) {
+    const parsed = parseLine(raw);
+    if (parsed) yield parsed;
+  }
 }
 
 /**
@@ -281,6 +327,26 @@ export function readMessageUpdatedAt(message: PersistedUIMessage): number | unde
   return toStamp(message.updatedAt);
 }
 
+/**
+ * Fold one later line of an already-seen message, the ONE replacement rule.
+ *
+ * A resumed process holds the first line's body, which may lack `updatedAt`; its later whole-message
+ * rewrite is authoritative, so merge it over the partial first line. Every other update replaces
+ * the body. Search/window streaming and `foldLog` all call this, so they cannot disagree.
+ */
+export function mergeFoldedMessage(
+  previous: PersistedUIMessage | undefined,
+  message: PersistedUIMessage,
+  legacyLineTime?: unknown
+): PersistedUIMessage {
+  if (!previous) return message;
+  const lineTime = toStamp(legacyLineTime);
+  const updatedAt = readMessageUpdatedAt(message);
+  return readMessageUpdatedAt(previous) === undefined && lineTime !== undefined && updatedAt !== undefined
+    ? { ...previous, ...message }
+    : message;
+}
+
 /** Our decision-time stamp carried by a persisted tool-call part (`undefined` on a v6 line). */
 export function readApprovalUpdatedAt(part: PersistedToolCallPart): number | undefined {
   return toStamp(part.approval?.updatedAt);
@@ -327,10 +393,7 @@ export function foldLog(lines: SessionLogLine[]): FoldedSessionLog {
       // A resumed process holds the first line's body — it may lack `updatedAt`
       // (the seeding write did not stamp) — and rewrites the whole message on its
       // next save, so that later line is the authority for the body.
-      const fold: PersistedUIMessage =
-        prev && readMessageUpdatedAt(prev) === undefined && lineTime !== undefined && updatedAt !== undefined
-          ? { ...prev, ...message }
-          : message;
+      const fold = mergeFoldedMessage(prev, message, line.messageUpdatedAt);
       byId.set(message.id, fold);
 
       if (fold.role !== "assistant") continue;
