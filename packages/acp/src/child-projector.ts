@@ -20,7 +20,17 @@
 import { AcpProjector } from "./projector.js";
 
 import type { SessionUpdate } from "./types.js";
-import type { AgentSession } from "@codent/core";
+import type { AgentSession, AgentSessionChannel } from "@codent/core";
+
+/**
+ * The only channels a child needs: its transcript, tools, usage, and the compaction stream/status.
+ *
+ * Deliberately absent: `interaction` (a subagent has no approvals/ask_user — the spec forbids
+ * subscribing), `subagents` (subagents cannot spawn), `todos`/`plan`/`mode` (top-level selectors),
+ * `extensions` (no command surface), and `extension-ui` (no extensions). `state` stays for compaction
+ * status, with the title suppressed (the parent's announcement is the child's label).
+ */
+const CHILD_CHANNELS: AgentSessionChannel[] = ["messages", "tool", "summary", "lifecycle", "state", "usage"];
 
 /** Client capabilities a child projector needs (the `subagents` gate itself lives in the host). */
 export interface ChildProjectorClient {
@@ -60,6 +70,7 @@ function firstUserMessageId(session: AgentSession): string | undefined {
 export function createChildProjector(session: AgentSession, options: ChildProjectorOptions): ChildProjectorHandle {
   const promptId = firstUserMessageId(session);
   const projector = new AcpProjector(session, {
+    suppressTitle: true,
     rootPath: options.rootPath,
     emit: (update) => {
       if (options.isClosed()) return;
@@ -72,16 +83,14 @@ export function createChildProjector(session: AgentSession, options: ChildProjec
       // A child has no children of its own (subagents cannot spawn subagents).
       subagents: false,
     },
-    ...(promptId
-      ? {
-          userMessageAsSessionMessage: {
-            messageId: promptId,
-            senderSessionId: options.parentSessionId,
-            recipientSessionId: options.childId,
-            acpMessageId: options.parentTaskToolCallId ? `task:${options.parentTaskToolCallId}` : promptId,
-          },
-        }
-      : {}),
+    // `messageId` is omitted when the snapshot is not hydrated yet (remote `connect()`): the
+    // projector then converts the FIRST user message that arrives, so the prompt is not lost.
+    userMessageAsSessionMessage: {
+      ...(promptId ? { messageId: promptId } : {}),
+      senderSessionId: options.parentSessionId,
+      recipientSessionId: options.childId,
+      acpMessageId: options.parentTaskToolCallId ? `task:${options.parentTaskToolCallId}` : options.childId,
+    },
   });
 
   return {
@@ -89,7 +98,7 @@ export function createChildProjector(session: AgentSession, options: ChildProjec
       // Replay BEFORE subscribing (the same ordering `attach` uses): the replay primes the cursors,
       // so the retained-message delivery a subscription triggers emits nothing twice.
       if (replay) projector.replayFrom(session.getSnapshot());
-      projector.start({ primeOnly: !replay, seedState: false });
+      projector.start({ primeOnly: !replay, seedState: false, channels: CHILD_CHANNELS });
     },
     stop() {
       projector.stop();

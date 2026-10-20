@@ -23,12 +23,7 @@
 
 import { formatCompactionSummaryContent } from "@codent/core";
 
-import {
-  buildElicitationRequest,
-  mapElicitationResponse,
-  sessionConfigOptions,
-  toolLocationsFor,
-} from "../dist/index.mjs";
+import { sessionConfigOptions, toolLocationsFor } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
 import { capture, schemaFailures, zod } from "./acp-scenario.mjs";
@@ -741,72 +736,6 @@ const compactKey = "compact:agent_1";
     JSON.stringify(after.map((u) => u.content.text))
   );
   c.stop();
-}
-
-// ===========================================================================
-// 10. `ask_user` keeps the free-form answer the TUI offers
-// ===========================================================================
-//
-// The tool's contract is "the user can still provide a free-form answer", and the TUI gives them a text
-// field next to the options. A form whose only field is an `enum` takes that away — the client can render
-// buttons and nothing else — so the options carry a companion string, and a typed answer outranks the
-// selection (and is reported as the answer's `draft`).
-{
-  const withOptions = buildElicitationRequest("s1", { toolCallId: "c1", question: "Pick", options: ["a", "b"] });
-  const properties = withOptions.requestedSchema.properties ?? {};
-  check(
-    "an options question also offers a free-form field",
-    properties.custom?.type === "string" && Array.isArray(properties.answer?.enum),
-    JSON.stringify(Object.keys(properties))
-  );
-  check(
-    "…and passes the protocol's own elicitation schema",
-    (() => {
-      const parsed = zod.zCreateElicitationRequest.safeParse(withOptions);
-      return parsed.success ? true : JSON.stringify(parsed.error.issues.slice(0, 2));
-    })() === true
-  );
-  check(
-    "a typed answer becomes the answer AND the draft (not the selected option)",
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a", custom: "my own" } })) ===
-      JSON.stringify({ answer: "my own", draft: "my own" }),
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a", custom: "my own" } }))
-  );
-  check(
-    "a selection still maps to the option, with no draft",
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: "a" } })) ===
-      JSON.stringify({ answer: "a" })
-  );
-  check(
-    "a multi-select answer keeps its selected list",
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"] } })) ===
-      JSON.stringify({ answer: "a, b", selected: ["a", "b"] })
-  );
-  // Ticking options AND typing is not either/or: dropping the ticks was reported as "only my typing was
-  // sent", and the model then cannot tell which predefined answers were chosen.
-  check(
-    "…and a typed answer is an ADDITIONAL entry, not a replacement",
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"], custom: "mine" } })) ===
-      JSON.stringify({ answer: "a, b, mine", selected: ["a", "b"], draft: "mine" }),
-    JSON.stringify(mapElicitationResponse({ action: "accept", content: { answer: ["a", "b"], custom: "mine" } }))
-  );
-  // The question is the form's `message`; a field title repeating it rendered the question twice in Zed.
-  check(
-    "the question is not repeated in the field labels",
-    withOptions.message === "Pick" && properties.answer?.title !== "Pick" && properties.custom?.title !== "Pick",
-    JSON.stringify({ message: withOptions.message, labels: [properties.answer?.title, properties.custom?.title] })
-  );
-  const noOptions = buildElicitationRequest("s1", { toolCallId: "c2", question: "Why?" });
-  const plain = noOptions.requestedSchema.properties?.answer ?? {};
-  check(
-    "a question with no options is plain free text",
-    plain.type === "string" && !Array.isArray(plain.enum),
-    JSON.stringify(plain)
-  );
-  check(
-    "declining an elicitation is a null answer, not an empty string",
-    mapElicitationResponse({ action: "decline" }) === null
-  );
 }
 
 finish(checker.failures);

@@ -1115,8 +1115,33 @@ for (const [label, finishReason, iteration, expected] of [
   const { updates, value } = await runClient(app, async (cx) => {
     const s = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
     const response = await cx.request("session/set_model", { sessionId: s.sessionId, modelId: "0:m2" });
+    // A reopened thread must carry the same legacy state, not `{}` (the picker then showed the old model).
+    const loaded = await cx.request(methods.agent.session.load, {
+      sessionId: s.sessionId,
+      cwd: "/ws",
+      mcpServers: [],
+    });
+    // Re-selecting the model the load response just advertised must stay silent: load/resume seed
+    // the "last advertised" mirrors, so the first set does not produce a redundant update.
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: s.sessionId,
+      configId: "model",
+      value: "0:m2",
+    });
+    // A COLD load has no live mirrors; re-selecting the model it just advertised must still be
+    // silent. Without seeding, `advertised()` sees `undefined` and broadcasts a redundant update.
+    const cold = await cx.request(methods.agent.session.load, {
+      sessionId: "ses_cold",
+      cwd: "/ws",
+      mcpServers: [],
+    });
+    await cx.request(methods.agent.session.setConfigOption, {
+      sessionId: cold._meta?.sessionId ?? "ses_cold",
+      configId: "model",
+      value: "0:m1",
+    });
     await tick(20);
-    return response;
+    return { response, loaded, cold };
   });
   const update = updates
     .map((u) => u.update)
@@ -1125,7 +1150,31 @@ for (const [label, finishReason, iteration, expected] of [
         u.sessionUpdate === "config_option_update" &&
         u.configOptions?.some((o) => o.category === "model" && o.currentValue === "0:m2")
     );
-  check("legacy session/set_model still accepts the old API", JSON.stringify(value) === "{}");
+  check(
+    "legacy session/set_model returns the updated legacy `models` state",
+    value?.response?.models?.currentModelId === "0:m2",
+    JSON.stringify(value?.response?.models)
+  );
+  check(
+    "…and the complete updated configOptions",
+    value?.response?.configOptions?.some((option) => option.category === "model" && option.currentValue === "0:m2")
+  );
+  check(
+    "session/load carries the legacy `models` state for a picker that reads it",
+    value?.loaded?.models?.currentModelId === "0:m2",
+    JSON.stringify(value?.loaded?.models)
+  );
+  check(
+    "re-selecting the loaded model stays silent (load seeded the mirrors)",
+    updates.filter((u) => u.update.sessionUpdate === "config_option_update").length === 1,
+    String(updates.filter((u) => u.update.sessionUpdate === "config_option_update").length)
+  );
+  check(
+    "…including after a COLD load (the first advertisement of that process)",
+    value?.cold?.models?.currentModelId === "0:m1" &&
+      updates.filter((u) => u.update.sessionUpdate === "config_option_update").length === 1,
+    JSON.stringify(value?.cold?.models)
+  );
   check("legacy session/set_model re-advertises configOptions", Boolean(update));
 }
 

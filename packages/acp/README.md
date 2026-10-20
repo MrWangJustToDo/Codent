@@ -268,8 +268,10 @@ description — the same `toolCallInfo` the transcript uses, because a prompt th
 it is approving is not a decision anyone can make. `allow_always` / `reject_always` are remembered
 per session and keyed by tool identity (for `run_command`, the leading program, so allowing `git`
 does not allow `rm`); a matching future approval is answered without another dialog. `ask_user`
-becomes an `elicitation/create` form, and degrades to an agent message plus a cancelled tool result
-when the client does not advertise `elicitation.form`.
+becomes an `elicitation/create` form. When the client does not advertise `elicitation.form`, the
+question (and its numbered options) is posted as an agent message and the tool stays pending: the next
+plain-text prompt becomes its answer (`addToolResult`), instead of cancelling the question at t=0. A
+slash command is still a command; the question remains pending.
 
 Every suspend point settles. A client-cancelled permission dispatches `respondApproval(false)`; a
 declined/cancelled/failed elicitation settles the tool as `cancelled`; `session/cancel` and
@@ -321,9 +323,21 @@ Child sessions are **parent-owned**:
   `host.deleteSession` resolves the id as a live agent and would destroy the child.
 - Closing the parent stops the child projectors but never destroys the children; their lifecycle
   belongs to core.
-- A `session/load` / `resume` of a live parent attaches its still-live children without replaying
-  their history (the client keeps what it already rendered); a child announced after attach replays
-  its own prompt and early output.
+- A `session/load` / `resume` of a live parent **re-announces** its still-live children after the
+  response without replaying their history (the client keeps what it already rendered); a child
+  announced after attach is new and replays its own prompt and early output. A `fork` is a new
+  parent: its children are re-announced under the new id, never left streaming under the retired one.
+- A child projector subscribes only to its transcript/tools/usage and the compaction stream — no
+  `interaction`, `extensions`, or top-level selector channels — and it does not overwrite the roster
+  title with its internal agent name.
+- `session/load` replays a historical `task` row formatted, from either persisted shape (the call
+  part's `output`, or the result part's raw-JSON `content`). Without `subagents`, that row is still
+  the only result surface, so the raw object never comes back on replay.
+
+Known limitation: under `--client-env`, the client-backed environment is per **ACP session** (one id
+getter), so a child's `fs/*` / `terminal/*` requests are attributed to the parent session id. The
+subagent transcript/tool updates themselves carry the child id; only the client-env request
+attribution is shared until the env gains a per-child binding.
 
 The task's own `capabilities.cancel` is deliberately not advertised: a subagent is cancelled with its
 parent's turn (`session/cancel`), not through a per-child cancel request.
@@ -360,10 +374,10 @@ the model command (and to the `thought_level` selector above).
 | `plan` (from todos) | ✅ always the complete entry list |
 | `available_commands_update` | ✅ built-in catalog + extension commands, re-sent when the extension set changes |
 | `current_mode_update` / `config_option_update` / `session_info_update` / `usage_update` | ✅ (`config_option_update` on `set_mode`, `set_config_option` and legacy `set_model`, always carrying the WHOLE option set; `session_info_update._meta.diskSessionId` follows a rebind) |
-| model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list (the protocol has no `session/set_model`) |
+| model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list. The legacy `models` field and `session/set_model` are still served for older pickers — `set_model` answers with the updated `models` + `configOptions`, and `load`/`resume` carry `models` too, so a picker cannot stay on the previous model |
 | thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
 | `session/request_permission` | ✅ approvals → four-option round-trip; cancel/timeout/disconnect settle as a denial; `allow_always` / `reject_always` are remembered per session |
-| `elicitation/create` | ✅ `ask_user` (with an agent-message fallback); decline/cancel/failure settle as a cancelled tool result |
+| `elicitation/create` | ✅ `ask_user` (multi-select included; the next prompt answers when the client has no form support); decline/cancel/empty-accept/failure settle as a cancelled tool result |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
 | `subagent_update` + child sessions | ✅ gated by `subagents` (announce → patch; child transcripts under the child id; the parent `task` row is the formatted result) — see [Subagents](#subagents) |
 | child ownership | ✅ children are absent from `session/list`; `load` / `resume` / `prompt` / `fork` refuse a child id; `close` / `delete` are no-ops and never destroy one |

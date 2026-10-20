@@ -593,7 +593,9 @@ All domain updates route through a single unified `AgentEventBus` (`agent/agent-
 The parent's `task` row is the result of record: terminal content uses core's
 `formatToolOutput(output, "task")`, the live summary stream updates the same row, and a chunk after the
 final result is dropped. Internal workers (no `parentTaskToolCallId`) are never announced. Validate:
-`pnpm --filter @codent/acp run validate:acp:subagents` (also in `validate:acp`).
+`pnpm --filter @codent/acp run validate:acp:subagents` (the projector/host halves
+`validate-acp-subagents.mjs` + `validate-acp-subagents-host.mjs`; also in `validate:acp`). The mock
+sessions/app harness lives in `scripts/acp-subagent-scenario.mjs`.
 
 ## CoreEnv Server (Remote Mode)
 

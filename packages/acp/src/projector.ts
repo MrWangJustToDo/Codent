@@ -123,11 +123,18 @@ export interface AcpProjectorOptions {
    * post-filter would miss the retained-message delivery that `replayFrom` uses.
    */
   userMessageAsSessionMessage?: {
-    messageId: string;
+    /**
+     * The prompt's message id when it is already in the snapshot. Omitted for a remote child, whose
+     * `connect()` returns an unhydrated shell: the first user message that arrives is the prompt, and
+     * it still has to be converted (the live path used to drop user messages entirely).
+     */
+    messageId?: string;
     senderSessionId: string;
     recipientSessionId: string;
     acpMessageId: string;
   };
+  /** A child's own conversation title is the parent's roster label; do not overwrite it with `name`. */
+  suppressTitle?: boolean;
   /** Pending approvals / ask_user, forwarded from the `interaction` channel. */
   onInteraction?: (payload: unknown) => void;
   /**
@@ -232,6 +239,8 @@ export class AcpProjector {
    * and runs after {@link flushDeferred} has sent the announcement.
    */
   private deferredSubagents: AgentSessionSubagentSummary[] | null = null;
+  /** A lazily-resolved child prompt (remote attach) has already been converted once. */
+  private promptConverted = false;
 
   constructor(
     private readonly session: AgentSession,
@@ -339,7 +348,9 @@ export class AcpProjector {
         else this.emittedUserMessages.add(message.id);
         continue;
       }
-      if (message.role !== "assistant") continue;
+      // Tool-role messages (persisted at runtime; not part of the `UIMessage` union) carry their
+      // results as parts. Skipping them here was why `session/load` showed a `task` — and every
+      // other tool — with no result at all. Text/thinking are guarded by the assistant check below.
       // Replay in PART order — the order the live stream produced. Emitting "all the text, then all the
       // thinking, then the tool calls" reordered every turn (thinking after the reply, calls after both),
       // which is exactly what a client showed after a reconnect. Zed's own adapter replays by feeding the
@@ -349,7 +360,7 @@ export class AcpProjector {
       const thought = thoughtOf(message);
       for (const part of message.parts) {
         if (part.type === "thinking") {
-          if (emit) {
+          if (emit && message.role === "assistant") {
             this.publish({
               sessionUpdate: "agent_thought_chunk",
               messageId: this.acpIdOf(message),
@@ -357,7 +368,7 @@ export class AcpProjector {
             });
           }
         } else if (part.type === "text") {
-          if (emit) {
+          if (emit && message.role === "assistant") {
             this.publish({
               sessionUpdate: "agent_message_chunk",
               messageId: this.acpIdOf(message),
@@ -375,7 +386,9 @@ export class AcpProjector {
           else this.primeToolResult(part as ToolResultPartLike);
         }
       }
-      this.cursors.set(message.id, { text: text.length, thought: thought.length });
+      if (message.role === "assistant") {
+        this.cursors.set(message.id, { text: text.length, thought: thought.length });
+      }
     }
   }
 
@@ -458,6 +471,12 @@ export class AcpProjector {
   private emitMessages(messages: UIMessage[]): void {
     this.syncTurnIds(messages);
     for (const message of messages) {
+      // A child prompt can arrive on the retained `messages` tick (a remote host hydrates after
+      // attach). The live path otherwise never emits user messages — the child is the exception.
+      if (message.role === "user" && this.options.userMessageAsSessionMessage) {
+        this.emitUserMessage(message);
+        continue;
+      }
       if (message.role === "assistant") {
         this.emitAssistantText(message);
         this.emitAssistantThought(message);
@@ -488,7 +507,13 @@ export class AcpProjector {
 
     // A subagent's prompt is a parent→child message, not a user turn of the child session.
     const interSession = this.options.userMessageAsSessionMessage;
-    if (interSession && message.id === interSession.messageId) {
+    if (interSession) {
+      // A fixed id (local attach) OR the first user message (remote attach, snapshot not hydrated
+      // yet). Once converted, a later user message in a child is not a user-typed turn.
+      const isPrompt =
+        interSession.messageId === undefined ? !this.promptConverted : message.id === interSession.messageId;
+      if (!isPrompt) return;
+      this.promptConverted = true;
       this.emittedUserMessages.add(message.id);
       const text = textOf(message);
       const images = imagesOfParts(message.parts);
@@ -606,10 +631,8 @@ export class AcpProjector {
         // the door this transition used to walk past (it read `part.content`, which holds a string).
         // A `task` result is formatted for the reader (summary + status line) instead of being sent as
         // its raw object; that row is the parent's result of record.
-        const taskText =
-          state.name === BUILTIN_TOOL_NAMES.task && part.output !== undefined
-            ? formatToolOutput(part.output, BUILTIN_TOOL_NAMES.task)
-            : undefined;
+        const taskOutput = state.name === BUILTIN_TOOL_NAMES.task ? taskOutputOf(part) : undefined;
+        const taskText = taskOutput !== undefined ? formatToolOutput(taskOutput, BUILTIN_TOOL_NAMES.task) : undefined;
         const content = this.toolContentFor(state, nowTerminal, taskText, [], part.output);
         if (nowTerminal) {
           state.streamBuffer = "";
@@ -648,6 +671,11 @@ export class AcpProjector {
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
     const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text);
+    // A replayed task row carries its result on the CALL part (`output`); the persisted result part
+    // has no `output`, only the raw JSON `content`. Format it here or `session/load` shows raw JSON
+    // for every historical delegation — the one surface a client without `subagents` has.
+    const taskOutput = part.name === BUILTIN_TOOL_NAMES.task ? taskOutputOf(part) : undefined;
+    const taskText = taskOutput !== undefined ? formatToolOutput(taskOutput, BUILTIN_TOOL_NAMES.task) : undefined;
     this.tools.set(part.id, {
       status,
       name: part.name,
@@ -658,11 +686,21 @@ export class AcpProjector {
       streamBuffer: "",
       lastStreamFlush: 0,
       // NOT `replay`: the replay still owes the client a tool RESULT part, and a `true` here was
-      // what suppressed it (the retained `messages` delivery then skipped it too).
-      resultEmitted: false,
+      // what suppressed it (the retained `messages` delivery then skipped it too). A task CALL part
+      // that already carries its output IS the result, so it is the exception.
+      resultEmitted: taskText !== undefined,
       previewSent: (info.content ?? []).some((content) => content.type === "diff"),
     });
-    this.publish({ sessionUpdate: "tool_call", toolCallId: part.id, name: part.name, status, ...info });
+    const taskContent = taskText ? [{ type: "content" as const, content: textBlock(taskText) }] : [];
+    const content = [...(info.content ?? []), ...taskContent];
+    this.publish({
+      sessionUpdate: "tool_call",
+      toolCallId: part.id,
+      name: part.name,
+      status,
+      ...info,
+      ...(content.length > 0 ? { content } : {}),
+    });
     // Only a LIVE call can still see its pre-write content. On `load` replay the file has already
     // been written, so reading it would fabricate an empty/unrelated "old" side.
     if (!replay && part.name === BUILTIN_TOOL_NAMES.writeFile) void this.readWriteOldText(part.id);
@@ -766,10 +804,8 @@ export class AcpProjector {
     // The row's text. When the bytes are being rendered as an image block they must not ALSO be prose,
     // which is what `hasMedia` tells the extractor — a bare media object declares no text and so
     // contributes none. Every other result keeps the JSON that IS its rendering.
-    const taskText =
-      state?.name === BUILTIN_TOOL_NAMES.task && part.output !== undefined
-        ? formatToolOutput(part.output, BUILTIN_TOOL_NAMES.task)
-        : undefined;
+    const taskOutput = state?.name === BUILTIN_TOOL_NAMES.task ? taskOutputOf(part) : undefined;
+    const taskText = taskOutput !== undefined ? formatToolOutput(taskOutput, BUILTIN_TOOL_NAMES.task) : undefined;
     const text = taskText ?? (toolResultText(part.content, images.length > 0) || (part.error ?? ""));
     if (state) {
       // Kept so a late `write_file` oldText read can rebuild a terminal row without losing the
@@ -949,6 +985,7 @@ export class AcpProjector {
   }
 
   private emitTitle(name: string): void {
+    if (this.options.suppressTitle) return;
     if (!name || name === this.priorTitle) return;
     this.priorTitle = name;
     this.publish({ sessionUpdate: "session_info_update", title: name });
@@ -1032,6 +1069,24 @@ export class AcpProjector {
     this.finishCompaction(state.status === "aborted" ? "cancelled" : state.status === "error" ? "failed" : "completed");
   }
 
+  /**
+   * Forget every announced child (and its task streams) for a NEW parent conversation.
+   *
+   * `session/fork` re-keys this projector to a cloned session; announcing under the old id and
+   * streaming child traffic from it after the fork violates the protocol's announcement rule. The
+   * host stops the child projectors; the next snapshot re-announces whatever the new parent owns.
+   */
+  resetSubagents(): void {
+    this.announcedSubagents.clear();
+    this.deferredSubagents = null;
+    this.taskStreams.clear();
+  }
+
+  /** Re-diff the session's current `subagents` rows (fork / rebind after `/clear` · `/clone` · `/resume`). */
+  resyncSubagents(): void {
+    this.onSubagents(this.session.getSnapshot().subagents ?? []);
+  }
+
   /** Mark the start of a manual `/compact`; its command result closes the row (see below). */
   beginManualCompaction(): void {
     this.manualCompaction = true;
@@ -1062,7 +1117,6 @@ export class AcpProjector {
   private onSubagents(rows: AgentSessionSubagentSummary[]): void {
     if (!this.options.client.subagents) return;
 
-    const previousIds = [...this.announcedSubagents.keys()];
     const { announce, patch, current } = diffSubagents(this.announcedSubagents, rows, (toolCallId) =>
       this.taskPromptOf(toolCallId)
     );
@@ -1075,16 +1129,13 @@ export class AcpProjector {
       if (update) this.publish(update);
     }
 
-    const visible = rows.filter((row) => isUserVisibleTaskRow(row));
-    const visibleIds = visible.map((row) => row.id);
-    const setChanged =
-      visibleIds.length !== previousIds.length || visibleIds.some((id, index) => id !== previousIds[index]);
-    // Status patches do not change WHICH children exist; only a set change needs the host to
-    // attach/detach projectors.
-    if (!setChanged) return;
-
+    // ALWAYS hand the snapshot to the host, not only when the row SET changed: the host is the one
+    // that knows whether a child projector actually attached (`connect()` can return null), and it
+    // must get another chance on the next snapshot. It is idempotent by `bridge.subagents`.
+    //
     // AFTER the announcements: the child projector is attached from this callback, and its retained
     // messages must not reach the client before the announcement that names it.
+    const visible = rows.filter((row) => isUserVisibleTaskRow(row));
     if (this.deferred) this.deferredSubagents = visible;
     else this.options.onSubagents?.(visible);
   }
@@ -1241,6 +1292,23 @@ export class AcpProjector {
     const severity =
       event.level === "error" ? "error" : event.level === "success" || event.level === "info" ? "info" : "warning";
     this.publish({ sessionUpdate: "notice", severity, title: event.message });
+  }
+}
+
+/**
+ * A task result from either persisted shape: the call part's `output`, or the result part's raw-JSON
+ * `content` (older sessions persist no `output`). Anything that is not a JSON object stays unknown,
+ * so a non-task payload is never guessed into a task result.
+ */
+function taskOutputOf(part: { output?: unknown; content?: unknown }): unknown {
+  if (part.output !== undefined) return part.output;
+  const text = typeof part.content === "string" ? part.content : toolResultText(part.content);
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
   }
 }
 

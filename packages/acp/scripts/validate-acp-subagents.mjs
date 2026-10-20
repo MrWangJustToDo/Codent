@@ -18,84 +18,18 @@
  * Run: pnpm --filter @codent/acp run validate:acp:subagents
  */
 
-import { client as createAcpClient, methods } from "@agentclientprotocol/sdk";
-
-import { AcpProjector, createAcpAgent } from "../dist/index.mjs";
+import { AcpProjector } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
-import { zod } from "./acp-scenario.mjs";
+import { projectorScenario, row, schemaFailures, validateUpdate } from "./acp-subagent-scenario.mjs";
 import { baseSnapshot } from "./session-fixture.mjs";
 
 const checker = createChecker();
 const check = checker.check;
-const schemaFailures = [];
-
-function validateUpdate(update) {
-  const parsed = zod.zSessionUpdate.safeParse(update);
-  if (parsed.success) return;
-  schemaFailures.push(
-    `${update.sessionUpdate}: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"} ${i.message}`).join("; ")}`
-  );
-}
 
 // ===========================================================================
 // 1. Projector: announcement gate, filtering, state mapping, task results
 // ===========================================================================
-
-function projectorScenario({ client = { compaction: true, notices: true, subagents: true }, messages = [] } = {}) {
-  const listeners = new Set();
-  const emitted = [];
-  const attached = [];
-  let snapshot = baseSnapshot("parent", { messages });
-
-  const projector = new AcpProjector(
-    {
-      getSnapshot: () => snapshot,
-      subscribe: (handler) => {
-        listeners.add(handler);
-        return () => listeners.delete(handler);
-      },
-    },
-    {
-      rootPath: "/ws",
-      emit: (update) => {
-        emitted.push(update);
-        validateUpdate(update);
-      },
-      commands: () => ({ builtin: [], extension: [] }),
-      client,
-      onSubagents: (rows) => attached.push({ at: emitted.length, ids: rows.map((row) => row.id) }),
-    }
-  );
-  projector.start({ seedState: false });
-
-  return {
-    emitted,
-    attached,
-    push: (channel, payload) => {
-      for (const listener of listeners) listener({ channel, payload, ts: Date.now() });
-    },
-    subagents: (rows) => {
-      snapshot = { ...snapshot, subagents: rows };
-      for (const listener of listeners)
-        listener({ channel: "subagents", payload: { subagents: rows }, ts: Date.now() });
-    },
-    setMessages: (next) => {
-      snapshot = { ...snapshot, messages: next };
-      for (const listener of listeners) listener({ channel: "messages", payload: next, ts: Date.now() });
-    },
-    stop: () => projector.stop(),
-  };
-}
-
-const row = (over = {}) => ({
-  id: "child-1",
-  status: "running",
-  name: "explore",
-  description: "find the tests",
-  parentTaskToolCallId: "tc1",
-  ...over,
-});
 
 {
   const scenario = projectorScenario({ client: { compaction: true, notices: true } });
@@ -121,6 +55,11 @@ const row = (over = {}) => ({
     "…carries the CURRENT state (no follow-up read needed)",
     announcements[0]?.state?.state === "running",
     JSON.stringify(announcements[0]?.state)
+  );
+  check(
+    "…advertises no child mutations (`capabilities` omitted)",
+    announcements[0]?.capabilities === undefined,
+    JSON.stringify(announcements[0]?.capabilities)
   );
   check(
     "…and the child projector is attached only AFTER the announcement",
@@ -188,7 +127,11 @@ const row = (over = {}) => ({
     patch?.sessionUpdate === "subagent_update" && patch.title === undefined && patch.state?.state === "idle",
     JSON.stringify(patch)
   );
-  check("…and does not re-attach the child", scenario.attached.length === 1);
+  check(
+    "…and the attach callback still names only the child (host attach is idempotent)",
+    scenario.attached.length >= 1 && scenario.attached.every((entry) => JSON.stringify(entry.ids) === '["child-1"]'),
+    JSON.stringify(scenario.attached)
+  );
 
   const beforeRemoval = scenario.emitted.length;
   scenario.subagents([]);
@@ -196,6 +139,34 @@ const row = (over = {}) => ({
     "a removed child is forgotten without inventing an idle update",
     scenario.emitted.length === beforeRemoval && JSON.stringify(scenario.attached.at(-1)?.ids) === "[]",
     JSON.stringify({ emitted: scenario.emitted.length, attached: scenario.attached.at(-1) })
+  );
+  scenario.stop();
+}
+
+{
+  const scenario = projectorScenario();
+  scenario.setMessages([
+    {
+      id: "a9",
+      role: "assistant",
+      parts: [
+        {
+          id: "tc1",
+          type: "tool-call",
+          name: "task",
+          input: { prompt: "fallback title from the task call" },
+          arguments: '{"prompt":"fallback title from the task call"}',
+          state: "input-complete",
+        },
+      ],
+    },
+  ]);
+  scenario.subagents([row({ description: undefined, name: undefined })]);
+  const announcement = scenario.emitted.find((u) => u.sessionUpdate === "subagent_update");
+  check(
+    "a row with no description/name falls back to the task prompt",
+    announcement?.title === "fallback title from the task call" && announcement?.description === undefined,
+    JSON.stringify({ title: announcement?.title, description: announcement?.description })
   );
   scenario.stop();
 }
@@ -239,12 +210,31 @@ const row = (over = {}) => ({
   const stream = projectorScenario();
   stream.setMessages(message(taskCall("input-complete")));
   stream.push("summary", { type: "reset", key: "task:tc1", source: "task", toolCallId: "tc1", seq: 1 });
-  stream.push("summary", { type: "append", key: "task:tc1", chunk: "searching the repo", seq: 2 });
+  // Two chunks past the 300ms flush window: content REPLACES, so the second must carry BOTH.
+  const realNow = Date.now;
+  let clockOffset = 0;
+  Date.now = () => realNow() + clockOffset;
+  try {
+    stream.push("summary", { type: "append", key: "task:tc1", chunk: "searching ", seq: 2 });
+    clockOffset = 1000;
+    stream.push("summary", { type: "append", key: "task:tc1", chunk: "the repo", seq: 3 });
+  } finally {
+    Date.now = realNow;
+  }
   const streamed = stream.emitted.filter((u) => u.toolCallId === "tc1").at(-1);
   check(
-    "a task summary chunk updates the task row's content",
+    "a task summary update re-sends the ACCUMULATED text",
     (streamed?.content ?? []).some((c) => c?.content?.text === "searching the repo"),
     JSON.stringify(streamed?.content)
+  );
+  check(
+    "…and the summary is not duplicated onto a child/message surface",
+    stream.emitted.every(
+      (u) =>
+        (u.sessionUpdate !== "session_message" && u.sessionUpdate !== "agent_message_chunk") ||
+        !JSON.stringify(u).includes("searching")
+    ),
+    JSON.stringify(stream.emitted.map((u) => u.sessionUpdate))
   );
 
   stream.setMessages(message(taskCall("complete", { output: { summary: "final answer", iterations: 2 } })));
@@ -261,6 +251,19 @@ const row = (over = {}) => ({
       !(final?.content ?? []).some((c) => c?.content?.text?.includes("late tail")),
     JSON.stringify(stream.emitted.at(-1)?.content)
   );
+
+  // `end` should only stop the stream, never re-send the final text.
+  const beforeEnd = stream.emitted.length;
+  stream.push("summary", { type: "end", key: "task:tc1", seq: 5 });
+  check("a summary `end` after the result emits nothing", stream.emitted.length === beforeEnd);
+
+  // The formatted row is capability-independent (the only surface a non-subagent client has).
+  const gated = projectorScenario({ client: { compaction: true, notices: true } });
+  gated.setMessages(message(taskCall("complete", { output: { summary: "gated result", iterations: 1 } })));
+  const gatedUpdate = gated.emitted.filter((u) => u.toolCallId === "tc1").at(-1);
+  const gatedText = (gatedUpdate?.content ?? []).map((c) => c?.content?.text ?? "").join("");
+  check("without `subagents` the task row is still formatted", gatedText.includes("gated result"), gatedText);
+  gated.stop();
   stream.stop();
   scenario.stop();
 }
@@ -293,6 +296,116 @@ const row = (over = {}) => ({
   scenario.setMessages([{ id: "a2", role: "assistant", parts: [call, result] }]);
   check("…and re-delivering the final result emits nothing", scenario.emitted.length === beforeRepeat);
   scenario.stop();
+}
+
+{
+  // `session/load` replays stored rows. A persisted task result is either on the CALL part (`output`)
+  // or only in the result part's raw-JSON `content` — both must render formatted, not as JSON.
+  const src = baseSnapshot("parent");
+  const call = {
+    id: "tc3",
+    type: "tool-call",
+    name: "task",
+    input: { prompt: "p", description: "p" },
+    arguments: '{"prompt":"p","description":"p"}',
+    state: "complete",
+    output: { summary: "replayed result", reachedLimit: true },
+  };
+  const replay = projectorScenario();
+  replay.projector.replayFrom({ ...src, messages: [{ id: "a3", role: "assistant", parts: [call] }] });
+  const initial = replay.emitted.find((u) => u.sessionUpdate === "tool_call" && u.toolCallId === "tc3");
+  const initialText = (initial?.content ?? []).map((c) => c?.content?.text ?? "").join("");
+  check(
+    "session/load formats a task output carried on the call part",
+    initialText.includes("replayed result") &&
+      initialText.includes("limit reached") &&
+      initial?.rawOutput === undefined,
+    initialText
+  );
+  replay.stop();
+
+  const persisted = projectorScenario();
+  persisted.projector.replayFrom({
+    ...src,
+    messages: [
+      {
+        id: "a4",
+        role: "assistant",
+        parts: [
+          {
+            id: "tc4",
+            type: "tool-call",
+            name: "task",
+            input: {},
+            arguments: "{}",
+            state: "complete",
+          },
+        ],
+      },
+      {
+        id: "t4",
+        role: "tool",
+        parts: [
+          {
+            type: "tool-result",
+            toolCallId: "tc4",
+            state: "complete",
+            content: JSON.stringify({ summary: "from persistence", aborted: true }),
+          },
+        ],
+      },
+    ],
+  });
+  const persistedUpdate = persisted.emitted.filter((u) => u.toolCallId === "tc4").at(-1);
+  const persistedText = (persistedUpdate?.content ?? []).map((c) => c?.content?.text ?? "").join("");
+  check(
+    "…and a persisted result part without `output` is parsed, not shown as raw JSON",
+    persistedText.includes("from persistence") &&
+      persistedText.includes("cancelled") &&
+      persistedUpdate?.rawOutput === undefined,
+    persistedText
+  );
+  persisted.stop();
+}
+
+{
+  // A remote `connect()` returns an unhydrated shell, so the prompt id is unknown at attach. The
+  // FIRST user message that arrives must still become a `session_message` (the live path used to
+  // drop user messages entirely).
+  const listeners = new Set();
+  const emitted = [];
+  let messages = [];
+  const session = {
+    getSnapshot: () => baseSnapshot("child", { messages }),
+    subscribe: (handler) => {
+      listeners.add(handler);
+      return () => listeners.delete(handler);
+    },
+  };
+  const projector = new AcpProjector(session, {
+    rootPath: "/ws",
+    emit: (update) => {
+      emitted.push(update);
+      validateUpdate(update);
+    },
+    commands: () => ({ builtin: [], extension: [] }),
+    client: { compaction: true, notices: true, subagents: false },
+    userMessageAsSessionMessage: {
+      senderSessionId: "ses_parent",
+      recipientSessionId: "child-1",
+      acpMessageId: "task:tc9",
+    },
+  });
+  projector.start({ seedState: false });
+  messages = [{ id: "u9", role: "user", parts: [{ type: "text", content: "late prompt" }] }];
+  for (const listener of listeners) listener({ channel: "messages", payload: messages, ts: Date.now() });
+  const late = emitted.find((u) => u.sessionUpdate === "session_message");
+  check(
+    "a prompt hydrated after attach is still a `session_message`",
+    late?.messageId === "task:tc9" && late?.content?.[0]?.text === "late prompt",
+    JSON.stringify(emitted)
+  );
+  projector.stop();
 }
 
 {
@@ -334,309 +447,6 @@ const row = (over = {}) => ({
     "…not a `user_message_chunk` in the child session",
     emitted.every((u) => u.sessionUpdate !== "user_message_chunk")
   );
-}
-
-// ===========================================================================
-// 2. Host: wiring, ownership, cleanup
-// ===========================================================================
-
-function makeSession(id, { messages = [] } = {}) {
-  const listeners = new Set();
-  let snapshot = baseSnapshot(id, { messages });
-  let dispatched = [];
-  return {
-    id,
-    getSnapshot: () => snapshot,
-    getSummaryStreamSnapshot: () => null,
-    setMessages: (next) => {
-      snapshot = { ...snapshot, messages: next };
-    },
-    subscribe: (handler) => {
-      listeners.add(handler);
-      return () => listeners.delete(handler);
-    },
-    listenerCount: () => listeners.size,
-    push: (channel, payload) => {
-      for (const listener of listeners) listener({ channel, payload, ts: Date.now() });
-    },
-    dispatch: async (command) => {
-      dispatched.push(command);
-      return { ok: true };
-    },
-    take: () => {
-      const seen = dispatched;
-      dispatched = [];
-      return seen;
-    },
-  };
-}
-
-/**
- * Drive one ACP app over a fake host. `capability` decides whether the client is a subagent client.
- *
- * Everything runs INSIDE `connectWith` — once it returns, the connection is closed and no further
- * request/notification can be observed.
- */
-async function hostScenario({ subagents }, run) {
-  const prompt = { id: "u1", role: "user", parts: [{ type: "text", content: "explore the repo" }] };
-  const parent = makeSession("parent");
-  const child = makeSession("child-1", { messages: [prompt] });
-  const events = [];
-  const destroyed = [];
-  const deleted = [];
-  const connected = [];
-
-  const client = createAcpClient({ name: "subagents-client" }).onNotification(methods.client.session.update, (ctx) => {
-    events.push({ sessionId: ctx.params.sessionId, update: ctx.params.update });
-    validateUpdate(ctx.params.update);
-  });
-
-  const app = createAcpAgent({
-    host: {
-      async create() {
-        return { session: parent };
-      },
-      connect: (id) => {
-        connected.push(id);
-        return id === "child-1" ? child : null;
-      },
-      // Live agents include the child AND an internal worker that is never announced; the disk
-      // catalog is separate and holds no child at all.
-      list: () => [
-        { agentId: "parent", name: "parent", status: "running", createdAt: 1, updatedAt: 2 },
-        {
-          agentId: "child-1",
-          name: "find the tests",
-          parentId: "parent",
-          status: "running",
-          createdAt: 1,
-          updatedAt: 2,
-        },
-        {
-          agentId: "worker-1",
-          name: "memory-summarizer",
-          parentId: "parent",
-          status: "running",
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      ],
-      listPersistedSessions: () => [],
-      async destroy(id) {
-        destroyed.push(id);
-      },
-      async deleteSession(id) {
-        deleted.push(id);
-      },
-    },
-    defaults: { model: "fake-model" },
-    rootPath: "/ws",
-  });
-
-  await client.connectWith(app, async (cx) => {
-    await cx.request(methods.agent.initialize, {
-      protocolVersion: 1,
-      clientCapabilities: {
-        // `undefined` = absent, `null` = explicitly unsupported, `{}` = supported — all three are
-        // legal protocol values and only the object form may enable the feature.
-        ...(subagents === undefined ? {} : { subagents }),
-        session: { compaction: true, notices: true },
-      },
-    });
-    const started = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
-    await run({
-      cx,
-      started,
-      parent,
-      child,
-      events,
-      destroyed,
-      deleted,
-      connected,
-      /** Notifications are sent asynchronously; one macrotask flushes the frames. */
-      settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
-      rejection: async (method, params) => {
-        try {
-          await cx.request(method, params);
-          return undefined;
-        } catch (error) {
-          return error;
-        }
-      },
-    });
-  });
-}
-
-{
-  await hostScenario({ subagents: {} }, async (scenario) => {
-    const parentId = scenario.started.sessionId;
-
-    scenario.parent.push("subagents", { subagents: [row()] });
-    await scenario.settle();
-    const announcement = scenario.events.find((e) => e.update.sessionUpdate === "subagent_update");
-    check(
-      "host: the parent announces the child",
-      announcement?.sessionId === parentId &&
-        announcement?.update.sessionId === "child-1" &&
-        announcement?.update.title === "find the tests",
-      JSON.stringify(announcement)
-    );
-    check("host: the child session is connected for projection", scenario.connected.includes("child-1"));
-
-    const childPrompt = scenario.events.find(
-      (e) => e.sessionId === "child-1" && e.update.sessionUpdate === "session_message"
-    );
-    check(
-      "host: the child's prompt is a session_message from the parent",
-      childPrompt?.update.senderSessionId === parentId &&
-        childPrompt?.update.recipientSessionId === "child-1" &&
-        childPrompt?.update.content?.[0]?.text === "explore the repo",
-      JSON.stringify(childPrompt)
-    );
-    check(
-      "host: the announcement is the FIRST frame naming the child",
-      scenario.events.findIndex((e) => e.update.sessionUpdate === "session_message") >
-        scenario.events.findIndex((e) => e.update.sessionUpdate === "subagent_update"),
-      JSON.stringify(scenario.events.map((e) => [e.sessionId, e.update.sessionUpdate]))
-    );
-
-    scenario.child.setMessages([
-      { id: "u1", role: "user", parts: [{ type: "text", content: "explore the repo" }] },
-      {
-        id: "a1",
-        role: "assistant",
-        parts: [
-          { type: "text", content: "the tests use node:test" },
-          { id: "ct1", type: "tool-call", name: "grep", state: "input-complete", input: { pattern: "node:test" } },
-        ],
-      },
-    ]);
-    scenario.child.push("messages", scenario.child.getSnapshot().messages);
-    await scenario.settle();
-    const childText = scenario.events.find(
-      (e) => e.sessionId === "child-1" && e.update.sessionUpdate === "agent_message_chunk"
-    );
-    check(
-      "host: child transcript updates carry the child session id",
-      childText?.update.content?.text?.includes("node:test"),
-      JSON.stringify(childText)
-    );
-    check(
-      "host: …including the child's tool calls",
-      scenario.events.some(
-        (e) => e.sessionId === "child-1" && e.update.sessionUpdate === "tool_call" && e.update.toolCallId === "ct1"
-      ),
-      JSON.stringify(scenario.events.filter((e) => e.sessionId === "child-1").map((e) => e.update.sessionUpdate))
-    );
-    scenario.child.push("usage", baseSnapshot("child-1").usage);
-    await scenario.settle();
-    check(
-      "host: …and its usage",
-      scenario.events.some((e) => e.sessionId === "child-1" && e.update.sessionUpdate === "usage_update"),
-      JSON.stringify(scenario.events.filter((e) => e.sessionId === "child-1").map((e) => e.update.sessionUpdate))
-    );
-
-    const listed = await scenario.cx.request(methods.agent.session.list, {});
-    check(
-      "host: session/list never contains the child",
-      !(listed.sessions ?? []).some((session) => session.sessionId === "child-1"),
-      JSON.stringify(listed.sessions)
-    );
-
-    // Ownership: a child is not a root session.
-    const workerLoad = await scenario.rejection(methods.agent.session.load, {
-      sessionId: "worker-1",
-      cwd: "/ws",
-      mcpServers: [],
-    });
-    check(
-      "host: a live child that was never announced is still refused",
-      workerLoad?.code === -32602,
-      String(workerLoad?.code)
-    );
-    const loads = await scenario.rejection(methods.agent.session.load, {
-      sessionId: "child-1",
-      cwd: "/ws",
-      mcpServers: [],
-    });
-    check("host: `session/load` on a child is refused", loads?.code === -32602, String(loads?.code));
-    const resumes = await scenario.rejection(methods.agent.session.resume, {
-      sessionId: "child-1",
-      cwd: "/ws",
-      mcpServers: [],
-    });
-    check("host: `session/resume` on a child is refused", resumes?.code === -32602, String(resumes?.code));
-    const prompts = await scenario.rejection(methods.agent.session.prompt, {
-      sessionId: "child-1",
-      prompt: [{ type: "text", text: "hi" }],
-    });
-    check("host: `session/prompt` on a child is refused", prompts?.code === -32602, String(prompts?.code));
-    const forks = await scenario.rejection(methods.agent.session.fork, {
-      sessionId: "child-1",
-      cwd: "/ws",
-      mcpServers: [],
-    });
-    check("host: `session/fork` from a child is refused", forks?.code === -32602, String(forks?.code));
-
-    const deletion = await scenario.cx.request(methods.agent.session.delete, { sessionId: "child-1" });
-    check(
-      "host: deleting a child is an idempotent no-op (never `deleteSession`)",
-      JSON.stringify(deletion) === "{}" && !scenario.deleted.includes("child-1"),
-      JSON.stringify({ deletion, deleted: scenario.deleted })
-    );
-    const closing = await scenario.cx.request(methods.agent.session.close, { sessionId: "child-1" });
-    check(
-      "host: closing a child does not destroy it",
-      JSON.stringify(closing) === "{}" && !scenario.destroyed.includes("child-1"),
-      JSON.stringify({ closing, destroyed: scenario.destroyed })
-    );
-
-    // Closing the parent stops child projection; the child itself is not destroyed.
-    await scenario.cx.request(methods.agent.session.close, { sessionId: parentId });
-    const afterClose = scenario.events.length;
-    scenario.child.push("messages", [
-      { id: "u1", role: "user", parts: [{ type: "text", content: "explore the repo" }] },
-      { id: "a2", role: "assistant", parts: [{ type: "text", content: "late child output" }] },
-    ]);
-    await scenario.settle();
-    check("host: closing the parent stops child updates", scenario.events.length === afterClose);
-    check(
-      "host: …and unsubscribes the child projector",
-      scenario.child.listenerCount() === 0,
-      `listeners=${scenario.child.listenerCount()}`
-    );
-    check(
-      "host: …without destroying the child session",
-      scenario.destroyed.length > 0 && !scenario.destroyed.includes("child-1"),
-      JSON.stringify(scenario.destroyed)
-    );
-  });
-}
-
-{
-  await hostScenario({ subagents: null }, async (scenario) => {
-    scenario.parent.push("subagents", { subagents: [row()] });
-    await scenario.settle();
-    check(
-      "host: `subagents: null` is not support (no frame, no attach)",
-      scenario.events.every((e) => e.update.sessionUpdate !== "subagent_update" && e.sessionId !== "child-1") &&
-        !scenario.connected.includes("child-1"),
-      JSON.stringify(scenario.events.map((e) => [e.sessionId, e.update.sessionUpdate]))
-    );
-  });
-}
-
-{
-  await hostScenario({}, async (scenario) => {
-    scenario.parent.push("subagents", { subagents: [row()] });
-    await scenario.settle();
-    check(
-      "host: without the capability no subagent frame is sent",
-      scenario.events.every((e) => e.update.sessionUpdate !== "subagent_update" && e.sessionId !== "child-1"),
-      JSON.stringify(scenario.events.map((e) => [e.sessionId, e.update.sessionUpdate]))
-    );
-    check("host: …and the child session is never connected", !scenario.connected.includes("child-1"));
-  });
 }
 
 for (const failure of schemaFailures) check(`protocol schema: ${failure}`, false);

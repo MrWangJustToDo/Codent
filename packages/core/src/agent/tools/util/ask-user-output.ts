@@ -29,6 +29,12 @@ export interface AskUserAnswerInput {
   draft?: string;
   /** Whether the question offered choices — decides `hasOptions`. Defaults to `selected.length > 0`. */
   hasOptions?: boolean;
+  /**
+   * The QUESTION's multi-select flag, not "how many were ticked". A multi-select answered with only
+   * typed text (`selected` empty) is still a multi-select answer; the TUI sends this flag, and the
+   * ACP elicitation path must too or the model loses the distinction.
+   */
+  multiSelect?: boolean;
   cancelled?: boolean;
   durationMs?: number;
   cachedOutputPath?: string | null;
@@ -51,12 +57,15 @@ export function buildAskUserOutput(input: AskUserAnswerInput): AskUserOutput {
     ...(input.cancelled ? { cancelled: true } : {}),
   };
 
+  // The `multiSelect` flag describes the QUESTION (the TUI always sends it), so a custom-only answer
+  // to a multi-select question keeps it too. Fall back to the tick count for hosts that omit it.
+  const multiSelect = input.multiSelect ?? selected.length > 1;
   if (selected.length > 0) {
     return {
       ...base,
       answer: [...selected, ...(draft ? [draft] : [])].join(", "),
       hasOptions: input.hasOptions ?? true,
-      multiSelect: true,
+      ...(multiSelect ? { multiSelect: true } : {}),
       selected: [...selected],
       ...(draft ? { draft } : {}),
     };
@@ -66,6 +75,7 @@ export function buildAskUserOutput(input: AskUserAnswerInput): AskUserOutput {
     ...base,
     answer: draft ?? input.answer ?? "",
     hasOptions: input.hasOptions ?? false,
+    ...(multiSelect ? { multiSelect: true } : {}),
     ...(draft ? { draft } : {}),
   };
 }

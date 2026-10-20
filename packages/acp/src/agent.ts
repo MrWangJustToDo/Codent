@@ -31,7 +31,15 @@ import { createInteractionHandlers, type InteractionHandlers } from "./interacti
 import { mapAcpMcpServers } from "./mcp.js";
 import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
-import { applyMode, applyModel, applyThoughtLevel, effortOf, sessionConfigOptions } from "./session-config-options.js";
+import {
+  applyMode,
+  applyModel,
+  applyThoughtLevel,
+  effortOf,
+  legacySessionModelState,
+  resolveAdvertisedEntryIndex,
+  sessionConfigOptions,
+} from "./session-config-options.js";
 import { buildSessionRuntime, type SessionRuntime } from "./session-runtime.js";
 import { diskSessionId, sessionSelectors, sessionSelectorsFor, stopReasonFor } from "./session-status.js";
 import { createSessionCatalog } from "./sessions.js";
@@ -97,12 +105,14 @@ interface SessionBridge {
   pending: Set<AbortController>;
   /** The in-flight `request_permission` per approval id (see `interactions.ts`). */
   pendingApprovals: Map<string, AbortController>;
-  /** The in-flight `elicitation/create` per `ask_user` tool call (with its question). */
+  /** The in-flight question per `ask_user` tool call (form, or the text-prompt fallback). */
   pendingAskUser: Map<
     string,
     {
       controller: AbortController;
       ask: { toolCallId: string; question: string; options?: string[]; multiSelect?: boolean };
+      mode: "form" | "text";
+      answer?: (text: string) => Promise<void>;
     }
   >;
   /** Session-scoped `allow_always` / `reject_always` decisions, keyed by tool identity. */
@@ -409,6 +419,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
        * priming the cursors first is what makes that retained delivery idempotent.
        */
       replay?: boolean;
+      /**
+       * Attach the retained children WITHOUT replaying their history. Set by `load`/`resume`
+       * (a reconnect must not duplicate a child transcript the client already rendered); a child
+       * announced later is new and replays normally.
+       */
+      skipChildReplay?: boolean;
       /** `session/new`: queue every update until the response frame has gone out. */
       deferEmits?: boolean;
     }
@@ -435,7 +451,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       clientCompaction: Boolean(clientCaps?.session?.compaction),
       subagentsSupported: Boolean(clientCaps?.subagents),
       subagents: new Map(),
-      skipChildReplay: opts.replay === true,
+      skipChildReplay: opts.skipChildReplay ?? opts.replay === true,
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
       lastAdvertisedConfigModel: undefined,
@@ -490,10 +506,21 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       primeOnly: !replay,
       ...(opts.deferEmits ? { deferEmits: true } : {}),
     });
+    // The retained snapshot (even an EMPTY one) has been delivered by now. Clear the one-shot flag
+    // here as well: on a load whose retained `subagents` is empty no callback attaches anything, and
+    // leaving it set made the FIRST delegation after a load attach without replay (no prompt).
+    bridge.skipChildReplay = false;
     // No id may own two live bridges: the `set` below would orphan a previous one, whose projector keeps its subscription — updates emitted twice under one id, and only `close` would ever stop it.
     bridges.get(acpId)?.projector.stop();
     bridges.set(acpId, bridge);
     return bridge;
+  };
+
+  /** Stop every child projector and forget their announcements (a NEW parent conversation). */
+  const resetChildBridges = (bridge: SessionBridge): void => {
+    for (const child of bridge.subagents.values()) child.stop();
+    bridge.subagents.clear();
+    bridge.projector.resetSubagents();
   };
 
   /**
@@ -552,8 +579,11 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
    * covers a child that was never announced (internal workers are filtered out of `subagents`), so a
    * guessed id cannot be resurrected as a root session.
    */
-  const isChildSessionId = async (sessionId: string): Promise<boolean> => {
+  const isChildSessionId = async (sessionId: string, deep = true): Promise<boolean> => {
     if (knownChildIds.has(sessionId)) return true;
+    // Hot paths (prompt/close) only need the announced set: no child has a top-level bridge, so an
+    // unannounced id still fails as unknown. `deep` is for anything that could DESTROY a child.
+    if (!deep) return false;
     try {
       const entries = await options.host.list();
       return entries.some((entry) => entry.agentId === sessionId && entry.parentId !== undefined);
@@ -598,6 +628,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     } as SessionUpdate);
     // ACP's transcript is append-only; the client cannot retract what it already rendered. Say so
     // instead of letting `/clear` / `/resume` look like a no-op in a client that keeps the thread.
+    // The conversation changed under the same handle: re-diff its child rows (a cleared session
+    // has none, so the old projectors stop). No announcement reset is needed — the handle is the
+    // same, so unchanged rows stay announced.
+    bridge.projector.resyncSubagents();
     if (command === "session.new" || command === "session.clone" || command === "session.resume") {
       notify(
         bridge,
@@ -631,12 +665,13 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     await bridge.runtime.dispose().catch(() => undefined);
   };
 
-  const { handleInteractions, settlePendingInteractions }: InteractionHandlers = createInteractionHandlers({
-    client,
-    emit,
-    ...(options.interactionTimeoutMs !== undefined ? { timeoutMs: options.interactionTimeoutMs } : {}),
-    onClientOwnedApproval: () => undefined,
-  });
+  const { handleInteractions, answerPendingTextAsk, settlePendingInteractions }: InteractionHandlers =
+    createInteractionHandlers({
+      client,
+      emit,
+      ...(options.interactionTimeoutMs !== undefined ? { timeoutMs: options.interactionTimeoutMs } : {}),
+      onClientOwnedApproval: () => undefined,
+    });
 
   // --------------------------------------------------------------------------
   // Handlers
@@ -762,10 +797,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       deferEmits: true,
     });
     const snapshot = session.getSnapshot();
-    bridge.lastAdvertisedConfigMode = snapshot.mode;
-    bridge.lastAdvertisedConfigModel = snapshot.model;
-    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
-    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
+    seedAdvertised(bridge);
     setImmediate(() => {
       // The client may have closed the session between the response and this tick; do not emit
       // seed notifications for an id nobody owns any more.
@@ -833,6 +865,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
         live.replayed = true;
         live.projector.replayFrom(live.session.getSnapshot());
       }
+      // A load/resume on a LIVE parent must re-establish its child associations for the client
+      // (RFD: invalidate cached child state on reconnect). Announcements are sent after the
+      // response frame; the child projectors stay subscribed, so no history is replayed twice.
+      setImmediate(() => {
+        if (live.closed) return;
+        live.projector.resetSubagents();
+        live.projector.resyncSubagents();
+      });
       return live;
     }
     // `cwd` is the session's workspace root (ACP requires it on load/resume). The client told us
@@ -861,6 +901,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       diskSessionId: diskSessionId(session),
       mcpKey: mcpKeyOf(mapped.servers),
       replay,
+      // Both `load` and `resume` are reconnects: an already-announced child must not replay its
+      // history. A child created after this attach is new and does replay.
+      skipChildReplay: true,
     });
   };
 
@@ -873,6 +916,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ctx.params.additionalDirectories,
       ctx.params.cwd
     );
+    seedAdvertised(bridge);
     return {
       ...sessionSelectorsFor(bridge, options.models),
       // The request may have named a disk id while the live bridge uses a stable handle; tell the
@@ -889,6 +933,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ctx.params.additionalDirectories,
       ctx.params.cwd
     );
+    seedAdvertised(bridge);
     return {
       ...sessionSelectorsFor(bridge, options.models),
       _meta: { sessionId: bridge.acpId },
@@ -897,7 +942,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   app.onRequest(methods.agent.session.close, async (ctx) => {
     // A child has no top-level bridge; closing it is not a way to destroy a subagent.
-    if (await isChildSessionId(ctx.params.sessionId)) return {};
+    if (await isChildSessionId(ctx.params.sessionId, false)) return {};
     const bridge = findBridge(ctx.params.sessionId);
     if (bridge) await closeBridge(bridge);
     return {};
@@ -1017,19 +1062,25 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (sourceDiskId !== newId && sourceDiskId !== sourceId && sourceDiskId !== sourceHandle) {
       bridges.delete(sourceDiskId);
     }
+    // The child projectors captured the SOURCE parent id, and their announcements were sent under
+    // it. The cloned conversation is a new parent: stop them and re-announce under `newId` after
+    // the response (a child has one immediate parent; it cannot stay announced under a retired id).
+    resetChildBridges(bridge);
     // Prime + subscribe on the SAME handle: the cloned messages are already in the snapshot, so a
     // plain replay would duplicate the source transcript under the new id. The fork response carries
     // the new id, so queue its seed until the frame has gone out.
     bridge.projector.start({ primeOnly: true, deferEmits: true });
     setImmediate(() => {
-      if (bridges.get(newId) === bridge) bridge.projector.flushDeferred();
+      if (bridges.get(newId) !== bridge) return;
+      bridge.projector.flushDeferred();
+      // The client already has the child transcripts from the source conversation: re-announce the
+      // association, but do not replay the child history.
+      bridge.skipChildReplay = true;
+      bridge.projector.resyncSubagents();
     });
 
     const snapshot = bridge.session.getSnapshot();
-    bridge.lastAdvertisedConfigMode = snapshot.mode;
-    bridge.lastAdvertisedConfigModel = snapshot.model;
-    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
-    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
+    seedAdvertised(bridge);
     return {
       sessionId: newId,
       ...sessionSelectors(snapshot, options.models, bridge.selectedModelEntryIndex),
@@ -1066,12 +1117,31 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     }
     bridge.lastAdvertisedConfigMode = snapshot.mode;
     bridge.lastAdvertisedConfigModel = snapshot.model;
-    bridge.lastAdvertisedConfigEntryIndex = bridge.selectedModelEntryIndex;
+    bridge.lastAdvertisedConfigEntryIndex = resolveAdvertisedEntryIndex(
+      options.models,
+      snapshot.model,
+      bridge.selectedModelEntryIndex
+    );
     bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
     emit(bridge.acpId, {
       sessionUpdate: "config_option_update",
       configOptions: sessionConfigOptions(snapshot, options.models, bridge.selectedModelEntryIndex),
     });
+  };
+
+  /** Record what the client's config cache now holds after a response that carried the selectors. */
+  const seedAdvertised = (bridge: SessionBridge): void => {
+    const snapshot = bridge.session.getSnapshot();
+    bridge.lastAdvertisedConfigMode = snapshot.mode;
+    bridge.lastAdvertisedConfigModel = snapshot.model;
+    // The ADVERTISED entry (first match when the connection entry is unknown), not the raw record:
+    // the response names an entry, and re-selecting it must not look like a change.
+    bridge.lastAdvertisedConfigEntryIndex = resolveAdvertisedEntryIndex(
+      options.models,
+      snapshot.model,
+      bridge.selectedModelEntryIndex
+    );
+    bridge.lastAdvertisedConfigEffort = effortOf(snapshot);
   };
 
   /**
@@ -1170,7 +1240,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const onLegacyRequest = app.onRequest.bind(app) as unknown as (
     method: string,
     parser: (params: unknown) => { sessionId: string; modelId: string },
-    handler: (ctx: { params: { sessionId: string; modelId: string } }) => Promise<Record<string, never>>
+    handler: (ctx: { params: { sessionId: string; modelId: string } }) => Promise<Record<string, unknown>>
   ) => void;
   onLegacyRequest(
     "session/set_model",
@@ -1195,12 +1265,19 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       // Older clients only read `models` / call `session/set_model`; they still need the
       // `configOptions` cache refreshed, or a client rendering both surfaces shows the old value.
       advertise(bridge, before);
-      return {};
+      const snapshot = bridge.session.getSnapshot();
+      const models = legacySessionModelState(options.models, snapshot.model, bridge.selectedModelEntryIndex);
+      // The legacy response carries the updated state itself: a client whose picker is driven by
+      // `models` updates from THIS frame, and an empty `{}` left it showing the previous model.
+      return {
+        configOptions: sessionConfigOptions(snapshot, options.models, bridge.selectedModelEntryIndex),
+        ...(models ? { models } : {}),
+      };
     }
   );
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
-    if (await isChildSessionId(ctx.params.sessionId)) {
+    if (await isChildSessionId(ctx.params.sessionId, false)) {
       throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
     }
     const bridge = findBridge(ctx.params.sessionId);
@@ -1208,10 +1285,21 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // A prompt can follow `session/new` before the deferred seed tick ran. Flush the seed first so
     // the client gets `available_commands_update` etc. before this turn's tool/text updates.
     bridge.projector.flushDeferred();
-    // A prompt arriving while the turn is SUSPENDED on the client (approval / `ask_user`) is force-submit:
-    // the answer it waits for was replaced by typing, so queueing waits on a client that will never answer.
-    // Settling what is pending (what cancelling does) ends that turn as `cancelled`; this prompt then runs.
-    if (bridge.pending.size > 0) await interruptBridge(bridge);
+    // A prompt arriving while the turn is SUSPENDED on the client (approval / form elicitation) is
+    // force-submit: the answer it waits for was replaced by typing, so queueing waits on a client
+    // that will never answer. The ONE exception is a text-mode question (a client without form
+    // elicitation): its answer IS a plain prompt, so let `runPrompt` settle the tool instead of
+    // cancelling the question and starting a new turn.
+    const answerText =
+      ctx.params.prompt.length === 1 && ctx.params.prompt[0]?.type === "text"
+        ? ctx.params.prompt[0].text.trim()
+        : undefined;
+    const textAskPending =
+      Boolean(answerText) &&
+      !answerText?.startsWith("/") &&
+      bridge.pendingApprovals.size === 0 &&
+      [...bridge.pendingAskUser.values()].every((entry) => entry.mode === "text");
+    if (bridge.pending.size > 0 && !textAskPending) await interruptBridge(bridge);
     const run = bridge.chain.then(async () => {
       if (TRACE_UPDATES) process.stderr.write(`[codent-acp] <- session/prompt ${ctx.params.sessionId}\n`);
       const startedAt = Date.now();
@@ -1254,6 +1342,14 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     if (mapping.error) throw new Error(mapping.error);
 
     const text = typeof mapping.content === "string" ? mapping.content : undefined;
+    // The no-elicitation fallback: a plain-text prompt answers a parked question instead of starting
+    // a new turn. A slash command is still a command (the question stays pending).
+    if (text && !text.trim().startsWith("/") && bridge.pendingApprovals.size === 0) {
+      if (await answerPendingTextAsk(bridge, text.trim())) {
+        await waitForTurnEnd(bridge);
+        return { stopReason: stopReasonFor(bridge) };
+      }
+    }
     const parsed = text ? parseSlashCommand(text) : null;
     if (parsed && text) {
       // A slash command can change what the client's `configOptions` cache says — `/models` moves the

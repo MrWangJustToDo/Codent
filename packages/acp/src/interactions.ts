@@ -58,8 +58,19 @@ export interface InteractionBridge {
    * already ran and a late answer re-decides it.
    */
   pendingApprovals: Map<string, AbortController>;
-  /** The in-flight `elicitation/create` per `ask_user` tool call (with its question for settlement). */
-  pendingAskUser: Map<string, { controller: AbortController; ask: AskUserRequest }>;
+  /**
+   * The in-flight question per `ask_user` tool call. `mode: "text"` is the no-elicitation fallback:
+   * the next plain-text prompt answers it (`answer`), instead of cancelling the tool immediately.
+   */
+  pendingAskUser: Map<
+    string,
+    {
+      controller: AbortController;
+      ask: AskUserRequest;
+      mode: "form" | "text";
+      answer?: (text: string) => Promise<void>;
+    }
+  >;
   /**
    * Session-scoped "always" decisions, keyed by tool identity.
    *
@@ -99,6 +110,11 @@ export interface InteractionHandlerContext {
 /** What {@link createInteractionHandlers} hands back — the projector's `onInteraction` entry points. */
 export interface InteractionHandlers {
   handleInteractions: (bridge: InteractionBridge, payload: unknown) => Promise<void>;
+  /**
+   * Answer the first text-mode `ask_user` with a plain-text prompt (the no-elicitation fallback).
+   * Returns false when no text-mode question is pending.
+   */
+  answerPendingTextAsk: (bridge: InteractionBridge, text: string) => Promise<boolean>;
   /**
    * Resolve every outstanding approval/question as denied/cancelled.
    *
@@ -234,7 +250,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     const controller = new AbortController();
     const startedAt = Date.now();
     bridge.pending.add(controller);
-    bridge.pendingAskUser.set(ask.toolCallId, { controller, ask });
+    bridge.pendingAskUser.set(ask.toolCallId, { controller, ask, mode: "form" });
     let settled = false;
     let timedOut = false;
     let rejectTimeout: ((error: Error) => void) | undefined;
@@ -265,16 +281,57 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         durationMs: Date.now() - startedAt,
       });
 
-    try {
-      if (!bridge.elicitation) {
-        emit(bridge.acpId, {
-          sessionUpdate: "agent_message_chunk",
-          messageId: `${bridge.acpId}-ask-${ask.toolCallId}`,
-          content: { type: "text", text: `The agent asked: ${ask.question}` },
-        });
-        await settle(cancelledOutput());
-        return;
+    if (!bridge.elicitation) {
+      // A client without form elicitation has no control to answer. Do not settle as cancelled at
+      // t=0 (that made reply / single-select / multi-select impossible); park the question and let
+      // the next plain-text prompt become its answer (`answerPendingTextAsk`).
+      clearTimeout(timer);
+      const options = ask.options ?? [];
+      const hint = options.length
+        ? `\n\nOptions:\n${options.map((option, index) => `${index + 1}. ${option}`).join("\n")}\n\n` +
+          "Reply with an option, or type your own answer."
+        : "\n\nReply with your answer.";
+      emit(bridge.acpId, {
+        sessionUpdate: "agent_message_chunk",
+        messageId: `${bridge.acpId}-ask-${ask.toolCallId}`,
+        content: { type: "text", text: `The agent asked: ${ask.question}${hint}` },
+      });
+      const textTimer = setTimeout(() => {
+        if (!stillOurs()) return;
+        void (async () => {
+          await settle(cancelledOutput());
+          notify(bridge, "The question timed out and was cancelled.", "warning");
+          bridge.pendingAskUser.delete(ask.toolCallId);
+          bridge.pending.delete(controller);
+        })();
+      }, timeoutMs);
+      textTimer.unref?.();
+      const entry = bridge.pendingAskUser.get(ask.toolCallId);
+      if (entry) {
+        entry.mode = "text";
+        entry.answer = async (text: string) => {
+          clearTimeout(textTimer);
+          // The message numbers the options; "2" means the second one, not the literal "2".
+          const trimmed = text.trim();
+          const index = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
+          const answer = index >= 0 && index < options.length ? options[index] : trimmed;
+          await settle(
+            buildAskUserOutput({
+              question: ask.question,
+              hasOptions: options.length > 0,
+              answer,
+              ...(ask.multiSelect ? { multiSelect: true } : {}),
+              durationMs: Date.now() - startedAt,
+            })
+          );
+          bridge.pendingAskUser.delete(ask.toolCallId);
+          bridge.pending.delete(controller);
+        };
       }
+      return;
+    }
+
+    try {
       const response = await Promise.race([
         client().request(methods.client.elicitation.create, buildElicitationRequest(bridge.acpId, ask), {
           cancellationSignal: controller.signal,
@@ -292,6 +349,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         buildAskUserOutput({
           question: ask.question,
           hasOptions: Boolean(ask.options?.length),
+          ...(ask.multiSelect ? { multiSelect: true } : {}),
           ...(answer.selected?.length ? { selected: answer.selected } : { answer: answer.answer ?? "" }),
           ...(answer.draft ? { draft: answer.draft } : {}),
           durationMs: Date.now() - startedAt,
@@ -307,6 +365,15 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
       bridge.pendingAskUser.delete(ask.toolCallId);
       bridge.pending.delete(controller);
     }
+  };
+
+  const answerPendingTextAsk = async (bridge: InteractionBridge, text: string): Promise<boolean> => {
+    for (const entry of bridge.pendingAskUser.values()) {
+      if (entry.mode !== "text" || !entry.answer) continue;
+      await entry.answer(text);
+      return true;
+    }
+    return false;
   };
 
   const settlePendingInteractions = async (bridge: InteractionBridge): Promise<void> => {
@@ -407,5 +474,5 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     }
   };
 
-  return { handleInteractions, settlePendingInteractions };
+  return { handleInteractions, answerPendingTextAsk, settlePendingInteractions };
 }

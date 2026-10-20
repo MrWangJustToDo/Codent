@@ -197,6 +197,24 @@ function modelConfigOption(
 }
 
 /**
+ * The entry index the ADVERTISEMENT names for `model` (first match when nothing was recorded).
+ *
+ * Distinct from the connection's `selectedEntryIndex`: the latter is only known when this process
+ * switched the session, while the advertised value always has to name SOME entry. Hosts seed their
+ * "last advertised" mirror with this, or re-selecting the value a `load` response just advertised
+ * looks like an entry change (`undefined → 0`) and broadcasts a redundant update.
+ */
+export function resolveAdvertisedEntryIndex(
+  read: ModelCatalogRead | undefined,
+  model: string | undefined,
+  selectedEntryIndex?: number
+): number | undefined {
+  const catalog = entriesOf(read);
+  if (!catalog?.length || !model) return selectedEntryIndex;
+  return resolveCurrentEntry(catalog, model, selectedEntryIndex)?.index;
+}
+
+/**
  * The session config selects advertised by `session/new` and `session/fork`.
  *
  * `mode` reads the same `mode` channel state as `session/set_mode` / `current_mode_update`, so it is

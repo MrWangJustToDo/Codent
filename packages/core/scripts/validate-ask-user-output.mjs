@@ -39,6 +39,16 @@ assert.deepEqual(multi.selected, ["A", "B"]);
 assert.equal(multi.draft, "C", "draft is trimmed");
 assert.equal(multi.multiSelect, true);
 
+// --- a multi-select question answered only with typed text keeps its flag ----------------------
+// The TUI sends the QUESTION's flag even when no option was ticked; the ACP host must match, or the
+// model loses the difference between a single free-text answer and a multi-select custom answer.
+const multiCustom = valid(
+  buildAskUserOutput({ question: "Pick", hasOptions: true, multiSelect: true, answer: "only custom" })
+);
+assert.equal(multiCustom.answer, "only custom");
+assert.equal(multiCustom.multiSelect, true, "the question is multi-select even with zero ticks");
+assert.equal(multiCustom.selected, undefined);
+
 // --- single choice overridden by typed text ----------------------------------------------------
 const override = valid(buildAskUserOutput({ question: "Which?", hasOptions: true, answer: "A", draft: "custom" }));
 assert.equal(override.answer, "custom", "typing overrides the radio choice");

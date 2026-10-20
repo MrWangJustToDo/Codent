@@ -241,6 +241,9 @@ export async function bootstrapLocalAcp(
           baseURL: connection.baseURL,
           apiKey: connection.apiKey,
         });
+        // Same single entry as the flag plane: record it, or a session can only first-match a
+        // duplicated model id when it advertises the selector.
+        modelsDefaultEntryIndex = 0;
       }
     }
   }

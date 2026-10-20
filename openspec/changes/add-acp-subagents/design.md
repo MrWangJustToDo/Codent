@@ -91,6 +91,17 @@ attached inside that window would emit from its OWN projector queue and beat the
 so the attach callback is deferred with the announcements and runs immediately after
 `flushDeferred()` — announcement first even for a session created in this window.
 
+The host is handed **every** snapshot, not only a changed row set: `connect()` may transiently return
+null (a child destroyed between the manager snapshot and the connect, or a remote eviction), and the
+next snapshot must retry. The attach itself is idempotent by `bridge.subagents`.
+
+A reconnect (`session/load`/`resume`) re-establishes the associations: announcements are re-sent after
+the response, with the existing child projectors kept (no transcript replay). A `fork` re-keys the
+parent id, so it stops the old child projectors and re-announces under the new id; the child history
+is not replayed. The one-shot "attach without replay" flag is cleared once the initial subscription
+has been delivered, even when the retained child list is empty — otherwise the first delegation after
+a load attached without replay and lost its prompt.
+
 ### D3. State comes from `AgentStatus`; `taskPhase` is metadata
 
 | `AgentStatus` | ACP state |

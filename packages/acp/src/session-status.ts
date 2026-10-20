@@ -41,11 +41,16 @@ export function sessionSelectors(
   };
 }
 
-/** {@link sessionSelectors} for a live bridge — the shape `load` / `resume` answer with. */
+/**
+ * {@link sessionSelectors} for a live bridge — the shape `load` / `resume` / `fork` answer with.
+ *
+ * Includes the legacy `models` field: a client that predates `configOptions` reads it (and calls
+ * `session/set_model`), and omitting it on a reload left that picker with no state at all.
+ */
 export function sessionSelectorsFor(
   bridge: { session: AgentSession; selectedModelEntryIndex?: number },
   read: ModelCatalogRead | undefined
-): { modes: SessionModeState; configOptions: SessionConfigOption[] } {
+): { modes: SessionModeState; configOptions: SessionConfigOption[]; models?: LegacySessionModelState } {
   return sessionSelectors(bridge.session.getSnapshot(), read, bridge.selectedModelEntryIndex);
 }
 

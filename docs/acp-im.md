@@ -154,7 +154,7 @@ Use `/whoami` or `/status` in chat to learn your platform user id.
 | `agent_message_chunk` / `agent_thought_chunk` | streaming reply / thinking (subject to the display mode) |
 | `tool_call` / `tool_call_update` | tool rows; streamed command output where supported; long tool text is subject to `[display] tool_max_len` |
 | `session/request_permission` | approve / deny buttons (four standard options) |
-| `elicitation/create` (`ask_user`) | cc-connect does **not** declare the elicitation capability, so the documented fallback runs: the question is posted as an agent message and the tool settles as cancelled. Answering it is a new prompt, not a tool result. |
+| `elicitation/create` (`ask_user`) | cc-connect does **not** declare the elicitation capability, so the fallback runs: the question and its numbered options are posted as an agent message and the tool stays pending. The next plain-text message answers it (the tool result), rather than starting a new turn; a slash command is still a command. |
 | `modes` / `set_mode` | `/mode` works (cc-connect reads the legacy field and calls `session/set_mode`) |
 | `configOptions` (`model`, `thought_level`) | not projected by cc-connect; `/model` targets its own provider registry. Use the agent's `/models` command (it is forwarded as a prompt). |
 | `available_commands_update` | not projected; `/help` lists cc-connect's commands only. Agent commands such as `/models` still work when typed (unknown commands are forwarded). |

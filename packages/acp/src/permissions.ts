@@ -99,7 +99,10 @@ export function buildElicitationRequest(sessionId: string, ask: AskUserInteracti
         answer: choice,
         custom: { type: "string", title: "Or type your own answer", description: "Optional." },
       },
-      required: ["answer"],
+      // NOT required: `custom` is a legitimate answer on its own. The ACP schema subset has no
+      // object-level `anyOf`, so requiring `answer` made "type your own instead of picking"
+      // unsubmittable (and a client without `array` support could never satisfy a multi-select).
+      // An all-empty submission is mapped to `null` (cancelled) below.
     },
   };
 }
@@ -120,7 +123,8 @@ export function mapElicitationResponse(response: CreateElicitationResponse): Eli
   // and types one more expects all three. Dropping the ticks when `custom` was filled was reported as
   // "only my typing was sent" — the typed text is one more entry in the list, kept separately as `draft`.
   if (Array.isArray(value)) {
-    const selected = value.map(String);
+    const selected = value.map(String).filter((item) => item.trim().length > 0);
+    if (selected.length === 0 && !custom) return null;
     const parts = [...selected, ...(custom ? [custom] : [])];
     return {
       answer: parts.join(", "),
@@ -131,6 +135,9 @@ export function mapElicitationResponse(response: CreateElicitationResponse): Eli
   // Single select: typing overrides the radio choice, so the typed text is the answer (and a draft).
   if (custom) return { answer: custom, draft: custom };
   // A selection is not a "custom answer": `draft` is documented as the free-form text the user typed, and
-  // an answer without options already IS that text.
-  return { answer: value == null ? "" : String(value) };
+  // an answer without options already IS that text. An empty/whitespace-only accept is NOT an answer —
+  // mapping it to "" made a cancelled form look like the user typed nothing (the bug this file fixes).
+  const text = value == null ? "" : String(value);
+  if (!text.trim()) return null;
+  return { answer: text };
 }
