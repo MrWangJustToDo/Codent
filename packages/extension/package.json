@@ -23,7 +23,7 @@
     "@my-react/react-terminal": "^0.0.31",
     "chalk": "^5.6.2",
     "ink-stream-markdown": "^0.0.14",
-    "reactivity-store": "^0.4.0"
+    "reactivity-store": "^0.4.1"
   },
   "devDependencies": {
     "@my-react/react-refresh": "^0.3.30",

@@ -19,10 +19,10 @@ minimumReleaseAgeExclude:
   - "@my-react/react-vite@0.0.36"
   - "@my-react/react@0.3.30"
   - ink-stream-markdown@0.0.14
-  - "@git-diff-view/core@0.1.7"
-  - "@git-diff-view/file@0.1.7"
-  - "@git-diff-view/lowlight@0.1.7"
-  - "@git-diff-view/cli@0.1.10"
+  - "@git-diff-view/core@0.1.8"
+  - "@git-diff-view/file@0.1.8"
+  - "@git-diff-view/lowlight@0.1.8"
+  - "@git-diff-view/cli@0.1.11"
   # Only the @tanstack versions the lockfile currently resolves AND that are still
   # younger than the quarantine window need an entry. A version the lockfile no longer
   # resolves, or one that has aged past the window, is dead weight. Add a new entry only

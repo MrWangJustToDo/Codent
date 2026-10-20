@@ -102,17 +102,17 @@ importers:
         version: 4.18.1
     devDependencies:
       '@git-diff-view/cli':
-        specifier: ^0.1.10
-        version: 0.1.10(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
+        specifier: ^0.1.11
+        version: 0.1.11(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       '@git-diff-view/core':
-        specifier: ^0.1.7
-        version: 0.1.7
+        specifier: ^0.1.8
+        version: 0.1.8
       '@git-diff-view/file':
-        specifier: ^0.1.7
-        version: 0.1.7
+        specifier: ^0.1.8
+        version: 0.1.8
       '@git-diff-view/lowlight':
-        specifier: ^0.1.7
-        version: 0.1.7
+        specifier: ^0.1.8
+        version: 0.1.8
       '@m234/nerd-fonts':
         specifier: ^0.5.1
         version: 0.5.2
@@ -135,8 +135,8 @@ importers:
         specifier: ^0.0.14
         version: 0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       reactivity-store:
-        specifier: ^0.4.0
-        version: 0.4.0(react@19.3.0)
+        specifier: ^0.4.1
+        version: 0.4.1(react@19.3.0)
       socket.io-client:
         specifier: ^4.8.4
         version: 4.8.4(supports-color@10.2.2)
@@ -181,8 +181,8 @@ importers:
         specifier: ^18.0.6
         version: 18.0.6
       reactivity-store:
-        specifier: ^0.4.0
-        version: 0.4.0(react@19.3.0)
+        specifier: ^0.4.1
+        version: 0.4.1(react@19.3.0)
       tsdown:
         specifier: ^0.23.0
         version: 0.23.0(typescript@5.9.3)(unrun@0.2.39(synckit@0.11.13))
@@ -332,8 +332,8 @@ importers:
         specifier: ^0.0.14
         version: 0.0.14(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)
       reactivity-store:
-        specifier: ^0.4.0
-        version: 0.4.0(react@19.3.0)
+        specifier: ^0.4.1
+        version: 0.4.1(react@19.3.0)
     devDependencies:
       '@my-react/react-refresh':
         specifier: ^0.3.30
@@ -495,8 +495,8 @@ importers:
         specifier: ^0.56.0
         version: 0.56.0
       reactivity-store:
-        specifier: ^0.4.0
-        version: 0.4.0(react@19.3.0)
+        specifier: ^0.4.1
+        version: 0.4.1(react@19.3.0)
       tree-sitter-wasms:
         specifier: ^0.1.13
         version: 0.1.13
@@ -1066,20 +1066,20 @@ packages:
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
-  '@git-diff-view/cli@0.1.10':
-    resolution: {integrity: sha512-V5R0oLaKpczg73Kzm1vkwmKANqOBF0zzRT7QX1rNzt0VSsAZEtQMqLTDmoSid7SeyZ6v+WT3Hu28kCsw1p7LvA==}
+  '@git-diff-view/cli@0.1.11':
+    resolution: {integrity: sha512-5uBw+wDQKzYFWZuUUJ8MzeqaCaatSJXWq3gd6yXo8E7T+aqTi1e8GZsJfJT+pW4gJ9HPFJvVe4vZ6ozjE+nDVA==}
     peerDependencies:
       ink: ^6.1.0
       react: ^19.2.0
 
-  '@git-diff-view/core@0.1.7':
-    resolution: {integrity: sha512-ZW/kumNoUQ8+DgawYhcrABa7TOALYzn3pe723uTHSy6/r35qAwgswJxF1bkdV9Zr+KHuhlFeRLiVhjij59qdIA==}
+  '@git-diff-view/core@0.1.8':
+    resolution: {integrity: sha512-3iJH51t64EeKmfdy2ybsW7dBaHGVYzq/bFnmz3GgDDpD7DWfxLOz6iJ+PeoUmhbpXS7n27NmMppvMc0Z48nutQ==}
 
-  '@git-diff-view/file@0.1.7':
-    resolution: {integrity: sha512-Od+D+FTqgGPfQllv6qkeanyjcF/MGyNJHc5t1gxr7mym5ojjsq1TaeabQ59Jep2MMYTwVAtZUSlQVRDVwURIjw==}
+  '@git-diff-view/file@0.1.8':
+    resolution: {integrity: sha512-O03m3MOYSeBTL8fYzKekAkquzZZ0Pf46pFxk+HlQ7Xy2cLD311QsPCzL89G6wUPT4PWS6gNj2HzawcEWajZ12g==}
 
-  '@git-diff-view/lowlight@0.1.7':
-    resolution: {integrity: sha512-Rkv2ERr83xTSsjlrJxjYVWndREEARG11viTrJ7qyUU+lnPPmSNF1aemp1lKiOLs6sNCeJJdIMhxLFJtKfmRIZw==}
+  '@git-diff-view/lowlight@0.1.8':
+    resolution: {integrity: sha512-pv9MhmIxWrnfomBP0LjK3x1pyfieE4GHhRpYo9mw0b3wk1GaAJ7IG3dqU//gLe+DA43xhFnK4rct4NFNRvqDvA==}
 
   '@hono/node-server@2.1.3':
     resolution: {integrity: sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==}
@@ -2325,11 +2325,11 @@ packages:
       oxc-transform-react:
         optional: true
 
-  '@vue/reactivity@3.5.43':
-    resolution: {integrity: sha512-G/c9GyOZNI2jVaaS6OX1EF1SSFSv7H0ERqNTl4+DTFMlZmB5eVAB53aLQNam/7NL2NPtaDD7RdVrzf8uJzMuOA==}
+  '@vue/reactivity@3.5.44':
+    resolution: {integrity: sha512-u+QJdKeBBEADkPdevsL+6E12QlYVfBD8Zcw5qjDQKtamI6l14KyqazJMobhCKelhWN5zpyKUiEDoTyHE93cqWw==}
 
-  '@vue/shared@3.5.43':
-    resolution: {integrity: sha512-uksS7YGMR5NZyr4JNq0Rp+QyLns0ueaz20KwzIPW9R0LH1Vnt4E+XUM29PNseEbf1www2gOuhuDi5AKOIXag9Q==}
+  '@vue/shared@3.5.44':
+    resolution: {integrity: sha512-H82XLH0DjmSOdbEwO15x3QTo1f5PWEtv237eLpYKc0mqLu+B8hnq16lFWmuBmNurkeiG3wr+oM1FhOll/YVFRg==}
 
   '@webcontainer/api@1.6.4':
     resolution: {integrity: sha512-r9sHCXg1FcC1AMgppGwAc0vYWaQhqvg282cnsuPbJEzYnWifAdCVvg+8ngJUEHyHcomhJJp+/zuytite4ITHLw==}
@@ -2941,10 +2941,6 @@ packages:
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
-
-  diff@8.0.4:
-    resolution: {integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==}
-    engines: {node: '>=0.3.1'}
 
   diff@9.0.0:
     resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
@@ -4646,8 +4642,8 @@ packages:
     resolution: {integrity: sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==}
     engines: {node: '>=0.10.0'}
 
-  reactivity-store@0.4.0:
-    resolution: {integrity: sha512-uL9uoREOBg2o4zUa8vMU0AbvAOk0osPloizscmyZqMvJzcuuKX3ELFYYr1DX8gAcfvlhPduz4QuLZn1eChCu4Q==}
+  reactivity-store@0.4.1:
+    resolution: {integrity: sha512-TNjxddJvsHqtzLhFoiHDXLBv2ht4jAZm8nbpWdCA8wX1oFHvDnAbDv4YNzZ0z2zPjwRbMRH7MhTEfiN14WuvFA==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -5994,9 +5990,9 @@ snapshots:
 
   '@fontsource-variable/geist@5.3.0': {}
 
-  '@git-diff-view/cli@0.1.10(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)':
+  '@git-diff-view/cli@0.1.11(ink@6.8.0(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@git-diff-view/core': 0.1.7
+      '@git-diff-view/core': 0.1.8
       '@types/hast': 3.0.5
       chalk: 5.6.2
       fast-diff: 1.3.0
@@ -6004,26 +6000,26 @@ snapshots:
       ink: 6.8.0(@types/react@19.3.0)(react@19.3.0)
       lowlight: 3.3.0
       react: 19.3.0
-      reactivity-store: 0.4.0(react@19.3.0)
+      reactivity-store: 0.4.1(react@19.3.0)
       string-width: 7.2.0
       use-sync-external-store: 1.7.0(react@19.3.0)
 
-  '@git-diff-view/core@0.1.7':
+  '@git-diff-view/core@0.1.8':
     dependencies:
-      '@git-diff-view/lowlight': 0.1.7
+      '@git-diff-view/lowlight': 0.1.8
       fast-diff: 1.3.0
       highlight.js: 11.12.0
       lowlight: 3.3.0
 
-  '@git-diff-view/file@0.1.7':
+  '@git-diff-view/file@0.1.8':
     dependencies:
-      '@git-diff-view/core': 0.1.7
-      diff: 8.0.4
+      '@git-diff-view/core': 0.1.8
+      diff: 9.0.0
       fast-diff: 1.3.0
       highlight.js: 11.12.0
       lowlight: 3.3.0
 
-  '@git-diff-view/lowlight@0.1.7':
+  '@git-diff-view/lowlight@0.1.8':
     dependencies:
       '@types/hast': 3.0.5
       highlight.js: 11.12.0
@@ -7036,11 +7032,11 @@ snapshots:
     dependencies:
       '@rolldown/pluginutils': 1.0.1
 
-  '@vue/reactivity@3.5.43':
+  '@vue/reactivity@3.5.44':
     dependencies:
-      '@vue/shared': 3.5.43
+      '@vue/shared': 3.5.44
 
-  '@vue/shared@3.5.43': {}
+  '@vue/shared@3.5.44': {}
 
   '@webcontainer/api@1.6.4': {}
 
@@ -7571,8 +7567,6 @@ snapshots:
   devlop@1.1.0:
     dependencies:
       dequal: 2.0.3
-
-  diff@8.0.4: {}
 
   diff@9.0.0: {}
 
@@ -9349,10 +9343,10 @@ snapshots:
 
   react@19.3.0: {}
 
-  reactivity-store@0.4.0(react@19.3.0):
+  reactivity-store@0.4.1(react@19.3.0):
     dependencies:
-      '@vue/reactivity': 3.5.43
-      '@vue/shared': 3.5.43
+      '@vue/reactivity': 3.5.44
+      '@vue/shared': 3.5.44
       react: 19.3.0
       use-sync-external-store: 1.7.0(react@19.3.0)
 

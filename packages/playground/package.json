@@ -31,7 +31,7 @@
     "fflate": "^0.8.2",
     "ink-stream-markdown": "^0.0.14",
     "monaco-editor": "^0.56.0",
-    "reactivity-store": "^0.4.0",
+    "reactivity-store": "^0.4.1",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.25.10"
   },
