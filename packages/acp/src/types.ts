@@ -7,7 +7,31 @@
  * command shape.
  */
 
-export type { ToolCallStatus, SessionUpdate, ToolCallContent, PlanEntry, ContentBlock } from "@agentclientprotocol/sdk";
+import type { StateUpdate } from "@agentclientprotocol/sdk";
+import type { AgentSessionSubagentSummary } from "@codent/core";
+
+export type {
+  ToolCallStatus,
+  SessionUpdate,
+  StateUpdate,
+  ToolCallContent,
+  PlanEntry,
+  ContentBlock,
+} from "@agentclientprotocol/sdk";
+
+/**
+ * One child as the host presents it, translated from core's `subagents` row.
+ *
+ * The protocol's subagent types are experimental; keeping the host-facing shape here means the
+ * projector, the announce/patch diff and the child-attach wiring do not depend on the SDK's union.
+ */
+export interface SubagentProjection {
+  sessionId: string;
+  title: string;
+  description?: string;
+  state: StateUpdate;
+  taskPhase?: AgentSessionSubagentSummary["taskPhase"];
+}
 
 /** Structural view of a `tool-call` part (only fields the projector reads). */
 export interface ToolCallPartLike {

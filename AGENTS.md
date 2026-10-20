@@ -37,7 +37,7 @@ A pnpm monorepo with ten packages organized in a layered architecture.
 | `@codent/extension` | Chrome extension host using WXT framework |
 | `@codent/playground` | In-browser WebContainer host (Vite) |
 | `@codent/mcp-server` | MCP server for external tool integration |
-| `@codent/acp` | Agent-side Agent Client Protocol host. Serves an `AgentSessionHost` over ACP (stdio) via `@agentclientprotocol/sdk`, so editors (Zed/JetBrains) and ACP→IM bridges drive the agent without host-specific code. `codent acp` / `codent-acp` entry; also used in-process (`createAcpAgent`). See `packages/acp/README.md`. |
+| `@codent/acp` | Agent-side Agent Client Protocol host. Serves an `AgentSessionHost` over ACP (stdio) via `@agentclientprotocol/sdk`, so editors (Zed/JetBrains) and ACP→IM bridges drive the agent without host-specific code. `codent acp` / `codent-acp` entry; also used in-process (`createAcpAgent`). Subagents are projected when the client advertises `subagents` (`subagent_update` + child transcripts + formatted task results). See `packages/acp/README.md`. |
 | `codent-cli` | **Release host.** Local-only terminal CLI (no remote planes) published as one fully bundled, self-contained tarball — `@codent/app` / `core` / `node` / `acp` are inlined, so no sibling has to be on the registry. The npm name is `codent-cli` (plain `codent` is rejected as too similar to `code` / `dedent`); the installed command is still `codent`. `codent acp` serves ACP over stdio. See `packages/codent/tsdown.config.ts`. |
 
 ## Architecture
@@ -578,6 +578,22 @@ Hosts should prefer `AgentSession` (`getSnapshot` / `dispatch` / `subscribe`) ov
 All domain updates route through a single unified `AgentEventBus` (`agent/agent-event-bus`) — one type registry (`AgentEvents` + `AGENT_EVENT_META`), two dispatch modes: observer `emit` (sync, fire-and-forget, retained values) and interceptor `intercept` (async, ordered, cancel short-circuit; `tool:before:*` patterns). `AgentManager.of(agentId, parentId?)` mints per-agent scoped buses (subagent events up-flow to parent/root). `AgentSession` subscribes the scoped bus once and projects every observer event to its channel via `AGENT_EVENT_META[type].channel`, replaying retained values per subscriber. The former structured `log` channel was **removed** — log observability is provided exclusively by the persisted JSONL file sink (`.agents/logs/<sessionId>/agent.log`).
 
 **TODO:** message channel currently delivers full `UIMessage[]` (incremental/patch later).
+
+### ACP subagents (child sessions + task result)
+
+`@codent/acp` maps core's `subagents` snapshot onto the protocol's experimental surface, gated on
+`clientCapabilities.subagents` (object = supported; absent/`null` = no subagent frame at all):
+
+| Piece | File | Responsibility |
+|---|---|---|
+| projection | `packages/acp/src/subagent-projection.ts` | `AgentSessionSubagentSummary` → `subagent_update`: user-visible filter (`isUserVisibleTaskRow`), status → `StateUpdate`, `_meta.taskPhase`, announce-vs-patch diff |
+| child transcript | `packages/acp/src/child-projector.ts` | one `AcpProjector` per announced child, emitting under the **child** session id; prompt is `session_message` (parent→child), commands empty, compaction follows the client |
+| wiring | `packages/acp/src/agent.ts` | announce FIRST, then attach child projectors; parent `closeBridge` stops children without destroying them; child ids are screened out of `load`/`resume`/`prompt`/`fork`, and `delete` is short-circuited before `host.deleteSession` (which would destroy the child) |
+
+The parent's `task` row is the result of record: terminal content uses core's
+`formatToolOutput(output, "task")`, the live summary stream updates the same row, and a chunk after the
+final result is dropped. Internal workers (no `parentTaskToolCallId`) are never announced. Validate:
+`pnpm --filter @codent/acp run validate:acp:subagents` (also in `validate:acp`).
 
 ## CoreEnv Server (Remote Mode)
 

@@ -285,7 +285,49 @@ for a tool that already ran, and its late answer re-decides the approval (a `den
 completed).
 
 `session/update` notifications are capability-gated where the protocol says so: `compaction_update`
-only for clients declaring `session.compaction`, `notice` only for `session.notices`.
+only for clients declaring `session.compaction`, `notice` only for `session.notices`. Every subagent frame is gated on `subagents`.
+
+## Subagents
+
+Delegated work (`task` tool calls) is surfaced on two surfaces, and which one a client sees depends on
+its capability:
+
+- **Without `clientCapabilities.subagents`** every `subagent_update` and every child `session/update`
+  is withheld. The parent's `task` row still carries the final result, so a client that only renders
+  the main transcript loses nothing but the live exploration.
+- **With `subagents: {}`** the parent announces a child with `subagent_update` (id, title,
+  description, current `state`, and `_meta.taskPhase`) **before** any frame tagged with that child id.
+  Later snapshots patch only the fields that moved; a destroyed child is forgotten, not reported as
+  `idle`. The announcement comes from the `subagents` snapshot, and it is flushed before the child
+  projector is attached — including under `session/new`'s deferred-emit window, where the child's own
+  projector would otherwise beat the announcement to the client.
+
+Only **user-visible delegations** are announced: rows without a `parentTaskToolCallId` (compaction /
+memory summarizers, internal workers) stay invisible. This is enforced by `isUserVisibleTaskRow` in
+core, not by a host-side name check.
+
+The two surfaces:
+
+| Surface | What the client gets |
+|---|---|
+| child session (id from `subagent_update`) | the child's ordinary transcript, tagged with the CHILD session id: `agent_message_chunk`, `agent_thought_chunk`, `tool_call` / `tool_call_update`, usage. The child's prompt is `session_message` (sender = parent, recipient = child), not a `user_message_chunk`, because the client did not type it. |
+| parent `task` row | the result of record: `tool_call_update.content` is core's `formatToolOutput(output, "task")` (summary + `limit reached` / `cancelled` / `stalled` / `cached` status line). While the task summary streams, the row is updated in place with the accumulated text (tool `content` replaces; it does not append). The raw task object is never sent as `rawOutput`, and a summary chunk that arrives after the final result is dropped. |
+
+Child sessions are **parent-owned**:
+
+- `session/list` never contains a child (children have no disk session).
+- `session/load` / `resume` / `prompt` / `fork` with a child id return `invalid params`; `close` and
+  `delete` are idempotent no-ops. `delete` is screened BEFORE the catalog, because
+  `host.deleteSession` resolves the id as a live agent and would destroy the child.
+- Closing the parent stops the child projectors but never destroys the children; their lifecycle
+  belongs to core.
+- A `session/load` / `resume` of a live parent attaches its still-live children without replaying
+  their history (the client keeps what it already rendered); a child announced after attach replays
+  its own prompt and early output.
+
+The task's own `capabilities.cancel` is deliberately not advertised: a subagent is cancelled with its
+parent's turn (`session/cancel`), not through a per-child cancel request.
+
 
 ## Slash commands
 
@@ -323,6 +365,8 @@ the model command (and to the `thought_level` selector above).
 | `session/request_permission` | ✅ approvals → four-option round-trip; cancel/timeout/disconnect settle as a denial; `allow_always` / `reject_always` are remembered per session |
 | `elicitation/create` | ✅ `ask_user` (with an agent-message fallback); decline/cancel/failure settle as a cancelled tool result |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
+| `subagent_update` + child sessions | ✅ gated by `subagents` (announce → patch; child transcripts under the child id; the parent `task` row is the formatted result) — see [Subagents](#subagents) |
+| child ownership | ✅ children are absent from `session/list`; `load` / `resume` / `prompt` / `fork` refuse a child id; `close` / `delete` are no-ops and never destroy one |
 | per-session `mcpServers` | ✅ stdio / http / sse on `new` / `load` / `resume`; `acp` refused; fork refuses the field |
 | `additionalDirectories` | ⛔ deliberately undeclared, refused with one shared error on all four requests that can carry it |
 

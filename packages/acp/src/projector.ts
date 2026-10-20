@@ -28,14 +28,17 @@ import {
   BUILTIN_TOOL_NAMES,
   extractCompactionSummaryBody,
   findBuiltinCommand,
+  formatToolOutput,
   isCompactionSummaryUIMessage,
   isContextUIMessage,
+  isUserVisibleTaskRow,
   parseToolInput,
 } from "@codent/core";
 
 import { textBlock } from "./content.js";
 import { imagesOfParts, imagesOfResult } from "./media.js";
 import { toWirePath } from "./paths.js";
+import { announcementOf, diffSubagents, patchOf } from "./subagent-projection.js";
 import { toolCallInfo, toolDiffsFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
 import type {
@@ -43,6 +46,7 @@ import type {
   ContentBlock,
   PlanEntry,
   SessionUpdate,
+  SubagentProjection,
   ToolCallContent,
   ToolCallStatus,
   ToolCallPartLike,
@@ -54,6 +58,7 @@ import type {
   AgentSessionChannel,
   AgentSessionEvent,
   AgentSessionSnapshot,
+  AgentSessionSubagentSummary,
   SummaryStreamEvent,
 } from "@codent/core";
 import type { UIMessage } from "@tanstack/ai";
@@ -102,7 +107,27 @@ export interface AcpProjectorOptions {
   /** Command catalog to advertise; recomputed on the `extensions` channel. */
   commands: () => AcpCommands;
   /** Client capabilities that gate optional updates. */
-  client: { compaction: boolean; notices: boolean };
+  client: { compaction: boolean; notices: boolean; subagents?: boolean };
+  /**
+   * Called after a `subagents` snapshot has been announced/patched, with the user-visible rows.
+   *
+   * The host attaches/detaches child projectors here; this runs after the announcements so the
+   * protocol's "announcement before child traffic" rule holds even for retained delivery.
+   */
+  onSubagents?: (rows: AgentSessionSubagentSummary[]) => void;
+  /**
+   * Project this user message as an inter-session `session_message` instead of `user_message_chunk`.
+   *
+   * A subagent's first user message IS its task prompt, sent by the parent — not typed by a user of
+   * that session. The conversion lives here (by message id, applied to replay and live) because a
+   * post-filter would miss the retained-message delivery that `replayFrom` uses.
+   */
+  userMessageAsSessionMessage?: {
+    messageId: string;
+    senderSessionId: string;
+    recipientSessionId: string;
+    acpMessageId: string;
+  };
   /** Pending approvals / ask_user, forwarded from the `interaction` channel. */
   onInteraction?: (payload: unknown) => void;
   /**
@@ -194,6 +219,19 @@ export class AcpProjector {
   private lastCompactionId: string | undefined;
   /** Bumped by {@link stop}; a late async write (oldText read) must not publish after a stop. */
   private generation = 0;
+  /** Last announced projection per child, so a snapshot update becomes a patch, never a re-announcement. */
+  private readonly announcedSubagents = new Map<string, SubagentProjection>();
+  /** Live task-summary streams keyed by `task:<toolCallId>` — the parent-facing task report. */
+  private readonly taskStreams = new Map<string, { toolCallId: string; buffer: string; lastFlush: number }>();
+  /**
+   * Child attach/detach deferred with the announcements it follows.
+   *
+   * `session/new` queues updates until the response carries the id. A child attached in that window
+   * would emit its `session_message`/transcript IMMEDIATELY (its projector has its own queue), so the
+   * client would see child traffic before the announcement that names it. The callback waits here
+   * and runs after {@link flushDeferred} has sent the announcement.
+   */
+  private deferredSubagents: AgentSessionSubagentSummary[] | null = null;
 
   constructor(
     private readonly session: AgentSession,
@@ -255,6 +293,7 @@ export class AcpProjector {
     this.generation += 1;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.deferredSubagents = null;
   }
 
   /** The single outbound door: queue while `session/new`'s response is in flight, else send. */
@@ -266,9 +305,13 @@ export class AcpProjector {
   /** Send what was queued while the client did not yet know the session id. */
   flushDeferred(): void {
     const queued = this.deferred;
+    const children = this.deferredSubagents;
     this.deferred = null;
-    if (!queued) return;
-    for (const update of queued) this.options.emit(update);
+    this.deferredSubagents = null;
+    if (queued) for (const update of queued) this.options.emit(update);
+    // AFTER the announcements it was waiting behind: the child's first frame is only legal once the
+    // client knows the id.
+    if (children) this.options.onSubagents?.(children);
   }
 
   /**
@@ -359,6 +402,9 @@ export class AcpProjector {
       case "summary":
         this.onSummary(event.payload);
         break;
+      case "subagents":
+        this.onSubagents(event.payload.subagents);
+        break;
       case "extensions":
         this.emitCommands();
         break;
@@ -439,6 +485,23 @@ export class AcpProjector {
       return;
     }
     if (this.emittedUserMessages.has(message.id)) return;
+
+    // A subagent's prompt is a parent→child message, not a user turn of the child session.
+    const interSession = this.options.userMessageAsSessionMessage;
+    if (interSession && message.id === interSession.messageId) {
+      this.emittedUserMessages.add(message.id);
+      const text = textOf(message);
+      const images = imagesOfParts(message.parts);
+      this.publish({
+        sessionUpdate: "session_message",
+        messageId: interSession.acpMessageId,
+        senderSessionId: interSession.senderSessionId,
+        recipientSessionId: interSession.recipientSessionId,
+        ...(text || images.length > 0 ? { content: [...(text ? [textBlock(text)] : []), ...images] } : {}),
+      });
+      return;
+    }
+
     const text = textOf(message);
     const images = imagesOfParts(message.parts);
     if (!text && images.length === 0) return;
@@ -541,8 +604,20 @@ export class AcpProjector {
         const nowTerminal = next === "completed" || next === "failed";
         // `part.output` is the tool's own return value — where a `read_file` image actually lives, and
         // the door this transition used to walk past (it read `part.content`, which holds a string).
-        const content = this.toolContentFor(state, nowTerminal, undefined, [], part.output);
-        if (nowTerminal) state.streamBuffer = "";
+        // A `task` result is formatted for the reader (summary + status line) instead of being sent as
+        // its raw object; that row is the parent's result of record.
+        const taskText =
+          state.name === BUILTIN_TOOL_NAMES.task && part.output !== undefined
+            ? formatToolOutput(part.output, BUILTIN_TOOL_NAMES.task)
+            : undefined;
+        const content = this.toolContentFor(state, nowTerminal, taskText, [], part.output);
+        if (nowTerminal) {
+          state.streamBuffer = "";
+          // Only a `task` row treats an output-bearing tool-call part as the result of record — for
+          // every other tool the `tool-result` part still owes the client the real result, so
+          // `resultEmitted` must stay its flag. (A late task-summary chunk must not replace this.)
+          if (taskText !== undefined) state.resultEmitted = true;
+        }
         this.publish({
           sessionUpdate: "tool_call_update",
           toolCallId: id,
@@ -552,9 +627,11 @@ export class AcpProjector {
           kind: toolKindFor(state.name),
           status: next,
           ...(content ? { content } : {}),
-          // `rawOutput` only when there is no content to show: sending both rendered the same result
-          // twice (once as content, once as the raw output).
-          ...(nowTerminal && content === undefined && part.output !== undefined ? { rawOutput: part.output } : {}),
+          // `rawOutput` only when there is no content to show, and never for a `task` row (its formatted
+          // text is the result, even when that text is empty).
+          ...(nowTerminal && taskText === undefined && content === undefined && part.output !== undefined
+            ? { rawOutput: part.output }
+            : {}),
         });
       }
     }
@@ -689,7 +766,11 @@ export class AcpProjector {
     // The row's text. When the bytes are being rendered as an image block they must not ALSO be prose,
     // which is what `hasMedia` tells the extractor — a bare media object declares no text and so
     // contributes none. Every other result keeps the JSON that IS its rendering.
-    const text = toolResultText(part.content, images.length > 0) || (part.error ?? "");
+    const taskText =
+      state?.name === BUILTIN_TOOL_NAMES.task && part.output !== undefined
+        ? formatToolOutput(part.output, BUILTIN_TOOL_NAMES.task)
+        : undefined;
+    const text = taskText ?? (toolResultText(part.content, images.length > 0) || (part.error ?? ""));
     if (state) {
       // Kept so a late `write_file` oldText read can rebuild a terminal row without losing the
       // result text/images that the diff update replaces.
@@ -714,7 +795,9 @@ export class AcpProjector {
         : text
           ? { content: [{ type: "content", content: textBlock(text) }] as ToolCallContent[] }
           : {}),
-      ...(content === undefined && part.content !== undefined ? { rawOutput: part.content } : {}),
+      ...(content === undefined && taskText === undefined && part.content !== undefined
+        ? { rawOutput: part.content }
+        : {}),
     });
   }
 
@@ -969,8 +1052,68 @@ export class AcpProjector {
    * followed. `reset` opens the row, `append` streams it, `end` closes it — which is the protocol's
    * `compaction_summary_chunk` contract verbatim ("a first-seen id creates an in-progress compaction").
    */
+  /**
+   * Project a `subagents` snapshot: announce first sighting, patch changed rows, forget removed ones.
+   *
+   * The row list includes internal workers (compaction / memory summarizers); `diffSubagents`
+   * filters with `isUserVisibleTaskRow`, so those never reach the client. Removed rows are dropped
+   * from the announced map without inventing a state — a destroyed child is not "idle".
+   */
+  private onSubagents(rows: AgentSessionSubagentSummary[]): void {
+    if (!this.options.client.subagents) return;
+
+    const previousIds = [...this.announcedSubagents.keys()];
+    const { announce, patch, current } = diffSubagents(this.announcedSubagents, rows, (toolCallId) =>
+      this.taskPromptOf(toolCallId)
+    );
+    this.announcedSubagents.clear();
+    for (const [id, projection] of current) this.announcedSubagents.set(id, projection);
+
+    for (const projection of announce) this.publish(announcementOf(projection));
+    for (const item of patch) {
+      const update = patchOf(item.previous, item.next);
+      if (update) this.publish(update);
+    }
+
+    const visible = rows.filter((row) => isUserVisibleTaskRow(row));
+    const visibleIds = visible.map((row) => row.id);
+    const setChanged =
+      visibleIds.length !== previousIds.length || visibleIds.some((id, index) => id !== previousIds[index]);
+    // Status patches do not change WHICH children exist; only a set change needs the host to
+    // attach/detach projectors.
+    if (!setChanged) return;
+
+    // AFTER the announcements: the child projector is attached from this callback, and its retained
+    // messages must not reach the client before the announcement that names it.
+    if (this.deferred) this.deferredSubagents = visible;
+    else this.options.onSubagents?.(visible);
+  }
+
+  /** The `task` call's description/prompt, used as the child's title fallback. */
+  private taskPromptOf(toolCallId: string | undefined): string | undefined {
+    if (!toolCallId) return undefined;
+    for (const message of this.session.getSnapshot().messages) {
+      if (message.role !== "assistant") continue;
+      for (const part of message.parts) {
+        if (part.type !== "tool-call" || part.id !== toolCallId) continue;
+        const input = toolInputOf(part as ToolCallPartLike);
+        const record = input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
+        const description = typeof record?.description === "string" ? record.description : undefined;
+        const prompt = typeof record?.prompt === "string" ? record.prompt : undefined;
+        return description ?? prompt;
+      }
+    }
+    return undefined;
+  }
+
   private onSummary(event: SummaryStreamEvent): void {
     if (event.type === "reset") {
+      // A task summary is the PARENT-facing result stream for one task tool call. It is not a
+      // compaction row and not a child message: it updates the existing task row's content.
+      if (event.source === "task" && event.toolCallId) {
+        this.taskStreams.set(event.key, { toolCallId: event.toolCallId, buffer: "", lastFlush: 0 });
+        return;
+      }
       if (event.source !== "compact") return;
       if (this.compaction) {
         // Opened already from the status (`compacting` fires first): the same compaction, one row.
@@ -986,6 +1129,34 @@ export class AcpProjector {
       this.announceCompaction();
       return;
     }
+    // Task streams are keyed independently of the compaction row.
+    const task = this.taskStreams.get(event.key);
+    if (task) {
+      if (event.type === "append") {
+        task.buffer += event.chunk;
+        const toolState = this.tools.get(task.toolCallId);
+        // A chunk that arrives after the final result must be dropped — otherwise it would replace
+        // the terminal content with a partial buffer.
+        if (!toolState || toolState.resultEmitted) return;
+        const now = Date.now();
+        if (now - task.lastFlush < STREAM_FLUSH_MS) return;
+        task.lastFlush = now;
+        this.publish({
+          sessionUpdate: "tool_call_update",
+          toolCallId: task.toolCallId,
+          title: toolTitleOf(toolState.name, toolState.input),
+          kind: toolKindFor(toolState.name),
+          status: toolState.status === "pending" ? "in_progress" : toolState.status,
+          // ACP tool `content` REPLACES what the client holds; there is no append form, so each
+          // update re-sends the whole accumulated text.
+          content: [{ type: "content", content: textBlock(task.buffer) }],
+        });
+        return;
+      }
+      this.taskStreams.delete(event.key);
+      return;
+    }
+
     const active = this.compaction;
     if (!active || event.key !== active.key) return;
     if (event.type === "append") {

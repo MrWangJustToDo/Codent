@@ -160,6 +160,7 @@ Use `/whoami` or `/status` in chat to learn your platform user id.
 | `available_commands_update` | not projected; `/help` lists cc-connect's commands only. Agent commands such as `/models` still work when typed (unknown commands are forwarded). |
 | `plan` update | rendered as a thinking text block by cc-connect, not a plan/todo card |
 | `compaction_update` / `notice` | only for clients that advertise the capability; cc-connect does not |
+| `subagent_update` / child sessions | only for clients that advertise `subagents`; cc-connect does not, so live subagent progress is not projected. The parent `task` row still arrives as `tool_call_update` with the formatted result (summary + `limit reached` / `cancelled` / `stalled`), so chat users see what the delegation produced. A client that does advertise it receives the child's transcript as ordinary `session/update` frames carrying the child session id — no protocol extension and no cc-connect change beyond declaring the capability. |
 | Images / audio | cc-connect saves inbound images under `<work_dir>/.cc-connect/attachments/` and appends the local path to the prompt text — it does **not** send ACP `image` blocks. The model must `read_file` that path; audio needs cc-connect's `[speech]` transcription. |
 
 Because these projections are cc-connect behaviour, re-run the checklist after upgrading it.

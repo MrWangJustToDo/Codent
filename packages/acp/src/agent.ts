@@ -24,6 +24,7 @@ import { agent as createAgentApp, methods, PROTOCOL_VERSION, RequestError } from
 import { buildDefaultSystemPrompt, defaultPath, findBuiltinCommand, isActiveStatus } from "@codent/core";
 import { createHash } from "node:crypto";
 
+import { createChildProjector, type ChildProjectorHandle } from "./child-projector.js";
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
 import { createInteractionHandlers, type InteractionHandlers } from "./interactions.js";
@@ -52,6 +53,7 @@ import type {
   AgentSession,
   AgentSessionHost,
   AgentSessionSnapshot,
+  AgentSessionSubagentSummary,
   ModelCatalogRead,
   ModelInfo,
   ModelStyle,
@@ -108,6 +110,17 @@ interface SessionBridge {
   elicitation: boolean;
   /** Client advertises `session.notices` — failures/cancellations are reported that way. */
   notices: boolean;
+  /** Client advertises `session.compaction` — child projectors inherit it. */
+  clientCompaction: boolean;
+  /** Client advertises `subagents` — every child frame is gated on it. */
+  subagentsSupported: boolean;
+  /** Child projectors for the user-visible delegations this session announced. */
+  subagents: Map<string, ChildProjectorHandle>;
+  /**
+   * The first retained `subagents` snapshot of a `session/load` attaches children WITHOUT replaying
+   * their history (the change spec: no child replay). Later children are new and replay normally.
+   */
+  skipChildReplay: boolean;
   promptCaps: PromptCaps;
   /** Canonical snapshot of the MCP server list this session was created with. */
   mcpKey: string;
@@ -251,6 +264,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   const rootPath = resolveRoot(options.rootPath);
   const version = options.version ?? "0.0.1";
   const bridges = new Map<string, SessionBridge>();
+  /**
+   * Child session ids announced to a client. A child never becomes a top-level session: `load`,
+   * `resume`, `fork` and `prompt` must refuse it, and `delete` must not hand it to
+   * `host.deleteSession` (which looks the id up as an agent and would destroy the child).
+   *
+   * Ids are never removed — a closed child stays screened rather than turning into "unknown", which
+   * would let a late request reach the top-level path.
+   */
+  const knownChildIds = new Set<string>();
   let connection: AgentConnection | null = null;
   let initCaps: ClientCapabilities | undefined;
   let sessionSeq = 0;
@@ -410,6 +432,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       approvalPolicy: new Map(),
       elicitation: Boolean(clientCaps?.elicitation?.form),
       notices: Boolean(clientCaps?.session?.notices),
+      clientCompaction: Boolean(clientCaps?.session?.compaction),
+      subagentsSupported: Boolean(clientCaps?.subagents),
+      subagents: new Map(),
+      skipChildReplay: opts.replay === true,
       promptCaps: { image: true, audio: true, embeddedContext: true },
       lastAdvertisedConfigMode: undefined,
       lastAdvertisedConfigModel: undefined,
@@ -432,7 +458,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       client: {
         compaction: Boolean(clientCaps?.session?.compaction),
         notices: Boolean(clientCaps?.session?.notices),
+        subagents: Boolean(clientCaps?.subagents),
       },
+      onSubagents: (rows) => syncChildBridges(bridge, rows),
       onInteraction: (payload) => void handleInteractions(bridge, payload).catch(() => undefined),
       // The finish reason travels on the state payload at run end (core records it with the status
       // flip), so the host reads it from the one channel every session already subscribes to.
@@ -466,6 +494,72 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridges.get(acpId)?.projector.stop();
     bridges.set(acpId, bridge);
     return bridge;
+  };
+
+  /**
+   * Reconcile the child projectors an announced `subagents` snapshot implies.
+   *
+   * Called by the parent projector AFTER it emitted announcements, so the client always learns a
+   * child id before any update tagged with it. This is the only place a child gets a projector, and
+   * it never creates or destroys a child session: a removed row just stops projection.
+   */
+  const syncChildBridges = (bridge: SessionBridge, rows: AgentSessionSubagentSummary[]): void => {
+    if (!bridge.subagentsSupported) {
+      for (const child of bridge.subagents.values()) child.stop();
+      bridge.subagents.clear();
+      return;
+    }
+
+    const wanted = new Set(rows.map((row) => row.id));
+    for (const [id, child] of [...bridge.subagents]) {
+      if (wanted.has(id)) continue;
+      child.stop();
+      bridge.subagents.delete(id);
+    }
+
+    for (const row of rows) {
+      knownChildIds.add(row.id);
+      if (bridge.subagents.has(row.id)) continue;
+      const childSession = bridge.runtime.host.connect(row.id);
+      if (!childSession) continue;
+      const child = createChildProjector(childSession, {
+        childId: row.id,
+        parentSessionId: bridge.acpId,
+        ...(row.parentTaskToolCallId ? { parentTaskToolCallId: row.parentTaskToolCallId } : {}),
+        emit: (childId, update) => {
+          // The parent may close while a child stream is still flushing; a frame tagged with a
+          // child id nobody announced any more is worse than a dropped one.
+          if (bridge.closed || !bridge.subagentsSupported) return;
+          emit(childId, update);
+        },
+        rootPath: bridge.rootPath,
+        client: { compaction: bridge.clientCompaction, notices: bridge.notices },
+        isClosed: () => bridge.closed,
+      });
+      child.start({ replay: !bridge.skipChildReplay });
+      bridge.subagents.set(row.id, child);
+    }
+
+    // Only the first retained snapshot of a `load`/`resume` suppresses replay; a child announced
+    // later is new and replays its own (prompt + early output) history.
+    bridge.skipChildReplay = false;
+  };
+
+  /**
+   * Is this id a child of a live session?
+   *
+   * The announced set is authoritative for anything a client could have learned. The host listing
+   * covers a child that was never announced (internal workers are filtered out of `subagents`), so a
+   * guessed id cannot be resurrected as a root session.
+   */
+  const isChildSessionId = async (sessionId: string): Promise<boolean> => {
+    if (knownChildIds.has(sessionId)) return true;
+    try {
+      const entries = await options.host.list();
+      return entries.some((entry) => entry.agentId === sessionId && entry.parentId !== undefined);
+    } catch {
+      return false;
+    }
   };
 
   /** The {@link ConfigOptionTarget} shape the shared write helpers act on. */
@@ -525,6 +619,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     bridge.pendingAskUser.clear();
     bridge.approvalPolicy.clear();
     await bridge.session.dispatch({ type: "stop" }).catch(() => undefined);
+    // Parent-owned: stop projecting the children, but never destroy them here (`delete`/`close` of a
+    // child are screened out above; a parent close must not kill a subagent another surface watches).
+    for (const child of bridge.subagents.values()) child.stop();
+    bridge.subagents.clear();
     bridge.projector.stop();
     for (const [id, b] of bridges) if (b === bridge) bridges.delete(id);
     await bridge.runtime.host.destroy(bridge.session.id);
@@ -688,6 +786,10 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     additionalDirectories: string[] | undefined,
     cwd: string | undefined
   ): Promise<SessionBridge> => {
+    // A child is not a top-level session: load/resume/fork must not adopt it as one.
+    if (await isChildSessionId(sessionId)) {
+      throw RequestError.invalidParams(undefined, `Unknown session: ${sessionId}`);
+    }
     // `additionalDirectories` is not a declared capability; see `rejectAdditionalDirectories`.
     rejectAdditionalDirectories(additionalDirectories);
     // Restoring a session runs the same `Host.create` as `session/new` (with `resumeSessionId`),
@@ -794,6 +896,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   });
 
   app.onRequest(methods.agent.session.close, async (ctx) => {
+    // A child has no top-level bridge; closing it is not a way to destroy a subagent.
+    if (await isChildSessionId(ctx.params.sessionId)) return {};
     const bridge = findBridge(ctx.params.sessionId);
     if (bridge) await closeBridge(bridge);
     return {};
@@ -823,7 +927,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     note: (text) => process.stderr.write(text),
   });
   app.onRequest(methods.agent.session.list, (ctx) => catalog.list(ctx.params));
-  app.onRequest(methods.agent.session.delete, (ctx) => catalog.remove(ctx.params));
+  app.onRequest(methods.agent.session.delete, async (ctx) => {
+    // `deleteSession` looks the id up as an agent; on a child that would destroy a live subagent.
+    // Idempotent no-op keeps ACP's delete contract for an id the client does not own.
+    if (await isChildSessionId(ctx.params.sessionId)) return {};
+    return catalog.remove(ctx.params);
+  });
 
   app.onRequest(methods.agent.session.fork, async (ctx) => {
     const sourceId = ctx.params.sessionId;
@@ -1091,6 +1200,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   );
 
   app.onRequest(methods.agent.session.prompt, async (ctx) => {
+    if (await isChildSessionId(ctx.params.sessionId)) {
+      throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
+    }
     const bridge = findBridge(ctx.params.sessionId);
     if (!bridge) throw RequestError.invalidParams(undefined, `Unknown session: ${ctx.params.sessionId}`);
     // A prompt can follow `session/new` before the deferred seed tick ran. Flush the seed first so
