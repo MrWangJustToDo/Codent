@@ -155,6 +155,59 @@ assert.equal(
 );
 
 // ---------------------------------------------------------------------------
+// 6. The hidden-marker count: ONE subtraction over source messages
+// ---------------------------------------------------------------------------
+// `MessageList` derives the marker as `staticSourceTotal - countSourceMessages(visibleRows)`.
+// It used to add "messages with no row" to "messages behind dropped rows", which agreed only while
+// no message straddled the budget cut — and it reported a compact fold as hidden history.
+const markerOf = (result, visibleCount) =>
+  Math.max(0, result.staticSourceTotal - countSourceMessages(result.staticMessages.slice(-visibleCount)));
+
+const foldedPair = [user, toolMsg("a1", [readFile("t1")]), toolMsg("a2", [readFile("t2")]), final("a3")];
+const fullPair = getMessages(foldedPair, { mode: "full" });
+const compactPair = getMessages(foldedPair, { mode: "compact" });
+assert.equal(fullPair.staticSourceTotal, 3, "the static side is user + two tool sources");
+assert.equal(compactPair.staticSourceTotal, 3, "the total is mode-independent");
+assert.equal(markerOf(fullPair, fullPair.staticMessages.length), 0, "full mode hides nothing");
+assert.equal(
+  markerOf(compactPair, compactPair.staticMessages.length),
+  0,
+  "folding two tool messages is display, not truncation"
+);
+
+// A source that genuinely produces no row (thinking-only) still counts as hidden, in both modes.
+const thinkingOnly = { id: "a0", role: "assistant", parts: [{ type: "thinking", content: "hm" }] };
+const withUnrendered = [
+  user,
+  thinkingOnly,
+  toolMsg("a1", [readFile("t1")]),
+  toolMsg("a2", [readFile("t2")]),
+  final("a4"),
+];
+for (const mode of ["full", "compact"]) {
+  const result = getMessages(withUnrendered, { mode });
+  assert.equal(result.staticSourceTotal, 4, `${mode}: the thinking-only message is on the static side`);
+  assert.equal(markerOf(result, result.staticMessages.length), 1, `${mode}: it is hidden, and only it`);
+}
+
+// A budget cut INSIDE one message's parts does not over-report: the visible part represents it.
+// (The old two-term formula counted it through the dropped-rows term.)
+const splitRows = [rowOf("a1-d0"), rowOf("a1-d1")];
+assert.equal(countSourceMessages(splitRows), 1, "both rows are one source message");
+assert.equal(
+  Math.max(0, 1 - countSourceMessages(splitRows.slice(-1))),
+  0,
+  "one visible part is enough for the message not to be hidden"
+);
+
+// The activity row records what it stands for, and the counter expands it (so a fold dropped by
+// the budget reports every message behind it).
+const activity = compactPair.staticMessages.find((m) => m.id.startsWith("display-activity:"));
+assert.ok(activity, "the folded pair produced an activity row");
+assert.deepEqual(activity.sourceMessageIds, ["a1", "a2"], "the row records its source messages");
+assert.equal(countSourceMessages([activity]), 2, "the counter expands the fold");
+
+// ---------------------------------------------------------------------------
 // The synthetic-context predicate is CORE's, not a host copy.
 //
 // It answers "is this row a `<ctx kind=…>` context block?" — persisted for the model, hidden from

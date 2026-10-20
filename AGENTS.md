@@ -1101,9 +1101,12 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
   `onRender` → `measureElement` (`useStaticHeights`, keyed by row id, pruned to the rendered set);
   rows never measured get `PROVISIONAL_ROW_LINES`, which must stay stable so a selection never
   oscillates as measurements land, and conservative so a cold mount never truncates harder than the
-  message-count cap it replaced. Historic message counts and dropped-row totals are derived from
-  `selectVisibleRows`; note the worker's screen model keeps ~1000 lines and evicts history only when
-  a **single frame** exceeds it — raising that limit is not the fix for long sessions.
+  message-count cap it replaced. The hidden-marker total is **one subtraction**, in messages:
+  `staticSourceTotal - countSourceMessages(visibleRows)` (`getMessages` reports the static-side
+  total; a compact activity row expands to its `sourceMessageIds`). A message counts as hidden only
+  when no visible row represents it, so a cut inside a message's parts does not over-report. Note
+  the worker's screen model keeps ~1000 lines and evicts history only when a **single frame**
+  exceeds it — raising that limit is not the fix for long sessions.
   - **The welcome panel sits OUTSIDE this budget** (`Content` renders it as its own `<StaticRender>`
     keyed on `headerSet`). It is the user's orientation and the only element pinned to the top of
     the transcript, so the budget must never be able to drop it. Do not prepend it to the row list.
@@ -1135,7 +1138,11 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
 - **Compact transcript (`/appearance compact`):** the density mode has two layers that must agree:
   - *Projection* (`packages/app/src/utils/project-transcript.ts`) folds contiguous **completed**
     tool calls into one synthesized activity-summary row (`display-activity:<turn>:<seq>`). Only the
-    static (non-streaming) portion is projected; the live message renders as-is.
+    static (non-streaming) portion is projected; the live message renders as-is. The row carries the
+    source message ids it stands for (`sourceMessageIds`), because the truncation marker counts
+    **source messages**: a fold is display, not hidden history, and counting the row as one reported
+    a phantom "... N older messages hidden" line (the line budget dropping a fold must likewise
+    report every message behind it).
   - *Render* (`packages/app/src/messages/ToolOutputView.tsx`, `ToolInputView.tsx`) hides bulky
     blocks; input lines clamp to 72 chars, result blocks to a single 200-char line.
   - A tool **keeps its row and its one-line result** when `keepsCompactRow(name)` is true

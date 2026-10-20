@@ -123,13 +123,14 @@ function computeDynamicListSignature(messages: UIMessage[]): string {
  * value is stable, a row's inclusion does not depend on whether a measurement has landed:
  * selections cannot oscillate as `onRender` fires after each frame.
  *
- * Returns the dropped counts in MESSAGES (matching the marker's unit), by counting the
- * source messages behind the dropped rows rather than the rows themselves.
+ * Rows only. The marker's message count is derived once in the component as
+ * `staticSourceTotal - countSourceMessages(visibleRows)` — mixing a row-side count in here is how
+ * the fold/partial-message edge cases appeared in the first place.
  */
 export function selectVisibleRows(
   rows: UIMessage[],
   heights: Record<string, number>
-): { visibleCount: number; droppedCount: number; droppedSourceMessages: number } {
+): { visibleCount: number; droppedCount: number } {
   let used = 0;
   let visibleCount = 0;
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -138,9 +139,7 @@ export function selectVisibleRows(
     used += cost;
     visibleCount++;
   }
-  const droppedCount = rows.length - visibleCount;
-  const droppedSourceMessages = droppedCount > 0 ? countSourceMessages(rows.slice(0, droppedCount)) : 0;
-  return { visibleCount, droppedCount, droppedSourceMessages };
+  return { visibleCount, droppedCount: rows.length - visibleCount };
 }
 
 // ============================================================================
@@ -154,7 +153,7 @@ export const MessageList = ({ messages }: MessageListProps) => {
   // active agent; before it is bound, fall back to a shared slot.
   const session = useAgent((s) => s.session);
   const namespace = session ? flattenNamespaceFor(session.id) : FLATTEN_NAMESPACE_FALLBACK;
-  const { staticMessages, staticSignatures, dynamicMessages, hiddenSourceMessages } = getMessages(messages, {
+  const { staticMessages, staticSignatures, dynamicMessages, staticSourceTotal } = getMessages(messages, {
     mode,
     window: STATIC_INPUT_WINDOW,
     namespace,
@@ -188,17 +187,21 @@ export const MessageList = ({ messages }: MessageListProps) => {
   // only once the width is known makes the first cache write happen at the real width, in one pass.
   const widthReady = width > 0;
   // ── Truncate static list to a LINE budget ──
-  // Everything here is counted in MESSAGES (never rows): `hiddenSourceMessages` covers the
-  // window prefix plus static messages that produced no row, and the rendered-row budget adds
-  // the messages behind the rows it drops. Mixing the two units would print a total that
-  // exceeds the transcript length.
-  const { visibleCount, droppedSourceMessages } = selectVisibleRows(staticMessages, heights);
+  // The marker is ONE subtraction, in MESSAGES: every static-side source message (`staticSourceTotal`,
+  // which already includes the input window's prefix) minus the distinct sources the visible rows
+  // represent. A message therefore counts as hidden only when NO visible row stands for it:
+  //   - the budget cut inside one message's parts → it has a visible row → not hidden;
+  //   - a compact activity row → its `sourceMessageIds` expand, so folded history is not "hidden";
+  //   - a message that produced no row (thinking-only, …) → not represented → hidden.
+  // Adding a "no row" term and a "dropped rows" term instead is the same number only while no
+  // message straddles the cut — and it reported a fold as truncation in compact mode.
+  const { visibleCount } = selectVisibleRows(staticMessages, heights);
   const visibleStaticMessages =
     visibleCount === staticMessages.length ? staticMessages : staticMessages.slice(-visibleCount);
   const visibleStaticSignatures =
     visibleCount === staticSignatures.length ? staticSignatures : staticSignatures.slice(-visibleCount);
   const visibleStaticLength = visibleStaticMessages.length;
-  const hiddenTotal = hiddenSourceMessages + droppedSourceMessages;
+  const hiddenTotal = Math.max(0, staticSourceTotal - countSourceMessages(visibleStaticMessages));
   const dynamicSignature = computeDynamicListSignature(dynamicMessages);
 
   // Rebuild static list when the row set, the marker total or the projection changes.

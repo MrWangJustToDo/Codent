@@ -14,7 +14,7 @@ import {
   setFlatByRef,
   setStaticFlattenSnapshot,
 } from "./message-flat-cache.js";
-import { projectTranscriptForDisplay, type TranscriptDisplayMode } from "./project-transcript.js";
+import { foldedSourceIdsOf, projectTranscriptForDisplay, type TranscriptDisplayMode } from "./project-transcript.js";
 
 import type { ImagePart, TextPart, UIMessage } from "@tanstack/ai";
 
@@ -196,12 +196,14 @@ export const getMessages = (messages: UIMessage[], options: GetMessagesOptions =
     staticSignatures,
     dynamicMessages: validDynamicMessages,
     /**
-     * Messages not represented in the transcript at all: the window prefix plus every
-     * static source message that produced no row (thinking-only, tool-result-only, …).
-     * `MessageList` subtracts the messages visible in the rendered cap to get the marker
-     * total. Kept in MESSAGES so the marker never mixes units.
+     * Source messages on the STATIC side: the window prefix plus the derived static source.
+     *
+     * The truncation marker is ONE subtraction over this: `staticSourceTotal -
+     * countSourceMessages(visibleRows)` (`MessageList`). Deriving it from the visible rows instead of
+     * adding a "no row" term and a "dropped rows" term keeps it in one unit and makes a message that
+     * is only partially visible (the budget cut inside its parts) count as visible, not hidden.
      */
-    hiddenSourceMessages: windowStart + Math.max(0, staticSource.length - countSourceMessages(staticMessages)),
+    staticSourceTotal: windowStart + staticSource.length,
   };
 };
 
@@ -280,7 +282,17 @@ function sourceIdOf(rowId: string): string {
  */
 export function countSourceMessages(rows: UIMessage[]): number {
   const seen = new Set<string>();
-  for (const row of rows) seen.add(row.role === "user" ? row.id : sourceIdOf(row.id));
+  for (const row of rows) {
+    // A compact activity row STANDS FOR several source messages; counting it as one made the
+    // marker report the fold as hidden history (`... N older messages hidden` with nothing
+    // dropped). Expand it, so a source that also produced a text row still counts once (Set).
+    const folded = foldedSourceIdsOf(row);
+    if (folded) {
+      for (const id of folded) seen.add(id);
+      continue;
+    }
+    seen.add(row.role === "user" ? row.id : sourceIdOf(row.id));
+  }
   return seen.size;
 }
 

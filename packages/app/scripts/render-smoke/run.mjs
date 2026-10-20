@@ -63,7 +63,7 @@ import { Content } from "./dist/layout/Content.mjs";
 import { Header } from "./dist/layout/Header.mjs";
 import { WelcomePanel, LOADING_STATUS_TEXT } from "./dist/layout/WelcomePanel.mjs";
 import { CompactionSummaryView } from "./dist/messages/CompactionSummaryView.mjs";
-import { getMessages } from "./dist/utils/get-messages.mjs";
+import { countSourceMessages, getMessages } from "./dist/utils/get-messages.mjs";
 import { flattenNamespaceFor, getStaticFlattenSnapshot } from "./dist/utils/message-flat-cache.mjs";
 
 // ── fake terminal ────────────────────────────────────────────────────────────
@@ -310,11 +310,16 @@ record("no React key/identity warnings", !consoleErrors.some((e) => /key|duplica
 // Derive the expectation from the same pure function the component uses, fed with the heights
 // the component itself measured (`onRender` writes them into `useStaticHeights`). Row ids are
 // part-scoped, so the row list is not simply the message list.
-const { staticMessages, dynamicMessages, hiddenSourceMessages } = getMessages(all, {
+const { staticMessages, dynamicMessages, staticSourceTotal } = getMessages(all, {
   mode: useTranscriptDisplay.getState().mode,
   window: 120,
   namespace: "transcript",
 });
+
+/** The marker's total, exactly as `MessageList` derives it (one subtraction, in messages). */
+function hiddenMarkerOf(rows, total, visibleCount) {
+  return Math.max(0, total - countSourceMessages(rows.slice(-visibleCount)));
+}
 
 /** Recompute the row budget as `MessageList` does, from the live measured heights. */
 function expectedStaticRows() {
@@ -348,7 +353,7 @@ for (const c of budgetChecks) record(c.name, c.pass, c.detail);
 // prepended INSIDE the cached static region (that is where it belongs: it describes the rows
 // the budget dropped), so the store holds the kept rows plus one marker element.
 const budget0 = expectedStaticRows();
-const markerExpected = hiddenSourceMessages + budget0.droppedSourceMessages;
+const markerExpected = hiddenMarkerOf(staticMessages, staticSourceTotal, budget0.visibleCount);
 const expectedStoreRows = budget0.visibleCount + (markerExpected > 0 ? 1 : 0);
 record(
   "static store holds exactly the line-budget rows plus the in-region marker",
@@ -431,7 +436,10 @@ record(
 const markerState = await awaitStableMarker({
   readState: () => {
     const budget = expectedStaticRows();
-    return { marker: hiddenSourceMessages + budget.droppedSourceMessages, visibleCount: budget.visibleCount };
+    return {
+      marker: hiddenMarkerOf(staticMessages, staticSourceTotal, budget.visibleCount),
+      visibleCount: budget.visibleCount,
+    };
   },
   readPaintedMarker: () =>
     [
@@ -487,7 +495,9 @@ for (const extra of [1, 2, 4]) {
   const budget = selectVisibleRows(projected.staticMessages, useStaticHeights.getState().heights);
   rowChecks.push({
     storeRows: useStatic.getState().list.length,
-    expectedRows: budget.visibleCount + (projected.hiddenSourceMessages + budget.droppedSourceMessages > 0 ? 1 : 0),
+    expectedRows:
+      budget.visibleCount +
+      (hiddenMarkerOf(projected.staticMessages, projected.staticSourceTotal, budget.visibleCount) > 0 ? 1 : 0),
   });
 }
 // The budget must keep holding as the window slides: growth without bound would mean the
@@ -532,7 +542,10 @@ record("no React key/identity warning after slides", !consoleErrors.some((e) => 
   });
   const midBudget = selectVisibleRows(midStreamResult.staticMessages, useStaticHeights.getState().heights);
   const expectedRows =
-    midBudget.visibleCount + (midStreamResult.hiddenSourceMessages + midBudget.droppedSourceMessages > 0 ? 1 : 0);
+    midBudget.visibleCount +
+    (hiddenMarkerOf(midStreamResult.staticMessages, midStreamResult.staticSourceTotal, midBudget.visibleCount) > 0
+      ? 1
+      : 0);
 
   // The regression this guards is rows rendered NOWHERE, not the exact row count: a message
   // promoted out of the streaming tail while the agent is non-idle belongs to neither list if

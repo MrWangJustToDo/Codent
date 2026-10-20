@@ -12,6 +12,20 @@ export function isActivitySummaryMessage(message: { id?: string }): boolean {
   return typeof message.id === "string" && message.id.startsWith(ACTIVITY_SUMMARY_ID_PREFIX);
 }
 
+/**
+ * Source messages folded into an activity summary row (display-only; not persisted).
+ *
+ * The row replaces N source messages with ONE line, so any consumer that counts "messages
+ * represented by these rows" must expand it. Without this the compact transcript reported the
+ * fold itself as a truncation: the marker is `staticSourceTotal - countSourceMessages(visibleRows)`,
+ * and a row that counted 1 for 3 folded messages made the difference look like hidden history —
+ * the phantom "... N older messages hidden" line.
+ */
+export function foldedSourceIdsOf(row: unknown): readonly string[] | undefined {
+  const ids = (row as { sourceMessageIds?: unknown } | null)?.sourceMessageIds;
+  return Array.isArray(ids) && ids.length > 0 ? (ids as string[]) : undefined;
+}
+
 type Turn = {
   userMessageId: string | null;
   messages: UIMessage[];
@@ -90,7 +104,10 @@ function collapseTurn(turn: Turn): UIMessage[] {
       id: `${ACTIVITY_SUMMARY_ID_PREFIX}${turn.userMessageId ?? "orphan"}:${summarySeq++}`,
       role: "assistant",
       parts: [{ type: "text", content: summary } as TextPart],
-    } as UIMessage);
+      // What this row stands in for. `flattenMessage` spreads the row, so the field survives into
+      // the static rows the marker counts.
+      sourceMessageIds: [...new Set(folded.map((item) => item.source.id))],
+    } as UIMessage & { sourceMessageIds: string[] });
   };
 
   for (const message of turn.messages) {

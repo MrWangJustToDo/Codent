@@ -58,11 +58,12 @@ function budgetInvariants() {
   const tooTall = Object.fromEntries(rows.map((r) => [r.id, Math.ceil(MAX_STATIC_LINES / 3)]));
   const dropping = selectVisibleRows(rows, tooTall);
   checks.push({
-    name: "dropped totals are counted in source messages, not rows",
+    name: "a forced drop keeps a trailing visible window",
     pass:
-      dropping.droppedCount > 0 && dropping.droppedSourceMessages > 0 && dropping.droppedSourceMessages <= rows.length,
+      dropping.droppedCount > 0 &&
+      dropping.visibleCount > 0 &&
+      dropping.visibleCount + dropping.droppedCount === rows.length,
     detail: {
-      droppedSourceMessages: dropping.droppedSourceMessages,
       droppedRows: dropping.droppedCount,
       visibleCount: dropping.visibleCount,
     },
