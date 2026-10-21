@@ -23,14 +23,6 @@ export interface PlanApiHost {
   getCoreEnv: () => ResolvedCoreEnv;
 }
 
-export function enablePlanMode(host: PlanApiHost): void {
-  host.planMode.enable();
-}
-
-export function disablePlanMode(host: PlanApiHost): void {
-  host.planMode.disable();
-}
-
 export function getPlanModeState(host: PlanApiHost): PlanModeState {
   return host.planMode.getState();
 }

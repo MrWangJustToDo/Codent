@@ -92,8 +92,6 @@ import {
   beginPlanExecution as beginPlanExecutionHelper,
   cancelPlanExecution as cancelPlanExecutionHelper,
   completePlan as completePlanHelper,
-  disablePlanMode as disablePlanModeHelper,
-  enablePlanMode as enablePlanModeHelper,
   getPlanModeState as getPlanModeStateHelper,
   listWorkspacePlans as listWorkspacePlansHelper,
   loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
@@ -111,6 +109,7 @@ import {
   restoreManagedSession,
   saveSessionUIMessages as saveSessionUIMessagesHelper,
 } from "./managed-agent-session.js";
+import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
 import { BackgroundWorkService } from "./services/background-work-service.js";
@@ -345,6 +344,8 @@ export class ManagedAgent {
   readonly planMode: PlanModeController;
   /** Auto / YOLO mode — skip all tool approvals. Cleared on reset / `/clear`. */
   readonly autoMode: AutoModeController;
+  /** Plan/auto mutual exclusion + mode persistence/restore. */
+  readonly mode: ModeCoordinator;
   /** Session-backed tool-approval interrupt table. */
   readonly approvals: ToolApprovalTable;
 
@@ -519,6 +520,11 @@ export class ManagedAgent {
     this.autoMode = new AutoModeController(() => {
       this.emitStateChange();
       this.persistSession();
+    });
+    this.mode = new ModeCoordinator({
+      planMode: this.planMode,
+      autoMode: this.autoMode,
+      persist: () => this.persistSession(),
     });
     this.approvals = new ToolApprovalTable({
       onResolved: (resolution) => {
@@ -1499,15 +1505,11 @@ export class ManagedAgent {
   // ============================================================================
 
   isAutoModeEnabled(): boolean {
-    return this.autoMode.isEnabled();
+    return this.mode.isAutoEnabled();
   }
 
   setAutoModeEnabled(enabled: boolean): void {
-    this.autoMode.setEnabled(enabled);
-    // Auto mode and plan mode are mutually exclusive — enabling auto disables plan
-    if (enabled && this.planMode.getPhase() !== "off") {
-      this.planMode.disable();
-    }
+    this.mode.setAuto(enabled);
   }
 
   /**
@@ -1515,7 +1517,7 @@ export class ManagedAgent {
    * True when auto mode is on, or plan mode is building a seeded plan.
    */
   shouldAutoApprovePendingTools(): boolean {
-    return this.autoMode.isEnabled() || this.planMode.shouldAutoApproveTools();
+    return this.mode.shouldAutoApprove();
   }
 
   /**
@@ -1523,9 +1525,7 @@ export class ManagedAgent {
    * Plan mode takes priority over auto mode; normal is the fallback.
    */
   getAgentMode(): AgentMode {
-    if (this.planMode.getPhase() !== "off") return "plan";
-    if (this.autoMode.isEnabled()) return "auto";
-    return "normal";
+    return this.mode.getMode();
   }
 
   /**
@@ -1534,21 +1534,12 @@ export class ManagedAgent {
    * @returns the resulting mode
    */
   setAgentMode(mode: AgentMode): AgentMode {
-    if (mode === "plan") {
-      this.enablePlanMode();
-    } else if (mode === "auto") {
-      this.setAutoModeEnabled(true);
-    } else {
-      if (this.planMode.getPhase() !== "off") this.disablePlanMode();
-      this.autoMode.setEnabled(false);
-    }
-    return this.getAgentMode();
+    return this.mode.setMode(mode);
   }
 
   /** Cycle normal → auto → plan → normal. @returns the resulting mode */
   cycleAgentMode(): AgentMode {
-    const current = this.getAgentMode();
-    return this.setAgentMode(current === "normal" ? "auto" : current === "auto" ? "plan" : "normal");
+    return this.mode.cycle();
   }
 
   // ============================================================================
@@ -1556,19 +1547,11 @@ export class ManagedAgent {
   // ============================================================================
 
   enablePlanMode(): void {
-    enablePlanModeHelper(this);
-    // Plan mode and auto mode are mutually exclusive — enabling plan disables auto
-    if (this.autoMode.isEnabled()) {
-      this.autoMode.setEnabled(false);
-    }
-    // planMode is session state too; persist it without waiting for the next turn
-    // (a redundant call here is a no-op: nothing changed since the autoMode write).
-    this.persistSession();
+    this.mode.enablePlan();
   }
 
   disablePlanMode(): void {
-    disablePlanModeHelper(this);
-    this.persistSession();
+    this.mode.disablePlan();
   }
 
   getPlanModeState(): PlanModeState {
@@ -1944,8 +1927,7 @@ export class ManagedAgent {
       hadTodos: this.getTodoManager()?.hasTodos() ?? false,
     });
     // Exit plan / auto-approve first so approval bypass cannot stick across sessions.
-    this.planMode.disable();
-    this.setAutoModeEnabled(false);
+    this.mode.reset();
     this.approvals.clear();
     this.run.resetRunState();
     // `resetRunState` stops the run's controllers — the eager runs included, through the run's

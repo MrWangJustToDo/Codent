@@ -174,6 +174,11 @@ table. It enforces **three** properties:
 | `setStatus` / `setContext` / `setUIChannel` | Mutation entry points (`setUIChannel` package-internal)                            |
 | `statusController.applyRunOutcome(...)`     | Unified run finalization (chat + detached/subagent)                                |
 
+Plan/auto exclusion is owned by `ModeCoordinator` (`managers/mode-coordinator.ts`): it disables
+plan **before** auto turns on (so the auto onChange persist cannot capture `plan on + auto on`),
+keeps the persisted auto flag false during any plan phase, and makes a restored plan win over a
+persisted auto flag.
+
 ---
 
 ### 1.7 Identity: runtime / agent / session
@@ -739,7 +744,7 @@ Each log line is `{ t: "message", message: UIMessage | null, state }`: the messa
 
 App hosts subscribe to Session `messages`/`state` for UI only — they do **not** checkpoint to disk. Approval decisions mutate the tool-call message part (`pending` on request, `approved`/`denied` on `y`/`n` or auto-approve), so they ride the same persist triggers as `uiMessages` (the message line is re-emitted). The decision timestamp is written onto that part by `AgentUIChannel.addToolApprovalResponse`, which returns it so `AgentChatController` hands the *same* value to the in-memory approval table (`approvals.upsert`) — one time value for the log and the table. On restore the table is derived from the messages (`normalizeSessionApprovals`); chat middleware rebuilds `resumeToolState.approvals` from it (pending omitted).
 
-On restore, `PlanModeController.restoreState` rehydrates phase (and reloads markdown from `planFilePath` when missing). `/clear` / `ManagedAgent.reset` always `planMode.disable()`.
+On restore, `ModeCoordinator.restore` rehydrates plan phase (and reloads markdown from `planFilePath` when missing) with plan winning over auto. `/clear` / `ManagedAgent.reset` always leave plan mode through `ModeCoordinator.reset()`.
 
 `SessionStore.save`: incremental append — content signature (state sans `updatedAt` + per-message fingerprints) is compared **before** `updatedAt` is bumped, so a re-save of unchanged data is a true no-op with zero IO. New/changed messages are appended as lines; a state-only change re-emits the last message line; a session that goes non-empty → empty, any non-append history change, or a save with no delta baseline (`prev === undefined`, e.g. an unprimed store) rewrites the file to converge on the session. Per-session write lock; `delete()` removes the log and clears the cached bookkeeping. The message timestamps (`message.updatedAt` / `part.approval.updatedAt`) are resolved before that comparison and are deliberately not part of it: an unchanged message keeps the stamp it was written with (from disk or from the last write), so a re-emitted line is byte-identical and a state-only re-emit cannot move an approval's decision time. The only mutation of the live objects is `session.updatedAt`, always after the no-op check.
 

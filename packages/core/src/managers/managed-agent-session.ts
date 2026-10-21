@@ -6,6 +6,7 @@ import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 
 import type { ResolvedCoreEnv } from "../env";
+import type { ModeCoordinator } from "./mode-coordinator.js";
 import type { SessionPersistInput, SessionService } from "./services/session-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -28,6 +29,8 @@ export interface SessionHost {
   /** Owning runtime's env, so plan files are read under the runtime root. */
   getCoreEnv: () => ResolvedCoreEnv;
   planMode: PlanModeController;
+  /** Mode owner; optional for hosts that only need the plan/auto fields below. */
+  mode?: ModeCoordinator;
   isAutoModeEnabled: () => boolean;
   setAutoModeEnabled: (enabled: boolean) => void;
   /** Read the agent's current reasoning-effort config (for persistence). */
@@ -83,7 +86,7 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     todoManager: host.getTodoManager(),
     planMode: host.planMode.getState(),
     // Mutual exclusivity: never persist auto while plan is active.
-    autoMode: planOn ? false : host.isAutoModeEnabled(),
+    autoMode: host.mode?.getPersistedAutoMode() ?? (planOn ? false : host.isAutoModeEnabled()),
     reasoningEffort: host.getReasoningEffort(),
     resolveTextAdapter: host.resolveTextAdapter,
     emitEvent: (type, data) => host.emitEvent(type, data),
@@ -141,11 +144,14 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
       planSnapshot.planMarkdown = markdown;
     }
   }
-  host.planMode.restoreState(planSnapshot);
   // Mutual exclusivity: plan phase wins over auto on restore.
-  const planOn = host.planMode.getPhase() !== "off";
   const wantAuto = Boolean(session.autoMode ?? session.autoApprove);
-  host.setAutoModeEnabled(planOn ? false : wantAuto);
+  if (host.mode) {
+    host.mode.restore(planSnapshot, wantAuto);
+  } else {
+    host.planMode.restoreState(planSnapshot);
+    host.setAutoModeEnabled(host.planMode.getPhase() === "off" && wantAuto);
+  }
   // Approvals are not stored separately: derive them from the restored message
   // log (the tool-call parts carry pending/approved/denied + reason), keeping
   // the decision timestamps recorded in the log.

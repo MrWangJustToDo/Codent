@@ -39,6 +39,8 @@ export { promptTokensOf, totalTokensOf } from "../runtime-types/token-usage.js";
 export { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
 export { RunFinalizer } from "../managers/run-finalizer.js";
 export { ApprovalDecisionCoordinator } from "../managers/approval-decision-coordinator.js";
+export { ModeCoordinator } from "../managers/mode-coordinator.js";
+export { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 export { TurnContextController } from "../managers/controllers/turn-context-controller.js";
 export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/managed-agent-run-lifecycle.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
