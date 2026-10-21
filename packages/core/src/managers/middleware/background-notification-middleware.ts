@@ -64,8 +64,10 @@ export function createBackgroundNotificationMiddleware(
       const messages = config.messages as ModelMessage[];
       const ui = deps.getUIChannel();
       if (!ui) {
-        // No channel: transient wire-only injection. Still returns a new array — the
-        // input may be the projection WireProjectionCache retains.
+        // No channel: transient wire-only injection, with no durable copy behind it (and no
+        // `<background_jobs>` section either — that also needs a channel). Marking here is the
+        // deliberate best-effort for a channel-less caller; callers that can lose a turn should
+        // provide a channel. Still returns a new array — the input may be the projection cache.
         await registry.markNotified(completed.map((job) => job.id));
         return {
           messages: [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }],
@@ -80,7 +82,10 @@ export function createBackgroundNotificationMiddleware(
         [{ kind: BACKGROUND_NOTIFICATION_KIND, content: formatNotifications(completed, maxOutputChars) }],
         { ui, persist: deps.persistMessages }
       );
-      // The channel write is the durable delivery; only now is it safe to mark the jobs notified.
+      // The channel write is the delivery point. The session persist behind it is fire-and-forget
+      // in this host, so a crash in this window is covered two ways: the content-hash id dedupes a
+      // re-delivery if the row landed, and the `<background_jobs>` turn-context section re-admits
+      // the job id/log path if it did not.
       await registry.markNotified(completed.map((job) => job.id));
 
       return { messages: next };
