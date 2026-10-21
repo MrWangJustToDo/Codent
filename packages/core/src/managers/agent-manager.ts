@@ -216,6 +216,12 @@ export class AgentManager {
       // timeline includes session:start/doc/skill/memory (persistence-only
       // log — pre-attach entries would be dropped).
       managed.ensureSessionData();
+      // A live root agent holds the disk session it is running from the start, not only after a
+      // resume. Without this, a fresh session was invisible to the ownership table (and became
+      // resumable by another live agent once it hit disk). `restoreSession` re-acquires the same
+      // id idempotently when bootstrap resumed one.
+      const activeSessionId = managed.getSessionData()?.id;
+      if (activeSessionId) this.acquireSessionOwnership(activeSessionId, managed.id);
       managed.bindSessionLogSink();
     }
 

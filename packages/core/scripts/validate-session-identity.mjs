@@ -119,6 +119,18 @@ assertIdentity(first, "fresh");
 
 const store = managed.getSessionStore();
 assert.ok(store, "session store available");
+// The live agent must actually hold the session it is running, or the release assertion below
+// would be vacuous (a never-claimed id is trivially claimable). `createManagedAgent` claims the
+// active disk session at bootstrap; this is the other half of the A→B transaction.
+{
+  const owner = managed.manager;
+  assert.ok(owner, "the agent exposes the manager that holds the ownership table");
+  assert.equal(
+    owner.acquireSessionOwnership(first, "probe-agent"),
+    false,
+    "a fresh live session is claimed by the agent running it"
+  );
+}
 const target = store.create({ modelStyle: "openai", model: "test-model" });
 target.name = "Resumed Target";
 await store.save(target);
@@ -141,7 +153,6 @@ assert.equal(managed.name, "Resumed Target", "resume mirrors the restored displa
   assert.equal(owner.acquireSessionOwnership(target.id, probe), false, "the resumed session stays claimed");
   assert.equal(owner.acquireSessionOwnership(first, probe), true, "the session left behind was released");
   owner.releaseSessionOwnership(first, probe);
-  owner.releaseSessionOwnership(target.id, probe);
 }
 
 // Provenance of the AGENT id, the other half of this subject: core assigns it. A spawned subagent gets
@@ -202,6 +213,33 @@ assert.ok(
   "session.new announces itself in the new session's log"
 );
 assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and not in the session it replaced");
+
+// ----------------------------------------------------------------------------
+// 4. A failed restore rolls back the attempted claim and keeps the current one
+// ----------------------------------------------------------------------------
+// Distinct from a refused claim (another agent owns the target, which fails before any state
+// changes): this reaches `restoreSession`'s catch after the new id was acquired, so it is the path
+// that used to leave a stale claim behind. The current id is claimed by `startNewDiskSession`.
+{
+  const owner = managed.manager;
+  assert.ok(owner, "the agent exposes the manager that holds the ownership table");
+  const current = session.getSnapshot().activeSessionId;
+  assert.equal(current, nextId, "the failed restore starts from the current session");
+
+  const missing = "ses_missing_restore_target";
+  await assert.rejects(() => managed.restoreSession(missing), "restoring a missing session fails");
+  assert.equal(
+    owner.acquireSessionOwnership(current, "probe-agent"),
+    false,
+    "a failed restore keeps the current session claimed"
+  );
+  assert.equal(
+    owner.acquireSessionOwnership(missing, "probe-agent"),
+    true,
+    "a failed restore releases the attempted claim"
+  );
+  owner.releaseSessionOwnership(missing, "probe-agent");
+}
 
 // ============================================================================
 // Teardown

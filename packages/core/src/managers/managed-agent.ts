@@ -1988,6 +1988,7 @@ export class ManagedAgent {
     if (manager && !manager.acquireSessionOwnership(sessionId, this.id)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
+    let restored = false;
     try {
       // Announce the departure BEFORE anything re-points the sink — in particular before the
       // pre-bind below, which is itself a re-point. Ordering is the whole point: this entry
@@ -2013,19 +2014,29 @@ export class ManagedAgent {
       // the alternative is losing the record of the attempt entirely.
       this.bindSessionLogSink(sessionId);
       const session = await restoreManagedSession(this, sessionId);
+      restored = true;
+      // The switch is complete: release the session being left only NOW. Releasing before the
+      // restore would turn a failed resume into "lost the session we were still on"; releasing
+      // never (the previous behavior) leaked a claim for every A→B→C switch, blocking those ids
+      // for every other live agent in the process.
+      if (manager && leavingId && leavingId !== sessionId) {
+        manager.releaseSessionOwnership(leavingId, this.id);
+      }
       // Re-point the log sink at the restored session's dir so a mid-session
       // switch keeps logging to the session being viewed. A no-op at bootstrap
       // (the sink was already bound to this id by `createManagedAgent`).
       this.bindSessionLogSink();
       return session;
     } catch (err) {
-      // Roll back ownership so a failed restore (e.g. missing session) doesn't
-      // leave a stale claim.
-      manager?.releaseSessionOwnership(sessionId, this.id);
-      // …and the log binding, for the same reason: a failed restore leaves the session data on
-      // the transient id, so the sink must go back there or the agent keeps writing into a
-      // directory belonging to a session it is not running.
-      this.bindSessionLogSink();
+      // Roll back ownership only when the restore itself failed. A post-success failure (the
+      // sink re-bind above) must not drop the claim on the session we are now running.
+      if (!restored) {
+        manager?.releaseSessionOwnership(sessionId, this.id);
+        // …and the log binding, for the same reason: a failed restore leaves the session data on
+        // the transient id, so the sink must go back there or the agent keeps writing into a
+        // directory belonging to a session it is not running.
+        this.bindSessionLogSink();
+      }
       throw err;
     }
   }

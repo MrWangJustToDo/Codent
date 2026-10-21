@@ -782,11 +782,12 @@ App bootstrap resume still passes `initialMessages` from Host.create into `Manag
 
 **Ownership dedup.** `AgentManager` keeps a process-local ownership registry
 (`Map<sessionId, agentId>`) so a disk session is bound to at most **one** live agent
-at a time. `resumeSession` (and `restoreManagedSession`) first `assertFree(sessionId)` —
-if that session is already owned by another live agent, restore is **rejected** with a
-clear error (the `/resume` picker marks such entries `bound (active)`).
-`startNewDiskSession` acquires ownership for the new session id, and `destroyAgent`
-releases it, so an owned session is never double-resumed and never leaks after teardown.
+at a time. A live root claims the active id at bootstrap and after `/clear`; `restoreSession`
+acquires the target before the switch, releases the session being left **only after the restore
+succeeds**, and rolls the attempted target back when it fails. A refused target (already owned by
+another live agent) is rejected with a clear error and leaves the current claim untouched (the
+`/resume` picker marks such entries `bound (active)`). `destroyAgent` releases the current id, so
+an owned session is never double-resumed and a switch never leaks the claim it left behind.
 
 ### 6.4 Channel ↔ wire projection
 

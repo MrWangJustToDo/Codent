@@ -167,6 +167,9 @@ export async function startNewDiskSession(
     model: currentSession?.model ?? "unknown",
   });
   managed.setSessionData(newSession);
+  // The cleared agent now runs the new session; claim it like any other live root session so the
+  // ownership table describes reality (the previous id was released just above).
+  managed.manager?.acquireSessionOwnership(newSession.id, managed.id);
   managed.resetAdmittedTurnContext();
   managed.resetSystemPrompt();
   managed.getTodoManager()?.reset();
@@ -267,7 +270,6 @@ export async function branchSession(
     forkText = uiMessageText(messages[index]!);
   }
 
-  const sourceId = current.id;
   const newSession = store.branchFrom(current, {
     ...(upToIndex !== undefined ? { upToIndex } : {}),
     ...(options.name ? { name: options.name } : {}),
@@ -275,14 +277,9 @@ export async function branchSession(
   });
 
   await store.save(newSession);
+  // `restoreSession` acquires the new id and releases the session being left only after a
+  // successful restore, so a branch needs no compensating release here.
   const restored = await managed.restoreSession(newSession.id);
-
-  // Relinquish the source session so another live agent may resume it — mirroring
-  // `startNewDiskSession`. `restoreSession` only acquires the *new* id, so without this
-  // the source stayed claimed by this agent (and the session-owners map grew per branch).
-  if (sourceId && sourceId !== newSession.id) {
-    managed.manager?.releaseSessionOwnership(sourceId, managed.id);
-  }
 
   return {
     ok: true,
