@@ -11,6 +11,8 @@
  * stdout/stderr — so it is cheap and changes only when a job starts or reaches a terminal state.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 export interface BackgroundJobContextRow {
   jobId: string;
   /** The `run_command` tool call that started it, so the caller can filter to the model's wire. */
@@ -56,7 +58,7 @@ const MAX_COMMAND_CHARS = 120;
 
 function oneLine(command: string): string {
   const flattened = command.replace(/\s+/g, " ").trim();
-  return flattened.length <= MAX_COMMAND_CHARS ? flattened : `${flattened.slice(0, MAX_COMMAND_CHARS - 1)}…`;
+  return truncateText(flattened, MAX_COMMAND_CHARS, { marker: "…" });
 }
 
 /** Render the section, or `undefined` when the session has no jobs. */
