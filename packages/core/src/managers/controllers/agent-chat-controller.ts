@@ -1,4 +1,3 @@
-import { findToolCallIdForApproval, findToolCallNameForApproval } from "../../agent/approval/tool-approval-table.js";
 import { assertNotCompactionSummaryInput } from "../../agent/compaction";
 import { shouldDeferMidRunQueue } from "../../agent/queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../../agent/queue/pending-message-queue.js";
@@ -15,7 +14,6 @@ import {
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
 import {
-  collectPendingApprovals,
   hasPendingAskUser,
   hasPendingToolApprovals,
   needsAgentResponseAfterTools,
@@ -23,18 +21,16 @@ import {
   shouldContinueAgentPump,
 } from "../../agent/stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
-import { analyzeCommand, createAnalysisContext } from "../../agent/tools/command-safety/command-analyzer.js";
-import { evaluateCommandApproval } from "../../agent/tools/command-safety/command-approval-policy.js";
-import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
+import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 import type { AgentManager } from "../agent-manager.js";
 import type { ManagedAgent } from "../managed-agent.js";
 import type { RunToken } from "../run-coordinator.js";
-import type { ContentPart, ToolCallPart, UIMessage } from "@tanstack/ai";
+import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
 
@@ -60,6 +56,8 @@ export class AgentChatController {
 
   private readonly steeringQueue = new PendingMessageQueue<QueuedMessageContent>();
   private readonly followUpQueue = new PendingMessageQueue<QueuedMessageContent>();
+  /** Channel/table/status/persist/repump transaction for approval decisions. */
+  private readonly approvalDecisions: ApprovalDecisionCoordinator;
 
   /** Unified event bus for the owning agent (session `queues` projection). */
   private eventBus?: AgentEventBus;
@@ -78,6 +76,17 @@ export class AgentChatController {
   ) {
     this.channel = new AgentUIChannel({ initialMessages });
     this.managed.setUIChannel(this.channel);
+    this.approvalDecisions = new ApprovalDecisionCoordinator({
+      getMessages: () => this.channel.getMessages(),
+      addToolApprovalResponse: (approvalId, approved, reason) =>
+        this.channel.addToolApprovalResponse(approvalId, approved, reason),
+      upsertApproval: (input) => this.managed.approvals.upsert(input),
+      shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
+      reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
+      persist: () => this.persistMessages("pump-complete"),
+      enqueueRun: () => this.enqueueRunOnce(),
+      getCoreEnv: () => this.managed.getCoreEnv(),
+    });
   }
 
   getUIChannel(): AgentUIChannel {
@@ -286,24 +295,7 @@ export class AgentChatController {
   }
 
   respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<void> {
-    // The channel stamps the decision time onto the tool-call part (that is what
-    // the session log stores); the approval table reuses the same value so the
-    // in-memory and persisted timelines never diverge.
-    const decidedAt = this.channel.addToolApprovalResponse(approvalId, approved, reason);
-    const toolCallId = findToolCallIdForApproval(this.channel.getMessages(), approvalId) ?? approvalId;
-    this.managed.approvals.upsert({
-      id: approvalId,
-      toolCallId,
-      status: approved ? "approved" : "denied",
-      reason: approved ? undefined : reason,
-      toolName: findToolCallNameForApproval(this.channel.getMessages(), approvalId),
-      updatedAt: decidedAt,
-    });
-    this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
-    this.persistMessages("pump-complete");
-    // Join a queued pump when one exists rather than scheduling a second for the
-    // same decision (see `enqueueRunOnce`).
-    return this.enqueueRunOnce();
+    return this.approvalDecisions.respondToToolApproval(approvalId, approved, reason);
   }
 
   /**
@@ -319,23 +311,7 @@ export class AgentChatController {
    * then ONE pump enqueue: `enqueueRunOnce` joins, so N decisions do not schedule N pumps.
    */
   approvePendingApprovals(): Promise<void> {
-    const pending = collectPendingApprovals(this.channel.getMessages());
-    if (pending.length === 0) return Promise.resolve();
-
-    for (const approval of pending) {
-      const decidedAt = this.channel.addToolApprovalResponse(approval.approvalId, true);
-      this.managed.approvals.upsert({
-        id: approval.approvalId,
-        toolCallId: approval.toolCallId,
-        status: "approved",
-        toolName: approval.toolName,
-        updatedAt: decidedAt,
-      });
-    }
-
-    this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
-    this.persistMessages("pump-complete");
-    return this.enqueueRunOnce();
+    return this.approvalDecisions.approvePendingApprovals();
   }
 
   addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<void> {
@@ -503,9 +479,9 @@ export class AgentChatController {
 
         // Auto-approve tools during plan execution so the agent can
         // run without waiting for user confirmation on each tool call.
-        this.autoApprovePendingTools();
+        this.approvalDecisions.autoApprovePending();
         // Command-safety approval rules (no-op in auto mode / plan execution).
-        await this.applyApprovalRules();
+        await this.approvalDecisions.applyCommandSafetyPolicy();
 
         const after = this.channel.getMessages();
         if (hasPendingToolApprovals(after)) break;
@@ -638,120 +614,10 @@ export class AgentChatController {
     const text = extractAssistantText(this.channel.getMessages());
     if (text) this.managed.planMode.onAssistantText(text);
   }
-
-  /**
-   * Apply command-safety approval rules to pending run_command tool calls.
-   *
-   * Runs after {@link autoApprovePendingTools}. In auto mode / plan execution
-   * it is a no-op (everything was already auto-approved). Otherwise the
-   * tree-sitter command policy runs: project-internal read-only commands are
-   * auto-approved, denies are answered with a reason (visible to the LLM), and
-   * anything uncertain stays pending for the user's y/n decision.
-   */
-  private async applyApprovalRules(): Promise<void> {
-    if (this.managed.shouldAutoApprovePendingTools()) return;
-
-    const messages = this.channel.getMessages();
-    let handled = false;
-
-    for (const part of messages.flatMap((m) => m.parts)) {
-      if (part.type !== "tool-call") continue;
-      const toolCall = part as ToolCallPart;
-      if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
-      if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
-      const approvalId = toolCall.approval.id;
-      const input = parseToolCallInput(toolCall);
-      const command = input?.command;
-      if (!approvalId || !command) continue;
-
-      const ctx = await createAnalysisContext(this.managed.getCoreEnv());
-      const report = await analyzeCommand(command, ctx);
-      const decision = evaluateCommandApproval(report, { agentKind: "root" });
-
-      if (decision.action === "allow") {
-        const decidedAt = this.channel.addToolApprovalResponse(approvalId, true);
-        this.managed.approvals.upsert({
-          id: approvalId,
-          toolCallId: toolCall.id,
-          status: "approved",
-          toolName: toolCall.name,
-          updatedAt: decidedAt,
-        });
-        handled = true;
-      } else if (decision.action === "deny") {
-        const decidedAt = this.channel.addToolApprovalResponse(approvalId, false, decision.reason);
-        this.managed.approvals.upsert({
-          id: approvalId,
-          toolCallId: toolCall.id,
-          status: "denied",
-          reason: decision.reason,
-          toolName: toolCall.name,
-          updatedAt: decidedAt,
-        });
-        handled = true;
-      }
-      // ask → keep pending so the user can approve/deny (y/n).
-    }
-
-    if (handled) {
-      this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
-      this.persistMessages("pump-complete");
-    }
-  }
-
-  /**
-   * Auto-approve pending tools when auto mode is on, or plan mode is building.
-   */
-  private autoApprovePendingTools(): void {
-    if (!this.managed.shouldAutoApprovePendingTools()) return;
-
-    const messages = this.channel.getMessages();
-    let didApprove = false;
-
-    for (const part of messages.flatMap((m) => m.parts)) {
-      if (part.type !== "tool-call") continue;
-      const toolCall = part as ToolCallPart;
-      if (toolCall.approval?.needsApproval === true && toolCall.approval.approved === undefined) {
-        const approvalId = toolCall.approval.id;
-        if (approvalId) {
-          const decidedAt = this.channel.addToolApprovalResponse(approvalId, true);
-          this.managed.approvals.upsert({
-            id: approvalId,
-            toolCallId: toolCall.id,
-            status: "approved",
-            toolName: toolCall.name,
-            updatedAt: decidedAt,
-          });
-          didApprove = true;
-        }
-      }
-    }
-
-    if (didApprove) {
-      this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
-      this.persistMessages("pump-complete");
-    }
-  }
 }
 
 /** Format stream errors for display (re-export for app convenience). */
 export function formatChatError(error: Error | null): string | null {
   if (!error) return null;
   return formatAgentStreamError(error).message;
-}
-
-/**
- * Safely extract a tool-call's parsed input, falling back to the raw
- * `arguments` JSON string when `input` is not yet populated.
- */
-function parseToolCallInput(toolCall: ToolCallPart): { command?: string } | undefined {
-  if (toolCall.input) {
-    return toolCall.input as { command?: string };
-  }
-  try {
-    const parsed = JSON.parse(toolCall.arguments ?? "{}") as { command?: string };
-    return parsed && typeof parsed === "object" ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
 }
