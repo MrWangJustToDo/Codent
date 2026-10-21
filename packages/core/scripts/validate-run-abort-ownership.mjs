@@ -279,14 +279,24 @@ function createManaged(id) {
 
 {
   const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  const finalizer = readFileSync(join(SRC, "managers/controllers/run-finalizer.ts"), "utf8");
   assert.match(
     controller,
-    /if \(!waitingForUser\) \{\s*this\.managed\.discardPreforkRuns\("run-finish"\);\s*\}/,
-    "the pump must collect the pre-forks a deferred `onFinish` left behind when the turn ends — " +
+    /this\.managed\.runFinalizer\.finalizeChat\(\{[\s\S]*?waitingForUser,/,
+    "the pump must hand the turn end to RunFinalizer with the wait verdict"
+  );
+  assert.ok(
+    !/discardPreforkRuns\("run-finish"\)/.test(controller),
+    "the pump delegates pre-fork cleanup to RunFinalizer; a second call site would be a second seat"
+  );
+  assert.match(
+    finalizer,
+    /if \(!input\.waitingForUser\) \{\s*this\.deps\.discardPreforkRuns\("run-finish"\);\s*\}/,
+    "the turn end must collect the pre-forks a deferred `onFinish` left behind — " +
       "guarded by `!waitingForUser`, since a WAIT is the case that continues the run"
   );
   assert.ok(
-    !/if \(waitingForUser\) \{\s*this\.managed\.discardPreforkRuns/.test(controller),
+    !/if \(input\.waitingForUser\) \{\s*this\.deps\.discardPreforkRuns/.test(finalizer),
     "the wait path must not discard: the pump that answers the wait is what joins them"
   );
   assert.match(

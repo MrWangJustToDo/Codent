@@ -157,7 +157,7 @@ export async function runAgentOnce(options: RunAgentOnceOptions): Promise<RunAge
   });
 
   if (outcome) {
-    managed.statusController.applyRunOutcome({
+    managed.runFinalizer.applyOutcome({
       kind: outcome.kind,
       messages: outcome.messages ?? messages,
       path: outcome.path,

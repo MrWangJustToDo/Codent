@@ -86,6 +86,7 @@ import { generateId } from "../utils/generate-id.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
+import { RunFinalizer } from "./controllers/run-finalizer.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { handleManagedReactiveCompact, runManualCompact } from "./managed-agent-compact.js";
 import {
@@ -331,6 +332,8 @@ export class ManagedAgent {
   readonly usageHistory: UsageHistoryService;
   readonly run: RunCoordinator;
   readonly statusController: AgentStatusController;
+  /** End-of-run sequence (outcome → persist → finalize → turn summary). */
+  readonly runFinalizer: RunFinalizer;
   /** Plan mode (read-only planning → execute). Root agents only; subagents leave phase off. */
   /**
    * Instance id — an agent *bound to one conversation*: the conversation-scoped state below
@@ -491,6 +494,15 @@ export class ManagedAgent {
         this.lastFinishReason = reason;
       },
       emitEvent: (type, data) => this.emitEvent(type, data),
+    });
+    this.runFinalizer = new RunFinalizer({
+      status: this.statusController,
+      getStatus: () => this.getStatus(),
+      getError: () => this.getError(),
+      finalizeRun: (reason) => this.finalizeRun(reason),
+      discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
+      emitEvent: (type, data) => this.emitEvent(type, data),
+      usage: this.usage,
     });
 
     this.planMode = new PlanModeController({
@@ -710,7 +722,7 @@ export class ManagedAgent {
 
   /** Reconcile status after a chat pump finishes. */
   syncRunStatusFromUIMessages(messages: TanStackUIMessage[]): void {
-    this.statusController.applyRunOutcome({ kind: "finished", messages, path: "chat" });
+    this.runFinalizer.finalizeSnapshot(messages);
   }
 
   /** L1 status snapshot for Emitter / Session projection. */

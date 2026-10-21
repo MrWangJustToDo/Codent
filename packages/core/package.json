@@ -140,6 +140,7 @@
     "validate:lifecycle-middleware": "pnpm run build && node scripts/validate-lifecycle-middleware.mjs",
     "validate:lifecycle-provider": "pnpm run build && node scripts/validate-lifecycle-provider.mjs",
     "validate:run-finalize": "pnpm run build && node scripts/validate-run-finalize.mjs",
+    "validate:run-finalizer": "pnpm run build && node scripts/validate-run-finalizer.mjs",
     "validate:extensions-middleware": "pnpm run build && node scripts/validate-extensions-middleware.mjs",
     "validate:early-tool-result-ui": "pnpm run build && node scripts/validate-early-tool-result-ui.mjs",
     "validate:tool-phase-utils": "pnpm run build && node scripts/validate-tool-phase-utils.mjs",

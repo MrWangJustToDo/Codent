@@ -37,6 +37,7 @@ export { UsageStore } from "../agent/usage/index.js";
 // display surface against the rule rather than against a formatted string.
 export { promptTokensOf, totalTokensOf } from "../runtime-types/token-usage.js";
 export { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
+export { RunFinalizer } from "../managers/controllers/run-finalizer.js";
 export { TurnContextController } from "../managers/controllers/turn-context-controller.js";
 export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/managed-agent-run-lifecycle.js";
 export { ManagedAgent } from "../managers/managed-agent.js";

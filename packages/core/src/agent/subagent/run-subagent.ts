@@ -280,13 +280,11 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     // "error"` flips the status, and `deriveSubagentRunStats` reads that status into `incomplete`
     // — the flag the parent judges the summary by (see `run-stats.ts`).
     const outcomeKind = aborted ? "aborted" : failed ? "error" : "finished";
-    subagentManaged.statusController.applyRunOutcome({
+    subagentManaged.runFinalizer.finalizeDetached({
       kind: outcomeKind,
       messages: previewMessages,
-      path: "detached",
       ...(failed && errorMessage ? { errorMessage } : {}),
     });
-    subagentManaged.finalizeRun(outcomeKind);
     // ONLY for an abort or a failure — never for a finished run. Applying a notice by class
     // appended `[Task cancelled.]` to every SUCCESSFUL subagent, which then reached the parent
     // model's context as a cancellation the operator never made. A finished run's summary is its

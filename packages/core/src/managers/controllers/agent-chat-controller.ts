@@ -519,14 +519,7 @@ export class AgentChatController {
         const waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
         const keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
         // Prefer status already set by executeStream (error/abort) over message-derived waits.
-        const outcomeKind =
-          this.managed.getStatus() === "aborted"
-            ? "aborted"
-            : hasError || this.managed.getStatus() === "error"
-              ? "error"
-              : waitingForUser
-                ? "waiting"
-                : "finished";
+        const outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
 
         // Phase cap or early stream end while tools/model still need work — chain
         // another pump without finalizing the turn (avoids stale "running" + trapped queues).
@@ -537,53 +530,13 @@ export class AgentChatController {
           return;
         }
 
-        // The turn is over and no tool phase is coming: collect the eager `task` runs it left
-        // registered.
-        //
-        // `onFinish` defers exactly this discard when it sees a pending tool call, on the assumption
-        // that the tool phase is about to join them. That assumption is wrong for a call that cannot
-        // run — truncated arguments, which `cancelIncompleteToolCalls` settles as `error` — and no
-        // later boundary collects it either: the next turn's tool phase addresses different call ids,
-        // so a pre-fork kept past its own turn only runs on unobserved. This is that missing seat.
-        //
-        // Not for a WAIT (`waitingForUser`): the run is not over, and the pump that answers the wait is
-        // precisely what joins them.
-        if (!waitingForUser) {
-          this.managed.discardPreforkRuns("run-finish");
-        }
-
-        this.managed.statusController.applyRunOutcome({
+        this.managed.runFinalizer.finalizeChat({
           kind: outcomeKind,
           messages,
-          path: "chat",
-          // Only supply a message when status is not already error (avoids duplicate stream-error).
-          errorMessage:
-            outcomeKind === "error" && this.managed.getStatus() !== "error"
-              ? this.managed.getError() || "Stream execution failed"
-              : undefined,
-        });
-        this.persistMessages("pump-complete");
-
-        // Waiting (approval / ask_user) keeps turn context for the resume pump.
-        if (outcomeKind === "finished" || outcomeKind === "aborted" || outcomeKind === "error") {
-          this.managed.finalizeRun(outcomeKind);
-        }
-
-        const totalUsage = this.managed.usage?.getTotal();
-        const toolCallCount = this.channel
-          .getMessages()
-          .filter((m) => m.role === "assistant")
-          .reduce((count, m) => count + m.parts.filter((p) => p.type === "tool-call").length, 0);
-        this.managed.emitEvent("turn:summary", {
-          ...(outcomeKind !== "waiting" ? { outcome: outcomeKind } : {}),
+          waitingForUser,
           phases: toolPhases,
-          toolCalls: toolCallCount,
-          inputTokens: totalUsage?.inputTokens ?? 0,
-          outputTokens: totalUsage?.outputTokens ?? 0,
-          cacheReadTokens: totalUsage?.cacheReadTokens ?? 0,
-          cacheWriteTokens: totalUsage?.cacheWriteTokens ?? 0,
-          costUsd: this.managed.usage?.getTotalCostUsd() ?? 0,
-          durationMs: Date.now() - turnStart,
+          turnStartedAt: turnStart,
+          persist: () => this.persistMessages("pump-complete"),
         });
       }
     } finally {

@@ -745,11 +745,13 @@ On restore, `PlanModeController.restoreState` rehydrates phase (and reloads mark
 | `aborted`  | Yes             | No                | `{ reason: "aborted" }`  |
 | `error`    | Yes             | No                | `{ reason: "error" }`    |
 
-Owned by the **chat pump** / detached runners — not per-`chat()` lifecycle middleware:
+Owned by the **chat pump** / detached runners — not per-`chat()` lifecycle middleware. The terminal
+sequence itself (outcome kind → apply status → persist → `finalizeRun` → `turn:summary`) lives in
+`RunFinalizer`, so the callers below cannot reorder it:
 
-- `AgentChatController.pumpToolPhases` — after `applyRunOutcome` when kind is `finished` / `aborted` / `error` (not `waiting`, so approval resume keeps turn context)
+- `AgentChatController.pumpToolPhases` — `RunFinalizer.finalizeChat` when kind is `finished` / `aborted` / `error` (not `waiting`, so approval resume keeps turn context)
 - `AgentChatController.stop` — `aborted` (generation bump skips the in-flight pump’s outcome path)
-- `run-subagent` — after detached `applyRunOutcome`
+- `run-subagent` — `RunFinalizer.finalizeDetached` after the detached status outcome
 
 Idempotent per turn via `resetTurnLifecycle` / `beginTurnFinalize` (stop + pump must not double-fire).
 
