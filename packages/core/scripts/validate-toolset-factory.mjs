@@ -112,5 +112,10 @@ assert.match(
   /if \(customTools !== undefined\) \{\s*subagent\.tools = customTools/,
   "only custom tools override the factory result"
 );
+assert.match(
+  manager,
+  /hasOwnProperty\.call\(config, "subagentTools"\)/,
+  "per-spawn overrides beat the root config default"
+);
 
 console.log("toolset-factory validation passed");

@@ -15,7 +15,7 @@
  *   members. Those are real ports and should be declared where they are consumed.
  * - **Composition-root ports** (`ManagedAgent`, `AgentManager`) are whole objects. A
  *   structural port for them is only worth writing once `ManagedAgent` itself is split
- *   (see `openspec/changes/core-structure-convergence/architecture-debt-tracker.md`,
+ *   (see `openspec/changes/archive/2026-10-10-core-structure-convergence/architecture-debt-tracker.md`,
  *   P1-15) — until then a copied interface is a second source of truth for the exact
  *   surface the split is meant to shrink.
  *

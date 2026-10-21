@@ -355,7 +355,6 @@ function newService() {
     setAutoModeEnabled: () => {},
     getReasoningEffort: () => undefined,
     session: service,
-    sessionSyncTracker: tracker,
     emitEvent: () => {},
     clearQueuedMessages: () => {},
     syncInteractionStateFromUIMessages: () => {},
@@ -391,7 +390,6 @@ function newService() {
     setAutoModeEnabled: () => {},
     getReasoningEffort: () => undefined,
     session: service,
-    sessionSyncTracker: tracker,
     emitEvent: () => {},
     clearQueuedMessages: () => {},
     syncInteractionStateFromUIMessages: () => {},
@@ -444,7 +442,7 @@ function newService() {
   // The title write is fire-and-forget inside a `.then`, so give it a turn to land.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  // `persistSessionModelState` carries no `uiMessages` at all (this is what `/clear`'s mode
+  // state-only persists carry no `uiMessages` at all (this is what `/clear`'s mode
   // resets queue); a stray empty list is the same "nothing to title" case. Neither may reach
   // the side LLM.
   await persist(undefined);
@@ -473,7 +471,7 @@ function newService() {
   data.name = "gate"; // keep the auto-title path out of this block
   const sessionFiles = () => [...files.keys()].filter((p) => p.endsWith(".session.jsonl"));
 
-  // State-only persists — `/clear`'s mode resets, `persistSessionModelState`, a mode / effort /
+  // State-only persists — `/clear`'s mode resets, state-only persists, a mode / effort /
   // model toggle — must not create a file for a session with no content yet. Old code: each one
   // wrote the log, leaving an empty "New Session" on disk (and a ghost row in `/resume`).
   await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null });

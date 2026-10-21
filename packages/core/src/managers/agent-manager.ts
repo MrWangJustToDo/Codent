@@ -12,7 +12,6 @@ import { SessionOwnership } from "./session-ownership.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
 import type { SkillDirectory } from "../agent/skills/skill-registry.js";
-import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { StreamChunk } from "@tanstack/ai";
 
@@ -234,9 +233,13 @@ export class AgentManager {
     };
     const subagent = await this.createManagedAgent(finalConfig, parentId, subagentId);
 
-    const customTools = (config as { subagentTools?: ToolsRecord | null }).subagentTools;
-    // The factory already built the default read-only subagent set; only a caller-supplied
-    // override needs to replace it here.
+    // A per-spawn override wins; otherwise the root agent's configured default applies. `null`
+    // remains an explicit "clear all tools" value, so use hasOwn rather than `??`.
+    const customTools = Object.prototype.hasOwnProperty.call(config, "subagentTools")
+      ? config.subagentTools
+      : parent.config.subagentTools;
+    // The factory already built the default read-only subagent set; only an override needs to
+    // replace it here.
     if (customTools !== undefined) {
       subagent.tools = customTools ?? {};
       subagent.invalidateRunner();

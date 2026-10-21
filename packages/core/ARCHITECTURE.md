@@ -205,7 +205,7 @@ Today's contract:
 - A subagent has **no** disk session, but does have its own log file under the root agent's session
   directory — the directory is keyed by the disk session, the file name by the agent.
 - `parentId` always references an **agent id**, never a session.
-- One disk session is held by one live agent at a time (`AgentManager.sessionOwners`).
+- One disk session is held by one live agent at a time (`SessionOwnership`).
 - `/resume` **re-binds** the existing agent instance to another disk session (it does not create a
   second agent); the previous session's ownership is released on the switch.
 

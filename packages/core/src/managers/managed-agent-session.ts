@@ -120,10 +120,6 @@ export async function saveSessionUIMessages(
   if (persisted) tracker.markPersisted(uiMessages);
 }
 
-export async function persistSessionModelState(host: SessionHost): Promise<void> {
-  await host.session.persistSession(() => getSessionPersistInput(host));
-}
-
 export async function restoreManagedSession(
   host: SessionHost,
   sessionId: string,

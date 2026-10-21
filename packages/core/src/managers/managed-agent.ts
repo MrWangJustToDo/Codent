@@ -1945,8 +1945,3 @@ export class ManagedAgent {
     this.runnerWiring.setUIChannel(ui);
   }
 }
-
-export function createManagedAgentTimestamps(): Pick<ManagedAgent, "createdAt" | "updatedAt" | "childIds"> {
-  const now = Date.now();
-  return { createdAt: now, updatedAt: now, childIds: [] };
-}

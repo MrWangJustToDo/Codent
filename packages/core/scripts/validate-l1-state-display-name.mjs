@@ -142,7 +142,6 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
       approvals: { restore: () => {} },
-      sessionSyncTracker: { reset: () => {} },
       getUI: () => ({ setMessages: () => {} }),
       clearQueuedMessages: () => {},
       syncInteractionStateFromUIMessages: () => {},

@@ -298,7 +298,7 @@ export class SessionService {
     if (!this.data.name || this.data.name === "New Session") {
       const firstUserText = getFirstUserInput(uiMessages || []).trim();
       // A brand-new session is persisted *before* its first turn by state-only writes:
-      // `persistSessionModelState` carries no `uiMessages`, and `/clear` queues one (its mode
+      // state-only persists carry no `uiMessages`, and `/clear` queues one (its mode
       // resets), whose lazily-resolved payload lands after the new session is adopted. There is
       // nothing to title at that point — an empty prompt produced a title with no conversation
       // behind it and a wasted side call (some providers reject the empty input outright, which

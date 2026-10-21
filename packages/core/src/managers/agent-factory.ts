@@ -79,7 +79,6 @@ export async function buildManagedAgent({
     }
   );
 
-  if (!parentId && todoManager) managed.setTodoManager(todoManager);
   const toolsRecord = { ...(await buildToolset({ profile: parentId ? "subagent" : "root", managed, todoManager })) };
   managed.tools = toolsRecord;
   managed.runtime = runtime;

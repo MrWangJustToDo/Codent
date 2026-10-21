@@ -20,6 +20,7 @@ export interface AgentEventBusScopeDeps {
 export class AgentEventBusScope {
   readonly root: AgentEventBus;
   private readonly scopes = new Map<string, AgentEventBus>();
+  private readonly parents = new Map<string, string | undefined>();
 
   constructor(private readonly deps: AgentEventBusScopeDeps) {
     this.root = createAgentEventBus("root", ({ pattern, event, scopeId, error }) => {
@@ -38,15 +39,36 @@ export class AgentEventBusScope {
   /** Scoped bus for one agent; subagents are scoped under their parent and up-flow. */
   of(agentId: string, parentId?: string): AgentEventBus {
     const cached = this.scopes.get(agentId);
-    if (cached) return cached;
-    const parent = parentId ? this.of(parentId) : this.root;
+    if (cached) {
+      if (this.parents.get(agentId) !== parentId) {
+        throw new Error(
+          `Agent event bus scope "${agentId}" was already created with a different parent; ` +
+            `the first call wins (got ${String(this.parents.get(agentId))}, requested ${String(parentId)}).`
+        );
+      }
+      return cached;
+    }
+    // Recursive parent creation must not re-validate the parent's own relation: callers only pass
+    // one level, and the parent may already have been created under its own parent.
+    const parent = parentId ? this.ensureScope(parentId) : this.root;
     const bus = parent.scope(agentId);
     this.scopes.set(agentId, bus);
+    this.parents.set(agentId, parentId);
+    return bus;
+  }
+
+  private ensureScope(agentId: string): AgentEventBus {
+    const cached = this.scopes.get(agentId);
+    if (cached) return cached;
+    const bus = this.root.scope(agentId);
+    this.scopes.set(agentId, bus);
+    this.parents.set(agentId, undefined);
     return bus;
   }
 
   /** Drop a destroyed agent's scope. */
   delete(agentId: string): void {
     this.scopes.delete(agentId);
+    this.parents.delete(agentId);
   }
 }
