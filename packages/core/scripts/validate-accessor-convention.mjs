@@ -19,7 +19,7 @@
  *    the same concept (same name, or `foo` + `getFoo`).
  * 2. **Method form on the frozen list.** Classes on {@link METHOD_ONLY_CLASSES} must
  *    not use property getters for state access at all: the write side is already
- *    methods (`setTodoManager`, `setUIChannel`), and state here is a *snapshot*, not
+ *    methods (`setUIChannel`, `setLog`), and state here is a *snapshot*, not
  *    a plain field — `managed.status` reads as data while `getStatus()` reads as a
  *    call, which is the honest signal.
  *

@@ -79,7 +79,7 @@ export async function buildManagedAgent({
     }
   );
 
-  const toolsRecord = { ...(await buildToolset({ profile: parentId ? "subagent" : "root", managed, todoManager })) };
+  const toolsRecord = { ...(await buildToolset({ profile: parentId ? "subagent" : "root", managed })) };
   managed.tools = toolsRecord;
   managed.runtime = runtime;
   managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);

@@ -13,7 +13,6 @@ import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 
-import type { TodoManager } from "../agent/todo";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { ManagedAgent } from "../runtime-types/hosts.js";
 
@@ -22,16 +21,15 @@ export type ToolsetProfile = "root" | "subagent";
 export interface BuildToolsetOptions {
   profile: ToolsetProfile;
   managed: ManagedAgent;
-  /** Root profile only; absent for subagents. */
-  todoManager?: TodoManager | null;
 }
 
-export async function buildToolset({ profile, managed, todoManager }: BuildToolsetOptions): Promise<ToolsRecord> {
+export async function buildToolset({ profile, managed }: BuildToolsetOptions): Promise<ToolsRecord> {
   if (profile === "subagent") {
     return createSubagentTools(managed);
   }
 
   const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
+  const todoManager = managed.getTodoManager();
   if (todoManager) {
     tools.todo = createTodoTool({ todoManager });
     tools.webfetch = createWebfetchTool({ managed });

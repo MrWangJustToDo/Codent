@@ -38,7 +38,7 @@ const managed = new ManagedAgent(
   { log, tools: {}, todoManager: new TodoManager() }
 );
 
-const root = await buildToolset({ profile: "root", managed, todoManager: new TodoManager() });
+const root = await buildToolset({ profile: "root", managed });
 const rootNames = new Set(Object.keys(root));
 for (const name of [
   "read_file",

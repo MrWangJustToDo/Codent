@@ -1135,10 +1135,6 @@ export class ManagedAgent {
     this.logBinding.flushOnDestroy();
   }
 
-  setTodoManager(t: TodoManager): void {
-    this.extensions.setTodoManager(t);
-  }
-
   getTodoManager(): TodoManager | null {
     return this.extensions.getTodoManager();
   }
