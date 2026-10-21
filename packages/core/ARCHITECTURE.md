@@ -729,6 +729,11 @@ Each log line is `{ t: "message", message: UIMessage | null, state }`: the messa
 
 **Single-process ownership:** a live agent claims its disk session in-process (`AgentManager.acquireSessionOwnership`, enforced by `restoreSession`), and an empty session carries a `reservedAt` window so a second process skips it during startup reuse. Writes from two processes bound to the *same* session id are **not** guarded (the last full state snapshot wins); running two hosts against one `.agents/` directory is unsupported.
 
+`SessionPersistence` (`managers/session-persistence.ts`) owns the per-agent sync fingerprint and the
+save / clear / persist / restore entry points; `SessionService` remains the serialized disk writer.
+`ManagedAgent.restoreSession` keeps only the lifecycle wrapper around it: ownership acquire/release,
+`session:switch`, and log-sink rebinding.
+
 **Binary media (v4):** On persist with `uiMessages`, `SessionService` clones → dehydrates Image/Audio/Video/Document parts to content-addressed **binary** files under `.agents/media/<hash>.<ext>`, writing `media://` refs + `metadata.mediaRef` into the log's message lines. Runtime messages stay hydrated (data URLs / raw base64). Restore hydrates for the UI, then re-dehydrates into `this.data` (so interrupt-snapshot repairs and media extraction stick). See `agent/media/`.
 
 **Media IO failures never escape the host (v4):** dehydrate runs inside `persistSession`'s try/catch — a write failure emits `session:save-error` (target `session+uiMessages`) and still saves the rest of the state, and the fire-and-forget `void …persist…` call sites attach `.catch` (no unhandled rejection). On the read side, `hydrateUIMessages(messages, { onMissing })` reports every un-hydratable `media://` ref (`not-found` / `invalid-ref`, in content parts or tool results) instead of dropping it silently, and `restoreSession` folds the count into `session:restore.mediaMissing`.

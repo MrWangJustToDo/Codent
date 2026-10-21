@@ -362,7 +362,7 @@ function newService() {
   };
 
   const messages = [textMessage("m1", "hello")];
-  await saveSessionUIMessages(host, messages);
+  await saveSessionUIMessages(host, messages, tracker);
   assert.equal(
     tracker.getSnapshot(),
     null,
@@ -398,7 +398,7 @@ function newService() {
   };
 
   const messages = [textMessage("m1", "hello")];
-  await saveSessionUIMessages(host, messages);
+  await saveSessionUIMessages(host, messages, tracker);
   assert.notEqual(tracker.getSnapshot(), null, "a landed write marks the snapshot");
   assert.equal(
     tracker.shouldPersist(messages, { reason: "pump-complete" }),

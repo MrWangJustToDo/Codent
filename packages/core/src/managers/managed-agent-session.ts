@@ -3,6 +3,7 @@
  */
 
 import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table.js";
+import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 
 import type { ResolvedCoreEnv } from "../env";
@@ -13,7 +14,6 @@ import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentLog } from "../agent/agent-log";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
-import type { SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import type { SessionData } from "../agent/persistence/types.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
@@ -38,7 +38,6 @@ export interface SessionHost {
   /** Set reasoning-effort config (restore path). Optional — older hosts may omit. */
   setReasoningEffort?: (effort: ReasoningEffort | undefined) => void;
   session: SessionService;
-  sessionSyncTracker: SessionSyncTracker;
   approvals: ToolApprovalTable;
   toolCompactCache: ToolCompactCache;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
@@ -98,7 +97,11 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
   };
 }
 
-export async function saveSessionUIMessages(host: SessionHost, uiMessages: TanStackUIMessage[]): Promise<void> {
+export async function saveSessionUIMessages(
+  host: SessionHost,
+  uiMessages: TanStackUIMessage[],
+  tracker: SessionSyncTracker
+): Promise<void> {
   if (uiMessages.length === 0) return;
   // Only mark persisted when the write actually landed. Marking a failed save
   // would make the fingerprint match, so every later persist of the same content
@@ -110,14 +113,18 @@ export async function saveSessionUIMessages(host: SessionHost, uiMessages: TanSt
   // during the same turn). Re-reading it here keeps the newest state on the last
   // write; the message snapshot stays exactly the caller's.
   const persisted = await host.session.persistSession(() => getSessionPersistInput(host, uiMessages));
-  if (persisted) host.sessionSyncTracker.markPersisted(uiMessages);
+  if (persisted) tracker.markPersisted(uiMessages);
 }
 
 export async function persistSessionModelState(host: SessionHost): Promise<void> {
   await host.session.persistSession(() => getSessionPersistInput(host));
 }
 
-export async function restoreManagedSession(host: SessionHost, sessionId: string): Promise<SessionData> {
+export async function restoreManagedSession(
+  host: SessionHost,
+  sessionId: string,
+  tracker: SessionSyncTracker = createSessionSyncTracker()
+): Promise<SessionData> {
   // The transcript is about to be replaced, so any run still pumping into the
   // current channel must stop first: its later chunks would interleave with the
   // restored history and its pump-complete persist would write that mixture as the
@@ -178,7 +185,7 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
   }
   applyRestoredSessionChatState(host, session.uiMessages);
   host.resetAdmittedTurnContext?.();
-  host.sessionSyncTracker.reset(session.uiMessages);
+  tracker.reset(session.uiMessages);
   // Resumed sessions may carry a different display name than the previously
   // viewed one — mirror it (and broadcast) so the header/snapshot stay in sync.
   if (session.name) {

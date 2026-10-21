@@ -40,6 +40,7 @@ export { AgentChatController } from "../managers/controllers/agent-chat-controll
 export { RunFinalizer } from "../managers/run-finalizer.js";
 export { ApprovalDecisionCoordinator } from "../managers/approval-decision-coordinator.js";
 export { ModeCoordinator } from "../managers/mode-coordinator.js";
+export { SessionPersistence } from "../managers/session-persistence.js";
 export { AgentLogBinding } from "../managers/agent-log-binding.js";
 export {
   AgentBootstrap,

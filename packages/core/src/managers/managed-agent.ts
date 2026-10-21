@@ -26,11 +26,11 @@
  * 3. **Is it a middleware/host seam?** Then it is a `getXxx: () => ...` accessor, and
  *    the implementation moves to the seam's consumer.
  * 4. **Is it policy that reads and writes this same object graph?** Then it stays
- *    here for now. This is the honest limit of the split: the remaining ~610-line
- *    "Config & resources" region and ~245-line "Status & events" region are not
- *    field moves, they *are* the graph's mutation surface. Extracting them means
- *    moving policy and re-validating concurrency behaviour — tracked as P1-15 in
- *    `openspec/changes/core-structure-convergence/architecture-debt-tracker.md`.
+ *    here for now. This is the honest limit of the split: the remaining status /
+ *    session / resource regions are not field moves, they *are* the graph's
+ *    mutation surface. Extracting one means moving policy and re-validating
+ *    concurrency behaviour — see the archived debt tracker at
+ *    `openspec/changes/archive/2026-10-10-core-structure-convergence/architecture-debt-tracker.md`.
  *
  * The disable above is deliberately unexplained-by-default in the linter and
  * justified here instead, because the previous one carried no justification at all
@@ -58,11 +58,7 @@ import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.j
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
 import { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
-import {
-  createSessionSyncTracker,
-  type SessionSaveReason,
-  type SessionSyncTracker,
-} from "../agent/persistence/session-sync-tracker.js";
+import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
@@ -79,7 +75,6 @@ import { type TurnContextSection } from "../agent/turn-context/turn-context-mess
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
 import { offerableReasoningEfforts } from "../models/types.js";
-import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
@@ -103,12 +98,6 @@ import {
   prepareManagedAgentForRun,
 } from "./managed-agent-run-lifecycle.js";
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
-import {
-  getSessionPersistInput,
-  persistSessionModelState,
-  restoreManagedSession,
-  saveSessionUIMessages as saveSessionUIMessagesHelper,
-} from "./managed-agent-session.js";
 import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
@@ -118,6 +107,7 @@ import { ExtensionRegistryService } from "./services/extension-registry-service.
 import { MemoryService } from "./services/memory-service.js";
 import { SessionService } from "./services/session-service.js";
 import { UsageHistoryService } from "./services/usage-history-service.js";
+import { SessionPersistence } from "./session-persistence.js";
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
@@ -410,7 +400,7 @@ export class ManagedAgent {
   /** Shared channel → wire projection cache (see `getWireProjectionCache`). */
   private wireProjectionCache: WireProjectionCache | null = null;
   readonly toolCompactCache: ToolCompactCache;
-  readonly sessionSyncTracker: SessionSyncTracker;
+  readonly sessionPersistence: SessionPersistence;
 
   // ============================================================================
   // Run lifecycle flags + timing
@@ -486,6 +476,7 @@ export class ManagedAgent {
     this.usage = init.usage ?? new UsageTracker();
     this.memory = init.memory ?? new MemoryService();
     this.session = init.session ?? new SessionService();
+    this.sessionPersistence = new SessionPersistence(this);
     // The store resolves the runtime env when bound, else ambient lazily at first write.
     this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
     this.run = new RunCoordinator();
@@ -568,7 +559,6 @@ export class ManagedAgent {
     // ============================================================================
     this.compaction = init.compaction ?? new CompactionService();
     this.toolCompactCache = new ToolCompactCache();
-    this.sessionSyncTracker = createSessionSyncTracker();
 
     // ============================================================================
     // (Run lifecycle flags + timing inits moved into RunCoordinator)
@@ -1194,11 +1184,7 @@ export class ManagedAgent {
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   maybeSaveSessionUIMessages(uiMessages: TanStackUIMessage[], reason: SessionSaveReason): void {
-    if (uiMessages.length === 0) return;
-    if (!this.sessionSyncTracker.shouldPersist(uiMessages, { reason })) {
-      return;
-    }
-    void saveSessionUIMessagesHelper(this, uiMessages).catch((err) => this.reportBackgroundPersistError(err));
+    this.sessionPersistence.maybeSave(uiMessages, reason);
   }
 
   /**
@@ -1206,7 +1192,7 @@ export class ManagedAgent {
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   saveSessionUIMessages(uiMessages: TanStackUIMessage[]): void {
-    void saveSessionUIMessagesHelper(this, uiMessages).catch((err) => this.reportBackgroundPersistError(err));
+    this.sessionPersistence.save(uiMessages);
   }
 
   /**
@@ -1221,38 +1207,17 @@ export class ManagedAgent {
    * persist is not deduped against the pre-clear fingerprint.
    */
   clearPersistedSession(): void {
-    void this.session
-      .persistSession(() => ({
-        ...getSessionPersistInput(this),
-        uiMessages: [],
-        forceEmptyMessages: true,
-      }))
-      .then((persisted) => {
-        if (persisted) this.sessionSyncTracker.reset([]);
-      })
-      .catch((err) => this.reportBackgroundPersistError(err));
+    this.sessionPersistence.clear();
   }
 
   /** Reset fingerprint tracking after restore, clear, or new chat bootstrap. */
   resetSessionSyncTracker(uiMessages?: TanStackUIMessage[]): void {
-    this.sessionSyncTracker.reset(uiMessages);
+    this.sessionPersistence.resetTracker(uiMessages);
   }
 
   /** Persist model state only (usage, todos). Does not write `uiMessages`. */
   persistSession(): void {
-    void persistSessionModelState(this).catch((err) => this.reportBackgroundPersistError(err));
-  }
-
-  /**
-   * Backstop for fire-and-forget persists. Without it a rejected persist (e.g. a
-   * media/dehydrate IO error thrown outside `saveToStore`) becomes an unhandled
-   * rejection — and there is no global `unhandledRejection` handler, so the host
-   * process would crash. Surface it as `session:save-error` instead.
-   */
-  private reportBackgroundPersistError(error: unknown): void {
-    const message = errorMessage(error);
-    this.log.warn("system", "background session persist failed", { error: message });
-    this.emitEvent("session:save-error", { target: "session+uiMessages", error: message });
+    this.sessionPersistence.persistState();
   }
 
   /**
@@ -1830,7 +1795,7 @@ export class ManagedAgent {
       // session's file even when the restore then throws. The sink is best-effort either way, and
       // the alternative is losing the record of the attempt entirely.
       this.bindSessionLogSink(sessionId);
-      const session = await restoreManagedSession(this, sessionId);
+      const session = await this.sessionPersistence.restore(sessionId);
       restored = true;
       // The switch is complete: release the session being left only NOW. Releasing before the
       // restore would turn a failed resume into "lost the session we were still on"; releasing
