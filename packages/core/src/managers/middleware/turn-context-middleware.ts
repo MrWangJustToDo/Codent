@@ -27,6 +27,16 @@ export const SUBAGENT_ALLOWED_KINDS: ReadonlySet<string> = new Set<string>([
   TURN_CONTEXT_KINDS.projectInstructions,
 ]);
 
+/**
+ * Kinds that do NOT need the periodic same-content refresh.
+ *
+ * The refresh exists to keep dynamic context near the tail as the conversation grows. The background
+ * job pointer is different: it is re-admitted by compaction (the generation changes) and its old row
+ * remains in the wire until then, so re-injecting an unchanged list every ~100 messages only
+ * duplicates it. `aboveThreshold` still refreshes every other kind.
+ */
+const REFRESH_EXEMPT_KINDS: ReadonlySet<string> = new Set<string>([TURN_CONTEXT_KINDS.backgroundJobs]);
+
 /** Re-admit all sections when the conversation grows this much since last admit. */
 export const DEFAULT_REFRESH_MESSAGE_THRESHOLD = 100;
 
@@ -112,7 +122,7 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       for (const section of admitted) {
         const hash = hashTurnContextSection(section);
         const prior = hashes.get(section.key);
-        if (prior === hash && !aboveThreshold) continue;
+        if (prior === hash && (!aboveThreshold || REFRESH_EXEMPT_KINDS.has(section.key))) continue;
         changed.push({ section, isUpdate: prior !== undefined });
         hashes.set(section.key, hash);
       }

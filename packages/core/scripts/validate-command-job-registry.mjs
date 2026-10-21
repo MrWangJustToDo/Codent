@@ -604,6 +604,7 @@ console.log("teardown log deletion OK");
     const middleware = createTurnContextMiddleware({
       getFrozenSystemPrompt: () => undefined,
       getSections: async () => [],
+      refreshMessageThreshold: 1,
       getBackgroundJobsSection: async (wireMessages) => {
         const ids = collectRunCommandToolCallIds(wireMessages);
         const visible = ctxRows.filter((row) => !row.toolCallId || ids.has(row.toolCallId));
@@ -638,10 +639,16 @@ console.log("teardown log deletion OK");
       "…with the current job list"
     );
 
-    // No compaction / no change: a third call is silent.
+    // No compaction / no change: a third call is silent, even when the shared periodic-refresh
+    // threshold is crossed (1 message): a stable pointer does not need the same-content refresh.
+    messages = [...messages, { id: "u2", role: "user", parts: [{ type: "text", content: "next" }] }];
     const before = ctxCount();
     await middleware.onConfig({}, config);
-    assert.equal(ctxCount(), before, "an unchanged section is not re-injected on every call");
+    assert.equal(
+      ctxCount(),
+      before,
+      "an unchanged section is not re-injected by the periodic refresh (only other kinds refresh)"
+    );
   }
 
   // Multiple background completions batch into ONE notification; the persisted text is what session
