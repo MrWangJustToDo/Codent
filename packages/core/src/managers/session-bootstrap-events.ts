@@ -2,10 +2,13 @@ import { formatAgentDocResult } from "../agent/prompt/agent-doc-loader.js";
 
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 
+import type { BootstrapReport } from "./bootstrap-service.js";
 import type { ManagedAgent } from "./managed-agent.js";
 
 export interface SessionBootstrapContext {
   cwd: string;
+  /** Accounting from bootstrap; also supplies the doc import notices the event carries. */
+  report: BootstrapReport;
 }
 
 /**
@@ -27,7 +30,7 @@ export async function emitSessionBootstrapEvents(
         {
           content: docContent,
           source: docSource || undefined,
-          importNotices: [],
+          importNotices: [...(context.report.doc?.importNotices ?? [])],
         },
         managed.getCoreEnv()
       ),
