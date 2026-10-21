@@ -1872,7 +1872,11 @@ export class ManagedAgent {
    */
   getCommandJobRegistry(): CommandJobRegistry {
     if (!this.commandJobRegistry) {
-      const registry = new CommandJobRegistry(this.getCoreEnv());
+      const registry = new CommandJobRegistry(this.getCoreEnv(), {
+        // Lazy: the registry is created while `createTools` builds the agent, before the session id
+        // is ensured/restored.
+        ownerSessionId: () => this.getSessionData?.()?.id,
+      });
       registry.setChangeListener((jobs) => {
         this.eventBus?.emit("session:jobs", { jobs });
       });

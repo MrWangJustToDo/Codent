@@ -1050,7 +1050,7 @@ Runtime data under the project root is grouped under a single gitignored `.agent
 | `.agents/config/models.json` | Unified model config (global settings + provider entries) |
 | `.agents/memory/` | Cross-session memory markdown + `MEMORY.md` |
 | `.agents/cache/tool-output/` | Large tool-output spill files (`*.txt`) — GC'd two ways: reference-based on compaction **and** a 7-day age sweep (`sweepStaleToolOutput`, lazy on first cache write of a process). The age sweep is the only thing that collects files from sessions that never compacted, and files no session ever referenced |
-| `.agents/cache/command-jobs/` | Durable per-job background shell logs (`.log`); 24 h age sweep + deletion with the job record |
+| `.agents/cache/command-jobs/` | Background shell jobs: durable per-job logs (`.log`, 24 h sweep) + per-job records (`.json`, 7 days, scoped to the owning disk session). On resume, a `running` record is marked interrupted and an un-notified completion is re-delivered; the record keeps the status/tail after its log is swept |
 | `.agents/cache/models-dev.json` | models.dev metadata disk cache |
 | `.agents/plans/` | Saved plan markdown |
 | `.agents/skills/` | Project skills |
@@ -1092,7 +1092,7 @@ Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. E
 - Max 50KB for stdout and stderr each
 - Keeps the **end** of output (most relevant for errors)
 
-**Background jobs (`run_in_background`) and their log.** Output is retained in memory (head-trimmed: 256K/stream running, 64K/stream finished, 50 finished jobs kept) **and** tee'd to a durable log at `.agents/cache/command-jobs/<jobId>.log`, whose workspace-relative path is returned as `cachedOutputPath` by `run_command` (background) and `get_command_output`:
+**Background jobs (`run_in_background`) and their log.** Output is retained in memory (head-trimmed: 256K/stream running, 64K/stream finished, 50 finished jobs kept) **and** tee'd to a durable log at `.agents/cache/command-jobs/<jobId>.log`, whose workspace-relative path is returned as `cachedOutputPath` by `run_command` (background) and `get_command_output`. A sibling `<jobId>.json` record persists the status, exit code, pid (when known), output tail and `notified` flag, scoped to the owning disk session: on a process restart the registry restores completed jobs (so `get_command_output`/`kill_command` still answer and an un-notified completion is delivered once), marks a still-`running` record as interrupted (trusting a terminal footer in the log when the crash landed after finish), and leaves another session's records alone. A running job's process is **not** reaped on restart (no supervisor); the record's pid is informational. Records are kept 7 days; logs keep the 24 h sweep, so a notification can still carry the status/tail after its full log is gone.
 - one file per job, chunks appended in arrival order, stderr lines marked `[stderr] `;
 - header (`# <command>` + start time) on creation, terminal footer `[exit <code> · <status> · finished <iso>]` — **no footer means still running**;
 - **unbounded by design**: the log is never sized against a cap and never truncated — background output is always written. Disk growth is bounded by the 24 h stale sweep plus deletion with the job record, not by cutting the file, so `read_file` line offsets stay valid for as long as the file exists;

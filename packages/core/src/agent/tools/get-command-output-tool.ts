@@ -26,6 +26,7 @@ export const createGetCommandOutputTool = ({ managed }: { managed?: ManagedAgent
     needsApproval: false,
     lazy: true,
     execute: async ({ jobId }) => {
+      await registry.ready();
       const result = registry.poll(jobId);
       if (!result) {
         throw new Error(`Unknown background jobId: ${jobId}`);

@@ -14,8 +14,10 @@ import path from "node:path";
 import {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
+  CommandJobRegistry,
   clearCoreEnv,
   commandJobRegistry,
+  createGetCommandOutputTool,
   createKillCommandTool,
   registerCoreEnv,
   sweepStaleJobLogs,
@@ -79,7 +81,8 @@ function createEnv(rootPath, { withAppendFile = true } = {}) {
 }
 
 const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "command-job-registry-"));
-registerCoreEnv(createEnv(rootPath));
+const env = createEnv(rootPath);
+registerCoreEnv(env);
 
 const abs = (relPath) => path.join(rootPath, relPath);
 const logExists = async (relPath) =>
@@ -102,6 +105,16 @@ async function waitForLog(relPath, needle, timeoutMs = 3000) {
  * `remove()` awaits an in-flight flush before unlinking — so a fixed settle sleep is a
  * flake under load (too short) or dead time when idle. Polling is neither.
  */
+/** Wait until a file contains `needle` (record writes are serialized/fire-and-forget). */
+async function waitForFileContent(relPath, needle, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const content = await fs.promises.readFile(abs(relPath), "utf-8").catch(() => "");
+    if (content.includes(needle) || Date.now() > deadline) return content;
+    await sleep(25);
+  }
+}
+
 async function waitForLogGone(relPath, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while ((await logExists(relPath)) && Date.now() < deadline) {
@@ -274,7 +287,7 @@ console.log("teardown log deletion OK");
       assert.ok(seeded.includes("out-0"), "eviction candidate log exists before eviction");
     }
     registry.markExited(j.id, 0);
-    registry.collectCompleted(); // notified finished jobs are the evictable ones
+    await registry.collectCompleted(); // notified finished jobs are the evictable ones
     created.push(j);
   }
   await waitForLogGone(created[0].logPath);
@@ -407,6 +420,100 @@ console.log("teardown log deletion OK");
   const result = await tool.execute({ jobId: logged.id }, {});
   assert.equal(result.killed, false, "a finished job is reported as not running");
   assert.equal(result.cachedOutputPath, logged.logPath, "…and its log path is returned, not null");
+}
+
+// ---------------------------------------------------------------------------
+// 13. Durable records: a restart restores status/output and delivers once
+// ---------------------------------------------------------------------------
+{
+  const owner = "ses_durable";
+  // A getter is the production shape: the registry is built before `ensureSessionData()` exists.
+  const first = new CommandJobRegistry(env, { ownerSessionId: () => owner });
+  await first.ready();
+  const finished = first.create("echo durable");
+  first.appendStdout(finished.id, "durable output\n");
+  first.markExited(finished.id, 0);
+  const recordPath = `${COMMAND_JOB_LOG_DIR}/${finished.id}.json`;
+  const record = await waitForFileContent(recordPath, '"status":"exited"');
+  assert.ok(record.includes('"status":"exited"'), "terminal record persisted");
+
+  const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await resumed.ready();
+  assert.equal(resumed.get(finished.id)?.status, "exited", "resume restores the terminal status");
+  const polled = resumed.poll(finished.id);
+  assert.equal(polled?.stdout, "durable output\n", "first poll after resume returns the persisted tail");
+  // The middleware's two-phase contract: peek (no mark) → persist the notification → mark.
+  const peeked = await resumed.collectCompleted({ markNotified: false });
+  assert.equal(peeked.filter((j) => j.id === finished.id).length, 1, "…and queues the completion");
+  assert.ok(peeked.find((j) => j.id === finished.id)?.logPath, "…with the full log path");
+  assert.equal(
+    (await resumed.collectCompleted({ markNotified: false })).filter((j) => j.id === finished.id).length,
+    1,
+    "…and a crash before the notification re-delivers instead of dropping it"
+  );
+  await resumed.markNotified([finished.id]);
+  assert.deepEqual(await resumed.collectCompleted(), [], "marking makes the completion exactly-once");
+
+  const afterNotify = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await afterNotify.ready();
+  assert.deepEqual(await afterNotify.collectCompleted(), [], "the notified flag survives a restart");
+  assert.equal(afterNotify.get(finished.id)?.status, "exited");
+
+  // The kill tool works on a restored job too (no "unknown jobId" after resume).
+  const getTool = createGetCommandOutputTool({ managed: { getCommandJobRegistry: () => afterNotify } });
+  const out = await getTool.execute({ jobId: finished.id }, {});
+  assert.equal(out.status, "exited");
+  assert.equal(out.cachedOutputPath, finished.logPath);
+
+  await first.clear();
+  await resumed.clear();
+  await afterNotify.clear();
+}
+
+{
+  // A `running` record from a dead process is not "still running": mark it interrupted, close the
+  // log, and notify with the log path so the model can read whatever was produced.
+  const owner = "ses_interrupted";
+  const first = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await first.ready();
+  const running = first.create("sleep 60");
+  first.appendStdout(running.id, "partial\n");
+  await waitForLog(running.logPath, "partial");
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${running.id}.json`, '"status":"running"');
+
+  const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await resumed.ready();
+  const restored = resumed.get(running.id);
+  assert.equal(restored?.status, "failed", "a running record from a dead process is interrupted");
+  assert.match(restored?.stderr ?? "", /Interrupted by a process restart/);
+  const completed = await resumed.collectCompleted();
+  assert.equal(completed.filter((j) => j.id === running.id).length, 1, "the interruption is notified");
+  const logAfter = await waitForLog(running.logPath, "· interrupted ·");
+  assert.ok(logAfter.includes("· interrupted ·"), "the log gets an interrupted footer");
+
+  const getTool = createGetCommandOutputTool({ managed: { getCommandJobRegistry: () => resumed } });
+  const out = await getTool.execute({ jobId: running.id }, {});
+  assert.equal(out.status, "failed");
+  assert.equal(out.cachedOutputPath, running.logPath, "the log path survives the restart");
+
+  await first.clear();
+  await resumed.clear();
+}
+
+{
+  // Records are scoped to the disk session: a fork/`/clear` must not inherit another conversation's
+  // background jobs.
+  const ownerA = new CommandJobRegistry(env, { ownerSessionId: "ses_scope_a" });
+  await ownerA.ready();
+  const job = ownerA.create("echo scoped");
+  ownerA.markExited(job.id, 0);
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+
+  const ownerB = new CommandJobRegistry(env, { ownerSessionId: "ses_scope_b" });
+  await ownerB.ready();
+  assert.equal(ownerB.get(job.id), undefined, "another session does not restore the record");
+  await ownerA.clear();
+  await ownerB.clear();
 }
 
 await registry.destroyAll();

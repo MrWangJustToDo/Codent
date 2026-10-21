@@ -1,16 +1,35 @@
 /**
- * In-memory registry for background shell jobs started via CoreEnv.startCommand.
+ * Registry for background shell jobs started via CoreEnv.startCommand.
  *
  * Output is retained in memory (head-trimmed, see the caps below) *and* tee'd to
  * a durable per-job log (`command-output-log.ts`), so early output survives
  * trimming and stays readable from surfaces that cannot poll a job.
+ *
+ * A per-job JSON record (`command-job-store.ts`) makes the job's identity, status and notification
+ * state survive a process restart: `ready()` restores the owning session's records, a `running`
+ * record from a dead process becomes interrupted, and `collectCompleted()` re-delivers a completion
+ * that had not reached the model. The record is scoped to the disk session; a fork or `/clear` gets a
+ * new id and does not inherit another conversation's jobs.
  */
 
 import { registerEnvTeardownHook } from "../../../env/teardown";
 import { generateId } from "../../../utils/generate-id.js";
 
-import { createCommandJobLogWriter, sweepStaleJobLogs } from "./command-output-log.js";
+import {
+  readCommandJobRecords,
+  removeCommandJobRecord,
+  sweepStaleJobRecords,
+  tailText,
+  writeCommandJobRecord,
+} from "./command-job-store.js";
+import {
+  appendJobLogFooter,
+  createCommandJobLogWriter,
+  readJobLogFooter,
+  sweepStaleJobLogs,
+} from "./command-output-log.js";
 
+import type { PersistedCommandJob } from "./command-job-store.js";
 import type { CommandJobLogWriter } from "./command-output-log.js";
 import type { ResolvedCoreEnv } from "../../../env";
 
@@ -39,6 +58,8 @@ export interface CommandJobRecord {
    * surface that can only read files (e.g. the code-mode sandbox) can read it.
    */
   logPath: string | null;
+  /** OS/runtime process id, when the host exposed one (recovery metadata). */
+  pid?: number;
   /** Adapter-provided kill (best-effort). */
   kill?: () => Promise<void>;
 }
@@ -99,13 +120,41 @@ export interface CompletedCommandJob {
   stderr: string;
   startedAt: number;
   endedAt: number | null;
+  /** Durable log (full output) — the notification points the model at it after a resume. */
+  logPath: string | null;
+}
+
+export interface CommandJobRegistryOptions {
+  /**
+   * The disk session that owns these jobs. Records are restored only for this id: a new session,
+   * `/clear` or a fork must not inherit another conversation's background work. Omitted for the
+   * ambient/standalone registry (no persistence).
+   *
+   * A **getter** is allowed because the registry is created while `createTools` builds the agent,
+   * before `ensureSessionData()` mints/restores the id. Reading it lazily is what makes the first
+   * background command after a resume persist under the right session.
+   */
+  ownerSessionId?: string | (() => string | undefined | null);
 }
 
 export class CommandJobRegistry {
   /** Owning runtime's env, so durable job logs land under the runtime root. Ambient when omitted. */
-  constructor(private readonly env?: ResolvedCoreEnv) {}
+  constructor(
+    private readonly env?: ResolvedCoreEnv,
+    private readonly options: CommandJobRegistryOptions = {}
+  ) {}
 
   private readonly jobs = new Map<string, CommandJobRecord>();
+  /** Lazily restores durable records; tools/middleware await this before touching the registry. */
+  private restorePromise?: Promise<void>;
+
+  /** The owning session id, resolved lazily (see {@link CommandJobRegistryOptions.ownerSessionId}). */
+  private get ownerSessionId(): string | undefined {
+    const configured = this.options.ownerSessionId;
+    return typeof configured === "function" ? (configured() ?? undefined) : configured;
+  }
+  /** Serialized record writes per job (create → terminal must not land out of order). */
+  private readonly recordWrites = new Map<string, Promise<void>>();
 
   /** Durable log writers for jobs where logging is available. */
   private readonly logs = new Map<string, CommandJobLogWriter>();
@@ -115,6 +164,121 @@ export class CommandJobRegistry {
 
   /** Optional status observer (see {@link setChangeListener}). */
   private changeListener: CommandJobChangeListener | null = null;
+
+  /**
+   * Restore this session's durable job records (once). Call before `create`/`poll`/`collectCompleted`
+   * in a host that has a session id; the ambient registry has nothing to restore.
+   */
+  ready(): Promise<void> {
+    if (!this.restorePromise) {
+      // Not resolvable yet (no env/owner): do NOT cache the empty result — a later call, after
+      // `ensureSessionData()` has minted/restored the id, must still restore.
+      if (!this.env || !this.ownerSessionId) return Promise.resolve();
+      this.restorePromise = this.restore();
+    }
+    return this.restorePromise;
+  }
+
+  /**
+   * Load the owning session's records. A `running` record means the process died: trust a terminal
+   * footer if the log has one (the crash landed after finish, before the record update), otherwise
+   * mark it failed/interrupted and close the log. Completed records stay queryable and, when not yet
+   * notified, are picked up by {@link collectCompleted}.
+   */
+  private async restore(): Promise<void> {
+    const owner = this.ownerSessionId;
+    if (!this.env || !owner) return;
+    let changed = false;
+    const records = await readCommandJobRecords(this.env, owner);
+    for (const persisted of records) {
+      if (this.jobs.has(persisted.jobId)) continue;
+      const job = this.fromPersisted(persisted);
+      if (job.logPath && !(await this.env.fs.exists(job.logPath))) job.logPath = null;
+      const footer = job.logPath ? await readJobLogFooter(job.logPath, this.env) : null;
+      if (persisted.status === "running") {
+        if (footer) {
+          job.status = footer.status === "killed" ? "killed" : footer.status === "exited" ? "exited" : "failed";
+          job.exitCode = footer.exitCode;
+          job.endedAt = footer.endedAt ?? Date.now();
+        } else {
+          job.status = "failed";
+          job.exitCode = null;
+          job.endedAt = Date.now();
+          job.stderr = `${job.stderr}${job.stderr ? "\n" : ""}Interrupted by a process restart.`;
+          if (job.logPath) {
+            await appendJobLogFooter(job.logPath, "interrupted", null, job.endedAt, this.env);
+          }
+        }
+        // Return the persisted tail on the first poll; the log holds anything older.
+        job.stdoutReadOffset = 0;
+        job.stderrReadOffset = 0;
+        await this.persist(job);
+      } else if (job.logPath && !footer) {
+        // The terminal record landed but the writer's footer did not (crash between the two). Make
+        // the log consistent: its "no footer means running" contract must not outlive the process.
+        await appendJobLogFooter(job.logPath, job.status, job.exitCode, job.endedAt ?? Date.now(), this.env);
+      }
+      if (persisted.notified) this.notifiedJobIds.add(job.id);
+      this.jobs.set(job.id, job);
+      changed = true;
+    }
+    if (changed) this.notifyChange();
+    // Opportunistic sweep: records are tiny, but a long-lived workspace still accumulates them.
+    void sweepStaleJobRecords(this.env);
+  }
+
+  private fromPersisted(persisted: PersistedCommandJob): CommandJobRecord {
+    return {
+      id: persisted.jobId,
+      command: persisted.command,
+      status: persisted.status === "running" ? "failed" : persisted.status,
+      stdout: persisted.stdoutTail,
+      stderr: persisted.stderrTail,
+      stdoutReadOffset: 0,
+      stderrReadOffset: 0,
+      exitCode: persisted.exitCode,
+      startedAt: persisted.startedAt,
+      endedAt: persisted.endedAt,
+      logPath: persisted.logPath,
+      ...(persisted.pid !== undefined ? { pid: persisted.pid } : {}),
+    };
+  }
+
+  /**
+   * Persist a job record, serialized per job so a slow create-write cannot overwrite the terminal
+   * write that follows it. No-op for the ambient registry (no owner/env).
+   */
+  private persist(job: CommandJobRecord): Promise<void> {
+    const owner = this.ownerSessionId;
+    if (!this.env || !owner) return Promise.resolve();
+    const record: PersistedCommandJob = {
+      version: 1,
+      jobId: job.id,
+      command: job.command,
+      status: job.status,
+      exitCode: job.exitCode,
+      startedAt: job.startedAt,
+      endedAt: job.endedAt,
+      ownerSessionId: owner,
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
+      logPath: job.logPath,
+      stdoutTail: tailText(job.stdout),
+      stderrTail: tailText(job.stderr),
+      notified: this.notifiedJobIds.has(job.id),
+    };
+    const previous = this.recordWrites.get(job.id) ?? Promise.resolve();
+    const next = previous.then(() => writeCommandJobRecord(this.env as ResolvedCoreEnv, record)).catch(() => undefined);
+    this.recordWrites.set(job.id, next);
+    return next;
+  }
+
+  /** Remove a record after its pending writes settle (so a late write cannot recreate it). */
+  private async removeRecord(jobId: string): Promise<void> {
+    const pending = this.recordWrites.get(jobId);
+    if (pending) await pending.catch(() => undefined);
+    this.recordWrites.delete(jobId);
+    if (this.env) await removeCommandJobRecord(this.env, jobId).catch(() => undefined);
+  }
 
   /**
    * Watch job membership and lifecycle changes. The listener receives the full,
@@ -166,8 +330,9 @@ export class CommandJobRegistry {
       ...(this.env ? { env: this.env } : {}),
     });
     if (log) this.logs.set(id, log);
-    // Opportunistic safety net for logs left behind by an earlier run.
+    // Opportunistic safety net for logs/records left behind by an earlier run.
     void sweepStaleJobLogs(undefined, this.env);
+    if (this.env) void sweepStaleJobRecords(this.env);
     const record: CommandJobRecord = {
       id,
       command,
@@ -182,6 +347,7 @@ export class CommandJobRegistry {
       logPath: log?.path ?? null,
     };
     this.jobs.set(id, record);
+    void this.persist(record);
     this.notifyChange();
     return record;
   }
@@ -190,9 +356,12 @@ export class CommandJobRegistry {
     return this.jobs.get(jobId);
   }
 
-  setKill(jobId: string, kill: () => Promise<void>): void {
+  setKill(jobId: string, kill: () => Promise<void>, pid?: number): void {
     const job = this.jobs.get(jobId);
-    if (job) job.kill = kill;
+    if (!job) return;
+    job.kill = kill;
+    if (pid !== undefined) job.pid = pid;
+    void this.persist(job);
   }
 
   appendStdout(jobId: string, chunk: string): void {
@@ -223,6 +392,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    void this.persist(job);
     this.notifyChange();
   }
 
@@ -238,6 +408,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    void this.persist(job);
     this.notifyChange();
   }
 
@@ -248,6 +419,7 @@ export class CommandJobRegistry {
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
+    void this.persist(job);
     this.notifyChange();
   }
 
@@ -314,6 +486,7 @@ export class CommandJobRegistry {
       this.jobs.delete(id);
       this.notifiedJobIds.delete(id);
       void this.disposeLog(id);
+      void this.removeRecord(id);
       excess--;
     }
   }
@@ -387,12 +560,12 @@ export class CommandJobRegistry {
    * Independent of {@link poll} — this does NOT advance the incremental read
    * cursors, so the model can still read full output via get_command_output.
    */
-  collectCompleted(): CompletedCommandJob[] {
+  async collectCompleted(options: { markNotified?: boolean } = {}): Promise<CompletedCommandJob[]> {
+    await this.ready();
     const completed: CompletedCommandJob[] = [];
     for (const [id, job] of this.jobs) {
       if (job.status === "running") continue;
       if (this.notifiedJobIds.has(id)) continue;
-      this.notifiedJobIds.add(id);
       completed.push({
         id: job.id,
         command: job.command,
@@ -402,9 +575,27 @@ export class CommandJobRegistry {
         stderr: job.stderr,
         startedAt: job.startedAt,
         endedAt: job.endedAt,
+        logPath: job.logPath,
       });
     }
+    // Default callers drain-and-mark (the historical contract). The notification middleware passes
+    // `markNotified: false`, injects/persists the notification, and only then marks — so a crash
+    // between the two re-delivers the completion, and the synthetic message's content-hash id
+    // dedupes it instead of dropping it.
+    if (options.markNotified !== false) await this.markNotified(completed.map((job) => job.id));
     return completed;
+  }
+
+  /** Record completions as delivered (and persist the flag before a restart can lose it). */
+  async markNotified(jobIds: readonly string[]): Promise<void> {
+    if (jobIds.length === 0) return;
+    for (const id of jobIds) this.notifiedJobIds.add(id);
+    await Promise.all(
+      jobIds
+        .map((id) => this.jobs.get(id))
+        .filter((job): job is CommandJobRecord => job !== undefined)
+        .map((job) => this.persist(job))
+    );
   }
 
   /**
@@ -421,6 +612,7 @@ export class CommandJobRegistry {
       this.notifiedJobIds.delete(id);
     }
     await Promise.all(ids.map((id) => this.disposeLog(id)));
+    await Promise.all(ids.map((id) => this.removeRecord(id)));
     if (ids.length > 0) this.notifyChange();
   }
 
@@ -430,6 +622,7 @@ export class CommandJobRegistry {
       this.jobs.delete(id);
       this.notifiedJobIds.delete(id);
       void this.disposeLog(id);
+      void this.removeRecord(id);
     }
     if (ids.length > 0) this.notifyChange();
   }

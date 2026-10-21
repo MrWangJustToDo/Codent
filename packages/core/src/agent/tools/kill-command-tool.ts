@@ -23,6 +23,7 @@ export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = 
     needsApproval: true,
     lazy: true,
     execute: async ({ jobId }) => {
+      await registry.ready();
       const existing = registry.get(jobId);
       if (!existing) {
         throw new Error(`Unknown background jobId: ${jobId}`);

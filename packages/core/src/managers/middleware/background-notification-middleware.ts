@@ -55,7 +55,10 @@ export function createBackgroundNotificationMiddleware(
   return defineMiddleware("tools", {
     name: "background-notification",
     onConfig: async (_ctx, config) => {
-      const completed = (deps.getCommandJobRegistry?.() ?? commandJobRegistry).collectCompleted();
+      const registry = deps.getCommandJobRegistry?.() ?? commandJobRegistry;
+      // Do not mark yet: the notification must be persisted first, or a crash between collect and
+      // inject loses the completion while the record says it was delivered.
+      const completed = await registry.collectCompleted({ markNotified: false });
       if (completed.length === 0) return {};
 
       const messages = config.messages as ModelMessage[];
@@ -63,6 +66,7 @@ export function createBackgroundNotificationMiddleware(
       if (!ui) {
         // No channel: transient wire-only injection. Still returns a new array — the
         // input may be the projection WireProjectionCache retains.
+        await registry.markNotified(completed.map((job) => job.id));
         return {
           messages: [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }],
         };
@@ -76,6 +80,8 @@ export function createBackgroundNotificationMiddleware(
         [{ kind: BACKGROUND_NOTIFICATION_KIND, content: formatNotifications(completed, maxOutputChars) }],
         { ui, persist: deps.persistMessages }
       );
+      // The channel write is the durable delivery; only now is it safe to mark the jobs notified.
+      await registry.markNotified(completed.map((job) => job.id));
 
       return { messages: next };
     },
@@ -92,6 +98,7 @@ function formatNotifications(jobs: CompletedCommandJob[], maxOutputChars: number
     const err = truncateString(job.stderr, maxOutputChars, true).text;
     if (out) body.push(`stdout:\n${out}`);
     if (err) body.push(`stderr:\n${err}`);
+    if (job.logPath) body.push(`log: ${job.logPath} (full output)`);
     return body.join("\n");
   });
 

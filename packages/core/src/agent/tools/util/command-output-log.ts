@@ -264,3 +264,67 @@ const jobLogSweeper = createStaleFileSweeper({
 export function sweepStaleJobLogs(options?: StaleSweepOptions, env?: ResolvedCoreEnv): Promise<number> {
   return jobLogSweeper.sweep(env ?? getEnv(), options);
 }
+
+// ============================================================================
+// Footer parsing / recovery
+// ============================================================================
+
+export interface JobLogFooter {
+  /** `exited` | `failed` | `killed` | `interrupted` (recovery-only) */
+  status: string;
+  exitCode: number | null;
+  endedAt: number | null;
+}
+
+/** Parse the terminal footer the writer appends (also used to recover a crashed process). */
+export function parseJobLogFooter(text: string): JobLogFooter | null {
+  const match = /\[exit (n\/a|-?\d+) · ([a-z]+) · finished ([^\]]+)\]\s*$/m.exec(text);
+  if (!match) return null;
+  const [, code, status, iso] = match;
+  return {
+    status,
+    exitCode: code === "n/a" ? null : Number(code),
+    endedAt: Number.isNaN(Date.parse(iso)) ? null : Date.parse(iso),
+  };
+}
+
+/** Read the last few KB of a job log and parse its footer, or `null` when there is none. */
+export async function readJobLogFooter(path: string, env?: ResolvedCoreEnv): Promise<JobLogFooter | null> {
+  try {
+    const fs = (env ?? getEnv()).fs;
+    const stat = await fs.stat(path);
+    const window = 4096;
+    const start = Math.max(0, stat.size - window);
+    const text = fs.readFileRange ? await fs.readFileRange(path, start, stat.size) : await fs.readFile(path);
+    return parseJobLogFooter(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Append a terminal footer to a log whose writer is gone (a crashed process). Best-effort: a
+ * host without `appendFile` simply keeps the log open-ended, which still says "unknown".
+ */
+export async function appendJobLogFooter(
+  path: string,
+  status: string,
+  exitCode: number | null,
+  endedAt: number,
+  env?: ResolvedCoreEnv
+): Promise<void> {
+  try {
+    const fs = (env ?? getEnv()).fs;
+    if (!fs.appendFile) return;
+    const stat = await fs.stat(path);
+    const start = Math.max(0, stat.size - 1);
+    const tail = fs.readFileRange ? await fs.readFileRange(path, start, stat.size) : "";
+    const prefix = tail && !tail.endsWith("\n") ? "\n" : "";
+    await fs.appendFile(
+      path,
+      `${prefix}[exit ${exitCode ?? "n/a"} · ${status} · finished ${new Date(endedAt).toISOString()}]\n`
+    );
+  } catch {
+    // Recovery is advisory; never fail the restore path.
+  }
+}

@@ -184,6 +184,8 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       }
 
       if (run_in_background) {
+        // Restore this session's previous jobs first: `ready()` is a no-op after the first call.
+        await registry.ready();
         if (!coreEnv.startCommand) {
           throw new Error(
             "Background commands are not supported in this environment. " +
@@ -207,7 +209,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
               registry.markExited(job.id, exitCode);
             },
           });
-          registry.setKill(job.id, handle.kill);
+          registry.setKill(job.id, handle.kill, handle.pid);
         } catch (err) {
           const message = errorMessage(err);
           registry.markFailed(job.id, message);
