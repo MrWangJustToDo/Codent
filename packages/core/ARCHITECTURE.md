@@ -253,10 +253,14 @@ Every loader result goes through `recordExtensionResult` / `recordExtensionError
 ### 2.3 Event infrastructure — the unified bus (manager construct time)
 
 ```
+AgentEventBusScope (managers/agent-event-bus-scope.ts)
+  root = createAgentEventBus("root", …)           // single process-wide root
+  resolveLog(scopeId) → interceptor-error routing
+  of(agentId, parentId) → cached scoped bus
+
 AgentManager constructor
-  rootEventBus = createAgentEventBus()            // single process-wide root
-  createLogExtension({ bus, resolveLog }).start()  // only "*" observer consumer
-                                                 // (bridgeTelemetryToAgentLog is its policy half)
+  createLogExtension({ bus: scope.root, resolveLog }).start()  // only "*" observer consumer
+                                                              // (bridgeTelemetryToAgentLog is its policy half)
 
 ManagedAgent.setEventBus(manager.of(agentId, parentId))  // per-agent scoped bus
   agent:state / session:* retained providers registered here

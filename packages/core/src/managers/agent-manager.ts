@@ -1,8 +1,7 @@
-import { createAgentEventBus } from "../agent/agent-event-bus";
 import { createLogExtension, type LogExtension } from "../agent/log/extension.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
-import { errorMessage } from "../utils/errors.js";
 
+import { AgentEventBusScope } from "./agent-event-bus-scope.js";
 import { buildManagedAgent } from "./agent-factory.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { LifecycleService } from "./lifecycle-service.js";
@@ -82,25 +81,8 @@ export class AgentManager {
   /** Process-local disk-session claims (one live root agent per persisted id). */
   private readonly sessionOwnership = new SessionOwnership();
 
-  /**
-   * Unified event bus root — single source for every agent event. An interceptor
-   * that throws is reported to the owning agent's log rather than surfacing as a
-   * tool failure (see `DefaultAgentEventBus.intercept`).
-   */
-  private readonly rootEventBus = createAgentEventBus("root", ({ pattern, event, scopeId, error }) => {
-    const message = errorMessage(error);
-    // Log on the agent that owns the scope the interceptor was registered on, so
-    // the failure lands next to the run it affected. Falls back to any agent with
-    // a log (root-scoped interceptors belong to no single agent).
-    const owner = this.agents.get(scopeId) ?? [...this.agents.values()].find((agent) => agent.log);
-    owner?.log?.warn("hooks", "interceptor threw; continuing without it", { pattern, event, error: message });
-  });
-
-  /** Process-wide observer bus (the unified root; events up-flow from agent scopes). */
-  private readonly eventBus: AgentEventBus = this.rootEventBus;
-
-  /** Per-agent scoped buses (cached by agent id). */
-  private readonly agentBusScopes = new Map<string, AgentEventBus>();
+  /** Unified root bus + cached per-agent scopes (interceptor error isolation included). */
+  private readonly busScope: AgentEventBusScope;
 
   /**
    * Built-in log extension. It owns log policy (event→entry rules, message formatting, the JSONL
@@ -113,10 +95,16 @@ export class AgentManager {
 
   constructor(runtime?: AgentRuntime) {
     this.runtime = runtime;
+    this.busScope = new AgentEventBusScope({
+      // Log on the agent that owns the scope the interceptor was registered on; root-scoped
+      // interceptors fall back to any agent with a log.
+      resolveLog: (scopeId) =>
+        this.agents.get(scopeId)?.log ?? [...this.agents.values()].find((agent) => agent.log)?.log,
+    });
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
     this.logExtension = createLogExtension({
-      bus: this.eventBus,
+      bus: this.busScope.root,
       resolveLog: (event) =>
         this.agents.get(event.agentId)?.log ?? (event.parentId ? this.agents.get(event.parentId)?.log : null) ?? null,
     });
@@ -124,7 +112,7 @@ export class AgentManager {
     this.lifecycle = new LifecycleService({
       registry: this.agents,
       ownership: this.sessionOwnership,
-      clearAgentScope: (id) => this.agentBusScopes.delete(id),
+      clearAgentScope: (id) => this.busScope.delete(id),
     });
   }
 
@@ -155,7 +143,7 @@ export class AgentManager {
    * ```
    */
   on(type: AgentEventType | "*", listener: AgentEventListener): () => void {
-    return this.eventBus.on(type, listener);
+    return this.busScope.on(type, listener);
   }
 
   /**
@@ -163,12 +151,7 @@ export class AgentManager {
    * parent, so their events up-flow to the parent and root observers.
    */
   of(agentId: string, parentId?: string): AgentEventBus {
-    const cached = this.agentBusScopes.get(agentId);
-    if (cached) return cached;
-    const parent = parentId ? this.of(parentId) : this.rootEventBus;
-    const bus = parent.scope(agentId);
-    this.agentBusScopes.set(agentId, bus);
-    return bus;
+    return this.busScope.of(agentId, parentId);
   }
 
   // ============================================================================

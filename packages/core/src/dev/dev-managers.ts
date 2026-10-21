@@ -44,6 +44,7 @@ export { SessionPersistence } from "../managers/session-persistence.js";
 export { SessionOwnership } from "../managers/session-ownership.js";
 export { AgentRegistry } from "../managers/agent-registry.js";
 export { LifecycleService } from "../managers/lifecycle-service.js";
+export { AgentEventBusScope } from "../managers/agent-event-bus-scope.js";
 export { AgentLogBinding } from "../managers/agent-log-binding.js";
 export {
   AgentBootstrap,
