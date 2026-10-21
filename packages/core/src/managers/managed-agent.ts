@@ -1401,8 +1401,8 @@ export class ManagedAgent {
   }
 
   /** After compaction / clear — force the next turn to re-admit full dynamic context. */
-  resetAdmittedTurnContext(): void {
-    this.turnContext.resetAdmittedTurnContext();
+  resetAdmittedTurnContext(preserveInstructionContext = false): void {
+    this.turnContext.resetAdmittedTurnContext(preserveInstructionContext);
   }
 
   clearTurnContext(): void {

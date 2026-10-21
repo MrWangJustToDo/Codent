@@ -110,7 +110,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
               },
             })
           ) {
-            managed?.resetAdmittedTurnContext();
+            managed?.resetAdmittedTurnContext(true);
             wireCache.invalidate();
             llmMessages = projectWireFromChannel(channel, compactionConfig, contextWindow, wireCache);
           }

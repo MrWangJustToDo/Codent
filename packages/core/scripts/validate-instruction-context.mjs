@@ -260,7 +260,13 @@ setFile("CLAUDE.override.md", "# personal override\n");
   assert.ok(turn4.includes("<instruction_context>"), "clearTurnContext keeps sticky active");
   assert.ok(turn4.includes("rule NEW"), "still injecting latest content after clear");
 
-  // Full context reset (compaction path) re-baselines → next turn has no section.
+  // Compaction preserves the instruction digest so an edit made before the cut is not mistaken
+  // for a fresh baseline.
+  managed.resetAdmittedTurnContext(true);
+  const turnPreserved = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
+  assert.ok(turnPreserved.includes("<instruction_context>"), "compaction preserves changed instruction context");
+
+  // A full reset still re-baselines → next turn has no section.
   managed.resetAdmittedTurnContext();
   const turn5 = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
   assert.ok(!turn5.includes("<instruction_context>"), "resetAdmittedTurnContext re-baselines");

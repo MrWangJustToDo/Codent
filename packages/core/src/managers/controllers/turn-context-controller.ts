@@ -159,13 +159,22 @@ export class TurnContextController {
     });
   }
 
-  /** After compaction / clear — force the next turn to re-admit full dynamic context. */
-  resetAdmittedTurnContext(): void {
+  /**
+   * After compaction / clear — force the next turn to re-admit full dynamic context.
+   *
+   * `preserveInstructionContext` is used by compaction: the instruction digest is the baseline
+   * for detecting edits, so clearing it would make the next evaluation treat the current file as a
+   * fresh baseline and silently drop an edit that had not been admitted before the cut. A full
+   * clear/reset still re-baselines.
+   */
+  resetAdmittedTurnContext(preserveInstructionContext = false): void {
     this.lastAdmittedTurnContextHashes = undefined;
     this.turnContextGeneration += 1;
     this.turnContextAdmitMessageCount = 0;
-    this.instructionContextState = undefined;
-    this.instructionContextActive = false;
+    if (!preserveInstructionContext) {
+      this.instructionContextState = undefined;
+      this.instructionContextActive = false;
+    }
   }
 
   clearTurnContext(): void {
