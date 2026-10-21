@@ -77,9 +77,7 @@ import {
 } from "../agent/subagent/task-prefork.js";
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
-import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { collectRunCommandToolCallIds, formatBackgroundJobsSection, TURN_CONTEXT_KINDS } from "../agent/turn-context";
 import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
 import {
   formatInstructionContextSection,
@@ -125,6 +123,7 @@ import {
   saveSessionUIMessages as saveSessionUIMessagesHelper,
 } from "./managed-agent-session.js";
 import { RunCoordinator } from "./run-coordinator.js";
+import { BackgroundWorkService } from "./services/background-work-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
@@ -162,6 +161,7 @@ import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
+import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
@@ -395,8 +395,8 @@ export class ManagedAgent {
   /** Task / compact summary streams for the session `summary` channel. */
   readonly summaryStreams: SummaryStreamHub;
   private chatController?: AgentChatController;
-  /** Per-agent background command jobs (see {@link getCommandJobRegistry}). */
-  private commandJobRegistry?: CommandJobRegistry;
+  /** Per-agent background work ownership (registry + durable restore + turn-context pointer). */
+  private backgroundWork?: BackgroundWorkService;
   /** Set by AgentManager to route events to listeners. */
   dispatchEvent?: (event: AgentEvent) => void;
   /** Scoped unified event bus for this agent (set by the factory). */
@@ -798,7 +798,7 @@ export class ManagedAgent {
    * registry the answer is an explicit empty list instead.
    */
   readJobs(): SessionJobsSnapshot {
-    return { jobs: this.commandJobRegistry?.list() ?? [] };
+    return { jobs: this.backgroundWork?.list() ?? [] };
   }
 
   /**
@@ -1583,18 +1583,25 @@ export class ManagedAgent {
   async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
     if (this.parentId) return undefined;
     try {
-      const registry = this.getCommandJobRegistry();
-      await registry.ready();
-      const inContext = collectRunCommandToolCallIds(messages);
-      const rows = registry
-        .listForTurnContext()
-        .filter((job) => job.toolCallId !== undefined && inContext.has(job.toolCallId));
-      const content = formatBackgroundJobsSection(rows, { generation: this.turnContextGeneration });
-      return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
+      return await this.getBackgroundWork().sectionFor(messages, this.turnContextGeneration);
     } catch {
       // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
       return undefined;
     }
+  }
+
+  /** Lazily build the background-work owner (registry is created on first use). */
+  private getBackgroundWork(): BackgroundWorkService {
+    if (!this.backgroundWork) {
+      this.backgroundWork = new BackgroundWorkService({
+        env: () => this.getCoreEnv(),
+        ownerSessionId: () => this.getSessionData?.()?.id,
+        onJobsChange: (jobs) => {
+          this.eventBus?.emit("session:jobs", { jobs });
+        },
+      });
+    }
+    return this.backgroundWork;
   }
 
   /**
@@ -1901,29 +1908,17 @@ export class ManagedAgent {
    * surfaces that cannot reach the registry (extensions, remote clients).
    */
   getCommandJobRegistry(): CommandJobRegistry {
-    if (!this.commandJobRegistry) {
-      const registry = new CommandJobRegistry(this.getCoreEnv(), {
-        // Lazy: the registry is created while `createTools` builds the agent, before the session id
-        // is ensured/restored.
-        ownerSessionId: () => this.getSessionData?.()?.id,
-      });
-      registry.setChangeListener((jobs) => {
-        this.eventBus?.emit("session:jobs", { jobs });
-      });
-      this.commandJobRegistry = registry;
-    }
-    return this.commandJobRegistry;
+    return this.getBackgroundWork().registry();
   }
 
   /**
    * Kill this agent's background jobs and drop the registry (no-op if none was ever created).
    * Called on destroy so a disposed runtime does not leak `run_in_background` child processes.
    */
-  destroyCommandJobRegistry(): Promise<void> {
-    const registry = this.commandJobRegistry;
-    this.commandJobRegistry = undefined;
-    registry?.setChangeListener(null);
-    return registry ? registry.destroyAll() : Promise.resolve();
+  async destroyBackgroundWork(): Promise<void> {
+    const service = this.backgroundWork;
+    this.backgroundWork = undefined;
+    await service?.destroy();
   }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).

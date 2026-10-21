@@ -463,7 +463,7 @@ export class AgentManager {
       })
       // Kill this agent's background jobs (each agent owns its own registry) so a disposed
       // runtime does not leak child processes; awaited so `settleTeardowns` guarantees it.
-      .then(() => managedAgent.destroyCommandJobRegistry())
+      .then(() => managedAgent.destroyBackgroundWork())
       .then(() => {
         // Land the buffered teardown/abort entries before the sink is dropped, so a
         // process exit immediately after destroy does not lose them to the batch timer.

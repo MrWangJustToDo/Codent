@@ -14,6 +14,7 @@ import path from "node:path";
 import {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
+  BackgroundWorkService,
   CommandJobRegistry,
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
@@ -769,6 +770,49 @@ console.log("teardown log deletion OK");
   await registryA.clear();
   await before.clear();
   await after.clear();
+}
+
+// ---------------------------------------------------------------------------
+// 17. BackgroundWorkService: the agent-facing owner (registry + section)
+// ---------------------------------------------------------------------------
+{
+  const owner = "ses_background_service";
+  const events = [];
+  const service = new BackgroundWorkService({
+    env: () => env,
+    ownerSessionId: () => owner,
+    onJobsChange: (jobs) => events.push(jobs.map((job) => job.jobId)),
+  });
+  const serviceRegistry = service.registry();
+  const job = serviceRegistry.create("echo service", "call_service");
+  serviceRegistry.appendStdout(job.id, "service output\n");
+  serviceRegistry.markExited(job.id, 0);
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+  await service.ready();
+
+  const section = await service.sectionFor(
+    [
+      {
+        role: "assistant",
+        toolCalls: [{ id: "call_service", function: { name: "run_command", arguments: "{}" } }],
+      },
+    ],
+    0
+  );
+  assert.ok(section?.content.includes(job.id), "the service builds the in-context section");
+  assert.ok(events.length > 0, "the registry's change listener is wired by the service");
+  assert.equal(service.list().length, 1, "the non-creating list sees the job");
+  assert.equal(await service.sectionFor([], 0), undefined, "an empty wire has no pointer");
+
+  const completed = await service.collectCompleted();
+  assert.ok(
+    completed.some((entry) => entry.id === job.id),
+    "the service exposes the completion queue"
+  );
+  await service.markNotified([job.id]);
+  assert.deepEqual(await service.collectCompleted(), [], "marking is exactly-once");
+  await service.destroy();
+  assert.deepEqual(service.list(), [], "destroy tears the registry down");
 }
 
 await registry.destroyAll();

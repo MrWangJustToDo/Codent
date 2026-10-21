@@ -45,6 +45,7 @@ export { CompactionService } from "../managers/services/compaction-service.js";
 export { SessionService } from "../managers/services/session-service.js";
 export { MemoryService } from "../managers/services/memory-service.js";
 export { ExtensionRegistryService } from "../managers/services/extension-registry-service.js";
+export { BackgroundWorkService } from "../managers/services/background-work-service.js";
 export { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 export {
   armCapabilityStrip,
