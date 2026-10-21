@@ -384,6 +384,18 @@ record(
   overviewText.slice(0, 100).replace(/\n/g, " ")
 );
 
+// ---- 13b. Runtime disable must release the language servers immediately ----
+const disabled = await runner.setEnabled("codent-lsp", false);
+record("runtime disable deactivates the LSP extension", disabled.ok, disabled.message);
+const afterDisable = await waitForMockServers(mockBaseline, 60, 200);
+if (canCount) {
+  record(
+    "runtime disable shuts down LSP servers (no lingering children)",
+    afterDisable <= mockBaseline,
+    `${afterDisable} alive (baseline ${mockBaseline})`
+  );
+}
+
 // ---- 14. Cleanup: session:shutdown must shut down all LSP servers (child processes) ----
 // code_rewrite applies changes through fileSync.handleFileWrite (fire-and-forget),
 // so a server can be lazily starting here. Wait the teardown out instead of exiting

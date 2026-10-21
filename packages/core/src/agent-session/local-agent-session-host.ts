@@ -198,6 +198,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // Release the disk-session claim before tearing down, mirroring the branch/close paths, so
       // the ownership table does not keep pointing at a session whose log is about to vanish.
       this.manager.releaseSessionOwnership?.(sessionId, live.id);
+      // Block new writes and drain in-flight ones before the log disappears. `destroy` aborts a
+      // live pump, whose cancellation path queues a final persist; without this barrier that write
+      // can land after the file is removed and resurrect the deleted session.
+      await live.session?.close?.();
       // Tear-down settles the log flush; only after that is removing the file safe.
       await this.destroy(live.id);
       // `destroy` is NOT enough on its own: it releases a still-empty session's startup

@@ -332,6 +332,7 @@ registerCoreEnv({
 
   // activate registers a tool then throws → partial artifact must be rolled back.
   let activations = 0;
+  let deactivations = 0;
   await runner.loadExtension({
     id: "flaky",
     name: "Flaky",
@@ -346,6 +347,9 @@ registerCoreEnv({
       });
       if (activations === 1) throw new Error("boom");
     },
+    deactivate() {
+      deactivations++;
+    },
   });
 
   let info = runner.getExtensionInfos()[0];
@@ -353,6 +357,7 @@ registerCoreEnv({
   assert.deepEqual(info.tools, [], "partial tool rolled back after failed activate");
   assert.ok(!runner.getTool("partial_tool"), "partial tool not in registry");
   assert.ok(unregistered.includes("tool:partial_tool"), "partial tool unregistered on rollback");
+  assert.equal(deactivations, 1, "failed activate releases the resources it acquired");
 
   // Re-enable: activate succeeds (second run), registers cleanly.
   let res = await runner.setEnabled("flaky", true);
@@ -368,6 +373,7 @@ registerCoreEnv({
   const counts = unregistered.filter((u) => u === "tool:partial_tool").length;
   assert.equal(counts, 2, "rollback + final disable = 2 unregisters, no extra");
   assert.ok(!runner.getTool("partial_tool"), "tool removed on final disable");
+  assert.equal(deactivations, 2, "final disable releases the re-enabled instance exactly once");
 
   await runner.destroyAll();
 }

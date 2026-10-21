@@ -182,6 +182,7 @@ function notifyServerLifecycle(
 
 /** Create the built-in LSP extension. */
 export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
+  let shutdownCurrent: (() => Promise<void>) | undefined;
   return {
     id: "codent-lsp",
     name: "LSP Integration",
@@ -189,12 +190,25 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
     description:
       "Language Server Protocol tools: diagnostics, hover, definition, references, symbols, rename, completions, code actions + auto file-sync",
     async activate(ctx) {
-      await activateLsp(ctx, options);
+      await activateLsp(ctx, options, (manager) => {
+        // The manager is swapped on session:start; this closure always points at the
+        // one the extension currently owns, so deactivate never shuts down a stale one.
+        shutdownCurrent = () => manager.shutdownAll().catch(() => {});
+      });
+    },
+    async deactivate() {
+      const shutdown = shutdownCurrent;
+      shutdownCurrent = undefined;
+      await shutdown?.();
     },
   };
 }
 
-async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig): Promise<void> {
+async function activateLsp(
+  ctx: ExtensionContext,
+  options?: LspExtensionConfig,
+  onManager?: (manager: LspManager) => void
+): Promise<void> {
   const env = ctx.coreEnv;
   const corePath = env.path ?? defaultPath;
   const createConnection = env.createLspConnection;
@@ -336,6 +350,7 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
     getEnvVar,
     env.commandExists
   );
+  onManager?.(manager);
 
   const fileSync = new FileSync(manager, fsHelpers);
 
@@ -676,7 +691,7 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
   }
 
   // ---- Session lifecycle ----
-  ctx.events.on("session:start", async (event) => {
+  ctx.registerInterceptor("session:start", async (event) => {
     const payload = (event as { payload?: { cwd?: string } }).payload;
     if (!payload?.cwd) return;
     const newRoot = corePath.resolve(payload.cwd);
@@ -709,13 +724,14 @@ async function activateLsp(ctx: ExtensionContext, options?: LspExtensionConfig):
       env.commandExists
     );
     activeManager = newManager;
+    onManager?.(newManager);
     fileSync.setManager(newManager);
     const cfg = await loadProjectConfig(ctx, newManager);
     projectConfig = cfg;
     if (cfg?.autoStart?.length) newManager.startEagerly(cfg.autoStart);
   });
 
-  ctx.events.on("session:shutdown", async () => {
+  ctx.registerInterceptor("session:shutdown", async () => {
     await getManager()
       .shutdownAll()
       .catch(() => {});

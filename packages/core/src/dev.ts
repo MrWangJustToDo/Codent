@@ -29,7 +29,11 @@ export { createWriteFileTool } from "./agent/tools/write-file-tool.js";
 export { createEditFileTool } from "./agent/tools/edit-file-tool.js";
 export { createDeleteFileTool } from "./agent/tools/delete-file-tool.js";
 export { createBeginSummaryTool } from "./agent/subagent/begin-summary-tool.js";
-export { createSubagentTools } from "./agent/subagent/subagent-tools.js";
+export {
+  createSubagentTools,
+  SUBAGENT_TOOL_NAMES,
+  SUBAGENT_READ_ONLY_TOOL_NAMES,
+} from "./agent/subagent/subagent-tools.js";
 export { isProjectedModelContent } from "./agent/tools/runtime/projected-model-content.js";
 // The per-file mutation queue leaks if it never drains: `validate:file-mutation-queue` reads its
 // size to assert it does, which needs the module (not a replica of it).

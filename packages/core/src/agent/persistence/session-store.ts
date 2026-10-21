@@ -62,6 +62,17 @@ const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
  */
 const EMPTY_SESSION_RESERVE_MS = 5 * 60_000;
 
+/**
+ * Process-wide write locks and deletion tombstones, keyed by log path.
+ *
+ * A session may be written through more than one `SessionStore` instance (the agent's store and
+ * the `deleteSession` store). Per-instance locks cannot serialize those, and a delete that only
+ * removes the file lets an in-flight save recreate it. The tombstone makes deletion final for the
+ * rest of the process; the shared lock lets `delete` wait for a write already in progress.
+ */
+const sessionSaveLocks = new Map<string, Promise<void>>();
+const deletedSessionPaths = new Set<string>();
+
 /** What we remember about the last durable write, to compute the next delta. */
 interface LastSaved {
   /** Message ids in order at the last write (prefix check for append-only). */
@@ -106,11 +117,6 @@ export class SessionStore {
 
   /** Known approval decision times per session (approvalId → epoch ms). */
   private statusStamps: Map<string, Record<string, number>> = new Map();
-
-  /**
-   * Per-session write lock to prevent concurrent saves from racing.
-   */
-  private saveLocks: Map<string, Promise<void>> = new Map();
 
   private get fs() {
     return this.env.fs;
@@ -187,13 +193,15 @@ export class SessionStore {
    * Serializes concurrent saves per session.
    */
   async save(session: SessionData): Promise<void> {
-    const prev = this.saveLocks.get(session.id) ?? Promise.resolve();
+    const key = this.getLogKey(session.id);
+    if (deletedSessionPaths.has(key)) return;
+    const prev = sessionSaveLocks.get(key) ?? Promise.resolve();
     // Run doSave after the previous lock; return the rejecting promise to callers
     // so failures surface (session:save-error). Keep the stored lock chain
     // non-rejecting so one failure does not permanently stall later saves.
     const run = prev.then(() => this.doSave(session));
-    this.saveLocks.set(
-      session.id,
+    sessionSaveLocks.set(
+      key,
       run.then(
         () => undefined,
         () => undefined
@@ -210,7 +218,13 @@ export class SessionStore {
    * until it has something to write. `load()` uses the same check to report "not found".
    */
   async exists(id: string): Promise<boolean> {
+    if (deletedSessionPaths.has(this.getLogKey(id))) return false;
     return this.fs.exists(this.getLogPath(id));
+  }
+
+  /** Whether this session was deleted in this process; later saves and loads must not revive it. */
+  isDeleted(id: string): boolean {
+    return deletedSessionPaths.has(this.getLogKey(id));
   }
 
   /**
@@ -219,6 +233,7 @@ export class SessionStore {
    */
   async load(id: string): Promise<SessionData | null> {
     const logPath = this.getLogPath(id);
+    if (deletedSessionPaths.has(this.getLogKey(id))) return null;
     if (!(await this.fs.exists(logPath))) return null;
 
     const lines = await readLog(this.fs, logPath);
@@ -262,6 +277,7 @@ export class SessionStore {
       // (a copied/renamed log would then be un-loadable).
       const id = entry.name.slice(0, -SESSION_LOG_SUFFIX.length);
       if (!id) continue;
+      if (deletedSessionPaths.has(this.getLogKey(id))) continue;
 
       try {
         const state = await readLastState(this.fs, `${SESSION_DIR}/${entry.name}`);
@@ -367,10 +383,18 @@ export class SessionStore {
    */
   async delete(id: string): Promise<boolean> {
     const logPath = this.getLogPath(id);
-    if (!(await this.fs.exists(logPath))) return false;
-    await this.fs.remove(logPath);
+    const key = this.getLogKey(id);
+    // Mark before waiting: a save queued after this point must not restart the session. An
+    // in-flight save holds the shared lock; wait for it before removing the file it may be
+    // appending to.
+    deletedSessionPaths.add(key);
+    const pending = sessionSaveLocks.get(key);
+    if (pending) await pending;
+    sessionSaveLocks.delete(key);
     this.lastSaved.delete(id);
     this.statusStamps.delete(id);
+    if (!(await this.fs.exists(logPath))) return false;
+    await this.fs.remove(logPath);
     return true;
   }
 
@@ -397,6 +421,8 @@ export class SessionStore {
   // ==========================================================================
 
   private async doSave(session: SessionData): Promise<void> {
+    const logKey = this.getLogKey(session.id);
+    if (deletedSessionPaths.has(logKey)) return;
     const prev = this.lastSaved.get(session.id);
 
     // Snapshot the message list (and everything derived from it) before the first
@@ -428,6 +454,7 @@ export class SessionStore {
     if (prev && prev.signature === signature) return;
 
     await this.ensureDir();
+    if (deletedSessionPaths.has(logKey)) return;
     session.updatedAt = Date.now();
     stateFields.updatedAt = session.updatedAt;
 
@@ -508,6 +535,11 @@ export class SessionStore {
 
   private getLogPath(id: string): string {
     return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
+  }
+
+  /** Process-wide map key: the log path alone is relative to the workspace. */
+  private getLogKey(id: string): string {
+    return `${this.env.rootPath}\0${this.getLogPath(id)}`;
   }
 
   private async ensureDir(): Promise<void> {

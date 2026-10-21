@@ -58,6 +58,7 @@ export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/manag
 export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
+export { createManualCompactHost } from "../managers/managed-agent.js";
 export { RunnerWiring } from "../managers/managed-agent-runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../managers/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";

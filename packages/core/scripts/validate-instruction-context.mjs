@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import {
   buildTurnContextSections,
+  createManualCompactHost,
   diffInstructionStates,
   formatInstructionContextSection,
   instructionStateChanged,
@@ -281,6 +282,40 @@ setFile("CLAUDE.override.md", "# personal override\n");
   managed.reset();
   const turnAfterReset = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
   assert.ok(!turnAfterReset.includes("<instruction_context>"), "ManagedAgent.reset re-baselines instruction state");
+}
+
+// ---------------------------------------------------------------------------
+// 8b. The manual-compact host adapter forwards `preserveInstructionContext`.
+//
+// This is the regression that the direct `resetAdmittedTurnContext(true)` test
+// above cannot catch: a zero-argument adapter is structurally assignable to the
+// optional-parameter host type, so the manual `/compact` path silently
+// re-baselined the instruction digest while auto/reactive compaction preserved it.
+// ---------------------------------------------------------------------------
+{
+  const seen = [];
+  const fakeManaged = {
+    id: "manual-compact-adapter",
+    getStatus: () => "idle",
+    setStatus: () => {},
+    getUI: () => undefined,
+    usage: {},
+    getTodoManager: () => null,
+    statusController: {},
+    compaction: { getConfig: () => null },
+    getContextWindow: () => undefined,
+    getCoreEnv: () => ({ rootPath: ws }),
+    resetAdmittedTurnContext: (preserveInstructionContext) => seen.push(preserveInstructionContext),
+    resetSystemPrompt: () => {},
+    persistSession: () => {},
+    maybeSaveSessionUIMessages: () => {},
+    log: null,
+    getAbortSignal: () => undefined,
+  };
+
+  const host = createManualCompactHost(fakeManaged);
+  host.resetAdmittedTurnContext(true);
+  assert.deepEqual(seen, [true], "manual compact must ask the agent to preserve the instruction digest");
 }
 
 // ---------------------------------------------------------------------------

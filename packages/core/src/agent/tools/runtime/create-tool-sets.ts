@@ -1,3 +1,4 @@
+import { SUBAGENT_READ_ONLY_TOOL_NAMES } from "../../subagent/subagent-tools.js";
 import { BUILTIN_TOOL_NAMES } from "../tool-names.js";
 
 import { toolsToArray, type ToolsRecord } from "./tools-record.js";
@@ -30,17 +31,6 @@ const SUBAGENT_EXCLUDED: ReadonlyArray<string> = [
 /** Tools excluded from exploration subagents (read-only subset). */
 export const SUBAGENT_EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(SUBAGENT_EXCLUDED);
 
-/** Default exploration subagent tools (read-only fs + web research + begin_summary). */
-const SUBAGENT_TOOL_NAMES = [
-  BUILTIN_TOOL_NAMES.readFile,
-  BUILTIN_TOOL_NAMES.glob,
-  BUILTIN_TOOL_NAMES.grep,
-  BUILTIN_TOOL_NAMES.listFile,
-  BUILTIN_TOOL_NAMES.tree,
-  BUILTIN_TOOL_NAMES.webfetch,
-  BUILTIN_TOOL_NAMES.websearch,
-] as const;
-
 // ============================================================================
 // TanStack tool arrays
 // ============================================================================
@@ -55,7 +45,7 @@ export function resolveToolsRecord(
   return toolsToArray(record, options);
 }
 
-/** Names of tools included in the default exploration subagent set (excluding begin_summary). */
+/** Names of workspace-reading tools included in the default exploration subagent set. */
 export function getReadOnlyTanStackToolNames(): readonly string[] {
-  return SUBAGENT_TOOL_NAMES;
+  return SUBAGENT_READ_ONLY_TOOL_NAMES;
 }

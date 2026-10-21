@@ -96,6 +96,19 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
   for (const name of ["read_file", "glob", "grep", "tree", "list_file", "task", "run_command", "ask_user"]) {
     assert.equal(isPlanModeForbiddenTool(name), false, `${name} must remain available while planning`);
   }
+
+  // An extension tool that declares nothing has unknown effects. Plan mode is a safety boundary:
+  // fail closed instead of letting a third-party write tool run during planning.
+  assert.equal(
+    isPlanModeForbiddenTool("ext_write_config"),
+    true,
+    "an undeclared extension tool is treated as editing/unknown while planning"
+  );
+  assert.equal(
+    isWorkspaceEditingTool("ext_write_config"),
+    true,
+    "the unknown-effect rule is the same one the exclusion set uses"
+  );
 }
 
 // ============================================================================

@@ -82,7 +82,7 @@ import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.j
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
-import { handleManagedReactiveCompact, runManualCompact } from "./managed-agent-compact.js";
+import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
   cancelPlanExecution as cancelPlanExecutionHelper,
@@ -1715,28 +1715,7 @@ export class ManagedAgent {
     if (!manager) {
       return { ok: false, error: "AgentManager required for compact" };
     }
-    return runManualCompact(
-      {
-        id: this.id,
-        getStatus: () => this.getStatus(),
-        setStatus: (status, trigger) => this.setStatus(status, trigger ?? "manual-compact"),
-        getUI: () => this.getUI(),
-        usage: this.usage,
-        getTodoManager: () => this.getTodoManager(),
-        statusController: this.statusController,
-        compactionConfig: this.compaction.getConfig(),
-        getContextWindow: () => this.getContextWindow(),
-        getCoreEnv: () => this.getCoreEnv(),
-        resetAdmittedTurnContext: () => this.resetAdmittedTurnContext(),
-        resetSystemPrompt: () => this.resetSystemPrompt(),
-        persistSession: () => this.persistSession(),
-        maybeSaveSessionUIMessages: (messages, reason) => this.maybeSaveSessionUIMessages(messages, reason),
-        getLog: () => this.log,
-        getAbortSignal: () => this.getAbortSignal(),
-      },
-      manager,
-      options
-    );
+    return runManualCompact(createManualCompactHost(this), manager, options);
   }
 
   /**
@@ -1940,4 +1919,34 @@ export class ManagedAgent {
   setUIChannel(ui: AgentUIChannel | undefined): void {
     this.runnerWiring.setUIChannel(ui);
   }
+}
+
+/**
+ * Build the {@link ManualCompactHost} adapter for one agent.
+ *
+ * Extracted so the `resetAdmittedTurnContext` forwarding rule is testable: a zero-argument
+ * adapter is structurally assignable to the optional-parameter host type, and that is exactly
+ * how the manual `/compact` path silently re-baselined the instruction digest while auto and
+ * reactive compaction preserved it.
+ */
+export function createManualCompactHost(managed: ManagedAgent): ManualCompactHost {
+  return {
+    id: managed.id,
+    getStatus: () => managed.getStatus(),
+    setStatus: (status, trigger) => managed.setStatus(status, trigger ?? "manual-compact"),
+    getUI: () => managed.getUI(),
+    usage: managed.usage,
+    getTodoManager: () => managed.getTodoManager(),
+    statusController: managed.statusController,
+    compactionConfig: managed.compaction.getConfig(),
+    getContextWindow: () => managed.getContextWindow(),
+    getCoreEnv: () => managed.getCoreEnv(),
+    resetAdmittedTurnContext: (preserveInstructionContext) =>
+      managed.resetAdmittedTurnContext(preserveInstructionContext),
+    resetSystemPrompt: () => managed.resetSystemPrompt(),
+    persistSession: () => managed.persistSession(),
+    maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
+    getLog: () => managed.log,
+    getAbortSignal: () => managed.getAbortSignal(),
+  };
 }

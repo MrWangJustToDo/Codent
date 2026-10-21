@@ -75,9 +75,40 @@ export class SessionService {
    * Per-session persist serialization. See {@link persistSession}.
    */
   private persistQueue: Promise<void> = Promise.resolve();
+  /**
+   * Set by {@link close} (session deletion / teardown). Once closed, no new write may reach the
+   * store: a queued `pump-complete` save or an async title resolution would otherwise recreate a
+   * session file that `deleteSession` just removed.
+   */
+  private closed = false;
+  /** In-flight {@link saveToStore} writes, including the async title write that bypasses the queue. */
+  private readonly pendingSaves = new Set<Promise<boolean>>();
   setStore(store: SessionStore, config: { modelStyle: string; model: string }): void {
     this.store = store;
     this.config = config;
+  }
+
+  /**
+   * Close this session's writer and wait for writes already in flight.
+   *
+   * The deletion path must call this before removing the log file: a persist queued by the
+   * cancelled pump, or an async title resolution, otherwise lands after `SessionStore.delete`
+   * and resurrects the deleted session. Closing is intentionally irreversible here — a
+   * `SessionService` belongs to one agent, and an agent whose session was deleted is destroyed.
+   */
+  async close(): Promise<void> {
+    this.closed = true;
+    await this.persistQueue;
+    // A title save is a direct `saveToStore` call, not part of `persistQueue`; wait for those
+    // too. Loop because a queued save can start another one while we await.
+    while (this.pendingSaves.size > 0) {
+      await Promise.allSettled([...this.pendingSaves]);
+    }
+  }
+
+  /** Whether {@link close} has refused further writes. */
+  isClosed(): boolean {
+    return this.closed;
   }
 
   /** Update the model used by this session and by new sessions (model switch via `ManagedAgent.setModel`). */
@@ -176,14 +207,27 @@ export class SessionService {
    * "no store / no data", where there is nothing to persist.
    */
   private async saveToStore(emitEvent: EmitAgentTelemetryFn | undefined, target: string): Promise<boolean> {
-    if (!this.store || !this.data) return false;
+    const store = this.store;
+    const data = this.data;
+    if (this.closed || !store || !data) return false;
+    if (store.isDeleted?.(data.id) === true) return false;
+    // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
+    // `close()` must be able to wait for it before the log is deleted.
+    const run = (async () => {
+      try {
+        await store.save(data);
+        return true;
+      } catch (err) {
+        const errorMsg = errorMessage(err);
+        emitEvent?.("session:save-error", { target, error: errorMsg });
+        return false;
+      }
+    })();
+    this.pendingSaves.add(run);
     try {
-      await this.store.save(this.data);
-      return true;
-    } catch (err) {
-      const errorMsg = errorMessage(err);
-      emitEvent?.("session:save-error", { target, error: errorMsg });
-      return false;
+      return await run;
+    } finally {
+      this.pendingSaves.delete(run);
     }
   }
 
@@ -203,6 +247,7 @@ export class SessionService {
    * mark the content persisted (see {@link saveToStore}) must gate on this.
    */
   async persistSession(input: SessionPersistInput | (() => SessionPersistInput)): Promise<boolean> {
+    if (this.closed) return false;
     const run = this.persistQueue.then(() => this.persistSessionInner(typeof input === "function" ? input() : input));
     // Keep the stored chain non-rejecting so one failure cannot stall later saves.
     this.persistQueue = run.then(
@@ -213,6 +258,7 @@ export class SessionService {
   }
 
   private async persistSessionInner(input: SessionPersistInput): Promise<boolean> {
+    if (this.closed) return false;
     const {
       usage,
       todoManager,
@@ -230,6 +276,7 @@ export class SessionService {
       this.ensureSession();
       return this.persistSessionInner(input);
     }
+    if (this.store.isDeleted?.(this.data.id) === true) return false;
     if (input.sessionId !== undefined && this.data.id !== input.sessionId) {
       // A write captured before a session switch must not be retargeted onto the new session.
       return false;

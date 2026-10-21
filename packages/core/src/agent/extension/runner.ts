@@ -423,6 +423,9 @@ export class ExtensionRunner {
       instance.state = "active";
     } catch (err) {
       const error = toError(err);
+      // Release anything acquired before the throw (MCP clients, LSP servers). Artifact rollback
+      // alone leaves those live and a retry stacks a second copy on top of them.
+      await this.deactivateExtension(instance);
       // Roll back any artifacts registered before the failure so a later re-enable
       // starts clean (no duplicate registrations).
       this.unregisterInstanceArtifacts(instance);
@@ -445,19 +448,7 @@ export class ExtensionRunner {
     // *releases* the extension, and a fire-and-forget teardown would drop the last batch. A
     // failing flush is reported and the sequence continues (the extension still gets deactivated).
     await this.flushExtension(instance);
-    if (instance.api.deactivate) {
-      try {
-        await instance.api.deactivate();
-      } catch (err) {
-        // Do not swallow: surface deactivation failures for observability.
-        const error = toError(err);
-        this.rawBus.emit("agent:extension-error", {
-          extensionId: instance.api.id,
-          phase: "deactivate",
-          error: error.message,
-        });
-      }
-    }
+    await this.deactivateExtension(instance);
     this.unregisterInstanceArtifacts(instance);
     // Clear any surface slots this extension rendered so they do not linger
     // after the extension is disabled (e.g. a status line it published into the
@@ -480,6 +471,26 @@ export class ExtensionRunner {
       this.rawBus.emit("agent:extension-error", {
         extensionId: instance.api.id,
         phase: "flush",
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * Release an extension's resources. Runs before artifact rollback/unregistration so a
+   * `deactivate()` can still use the registrations it owns, and is safe after a failed
+   * `activate()` — the extension contract makes teardown idempotent.
+   */
+  private async deactivateExtension(instance: ExtensionInstance): Promise<void> {
+    if (!instance.api.deactivate) return;
+    try {
+      await instance.api.deactivate();
+    } catch (err) {
+      // Do not swallow: surface deactivation failures for observability.
+      const error = toError(err);
+      this.rawBus.emit("agent:extension-error", {
+        extensionId: instance.api.id,
+        phase: "deactivate",
         error: error.message,
       });
     }
@@ -550,7 +561,7 @@ export class ExtensionRunner {
 
     const already = instance.state === "active";
     if (enabled && already) return { ok: true, message: `Extension "${id}" already enabled` };
-    if (!enabled && !already) return { ok: true, message: `Extension "${id}" already disabled` };
+    if (!enabled && instance.state === "inactive") return { ok: true, message: `Extension "${id}" already disabled` };
 
     if (enabled) {
       try {
@@ -561,6 +572,9 @@ export class ExtensionRunner {
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
         const error = toError(err);
+        // A retry of an errored instance must release whatever the failed attempt acquired
+        // before rolling back its registrations; otherwise each retry stacks another copy.
+        await this.deactivateExtension(instance);
         // Roll back any artifacts registered before the failure.
         this.unregisterInstanceArtifacts(instance);
         instance.state = "error";

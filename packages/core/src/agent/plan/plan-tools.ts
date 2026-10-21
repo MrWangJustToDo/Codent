@@ -26,9 +26,17 @@ export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES: ReadonlySet<string> = new S
  *
  * Read from the presentation registry, which is what makes this cover every source of tools —
  * built-ins, the LSP extension's tools, and any future editing tool — without a second list.
+ *
+ * **An undeclared tool is treated as editing.** `present` is optional on extension tools, so a
+ * third-party write tool that declares nothing used to return `false` here and run during
+ * planning/ready. Plan mode is a safety boundary, so unknown effects fail closed; an extension
+ * that is genuinely read-only declares its presentation (and therefore becomes visible to the UI
+ * as well).
  */
 export function isWorkspaceEditingTool(toolName: string): boolean {
-  return getToolPresentation(toolName)?.category === "edits";
+  const presentation = getToolPresentation(toolName);
+  if (!presentation) return true;
+  return presentation.category === "edits";
 }
 
 /** Plan authoring tools — only offered while planning/ready. */
