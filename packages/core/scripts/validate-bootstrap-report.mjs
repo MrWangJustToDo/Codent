@@ -11,8 +11,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
-
 import {
   AgentManager,
   buildManagedAgent,
@@ -22,6 +20,8 @@ import {
   recordExtensionResult,
   registerCoreEnv,
 } from "../dist/dev.mjs";
+
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
 const report = createBootstrapReport();
 assert.deepEqual(report.extensions, { attempted: 0, active: 0, failed: 0, failures: [] });

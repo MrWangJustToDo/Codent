@@ -19,7 +19,7 @@ const resolveLog = (scopeId) =>
 const scope = new AgentEventBusScope({ resolveLog });
 assert.equal(scope.of("a"), scope.of("a"), "scope identity is cached");
 assert.notEqual(scope.of("a"), scope.of("b"));
-const orphan = scope.of("orphan");
+scope.of("orphan");
 assert.throws(() => scope.of("orphan", "a"), /different parent/, "a scope cannot be re-parented later");
 
 const rootEvents = [];
