@@ -279,11 +279,11 @@
     "validate:file-write": "pnpm run build && node scripts/validate-file-write.mjs"
   },
   "dependencies": {
-    "@tanstack/ai": "^0.68.0",
-    "@tanstack/ai-anthropic": "^0.21.1",
-    "@tanstack/ai-code-mode": "^0.5.2",
-    "@tanstack/ai-mcp": "^0.8.3",
-    "@tanstack/openai-base": "^0.13.1",
+    "@tanstack/ai": "^0.70.0",
+    "@tanstack/ai-anthropic": "^0.22.1",
+    "@tanstack/ai-code-mode": "^0.5.4",
+    "@tanstack/ai-mcp": "^0.9.1",
+    "@tanstack/openai-base": "^0.15.0",
     "htmlparser2": "^12.0.0",
     "openai": "^7.30.0",
     "pathe": "^2.0.3",

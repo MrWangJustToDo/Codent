@@ -1,3 +1,5 @@
+import type { ReasoningLevel } from "@tanstack/ai";
+
 // ============================================================================
 // Model Configuration Types
 // ============================================================================
@@ -71,6 +73,15 @@ export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number];
 /** Whether a string is one of {@link REASONING_EFFORT_VALUES}. */
 export function isReasoningEffort(value: string): value is ReasoningEffort {
   return (REASONING_EFFORT_VALUES as readonly string[]).includes(value);
+}
+
+/**
+ * Map our historical `"none"` spelling onto TanStack's unified reasoning option (`0.69+` uses
+ * `"off"`). Keeping the project-facing type stable avoids a second level vocabulary in sessions,
+ * commands, and the model picker.
+ */
+export function toTanStackReasoningLevel(effort: ReasoningEffort): ReasoningLevel {
+  return effort === "none" ? "off" : effort;
 }
 
 /**

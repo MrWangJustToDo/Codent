@@ -165,8 +165,8 @@ export interface SessionData {
   /** Whether todos are bound to plan building (optional; older sessions omit this). */
   todoPlanBound?: boolean;
   /**
-   * Reasoning effort recorded with this transcript (OpenAI `reasoning_effort` / Anthropic
-   * `effort`).
+   * Reasoning effort recorded with this transcript, in the project's level vocabulary
+   * (`"none"` / `"minimal"` / …), mapped to TanStack's unified `reasoning` option at send time.
    *
    * Same contract as {@link model}: a record of the state a message was produced under, not a
    * session-owned toggle. The live value is chosen through `/models` (model + depth as one

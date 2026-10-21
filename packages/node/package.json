@@ -59,8 +59,8 @@
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.75",
     "@codent/core": "workspace:*",
-    "@tanstack/ai-code-mode": "^0.5.2",
-    "@tanstack/ai-mcp": "^0.8.3",
+    "@tanstack/ai-code-mode": "^0.5.4",
+    "@tanstack/ai-mcp": "^0.9.1",
     "mime-types": "^3.0.2",
     "tree-sitter-wasms": "^0.1.13",
     "vscode-languageserver-protocol": "^3.18.4",

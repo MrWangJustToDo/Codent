@@ -496,16 +496,22 @@ function logModeDecision<TSchema extends SchemaInput>(
 // ============================================================================
 
 /**
- * Build the request options shared by both branches — the AbortController mirror
- * and model options.
+ * Build the request options shared by both branches — the AbortController mirror,
+ * the unified reasoning disable, and model options.
  *
  * Extracted so the structured branch cannot drift from the text branch on abort
- * propagation or the per-`modelStyle` thinking disable.
+ * propagation or the thinking disable.
  */
 function createQueryRequest(
   textAdapter: TextAdapterConfig,
   options: Pick<SideTextQueryOptions, "abortSignal" | "maxOutputTokens" | "disableThinking">
-): { abortController: AbortController; debug: false; modelOptions: Record<string, unknown> } {
+): {
+  abortController: AbortController;
+  debug: false;
+  promptCache: "none";
+  modelOptions: Record<string, unknown>;
+  reasoning?: "off";
+} {
   const abortController = new AbortController();
   if (options.abortSignal) {
     if (options.abortSignal.aborted) {
@@ -518,22 +524,19 @@ function createQueryRequest(
   }
 
   const disableThinking = options.disableThinking ?? true;
-  const reasoningOptions =
-    disableThinking && textAdapter.reasoning
-      ? textAdapter.modelStyle === "anthropic"
-        ? { thinking: { type: "disabled" } }
-        : { reasoning_effort: "none" }
-      : {};
 
   return {
     abortController,
     debug: false,
+    // TanStack 0.69+ enables automatic prompt caching by default. Side queries are
+    // one-shot and our cache policy belongs to the main agent's middleware.
+    promptCache: "none" as const,
+    ...(disableThinking && textAdapter.reasoning ? { reasoning: "off" as const } : {}),
     modelOptions: {
       // The cap goes through the thinking-aware floor: `max_tokens` bounds thinking AND the
       // answer, so a job-sized cap starves the answer on a reasoning model. See
       // `side-query-budget.ts` for the measurements behind the number.
       ...maxTokensOption(textAdapter.modelStyle, applySideQueryOutputFloor(options.maxOutputTokens)),
-      ...reasoningOptions,
     },
   };
 }

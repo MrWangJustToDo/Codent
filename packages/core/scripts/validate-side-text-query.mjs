@@ -532,19 +532,20 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
   assert.deepEqual(maxTokensOption("openai", 20), { max_completion_tokens: 20 });
 
   /** Records the options the port actually handed to the adapter. */
-  const capturing = (modelStyle) => {
+  const capturing = (modelStyle, reasoning = false) => {
     const seen = [];
     return {
       seen,
       model: "fake-model",
       modelStyle,
+      reasoning,
       adapter: {
         kind: "text",
         name: "fake",
         model: "fake-model",
         "~types": {},
         chatStream(options) {
-          seen.push(options.modelOptions ?? {});
+          seen.push(options);
           return (async function* () {
             yield { type: "TEXT_MESSAGE_CONTENT", delta: "ok" };
             yield usageChunk(1, 1);
@@ -555,23 +556,28 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
   };
 
   // The exact shape that was broken: title generation's 30 tokens, anthropic style.
-  const titleAdapter = capturing("anthropic");
+  const titleAdapter = capturing("anthropic", true);
   await runSideTextQuery(titleAdapter, { userPrompt: "x", maxOutputTokens: 30 });
+  const titleRequest = titleAdapter.seen[0];
   assert.equal(
-    titleAdapter.seen[0].max_tokens,
+    titleRequest.modelOptions.max_tokens,
     1024,
     "the title query no longer sends a cap that thinking can consume entirely"
   );
+  assert.equal(titleRequest.reasoning?.level, "off", "thinking is disabled through the unified reasoning option");
+  assert.equal("reasoning_effort" in titleRequest.modelOptions, false, "no legacy openai reasoning field is sent");
+  assert.equal("thinking" in titleRequest.modelOptions, false, "no legacy anthropic thinking field is sent");
+  assert.equal(titleRequest.promptCache?.retention, "none", "side queries do not opt into TanStack's automatic cache");
 
   // And the openai-style spelling goes through the same floor.
   const openaiTitle = capturing("openai");
   await runSideTextQuery(openaiTitle, { userPrompt: "x", maxOutputTokens: 30 });
-  assert.equal(openaiTitle.seen[0].max_completion_tokens, 1024, "the openai spelling is floored too");
+  assert.equal(openaiTitle.seen[0].modelOptions.max_completion_tokens, 1024, "the openai spelling is floored too");
 
   // A call site with no cap must still send none — the floor is not a default cap.
   const uncapped = capturing("anthropic");
   await runSideTextQuery(uncapped, { userPrompt: "x" });
-  assert.equal("max_tokens" in uncapped.seen[0], false, "an uncapped query stays uncapped");
+  assert.equal("max_tokens" in uncapped.seen[0].modelOptions, false, "an uncapped query stays uncapped");
 
   console.log("✓ the output cap is floored above the thinking budget");
 }

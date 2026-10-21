@@ -15,7 +15,7 @@ export interface TextAdapterConfig {
   adapter: AnyTextAdapter;
   /** Model id passed to `chat({ model })` */
   model: string;
-  /** API protocol style — determines the reasoning-effort wire key. */
+  /** API protocol style — selects the provider-specific token-cap field. */
   modelStyle: ModelStyle;
   /** Whether the model advertises the `reasoning` capability. */
   reasoning?: boolean;

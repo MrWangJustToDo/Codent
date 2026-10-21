@@ -2,6 +2,7 @@ import { chat, maxIterations } from "@tanstack/ai";
 
 import { getEnv } from "../../env";
 import { maxTokensOption } from "../../models/max-tokens-option.js";
+import { toTanStackReasoningLevel } from "../../models/types.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS } from "../../runtime-types/agent-limits.js";
 import { assertAsyncIterable } from "../stream/assert-async-iterable.js";
 
@@ -36,12 +37,12 @@ export interface AgentRunnerConfig {
   temperature?: number;
   maxOutputTokens?: number;
   /**
-   * Reasoning effort level to send on every request.
-   * OpenAI-compatible adapters get `reasoning_effort`; Anthropic gets `effort`.
+   * Reasoning effort level to send on every request through TanStack's unified
+   * `chat({ reasoning })` option. Our historical `"none"` maps to `"off"`.
    * Undefined → model default.
    */
   reasoningEffort?: ReasoningEffort;
-  /** API style — determines the reasoning-effort wire key. */
+  /** API style — selects the provider-specific token-cap field. */
   modelStyle?: ModelStyle;
   /**
    * Workspace env for this run's tool context. The owning runtime's env when bound;
@@ -156,14 +157,13 @@ export class AgentRunner {
       // Silence [tanstack-ai:errors] console dumps — they break Ink TUI layout.
       // Failures still surface via RUN_ERROR / agent:stream-error / ManagedAgent.error.
       debug: false,
+      // Preserve the pre-0.69 cache behavior while our prompt-cache middleware owns the
+      // provider-specific markers. 0.69 turned TanStack's automatic cache on by default.
+      promptCache: "none",
+      ...(this.config.reasoningEffort ? { reasoning: toTanStackReasoningLevel(this.config.reasoningEffort) } : {}),
       modelOptions: {
         ...(this.config.temperature != null ? { temperature: this.config.temperature } : {}),
         ...maxTokensOption(this.config.modelStyle, this.config.maxOutputTokens),
-        ...(this.config.reasoningEffort
-          ? this.config.modelStyle === "anthropic"
-            ? { effort: this.config.reasoningEffort }
-            : { reasoning_effort: this.config.reasoningEffort }
-          : {}),
       },
     });
 
