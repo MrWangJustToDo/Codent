@@ -49,7 +49,6 @@ import {
   type UIMessage as TanStackUIMessage,
 } from "@tanstack/ai";
 
-import { registerActiveAgentLog, unregisterActiveAgentLog } from "../agent/agent-log";
 import { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
@@ -64,7 +63,7 @@ import {
   type SessionSaveReason,
   type SessionSyncTracker,
 } from "../agent/persistence/session-sync-tracker.js";
-import { AGENT_LOG_DIR, type SessionData } from "../agent/persistence/types.js";
+import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
@@ -83,6 +82,7 @@ import { offerableReasoningEfforts } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 
+import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
@@ -355,8 +355,8 @@ export class ManagedAgent {
 
   tools: ToolsRecord;
   log: AgentLog;
-  /** Detach handle for the active log sink (lets a rebind or teardown dispose it). */
-  private logSinkDetach: (() => void) | null = null;
+  /** Session log sink lifetime (bind / re-point / flush-on-destroy). */
+  private readonly logBinding: AgentLogBinding;
   /** Extension / tool / integration registration domain (todo, MCP, skills, extensions). */
   readonly extensions: ExtensionRegistryService;
 
@@ -463,6 +463,14 @@ export class ManagedAgent {
     // zod-parsed AgentConfig subset (validation + defaults, e.g. maxIterations).
     this.config = { ...config, ...AgentConfigSchema.parse(config) };
     this.log = init.log;
+    this.logBinding = new AgentLogBinding({
+      getLog: () => this.log,
+      getParentId: () => this.parentId,
+      getSessionId: () => this.getSessionData()?.id,
+      getAgentId: () => this.id,
+      getCoreEnv: () => this.getCoreEnv(),
+      attachViaManager: (log, options) => this.manager?.getLogExtension()?.attachSink(log, options),
+    });
     this.tools = init.tools;
     // Always its own service, never injectable. It holds per-agent state that cannot be shared:
     // the agent's `tools` record (written straight into by `registerTool`), a single
@@ -1116,56 +1124,25 @@ export class ManagedAgent {
    * session being restored instead of the transient bootstrap dir.
    */
   bindSessionLogSink(sessionId?: string): void {
-    if (this.parentId) return;
-    const resolved = sessionId ?? this.getSessionData()?.id ?? this.id;
-    const dir = `${AGENT_LOG_DIR}/${resolved}`;
-    if (this.log.getFileSinkDir() === dir) return;
-    this.logSinkDetach?.();
-    // Bind through the built-in log extension (which tracks the sink for teardown); fall back to
-    // the seam's own convenience attach for a standalone log with no manager.
-    const options = { dir, env: this.getCoreEnv() };
-    this.logSinkDetach =
-      this.manager?.getLogExtension()?.attachSink(this.log, options) ?? this.log.attachFileSink(options);
-    // Track for the process-level crash/exit guards.
-    registerActiveAgentLog(this.log);
+    this.logBinding.bind(sessionId);
   }
 
   /**
    * Record the release handle for a sink bound outside {@link bindSessionLogSink} — the subagent
-   * path, where `spawnSubagent` owns the options (parent dir + `{subagentId}.log`) and core has to
-   * defer release until that agent is destroyed.
+   * path, where `spawnSubagent` owns the options and core defers release until destroy.
    */
   setLogSinkDetach(detach: () => void): void {
-    this.logSinkDetach?.();
-    this.logSinkDetach = detach;
+    this.logBinding.setExternalDetach(detach);
   }
 
-  /**
-   * Release the active log sink binding (registry entry + sink + seam), landing its buffered batch
-   * first. Idempotent — the handle is cleared, so a second call is a no-op.
-   *
-   * Called from {@link flushLogOnDestroy} at the end of the teardown chain — *after* the
-   * `session:shutdown` interception, which is how an extension lands its final work through
-   * `ctx.logger`. Releasing earlier would send that write into the seam's retained buffer, where
-   * nothing can drain it. Release (not just a flush) is required: the sink owns a periodic flush
-   * timer, and leaving it armed after the agent is gone keeps writing into the session's log
-   * directory — a leak in any runtime, and on Windows fatal to teardown, because a directory
-   * cannot be removed while a handle is open in it (`rm` then fails with ENOTEMPTY).
-   */
+  /** Release the active log sink binding. Idempotent. */
   detachLogSink(): void {
-    const detach = this.logSinkDetach;
-    this.logSinkDetach = null;
-    detach?.();
+    this.logBinding.detach();
   }
 
-  /**
-   * Land any buffered log entries synchronously and release the file sink. Called
-   * from `destroyAgent`.
-   */
+  /** Land buffered entries, release the sink, then unregister the process guard. */
   flushLogOnDestroy(): void {
-    this.log.flushSync();
-    this.detachLogSink();
-    unregisterActiveAgentLog(this.log);
+    this.logBinding.flushOnDestroy();
   }
 
   setTodoManager(t: TodoManager): void {
