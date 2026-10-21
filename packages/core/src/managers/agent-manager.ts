@@ -1,12 +1,11 @@
 import { createAgentEventBus } from "../agent/agent-event-bus";
 import { createLogExtension, type LogExtension } from "../agent/log/extension.js";
-import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
-import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 import { errorMessage } from "../utils/errors.js";
 
 import { buildManagedAgent } from "./agent-factory.js";
 import { AgentRegistry } from "./agent-registry.js";
+import { LifecycleService } from "./lifecycle-service.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
 import { SessionOwnership } from "./session-ownership.js";
@@ -109,14 +108,8 @@ export class AgentManager {
    */
   private logExtension: LogExtension;
 
-  /**
-   * In-flight awaited extension teardowns (`destroyAgent`). Teardown is async
-   * (extensions may flush/await on deactivate), but `destroyAgent` keeps a
-   * synchronous signature for its callers. The log flush is therefore chained
-   * onto this promise so it can never race the teardown, and `settleTeardowns()`
-   * lets an ordered shutdown (SessionHost close) wait for the whole sequence.
-   */
-  private pendingTeardowns = new Set<Promise<void>>();
+  /** Destroy/teardown cascade (recursive children + async flush chain). */
+  private readonly lifecycle: LifecycleService;
 
   constructor(runtime?: AgentRuntime) {
     this.runtime = runtime;
@@ -128,6 +121,11 @@ export class AgentManager {
         this.agents.get(event.agentId)?.log ?? (event.parentId ? this.agents.get(event.parentId)?.log : null) ?? null,
     });
     this.logExtension.start();
+    this.lifecycle = new LifecycleService({
+      registry: this.agents,
+      ownership: this.sessionOwnership,
+      clearAgentScope: (id) => this.agentBusScopes.delete(id),
+    });
   }
 
   /** The root log extension (sink provider + event→entry consumer). */
@@ -346,77 +344,10 @@ export class AgentManager {
   }
 
   /**
-   * Destroy an agent and its subagents
+   * Destroy an agent and its subagents.
    */
   destroyAgent(id: string): void {
-    const managedAgent = this.agents.get(id);
-    if (!managedAgent) return;
-
-    unregisterStreamingEventBus(id);
-    this.agentBusScopes.delete(id);
-
-    // Release every disk-session claim this agent held. Normally one, but releaseAllFor also
-    // cleans up a pre-fix leak if an older switch left an extra claim behind.
-    this.sessionOwnership.releaseAllFor(id);
-
-    // Force-kill MCP child processes synchronously to prevent orphans on exit
-    managedAgent.getMcpManager()?.forceKill();
-
-    managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed);
-
-    // Destroy all subagents first
-    for (const childId of [...managedAgent.childIds]) {
-      this.destroyAgent(childId);
-    }
-
-    // Remove from the tree before deleting the registry entry.
-    if (managedAgent.parentId) {
-      this.agents.unlinkChild(managedAgent.parentId, id);
-      managedAgent.emitEvent(
-        "subagent:destroyed",
-        { subagentId: id, parentTaskToolCallId: managedAgent.parentTaskId },
-        { parentId: managedAgent.parentId }
-      );
-    }
-
-    // Teardown extensions: emit interceptable session:shutdown first (so extensions can
-    // release resources, e.g. kill LSP daemons), then deactivate/destroy all extensions.
-    // This fixes a pre-existing leak where extensionRunner.destroyAll() was never called.
-    //
-    // The flush is chained onto the teardown promise rather than called here: teardown is
-    // async, and landing the log sink while a deactivate() flush could still be pending
-    // loses the final batch. Chaining also keeps `destroyAgent` synchronous for its
-    // subagent/dispose callers while making the order unconditional.
-    //
-    // ⚠️ The sink must stay bound across the whole chain. `session:shutdown` is how an
-    // extension lands its final work through `ctx.logger`, so releasing the binding before
-    // the interception runs sends that write into the seam's retained buffer, where nothing
-    // can ever drain it — the log file then lags `destroy()` by one entry or more.
-    // Release therefore happens exactly once, at the end of the chain (via
-    // `flushLogOnDestroy`), never up front.
-    const runner = managedAgent.getExtensionRunner();
-    const teardown = (async () => {
-      if (runner) {
-        // Awaited: the shutdown hook is how an extension lands final work, and the
-        // teardown below unregisters its interceptor — so it must not still be running.
-        await runner.emitSessionShutdown(id);
-        await runner.destroyAll();
-      }
-    })()
-      .catch(() => {
-        // Teardown failures are reported per phase on the bus; never block the flush below.
-      })
-      // Kill this agent's background jobs (each agent owns its own registry) so a disposed
-      // runtime does not leak child processes; awaited so `settleTeardowns` guarantees it.
-      .then(() => managedAgent.destroyBackgroundWork())
-      .then(() => {
-        // Land the buffered teardown/abort entries before the sink is dropped, so a
-        // process exit immediately after destroy does not lose them to the batch timer.
-        managedAgent.flushLogOnDestroy();
-      });
-    this.trackTeardown(teardown);
-
-    this.agents.delete(id);
+    this.lifecycle.destroy(id);
   }
 
   /**
@@ -466,13 +397,10 @@ export class AgentManager {
   }
 
   /**
-   * Destroy all agents
+   * Destroy all root agents (and therefore their subagents).
    */
   reset(): void {
-    // Destroy root agents (which will cascade to subagents)
-    for (const agent of this.getRootAgents()) {
-      this.destroyAgent(agent.id);
-    }
+    this.lifecycle.reset();
   }
 
   /**
@@ -484,17 +412,12 @@ export class AgentManager {
    * final batch can be lost when the process goes down right after closing a session.
    */
   async settleTeardowns(): Promise<void> {
-    // `destroyAgent` can enqueue more teardowns while these settle (subagent cascades),
-    // so drain until the set stops growing.
-    while (this.pendingTeardowns.size > 0) {
-      await Promise.allSettled([...this.pendingTeardowns]);
-    }
+    await this.lifecycle.settleTeardowns();
   }
 
-  /** Track a teardown promise so {@link settleTeardowns} can await it. */
-  private trackTeardown(promise: Promise<void>): void {
-    this.pendingTeardowns.add(promise);
-    void promise.finally(() => this.pendingTeardowns.delete(promise));
+  /** @internal Test seam for the growable-teardown contract. */
+  trackTeardown(promise: Promise<void>): void {
+    this.lifecycle.trackTeardown(promise);
   }
 }
 
