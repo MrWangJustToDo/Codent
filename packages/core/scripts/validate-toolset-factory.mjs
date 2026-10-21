@@ -117,5 +117,11 @@ assert.match(
   /hasOwnProperty\.call\(config, "subagentTools"\)/,
   "per-spawn overrides beat the root config default"
 );
+const runSubagent = readFileSync(`${SRC}agent/subagent/run-subagent.ts`, "utf8");
+assert.match(
+  runSubagent,
+  /\.\.\.\(customTools !== undefined \? \{ subagentTools: customTools \}/,
+  "runSubagent omits the override key when it has no per-spawn tools, so the root default can apply"
+);
 
 console.log("toolset-factory validation passed");

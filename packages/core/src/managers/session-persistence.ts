@@ -62,15 +62,20 @@ export class SessionPersistence {
    * session is actually blanked instead of the queued thunk resolving against the new one.
    */
   async clearNow(): Promise<boolean> {
-    const sessionId = this.host.session.getSessionData()?.id;
-    const persisted = await this.host.session.persistSession(() => ({
-      ...getSessionPersistInput(this.host),
-      ...(sessionId ? { sessionId } : {}),
-      uiMessages: [],
-      forceEmptyMessages: true,
-    }));
-    if (persisted) this.tracker.reset([]);
-    return persisted;
+    try {
+      const sessionId = this.host.session.getSessionData()?.id;
+      const persisted = await this.host.session.persistSession(() => ({
+        ...getSessionPersistInput(this.host),
+        ...(sessionId ? { sessionId } : {}),
+        uiMessages: [],
+        forceEmptyMessages: true,
+      }));
+      if (persisted) this.tracker.reset([]);
+      return persisted;
+    } catch (err) {
+      this.reportBackgroundPersistError(err);
+      return false;
+    }
   }
 
   /** Persist model/state only (usage, todos, mode); does not write `uiMessages`. */

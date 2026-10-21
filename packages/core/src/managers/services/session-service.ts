@@ -419,8 +419,10 @@ export class SessionService {
       session.name = "New Session";
     }
 
-    this.setSessionData(session);
+    // Adopt only after the canonical rewrite landed. A save failure must leave the agent on the
+    // session it was actually running, otherwise ownership/log/tracker and live state disagree.
     await this.store.save(session);
+    this.setSessionData(session);
 
     return {
       ...session,

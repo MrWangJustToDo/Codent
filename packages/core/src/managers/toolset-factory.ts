@@ -30,11 +30,9 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
 
   const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
   const todoManager = managed.getTodoManager();
-  if (todoManager) {
-    tools.todo = createTodoTool({ todoManager });
-    tools.webfetch = createWebfetchTool({ managed });
-    tools.websearch = createWebsearchTool({ managed });
-  }
+  if (todoManager) tools.todo = createTodoTool({ todoManager });
+  tools.webfetch = createWebfetchTool({ managed });
+  tools.websearch = createWebsearchTool({ managed });
   tools.ask_user = createAskUserTool();
   tools.create_plan = createCreatePlanTool({ getPlanMode: () => managed.planMode });
   tools.update_plan = createUpdatePlanTool({ getPlanMode: () => managed.planMode });

@@ -1,7 +1,7 @@
 /**
- * Validates a restore failure that happens AFTER SessionService adopts the target SessionData.
- * The switch is already effective for data/log purposes, so ownership must keep the target claim
- * and release the session being left — not the other way around.
+ * Validates that a restore whose post-load rewrite fails leaves the old session active. If
+ * SessionData had already been adopted, ownership, log and tracker would describe a switch that
+ * never completed.
  *
  * Run: pnpm --filter @codent/core run validate:session-restore-rollback
  */
@@ -86,10 +86,10 @@ try {
   assert.match(error.message, /disk full/);
 }
 
-assert.equal(managed.getSessionData()?.id, "ses_B", "the adopted session remains active");
-assert.equal(claims.get("ses_B"), managed.id, "the target claim is kept after the swap");
-assert.equal(claims.has("ses_A"), false, "the session being left is released");
-assert.deepEqual(released, ["ses_A"]);
+assert.equal(managed.getSessionData()?.id, "ses_A", "the old session remains active after a failed save");
+assert.equal(claims.get("ses_A"), managed.id, "the old claim is kept");
+assert.equal(claims.has("ses_B"), false, "the attempted target claim is rolled back");
+assert.deepEqual(released, ["ses_B"]);
 
 clearCoreEnv();
 console.log("session-restore-rollback validation passed");

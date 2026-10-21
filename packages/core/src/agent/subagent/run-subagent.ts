@@ -102,7 +102,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       name: `subagent-${description}`,
       systemPrompt,
       maxIterations,
-      subagentTools: customTools,
+      ...(customTools !== undefined ? { subagentTools: customTools } : {}),
     },
     // The id is core's to assign (`subagent_…`) — passed as the internal channel, not as config.
     subagentId
