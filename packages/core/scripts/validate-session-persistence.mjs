@@ -23,6 +23,7 @@ const host = {
   setAutoModeEnabled: () => {},
   getReasoningEffort: () => undefined,
   session: {
+    getSessionData: () => ({ id: "ses_current" }),
     persistSession: async (input) => {
       calls.push(typeof input === "function" ? input() : input);
       return landed;

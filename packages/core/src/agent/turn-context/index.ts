@@ -11,6 +11,7 @@ export {
   extractContextSection,
   hashTurnContextSection,
   findLatestTurnContextSectionHashes,
+  findLatestTurnContextSectionHashesFromWire,
 } from "./turn-context-message.js";
 export type { TurnContextKind, TurnContextSection } from "./turn-context-message.js";
 

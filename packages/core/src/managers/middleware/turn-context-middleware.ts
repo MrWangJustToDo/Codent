@@ -1,7 +1,7 @@
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 import {
   TURN_CONTEXT_KINDS,
-  findLatestTurnContextSectionHashes,
+  findLatestTurnContextSectionHashesFromWire,
   formatContextSectionUserContent,
   hashTurnContextSection,
   isContextUIMessage,
@@ -111,7 +111,7 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       // Seed per-kind hashes from persisted messages on first admit (restore).
       let hashes = deps.getAdmittedHashes();
       if (!hashes) {
-        hashes = findLatestTurnContextSectionHashes(uiMessages);
+        hashes = findLatestTurnContextSectionHashesFromWire(config.messages as ModelMessage[]);
         deps.setAdmittedHashes(hashes);
       }
 

@@ -203,6 +203,8 @@
     "validate:session-persist-integrity": "pnpm run build && node scripts/validate-session-persist-integrity.mjs",
     "validate:session-persistence": "pnpm run build && node scripts/validate-session-persistence.mjs",
     "validate:session-ownership": "pnpm run build && node scripts/validate-session-ownership.mjs",
+    "validate:session-switch-safety": "pnpm run build && node scripts/validate-session-switch-safety.mjs",
+    "validate:session-restore-rollback": "pnpm run build && node scripts/validate-session-restore-rollback.mjs",
     "validate:agent-registry": "pnpm run build && node scripts/validate-agent-registry.mjs",
     "validate:lifecycle-coordinator": "pnpm run build && node scripts/validate-lifecycle-coordinator.mjs",
     "validate:agent-event-bus-scope": "pnpm run build && node scripts/validate-agent-event-bus-scope.mjs",

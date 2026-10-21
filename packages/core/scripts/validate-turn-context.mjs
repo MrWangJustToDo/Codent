@@ -25,6 +25,7 @@ import {
   extractContextSection,
   findCutPointByBudget,
   findLatestTurnContextSectionHashes,
+  findLatestTurnContextSectionHashesFromWire,
   formatContextSectionUserContent,
   hashTurnContextPayload,
   hashTurnContextSection,
@@ -584,6 +585,69 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(controller.getTurnContextAdmitMessageCount(), 0);
   assert.equal(invalidations, 2, "resetTurnState also unfreezes the prompt");
   assert.ok(controller.getSystemPrompt().includes("doc-v2"), "resetTurnState rebuilds from current state");
+}
+
+// ---------------------------------------------------------------------------
+// 11. Admission seeds from the model-visible wire, not the durable channel.
+//     After compaction the pre-cut <ctx> rows remain in the channel; seeding
+//     from them would suppress the re-injection resetAdmittedTurnContext asked for.
+// ---------------------------------------------------------------------------
+{
+  const wire = [
+    { role: "user", content: "<ctx kind=current_date>\n<current_date>today</current_date>\n</ctx>" },
+    { role: "assistant", content: "ok" },
+  ];
+  assert.equal(
+    findLatestTurnContextSectionHashesFromWire(wire).get("current_date"),
+    hashTurnContextSection({
+      key: "current_date",
+      content: "<current_date>today</current_date>",
+    })
+  );
+  assert.equal(
+    findLatestTurnContextSectionHashesFromWire([{ role: "user", content: "summary only" }]).size,
+    0,
+    "a compacted wire without the old ctx row has no seeded hash"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 12. Middleware seeds from the post-compaction wire, not the channel: a stale
+//     <ctx> row still present in the channel must not suppress re-admission.
+// ---------------------------------------------------------------------------
+{
+  const { AgentUIChannel, createTurnContextMiddleware } = await import("../dist/dev.mjs");
+  const channel = new AgentUIChannel();
+  const currentDate = { key: "current_date", content: "<current_date>2026-10-21</current_date>" };
+  channel.setMessages([
+    { id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] },
+    {
+      id: "ctx-current_date-1",
+      role: "user",
+      parts: [{ type: "text", content: formatContextSectionUserContent(currentDate) }],
+    },
+  ]);
+  let hashes;
+  const middleware = createTurnContextMiddleware({
+    getFrozenSystemPrompt: () => undefined,
+    getSections: async () => [currentDate],
+    getUIChannel: () => channel,
+    persistMessages: () => {},
+    getManagedAgent: () => null,
+    getAdmittedHashes: () => hashes,
+    setAdmittedHashes: (next) => {
+      hashes = next;
+    },
+    getAdmitMessageCount: () => 0,
+    setAdmitMessageCount: () => {},
+    refreshMessageThreshold: 100,
+  });
+  const result = await middleware.onConfig({}, { messages: [{ role: "user", content: "hi" }] });
+  assert.equal(
+    result.messages.length,
+    2,
+    "an old ctx row in the channel must not suppress current_date after compaction"
+  );
 }
 
 console.log("turn-context validation passed");

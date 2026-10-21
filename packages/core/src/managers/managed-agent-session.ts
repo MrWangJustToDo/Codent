@@ -100,7 +100,8 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
 export async function saveSessionUIMessages(
   host: SessionHost,
   uiMessages: TanStackUIMessage[],
-  tracker: SessionSyncTracker
+  tracker: SessionSyncTracker,
+  sessionId: string | undefined = host.session.getSessionData()?.id
 ): Promise<void> {
   if (uiMessages.length === 0) return;
   // Only mark persisted when the write actually landed. Marking a failed save
@@ -112,7 +113,10 @@ export async function saveSessionUIMessages(
   // and by the time it runs the ambient state may have moved on (a mode switch
   // during the same turn). Re-reading it here keeps the newest state on the last
   // write; the message snapshot stays exactly the caller's.
-  const persisted = await host.session.persistSession(() => getSessionPersistInput(host, uiMessages));
+  const persisted = await host.session.persistSession(() => ({
+    ...getSessionPersistInput(host, uiMessages),
+    ...(sessionId ? { sessionId } : {}),
+  }));
   if (persisted) tracker.markPersisted(uiMessages);
 }
 

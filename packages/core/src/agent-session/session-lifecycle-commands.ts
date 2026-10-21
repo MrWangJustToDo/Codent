@@ -160,7 +160,10 @@ export async function startNewDiskSession(
   }
 
   const chatController = managed.getChatController();
-  chatController?.clearMessages();
+  // Blank the OLD session before rotating. The write is queued in SessionService, so awaiting it
+  // here is what keeps the thunk from resolving after `setSessionData(newSession)`.
+  await managed.clearPersistedSession();
+  chatController?.clearMessages({ persistEmpty: false });
 
   const newSession = store.create({
     modelStyle: currentSession?.modelStyle ?? "openai",

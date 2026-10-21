@@ -45,6 +45,12 @@ export interface SessionPersistInput {
   onTitleResolved?: (name: string) => void;
   uiMessages?: UIMessage[];
   /**
+   * Session the caller intended to write. A queued persist may run after a `/resume`/`/clear`
+   * has adopted a different session; refusing the stale target prevents the old transcript (or
+   * mode/todo state) from landing in the new session.
+   */
+  sessionId?: string;
+  /**
    * Allow `uiMessages: []` to be written.
    *
    * An empty list is normally refused (an empty persist must not erase a session
@@ -223,6 +229,10 @@ export class SessionService {
     if (!this.data) {
       this.ensureSession();
       return this.persistSessionInner(input);
+    }
+    if (input.sessionId !== undefined && this.data.id !== input.sessionId) {
+      // A write captured before a session switch must not be retargeted onto the new session.
+      return false;
     }
     this.data.usage = { ...usage.getTotal() };
     this.data.cost = usage.getTotalCostUsd();

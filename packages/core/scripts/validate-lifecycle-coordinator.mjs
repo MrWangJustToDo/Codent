@@ -80,4 +80,33 @@ for (const id of ["root", "child", "grandchild"]) {
 lifecycle.destroy("missing");
 await lifecycle.settleTeardowns();
 
+// A rejecting background-work step must not skip the log flush or become an unhandled rejection.
+{
+  const events2 = [];
+  const failing = {
+    id: "failing",
+    parentId: undefined,
+    childIds: [],
+    updatedAt: 0,
+    getMcpManager: () => null,
+    abort: () => {},
+    getExtensionRunner: () => null,
+    destroyBackgroundWork: async () => {
+      throw new Error("job teardown failed");
+    },
+    flushLogOnDestroy: () => events2.push("flush"),
+    emitEvent: () => {},
+  };
+  const registry2 = new AgentRegistry();
+  registry2.register(failing);
+  const lifecycle2 = new LifecycleCoordinator({
+    registry: registry2,
+    ownership: new SessionOwnership(),
+    clearAgentScope: () => {},
+  });
+  lifecycle2.destroy("failing");
+  await lifecycle2.settleTeardowns();
+  assert.deepEqual(events2, ["flush"], "a failed background teardown still flushes the log");
+}
+
 console.log("lifecycle-coordinator validation passed");

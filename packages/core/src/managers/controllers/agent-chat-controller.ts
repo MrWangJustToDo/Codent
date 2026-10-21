@@ -101,7 +101,7 @@ export class AgentChatController {
     this.channel.setMessages(messages);
   }
 
-  clearMessages(): void {
+  clearMessages(options: { persistEmpty?: boolean } = {}): void {
     this.clearQueuedMessages();
     this.channel.clearMessages();
     this.managed.resetAdmittedTurnContext();
@@ -112,8 +112,9 @@ export class AgentChatController {
     // walk alive for the rest of the agent's life. A later restore re-arms it from its own misses.
     this.managed.setMediaHydrationMisses(0);
     // The cleared transcript must also leave disk, or a later resume brings the
-    // conversation the user just discarded back.
-    this.persistEmpty();
+    // conversation the user just discarded back. A caller that is about to rotate
+    // sessions flushes the empty write itself against the old session first.
+    if (options.persistEmpty !== false) this.persistEmpty();
   }
 
   stop(): void {

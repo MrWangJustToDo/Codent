@@ -64,22 +64,31 @@ export class LifecycleCoordinator {
     // retained buffer nothing can drain.
     const runner = managedAgent.getExtensionRunner();
     const teardown = (async () => {
-      if (runner) {
-        // Awaited: the shutdown hook is how an extension lands final work, and the teardown below
-        // unregisters its interceptor — so it must not still be running.
-        await runner.emitSessionShutdown(id);
-        await runner.destroyAll();
+      try {
+        if (runner) {
+          // Awaited: the shutdown hook is how an extension lands final work, and the teardown
+          // below unregisters its interceptor — so it must not still be running.
+          await runner.emitSessionShutdown(id);
+          await runner.destroyAll();
+        }
+      } catch {
+        // Teardown failures are reported per phase on the bus; continue to cleanup.
       }
-    })()
-      .catch(() => {
-        // Teardown failures are reported per phase on the bus; never block the flush below.
-      })
-      // Kill this agent's background jobs so a disposed runtime does not leak child processes.
-      .then(() => managedAgent.destroyBackgroundWork())
-      .then(() => {
+
+      try {
+        // Kill this agent's background jobs so a disposed runtime does not leak child processes.
+        await managedAgent.destroyBackgroundWork();
+      } catch {
+        // A failed job teardown must not skip the log flush below.
+      }
+
+      try {
         // Land buffered teardown/abort entries before the sink is dropped.
         managedAgent.flushLogOnDestroy();
-      });
+      } catch {
+        // The process is going away; a failed flush cannot be retried here.
+      }
+    })();
     this.trackTeardown(teardown);
 
     this.deps.registry.delete(id);

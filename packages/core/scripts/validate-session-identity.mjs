@@ -133,6 +133,7 @@ assert.ok(store, "session store available");
 }
 const target = store.create({ modelStyle: "openai", model: "test-model" });
 target.name = "Resumed Target";
+target.uiMessages = [{ id: "target-message", role: "user", parts: [{ type: "text", content: "keep me" }] }];
 await store.save(target);
 
 const resume = await session.dispatch({ type: "session.resume", sessionId: target.id });
@@ -202,6 +203,14 @@ assert.equal(newSession.ok, true, "session.new succeeds");
 const nextId = newSession.data.sessionId;
 assert.notEqual(nextId, target.id, "session.new allocates a new disk session");
 assertIdentity(nextId, "session.new");
+
+// `/clear` must blank the session it leaves, not queue a thunk that resolves against the new one.
+const leftBehind = await store.load(target.id);
+assert.equal(
+  leftBehind?.uiMessages.length ?? 0,
+  0,
+  "session.new writes an empty transcript over the session it replaced"
+);
 
 // `/clear` changes the id the same way a resume does, so the sink must follow here too — a fixed
 // `session:restore` alone would have left this path writing into the session it replaced. The

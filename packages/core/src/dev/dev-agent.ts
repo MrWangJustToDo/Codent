@@ -249,6 +249,7 @@ export {
   extractContextSection,
   hashTurnContextSection,
   findLatestTurnContextSectionHashes,
+  findLatestTurnContextSectionHashesFromWire,
 } from "../agent/turn-context";
 export {
   INSTRUCTION_FILENAMES,

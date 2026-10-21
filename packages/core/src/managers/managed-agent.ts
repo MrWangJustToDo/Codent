@@ -1206,8 +1206,8 @@ export class ManagedAgent {
    * the log to its empty form. The sync tracker is reset to empty so a later
    * persist is not deduped against the pre-clear fingerprint.
    */
-  clearPersistedSession(): void {
-    this.sessionPersistence.clear();
+  clearPersistedSession(): Promise<boolean> {
+    return this.sessionPersistence.clearNow();
   }
 
   /** Reset fingerprint tracking after restore, clear, or new chat bootstrap. */
@@ -1771,13 +1771,13 @@ export class ManagedAgent {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
     let restored = false;
+    const leavingId = this.getSessionData()?.id;
     try {
       // Announce the departure BEFORE anything re-points the sink — in particular before the
       // pre-bind below, which is itself a re-point. Ordering is the whole point: this entry
       // describes the session being left, so it must be written while the sink still points at it.
       // A no-op when the id is already the target (a re-resume of the same session), which would
       // otherwise log a switch from a session to itself.
-      const leavingId = this.getSessionData()?.id;
       if (leavingId && leavingId !== sessionId) {
         this.emitEvent("session:switch", {
           fromSessionId: leavingId,
@@ -1810,13 +1810,23 @@ export class ManagedAgent {
       this.bindSessionLogSink();
       return session;
     } catch (err) {
-      // Roll back ownership only when the restore itself failed. A post-success failure (the
-      // sink re-bind above) must not drop the claim on the session we are now running.
-      if (!restored) {
+      // `restoreFromStore` adopts the new SessionData before its final save, so a failure after
+      // the swap has already moved the agent: releasing the target claim here would leave a live
+      // agent owning nothing while the old id stayed claimed. Treat a swapped data id as a
+      // completed switch for ownership/tracker/log purposes, then rethrow the failure.
+      const switched = this.getSessionData()?.id === sessionId;
+      if (!restored && !switched) {
         manager?.releaseSessionOwnership(sessionId, this.id);
         // …and the log binding, for the same reason: a failed restore leaves the session data on
         // the transient id, so the sink must go back there or the agent keeps writing into a
         // directory belonging to a session it is not running.
+        this.bindSessionLogSink();
+      }
+      if (switched) {
+        if (manager && leavingId && leavingId !== sessionId) {
+          manager.releaseSessionOwnership(leavingId, this.id);
+        }
+        this.sessionPersistence.resetTracker(this.getSessionData()?.uiMessages);
         this.bindSessionLogSink();
       }
       throw err;

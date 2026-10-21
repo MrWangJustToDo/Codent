@@ -161,3 +161,24 @@ export function findLatestTurnContextSectionHashes(messages: UIMessage[]): Map<s
   }
   return latest;
 }
+
+/**
+ * Seed the admitted hashes from the **model-visible wire**, not the durable UI channel.
+ *
+ * Compaction appends a SUMMARY and leaves the pre-cut channel rows intact, so seeding from the
+ * channel after `resetAdmittedTurnContext()` would find the old `<ctx>` rows and suppress the
+ * re-injection the reset was meant to force. The wire is the only view where a cut is real.
+ */
+export function findLatestTurnContextSectionHashesFromWire(messages: readonly ModelMessage[]): Map<string, string> {
+  const latest = new Map<string, string>();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!isContextModelMessage(message)) continue;
+    const section = extractContextSection(extractTextFromContent(message.content));
+    if (!section) continue;
+    if (!latest.has(section.key)) {
+      latest.set(section.key, hashTurnContextSection(section));
+    }
+  }
+  return latest;
+}
