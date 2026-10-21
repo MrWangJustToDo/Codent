@@ -11,6 +11,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
 import {
   AgentManager,
   buildManagedAgent,
@@ -94,7 +96,7 @@ assert.deepEqual(
         const st = await fs.promises.stat(toAbs(p));
         return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
       },
-      remove: async (p) => fs.promises.rm(toAbs(p), { recursive: true, force: true }),
+      remove: async (p) => fs.promises.rm(toAbs(p), TEMP_RM_OPTIONS),
     },
     runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
     exec: async () => ({ stdout: "", stderr: "", code: 0 }),
@@ -140,7 +142,7 @@ assert.deepEqual(
     built.managed.getExtensionRunner()?.destroyAll?.();
   } finally {
     clearCoreEnv();
-    await fs.promises.rm(rootPath, { recursive: true, force: true });
+    await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
   }
 }
 

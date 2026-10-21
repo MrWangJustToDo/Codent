@@ -122,9 +122,9 @@ assert.equal(resolveSubagentStopReason({ aborted: true, reason: "some-other" }),
   // The destroy label is additionally pinned to the shared constant, because it is the one
   // whose spelling is not discoverable from the code (it is prose, in title case) and it is
   // the dominant abort in real logs.
-  const agentManagerSrc = readFileSync(join(SRC, "managers/agent-manager.ts"), "utf8");
+  const lifecycleSrc = readFileSync(join(SRC, "managers/lifecycle-coordinator.ts"), "utf8");
   assert.ok(
-    /managedAgent\.abort\(SUBAGENT_ABORT_REASONS\.agentDestroyed\)/.test(agentManagerSrc),
+    /managedAgent\.abort\(SUBAGENT_ABORT_REASONS\.agentDestroyed\)/.test(lifecycleSrc),
     "the destroy path aborts through the shared constant"
   );
   assert.equal(SUBAGENT_ABORT_REASONS.agentDestroyed, "Agent destroyed", "…whose value is the observed one");
