@@ -79,6 +79,7 @@ When constructing the summary, stick to this template:
 ## Accomplished
 
 [What work has been completed, what work is still in progress, and what work is left?]
+- [Background command jobs: list each job id (job_…), its final status/exit code and log path. The live job list is also re-injected as <background_jobs> after compaction.]
 
 ## Key Decisions
 
@@ -172,6 +173,7 @@ When constructing the summary, stick to this template:
 ## Accomplished
 
 [What work has been completed, what work is still in progress, and what work is left?]
+- [Background command jobs: list each job id (job_…), its final status/exit code and log path. The live job list is also re-injected as <background_jobs> after compaction.]
 
 ## Key Decisions
 

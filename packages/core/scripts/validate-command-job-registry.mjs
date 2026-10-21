@@ -15,10 +15,14 @@ import {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
   CommandJobRegistry,
+  TURN_CONTEXT_KINDS,
+  buildTurnContextSections,
   clearCoreEnv,
   commandJobRegistry,
   createGetCommandOutputTool,
+  createTurnContextMiddleware,
   createKillCommandTool,
+  formatBackgroundJobsSection,
   registerCoreEnv,
   sweepStaleJobLogs,
 } from "../dist/dev.mjs";
@@ -514,6 +518,190 @@ console.log("teardown log deletion OK");
   assert.equal(ownerB.get(job.id), undefined, "another session does not restore the record");
   await ownerA.clear();
   await ownerB.clear();
+}
+
+// ---------------------------------------------------------------------------
+// 14. Background-jobs turn-context section: durable pointer after compaction
+// ---------------------------------------------------------------------------
+{
+  const rows = [
+    {
+      jobId: "job_running",
+      command: "npm run dev",
+      status: "running",
+      exitCode: null,
+      logPath: `.agents/cache/command-jobs/job_running.log`,
+      startedAt: 2,
+    },
+    {
+      jobId: "job_done",
+      command: "npm test",
+      status: "exited",
+      exitCode: 0,
+      logPath: `.agents/cache/command-jobs/job_done.log`,
+      startedAt: 1,
+    },
+  ];
+  const section = formatBackgroundJobsSection(rows, { generation: 0 });
+  assert.ok(section.includes("<background_jobs"), "section has its tag");
+  assert.ok(section.indexOf("job_running") < section.indexOf("job_done"), "running jobs come first");
+  assert.ok(section.includes("running") && section.includes("exited (exit 0)"));
+  assert.ok(section.includes("job_done.log"), "the durable log pointer is included");
+  assert.ok(!section.includes("npm test output"), "output is not duplicated in the pointer");
+
+  // Compaction bumps the generation so the otherwise-identical section re-admits (the restore
+  // seeding would find the old row in the channel and skip a same-hash section).
+  const afterCompact = formatBackgroundJobsSection(rows, { generation: 1 });
+  assert.notEqual(section, afterCompact, "a compaction generation changes the section hash");
+
+  const built = buildTurnContextSections({ relevantMemoryContent: "", backgroundJobs: section });
+  assert.ok(
+    built.some((entry) => entry.key === TURN_CONTEXT_KINDS.backgroundJobs),
+    "the section is part of the turn-context set"
+  );
+  assert.equal(formatBackgroundJobsSection([]), undefined, "no jobs → no section");
+
+  const many = Array.from({ length: 8 }, (_, i) => ({
+    ...rows[1],
+    jobId: `job_${i}`,
+    startedAt: i,
+  }));
+  const capped = formatBackgroundJobsSection(many);
+  assert.ok(capped.includes("more job(s)"), "the list is capped with a pointer to the rest");
+
+  // The real middleware: a compaction resets the admitted hashes; the generation-bumped section
+  // must be re-admitted even though the previous row is still in the channel (restore seeding would
+  // otherwise find its hash and skip).
+  {
+    const ctxRows = [{ ...rows[1], jobId: "job_ctx", command: "npm test", status: "exited", exitCode: 0 }];
+    let generation = 0;
+    let hashes;
+    let admitCount = 0;
+    let messages = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
+    const ui = { getMessages: () => messages, setMessages: (next) => (messages = next) };
+    const config = { messages: [], systemPrompts: [] };
+    const middleware = createTurnContextMiddleware({
+      getFrozenSystemPrompt: () => undefined,
+      getSections: async () => [
+        {
+          key: TURN_CONTEXT_KINDS.backgroundJobs,
+          content: formatBackgroundJobsSection(ctxRows, { generation }),
+        },
+      ],
+      getUIChannel: () => ui,
+      persistMessages: () => {},
+      getManagedAgent: () => ({}),
+      getAdmittedHashes: () => hashes,
+      setAdmittedHashes: (next) => (hashes = next),
+      getAdmitMessageCount: () => admitCount,
+      setAdmitMessageCount: (next) => (admitCount = next),
+    });
+    const first = await middleware.onConfig({}, config);
+    const ctxCount = () => messages.filter((message) => message.id.startsWith("ctx-background_jobs-")).length;
+    assert.equal(ctxCount(), 1, "the section is admitted once");
+    assert.ok(
+      (first.messages ?? []).some((message) => String(message.content).includes("<background_jobs")),
+      "…and is in the wire"
+    );
+
+    // Compaction: ManagedAgent bumps the generation and clears the hashes. Seeding finds the old
+    // row, but the new content hash differs, so the section is re-admitted.
+    hashes = undefined;
+    generation += 1;
+    const second = await middleware.onConfig({}, config);
+    assert.equal(ctxCount(), 2, "a compaction generation re-admits the section");
+    assert.ok(
+      (second.messages ?? []).some(
+        (message) => String(message.content).includes('generation="1"') && String(message.content).includes("job_ctx")
+      ),
+      "…with the current job list"
+    );
+
+    // No compaction / no change: a third call is silent.
+    const before = ctxCount();
+    await middleware.onConfig({}, config);
+    assert.equal(ctxCount(), before, "an unchanged section is not re-injected on every call");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 15. Graceful teardown keeps un-notified terminal records (idle completion)
+// ---------------------------------------------------------------------------
+{
+  const owner = "ses_graceful";
+  const first = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await first.ready();
+  const unNotified = first.create("echo pending");
+  first.appendStdout(unNotified.id, "pending output\n");
+  first.markExited(unNotified.id, 0);
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${unNotified.id}.json`, '"status":"exited"');
+
+  const notified = first.create("echo seen");
+  first.markExited(notified.id, 0);
+  await first.collectCompleted(); // default marks everything un-notified, including `unNotified`
+  // Recreate an un-notified terminal job after the drain: it represents a completion that arrived
+  // while the session was idle and the process then quit before the next LLM call.
+  const idle = first.create("echo idle");
+  first.markExited(idle.id, 0);
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${idle.id}.json`, '"status":"exited"');
+
+  await first.destroyAll();
+  assert.equal(
+    await fs.promises.access(abs(`${COMMAND_JOB_LOG_DIR}/${idle.id}.json`)).then(
+      () => true,
+      () => false
+    ),
+    true,
+    "a graceful quit keeps an un-notified terminal record"
+  );
+  assert.equal(
+    await fs.promises.access(abs(`${COMMAND_JOB_LOG_DIR}/${notified.id}.json`)).then(
+      () => true,
+      () => false
+    ),
+    false,
+    "an already-notified terminal record is removed"
+  );
+
+  const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
+  await resumed.ready();
+  assert.equal(resumed.get(idle.id)?.status, "exited", "the kept record restores");
+  const completed = await resumed.collectCompleted();
+  assert.equal(completed.filter((j) => j.id === idle.id).length, 1, "…and delivers its completion");
+  await resumed.clear();
+}
+
+// ---------------------------------------------------------------------------
+// 16. Per-job owner snapshot: a session-id switch does not re-file a running job
+// ---------------------------------------------------------------------------
+{
+  let owner = "ses_before_switch";
+  const registryA = new CommandJobRegistry(env, { ownerSessionId: () => owner });
+  await registryA.ready();
+  const job = registryA.create("echo survives-clear");
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"running"');
+  owner = "ses_after_switch";
+  registryA.markExited(job.id, 0);
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+
+  const record = JSON.parse(await fs.promises.readFile(abs(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`), "utf-8"));
+  assert.equal(record.ownerSessionId, "ses_before_switch", "the record stays filed to the starting session");
+  assert.deepEqual(
+    await registryA.collectCompleted(),
+    [],
+    "the switched conversation does not receive the old job's completion"
+  );
+  assert.deepEqual(registryA.listForTurnContext(), [], "…and the old job is not in its model-facing pointer");
+
+  const after = new CommandJobRegistry(env, { ownerSessionId: "ses_after_switch" });
+  await after.ready();
+  assert.equal(after.get(job.id), undefined, "the new session does not inherit the old job");
+  const before = new CommandJobRegistry(env, { ownerSessionId: "ses_before_switch" });
+  await before.ready();
+  assert.equal(before.get(job.id)?.status, "exited", "the starting session owns the record");
+  await registryA.clear();
+  await before.clear();
+  await after.clear();
 }
 
 await registry.destroyAll();

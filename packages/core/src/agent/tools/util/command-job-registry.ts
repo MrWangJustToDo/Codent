@@ -58,6 +58,12 @@ export interface CommandJobRecord {
    * surface that can only read files (e.g. the code-mode sandbox) can read it.
    */
   logPath: string | null;
+  /**
+   * The disk session that STARTED this job. Snapshotted per job: `/clear` / `/resume` can switch
+   * the registry's current owner while a job is still running, and its record must stay filed under
+   * the conversation that started it (not the one that happens to be current when it ends).
+   */
+  ownerSessionId?: string;
   /** OS/runtime process id, when the host exposed one (recovery metadata). */
   pid?: number;
   /** Adapter-provided kill (best-effort). */
@@ -240,6 +246,7 @@ export class CommandJobRegistry {
       startedAt: persisted.startedAt,
       endedAt: persisted.endedAt,
       logPath: persisted.logPath,
+      ownerSessionId: persisted.ownerSessionId,
       ...(persisted.pid !== undefined ? { pid: persisted.pid } : {}),
     };
   }
@@ -249,7 +256,7 @@ export class CommandJobRegistry {
    * write that follows it. No-op for the ambient registry (no owner/env).
    */
   private persist(job: CommandJobRecord): Promise<void> {
-    const owner = this.ownerSessionId;
+    const owner = job.ownerSessionId ?? this.ownerSessionId;
     if (!this.env || !owner) return Promise.resolve();
     const record: PersistedCommandJob = {
       version: 1,
@@ -291,6 +298,40 @@ export class CommandJobRegistry {
    */
   setChangeListener(listener: CommandJobChangeListener | null): void {
     this.changeListener = listener;
+  }
+
+  /**
+   * Internal rows for the `<background_jobs>` turn-context section: status, exit code and the
+   * durable log path (metadata only — output stays in the log). Not the serialized `jobs` channel
+   * payload, which deliberately stays summary-only.
+   */
+  listForTurnContext(): Array<{
+    jobId: string;
+    command: string;
+    status: CommandJobStatus;
+    exitCode: number | null;
+    logPath: string | null;
+    startedAt: number;
+  }> {
+    return [...this.jobs.values()]
+      .filter((job) => this.isCurrentOwner(job))
+      .map((job) => ({
+        jobId: job.id,
+        command: job.command,
+        status: job.status,
+        exitCode: job.exitCode,
+        logPath: job.logPath,
+        startedAt: job.startedAt,
+      }));
+  }
+
+  /**
+   * A job belongs to the conversation that started it. `/clear`/`/resume` can switch the registry's
+   * current owner while a job runs; it must not surface (or notify) in the new conversation.
+   */
+  private isCurrentOwner(job: CommandJobRecord): boolean {
+    const current = this.ownerSessionId;
+    return !job.ownerSessionId || !current || job.ownerSessionId === current;
   }
 
   /** Serializable status list (no output, no kill handles). */
@@ -345,6 +386,7 @@ export class CommandJobRegistry {
       startedAt,
       endedAt: null,
       logPath: log?.path ?? null,
+      ownerSessionId: this.ownerSessionId,
     };
     this.jobs.set(id, record);
     void this.persist(record);
@@ -566,6 +608,7 @@ export class CommandJobRegistry {
     for (const [id, job] of this.jobs) {
       if (job.status === "running") continue;
       if (this.notifiedJobIds.has(id)) continue;
+      if (!this.isCurrentOwner(job)) continue;
       completed.push({
         id: job.id,
         command: job.command,
@@ -606,13 +649,23 @@ export class CommandJobRegistry {
    */
   async destroyAll(): Promise<void> {
     const ids = [...this.jobs.keys()];
+    // A graceful quit must not erase a completion the model has not seen: keep terminal,
+    // un-notified records (and their logs) for the next resume. Running jobs are killed and
+    // deleted; already-notified terminal jobs have no future consumer.
+    const preserve = new Set(
+      ids.filter((id) => {
+        const job = this.jobs.get(id);
+        return job !== undefined && job.status !== "running" && !this.notifiedJobIds.has(id);
+      })
+    );
     await Promise.all(ids.map((id) => this.kill(id)));
     for (const id of ids) {
       this.jobs.delete(id);
       this.notifiedJobIds.delete(id);
     }
-    await Promise.all(ids.map((id) => this.disposeLog(id)));
-    await Promise.all(ids.map((id) => this.removeRecord(id)));
+    const disposable = ids.filter((id) => !preserve.has(id));
+    await Promise.all(disposable.map((id) => this.disposeLog(id)));
+    await Promise.all(disposable.map((id) => this.removeRecord(id)));
     if (ids.length > 0) this.notifyChange();
   }
 

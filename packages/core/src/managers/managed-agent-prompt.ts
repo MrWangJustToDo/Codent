@@ -65,6 +65,8 @@ export interface DynamicTurnContextInput {
   /** Session-retrieval guidance — where past conversations live and how to read
    *  each shape. Absent when the workspace has no history to search. */
   sessionRetrieval?: string;
+  /** Current/recent background command jobs (durable pointer; re-admitted after compaction). */
+  backgroundJobs?: string;
 }
 
 /**
@@ -117,6 +119,10 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
 
   if (input.sessionRetrieval?.trim()) {
     sections.push({ key: TURN_CONTEXT_KINDS.sessionRetrieval, content: input.sessionRetrieval.trim() });
+  }
+
+  if (input.backgroundJobs?.trim()) {
+    sections.push({ key: TURN_CONTEXT_KINDS.backgroundJobs, content: input.backgroundJobs.trim() });
   }
 
   if (input.extensionTurnContextSections) {

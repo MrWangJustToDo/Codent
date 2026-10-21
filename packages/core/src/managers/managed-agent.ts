@@ -79,6 +79,7 @@ import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js"
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
 import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
+import { formatBackgroundJobsSection } from "../agent/turn-context";
 import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
 import {
   formatInstructionContextSection,
@@ -440,6 +441,8 @@ export class ManagedAgent {
   private lastAdmittedTurnContextHashes: Map<string, string> | undefined;
   /** Message count at the last context admit (for periodic refresh; state owned by turn-context middleware). */
   private turnContextAdmitMessageCount: number;
+  /** Bumped by {@link resetAdmittedTurnContext}; forces the background-jobs section to re-admit. */
+  private turnContextGeneration = 0;
   /** Last-seen instruction file digest snapshot (for instruction change detection). */
   private instructionContextState: InstructionContextState | undefined;
   /** Once an instruction change is detected, keep re-injecting (stable payload). */
@@ -1493,6 +1496,7 @@ export class ManagedAgent {
   /** After compaction / clear — force the next turn to re-admit full dynamic context. */
   resetAdmittedTurnContext(): void {
     this.lastAdmittedTurnContextHashes = undefined;
+    this.turnContextGeneration += 1;
     this.turnContextAdmitMessageCount = 0;
     this.instructionContextState = undefined;
     this.instructionContextActive = false;
@@ -1552,6 +1556,22 @@ export class ManagedAgent {
     // Read per turn (not cached): a resume/clear changes it and the section re-admits.
     const sessionId = this.getSessionData()?.id;
 
+    // A completed background job's one-shot notification can be compacted away; this metadata
+    // section is re-admitted after compaction and is the model's durable pointer to the job/log.
+    let backgroundJobs: string | undefined;
+    if (!this.parentId) {
+      try {
+        const registry = this.getCommandJobRegistry();
+        await registry.ready();
+        backgroundJobs = formatBackgroundJobsSection(registry.listForTurnContext(), {
+          generation: this.turnContextGeneration,
+        });
+      } catch {
+        // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
+        backgroundJobs = undefined;
+      }
+    }
+
     const sections = buildTurnContextSections({
       relevantMemoryContent: this.memory.getRelevantContent(),
       todoNagReminder,
@@ -1563,6 +1583,7 @@ export class ManagedAgent {
       sessionRetrieval,
       extensionTurnContextSections: this.pendingExtensionTurnContextSections,
       instructionContext,
+      backgroundJobs,
     });
     return sections;
   }

@@ -49,6 +49,7 @@ export const TURN_CONTEXT_KINDS = {
   mode: "mode",
   instructionContext: "instruction_context",
   sessionRetrieval: "session_retrieval",
+  backgroundJobs: "background_jobs",
   projectInstructions: "project_instructions",
 } as const;
 

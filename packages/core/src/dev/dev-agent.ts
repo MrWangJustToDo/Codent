@@ -260,6 +260,8 @@ export {
   readInstructionContextState,
 } from "../agent/turn-context";
 export { TURN_CONTEXT_KINDS } from "../agent/turn-context";
+export { formatBackgroundJobsSection } from "../agent/turn-context";
+export type { BackgroundJobContextRow } from "../agent/turn-context";
 export type { TurnContextKind } from "../agent/turn-context";
 export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "../agent/turn-context";
 export {
