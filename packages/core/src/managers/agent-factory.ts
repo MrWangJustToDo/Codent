@@ -1,17 +1,13 @@
 import { AgentLog } from "../agent/agent-log";
 import { createCompactionConfig } from "../agent/compaction/types.js";
 import { SessionStore } from "../agent/persistence/session-store.js";
-import { createCompletePlanTool, createCreatePlanTool, createUpdatePlanTool } from "../agent/plan/create-plan-tool.js";
 import { TodoManager } from "../agent/todo";
-import { createTodoTool } from "../agent/todo/todo-tool.js";
-import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
-import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
-import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 
 import { AgentBootstrap, type BootstrapReport } from "./agent-bootstrap.js";
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
+import { buildToolset } from "./toolset-factory.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { SessionBootstrapContext } from "./session-bootstrap-events.js";
@@ -83,7 +79,8 @@ export async function buildManagedAgent({
     }
   );
 
-  const toolsRecord: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
+  if (!parentId && todoManager) managed.setTodoManager(todoManager);
+  const toolsRecord = { ...(await buildToolset({ profile: parentId ? "subagent" : "root", managed, todoManager })) };
   managed.tools = toolsRecord;
   managed.runtime = runtime;
   managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
@@ -100,20 +97,6 @@ export async function buildManagedAgent({
   }
 
   managed.setLog(log);
-
-  if (!parentId && todoManager) {
-    managed.setTodoManager(todoManager);
-    toolsRecord.todo = createTodoTool({ todoManager });
-    toolsRecord.webfetch = createWebfetchTool({ managed });
-    toolsRecord.websearch = createWebsearchTool({ managed });
-  }
-
-  if (!parentId) {
-    toolsRecord.ask_user = createAskUserTool();
-    toolsRecord.create_plan = createCreatePlanTool({ getPlanMode: () => managed.planMode });
-    toolsRecord.update_plan = createUpdatePlanTool({ getPlanMode: () => managed.planMode });
-    toolsRecord.complete_plan = createCompletePlanTool({ getPlanMode: () => managed.planMode });
-  }
 
   let bootstrapReport: BootstrapReport | undefined;
 

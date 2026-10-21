@@ -52,7 +52,8 @@
 import assert from "node:assert/strict";
 
 import {
-  createTanStackTools,
+  createTools,
+  resolveToolsRecord,
   declaredStackDepth,
   ExtensionRunner,
   getToolPresentation,
@@ -85,7 +86,7 @@ function makeAgent(tools, id = "agent_restore") {
 
 /** Real built-in tool objects — each has already declared its `present` + `toModelOutput`. */
 async function makeBuiltinAgent(id) {
-  const builtins = await createTanStackTools();
+  const builtins = resolveToolsRecord(await createTools());
   const record = Object.fromEntries(builtins.map((tool) => [tool.name, tool]));
   return { managed: makeAgent(record, id), builtinReadFile: record.read_file };
 }

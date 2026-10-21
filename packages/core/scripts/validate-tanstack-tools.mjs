@@ -8,21 +8,22 @@ import assert from "node:assert/strict";
 
 import {
   createExtensionsMiddleware,
-  createTanStackSubagentTools,
-  createTanStackTools,
+  createSubagentTools,
+  createTools,
   getReadOnlyTanStackToolNames,
+  resolveToolsRecord,
 } from "../dist/dev.mjs";
 
 const readOnlyNames = getReadOnlyTanStackToolNames();
 assert.deepEqual(readOnlyNames, ["read_file", "glob", "grep", "list_file", "tree", "webfetch", "websearch"]);
 
-const baseTools = await createTanStackTools();
+const baseTools = resolveToolsRecord(await createTools());
 const baseNames = baseTools.map((t) => t.name).sort();
 assert.ok(baseNames.includes("read_file"));
 assert.ok(baseNames.includes("run_command"));
 assert.ok(baseNames.includes("glob"));
 
-const subagentTools = createTanStackSubagentTools();
+const subagentTools = resolveToolsRecord(createSubagentTools());
 const subagentNames = new Set(subagentTools.map((t) => t.name));
 for (const name of readOnlyNames) {
   assert.ok(subagentNames.has(name), `missing subagent tool: ${name}`);

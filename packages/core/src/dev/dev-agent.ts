@@ -358,7 +358,7 @@ export {
   collectPendingAskUser,
 } from "../agent/stream/tool-phase-utils.js";
 export { isStaleActiveRunStatus, shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
-export { createTanStackSubagentTools, createTanStackTools, getReadOnlyTanStackToolNames } from "../agent/tools/runtime";
+export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime";
 export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/tool-names.js";
 export {
   clearStreamingOutput,

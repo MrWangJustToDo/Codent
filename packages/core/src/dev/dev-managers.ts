@@ -156,6 +156,10 @@ export {
 } from "../agent/tools/presentation/registry.js";
 // The row rule a host branches on — asserted alongside the MCP descriptor it consumes.
 export { keepsCompactRow } from "../agent/tools/presentation/row-rules.js";
+export { createTools } from "../agent/tools";
+export { buildToolset } from "../managers/toolset-factory.js";
+export { createSubagentTools } from "../agent/subagent/subagent-tools.js";
+export { resolveToolsRecord } from "../agent/tools/runtime";
 export type {
   AgentRunOutcome,
   AgentRunOutcomeKind,

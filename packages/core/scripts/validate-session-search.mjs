@@ -24,7 +24,8 @@ import { fileURLToPath } from "node:url";
 import {
   createSessionReadTool,
   createSessionSearchTool,
-  createTanStackSubagentTools,
+  createSubagentTools,
+  resolveToolsRecord,
   listSessionIds,
   makeSnippet,
   readSessionMessages,
@@ -465,7 +466,7 @@ try {
   // 7. Root-only + read-only
   // ==========================================================================
   {
-    const subagentNames = createTanStackSubagentTools().map((tool) => tool.name);
+    const subagentNames = resolveToolsRecord(createSubagentTools()).map((tool) => tool.name);
     assert.ok(!subagentNames.includes("session_search"), "subagents do not get session_search");
     assert.ok(!subagentNames.includes("session_read"), "subagents do not get session_read");
 

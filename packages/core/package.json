@@ -145,6 +145,7 @@
     "validate:mode-coordinator": "pnpm run build && node scripts/validate-mode-coordinator.mjs",
     "validate:agent-log-binding": "pnpm run build && node scripts/validate-agent-log-binding.mjs",
     "validate:bootstrap-report": "pnpm run build && node scripts/validate-bootstrap-report.mjs",
+    "validate:toolset-factory": "pnpm run build && node scripts/validate-toolset-factory.mjs",
     "validate:extensions-middleware": "pnpm run build && node scripts/validate-extensions-middleware.mjs",
     "validate:early-tool-result-ui": "pnpm run build && node scripts/validate-early-tool-result-ui.mjs",
     "validate:tool-phase-utils": "pnpm run build && node scripts/validate-tool-phase-utils.mjs",
