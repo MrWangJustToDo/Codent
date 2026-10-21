@@ -435,7 +435,7 @@ console.log("teardown log deletion OK");
   // A getter is the production shape: the registry is built before `ensureSessionData()` exists.
   const first = new CommandJobRegistry(env, { ownerSessionId: () => owner });
   await first.ready();
-  const finished = first.create("echo durable");
+  const finished = first.create("echo durable", "call_durable");
   first.appendStdout(finished.id, "durable output\n");
   first.markExited(finished.id, 0);
   const recordPath = `${COMMAND_JOB_LOG_DIR}/${finished.id}.json`;
@@ -445,6 +445,11 @@ console.log("teardown log deletion OK");
   const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
   await resumed.ready();
   assert.equal(resumed.get(finished.id)?.status, "exited", "resume restores the terminal status");
+  assert.equal(
+    resumed.get(finished.id)?.toolCallId,
+    "call_durable",
+    "…and the tool-call id used by the section filter"
+  );
   const polled = resumed.poll(finished.id);
   assert.equal(polled?.stdout, "durable output\n", "first poll after resume returns the persisted tail");
   // The middleware's two-phase contract: peek (no mark) → persist the notification → mark.
@@ -481,7 +486,7 @@ console.log("teardown log deletion OK");
   const owner = "ses_interrupted";
   const first = new CommandJobRegistry(env, { ownerSessionId: owner });
   await first.ready();
-  const running = first.create("sleep 60");
+  const running = first.create("sleep 60", "call_running");
   first.appendStdout(running.id, "partial\n");
   await waitForLog(running.logPath, "partial");
   await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${running.id}.json`, '"status":"running"');
@@ -490,6 +495,7 @@ console.log("teardown log deletion OK");
   await resumed.ready();
   const restored = resumed.get(running.id);
   assert.equal(restored?.status, "failed", "a running record from a dead process is interrupted");
+  assert.equal(restored?.toolCallId, "call_running", "…and keeps its tool-call id");
   assert.match(restored?.stderr ?? "", /Interrupted by a process restart/);
   const completed = await resumed.collectCompleted();
   assert.equal(completed.filter((j) => j.id === running.id).length, 1, "the interruption is notified");
