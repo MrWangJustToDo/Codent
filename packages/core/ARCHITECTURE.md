@@ -239,13 +239,13 @@ agent-manager.ts
 | 3    | `managed.setEventBus(manager.of(agentId, parentId))` — agent-scoped `AgentEventBus` for session projections + telemetry `dispatchEvent` (up-flows to root)                                                                                                                                                                                                                              |
 | 4    | Root tools: `todo`, `webfetch`, `websearch`, `ask_user`, plan tools                                                                                                                                                                                                                         |
 | 5    | `setCompactionConfig` from model context window                                                                                                                                                                                                                                             |
-| 6    | `BootstrapService.bootstrapRoot()` — agent doc, skills + `task`, `McpManager`, `MemoryManager`, then the extension host (loader/runner, disk/config extensions, built-ins)                                                                                                                  |
+| 6    | `AgentBootstrap.bootstrapRoot()` — agent doc, skills + `task`, `McpManager`, `MemoryManager`, then the extension host (loader/runner, disk/config extensions, built-ins)                                                                                                                  |
 | 7    | `BootstrapReport` returned alongside the session context; extension `attempted = active + failed`, including fail-open activation errors                                                                                 |
 | 8    | `SessionStore` → `setSessionStore({ modelStyle, model })`                                                                                                                                                                                                                                   |
 
 **Subagent** (`parentId` set): inherits parent config via `spawnSubagent`; skips docs, skills, MCP, memory, extensions, session, and most root-only tools.
 
-`BootstrapService` owns the root-only resource/extension phases and returns a `BootstrapReport`.
+`AgentBootstrap` owns the root-only resource/extension phases and returns a `BootstrapReport`.
 Every loader result goes through `recordExtensionResult` / `recordExtensionError`, so a fail-open
 `state: "error"` activation is counted as failed rather than active. The report travels with
 `SessionBootstrapContext`; `session:doc` uses its import notices instead of dropping them.

@@ -2,7 +2,7 @@ import { formatAgentDocResult } from "../agent/prompt/agent-doc-loader.js";
 
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 
-import type { BootstrapReport } from "./bootstrap-service.js";
+import type { BootstrapReport } from "./agent-bootstrap.js";
 import type { ManagedAgent } from "./managed-agent.js";
 
 export interface SessionBootstrapContext {

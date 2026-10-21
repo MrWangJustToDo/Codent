@@ -42,11 +42,11 @@ export { ApprovalDecisionCoordinator } from "../managers/approval-decision-coord
 export { ModeCoordinator } from "../managers/mode-coordinator.js";
 export { AgentLogBinding } from "../managers/agent-log-binding.js";
 export {
-  BootstrapService,
+  AgentBootstrap,
   createBootstrapReport,
   recordExtensionError,
   recordExtensionResult,
-} from "../managers/bootstrap-service.js";
+} from "../managers/agent-bootstrap.js";
 export { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 export { TurnContextController } from "../managers/controllers/turn-context-controller.js";
 export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/managed-agent-run-lifecycle.js";

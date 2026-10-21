@@ -9,7 +9,7 @@ import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 import { type ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 
-import { BootstrapService, type BootstrapReport } from "./bootstrap-service.js";
+import { AgentBootstrap, type BootstrapReport } from "./agent-bootstrap.js";
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
 import { resolveTextAdapterForManaged } from "./run-agent.js";
 
@@ -132,7 +132,7 @@ export async function buildManagedAgent({
     }
     managed.setCompactionConfig(createCompactionConfig(compactionInput));
 
-    bootstrapReport = await new BootstrapService({
+    bootstrapReport = await new AgentBootstrap({
       managed,
       config,
       env: coreEnv,

@@ -80,7 +80,7 @@ export function recordExtensionError(report: BootstrapReport, label: string, err
   extensions.failures.push({ id: label, error: errorMessage(error) });
 }
 
-export interface BootstrapServiceOptions {
+export interface AgentBootstrapOptions {
   managed: ManagedAgent;
   config: ManagedAgentConfig;
   env: ResolvedCoreEnv;
@@ -90,8 +90,8 @@ export interface BootstrapServiceOptions {
   getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
 }
 
-export class BootstrapService {
-  constructor(private readonly deps: BootstrapServiceOptions) {}
+export class AgentBootstrap {
+  constructor(private readonly deps: AgentBootstrapOptions) {}
 
   async bootstrapRoot(): Promise<BootstrapReport> {
     const report = createBootstrapReport();
