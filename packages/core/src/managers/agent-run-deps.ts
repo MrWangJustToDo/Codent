@@ -97,6 +97,7 @@ export interface AgentRunDeps {
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
   getDynamicTurnContextSections: () => Promise<TurnContextSection[]>;
+  getBackgroundJobsSection: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
   getAdmittedContextHashes: () => Map<string, string> | undefined;
   setAdmittedContextHashes: (hashes: Map<string, string> | undefined) => void;
   getTurnContextAdmitMessageCount: () => number;
@@ -150,6 +151,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),
     getDynamicTurnContextSections: () => managed.getDynamicTurnContextSections(),
+    getBackgroundJobsSection: (messages) => managed.getBackgroundJobsSection(messages),
     getAdmittedContextHashes: () => managed.getAdmittedContextHashes(),
     setAdmittedContextHashes: (hashes) => managed.setAdmittedContextHashes(hashes),
     getTurnContextAdmitMessageCount: () => managed.getTurnContextAdmitMessageCount(),

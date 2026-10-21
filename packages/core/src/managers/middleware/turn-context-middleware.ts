@@ -35,6 +35,11 @@ export interface TurnContextMiddlewareDeps {
   getFrozenSystemPrompt: () => string | undefined;
   /** Current dynamic sections for this agent (computed per call, hash-deduped below). */
   getSections: () => Promise<TurnContextSection[]>;
+  /**
+   * Build the `<background_jobs>` section for the model-visible wire (after compaction). Only jobs
+   * whose `run_command` tool call is still in `messages` belong there.
+   */
+  getBackgroundJobsSection?: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (no-op for subagents without a session store). */
   persistMessages: (next: UIMessage[]) => void;
@@ -70,7 +75,11 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       const managed = deps.getManagedAgent();
       const isSubagent = Boolean(managed?.parentId);
 
-      const sections = await deps.getSections();
+      const sections = [...(await deps.getSections())];
+      if (!isSubagent && deps.getBackgroundJobsSection) {
+        const backgroundJobs = await deps.getBackgroundJobsSection(config.messages as ModelMessage[]);
+        if (backgroundJobs) sections.push(backgroundJobs);
+      }
       const admitted: TurnContextSection[] = isSubagent
         ? [...sections.filter((section) => SUBAGENT_ALLOWED_KINDS.has(section.key))]
         : [...sections];

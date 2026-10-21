@@ -197,6 +197,7 @@ export function buildAgentRunner(
     createTurnContextMiddleware({
       getFrozenSystemPrompt: deps.getFrozenSystemPrompt,
       getSections: deps.getDynamicTurnContextSections,
+      getBackgroundJobsSection: deps.getBackgroundJobsSection,
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getManagedAgent: () => managed,

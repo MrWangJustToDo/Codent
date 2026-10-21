@@ -193,7 +193,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
           );
         }
 
-        const job = registry.create(command);
+        const job = registry.create(command, toolCallId);
 
         try {
           const handle = await coreEnv.startCommand(command, {

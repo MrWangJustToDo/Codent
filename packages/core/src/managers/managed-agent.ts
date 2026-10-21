@@ -79,7 +79,7 @@ import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js"
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
 import { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { formatBackgroundJobsSection } from "../agent/turn-context";
+import { collectRunCommandToolCallIds, formatBackgroundJobsSection, TURN_CONTEXT_KINDS } from "../agent/turn-context";
 import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
 import {
   formatInstructionContextSection,
@@ -1556,22 +1556,6 @@ export class ManagedAgent {
     // Read per turn (not cached): a resume/clear changes it and the section re-admits.
     const sessionId = this.getSessionData()?.id;
 
-    // A completed background job's one-shot notification can be compacted away; this metadata
-    // section is re-admitted after compaction and is the model's durable pointer to the job/log.
-    let backgroundJobs: string | undefined;
-    if (!this.parentId) {
-      try {
-        const registry = this.getCommandJobRegistry();
-        await registry.ready();
-        backgroundJobs = formatBackgroundJobsSection(registry.listForTurnContext(), {
-          generation: this.turnContextGeneration,
-        });
-      } catch {
-        // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
-        backgroundJobs = undefined;
-      }
-    }
-
     const sections = buildTurnContextSections({
       relevantMemoryContent: this.memory.getRelevantContent(),
       todoNagReminder,
@@ -1583,9 +1567,34 @@ export class ManagedAgent {
       sessionRetrieval,
       extensionTurnContextSections: this.pendingExtensionTurnContextSections,
       instructionContext,
-      backgroundJobs,
     });
     return sections;
+  }
+
+  /**
+   * `<background_jobs>` section for the CURRENT model-visible wire.
+   *
+   * Only jobs whose `run_command` tool call is still in `messages` are listed: after compaction has
+   * dropped the call, re-listing the job is noise (the completion notification is a separate,
+   * self-contained surface and stays searchable). Built by the turn-context middleware, which has
+   * the post-compaction wire; the generation changes on every compaction reset so a reset
+   * re-admits the section even when the restore seeding finds the old row in the channel.
+   */
+  async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
+    if (this.parentId) return undefined;
+    try {
+      const registry = this.getCommandJobRegistry();
+      await registry.ready();
+      const inContext = collectRunCommandToolCallIds(messages);
+      const rows = registry
+        .listForTurnContext()
+        .filter((job) => job.toolCallId !== undefined && inContext.has(job.toolCallId));
+      const content = formatBackgroundJobsSection(rows, { generation: this.turnContextGeneration });
+      return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
+    } catch {
+      // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
+      return undefined;
+    }
   }
 
   /**

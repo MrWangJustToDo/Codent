@@ -28,6 +28,8 @@ export const MAX_JOB_RECORD_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export interface PersistedCommandJob {
   version: typeof COMMAND_JOB_RECORD_VERSION;
   jobId: string;
+  /** The `run_command` tool call that started it (for the in-context pointer filter). */
+  toolCallId?: string;
   command: string;
   status: CommandJobStatus;
   exitCode: number | null;
@@ -82,6 +84,7 @@ export async function readCommandJobRecords(
         records.push({
           version: COMMAND_JOB_RECORD_VERSION,
           jobId: parsed.jobId,
+          ...(typeof parsed.toolCallId === "string" ? { toolCallId: parsed.toolCallId } : {}),
           command: parsed.command,
           status: parsed.status as CommandJobStatus,
           exitCode: typeof parsed.exitCode === "number" ? parsed.exitCode : null,

@@ -28,8 +28,8 @@ export {
 } from "./instruction-context.js";
 export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "./instruction-context.js";
 
-export { formatBackgroundJobsSection } from "./background-jobs.js";
-export type { BackgroundJobContextRow } from "./background-jobs.js";
+export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./background-jobs.js";
+export type { BackgroundJobContextRow, WireMessage, WireToolCall } from "./background-jobs.js";
 
 export {
   SESSION_RETRIEVAL_CLOSE,

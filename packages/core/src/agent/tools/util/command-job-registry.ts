@@ -42,6 +42,8 @@ export type CommandJobStatus = "running" | "exited" | "killed" | "failed";
 
 export interface CommandJobRecord {
   id: string;
+  /** The `run_command` tool call that started this job (absent for legacy/ambient jobs). */
+  toolCallId?: string;
   command: string;
   status: CommandJobStatus;
   stdout: string;
@@ -119,6 +121,7 @@ const MAX_FINISHED_JOBS = 50;
 
 export interface CompletedCommandJob {
   id: string;
+  toolCallId?: string;
   command: string;
   status: CommandJobStatus;
   exitCode: number | null;
@@ -247,6 +250,7 @@ export class CommandJobRegistry {
       endedAt: persisted.endedAt,
       logPath: persisted.logPath,
       ownerSessionId: persisted.ownerSessionId,
+      ...(persisted.toolCallId ? { toolCallId: persisted.toolCallId } : {}),
       ...(persisted.pid !== undefined ? { pid: persisted.pid } : {}),
     };
   }
@@ -261,6 +265,7 @@ export class CommandJobRegistry {
     const record: PersistedCommandJob = {
       version: 1,
       jobId: job.id,
+      ...(job.toolCallId ? { toolCallId: job.toolCallId } : {}),
       command: job.command,
       status: job.status,
       exitCode: job.exitCode,
@@ -307,6 +312,7 @@ export class CommandJobRegistry {
    */
   listForTurnContext(): Array<{
     jobId: string;
+    toolCallId?: string;
     command: string;
     status: CommandJobStatus;
     exitCode: number | null;
@@ -317,6 +323,7 @@ export class CommandJobRegistry {
       .filter((job) => this.isCurrentOwner(job))
       .map((job) => ({
         jobId: job.id,
+        ...(job.toolCallId ? { toolCallId: job.toolCallId } : {}),
         command: job.command,
         status: job.status,
         exitCode: job.exitCode,
@@ -355,7 +362,7 @@ export class CommandJobRegistry {
     this.changeListener?.(this.list());
   }
 
-  create(command: string): CommandJobRecord {
+  create(command: string, toolCallId?: string): CommandJobRecord {
     const id = generateId("job");
     const startedAt = Date.now();
     // A write failure disables logging for this job — stop advertising the path.
@@ -376,6 +383,7 @@ export class CommandJobRegistry {
     if (this.env) void sweepStaleJobRecords(this.env);
     const record: CommandJobRecord = {
       id,
+      ...(toolCallId ? { toolCallId } : {}),
       command,
       status: "running",
       stdout: "",
@@ -611,6 +619,7 @@ export class CommandJobRegistry {
       if (!this.isCurrentOwner(job)) continue;
       completed.push({
         id: job.id,
+        ...(job.toolCallId ? { toolCallId: job.toolCallId } : {}),
         command: job.command,
         status: job.status,
         exitCode: job.exitCode,

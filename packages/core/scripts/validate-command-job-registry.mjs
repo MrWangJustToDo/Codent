@@ -16,9 +16,10 @@ import {
   MAX_JOB_LOG_AGE_MS,
   CommandJobRegistry,
   TURN_CONTEXT_KINDS,
-  buildTurnContextSections,
   clearCoreEnv,
   commandJobRegistry,
+  collectRunCommandToolCallIds,
+  createBackgroundNotificationMiddleware,
   createGetCommandOutputTool,
   createTurnContextMiddleware,
   createKillCommandTool,
@@ -554,12 +555,14 @@ console.log("teardown log deletion OK");
   const afterCompact = formatBackgroundJobsSection(rows, { generation: 1 });
   assert.notEqual(section, afterCompact, "a compaction generation changes the section hash");
 
-  const built = buildTurnContextSections({ relevantMemoryContent: "", backgroundJobs: section });
-  assert.ok(
-    built.some((entry) => entry.key === TURN_CONTEXT_KINDS.backgroundJobs),
-    "the section is part of the turn-context set"
-  );
   assert.equal(formatBackgroundJobsSection([]), undefined, "no jobs → no section");
+
+  // Only `run_command` calls still in the wire count; other tools do not.
+  const inContext = collectRunCommandToolCallIds([
+    { role: "assistant", toolCalls: [{ id: "call_visible", function: { name: "run_command", arguments: "{}" } }] },
+    { role: "assistant", toolCalls: [{ id: "call_read", function: { name: "read_file", arguments: "{}" } }] },
+  ]);
+  assert.deepEqual([...inContext], ["call_visible"], "only run_command tool calls are pointers");
 
   const many = Array.from({ length: 8 }, (_, i) => ({
     ...rows[1],
@@ -571,23 +574,36 @@ console.log("teardown log deletion OK");
 
   // The real middleware: a compaction resets the admitted hashes; the generation-bumped section
   // must be re-admitted even though the previous row is still in the channel (restore seeding would
-  // otherwise find its hash and skip).
+  // otherwise find its hash and skip). Only jobs whose tool call is still in the wire are listed.
   {
-    const ctxRows = [{ ...rows[1], jobId: "job_ctx", command: "npm test", status: "exited", exitCode: 0 }];
+    const ctxRows = [
+      { ...rows[1], jobId: "job_ctx", toolCallId: "call_ctx", command: "npm test", status: "exited", exitCode: 0 },
+      { ...rows[1], jobId: "job_hidden", toolCallId: "call_hidden", command: "npm run dev", status: "running" },
+    ];
     let generation = 0;
     let hashes;
     let admitCount = 0;
     let messages = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
     const ui = { getMessages: () => messages, setMessages: (next) => (messages = next) };
-    const config = { messages: [], systemPrompts: [] };
-    const middleware = createTurnContextMiddleware({
-      getFrozenSystemPrompt: () => undefined,
-      getSections: async () => [
+    const config = {
+      messages: [
         {
-          key: TURN_CONTEXT_KINDS.backgroundJobs,
-          content: formatBackgroundJobsSection(ctxRows, { generation }),
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "call_ctx", function: { name: "run_command", arguments: "{}" } }],
         },
       ],
+      systemPrompts: [],
+    };
+    const middleware = createTurnContextMiddleware({
+      getFrozenSystemPrompt: () => undefined,
+      getSections: async () => [],
+      getBackgroundJobsSection: async (wireMessages) => {
+        const ids = collectRunCommandToolCallIds(wireMessages);
+        const visible = ctxRows.filter((row) => !row.toolCallId || ids.has(row.toolCallId));
+        const content = formatBackgroundJobsSection(visible, { generation });
+        return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
+      },
       getUIChannel: () => ui,
       persistMessages: () => {},
       getManagedAgent: () => ({}),
@@ -599,10 +615,9 @@ console.log("teardown log deletion OK");
     const first = await middleware.onConfig({}, config);
     const ctxCount = () => messages.filter((message) => message.id.startsWith("ctx-background_jobs-")).length;
     assert.equal(ctxCount(), 1, "the section is admitted once");
-    assert.ok(
-      (first.messages ?? []).some((message) => String(message.content).includes("<background_jobs")),
-      "…and is in the wire"
-    );
+    const firstText = (first.messages ?? []).map((message) => String(message.content)).join("\n");
+    assert.ok(firstText.includes("job_ctx"), "the in-context job is listed");
+    assert.ok(!firstText.includes("job_hidden"), "a job whose tool call left the wire is not listed");
 
     // Compaction: ManagedAgent bumps the generation and clears the hashes. Seeding finds the old
     // row, but the new content hash differs, so the section is re-admitted.
@@ -621,6 +636,45 @@ console.log("teardown log deletion OK");
     const before = ctxCount();
     await middleware.onConfig({}, config);
     assert.equal(ctxCount(), before, "an unchanged section is not re-injected on every call");
+  }
+
+  // Multiple background completions batch into ONE notification; the persisted text is what session
+  // search indexes. (The notification is intentionally NOT filtered by the wire: it is the durable
+  // result, while the section above is only a pointer for in-context jobs.)
+  {
+    const owner = "ses_notify_batch";
+    const batch = new CommandJobRegistry(env, { ownerSessionId: owner });
+    await batch.ready();
+    const firstJob = batch.create("npm test", "call_a");
+    batch.appendStdout(firstJob.id, "first output\n");
+    batch.markExited(firstJob.id, 0);
+    const secondJob = batch.create("npm run build", "call_b");
+    batch.appendStdout(secondJob.id, "second output\n");
+    batch.markExited(secondJob.id, 0);
+    await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${firstJob.id}.json`, '"status":"exited"');
+    await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${secondJob.id}.json`, '"status":"exited"');
+
+    let notificationMessages = [];
+    const ui = { getMessages: () => notificationMessages, setMessages: (next) => (notificationMessages = next) };
+    const middleware = createBackgroundNotificationMiddleware({
+      getUIChannel: () => ui,
+      persistMessages: (next) => (notificationMessages = next),
+      getCommandJobRegistry: () => batch,
+    });
+    await middleware.onConfig({}, { messages: [], systemPrompts: [] });
+    const notificationRows = notificationMessages.filter((message) =>
+      message.id.startsWith("ctx-background_notification-")
+    );
+    assert.equal(notificationRows.length, 1, "two completions produce ONE notification row");
+    const text = notificationRows[0]?.parts?.map((part) => part.content).join("\n") ?? "";
+    assert.ok(text.includes(firstJob.id) && text.includes(secondJob.id), "both job ids are in the batch");
+    assert.ok(text.includes("first output") && text.includes("second output"), "both results are persisted/searchable");
+
+    const after = new CommandJobRegistry(env, { ownerSessionId: owner });
+    await after.ready();
+    assert.deepEqual(await after.collectCompleted(), [], "both completions were marked delivered");
+    await batch.clear();
+    await after.clear();
   }
 }
 
