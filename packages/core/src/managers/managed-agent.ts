@@ -51,7 +51,6 @@ import {
 
 import { registerActiveAgentLog, unregisterActiveAgentLog } from "../agent/agent-log";
 import { AutoModeController } from "../agent/approval/auto-mode-controller.js";
-import { buildAutoModePrompt } from "../agent/approval/auto-mode-prompt.js";
 import { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
@@ -67,7 +66,6 @@ import {
 } from "../agent/persistence/session-sync-tracker.js";
 import { AGENT_LOG_DIR, type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
-import { buildModeInactivePrompt, buildPlanModePrompt } from "../agent/plan/plan-prompts.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import {
@@ -78,15 +76,6 @@ import {
 import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
 import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
-import { getCurrentDate, getGitInfo } from "../agent/turn-context/env-context.js";
-import {
-  formatInstructionContextSection,
-  instructionStateChanged,
-  loadLatestInstructionContent,
-  readInstructionContextState,
-  type InstructionContextState,
-} from "../agent/turn-context/instruction-context.js";
-import { formatSessionRetrievalSection, hasSessionHistory } from "../agent/turn-context/session-retrieval.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
@@ -97,6 +86,7 @@ import { generateId } from "../utils/generate-id.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
+import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { handleManagedReactiveCompact, runManualCompact } from "./managed-agent-compact.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
@@ -109,7 +99,6 @@ import {
   loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
   savePlanToWorkspace as savePlanToWorkspaceHelper,
 } from "./managed-agent-plan.js";
-import { buildTurnContextSections, buildFrozenSystemPrompt } from "./managed-agent-prompt.js";
 import {
   abortManagedAgentRun,
   finalizeManagedAgentRun,
@@ -147,7 +136,6 @@ import type {
   ExtensionToolDefinition,
 } from "../agent/extension";
 import type { DispatchRank } from "../agent/extension/dispatch-order.js";
-import type { ExtensionTurnContextSection } from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
 import type { McpExtensionConfig, McpServerConfig } from "../agent/mcp";
@@ -430,29 +418,8 @@ export class ManagedAgent {
   // Prompt / turn context
   // ============================================================================
 
-  private systemPrompt: string;
-  agentDocContent: string;
-  agentDocSource: string;
-  private frozenSystemPrompt: string | undefined;
-  private systemPromptFrozen: boolean;
-  /** Pending per-extension turn-context sections collected in prepareForRun (before injection). */
-  private pendingExtensionTurnContextSections: ExtensionTurnContextSection[] | undefined;
-  /** Latest admitted hash per section kind (restore-seeded; only changed kinds re-admit). */
-  private lastAdmittedTurnContextHashes: Map<string, string> | undefined;
-  /** Message count at the last context admit (for periodic refresh; state owned by turn-context middleware). */
-  private turnContextAdmitMessageCount: number;
-  /** Bumped by {@link resetAdmittedTurnContext}; forces the background-jobs section to re-admit. */
-  private turnContextGeneration = 0;
-  /** Last-seen instruction file digest snapshot (for instruction change detection). */
-  private instructionContextState: InstructionContextState | undefined;
-  /** Once an instruction change is detected, keep re-injecting (stable payload). */
-  private instructionContextActive = false;
-  /**
-   * Whether the workspace had conversation history when this agent was created.
-   * Evaluated once: the retrieval section must be byte-stable across turns, so it
-   * cannot be re-probed per turn (a new session would flip it and re-inject).
-   */
-  private sessionHistoryPresent = false;
+  /** Prompt + dynamic turn-context state (frozen prefix, admission, instruction detection). */
+  private readonly turnContext: TurnContextController;
 
   constructor(
     config: ManagedAgentConfig,
@@ -582,16 +549,24 @@ export class ManagedAgent {
     // ============================================================================
 
     // ============================================================================
-    // Prompt / turn context (inline inits)
+    // Prompt / turn context (owned by the controller)
     // ============================================================================
-    this.systemPrompt = "";
-    this.agentDocContent = "";
-    this.agentDocSource = "";
-    this.systemPromptFrozen = false;
-    this.lastAdmittedTurnContextHashes = undefined;
-    this.turnContextAdmitMessageCount = 0;
-    this.instructionContextState = undefined;
-    this.instructionContextActive = false;
+    this.turnContext = new TurnContextController({
+      agentId: this.id,
+      getConfig: () => this.config,
+      getCoreEnv: () => this.getCoreEnv(),
+      getSessionId: () => this.getSessionData()?.id,
+      getTodoManager: () => this.getTodoManager(),
+      getPlanState: () => this.planMode.getState(),
+      isAutoModeEnabled: () => this.autoMode.isEnabled(),
+      getRelevantMemoryContent: () => this.memory.getRelevantContent(),
+      getExtensionRunner: () => this.extensions.getExtensionRunner(),
+      getParentId: () => this.parentId,
+      getBackgroundJobsSection: (messages, generation) => this.getBackgroundWork().sectionFor(messages, generation),
+      onPromptBefore: (input) => this.emitEvent("prompt:before", input),
+      invalidateRunner: () => this.invalidateRunner(),
+      log: this.log,
+    });
 
     if (config.setUp) {
       return config.setUp(this);
@@ -1308,24 +1283,21 @@ export class ManagedAgent {
   }
 
   setAgentDocContent(content: string, source?: string): void {
-    this.agentDocContent = content;
-    this.agentDocSource = source ?? "";
+    this.turnContext.setAgentDocContent(content, source);
   }
 
-  /**
-   * Evaluate the session-history gate once, at agent creation.
-   *
-   * Deliberately not re-evaluated per turn: the retrieval section is injected by
-   * hash, so a workspace gaining its first session mid-conversation would flip the
-   * gate, change the hash, and re-inject the whole block. Called only for root
-   * agents (see `agent-factory`), matching `setAgentDocContent`.
-   */
+  /** Evaluate the session-history gate once, at agent creation. */
   async primeSessionHistoryGate(): Promise<void> {
-    this.sessionHistoryPresent = await hasSessionHistory(this.getCoreEnv());
+    await this.turnContext.primeSessionHistoryGate();
   }
 
   getAgentDocContent(): string {
-    return this.agentDocContent;
+    return this.turnContext.getAgentDocContent();
+  }
+
+  /** Source of the loaded agent doc (`AGENTS.md` / `CLAUDE.md`); empty when none. */
+  getAgentDocSource(): string {
+    return this.turnContext.getAgentDocSource();
   }
 
   setSkillRegistry(t: SkillRegistry): void {
@@ -1441,153 +1413,59 @@ export class ManagedAgent {
   }
 
   getSystemPrompt(): string | undefined {
-    if (this.systemPromptFrozen) return this.frozenSystemPrompt;
-    this.frozenSystemPrompt = buildFrozenSystemPrompt({
-      config: this.config,
-      agentDocContent: this.agentDocContent,
-    });
-    this.systemPromptFrozen = true;
-    this.systemPrompt = this.frozenSystemPrompt ?? "";
-    return this.frozenSystemPrompt;
+    return this.turnContext.getSystemPrompt();
   }
 
   /** Alias for the cacheable system prompt prefix (before per-turn dynamic segment). */
   getFrozenSystemPrompt(): string | undefined {
-    return this.getSystemPrompt();
+    return this.turnContext.getFrozenSystemPrompt();
   }
 
-  // --- Turn-context admission state (owned here, mutated by turn-context middleware). ---
+  // --- Turn-context admission state (owned by TurnContextController, mutated by middleware). ---
 
   getAdmittedContextHashes(): Map<string, string> | undefined {
-    return this.lastAdmittedTurnContextHashes;
+    return this.turnContext.getAdmittedContextHashes();
   }
 
   setAdmittedContextHashes(hashes: Map<string, string> | undefined): void {
-    this.lastAdmittedTurnContextHashes = hashes;
+    this.turnContext.setAdmittedContextHashes(hashes);
   }
 
   getTurnContextAdmitMessageCount(): number {
-    return this.turnContextAdmitMessageCount;
+    return this.turnContext.getTurnContextAdmitMessageCount();
   }
 
   setTurnContextAdmitMessageCount(count: number): void {
-    this.turnContextAdmitMessageCount = count;
+    this.turnContext.setTurnContextAdmitMessageCount(count);
   }
 
-  /**
-   * Collect `before_agent_start` interceptors + turn-context providers for this user turn.
-   * Runs in prepareForRun; the turn-context middleware consumes the results at onConfig.
-   */
+  /** Collect `before_agent_start` interceptors + turn-context providers for this user turn. */
   async collectExtensionPromptHooks(prompt: string): Promise<void> {
-    this.pendingExtensionTurnContextSections = undefined;
-
-    const runner = this.extensions.getExtensionRunner();
-    if (!runner) return;
-
-    const collected = await runner.collectBeforeAgentStart(prompt, this.id);
-    this.pendingExtensionTurnContextSections = collected.turnContextSections;
-
-    this.emitEvent("prompt:before", {
-      prompt,
-      hasTurnContext: Boolean(collected.turnContextSections?.length),
-    });
+    await this.turnContext.collectExtensionPromptHooks(prompt);
   }
 
   /** After compaction / clear — force the next turn to re-admit full dynamic context. */
   resetAdmittedTurnContext(): void {
-    this.lastAdmittedTurnContextHashes = undefined;
-    this.turnContextGeneration += 1;
-    this.turnContextAdmitMessageCount = 0;
-    this.instructionContextState = undefined;
-    this.instructionContextActive = false;
+    this.turnContext.resetAdmittedTurnContext();
   }
 
   clearTurnContext(): void {
     this.memory.clearTurnContext();
-    this.pendingExtensionTurnContextSections = undefined;
-    // NOTE: instructionContextState / instructionContextActive intentionally NOT
-    // reset here — like lastAdmittedTurnContextHashes they must survive across user
-    // turns (clearTurnContext runs at every turn finalize). Otherwise every turn
-    // re-baselines and cross-turn instruction changes are never detected. Reset
-    // only on compact / full context reset (resetAdmittedTurnContext).
+    this.turnContext.clearTurnContext();
   }
 
   resetSystemPrompt(): void {
-    this.systemPromptFrozen = false;
-    this.frozenSystemPrompt = undefined;
-    this.invalidateRunner();
+    this.turnContext.resetSystemPrompt();
   }
 
   /** Build the ordered dynamic turn-context sections for the current user turn. */
   async getDynamicTurnContextSections(): Promise<TurnContextSection[]> {
-    let todoNagReminder: string | undefined;
-    if (this.getTodoManager()?.shouldNag()) {
-      todoNagReminder = this.getTodoManager()!.getNagReminder(this.getTodoManager()!.getRoundsSinceUpdate());
-      this.log?.debug("todo", "Capturing nag reminder in turn context snapshot", {
-        roundsSinceUpdate: this.getTodoManager()!.getRoundsSinceUpdate(),
-      });
-    }
-
-    const currentDate = getCurrentDate();
-    const { branch: gitBranch, status: gitStatus } = await getGitInfo(this.getCoreEnv());
-
-    const planState = this.planMode.getState();
-    const planModeContent = buildPlanModePrompt(planState.phase, planState.planMarkdown, planState.planFilePath);
-    // Plan turn-context wins when plan is active; auto prompt only in pure auto mode.
-    // The mode section is always present (inactive declaration when neither is
-    // active) so mode exits are explicitly communicated and re-entries with
-    // identical instructions still re-inject (content reflects state).
-    const autoModeContent = !planModeContent && this.autoMode.isEnabled() ? buildAutoModePrompt() : undefined;
-    const modeContent = planModeContent ?? autoModeContent ?? buildModeInactivePrompt();
-
-    // Instruction files are frozen into the system prompt at startup; if the model
-    // edited AGENTS.md / CLAUDE.md since we last evaluated, re-inject the latest
-    // content. Only injected on change — unchanged keeps the payload byte-stable
-    // (prompt-cache friendly). First evaluation establishes the baseline (frozen
-    // system prompt already carries the initial content).
-    const instructionContext = await this.readChangedInstructionContext();
-
-    // Retrieval guidance is static and gated on history existing. The gate is
-    // evaluated once (see `primeSessionHistoryGate`) rather than per turn: a
-    // workspace gaining its first session must not change this section's hash.
-    const sessionRetrieval = formatSessionRetrievalSection({ hasHistory: this.sessionHistoryPresent });
-
-    // The live session id, so the model can address its own compacted-away history.
-    // Read per turn (not cached): a resume/clear changes it and the section re-admits.
-    const sessionId = this.getSessionData()?.id;
-
-    const sections = buildTurnContextSections({
-      relevantMemoryContent: this.memory.getRelevantContent(),
-      todoNagReminder,
-      currentDate,
-      gitBranch,
-      gitStatus,
-      modeContent,
-      sessionId,
-      sessionRetrieval,
-      extensionTurnContextSections: this.pendingExtensionTurnContextSections,
-      instructionContext,
-    });
-    return sections;
+    return this.turnContext.getDynamicTurnContextSections();
   }
 
-  /**
-   * `<background_jobs>` section for the CURRENT model-visible wire.
-   *
-   * Only jobs whose `run_command` tool call is still in `messages` are listed: after compaction has
-   * dropped the call, re-listing the job is noise (the completion notification is a separate,
-   * self-contained surface and stays searchable). Built by the turn-context middleware, which has
-   * the post-compaction wire; the generation changes on every compaction reset so a reset
-   * re-admits the section even when the restore seeding finds the old row in the channel.
-   */
+  /** `<background_jobs>` section for the current model-visible wire. */
   async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
-    if (this.parentId) return undefined;
-    try {
-      return await this.getBackgroundWork().sectionFor(messages, this.turnContextGeneration);
-    } catch {
-      // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
-      return undefined;
-    }
+    return this.turnContext.getBackgroundJobsSection(messages);
   }
 
   /** Lazily build the background-work owner (registry is created on first use). */
@@ -1602,39 +1480,6 @@ export class ManagedAgent {
       });
     }
     return this.backgroundWork;
-  }
-
-  /**
-   * Detect whether instruction files changed since the last evaluation and, when
-   * so, return the rendered `<instruction_context>` section with the latest content.
-   * Always refreshes the stored digest snapshot (baseline = first evaluation).
-   */
-  private async readChangedInstructionContext(): Promise<string | undefined> {
-    try {
-      const current = await readInstructionContextState(this.getCoreEnv());
-      // Baseline: the first evaluation only stores the snapshot without injecting —
-      // the frozen system prompt already carries the initial instructions. This also
-      // covers the restore-from-session case (fresh instance, no prior snapshot).
-      if (this.instructionContextState === undefined) {
-        this.instructionContextState = current;
-        return undefined;
-      }
-
-      const changed = instructionStateChanged(this.instructionContextState, current);
-      this.instructionContextState = current;
-      if (!this.instructionContextActive && !changed) return undefined;
-
-      // Sticky: once a change is detected we keep re-injecting the latest content so
-      // the payload stays stable across turns (prompt-cache friendly). A fresh
-      // change re-reads the newest file content into the section.
-      this.instructionContextActive = true;
-      const loaded = await loadLatestInstructionContent(this.getCoreEnv());
-      return formatInstructionContextSection(loaded);
-    } catch (err) {
-      const message = errorMessage(err);
-      this.log?.warn("agent", "Instruction-context detection failed", { error: message });
-      return undefined;
-    }
   }
 
   // ============================================================================
@@ -2101,16 +1946,13 @@ export class ManagedAgent {
     this.retryInfo = null;
     this.pendingApprovalCount = 0;
     this.memory.resetState();
-    this.pendingExtensionTurnContextSections = undefined;
     this.usage.reset();
     this.unhydratedMediaCount = 0;
     this.getTodoManager()?.reset();
     this.run.resetTurnLifecycle();
     // Keep chatController + uiChannel alive — /clear calls clearMessages() separately.
     // Resetting these would break subsequent sendMessage() calls.
-    this.lastAdmittedTurnContextHashes = undefined;
-    this.systemPromptFrozen = false;
-    this.frozenSystemPrompt = undefined;
+    this.turnContext.resetTurnState();
   }
 
   // ============================================================================

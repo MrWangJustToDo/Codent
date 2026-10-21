@@ -866,6 +866,9 @@ mid-run; a periodic refresh re-admits everything once the conversation grows pas
 `DEFAULT_REFRESH_MESSAGE_THRESHOLD` since the last admit. `findCutPointByBudget`
 skips synthetic `<ctx kind=...>` messages when walking the token-budget boundary.
 After compaction / clear, `resetAdmittedTurnContext()` forces a fresh admission.
+`TurnContextController` owns the frozen prompt, per-kind admission state, the instruction digest
+snapshot and pending per-extension sections; the middleware reads them through `ManagedAgent`
+delegates, and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
 
 **Subagent isolation:** subagents run the same middleware but only `SUBAGENT_ALLOWED_KINDS`
 (`current_date`, `git_status`, `project_instructions`) pass; memory / todo / plan / mode /

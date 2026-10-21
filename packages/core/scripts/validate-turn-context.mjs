@@ -33,6 +33,7 @@ import {
   isContextUIMessage,
   syntheticMessageId,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+  TurnContextController,
 } from "../dist/dev.mjs";
 
 // ---------------------------------------------------------------------------
@@ -495,6 +496,94 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   const second = tm.getNagReminder(3);
   assert.notEqual(first, second, "same rounds → different episode → different content");
   assert.ok(second.includes(`#2`), "episode counter is monotonic");
+}
+
+// ---------------------------------------------------------------------------
+// 10. TurnContextController owns the frozen prompt + admission transaction.
+// ---------------------------------------------------------------------------
+{
+  let config = { systemPrompt: "base prompt" };
+  let doc = "doc-v1";
+  let invalidations = 0;
+  let promptBefore;
+  let parentId;
+  const generations = [];
+  const runner = {
+    lastPrompt: undefined,
+    lastAgentId: undefined,
+    async collectBeforeAgentStart(prompt, agentId) {
+      this.lastPrompt = prompt;
+      this.lastAgentId = agentId;
+      return { turnContextSections: [{ id: "ext", content: "<ext>context</ext>" }] };
+    },
+  };
+  const controller = new TurnContextController({
+    agentId: "agent_turn_context",
+    getConfig: () => config,
+    getCoreEnv: () => ({}),
+    getSessionId: () => "ses_turn_context",
+    getTodoManager: () => null,
+    getPlanState: () => ({
+      phase: "off",
+      planMarkdown: null,
+      steps: [],
+      enabledAt: null,
+      todosSeeded: false,
+      preservedExistingTodos: false,
+      planFilePath: null,
+    }),
+    isAutoModeEnabled: () => false,
+    getRelevantMemoryContent: () => "",
+    getExtensionRunner: () => runner,
+    getParentId: () => parentId,
+    getBackgroundJobsSection: async (_messages, generation) => {
+      generations.push(generation);
+      return undefined;
+    },
+    onPromptBefore: (input) => {
+      promptBefore = input;
+    },
+    invalidateRunner: () => {
+      invalidations += 1;
+    },
+  });
+
+  controller.setAgentDocContent(doc);
+  const firstPrompt = controller.getSystemPrompt();
+  assert.ok(firstPrompt?.includes("base prompt") && firstPrompt.includes("doc-v1"));
+  doc = "doc-v2";
+  controller.setAgentDocContent(doc);
+  assert.equal(controller.getSystemPrompt(), firstPrompt, "the frozen prefix stays frozen until reset");
+
+  controller.resetSystemPrompt();
+  assert.equal(invalidations, 1, "resetSystemPrompt invalidates the cached runner");
+  assert.ok(controller.getSystemPrompt().includes("doc-v2"), "the rebuilt prompt sees the new doc");
+
+  controller.setAdmittedContextHashes(new Map([["current_date", "hash"]]));
+  controller.setTurnContextAdmitMessageCount(9);
+  await controller.getBackgroundJobsSection([]);
+  assert.deepEqual(generations, [0], "the first jobs section uses generation 0");
+  controller.resetAdmittedTurnContext();
+  assert.equal(controller.getAdmittedContextHashes(), undefined);
+  assert.equal(controller.getTurnContextAdmitMessageCount(), 0);
+  await controller.getBackgroundJobsSection([]);
+  assert.deepEqual(generations, [0, 1], "a context reset bumps the jobs generation");
+  parentId = "parent-agent";
+  await controller.getBackgroundJobsSection([]);
+  assert.deepEqual(generations, [0, 1], "subagents never receive the jobs pointer");
+
+  await controller.collectExtensionPromptHooks("hello");
+  assert.deepEqual(promptBefore, { prompt: "hello", hasTurnContext: true });
+  assert.equal(runner.lastPrompt, "hello");
+  assert.equal(runner.lastAgentId, "agent_turn_context");
+
+  controller.setAdmittedContextHashes(new Map([["mode", "hash"]]));
+  controller.setTurnContextAdmitMessageCount(12);
+  controller.resetTurnState();
+  assert.equal(controller.getAdmittedContextHashes(), undefined);
+  assert.equal(controller.getTurnContextAdmitMessageCount(), 0);
+  assert.equal(invalidations, 2, "resetTurnState also unfreezes the prompt");
+  assert.ok(controller.getSystemPrompt().includes("doc-v2"), "resetTurnState rebuilds from current state");
 }
 
 console.log("turn-context validation passed");

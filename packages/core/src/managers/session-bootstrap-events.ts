@@ -17,7 +17,7 @@ export async function emitSessionBootstrapEvents(
   context: SessionBootstrapContext
 ): Promise<void> {
   const docContent = managed.getAgentDocContent();
-  const docSource = managed.agentDocSource;
+  const docSource = managed.getAgentDocSource();
 
   if (docContent) {
     emitAgentTelemetry(managed, "session:doc", {
