@@ -3,10 +3,10 @@ import { createLogExtension, type LogExtension } from "../agent/log/extension.js
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
-import { ACTIVE_STATUSES } from "../runtime-types/agent-status.js";
 import { errorMessage } from "../utils/errors.js";
 
 import { buildManagedAgent } from "./agent-factory.js";
+import { AgentRegistry } from "./agent-registry.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
 import { SessionOwnership } from "./session-ownership.js";
@@ -71,8 +71,8 @@ export async function getDefaultSkillDirs(env?: ResolvedCoreEnv): Promise<SkillD
 // ============================================================================
 
 export class AgentManager {
-  /** Managed agents by ID */
-  private agents: Map<string, ManagedAgent> = new Map();
+  /** Live agents + tree queries. */
+  private readonly agents = new AgentRegistry();
 
   /**
    * Runtime this manager belongs to (env + model provider). `undefined` = the ambient
@@ -196,11 +196,7 @@ export class AgentManager {
       ...(id ? { id } : {}),
     });
 
-    if (this.agents.has(managed.id)) {
-      throw new Error(`Agent id already registered: ${managed.id}`);
-    }
-
-    this.agents.set(managed.id, managed);
+    this.agents.register(managed);
     managed.manager = this;
 
     if (!parentId && bootstrap) {
@@ -221,13 +217,7 @@ export class AgentManager {
       await emitSessionBootstrapEvents(managed, bootstrap);
     }
 
-    if (parentId) {
-      const parent = this.agents.get(parentId);
-      if (parent) {
-        parent.childIds.push(managed.id);
-        parent.updatedAt = Date.now();
-      }
-    }
+    if (parentId) this.agents.linkChild(parentId, managed.id);
 
     return managed;
   }
@@ -301,23 +291,21 @@ export class AgentManager {
    * Get all agents
    */
   getAgents(): ManagedAgent[] {
-    return Array.from(this.agents.values());
+    return this.agents.all();
   }
 
   /**
    * Get root agents (agents without parent)
    */
   getRootAgents(): ManagedAgent[] {
-    return this.getAgents().filter((a) => !a.parentId);
+    return this.agents.roots();
   }
 
   /**
    * Get subagents of a parent
    */
   getSubagents(parentId: string): ManagedAgent[] {
-    const parent = this.agents.get(parentId);
-    if (!parent) return [];
-    return parent.childIds.map((id) => this.agents.get(id)).filter((a): a is ManagedAgent => a !== undefined);
+    return this.agents.subagents(parentId);
   }
 
   /**
@@ -338,9 +326,7 @@ export class AgentManager {
    * @returns Active subagents, deepest-first
    */
   getActiveSubagents(rootAgentId: string): ManagedAgent[] {
-    return this._collectSubagents(rootAgentId, {
-      filter: (managed) => managed.parentId != null && ACTIVE_STATUSES.has(managed.getStatus()),
-    });
+    return this.agents.activeSubagents(rootAgentId);
   }
 
   /**
@@ -356,40 +342,7 @@ export class AgentManager {
    * @returns All subagents, deepest-first
    */
   getAllSubagents(rootAgentId: string): ManagedAgent[] {
-    return this._collectSubagents(rootAgentId, {
-      filter: (managed) => managed.parentId != null,
-    });
-  }
-
-  /**
-   * Shared internal walker that recursively collects subagents under a root
-   * agent, applying an optional filter predicate. Results are ordered
-   * deepest-first (most recently spawned subagent first).
-   */
-  private _collectSubagents(
-    rootAgentId: string,
-    options?: { filter?: (managed: ManagedAgent) => boolean }
-  ): ManagedAgent[] {
-    const result: ManagedAgent[] = [];
-    const seen = new Set<string>();
-    const { filter } = options ?? {};
-
-    const walk = (agentId: string) => {
-      const managed = this.agents.get(agentId);
-      if (!managed) return;
-      // Recurse into children first (deepest-first ordering)
-      for (const childId of [...managed.childIds].reverse()) {
-        walk(childId);
-      }
-      // Include this node if it passes the filter (or no filter) and is not yet seen
-      if ((!filter || filter(managed)) && !seen.has(managed.id)) {
-        seen.add(managed.id);
-        result.push(managed);
-      }
-    };
-
-    walk(rootAgentId);
-    return result;
+    return this.agents.allSubagents(rootAgentId);
   }
 
   /**
@@ -416,13 +369,9 @@ export class AgentManager {
       this.destroyAgent(childId);
     }
 
-    // Remove from parent's childIds
+    // Remove from the tree before deleting the registry entry.
     if (managedAgent.parentId) {
-      const parent = this.agents.get(managedAgent.parentId);
-      if (parent) {
-        parent.childIds = parent.childIds.filter((cid) => cid !== id);
-        parent.updatedAt = Date.now();
-      }
+      this.agents.unlinkChild(managedAgent.parentId, id);
       managedAgent.emitEvent(
         "subagent:destroyed",
         { subagentId: id, parentTaskToolCallId: managedAgent.parentTaskId },

@@ -223,9 +223,9 @@ per-manager, so two runtimes over one workspace can open the same session and ea
 ```
 agent-manager.ts
   buildManagedAgent({ config, manager, emit, getDefaultSkillDirs })
-  agents.set(managed.id, managed)
+  AgentRegistry.register(managed)                  // live map + tree queries
   emitSessionBootstrapEvents(managed, bootstrap)   // root agents only
-  link parent.childIds if subagent
+  AgentRegistry.linkChild(parentId, managed.id) if subagent
 ```
 
 ### 2.2 `buildManagedAgent` wiring (`agent-factory.ts`)

@@ -42,6 +42,7 @@ export { ApprovalDecisionCoordinator } from "../managers/approval-decision-coord
 export { ModeCoordinator } from "../managers/mode-coordinator.js";
 export { SessionPersistence } from "../managers/session-persistence.js";
 export { SessionOwnership } from "../managers/session-ownership.js";
+export { AgentRegistry } from "../managers/agent-registry.js";
 export { AgentLogBinding } from "../managers/agent-log-binding.js";
 export {
   AgentBootstrap,
