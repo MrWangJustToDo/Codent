@@ -86,7 +86,6 @@ import { generateId } from "../utils/generate-id.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
-import { RunFinalizer } from "./controllers/run-finalizer.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { handleManagedReactiveCompact, runManualCompact } from "./managed-agent-compact.js";
 import {
@@ -113,6 +112,7 @@ import {
   saveSessionUIMessages as saveSessionUIMessagesHelper,
 } from "./managed-agent-session.js";
 import { RunCoordinator } from "./run-coordinator.js";
+import { RunFinalizer } from "./run-finalizer.js";
 import { BackgroundWorkService } from "./services/background-work-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";

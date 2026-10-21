@@ -9,12 +9,12 @@
  * by accident.
  */
 
-import type { PreforkDiscardCause } from "../../agent/subagent/task-prefork.js";
-import type { AgentRunOutcome, AgentRunOutcomeKind } from "../agent-run-outcome.js";
-import type { AgentStatus, RunFinalizeReason } from "../agent-types.js";
-import type { AgentStatusController } from "./agent-status-controller.js";
-import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
-import type { UsageTracker } from "../telemetry/usage-tracker.js";
+import type { AgentRunOutcome, AgentRunOutcomeKind } from "./agent-run-outcome.js";
+import type { AgentStatus, RunFinalizeReason } from "./agent-types.js";
+import type { AgentStatusController } from "./controllers/agent-status-controller.js";
+import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
+import type { UsageTracker } from "./telemetry/usage-tracker.js";
+import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";
 import type { UIMessage } from "@tanstack/ai";
 
 export interface RunFinalizerDeps {

@@ -279,7 +279,7 @@ function createManaged(id) {
 
 {
   const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
-  const finalizer = readFileSync(join(SRC, "managers/controllers/run-finalizer.ts"), "utf8");
+  const finalizer = readFileSync(join(SRC, "managers/run-finalizer.ts"), "utf8");
   assert.match(
     controller,
     /this\.managed\.runFinalizer\.finalizeChat\(\{[\s\S]*?waitingForUser,/,
