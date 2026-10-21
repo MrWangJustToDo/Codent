@@ -3,12 +3,12 @@
  * recursive child destruction, ownership + bus-scope cleanup, the subagent:destroyed event, and
  * the ordered extension → background-work → log-flush chain that settleTeardowns drains.
  *
- * Run: pnpm --filter @codent/core run validate:lifecycle-service
+ * Run: pnpm --filter @codent/core run validate:lifecycle-coordinator
  */
 
 import assert from "node:assert/strict";
 
-import { AgentRegistry, LifecycleService, SessionOwnership } from "../dist/dev.mjs";
+import { AgentRegistry, LifecycleCoordinator, SessionOwnership } from "../dist/dev.mjs";
 
 const events = [];
 const scopes = [];
@@ -34,7 +34,7 @@ function fakeAgent(id, parentId) {
 
 const registry = new AgentRegistry();
 const ownership = new SessionOwnership();
-const lifecycle = new LifecycleService({
+const lifecycle = new LifecycleCoordinator({
   registry,
   ownership,
   clearAgentScope: (id) => scopes.push(id),
@@ -80,4 +80,4 @@ for (const id of ["root", "child", "grandchild"]) {
 lifecycle.destroy("missing");
 await lifecycle.settleTeardowns();
 
-console.log("lifecycle-service validation passed");
+console.log("lifecycle-coordinator validation passed");

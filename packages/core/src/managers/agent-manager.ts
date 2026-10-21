@@ -4,7 +4,7 @@ import { getEnv, type ResolvedCoreEnv } from "../env";
 import { AgentEventBusScope } from "./agent-event-bus-scope.js";
 import { buildManagedAgent } from "./agent-factory.js";
 import { AgentRegistry } from "./agent-registry.js";
-import { LifecycleService } from "./lifecycle-service.js";
+import { LifecycleCoordinator } from "./lifecycle-coordinator.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
 import { SessionOwnership } from "./session-ownership.js";
@@ -91,7 +91,7 @@ export class AgentManager {
   private logExtension: LogExtension;
 
   /** Destroy/teardown cascade (recursive children + async flush chain). */
-  private readonly lifecycle: LifecycleService;
+  private readonly lifecycle: LifecycleCoordinator;
 
   constructor(runtime?: AgentRuntime) {
     this.runtime = runtime;
@@ -109,7 +109,7 @@ export class AgentManager {
         this.agents.get(event.agentId)?.log ?? (event.parentId ? this.agents.get(event.parentId)?.log : null) ?? null,
     });
     this.logExtension.start();
-    this.lifecycle = new LifecycleService({
+    this.lifecycle = new LifecycleCoordinator({
       registry: this.agents,
       ownership: this.sessionOwnership,
       clearAgentScope: (id) => this.busScope.delete(id),

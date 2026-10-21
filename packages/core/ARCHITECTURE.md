@@ -1044,7 +1044,7 @@ An extension that buffers state needs two exits, and they are different mechanis
 
 Order per extension: `session:shutdown` (interceptors) → `flush` → `deactivate` → unregister registrations + clear UI slots. A throwing flush is reported as `agent:extension-error` with phase `flush` and does not skip the remaining phases. The runner releases both registrations in `unregisterInstanceArtifacts`, so a destroyed extension stops running on `exit`.
 
-`LifecycleService` owns the recursive destroy cascade. `AgentManager.destroyAgent` keeps its synchronous signature: teardown is tracked as a promise and the log flush is chained onto its continuation, with `settleTeardowns()` for an ordered shutdown (which `LocalAgentSessionHost.destroy()` awaits). The log extension registers a sync exit flush over every sink it attached, so a hard exit with a live session still lands the pending batch.
+`LifecycleCoordinator` owns the recursive destroy cascade. `AgentManager.destroyAgent` keeps its synchronous signature: teardown is tracked as a promise and the log flush is chained onto its continuation, with `settleTeardowns()` for an ordered shutdown (which `LocalAgentSessionHost.destroy()` awaits). The log extension registers a sync exit flush over every sink it attached, so a hard exit with a live session still lands the pending batch.
 
 ### 8.5 Extension interception (L4)
 
@@ -1082,7 +1082,7 @@ Validate: `pnpm --filter @codent/core run validate:extension-order`.
 
 Same-phase ordering note: `compaction` and `message-transform` declare the same phase, so the phase sort cannot order them — their relative order comes from the array position in `buildAgentRunner`, which is why `validate:middleware-order` asserts the adjacency against the pipeline the runner **actually assembles** rather than a copied factory list.
 
-The ExtensionEventBus also carries **session lifecycle events** (distinct from the L2 `session:start` telemetry): `session:start` (emitted at the end of `emitSessionBootstrapEvents`, payload `{ cwd, sessionId }`) and `session:shutdown` (emitted in `LifecycleService.destroy()` before `extensionRunner.destroyAll()`, so extensions can release resources first).
+The ExtensionEventBus also carries **session lifecycle events** (distinct from the L2 `session:start` telemetry): `session:start` (emitted at the end of `emitSessionBootstrapEvents`, payload `{ cwd, sessionId }`) and `session:shutdown` (emitted in `LifecycleCoordinator.destroy()` before `extensionRunner.destroyAll()`, so extensions can release resources first).
 
 **Observation (`ctx.events.observe` / `observeAny` / `retained`).** Interception lets an extension *change* an operation; observation lets it *read* one. The three accessors reuse the bus's existing **observer** dispatch mode (synchronous, registration-ordered, fire-and-forget, throw-isolated) — they are not a third dispatch mode, and `ctx.events.on` (the interceptor spelling) is unchanged. They register on the extension's **scoped** bus, so a root-scope extension receives subagent events up-flow with no `agentId`/`parentId` comparison.
 

@@ -14,17 +14,17 @@ import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callb
 import type { AgentRegistry } from "./agent-registry.js";
 import type { SessionOwnership } from "./session-ownership.js";
 
-export interface LifecycleServiceDeps {
+export interface LifecycleCoordinatorDeps {
   registry: AgentRegistry;
   ownership: SessionOwnership;
   /** Drop the per-agent event-bus scope. */
   clearAgentScope: (id: string) => void;
 }
 
-export class LifecycleService {
+export class LifecycleCoordinator {
   private pendingTeardowns = new Set<Promise<void>>();
 
-  constructor(private readonly deps: LifecycleServiceDeps) {}
+  constructor(private readonly deps: LifecycleCoordinatorDeps) {}
 
   /** Destroy an agent and its subagents. Synchronous; teardown is tracked for settle. */
   destroy(id: string): void {
