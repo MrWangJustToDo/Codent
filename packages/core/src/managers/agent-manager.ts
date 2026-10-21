@@ -9,10 +9,10 @@ import { errorMessage } from "../utils/errors.js";
 import { buildManagedAgent } from "./agent-factory.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
+import { SessionOwnership } from "./session-ownership.js";
 
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
-import type { ResumeResult, SessionData } from "../agent/persistence/types.js";
 import type { SkillDirectory } from "../agent/skills/skill-registry.js";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
@@ -80,15 +80,8 @@ export class AgentManager {
    */
   readonly runtime?: AgentRuntime;
 
-  /**
-   * Disk session ownership registry: maps a persisted session id to the live
-   * agent id that currently holds (has resumed/owns) it. Because each root
-   * agent owns an independent SessionStore, a second live agent would otherwise
-   * resume the same disk session with no mutual exclusion. Live ownership is
-   * intentionally process-local (not persisted) — a crashed process leaves no
-   * stale owner, matching the "live exclusive" semantics.
-   */
-  private sessionOwners: Map<string, string> = new Map();
+  /** Process-local disk-session claims (one live root agent per persisted id). */
+  private readonly sessionOwnership = new SessionOwnership();
 
   /**
    * Unified event bus root — single source for every agent event. An interceptor
@@ -409,11 +402,9 @@ export class AgentManager {
     unregisterStreamingEventBus(id);
     this.agentBusScopes.delete(id);
 
-    // Release any disk-session ownership this agent held (root agents own one).
-    const ownedSessionId = managedAgent.getSessionData?.()?.id;
-    if (ownedSessionId) {
-      this.releaseSessionOwnership(ownedSessionId, id);
-    }
+    // Release every disk-session claim this agent held. Normally one, but releaseAllFor also
+    // cleans up a pre-fix leak if an older switch left an extra claim behind.
+    this.sessionOwnership.releaseAllFor(id);
 
     // Force-kill MCP child processes synchronously to prevent orphans on exit
     managedAgent.getMcpManager()?.forceKill();
@@ -495,12 +486,7 @@ export class AgentManager {
    * session).
    */
   acquireSessionOwnership(sessionId: string, agentId: string): boolean {
-    const owner = this.sessionOwners.get(sessionId);
-    if (owner !== undefined && owner !== agentId) {
-      return false;
-    }
-    this.sessionOwners.set(sessionId, agentId);
-    return true;
+    return this.sessionOwnership.acquire(sessionId, agentId);
   }
 
   /**
@@ -508,62 +494,7 @@ export class AgentManager {
    * No-op when the session is owned by another agent or unknown.
    */
   releaseSessionOwnership(sessionId: string, agentId: string): void {
-    if (this.sessionOwners.get(sessionId) === agentId) {
-      this.sessionOwners.delete(sessionId);
-    }
-  }
-
-  /**
-   * Resume a session by ID. Restores uiMessages, usage, and todos.
-   * Returns UIMessages for the client to display.
-   */
-  async resumeSession(agentId: string, sessionId: string): Promise<ResumeResult> {
-    const managed = this.agents.get(agentId);
-    if (!managed) throw new Error(`Agent not found: ${agentId}`);
-
-    const session = await managed.restoreSession(sessionId);
-
-    return {
-      uiMessages: session.uiMessages,
-      session: {
-        id: session.id,
-        name: session.name,
-        version: session.version,
-        modelStyle: session.modelStyle,
-        model: session.model,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      },
-    };
-  }
-
-  /**
-   * Continue the most recent session. Returns null if no sessions exist.
-   */
-  async continueLatestSession(agentId: string): Promise<ResumeResult | null> {
-    const managed = this.agents.get(agentId);
-    if (!managed) throw new Error(`Agent not found: ${agentId}`);
-
-    const store = managed.getSessionStore();
-    if (!store) throw new Error("Session store not available");
-
-    const latest = await store.getLatest();
-    if (!latest) return null;
-
-    return this.resumeSession(agentId, latest.id);
-  }
-
-  /**
-   * List all sessions for a given agent's session store.
-   */
-  async listSessions(agentId: string): Promise<SessionData[]> {
-    const managed = this.agents.get(agentId);
-    if (!managed) throw new Error(`Agent not found: ${agentId}`);
-
-    const store = managed.getSessionStore();
-    if (!store) return [];
-
-    return (await store.list()) as SessionData[];
+    this.sessionOwnership.release(sessionId, agentId);
   }
 
   /**

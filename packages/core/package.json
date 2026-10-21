@@ -202,6 +202,7 @@
     "validate:session-persist-media-failure": "pnpm run build && node scripts/validate-session-persist-media-failure.mjs",
     "validate:session-persist-integrity": "pnpm run build && node scripts/validate-session-persist-integrity.mjs",
     "validate:session-persistence": "pnpm run build && node scripts/validate-session-persistence.mjs",
+    "validate:session-ownership": "pnpm run build && node scripts/validate-session-ownership.mjs",
     "validate:session-interaction-channel": "pnpm run build && node scripts/validate-session-interaction-channel.mjs",
     "validate:agent-iteration-progress": "pnpm run build && node scripts/validate-agent-iteration-progress.mjs",
     "validate:command-jobs-channel": "pnpm run build && node scripts/validate-command-jobs-channel.mjs",

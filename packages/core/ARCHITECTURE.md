@@ -81,7 +81,7 @@ packages/app/src/adapter/create-agent.ts
     // uses the runtime's ModelProvider (remote forces baseURL/apiKey); ambient fallback when omitted
   host.create({ modelInfo, modelStyle, ... })   // host = CodentAgent.host (local) | remote host
   wire React stores (useAgent)
-  optional: continueLatestSession() / resumeSession() → initialMessages
+  optional: Host.create({ resumeSessionId | continueSession }) → initialMessages
 ```
 
 ### 1.3 Chat transport (in-process)
@@ -776,9 +776,9 @@ Idempotent per turn via `resetTurnLifecycle` / `beginTurnFinalize` (stop + pump 
 ### 6.3 Resume
 
 ```
-AgentManager.resumeSession(agentId, sessionId)
-  → managed.restoreSession(sessionId)
-    → SessionService.restoreFromStore
+Session `session.resume` / Host.create `{ resumeSessionId | continueSession }`
+  → ManagedAgent.restoreSession(sessionId)
+    → SessionPersistence.restore → SessionService.restoreFromStore
       → usage.reset(); hydrate uiMessages
       → restore usage, todos, approvals (missing/`[]` backfills from UIMessage approval parts)
     → host.approvals.restore(session.approvals)
@@ -794,15 +794,14 @@ Host.create `{ resumeSessionId | continueSession }` and Session `session.resume`
 share that restore path. Create then calls `initChat(initialMessages)` because
 the chat controller does not exist yet.
 
-AgentManager.continueLatestSession(agentId)
-  → store.getLatest() → resumeSession
+Host.create `{ continueSession }` resolves the latest id before calling the same restore path.
 ```
 
 App bootstrap resume still passes `initialMessages` from Host.create into `ManagedAgent.initChat()`.
 
-**Ownership dedup.** `AgentManager` keeps a process-local ownership registry
-(`Map<sessionId, agentId>`) so a disk session is bound to at most **one** live agent
-at a time. A live root claims the active id at bootstrap and after `/clear`; `restoreSession`
+**Ownership dedup.** `AgentManager` delegates to `SessionOwnership`
+(`managers/session-ownership.ts`), a process-local claim table (`sessionId → agentId`) so a disk
+session is bound to at most **one** live agent at a time. A live root claims the active id at bootstrap and after `/clear`; `restoreSession`
 acquires the target before the switch, releases the session being left **only after the restore
 succeeds**, and rolls the attempted target back when it fails. A refused target (already owned by
 another live agent) is rejected with a clear error and leaves the current claim untouched (the
