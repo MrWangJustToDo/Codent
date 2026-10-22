@@ -148,8 +148,9 @@ export class AgentCommandService implements AgentCommandPort {
     return this.registry().markNotified(jobIds);
   }
 
-  /** Session switch: drop this session's jobs and completion queue. */
+  /** Session switch: drop this session's jobs and completion queue, and clear the jobs channel. */
   async reset(_reason: string): Promise<void> {
+    this.options.onJobsChange([]);
     await this.destroy();
   }
 

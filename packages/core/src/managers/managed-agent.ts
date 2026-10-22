@@ -648,7 +648,9 @@ export class ManagedAgent {
       resetCommandJobs: (reason) => {
         const service = this.commandService;
         this.commandService = undefined;
-        void service?.reset(reason);
+        void service?.reset(reason).catch((error: unknown) => {
+          this.log?.warn("system", "Failed to reset command jobs", { reason, error: String(error) });
+        });
       },
     });
 
