@@ -14,6 +14,21 @@ const CONTEXT_LINES = 1;
 /** Collapse a context run into a gap marker once the line-number jump exceeds this. */
 const MAX_CONTEXT_LINES_WITHOUT_GAP = 5;
 
+/**
+ * Default render-row cap for a message-view diff preview.
+ *
+ * This is a *preview*: the change's shape, not its contents. It used to be 40, which is more
+ * rows than a typical terminal has (`rows` is often 24), so a single `edit_file` row could
+ * occupy the whole viewport and push the conversation off screen. Twenty leaves room for the
+ * tool row's own header, the surrounding conversation and the fold line, so the diff stays
+ * identifiable while the transcript around it remains readable.
+ *
+ * Lives here, in the pure pipeline, because the component default and this fallback used to be
+ * two separate 40s that agreed only by luck — a caller omitting `maxLines` would silently
+ * re-adopt the old value the moment one of them was tuned.
+ */
+export const LITE_DIFF_MAX_LINES = 20;
+
 export type LiteDiffRowType = "add" | "del" | "context" | "gap";
 
 /**
@@ -44,7 +59,7 @@ export interface LiteDiffResult {
 }
 
 export interface LiteDiffOptions {
-  /** Max rendered rows before tail truncation. */
+  /** Max rendered rows before tail truncation (default {@link LITE_DIFF_MAX_LINES}). */
   maxLines?: number;
   /** Render row cap; pass Infinity to disable truncation. */
 }
@@ -95,7 +110,7 @@ export function parsePatchRows(patch: string): LiteDiffRow[] {
  *  - tail truncation at `maxLines` (head-first, like a code preview).
  */
 export function createLiteDiff(oldFile: string, newFile: string, options: LiteDiffOptions = {}): LiteDiffResult {
-  const maxLines = options.maxLines ?? 40;
+  const maxLines = options.maxLines ?? LITE_DIFF_MAX_LINES;
 
   let additions = 0;
   let deletions = 0;

@@ -4,7 +4,7 @@ import { memo, useMemo } from "react";
 import { BG, COLORS } from "../theme/colors.js";
 import { syntaxColorForClasses } from "../theme/syntax-colors.js";
 import { highlightLines, langForPath } from "../utils/lite-diff-highlight.js";
-import { createLiteDiff, type LiteDiffRow } from "../utils/lite-diff.js";
+import { createLiteDiff, LITE_DIFF_MAX_LINES, type LiteDiffRow } from "../utils/lite-diff.js";
 
 import type { LiteDiffSegment } from "../utils/lite-diff-highlight.js";
 
@@ -23,7 +23,7 @@ export type LiteDiffProps = {
   oldFile: string;
   newFile: string;
   width: number;
-  /** Max rendered rows before tail truncation (default 40). */
+  /** Max rendered rows before tail truncation (default {@link LITE_DIFF_MAX_LINES}). */
   maxLines?: number;
   /** 1-based line offset for fragment diffs (prepends virtual empty lines). */
   startLine?: number;
@@ -53,7 +53,7 @@ export const LiteDiff = memo(function LiteDiff({
   oldFile,
   newFile,
   width,
-  maxLines = 40,
+  maxLines = LITE_DIFF_MAX_LINES,
   startLine,
 }: LiteDiffProps) {
   const paddedOld = startLine && startLine > 1 ? "\n".repeat(startLine - 1) + oldFile : oldFile;

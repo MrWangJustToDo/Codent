@@ -4,8 +4,9 @@
  * Run: node packages/app/test/lite-diff.test.mjs
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-const { createLiteDiff, parsePatchRows } = await import("../dist/utils/lite-diff.mjs");
+const { createLiteDiff, parsePatchRows, LITE_DIFF_MAX_LINES } = await import("../dist/utils/lite-diff.mjs");
 const { highlightLines } = await import("../dist/utils/lite-diff-highlight.mjs");
 
 const oldFile = ["a", "b", "c", "d", "e", "f", "g", "h"].join("\n");
@@ -52,6 +53,22 @@ const newFile = ["a", "b", "c", "D", "e", "f", "g", "X", "Y"].join("\n");
   const { rows, hidden } = createLiteDiff(lines.join("\n"), modified.join("\n"), { maxLines: 5 });
   assert.equal(rows.length, 5);
   assert.ok(hidden > 0);
+}
+
+// The DEFAULT cap is a shared constant, not a literal that only happens to agree.
+// A preview is the change's shape, not its contents: 40 rows is taller than a common
+// 24-row terminal, so one `edit_file` row could fill the whole viewport.
+{
+  const lines = Array.from({ length: 100 }, (_, i) => `line${i}`);
+  const modified = lines.map((l) => `${l}!`);
+  const omitted = createLiteDiff(lines.join("\n"), modified.join("\n"));
+  assert.equal(omitted.rows.length, LITE_DIFF_MAX_LINES);
+  assert.equal(LITE_DIFF_MAX_LINES, 20);
+  // The component default must be the same constant, so a call site that omits `maxLines`
+  // cannot silently fall back to a different cap than the pipeline's. Checked against the
+  // source because `LiteDiff` is bundled (no per-module dist entry to import).
+  const componentSource = readFileSync(new URL("../src/components/LiteDiff.tsx", import.meta.url), "utf8");
+  assert.match(componentSource, /maxLines = LITE_DIFF_MAX_LINES/, "component default is a literal again");
 }
 
 // Identical content → no rows, no additions.
