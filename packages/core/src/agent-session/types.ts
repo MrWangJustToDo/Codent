@@ -14,7 +14,7 @@ import type { AgentEvent } from "../agent/agent-event-bus";
 import type { ExtensionInfo, ExtensionRenderPayload, ExtensionUiContext } from "../agent/extension/types.js";
 import type { McpServerStatus } from "../agent/mcp/manager.js";
 import type { PlanModeState } from "../agent/plan/plan-mode-controller.js";
-import type { SummaryStreamEvent, SummaryStreamSnapshot } from "../agent/summary-stream/types.js";
+import type { AgentStreamEvent, AgentStreamSnapshot } from "../agent/stream-hub/types.js";
 import type { TodoItem } from "../agent/todo/types.js";
 import type { ToolPresentationInfo } from "../agent/tools/presentation/types.js";
 import type { StreamingChunk } from "../agent/tools/util/streaming-callback.js";
@@ -290,7 +290,7 @@ export interface AgentSessionChannelPayloads {
   todos: { items: TodoItem[]; title: string | null };
   plan: PlanModeState;
   tool: { kind: "chunk"; chunk: StreamingChunk } | { kind: "clear"; toolCallId: string };
-  summary: SummaryStreamEvent;
+  summary: AgentStreamEvent;
   lifecycle: AgentEvent;
   "extension-ui": ExtensionUIEvent;
   extensions: AgentSessionExtensionsSummary;
@@ -334,10 +334,10 @@ export interface AgentSessionSubscribeOptions {
 export interface AgentSession {
   readonly id: string;
   getSnapshot(): AgentSessionSnapshot;
-  /** Authoritative summary-stream state for remount (subscribe first, then call). */
-  getSummaryStreamSnapshot(key: string): SummaryStreamSnapshot | null;
+  /** Authoritative live-stream state for remount (subscribe first, then call). */
+  getAgentStreamSnapshot(key: string): AgentStreamSnapshot | null;
   /** All live summary streams (client cache seeding / remount over HTTP). */
-  listSummaryStreamSnapshots?(): SummaryStreamSnapshot[];
+  listAgentStreamSnapshots?(): AgentStreamSnapshot[];
   dispatch(command: AgentSessionCommand): Promise<AgentSessionCommandResult>;
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void;
   close?(): Promise<void>;

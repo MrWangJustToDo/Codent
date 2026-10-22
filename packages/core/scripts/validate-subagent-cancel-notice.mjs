@@ -133,9 +133,9 @@ assert.equal(resolveSubagentStopReason({ aborted: true, reason: "some-other" }),
   // carry it — the classifier's result into `SubagentResult`, through the `task` schema, into
   // the tool output — and the first of those was silently missing (the field went onto the
   // payload but never into the returned result), leaving the other two dead.
-  const runSrc = readFileSync(join(SRC, "agent/subagent/run-subagent.ts"), "utf8");
+  const resultSrc = readFileSync(join(SRC, "agent/subagent/task-result.ts"), "utf8");
   assert.ok(
-    /\.\.\.\(aborted \? \{ stopReason \} : \{\}\)/.test(runSrc),
+    /\.\.\.\(aborted \? \{ stopReason \} : \{\}\)/.test(resultSrc),
     "an aborted SubagentResult carries its stop reason"
   );
   const toolSrc = readFileSync(join(SRC, "agent/subagent/task-tool.ts"), "utf8");

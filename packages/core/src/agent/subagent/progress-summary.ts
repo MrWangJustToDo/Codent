@@ -29,6 +29,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { serializeConversation } from "../compaction/serialize-conversation.js";
 import { resolveSummarizationInputBudget, splitMessagesByTokenBudget } from "../compaction/summarization-budget.js";
 
+import { EMPTY_SUMMARY } from "./subagent-output.js";
 import { SUBAGENT_STOP_NOTICES } from "./subagent-stop-reason.js";
 
 import type { SubagentConfig, SubagentResult, SubagentRunDeps } from "./types.js";
@@ -184,7 +185,7 @@ export function isProgressSummaryEligible(
   // stopped, and all of them mean "no usable report".
   const emptyOutput =
     trimmed.length === 0 ||
-    trimmed === "(no summary)" ||
+    trimmed === EMPTY_SUMMARY ||
     SUBAGENT_STOP_NOTICES.some((notice) => trimmed.includes(notice));
   if (emptyOutput) return true;
 
@@ -218,9 +219,11 @@ export async function summarizeProgress(
   spawn: SummarizerSpawn,
   taskPrompt?: string,
   stream?: ProgressSummaryStream,
-  emitError?: (error: string) => void
+  emitError?: (error: string) => void,
+  abortSignal?: AbortSignal
 ): Promise<string | null> {
   try {
+    if (abortSignal?.aborted) return null;
     const modelMessages: ModelMessage[] = convertMessagesToModelMessages(messages);
 
     if (modelMessages.length === 0) return null;
@@ -230,16 +233,28 @@ export async function summarizeProgress(
 
     let summary: string;
     if (batches.length <= 1) {
-      summary = await summarizeProgressBatch(modelMessages, parentAgentId, manager, spawn, taskPrompt, stream);
+      summary = await summarizeProgressBatch(
+        modelMessages,
+        parentAgentId,
+        manager,
+        spawn,
+        taskPrompt,
+        stream,
+        abortSignal
+      );
     } else {
-      summary = await summarizeProgressBatched(batches, parentAgentId, manager, spawn, taskPrompt, stream);
+      summary = await summarizeProgressBatched(batches, parentAgentId, manager, spawn, taskPrompt, stream, abortSignal);
     }
 
+    if (abortSignal?.aborted) return null;
+
     const trimmed = summary.trim();
-    if (!trimmed || trimmed === "(no summary)") return null;
+    if (!trimmed || trimmed === EMPTY_SUMMARY) return null;
 
     return `${trimmed}\n\n${PROGRESS_SUMMARY_MARKER}`;
   } catch (err) {
+    // A session switch cancels this side-summarizer; do not report a user-visible error for it.
+    if (abortSignal?.aborted) return null;
     // Fallback stays silent for callers (return null never changes the original
     // subagent failure behavior), but surface an error event for observability.
     const failureText = errorMessage(err);
@@ -255,12 +270,13 @@ async function summarizeProgressBatch(
   manager: AgentManager,
   spawn: SummarizerSpawn,
   taskPrompt?: string,
-  stream?: ProgressSummaryStream
+  stream?: ProgressSummaryStream,
+  abortSignal?: AbortSignal
 ): Promise<string> {
   // Rebuild UIMessage-free prompt: the batch is already ModelMessage[], but
   // buildProgressSummaryPrompt takes UIMessage[]. We serialize directly.
   const prompt = buildProgressSummaryPromptFromModel(messages, taskPrompt);
-  return runSummarizerSubagent(prompt, parentAgentId, manager, spawn, stream);
+  return runSummarizerSubagent(prompt, parentAgentId, manager, spawn, stream, abortSignal);
 }
 
 /** Summarize multiple batches, then merge partial reports with a final pass. */
@@ -270,21 +286,32 @@ async function summarizeProgressBatched(
   manager: AgentManager,
   spawn: SummarizerSpawn,
   taskPrompt?: string,
-  stream?: ProgressSummaryStream
+  stream?: ProgressSummaryStream,
+  abortSignal?: AbortSignal
 ): Promise<string> {
   const partials: string[] = [];
   for (let i = 0; i < batches.length; i++) {
+    if (abortSignal?.aborted) return "";
     const batch = batches[i]!;
     const batchLabel =
       taskPrompt != null
         ? `${taskPrompt} (segment ${i + 1} of ${batches.length})`
         : `Segment ${i + 1} of ${batches.length} of the subagent's execution trace`;
-    const partial = await summarizeProgressBatch(batch, parentAgentId, manager, spawn, batchLabel, stream);
+    const partial = await summarizeProgressBatch(batch, parentAgentId, manager, spawn, batchLabel, stream, abortSignal);
     partials.push(partial);
   }
 
+  if (abortSignal?.aborted) return "";
+
   const mergedInput = partials.map((text, index) => `## Segment ${index + 1}\n\n${text}`).join("\n\n");
-  return runSummarizerSubagent(`${mergedInput}\n\n${PROGRESS_MERGE_PROMPT}`, parentAgentId, manager, spawn, stream);
+  return runSummarizerSubagent(
+    `${mergedInput}\n\n${PROGRESS_MERGE_PROMPT}`,
+    parentAgentId,
+    manager,
+    spawn,
+    stream,
+    abortSignal
+  );
 }
 
 /** Serialize a ModelMessage[] batch directly (avoids a UIMessage round-trip). */
@@ -301,12 +328,14 @@ async function runSummarizerSubagent(
   parentAgentId: string,
   manager: AgentManager,
   spawn: SummarizerSpawn,
-  stream?: ProgressSummaryStream
+  stream?: ProgressSummaryStream,
+  abortSignal?: AbortSignal
 ): Promise<string> {
   const result = await spawn(
     {
       prompt,
       parentAgentId,
+      profile: "internal",
       systemPrompt: PROGRESS_SUMMARY_SYSTEM_PROMPT,
       tools: {},
       maxIterations: 1,
@@ -314,8 +343,8 @@ async function runSummarizerSubagent(
       autoDestroy: true,
       aggregateUsageToParent: true,
       description: "progress-summary",
-      bridgeUI: false,
       onTextDelta: stream?.onDelta,
+      ...(abortSignal ? { abortSignal } : {}),
     },
     { manager }
   );

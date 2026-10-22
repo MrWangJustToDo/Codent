@@ -36,7 +36,7 @@ import type {
   InterceptableEvent,
 } from "../extension/types.js";
 import type { PlanModeState } from "../plan/plan-mode-controller.js";
-import type { SummaryStreamEvent } from "../summary-stream/types.js";
+import type { AgentStreamEvent } from "../stream-hub/types.js";
 import type { TodoItem } from "../todo/types.js";
 import type { ToolPresentationInfo } from "../tools/presentation/types.js";
 import type { StreamingChunk } from "../tools/util/streaming-callback.js";
@@ -70,7 +70,7 @@ export interface AgentEvents extends AgentEventPayloadMap {
   /** Plan mode state. */
   "session:plan": PlanModeState;
   /** Summary stream event (task/compact). */
-  "session:summary": SummaryStreamEvent;
+  "session:summary": AgentStreamEvent;
   /** Derived agent mode (plan phase + auto mode). */
   "session:mode": { mode: AgentMode; autoMode: boolean };
   /** Extension list snapshot. */

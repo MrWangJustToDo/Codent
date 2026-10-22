@@ -56,8 +56,8 @@ for (const name of [
 assert.ok(!rootNames.has("begin_summary"), "begin_summary is subagent-only");
 assert.equal(root.run_command.needsApproval, true, "root run_command keeps approval");
 
-const subagent = await buildToolset({ profile: "subagent", managed });
-const subagentNames = new Set(Object.keys(subagent));
+const explore = await buildToolset({ profile: "explore", managed });
+const exploreNames = new Set(Object.keys(explore));
 for (const name of [
   "read_file",
   "glob",
@@ -69,7 +69,7 @@ for (const name of [
   "websearch",
   "begin_summary",
 ]) {
-  assert.ok(subagentNames.has(name), `subagent toolset is missing ${name}`);
+  assert.ok(exploreNames.has(name), `explore toolset is missing ${name}`);
 }
 for (const name of [
   "write_file",
@@ -82,31 +82,48 @@ for (const name of [
   "session_search",
   "session_read",
 ]) {
-  assert.ok(!subagentNames.has(name), `subagent must not get ${name}`);
+  assert.ok(!exploreNames.has(name), `explore must not get ${name}`);
 }
-assert.equal(subagent.run_command.needsApproval, false, "subagent run_command is subagentSafe");
+assert.equal(explore.run_command.needsApproval, false, "explore run_command is subagentSafe");
 assert.deepEqual(
-  resolveToolsRecord(subagent)
+  resolveToolsRecord(explore)
     .map((tool) => tool.name)
     .sort(),
   resolveToolsRecord(createSubagentTools())
     .map((tool) => tool.name)
     .sort(),
-  "the factory's subagent profile is the canonical subagent set"
+  "the factory's explore profile is the canonical subagent set"
+);
+
+const general = await buildToolset({ profile: "general", managed });
+const generalNames = new Set(Object.keys(general));
+for (const name of ["read_file", "write_file", "edit_file", "run_command", "webfetch", "websearch"]) {
+  assert.ok(generalNames.has(name), `general toolset is missing ${name}`);
+}
+for (const name of ["ask_user", "todo", "create_plan", "update_plan", "complete_plan", "task", "begin_summary"]) {
+  assert.ok(!generalNames.has(name), `general must not get ${name}`);
+}
+
+const internal = await buildToolset({ profile: "internal", managed });
+assert.equal(Object.keys(internal).length, 0, "internal starts with caller-supplied tools only");
+
+await assert.rejects(
+  () => buildToolset({ profile: "not-a-profile", managed }),
+  /Unsupported toolset profile/,
+  "an unknown profile must not fall through to the root toolset"
 );
 
 // The factory owns the only default build site; agent-manager only layers a custom override.
 const factory = readFileSync(`${SRC}managers/agent-factory.ts`, "utf8");
-assert.match(
-  factory,
-  /buildToolset\(\{\s*profile: parentId \? "subagent" : "root"/,
-  "factory selects the profile once"
-);
+assert.match(factory, /buildToolset\(\{\s*profile: toolsetProfile/, "factory selects the toolset once");
 assert.ok(!/from "\.\.\/agent\/tools\/create-tools\.js"/.test(factory), "factory does not import createTools directly");
 assert.ok(!/createSubagentTools/.test(factory), "factory does not import the subagent builder directly");
 
 const manager = readFileSync(`${SRC}managers/agent-manager.ts`, "utf8");
 assert.ok(!/createSubagentTools/.test(manager), "spawnSubagent no longer rebuilds the default subagent set");
+assert.match(factory, /general agent profile is not enabled/, "the factory keeps general behind an explicit follow-up");
+assert.match(factory, /Unknown agent profile/, "the factory rejects unknown profile ids");
+assert.match(manager, /Subagents cannot spawn subagents/, "the manager enforces one child level");
 assert.match(
   manager,
   /if \(customTools !== undefined\) \{\s*subagent\.tools = customTools/,

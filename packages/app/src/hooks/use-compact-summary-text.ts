@@ -5,7 +5,7 @@
  * missed while status is still catching up. Return "" unless `enabled`.
  */
 
-import { compactSummaryStreamId, summaryStreamKey } from "@codent/core";
+import { agentStreamKey } from "@codent/core";
 import { useEffect, useRef, useState } from "react";
 
 import { resolveAgentSession } from "../utils/session-resolve.js";
@@ -44,7 +44,7 @@ export function useCompactSummaryText(options?: UseCompactSummaryTextOptions): C
       return;
     }
 
-    const key = summaryStreamKey("compact", compactSummaryStreamId(rootAgentId));
+    const key = agentStreamKey("compact", rootAgentId);
 
     return subscribeSummaryStream(session, key, {
       onReset: (event) => {
@@ -59,7 +59,7 @@ export function useCompactSummaryText(options?: UseCompactSummaryTextOptions): C
       onEnd: () => {},
       onSnapshot: (snap) => {
         if (snap && snap.status === "active") {
-          const raw = [...snap.lines, snap.pendingLine].filter(Boolean).join("");
+          const raw = snap.lines.map((line) => `${line}\n`).join("") + snap.pendingLine;
           textRef.current = raw;
           setText(raw);
           setLabel(snap.label ?? "");

@@ -19,7 +19,7 @@ import { isAbortError } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
 import { generateId } from "../../utils/generate-id.js";
 import { runSubagent } from "../subagent/run-subagent.js";
-import { compactSummaryStreamId } from "../summary-stream/types.js";
+import { EMPTY_SUMMARY } from "../subagent/subagent-output.js";
 import { isContextModelMessage } from "../turn-context/turn-context-message.js";
 
 import { buildCompactionPrompt, COMPACTION_SYSTEM_PROMPT, TURN_PREFIX_INSTRUCTION } from "./compaction-prompt.js";
@@ -267,14 +267,18 @@ async function summarizeConversationBatch(
   manager: AgentManager,
   options?: SummarizeOptions
 ): Promise<string> {
+  // A session switch can abort between two compaction batches, before this batch has spawned a
+  // subagent. Do not start a new summarizer (and recreate its stream) after the switch.
+  if (options?.abortSignal?.aborted) throw compactionAbortError();
   const fullPrompt = buildSummarizationUserPrompt(messages, options);
-  const compactId = compactSummaryStreamId(parentAgentId);
+  const compactId = parentAgentId;
   const { maxOutputTokens } = resolveSummarizationBudget(manager.getAgent(parentAgentId)?.getModelInfo());
 
   const result = await runSubagent(
     {
       prompt: fullPrompt,
       parentAgentId,
+      profile: "internal",
       systemPrompt: COMPACTION_SYSTEM_PROMPT,
       tools: {},
       maxIterations: 1,
@@ -282,7 +286,6 @@ async function summarizeConversationBatch(
       autoDestroy: true,
       aggregateUsageToParent: true,
       description: "compaction",
-      bridgeUI: false,
       compactSummaryStream: {
         compactId,
         label: options?.streamLabel ?? "Summarizing conversation",
@@ -300,7 +303,7 @@ async function summarizeConversationBatch(
   }
 
   const output = result.output?.trim() ?? "";
-  if (!output || output === "(no summary)") {
+  if (!output || output === EMPTY_SUMMARY) {
     throw new Error(
       `Compaction subagent returned no summary (tokens=${result.usage.totalTokens}, ` +
         `incomplete=${result.incomplete}, reachedLimit=${result.reachedLimit}, aborted=${result.aborted})`
@@ -465,6 +468,7 @@ export async function autoCompact(
         instruction: TURN_PREFIX_INSTRUCTION,
         streamLabel: "Summarizing discarded turn context",
         streamEpoch,
+        ...(options?.abortSignal ? { abortSignal: options.abortSignal } : {}),
       });
       // When the split turn starts right after the head SUMMARY (no history to
       // compress), prevSummary must still survive — otherwise the new checkpoint

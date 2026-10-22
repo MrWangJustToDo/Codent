@@ -14,9 +14,10 @@ import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/t
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
+import type { AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { ManagedAgent } from "../runtime-types/hosts.js";
 
-export type ToolsetProfile = "root" | "subagent";
+export type ToolsetProfile = AgentToolsetProfile;
 
 export interface BuildToolsetOptions {
   profile: ToolsetProfile;
@@ -24,15 +25,32 @@ export interface BuildToolsetOptions {
 }
 
 export async function buildToolset({ profile, managed }: BuildToolsetOptions): Promise<ToolsRecord> {
-  if (profile === "subagent") {
+  if (profile === "explore") {
     return createSubagentTools(managed);
+  }
+  if (profile === "internal") {
+    // Internal one-shot workers are caller-supplied (often `{}`); never pay for a root tool
+    // build only to replace it in spawnSubagent.
+    return {};
+  }
+  if (profile !== "root" && profile !== "general") {
+    // Runtime guard for host-supplied ids: the union protects TypeScript callers, but a JS host
+    // must never fall through to the root (writable) toolset.
+    throw new Error(`Unsupported toolset profile: "${String(profile)}"`);
   }
 
   const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
   const todoManager = managed.getTodoManager();
-  if (todoManager) tools.todo = createTodoTool({ todoManager });
+  if (profile !== "general" && todoManager) tools.todo = createTodoTool({ todoManager });
   tools.webfetch = createWebfetchTool({ managed });
   tools.websearch = createWebsearchTool({ managed });
+
+  if (profile === "general") {
+    // General is a writable child profile, but interactive/headless-incompatible tools stay out:
+    // ask_user, plan/todo, and task (no unbounded recursion by default).
+    return tools;
+  }
+
   tools.ask_user = createAskUserTool();
   tools.create_plan = createCreatePlanTool({ getPlanMode: () => managed.planMode });
   tools.update_plan = createUpdatePlanTool({ getPlanMode: () => managed.planMode });

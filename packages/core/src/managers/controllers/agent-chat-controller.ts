@@ -1,10 +1,9 @@
 import { assertNotCompactionSummaryInput } from "../../agent/compaction";
 import { shouldDeferMidRunQueue } from "../../agent/queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../../agent/queue/pending-message-queue.js";
-import { runAgentOnce } from "../../agent/run/run-agent-skeleton.js";
+import { runManagedSpan } from "../../agent/run/managed-span.js";
 import { formatAgentStreamError } from "../../agent/stream/assert-async-iterable.js";
 import { stripEmptyAssistantShells } from "../../agent/stream/empty-assistant-shell.js";
-import { EMPTY_MODEL_STREAM_MESSAGE, shouldFlagEmptyModelStream } from "../../agent/stream/empty-model-stream.js";
 import { extractAssistantText } from "../../agent/stream/extract-assistant-text.js";
 import {
   TOOL_CANCELLED_MESSAGE,
@@ -22,7 +21,6 @@ import {
 } from "../../agent/stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
-import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
@@ -529,47 +527,44 @@ export class AgentChatController {
     // directly into TanStack chat. Do not create a second controller here — that used
     // to leave ManagedAgent.abort() aborting a controller chat was not listening to.
     // Outcome finalization (path: "chat") stays in pumpToolPhases after the full loop.
-    const messagesBefore = messages;
-    try {
-      await runAgentOnce({
-        manager: this.manager,
-        agentId: this.managed.id,
-        messages,
-        channel: this.channel,
-      });
-      if (!token.isCurrent || this.managed.getStatus() === "aborted") {
-        this.applyCancelledIncompleteTools(true);
-        return;
-      }
-
-      // OpenAI-compatible streaming against SSO/HTML (HTTP 200) can yield zero chunks
-      // without throwing. Treat "no model progress" as an error instead of Completed.
-      const messagesAfter = this.channel.getMessages();
-      if (shouldFlagEmptyModelStream(messagesBefore, messagesAfter) && this.managed.getStatus() !== "error") {
-        this.managed.statusController.onRunError(EMPTY_MODEL_STREAM_MESSAGE);
-        this.managed.log?.error("agent", EMPTY_MODEL_STREAM_MESSAGE);
-        return;
-      }
-
-      this.managed.statusController.reconcileWithPolicy(messagesAfter, "during-run");
-    } catch (err) {
-      if (!token.isCurrent || this.managed.getStatus() === "aborted") {
-        this.applyCancelledIncompleteTools(true);
-        return;
-      }
-      const error = toError(err);
-      const message = formatAgentStreamError(error).message;
-      if (this.managed.isAbortError(err)) {
+    const result = await runManagedSpan({
+      manager: this.manager,
+      agentId: this.managed.id,
+      messages,
+      channel: this.channel,
+      flagEmptyStream: true,
+      abortErrorAsCancel: false,
+      onAbort: () => this.applyCancelledIncompleteTools(true),
+      onAbortError: (message) => {
+        if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
         this.managed.statusController.onExternalError(message, true);
         this.applyCancelledIncompleteTools(true);
-      } else {
+      },
+      onEmpty: (message) => {
+        if (!token.isCurrent || this.managed.getStatus() === "error") return;
+        this.managed.statusController.onRunError(message);
+        this.managed.log?.error("agent", message);
+      },
+      onError: (message, error) => {
+        if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
         // Surface stream failures in status + agent:stream-error (not silent Completed).
         this.managed.statusController.onRunError(message);
         this.managed.log?.error("agent", "Stream execution failed", error);
-      }
-      // Do not rethrow — hosts often do not catch sendMessage; an unhandled rejection
-      // aborts the entire CLI process. Status/error on ManagedAgent is the signal.
+      },
+    });
+
+    if (!token.isCurrent || this.managed.getStatus() === "aborted") {
+      this.applyCancelledIncompleteTools(true);
+      return;
     }
+    if (result.aborted) return; // onAbort already applied the framework fallback
+    if (result.errorMessage) {
+      // onError / onAbortError / onEmpty already set the status and logged the fault. Reconciling
+      // here would let a pending approval turn an empty-stream error back into `waiting`.
+      return;
+    }
+
+    this.managed.statusController.reconcileWithPolicy(result.messages, "during-run");
   }
 
   /**

@@ -150,6 +150,10 @@ export async function startNewDiskSession(
 
   managed.disablePlanMode();
   managed.setAutoModeEnabled(false);
+  // Stop task/compaction producers before the stream hub is cleared. `reset()` aborts the root
+  // controller and pre-forks, but a serial `task` child and a manual compaction need the explicit
+  // cascade in this seat; otherwise they can recreate task/compact previews after `clearAll()`.
+  managed.stopForSessionSwitch("session-switch");
   managed.reset();
   usage.reset();
 

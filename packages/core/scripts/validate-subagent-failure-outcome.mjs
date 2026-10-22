@@ -12,6 +12,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -87,37 +88,32 @@ assert.notEqual(
 // The markers are the catch's own shape and the comment that immediately follows it; the
 // `failed = true` assertion doubles as a check that the slice really is the catch body.
 
-const SRC = readFileSync(fileURLToPath(new URL("../src/agent/subagent/run-subagent.ts", import.meta.url)), "utf8");
-const catchStart = SRC.indexOf("} catch (err) {");
-const catchEnd = SRC.indexOf("// Esc → managed.abort() sets status during consume");
-assert.ok(catchStart > 0 && catchEnd > catchStart, "the abort/failure catch is where the guard expects it");
-const catchBody = SRC.slice(catchStart, catchEnd);
+const SRC = fileURLToPath(new URL("../src/", import.meta.url));
+const read = (rel) => readFileSync(join(SRC, rel), "utf8");
 
-assert.ok(catchBody.includes("failed = true"), "the non-abort branch marks the run failed");
-assert.ok(!/\bthrow err\b/.test(catchBody), "the catch must not rethrow: that is what skipped the shared finalization");
-assert.ok(catchBody.includes("channel?.getMessages()"), "and reads the work the attempt produced");
-assert.ok(
-  !catchBody.includes("channel.failRun("),
-  "the panel cleanup waits for the abort/failure precedence, so a cancel that surfaced as an error cannot leave a failure line"
-);
+// The managed span owns the catch/abort classification; the task projection still keeps the produced
+// work and applies the terminal verdict. Neither layer rethrows.
+const span = read("agent/run/managed-span.ts");
+assert.match(span, /catch \(err\)/, "the managed span owns the stream catch");
+assert.match(span, /onError\?\.\(message, error\)/, "a non-abort failure is normalized to the host");
+assert.match(span, /managed\.isAbortError\(err\)/, "abort classification is shared");
 
-// Terminal honesty, in both reports of it: a failed run is not a completed one.
-assert.ok(
-  /if \(aborted\) \{\s*failed = false;/.test(SRC),
-  "an abort outranks a captured fault — status, notice and payload tell one story"
+const resultSrc = read("agent/subagent/task-result.ts");
+const runSrc = read("agent/subagent/run-subagent.ts");
+assert.match(runSrc, /onError: \(message\) => \{\s*failed = true;/, "the task adapter marks the run failed");
+assert.match(
+  runSrc,
+  /aborted = aborted \|\| result\.aborted(?:\s*\|\|\s*abortSignal\?\.aborted === true)?;[\s\S]{0,200}if \(aborted\) \{\s*failed = false;/,
+  "an abort outranks a captured fault"
 );
-assert.ok(
-  /if \(failed\) \{\s*try \{\s*channel\.failRun\(/.test(SRC),
-  "failRun is applied after that precedence, and only for a failure"
+assert.ok(!/\bthrow err\b/.test(resultSrc), "the task result must not rethrow");
+assert.match(resultSrc, /channel\.failRun\(errorMessage\)/, "panel cleanup is applied after precedence");
+assert.match(resultSrc, /aborted \|\| failed \? "subagent:error" : "subagent:completed"/);
+assert.match(
+  resultSrc,
+  /if \(aborted \|\| failed\) \{/,
+  "the parent-log mirror does not record a failed run as completed"
 );
-assert.ok(
-  SRC.includes('aborted || failed ? "subagent:error" : "subagent:completed"'),
-  "a failed run emits subagent:error, not subagent:completed"
-);
-assert.ok(SRC.includes("if (aborted || failed) {"), "the parent-log mirror does not record a failed run as completed");
-assert.ok(
-  SRC.includes("aborted ? { stopReason } : {}"),
-  "the mirror names an abort reason only for an abort — a failure has none"
-);
+assert.match(resultSrc, /aborted \? \{ stopReason \} : \{\}/, "the mirror names an abort reason only for an abort");
 
 console.log("subagent-failure-outcome validation passed");

@@ -165,7 +165,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     // `AgentLog.log()` on the agent's own path. An unguarded throw would turn a diagnostic into a
     // run failure — the one thing log persistence must never do. Reported, never thrown.
     try {
-      buffer.push(JSON.stringify(entry));
+      // Write the validated object. The schema is strict: an unknown top-level field rejects the
+      // whole entry (safeParse above), so `parsed.data` is never a silently-stripped copy.
+      buffer.push(JSON.stringify(parsed.data));
     } catch (error) {
       console.error(`[agent] log entry is not serializable (${entry.level}/${entry.category}):`, errorMessage(error));
       return;

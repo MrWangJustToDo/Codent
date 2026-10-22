@@ -91,8 +91,17 @@ export async function resolveTextAdapterForManaged(managed: ManagedAgent): Promi
 // ============================================================================
 
 function resolveTanStackTools(managed: ManagedAgent): ServerTool[] {
-  if (managed.parentId) {
+  const toolset = managed.config.toolsetProfile ?? (managed.parentId ? "explore" : "root");
+  if (toolset === "explore") {
     return resolveToolsRecord(managed.tools, { exclude: SUBAGENT_EXCLUDED_TOOL_NAMES }) as ServerTool[];
+  }
+  if (toolset === "internal") {
+    // Internal one-shot workers are caller-supplied; the caller owns their safety policy. Do not
+    // silently drop a tool through the explore read-only filter here.
+    return resolveToolsRecord(managed.tools) as ServerTool[];
+  }
+  if (toolset !== "root" && toolset !== "general") {
+    throw new Error(`Unsupported toolset profile: "${String(toolset)}"`);
   }
   if (managed.planMode.isRestrictingTools()) {
     const exclude = getPlanModeToolExcludeSet(managed.tools);
@@ -220,6 +229,7 @@ export function buildAgentRunner(
       // A pre-forked `task` emits its own start on admission; skip the eager one so a
       // queued run does not time while it waits for a concurrency slot.
       isTaskToolStartDeferred: (toolCallId) => peekTaskPreforkCoordinator(managed)?.has(toolCallId) === true,
+      onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
     }),
     // TanStack batches TOOL_CALL_END until all tools finish; mirror each result into UI early.
     createEarlyToolResultUiMiddleware({

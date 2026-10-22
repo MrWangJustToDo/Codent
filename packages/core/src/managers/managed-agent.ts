@@ -62,15 +62,15 @@ import { type SessionSaveReason } from "../agent/persistence/session-sync-tracke
 import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
+import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import {
   type PreforkDiscardCause,
   discardRegisteredPrefork,
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
-import { SummaryStreamHub } from "../agent/summary-stream/summary-stream-hub.js";
 import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
-import { registerStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
+import { registerStreamingEventBus, registerStreamingHub } from "../agent/tools/util/streaming-callback.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
@@ -147,6 +147,7 @@ import type { ModelInfo } from "../models/types.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { AgentEventPayloadMap } from "../runtime-types/agent-event-payloads.js";
 import type { AgentEventType } from "../runtime-types/agent-events.js";
+import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type {
   QueuedMessageContent,
@@ -169,6 +170,10 @@ export type { AgentL1State, AgentMode } from "../runtime-types/session-payloads.
 
 export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   name: string;
+  /** Toolset family (root/explore/internal/general). */
+  toolsetProfile?: AgentToolsetProfile;
+  /** Profile id used for log/task attribution. */
+  profileId?: AgentProfileId;
   modelInfo?: ModelInfo;
   modelStyle?: ModelStyle;
   modelBaseURL?: string;
@@ -374,9 +379,17 @@ export class ManagedAgent {
 
   /** Package-internal TanStack runner wiring — not part of the host-facing surface. */
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  /** Task / compact summary streams for the session `summary` channel. */
-  readonly summaryStreams: SummaryStreamHub;
+  /** Live command/task/compact streams for the session `summary` / `tool` projection. */
+  readonly streamHub: AgentStreamHub;
   private chatController?: AgentChatController;
+  /**
+   * Abort controller for a manual `/compact` run. Manual compaction is not a chat pump, so it has
+   * no `RunCoordinator.currentAbortController`; without its own controller a session switch could
+   * clear the stream hub while the next compaction segment was still about to start.
+   */
+  private compactAbortController?: AbortController;
+  /** Owner generation for the current manual compaction; bumped whenever it is cancelled. */
+  private compactGeneration = 0;
   /** Per-agent background work ownership (registry + durable restore + turn-context pointer). */
   private backgroundWork?: BackgroundWorkService;
   /** Set by AgentManager to route events to listeners. */
@@ -551,7 +564,7 @@ export class ManagedAgent {
     // ============================================================================
     // Run / UI / model wiring (inline inits)
     // ============================================================================
-    this.summaryStreams = new SummaryStreamHub();
+    this.streamHub = new AgentStreamHub();
     this.modelInfo = null;
 
     // ============================================================================
@@ -860,8 +873,9 @@ export class ManagedAgent {
   setEventBus(bus: AgentEventBus): void {
     this.eventBus = bus;
     registerStreamingEventBus(this.id, bus);
+    registerStreamingHub(this.id, this.streamHub);
     this.usage.setEventBus(bus);
-    this.summaryStreams.setEventBus(bus);
+    this.streamHub.setEventBus(bus);
     this.planMode.setEventBus(bus);
     this.getTodoManager()?.setEventBus(bus);
     this.chatController?.setEventBus(bus);
@@ -1560,6 +1574,23 @@ export class ManagedAgent {
   }
 
   /**
+   * Claim compaction status ownership.
+   *
+   * Auto, manual, and reactive compaction share one generation: only the owner that still holds
+   * the current generation may restore `compacting` / `previousStatus`. A session switch bumps the
+   * generation through {@link abortManualCompaction}.
+   */
+  beginCompactionGeneration(): number {
+    this.compactGeneration += 1;
+    return this.compactGeneration;
+  }
+
+  /** Whether a compaction generation still owns the current status. */
+  isCompactionCurrent(generation: number | undefined): boolean {
+    return generation === undefined || generation === this.compactGeneration;
+  }
+
+  /**
    * Register a tool-scoped AbortController so {@link abort} cancels in-flight
    * HTTP work (e.g. webfetch / websearch) alongside the main run controller.
    */
@@ -1577,8 +1608,17 @@ export class ManagedAgent {
    * any pending tool controllers.
    */
   abort(reason?: string): void {
+    this.abortManualCompaction(reason ?? "aborted");
     abortManagedAgentRun(this, reason);
     this.cascadeAbortToChildren(reason);
+    // A cancelled tool may never reach `onAfterToolCall`, so its command preview has no chance
+    // to be marked ended. Settle every command stream here; completed previews remain available
+    // for remount, and the bounded prune can now evict them.
+    //
+    // This is a deliberate stop, not a drain: a chunk that the transport delivers after abort is
+    // ignored by the ended stream. The tool result (and the command job's durable log) still owns
+    // the final output; only the live preview loses an abort-race tail.
+    this.streamHub.endAllCommands();
     // Drop the pre-forked `task` runs this agent started, HERE and not only at the stream's terminal
     // hooks — a run can be abandoned while `chat()` is not running at all.
     //
@@ -1715,7 +1755,21 @@ export class ManagedAgent {
     if (!manager) {
       return { ok: false, error: "AgentManager required for compact" };
     }
-    return runManualCompact(createManualCompactHost(this), manager, options);
+    if (this.compactAbortController) {
+      return { ok: false, error: "Compaction already in progress" };
+    }
+    const controller = new AbortController();
+    const generation = this.beginCompactionGeneration();
+    this.compactAbortController = controller;
+    try {
+      return await runManualCompact(
+        createManualCompactHost(this, controller.signal, () => this.compactGeneration === generation),
+        manager,
+        options
+      );
+    } finally {
+      if (this.compactAbortController === controller) this.compactAbortController = undefined;
+    }
   }
 
   /**
@@ -1748,6 +1802,14 @@ export class ManagedAgent {
     let restored = false;
     const leavingId = this.getSessionData()?.id;
     try {
+      // A resume replaces the transcript. `restoreManagedSession` below stops the root pump /
+      // registered pre-fork; the explicit cascade reaches children that surface cannot see (a
+      // serial `task` child or a manual compaction) before `clearAll()` clears their streams.
+      this.abortManualCompaction("session-switch");
+      this.cascadeAbortToChildren("session-switch");
+      // Clear before the restore emits `session:restore`: a subscriber that fetches
+      // `/summary-streams` during the restore must not see the previous session's snapshots.
+      this.streamHub.clearAll();
       // Announce the departure BEFORE anything re-points the sink — in particular before the
       // pre-bind below, which is itself a re-point. Ordering is the whole point: this entry
       // describes the session being left, so it must be written while the sink still points at it.
@@ -1802,6 +1864,9 @@ export class ManagedAgent {
           manager.releaseSessionOwnership(leavingId, this.id);
         }
         this.sessionPersistence.resetTracker(this.getSessionData()?.uiMessages);
+        // The id already moved, so the previous session's stream snapshots are stale even though
+        // the restore failed. Keep the reset/restore cleanup symmetric.
+        this.streamHub.clearAll();
         this.bindSessionLogSink();
       }
       throw err;
@@ -1847,6 +1912,35 @@ export class ManagedAgent {
     this.chatController?.stopIfActive(reason);
   }
 
+  /**
+   * Stop every producer that can still write a session-scoped stream before a session switch.
+   *
+   * Clearing the stream hub is not enough: a serial `task` child has no controller registered on
+   * the root run, and a manual compaction is not a chat pump. `stopActiveRun` covers a live pump /
+   * registered pre-fork; the explicit cascade reaches children that were started outside that
+   * surface, and `endAllCommands` settles the root's command previews. Call this before
+   * `clearAll()`.
+   */
+  stopForSessionSwitch(reason = "session-switch"): void {
+    this.abortManualCompaction(reason);
+    this.stopActiveRun(reason);
+    this.cascadeAbortToChildren(reason);
+    this.discardPreforkRuns();
+    this.streamHub.endAllCommands();
+  }
+
+  /**
+   * Cancel the current manual compaction, if any.
+   *
+   * Keep the controller until {@link compact}'s own `finally` releases it: while the aborted
+   * `runManualCompact` is still unwinding (status restoration, persistence), a new `/compact`
+   * must not be admitted and overlap that teardown.
+   */
+  private abortManualCompaction(reason: string): void {
+    this.compactGeneration += 1;
+    this.compactAbortController?.abort(reason);
+  }
+
   reset(): void {
     const prevStatus = this.getStatus();
     this.log?.info("agent", "Resetting agent", {
@@ -1856,10 +1950,14 @@ export class ManagedAgent {
     // Exit plan / auto-approve first so approval bypass cannot stick across sessions.
     this.mode.reset();
     this.approvals.clear();
+    this.abortManualCompaction("session-switch");
     this.run.resetRunState();
     // `resetRunState` stops the run's controllers — the eager runs included, through the run's
     // pending-abort surface — but not their registry records, which would be reported later as some
-    // other run's orphans. Same reason as `abort()`: a PAUSED run reaches no stream terminal hook.
+    // other run's orphans. Same reason as `abort()`: a PAUSED run reaches no stream terminal hook,
+    // and a serial task child is not registered on the root's controller at all. Cascade here so a
+    // `/clear` cannot leave a child writing task/compact streams into the next session.
+    this.cascadeAbortToChildren("session-switch");
     this.discardPreforkRuns();
     this.compaction.resetReactiveCompactRetries();
     this.statusController.resetToIdle();
@@ -1871,6 +1969,7 @@ export class ManagedAgent {
     this.unhydratedMediaCount = 0;
     this.getTodoManager()?.reset();
     this.run.resetTurnLifecycle();
+    this.streamHub.clearAll();
     // Keep chatController + uiChannel alive — /clear calls clearMessages() separately.
     // Resetting these would break subsequent sendMessage() calls.
     this.turnContext.resetTurnState();
@@ -1929,7 +2028,11 @@ export class ManagedAgent {
  * how the manual `/compact` path silently re-baselined the instruction digest while auto and
  * reactive compaction preserved it.
  */
-export function createManualCompactHost(managed: ManagedAgent): ManualCompactHost {
+export function createManualCompactHost(
+  managed: ManagedAgent,
+  abortSignal?: AbortSignal,
+  isCurrent?: () => boolean
+): ManualCompactHost {
   return {
     id: managed.id,
     getStatus: () => managed.getStatus(),
@@ -1947,6 +2050,7 @@ export function createManualCompactHost(managed: ManagedAgent): ManualCompactHos
     persistSession: () => managed.persistSession(),
     maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     getLog: () => managed.log,
-    getAbortSignal: () => managed.getAbortSignal(),
+    getAbortSignal: () => abortSignal ?? managed.getAbortSignal(),
+    ...(isCurrent ? { isCurrent } : {}),
   };
 }

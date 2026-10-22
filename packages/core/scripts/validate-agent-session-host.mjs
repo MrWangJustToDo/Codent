@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 
 import {
-  SummaryStreamHub,
+  AgentStreamHub,
   TodoManager,
   UsageTracker,
   createLocalAgentSessionHost,
@@ -48,7 +48,7 @@ function createFake(id, parentId) {
     usage,
     log: null,
     getTodoManager: () => todoManager,
-    summaryStreams: new SummaryStreamHub(),
+    streamHub: new AgentStreamHub(),
     getExtensionRunner: () => null,
     readInteractions: () => ({ approvals: [], askUser: [] }),
     readIteration: () => ({ current: 0, max: 0 }),

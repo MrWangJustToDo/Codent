@@ -5,7 +5,7 @@
  * UI attach, stream consume, and optional outcome application.
  *
  * Every LLM run requires an {@link AgentUIChannel} (durable message SoT).
- * Parent-panel streaming is gated separately via `bridgeUI` / streaming ids.
+ * Parent-panel streaming is selected by the presence of a task id on the run.
  *
  * Lives under `agent/run/` so Worker code can import it without crossing the
  * agent→managers boundary. Managers may import this module.
@@ -14,7 +14,7 @@
 import { AgentUIChannel } from "../ui/ui-channel.js";
 
 import type { AgentManager, ManagedAgent } from "../../runtime-types/hosts.js";
-import type { SummaryStreamHub } from "../summary-stream";
+import type { AgentStreamHub } from "../stream-hub";
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
 
 export interface EnsureUIChannelOptions {
@@ -38,10 +38,11 @@ export interface ConsumeAgentStreamOptions {
   stream: AsyncIterable<StreamChunk>;
   channel: AgentUIChannel;
   parentTaskToolCallId?: string;
-  summaryHub?: SummaryStreamHub;
+  summaryHub?: AgentStreamHub;
   compactId?: string;
   compactLabel?: string;
   compactEpoch?: string;
+  summaryGeneration?: number;
   onUpdate?: (messages: UIMessage[]) => void;
 }
 
@@ -49,8 +50,17 @@ export interface ConsumeAgentStreamOptions {
  * Consume one agent stream into UIMessage snapshots via the UI channel.
  */
 export async function consumeAgentStream(options: ConsumeAgentStreamOptions): Promise<UIMessage[]> {
-  const { stream, channel, parentTaskToolCallId, summaryHub, compactId, compactLabel, compactEpoch, onUpdate } =
-    options;
+  const {
+    stream,
+    channel,
+    parentTaskToolCallId,
+    summaryHub,
+    compactId,
+    compactLabel,
+    compactEpoch,
+    summaryGeneration,
+    onUpdate,
+  } = options;
 
   if (!channel) {
     throw new Error("AgentUIChannel is required to consume an agent stream");
@@ -63,6 +73,7 @@ export async function consumeAgentStream(options: ConsumeAgentStreamOptions): Pr
     compactId,
     compactLabel,
     compactEpoch,
+    summaryGeneration,
     onUpdate,
   })) as UIMessage[];
 }
@@ -86,10 +97,11 @@ export interface RunAgentOnceOptions {
   channel?: AgentUIChannel;
   uiAttach?: EnsureUIChannelOptions;
   parentTaskToolCallId?: string;
-  summaryHub?: SummaryStreamHub;
+  summaryHub?: AgentStreamHub;
   compactId?: string;
   compactLabel?: string;
   compactEpoch?: string;
+  summaryGeneration?: number;
   onUpdate?: (messages: UIMessage[]) => void;
   /** Optional wrapper (e.g. finish-reason capture). Applied before consume. */
   transformStream?: (stream: AsyncIterable<StreamChunk>) => AsyncIterable<StreamChunk>;
@@ -123,6 +135,7 @@ export async function runAgentOnce(options: RunAgentOnceOptions): Promise<RunAge
     compactId,
     compactLabel,
     compactEpoch,
+    summaryGeneration,
     onUpdate,
     transformStream,
     outcome,
@@ -153,6 +166,7 @@ export async function runAgentOnce(options: RunAgentOnceOptions): Promise<RunAge
     compactId,
     compactLabel,
     compactEpoch,
+    summaryGeneration,
     onUpdate,
   });
 

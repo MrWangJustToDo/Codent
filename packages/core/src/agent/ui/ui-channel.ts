@@ -18,8 +18,8 @@ import { throwOnRunError } from "../stream/stream-errors.js";
 import { shouldSuppressMessagesSnapshot } from "../stream/suppress-messages-snapshot.js";
 import { shouldSuppressReplayedToolChunk } from "../stream/suppress-replayed-tool-chunks.js";
 import { shouldSuppressStaleTextChunk } from "../stream/suppress-stale-text-chunks.js";
+import { agentStreamKey, type AgentStreamHub } from "../stream-hub";
 import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
-import { summaryStreamKey, type SummaryStreamHub } from "../summary-stream";
 import { computeToolDisplay } from "../tools/presentation/compute-display.js";
 
 import type { AgentEventBus } from "../agent-event-bus";
@@ -49,7 +49,7 @@ export interface ConsumeRunOptions {
    * Parent agent's summary stream hub. When set with task or compact ids,
    * TEXT deltas are appended after the stream is unlocked (begin_summary or compact).
    */
-  summaryHub?: SummaryStreamHub;
+  summaryHub?: AgentStreamHub;
   /** Compact stream id when this run produces a compact summary. */
   compactId?: string;
   /** Phase label for the compact banner (multi-pass compaction). */
@@ -59,6 +59,11 @@ export interface ConsumeRunOptions {
    * same epoch, this pass APPENDS to the existing stream instead of resetting.
    */
   compactEpoch?: string;
+  /**
+   * Hub generation captured when the producer started. A producer that began before a session
+   * switch must not recreate a task/compact stream after `clearAll()`.
+   */
+  summaryGeneration?: number;
   onUpdate?: (messages: TanStackUIMessage[]) => void;
 }
 
@@ -139,10 +144,11 @@ export class AgentUIChannel {
   private readonly approvalListeners = new Set<ApprovalListener>();
   private readonly customEventListeners = new Set<UICustomEventListener>();
   private parentTaskToolCallId?: string;
-  private summaryHub?: SummaryStreamHub;
+  private summaryHub?: AgentStreamHub;
   private compactId?: string;
   private compactLabel?: string;
   private compactEpoch?: string;
+  private summaryGeneration?: number;
   private activeSummaryKey?: string;
   private onUpdate?: (messages: TanStackUIMessage[]) => void;
   private summaryStreamState: TaskSummaryStreamState = { summaryPhaseUnlocked: false };
@@ -355,9 +361,20 @@ export class AgentUIChannel {
   resetRetryUiState(): void {
     this.currentTurnMessageId = undefined;
 
+    if (this.summaryHub && !this.summaryGenerationCurrent()) {
+      // A retry from a session that was cleared must not recreate its banner.
+      this.activeSummaryKey = undefined;
+      this.summaryStreamState = { summaryPhaseUnlocked: false };
+      return;
+    }
+
     if (this.summaryHub && this.parentTaskToolCallId && !this.compactId) {
-      this.summaryHub.reset({ source: "task", toolCallId: this.parentTaskToolCallId });
-      this.activeSummaryKey = summaryStreamKey("task", this.parentTaskToolCallId);
+      this.summaryHub.reset({
+        source: "task",
+        toolCallId: this.parentTaskToolCallId,
+        ...(this.summaryGeneration !== undefined ? { generation: this.summaryGeneration } : {}),
+      });
+      this.activeSummaryKey = agentStreamKey("task", this.parentTaskToolCallId);
       this.summaryStreamState = { summaryPhaseUnlocked: false };
       return;
     }
@@ -370,13 +387,18 @@ export class AgentUIChannel {
         compactId: this.compactId,
         ...(this.compactLabel ? { label: this.compactLabel } : {}),
         ...(this.compactEpoch ? { epoch: this.compactEpoch } : {}),
+        ...(this.summaryGeneration !== undefined ? { generation: this.summaryGeneration } : {}),
       });
-      this.activeSummaryKey = summaryStreamKey("compact", this.compactId);
+      this.activeSummaryKey = agentStreamKey("compact", this.compactId);
       this.summaryStreamState = { summaryPhaseUnlocked: true };
       return;
     }
 
     this.summaryStreamState = { summaryPhaseUnlocked: false };
+  }
+
+  private summaryGenerationCurrent(): boolean {
+    return !this.summaryHub || this.summaryHub.isCurrentGeneration(this.summaryGeneration);
   }
 
   /** Process a single stream chunk (for incremental bridge during `runAgent`). */
@@ -463,6 +485,7 @@ export class AgentUIChannel {
     this.compactId = options.compactId;
     this.compactLabel = options.compactLabel;
     this.compactEpoch = options.compactEpoch;
+    this.summaryGeneration = options.summaryGeneration ?? options.summaryHub?.getGeneration();
     this.onUpdate = options.onUpdate;
     this.summaryStreamState = { summaryPhaseUnlocked: false };
     this.currentTurnMessageId = undefined;
@@ -473,8 +496,12 @@ export class AgentUIChannel {
     // phases read as one continuous stream (run-subagent injects [label]
     // separators between them).
     if (this.summaryHub && this.compactId) {
+      if (!this.summaryGenerationCurrent()) {
+        this.activeSummaryKey = undefined;
+        return;
+      }
       this.summaryStreamState = { summaryPhaseUnlocked: true };
-      const key = summaryStreamKey("compact", this.compactId);
+      const key = agentStreamKey("compact", this.compactId);
       const continuing = Boolean(this.compactEpoch) && this.summaryHub.getSnapshot(key)?.epoch === this.compactEpoch;
       if (!continuing) {
         this.summaryHub.reset({
@@ -482,6 +509,7 @@ export class AgentUIChannel {
           compactId: this.compactId,
           ...(this.compactLabel ? { label: this.compactLabel } : {}),
           ...(this.compactEpoch ? { epoch: this.compactEpoch } : {}),
+          ...(this.summaryGeneration !== undefined ? { generation: this.summaryGeneration } : {}),
         });
       }
       this.activeSummaryKey = key;
@@ -489,14 +517,18 @@ export class AgentUIChannel {
   }
 
   private endSummaryStream(): void {
-    if (this.summaryHub && this.activeSummaryKey) {
-      this.summaryHub.end(this.activeSummaryKey);
+    if (this.summaryHub && this.activeSummaryKey && this.summaryGenerationCurrent()) {
+      this.summaryHub.end(
+        this.activeSummaryKey,
+        this.summaryGeneration === undefined ? undefined : this.summaryGeneration
+      );
     }
     this.parentTaskToolCallId = undefined;
     this.summaryHub = undefined;
     this.compactId = undefined;
     this.compactLabel = undefined;
     this.compactEpoch = undefined;
+    this.summaryGeneration = undefined;
     this.activeSummaryKey = undefined;
     this.onUpdate = undefined;
     this.summaryStreamState = { summaryPhaseUnlocked: false };
@@ -510,21 +542,30 @@ export class AgentUIChannel {
     }
 
     if (!this.summaryHub || !this.parentTaskToolCallId || this.compactId) return;
+    if (!this.summaryGenerationCurrent()) return;
 
     const toolName = readToolCallName(chunk);
     if (toolName !== BEGIN_SUMMARY_TOOL_NAME) return;
 
     this.summaryStreamState = { summaryPhaseUnlocked: true };
-    this.summaryHub.reset({ source: "task", toolCallId: this.parentTaskToolCallId });
-    this.activeSummaryKey = summaryStreamKey("task", this.parentTaskToolCallId);
+    this.summaryHub.reset({
+      source: "task",
+      toolCallId: this.parentTaskToolCallId,
+      ...(this.summaryGeneration !== undefined ? { generation: this.summaryGeneration } : {}),
+    });
+    this.activeSummaryKey = agentStreamKey("task", this.parentTaskToolCallId);
   }
 
   private appendSummaryDelta(chunk: StreamChunk): void {
     if (!this.summaryHub || !this.activeSummaryKey) return;
     if (!this.summaryStreamState.summaryPhaseUnlocked) return;
+    if (!this.summaryGenerationCurrent()) return;
     const delta = readTextDelta(chunk);
     if (!delta) return;
-    this.summaryHub.append(this.activeSummaryKey, delta, { epoch: this.compactEpoch });
+    this.summaryHub.append(this.activeSummaryKey, delta, {
+      epoch: this.compactEpoch,
+      ...(this.summaryGeneration !== undefined ? { generation: this.summaryGeneration } : {}),
+    });
   }
 
   private handleMessagesChange(messages: TanStackUIMessage[]): void {

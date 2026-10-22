@@ -39,9 +39,24 @@ export interface SubagentLogDetails {
   durationMs?: number;
   /** Set for the `stopped` phase — why an aborted run stopped. */
   stopReason?: SubagentStopReason;
+  /** The child's own full timeline file, so the parent index is navigable. */
+  childLogPath?: string;
+  /** Set for the `phase` entry (summary / limit). */
+  taskPhase?: "summary" | "limit";
+  /** Terminal fault, so a parent index can distinguish a failure from a cancel. */
+  error?: string;
+  /** Completion usage, so the parent index carries the same statistics the child result reports. */
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    billedInputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
 }
 
-export type SubagentLifecyclePhase = "created" | "started" | "completed" | "stopped";
+export type SubagentLifecyclePhase = "created" | "started" | "phase" | "completed" | "stopped";
 
 /** `subagent <id> [task <callId>]` — the attribution every line carries. */
 function attribute(details: SubagentLogDetails): string {
@@ -63,6 +78,11 @@ export function subagentLifecycleLogLine(
         level: "debug",
         message: `Subagent started: ${details.description ?? details.subagentId} — ${attribute(details)}`,
       };
+    case "phase":
+      return {
+        level: "debug",
+        message: `Subagent phase ${details.taskPhase ?? "unknown"}: ${attribute(details)}`,
+      };
     case "completed":
       return {
         level: "info",
@@ -71,7 +91,10 @@ export function subagentLifecycleLogLine(
     case "stopped":
       // The reason is the point, so the message names it rather than saying "cancelled":
       // a discarded run's orphan is not a user cancel, and this line is where that shows.
-      return { level: "info", message: `Subagent ${details.stopReason ?? "stopped"}: ${attribute(details)}` };
+      return {
+        level: details.error ? "error" : "info",
+        message: `Subagent ${details.stopReason ?? "stopped"}: ${attribute(details)}`,
+      };
   }
 }
 
@@ -83,17 +106,34 @@ export function logSubagentLifecycle(
 ): void {
   if (!log) return;
   const { level, message } = subagentLifecycleLogLine(phase, details);
+  // Parent side is an INDEX: the child's own file is the full timeline. Mark the copy so a
+  // reader (and the validator) can tell an index record from a duplicated child entry.
+  const data: Record<string, unknown> = {
+    indexOnly: true,
+    subagentId: details.subagentId,
+    phase,
+    ...(details.parentTaskToolCallId ? { parentTaskToolCallId: details.parentTaskToolCallId } : {}),
+    ...(details.description ? { description: details.description } : {}),
+    ...(details.iterations !== undefined ? { iterations: details.iterations } : {}),
+    ...(details.maxIterations !== undefined ? { maxIterations: details.maxIterations } : {}),
+    ...(details.durationMs !== undefined ? { durationMs: details.durationMs } : {}),
+    ...(details.stopReason ? { stopReason: details.stopReason } : {}),
+    ...(details.childLogPath ? { childLogPath: details.childLogPath } : {}),
+    ...(details.taskPhase ? { taskPhase: details.taskPhase } : {}),
+    ...(details.error ? { error: details.error } : {}),
+    ...(details.usage ? { usage: details.usage } : {}),
+  };
   switch (level) {
     case "debug":
-      log.debug("system", message);
+      log.debug("system", message, data);
       return;
     case "warn":
-      log.warn("system", message);
+      log.warn("system", message, data);
       return;
     case "error":
-      log.error("system", message);
+      log.error("system", message, undefined, data);
       return;
     default:
-      log.info("system", message);
+      log.info("system", message, data);
   }
 }

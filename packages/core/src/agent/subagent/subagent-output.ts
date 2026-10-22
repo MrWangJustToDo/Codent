@@ -7,6 +7,9 @@
 
 import { SUBAGENT_DEFAULT_MAX_OUTPUT_LENGTH } from "./types.js";
 
+/** Sentinel output for a run with no assistant summary. */
+export const EMPTY_SUMMARY = "(no summary)";
+
 /**
  * Truncates summary to max length with notice.
  */

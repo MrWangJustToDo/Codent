@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
+
 /**
  * Log **entry schemas** — the validation boundary of the log extension, not of the seam.
  *
@@ -45,7 +47,11 @@ const logCategories = [
 ] as const;
 export const logCategorySchema = z.enum(logCategories);
 
-export const logEntrySchema = z.object({
+export const logEntrySchema = z.strictObject({
+  scope: z.strictObject({
+    profile: z.enum(AGENT_PROFILE_IDS),
+    taskCallId: z.string().optional(),
+  }),
   id: z.string(),
   timestamp: z.number(),
   level: logLevelSchema,
@@ -53,7 +59,7 @@ export const logEntrySchema = z.object({
   message: z.string(),
   data: z.record(z.string(), z.unknown()).optional(),
   error: z
-    .object({
+    .strictObject({
       name: z.string(),
       message: z.string(),
       stack: z.string().optional(),

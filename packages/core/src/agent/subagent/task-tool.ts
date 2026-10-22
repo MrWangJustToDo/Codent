@@ -19,6 +19,7 @@
 
 import { z } from "zod";
 
+import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
 import { generateId } from "../../utils/generate-id.js";
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 import { maybeCacheOutput } from "../tools/util/tool-output-cache.js";
@@ -49,6 +50,8 @@ export interface TaskToolConfig {
 export const taskOutputSchema = z.object({
   /** Subagent ID - can be used to track or access the subagent */
   subagentId: z.string().describe("ID of the subagent that executed this task"),
+  /** UI-only execution profile metadata; never sent to the model. */
+  profile: z.enum(AGENT_PROFILE_IDS).optional().describe("Execution profile (UI-only)"),
   /** Summary of what the subagent found/accomplished */
   summary: z.string().describe("Summary of the subagent's findings"),
   /** Whether the summary was truncated by maxOutputLength (not disk-cache preview) */
@@ -177,7 +180,7 @@ Example use cases:
 
     outputSchema: taskOutputSchema,
 
-    execute: async ({ prompt, description }, { toolCallId, coreEnv }) => {
+    execute: async ({ prompt, description }, { toolCallId, coreEnv, abortSignal }) => {
       // Prefer the subagent's own wall-clock run duration — for pre-forked
       // tasks the join wait would undercount (or be ~0 when already done).
       let runDurationMs: number | undefined;
@@ -188,15 +191,11 @@ Example use cases:
         const parentManaged = manager.getAgent(parentAgentId);
         const preforked = parentManaged ? await getTaskPreforkCoordinator(parentManaged).join(toolCallId) : null;
 
-        // Subagent owns its RunCoordinator AbortController (created in prepareForRun
-        // and passed into TanStack chat). We do NOT register it on the parent's
-        // pendingAbortControllers — child cancellation stays isolated from the
-        // parent's own controller. Parent cancel still reaches the child through
-        // ManagedAgent.abort() → cascadeAbortToChildren (running children get
-        // child.abort()), so no external abortSignal is passed here; runAgent
-        // wires the subagent's currentAbortController into chat so sub.abort()
-        // actually stops the stream. Preforked runs take the parent-signal
-        // listener path in task-prefork-middleware instead.
+        // The child owns its RunCoordinator AbortController, but the serial fallback must still
+        // carry the parent tool run's signal: the child can be spawned after the parent's abort
+        // fires (the idle interval between spawnSubagent and runManagedSpan), and
+        // cascadeAbortToChildren deliberately only aborts active-status children. Preforked runs
+        // already have their own controller tied to the parent signal in task-prefork-middleware.
         const result =
           preforked ??
           (await runSubagent(
@@ -210,6 +209,7 @@ Example use cases:
               parentTaskToolCallId: toolCallId,
               autoDestroy: false,
               maxOutputLength: SUBAGENT_NO_TRUNCATE,
+              ...(abortSignal ? { abortSignal } : {}),
             },
             { manager }
           ));
@@ -230,6 +230,7 @@ Example use cases:
 
         return {
           subagentId: result.subagentId,
+          ...(result.profile ? { profile: result.profile } : {}),
           summary,
           truncated,
           iterations: result.iterations,

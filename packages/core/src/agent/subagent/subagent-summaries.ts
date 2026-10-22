@@ -61,6 +61,7 @@ export function buildSubagentSummaries(
       status: child.getStatus(),
       name: child.name,
       taskPhase: readTaskRunPhase(managed, child.parentTaskId),
+      profile: child.config?.profileId ?? (child.parentId ? "explore" : "root"),
       ...(description ? { description } : {}),
       ...(child.parentTaskId ? { parentTaskToolCallId: child.parentTaskId } : {}),
       usage,

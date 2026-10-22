@@ -93,7 +93,7 @@ export function makeSession(id, { messages = [], subagents = [], retained = fals
     getSnapshot: () => snapshot,
     /** The `channels` each projector asked for (the child must not subscribe to interaction/etc.). */
     subscriptions: () => subscriptions,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     setMessages: (next) => {
       snapshot = { ...snapshot, messages: next };
     },

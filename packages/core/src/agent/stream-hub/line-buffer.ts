@@ -1,26 +1,26 @@
 /**
- * Line-buffer helpers for summary streams (producer snapshot + app display window).
+ * Line-buffer helpers for agent streams (producer snapshot + app display window).
  */
 
 import { hiddenLinesIndicator } from "../../utils/line-window.js";
 
-export interface SummaryLineBuffer {
+export interface AgentStreamLineBuffer {
   lines: string[];
   pendingLine: string;
 }
 
 /** Max complete lines retained in a producer snapshot ring. */
-export const SUMMARY_STREAM_SNAPSHOT_LINE_CAP = 500;
+export const AGENT_STREAM_SNAPSHOT_LINE_CAP = 500;
 
 /**
  * Apply a raw chunk to a line buffer. Complete lines (ending in `\n`) move into
  * `lines`; any remainder stays in `pendingLine`. Optionally ring-caps complete lines.
  */
-export function applySummaryStreamAppend(
-  buffer: SummaryLineBuffer,
+export function applyAgentStreamAppend(
+  buffer: AgentStreamLineBuffer,
   chunk: string,
   options?: { maxCompleteLines?: number }
-): SummaryLineBuffer {
+): AgentStreamLineBuffer {
   if (!chunk) return buffer;
 
   const maxCompleteLines = options?.maxCompleteLines;
@@ -41,7 +41,7 @@ export function applySummaryStreamAppend(
   return { lines: nextLines, pendingLine: pending };
 }
 
-export function emptySummaryLineBuffer(): SummaryLineBuffer {
+export function emptyAgentStreamLineBuffer(): AgentStreamLineBuffer {
   return { lines: [], pendingLine: "" };
 }
 
@@ -49,23 +49,23 @@ export function emptySummaryLineBuffer(): SummaryLineBuffer {
  * Display window: at most `contentSlots` complete lines + optional pending row,
  * with an independent `hidden` count of shifted complete lines.
  */
-export interface SummaryDisplayWindow {
+export interface AgentStreamDisplayWindow {
   lines: string[];
   pendingLine: string;
   hidden: number;
 }
 
-export function emptySummaryDisplayWindow(): SummaryDisplayWindow {
+export function emptyAgentStreamDisplayWindow(): AgentStreamDisplayWindow {
   return { lines: [], pendingLine: "", hidden: 0 };
 }
 
-export function applyAppendToDisplayWindow(
-  window: SummaryDisplayWindow,
+export function applyAppendToAgentStreamWindow(
+  window: AgentStreamDisplayWindow,
   chunk: string,
   contentSlots: number
-): SummaryDisplayWindow {
+): AgentStreamDisplayWindow {
   const slots = Math.max(1, contentSlots);
-  const next = applySummaryStreamAppend({ lines: window.lines, pendingLine: window.pendingLine }, chunk);
+  const next = applyAgentStreamAppend({ lines: window.lines, pendingLine: window.pendingLine }, chunk);
   let hidden = window.hidden;
   const lines = next.lines.slice();
   while (lines.length > slots) {
@@ -76,10 +76,10 @@ export function applyAppendToDisplayWindow(
 }
 
 /** Rebuild a display window from a producer snapshot (remount-safe). */
-export function displayWindowFromSnapshot(
+export function agentStreamWindowFromSnapshot(
   snapshot: { lines: string[]; pendingLine: string },
   contentSlots: number
-): SummaryDisplayWindow {
+): AgentStreamDisplayWindow {
   const slots = Math.max(1, contentSlots);
   const lines = snapshot.lines.slice();
   let hidden = 0;
@@ -91,8 +91,8 @@ export function displayWindowFromSnapshot(
 }
 
 /** Render rows for UI: optional overflow indicator + complete lines + pending. */
-export function renderSummaryDisplayRows(
-  window: SummaryDisplayWindow,
+export function renderAgentStreamDisplayRows(
+  window: AgentStreamDisplayWindow,
   maxLines: number
 ): { rows: string[]; hidden: number } {
   const contentSlots = Math.max(1, maxLines - 1);

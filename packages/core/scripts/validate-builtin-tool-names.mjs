@@ -138,7 +138,7 @@ const NAME_LITERAL_EXEMPT = [
     why: "log categories, one of which is named `todo`",
   },
   {
-    file: "agent/summary-stream/summary-stream-hub.ts",
+    file: "agent/stream-hub/agent-stream-hub.ts",
     why: "a summary SOURCE (`task` | `compact`), not a tool name",
   },
 ];

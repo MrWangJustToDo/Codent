@@ -2,9 +2,9 @@
  * Agent Session HTTP plane — same contract as LocalAgentSession (REST + SSE).
  * Distinct from CoreEnv workspace routes under `/api/fs`, `/api/command`, etc.
  *
- * Remount support: the server keeps per-agent tool output buffers (fed by the
- * session's own `tool` channel subscription) and serves summary-stream
- * snapshots so a reconnecting client can reconstruct in-flight state.
+ * Remount support: the server keeps per-agent command snapshots derived from each
+ * agent's `AgentStreamHub` and serves task/compact summary snapshots so a reconnecting
+ * client can reconstruct in-flight state.
  *
  * Runtime imports from `@codent/core` are dynamic so server dts bundling does not
  * pull TanStack AI types into the CoreEnv server entry.
@@ -101,74 +101,6 @@ const AGENT_SESSION_DEBUG = process.env.AGENT_SESSION_DEBUG === "1";
 
 function diag(message: string): void {
   if (AGENT_SESSION_DEBUG) console.log(`[agent-diag] ${message}`);
-}
-
-/** Per-agent tool output buffers for client remount (cap per stream). */
-const TOOL_BUFFER_CAP_BYTES = 256 * 1024;
-interface ToolBufferEntry {
-  stdout: string[];
-  stderr: string[];
-  stdoutBytes: number;
-  stderrBytes: number;
-}
-const toolBuffers = new Map<string, Map<string, ToolBufferEntry>>();
-const toolUnsubs = new Map<string, () => void>();
-
-/**
- * Append a chunk under the byte cap by dropping oldest chunks. Storage is a
- * chunk array with lazy join — per-chunk cost stays independent of the
- * accumulated size (a plain `current + chunk` would re-copy the whole string).
- */
-function appendCapped(chunks: string[], bytes: number, chunk: string): { chunks: string[]; bytes: number } {
-  chunks.push(chunk);
-  let total = bytes + chunk.length;
-  while (total > TOOL_BUFFER_CAP_BYTES && chunks.length > 1) {
-    const oldest = chunks[0];
-    if (oldest === undefined) break;
-    total -= oldest.length;
-    chunks.shift();
-  }
-  return { chunks, bytes: total };
-}
-
-function attachToolBuffer(id: string, session: SessionWithErasedSnapshot): void {
-  if (toolUnsubs.has(id)) return;
-  const buffers = new Map<string, ToolBufferEntry>();
-  toolBuffers.set(id, buffers);
-  toolUnsubs.set(
-    id,
-    session.subscribe((event) => {
-      if (event.channel !== "tool") return;
-      if (event.channel !== "tool") return;
-      const payload = event.payload;
-      if (payload.kind === "clear") {
-        buffers.delete(payload.toolCallId);
-        return;
-      }
-      const entry = buffers.get(payload.chunk.toolCallId) ?? {
-        stdout: [],
-        stderr: [],
-        stdoutBytes: 0,
-        stderrBytes: 0,
-      };
-      if (payload.chunk.type === "stdout") {
-        const next = appendCapped(entry.stdout, entry.stdoutBytes, payload.chunk.chunk);
-        entry.stdout = next.chunks;
-        entry.stdoutBytes = next.bytes;
-      } else {
-        const next = appendCapped(entry.stderr, entry.stderrBytes, payload.chunk.chunk);
-        entry.stderr = next.chunks;
-        entry.stderrBytes = next.bytes;
-      }
-      buffers.set(payload.chunk.toolCallId, entry);
-    })
-  );
-}
-
-function dropToolBuffer(id: string): void {
-  toolUnsubs.get(id)?.();
-  toolUnsubs.delete(id);
-  toolBuffers.delete(id);
 }
 
 const createBodySchema = z.object({
@@ -268,8 +200,17 @@ async function getSession(id: string): Promise<SessionWithErasedSnapshot | undef
   if (!managed) return undefined;
   const session = createLocalAgentSession({ managed, manager });
   sessions.set(id, session);
-  attachToolBuffer(id, session);
   return session;
+}
+
+/** Command snapshots for a root and its live child agents. */
+function listCommandSnapshots(rootId: string) {
+  const manager = getServerManager();
+  const root = manager.getAgent(rootId);
+  if (!root) return [];
+  return [root, ...manager.getAllSubagents(rootId)].flatMap((agent) =>
+    (agent.streamHub.listSnapshots() ?? []).filter((snapshot) => snapshot.source === "command")
+  );
 }
 
 export const agentSessionRoutes = new Hono()
@@ -365,7 +306,6 @@ export const agentSessionRoutes = new Hono()
       ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
     });
     sessions.set(session.id, session);
-    attachToolBuffer(session.id, session);
     // Redact secrets: `body` now carries toolConfig (websearch API keys) alongside the model
     // apiKey, so never stringify the whole payload — only its non-secret shape.
     const { apiKey: _apiKey, toolConfig: _toolConfig, ...safeBody } = body;
@@ -386,15 +326,24 @@ export const agentSessionRoutes = new Hono()
   .get("/:id/summary-streams", compress(), async (c) => {
     const session = await getSession(c.req.param("id"));
     if (!session) return c.json({ error: true, message: "Session not found" }, 404);
-    return c.json({ snapshots: session.listSummaryStreamSnapshots?.() ?? [] });
+    return c.json({
+      snapshots: (session.listAgentStreamSnapshots?.() ?? []).filter((snapshot) => snapshot.source !== "command"),
+    });
   })
   .get("/:id/tool-buffers", compress(), async (c) => {
     const id = c.req.param("id");
     const session = await getSession(id);
     if (!session) return c.json({ error: true, message: "Session not found" }, 404);
+    // Command output is a projection of the same stream hub the SSE channel uses —
+    // there is no second server-side tool buffer to keep in sync.
     const buffers: Record<string, { stdout: string; stderr: string }> = {};
-    for (const [toolCallId, entry] of toolBuffers.get(id) ?? []) {
-      buffers[toolCallId] = { stdout: entry.stdout.join(""), stderr: entry.stderr.join("") };
+    for (const snapshot of listCommandSnapshots(id)) {
+      if (!snapshot.toolCallId) continue;
+      const channel = snapshot.channel === "stderr" ? "stderr" : "stdout";
+      const text = snapshot.lines.map((line) => `${line}\n`).join("") + snapshot.pendingLine;
+      const entry = buffers[snapshot.toolCallId] ?? { stdout: "", stderr: "" };
+      entry[channel] = text;
+      buffers[snapshot.toolCallId] = entry;
     }
     return c.json({ buffers });
   })
@@ -502,7 +451,6 @@ export const agentSessionRoutes = new Hono()
     const id = c.req.param("id");
     sessions.delete(id);
     clearIdleStop(id);
-    dropToolBuffer(id);
     const manager = getServerManager();
     if (manager.getAgent(id)) {
       manager.destroyAgent(id);

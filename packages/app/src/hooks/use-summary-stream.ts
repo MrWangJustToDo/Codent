@@ -3,13 +3,13 @@
  */
 
 import {
-  applyAppendToDisplayWindow,
-  displayWindowFromSnapshot,
-  emptySummaryDisplayWindow,
-  renderSummaryDisplayRows,
-  summaryStreamKey,
-  type SummaryDisplayWindow,
-  type SummaryStreamSource,
+  applyAppendToAgentStreamWindow,
+  agentStreamWindowFromSnapshot,
+  emptyAgentStreamDisplayWindow,
+  renderAgentStreamDisplayRows,
+  agentStreamKey,
+  type AgentStreamDisplayWindow,
+  type AgentStreamSource,
 } from "@codent/core";
 import { useEffect, useMemo, useState } from "react";
 
@@ -21,7 +21,8 @@ import { useAgent } from "./use-agent.js";
 export interface UseSummaryStreamOptions {
   enabled?: boolean;
   maxLines?: number;
-  source: SummaryStreamSource;
+  /** Summary streams only; command output is served by `useStreamingOutput`. */
+  source: Exclude<AgentStreamSource, "command">;
   toolCallId?: string;
   compactId?: string;
   agentId?: string;
@@ -30,15 +31,15 @@ export interface UseSummaryStreamOptions {
 export interface UseSummaryStreamResult {
   rows: string[];
   hidden: number;
-  status: "idle" | "active" | "ended" | "missing";
+  status: "active" | "ended" | "missing";
   pendingLine: string;
 }
 
 function resolveKey(options: UseSummaryStreamOptions): string | undefined {
   if (options.source === "task") {
-    return options.toolCallId ? summaryStreamKey("task", options.toolCallId) : undefined;
+    return options.toolCallId ? agentStreamKey("task", options.toolCallId) : undefined;
   }
-  return options.compactId ? summaryStreamKey("compact", options.compactId) : undefined;
+  return options.compactId ? agentStreamKey("compact", options.compactId) : undefined;
 }
 
 export function useSummaryStream(options: UseSummaryStreamOptions): UseSummaryStreamResult {
@@ -49,39 +50,39 @@ export function useSummaryStream(options: UseSummaryStreamOptions): UseSummarySt
   const rootAgentId = useAgent((s) => s.session?.id);
   const agentId = options.agentId || rootAgentId;
 
-  const [windowState, setWindowState] = useState<SummaryDisplayWindow>(() => emptySummaryDisplayWindow());
+  const [windowState, setWindowState] = useState<AgentStreamDisplayWindow>(() => emptyAgentStreamDisplayWindow());
   const [status, setStatus] = useState<UseSummaryStreamResult["status"]>("missing");
 
   useEffect(() => {
     if (!enabled || !agentId || !key) {
-      setWindowState(emptySummaryDisplayWindow());
+      setWindowState(emptyAgentStreamDisplayWindow());
       setStatus("missing");
       return;
     }
 
     const session = resolveAgentSession(agentId);
     if (!session) {
-      setWindowState(emptySummaryDisplayWindow());
+      setWindowState(emptyAgentStreamDisplayWindow());
       setStatus("missing");
       return;
     }
 
     return subscribeSummaryStream(session, key, {
       onReset: () => {
-        setWindowState(emptySummaryDisplayWindow());
+        setWindowState(emptyAgentStreamDisplayWindow());
         setStatus("active");
       },
       onAppend: (accumulated) => {
-        setWindowState((prev) => applyAppendToDisplayWindow(prev, accumulated, contentSlots));
+        setWindowState((prev) => applyAppendToAgentStreamWindow(prev, accumulated, contentSlots));
         setStatus("active");
       },
       onEnd: () => setStatus("ended"),
       onSnapshot: (snap) => {
         if (snap) {
-          setWindowState(displayWindowFromSnapshot(snap, contentSlots));
-          setStatus(snap.status === "idle" ? "missing" : snap.status);
+          setWindowState(agentStreamWindowFromSnapshot(snap, contentSlots));
+          setStatus(snap.status);
         } else {
-          setWindowState(emptySummaryDisplayWindow());
+          setWindowState(emptyAgentStreamDisplayWindow());
           setStatus("missing");
         }
       },
@@ -89,7 +90,7 @@ export function useSummaryStream(options: UseSummaryStreamOptions): UseSummarySt
   }, [enabled, agentId, key, contentSlots]);
 
   return useMemo(() => {
-    const rendered = renderSummaryDisplayRows(windowState, maxLines);
+    const rendered = renderAgentStreamDisplayRows(windowState, maxLines);
     return {
       rows: rendered.rows,
       hidden: rendered.hidden,

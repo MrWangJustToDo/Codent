@@ -6,11 +6,11 @@ Parity between the in-process session handle and its HTTP transport: the same op
 
 ## Requirements
 ### Requirement: HTTP Session matches Local contract
-The HTTP AgentSession client SHALL implement the same AgentSession interface as Local, including `getSnapshot`, `dispatch`, `subscribe`, `getSummaryStreamSnapshot`, and optional `close`, with behavior equivalent for remount after reconnect.
+The HTTP AgentSession client SHALL implement the same AgentSession interface as Local, including `getSnapshot`, `dispatch`, `subscribe`, `getAgentStreamSnapshot`, `listAgentStreamSnapshots`, and optional `close`, with behavior equivalent for remount after reconnect.
 
 #### Scenario: Summary remount over HTTP
-- **WHEN** a remote client has subscribed to `summary` and later calls `getSummaryStreamSnapshot(key)`
-- **THEN** it SHALL return the last known summary snapshot for that key (not always null)
+- **WHEN** a remote client has subscribed to `summary` and later calls `getAgentStreamSnapshot(key)`
+- **THEN** it SHALL return the last known stream snapshot for that key (not always null)
 
 #### Scenario: Tool stream remount over HTTP
 - **WHEN** a remote client reconnects or remounts a tool output view for an in-flight `toolCallId`

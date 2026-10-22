@@ -28,6 +28,8 @@ export interface ExtensionsMiddlewareDeps {
    * runs tools in parallel — and the row times while a queued subagent merely waits.
    */
   isTaskToolStartDeferred?: (toolCallId: string) => boolean;
+  /** Called when a `run_command` settles, so its live command preview can be marked ended. */
+  onToolSettled?: (toolCallId: string) => void;
 }
 
 export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -86,6 +88,9 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       return;
     },
     onAfterToolCall: async (_ctx, info) => {
+      // Only run_command owns command stream snapshots. Calling this for every tool would grow the
+      // hub's closed-id tombstone set with read_file/grep/task ids that can never have a stream.
+      if (info.toolName === BUILTIN_TOOL_NAMES.runCommand) deps.onToolSettled?.(info.toolCallId);
       if (info.ok && info.toolName === BUILTIN_TOOL_NAMES.todo) {
         deps.getTodoManager?.()?.resetRoundCounter();
       }

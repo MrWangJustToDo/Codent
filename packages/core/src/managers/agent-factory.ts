@@ -3,6 +3,7 @@ import { createCompactionConfig } from "../agent/compaction/types.js";
 import { SessionStore } from "../agent/persistence/session-store.js";
 import { TodoManager } from "../agent/todo";
 import { getEnv, type ResolvedCoreEnv } from "../env";
+import { AGENT_PROFILE_IDS } from "../runtime-types/agent-profile.js";
 
 import { AgentBootstrap, type BootstrapReport } from "./agent-bootstrap.js";
 import { ManagedAgent, type ManagedAgentConfig } from "./managed-agent.js";
@@ -60,7 +61,28 @@ export async function buildManagedAgent({
   // The runtime's env when bound; ambient otherwise (legacy single-instance hosts).
   const coreEnv = runtime?.env ?? getEnv();
   const fsRootPath = coreEnv.rootPath;
-  const log = new AgentLog();
+  const profileId = config.profileId ?? (parentId ? "explore" : "root");
+  const toolsetProfile = config.toolsetProfile ?? profileId;
+  if (!(AGENT_PROFILE_IDS as readonly string[]).includes(profileId)) {
+    throw new Error(`Unknown agent profile: "${profileId}"`);
+  }
+  if (!(AGENT_PROFILE_IDS as readonly string[]).includes(toolsetProfile)) {
+    throw new Error(`Unknown toolset profile: "${toolsetProfile}"`);
+  }
+  if (profileId === "general" || toolsetProfile === "general") {
+    // Defined for the shared kernel, but its host opt-in and child approval routing are deferred.
+    throw new Error("The general agent profile is not enabled");
+  }
+  if (profileId !== toolsetProfile) {
+    throw new Error(`Agent profile "${profileId}" requires the "${profileId}" toolset, got "${toolsetProfile}"`);
+  }
+  if (!parentId && toolsetProfile !== "root") {
+    throw new Error(`Root agents require the root toolset, got "${toolsetProfile}"`);
+  }
+  if (parentId && toolsetProfile === "root") {
+    throw new Error("Child agents cannot use the root toolset");
+  }
+  const log = new AgentLog({ scope: { profile: profileId } });
   const todoManager = parentId ? null : new TodoManager();
 
   const managed = new ManagedAgent(
@@ -68,7 +90,7 @@ export async function buildManagedAgent({
     // resolved metadata is not reconstruction-able from `restConfig`, and a subagent
     // inherits its parent's stored config rather than re-resolving the model. Dropping
     // it left every subagent's usage tracker without pricing (`$0` at record time).
-    { ...restConfig, ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}), name },
+    { ...restConfig, toolsetProfile, profileId, ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}), name },
     {
       id,
       log,
@@ -79,7 +101,7 @@ export async function buildManagedAgent({
     }
   );
 
-  const toolsRecord = { ...(await buildToolset({ profile: parentId ? "subagent" : "root", managed })) };
+  const toolsRecord = { ...(await buildToolset({ profile: toolsetProfile, managed })) };
   managed.tools = toolsRecord;
   managed.runtime = runtime;
   managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
@@ -113,7 +135,9 @@ export async function buildManagedAgent({
       compactionInput.tokenThreshold = Math.min(resolvedModelInfo.contextWindow, MAX_THRESHOLD);
     }
     managed.setCompactionConfig(createCompactionConfig(compactionInput));
+  }
 
+  if (!parentId) {
     bootstrapReport = await new AgentBootstrap({
       managed,
       config,

@@ -179,7 +179,7 @@ function makeSession({ id, diskId = `ses_${id}`, messages = [], model, modelInfo
   const session = {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe(handler, options) {
       listeners.add(handler);
       if (!options?.channels || options.channels.includes("messages")) {

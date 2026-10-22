@@ -57,7 +57,7 @@ function makeSession(id) {
     id,
     dispatched,
     getSnapshot: () => snapshot,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);

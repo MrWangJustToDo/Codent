@@ -75,6 +75,7 @@ export { countSubagentIterations, deriveSubagentRunStats, hasBeginSummaryCall } 
 // The task tool itself, so a validation can assert what the model-facing projection actually
 // contains (the iteration numbers must not be in it).
 export { createTaskTool, taskOutputSchema } from "../agent/subagent/task-tool.js";
+export { subagentResultToTaskOutput } from "../agent/subagent/run-subagent.js";
 // The three tools that settle their own abort, so the cancellation contract can be driven
 // through their real factories (their `toModelOutput` must tell the model, not only the UI).
 export {
@@ -115,7 +116,8 @@ export {
   PROGRESS_SUMMARY_MARKER,
   summarizeProgress,
 } from "../agent/subagent/progress-summary.js";
-export { resolveSubagentBridgeUI } from "../agent/subagent/types.js";
+export { AGENT_PROFILE_IDS } from "../runtime-types/agent-profile.js";
+export { runManagedSpan } from "../agent/run/managed-span.js";
 export {
   discardRegisteredPrefork,
   getTaskPreforkCoordinator,
@@ -369,17 +371,16 @@ export {
   unregisterStreamingEventBus,
 } from "../agent/tools/util/streaming-callback.js";
 export {
-  SUMMARY_STREAM_SNAPSHOT_LINE_CAP,
-  SummaryStreamHub,
-  applyAppendToDisplayWindow,
-  applySummaryStreamAppend,
-  displayWindowFromSnapshot,
-  emptySummaryDisplayWindow,
-  emptySummaryLineBuffer,
-  renderSummaryDisplayRows,
-  compactSummaryStreamId,
-  summaryStreamKey,
-} from "../agent/summary-stream";
+  AGENT_STREAM_SNAPSHOT_LINE_CAP,
+  AgentStreamHub,
+  applyAppendToAgentStreamWindow,
+  applyAgentStreamAppend,
+  agentStreamWindowFromSnapshot,
+  emptyAgentStreamDisplayWindow,
+  emptyAgentStreamLineBuffer,
+  renderAgentStreamDisplayRows,
+  agentStreamKey,
+} from "../agent/stream-hub";
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
 export { CommandJobRegistry, commandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 export type {

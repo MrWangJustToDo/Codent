@@ -19,6 +19,7 @@
 
 import assert from "node:assert/strict";
 
+import { AgentLog, ManagedAgent } from "../dist/dev.mjs";
 import { AgentManager, registerCoreEnv } from "../dist/index.mjs";
 
 // A minimal env: nothing here touches the filesystem or runs commands.
@@ -178,6 +179,61 @@ registerCoreEnv({
 
   // Idle ⇒ the call is the no-op guard, not a real interrupt.
   assert.equal(agent.getStatus(), "idle", "an idle restore does not move the agent into aborted");
+}
+
+// ---------------------------------------------------------------------------
+// 3. Session switch stops child producers before the stream hub is cleared
+// ---------------------------------------------------------------------------
+{
+  const makePair = () => {
+    const parent = new ManagedAgent(
+      { name: "switch-parent", model: "test-model" },
+      { log: new AgentLog(), tools: {}, todoManager: null }
+    );
+    const child = new ManagedAgent(
+      { name: "switch-child", model: "test-model" },
+      { log: new AgentLog(), tools: {}, todoManager: null, parentId: parent.id }
+    );
+    const manager = {
+      getAgent: (id) => (id === parent.id ? parent : id === child.id ? child : undefined),
+    };
+    parent.manager = manager;
+    child.manager = manager;
+    parent.childIds.push(child.id);
+    return { parent, child };
+  };
+
+  const switched = makePair();
+  switched.child.setStatus("running");
+  switched.parent.stopForSessionSwitch("session-switch");
+  assert.equal(
+    switched.child.getStatus(),
+    "aborted",
+    "stopForSessionSwitch reaches a child not tied to the root controller"
+  );
+
+  // `reset()` is also a session-switch seat (`/clear` calls it directly in other paths).
+  const reset = makePair();
+  reset.child.setStatus("running");
+  reset.parent.reset();
+  assert.equal(reset.child.getStatus(), "aborted", "reset cascades to a running child before clearAll()");
+
+  // A manual compaction's controller is aborted by abort(), but retained until compact()'s own
+  // finally releases it so a second compact cannot overlap the aborted run's teardown.
+  const compacting = new ManagedAgent(
+    { name: "switch-compact", model: "test-model" },
+    { log: new AgentLog(), tools: {}, todoManager: null }
+  );
+  const compactController = new AbortController();
+  compacting.compactAbortController = compactController;
+  compacting.abort("session-switch");
+  assert.equal(compactController.signal.aborted, true, "abort() cancels a manual compaction");
+  assert.equal(
+    compacting.compactAbortController,
+    compactController,
+    "the controller stays owned until compact()'s finally releases it"
+  );
+  compacting.compactAbortController = undefined;
 }
 
 console.log("managed-agent-state validation passed");

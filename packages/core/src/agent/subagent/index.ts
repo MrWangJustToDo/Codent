@@ -3,8 +3,8 @@ export {
   SUBAGENT_DEFAULT_MAX_ITERATIONS,
   SUBAGENT_DEFAULT_MAX_OUTPUT_LENGTH,
   SUBAGENT_NO_TRUNCATE,
-  resolveSubagentBridgeUI,
   type SubagentConfig,
+  type SubagentProfile,
   type SubagentResult,
   type SubagentRunDeps,
 } from "./types.js";

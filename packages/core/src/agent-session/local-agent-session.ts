@@ -148,12 +148,12 @@ class LocalAgentSessionImpl implements AgentSession {
     return readLocalAgentSessionSnapshot(this.managed, this.manager);
   }
 
-  getSummaryStreamSnapshot(key: string) {
-    return this.managed.summaryStreams?.getSnapshot(key) ?? null;
+  getAgentStreamSnapshot(key: string) {
+    return this.managed.streamHub?.getSnapshot(key) ?? null;
   }
 
-  listSummaryStreamSnapshots() {
-    return this.managed.summaryStreams?.listSnapshots() ?? [];
+  listAgentStreamSnapshots() {
+    return this.managed.streamHub?.listSnapshots() ?? [];
   }
 
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void {

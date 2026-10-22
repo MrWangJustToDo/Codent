@@ -44,6 +44,9 @@ export interface ReactiveCompactHost {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
+  /** Shared compaction ownership generation (manual/auto/reactive). */
+  beginCompactionGeneration?: () => number;
+  isCompactionCurrent?: (generation: number | undefined) => boolean;
 }
 
 export async function handleManagedReactiveCompact(
@@ -62,6 +65,8 @@ export async function handleManagedReactiveCompact(
   if (!channel) return false;
 
   const retry = host.compaction.recordReactiveCompactRetry();
+  const generation = host.beginCompactionGeneration?.();
+  const current = () => host.isCompactionCurrent?.(generation) !== false;
 
   try {
     host.statusController.beginCompaction("reactive", {
@@ -79,6 +84,10 @@ export async function handleManagedReactiveCompact(
       ...(abortSignal ? { abortSignal } : {}),
     });
 
+    // A manual/auto compaction or a session switch can claim status while the reactive
+    // summarizer is finishing. Its checkpoint must not land in the new transcript.
+    if (!current()) return false;
+
     // Capture window fill before apply (usage is reset by applyReactiveCompactionResult).
     const tokensBefore = host.usage.getContextFillTokens();
 
@@ -93,6 +102,8 @@ export async function handleManagedReactiveCompact(
     });
     host.resetAdmittedTurnContext?.(true);
 
+    if (!current()) return false;
+
     host.emitEvent("compaction:reactive-complete", {
       originalCount: llmMessages.length,
       compactedCount: compactedMessages.length,
@@ -100,9 +111,10 @@ export async function handleManagedReactiveCompact(
       tokensAfter: host.usage.getContextFillTokens(),
     });
 
-    host.statusController.endCompaction();
+    if (current()) host.statusController.endCompaction();
     return true;
   } catch (err) {
+    if (!current()) return false;
     host.statusController.endCompaction();
     // A user cancel is not a reactive-compaction failure — stay silent.
     if (isAbortError(err)) {
@@ -141,6 +153,8 @@ export interface ManualCompactHost {
   getLog?: () => AgentLog | null;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
+  /** Owner generation check; false means a session switch/reset superseded this compaction. */
+  isCurrent?: () => boolean;
 }
 
 export type ManualCompactResult =
@@ -183,10 +197,13 @@ export async function runManualCompact(
   const previousStatus = host.getStatus();
   const tokensBeforeEstimate = estimateTokens(messages);
   const actualTokens = host.usage.getContextFillTokens();
+  const abortSignal = host.getAbortSignal?.();
+
+  // Check ownership before publishing `compacting`; a stale caller must not leave that status
+  // behind on a run that never starts.
+  if (host.isCurrent?.() === false) return { ok: false, error: "Compaction aborted" };
 
   host.statusController.beginCompaction();
-
-  const abortSignal = host.getAbortSignal?.();
 
   try {
     const result = await autoCompact(messages, host.compactionConfig || {}, host.id, manager, {
@@ -196,6 +213,10 @@ export async function runManualCompact(
       contextWindow: host.getContextWindow(),
       ...(abortSignal ? { abortSignal } : {}),
     });
+
+    // The session may have switched while the summarizer was finishing. Do not apply a summary
+    // to the transcript that replaced the one this compaction started on.
+    if (host.isCurrent?.() === false || abortSignal?.aborted) return { ok: false, error: "Compaction aborted" };
 
     const applied = applyCompactionResult(host.getCoreEnv(), allModelMessages, channel, host.usage, result, {
       ...keepOptions,
@@ -217,6 +238,10 @@ export async function runManualCompact(
           "Nothing to compact — not enough older conversation to summarize (reduce keepRecentTokens or add more history).",
       };
     }
+
+    // An abort can land between apply and persistence; the new session must not receive the old
+    // compaction's checkpoint or state write.
+    if (host.isCurrent?.() === false || abortSignal?.aborted) return { ok: false, error: "Compaction aborted" };
 
     host.resetAdmittedTurnContext(true);
     host.resetSystemPrompt();
@@ -241,10 +266,15 @@ export async function runManualCompact(
     const err = toError(error);
     return { ok: false, error: `Compaction failed: ${err.message}` };
   } finally {
-    if (previousStatus === "compacting") {
-      host.statusController.endCompaction();
-    } else {
-      host.setStatus(previousStatus);
+    // A session switch may have reset the status while this (aborted) compaction was unwinding.
+    // Only the compaction that still owns the current generation/status may restore it, or an old
+    // run writes its previous status (e.g. `waiting`) onto the new session.
+    if (host.isCurrent?.() !== false && host.getStatus() === "compacting") {
+      if (previousStatus === "compacting") {
+        host.statusController.endCompaction();
+      } else {
+        host.setStatus(previousStatus);
+      }
     }
   }
 }

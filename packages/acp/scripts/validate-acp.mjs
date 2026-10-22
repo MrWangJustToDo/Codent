@@ -249,7 +249,7 @@ function makeFakeSession(id, diskId = id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
@@ -346,7 +346,7 @@ function makeRichSession(id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
@@ -432,7 +432,7 @@ function makeCancelSession(id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
@@ -528,7 +528,7 @@ function makeStreamSession(id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
@@ -628,7 +628,7 @@ function makeRestoredSession(id, diskId = id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       // A real session delivers its retained values to a NEW subscriber. That is what makes the
@@ -744,7 +744,7 @@ function makeApprovalSession(id) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);

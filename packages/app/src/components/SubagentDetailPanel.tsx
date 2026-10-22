@@ -33,8 +33,14 @@ export const SubagentDetailPanel = ({
 
   const childSession = useMemo(() => resolveAgentSession(subagentId), [subagentId]);
 
-  useInput((_input, key) => {
+  const snap = childSession?.getSnapshot();
+  const status = snap?.status ?? "idle";
+
+  useInput((input, key) => {
     if (key.escape) onBack();
+    else if (input.toLowerCase() === "x" && isSubagentActiveStatus(status)) {
+      void childSession?.dispatch({ type: "stop" }).catch(() => {});
+    }
   });
 
   useEffect(() => {
@@ -52,7 +58,6 @@ export const SubagentDetailPanel = ({
 
   void tick;
 
-  const snap = childSession?.getSnapshot();
   const retryNow = useRetryTicker(snap?.retry);
 
   const displayTitle = snap
@@ -60,8 +65,6 @@ export const SubagentDetailPanel = ({
       ? snap.name.slice("subagent-".length)
       : snap.name
     : subagentId;
-
-  const status = snap?.status ?? "idle";
 
   const usage = snap?.usage.total;
 
@@ -111,6 +114,12 @@ export const SubagentDetailPanel = ({
             {" "}
             · ({KeyLabel.esc} back to task list)
           </Text>
+          {isSubagentActiveStatus(status) ? (
+            <Text color={COLORS.muted} dimColor>
+              {" "}
+              · {KeyLabel.x} stop
+            </Text>
+          ) : null}
         </Box>
         {snap?.retry && (
           <Box>

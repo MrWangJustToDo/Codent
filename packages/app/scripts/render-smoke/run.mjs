@@ -276,6 +276,21 @@ async function resizeAndPaint(stdout, cols, { timeoutMs = 4000 } = {}) {
 const results = [];
 const record = (name, pass, detail) => results.push({ name, pass, detail });
 
+// Task panel navigation is a view over the child session, not a task-row-only link.
+// The detail surface itself is exercised by the component tree; this asserts the store
+// transition a row/task selection uses, so a regression to "link only" cannot pass silently.
+{
+  const actions = useSubagentPanel.getActions();
+  actions.openDetail("sub_panel_probe");
+  const state = useSubagentPanel.getReadonlyState();
+  record(
+    "task panel opens a complete child detail view",
+    state.view === "detail" && state.selectedSubagentId === "sub_panel_probe",
+    { view: state.view, selected: state.selectedSubagentId }
+  );
+  actions.close();
+}
+
 // React reports duplicate/missing keys through console.error. Capture it so a real
 // row-identity regression (the React key remount the window boundary must avoid) fails
 // the smoke instead of scrolling past in the terminal.

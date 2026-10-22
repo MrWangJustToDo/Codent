@@ -3,6 +3,7 @@
 // ============================================================================
 
 import type { ResolvedCoreEnv } from "../../env";
+import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
 
 /** Log levels */
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -28,8 +29,17 @@ export type LogCategory =
    */
   | "side-query";
 
+/** Non-derivable attribution carried by every persisted entry. */
+export interface LogScope {
+  profile: AgentProfileId;
+  /** The parent `task` tool call that owns this child, when applicable. */
+  taskCallId?: string;
+}
+
 /** Log entry */
 export interface LogEntry {
+  /** Profile/task attribution; root session and agent identity come from the sink path. */
+  scope: LogScope;
   /** Unique log ID */
   id: string;
   /** Timestamp (ms since epoch) */

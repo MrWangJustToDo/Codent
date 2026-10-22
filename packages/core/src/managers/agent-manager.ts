@@ -104,8 +104,11 @@ export class AgentManager {
     // scopes up-flow to the root, so one subscription covers subagents too.
     this.logExtension = createLogExtension({
       bus: this.busScope.root,
-      resolveLog: (event) =>
-        this.agents.get(event.agentId)?.log ?? (event.parentId ? this.agents.get(event.parentId)?.log : null) ?? null,
+      // Every event is attributed to its owning agent. A child that has already left the registry
+      // must NOT fall back to the parent sink: late child events would then look like parent
+      // content and violate the index-only contract. The parent index is written explicitly by
+      // `logSubagentLifecycle`.
+      resolveLog: (event) => this.agents.get(event.agentId)?.log ?? null,
     });
     this.logExtension.start();
     this.lifecycle = new LifecycleCoordinator({
@@ -167,6 +170,11 @@ export class AgentManager {
    * hosts cannot reach it, because `ManagedAgentConfig` has no id.
    */
   async createManagedAgent(config: ManagedAgentConfig, parentId?: string, id?: string): Promise<ManagedAgent> {
+    if (parentId) {
+      const parent = this.agents.get(parentId);
+      if (!parent) throw new Error(`Parent agent not found: ${parentId}`);
+      if (parent.parentId) throw new Error("Subagents cannot spawn subagents");
+    }
     const { managed, bootstrap } = await buildManagedAgent({
       config,
       parentId,
@@ -179,7 +187,7 @@ export class AgentManager {
     this.agents.register(managed);
     managed.manager = this;
 
-    if (!parentId && bootstrap) {
+    if (bootstrap) {
       // Attach the JSONL log sink BEFORE bootstrap events so the session
       // timeline includes session:start/doc/skill/memory (persistence-only
       // log — pre-attach entries would be dropped).
@@ -228,6 +236,11 @@ export class AgentManager {
     if (!parent) {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
+    if (parent.parentId) {
+      // The task tool is excluded from child toolsets, but a caller can still reach the manager
+      // directly. Keep the supported depth at one child level.
+      throw new Error("Subagents cannot spawn subagents");
+    }
     // Inherit the parent's *live* model metadata, not just its stored config:
     // `parent.config` is frozen at construction, while a late models.dev lookup or a
     // `/model` switch updates only `parent.modelInfo` (and its usage pricing). Without
@@ -236,6 +249,10 @@ export class AgentManager {
     const finalConfig = {
       ...parent.config,
       ...config,
+      // A child never inherits the parent's toolset. It defaults to explore, or uses the
+      // caller's explicit toolset/profile id (internal one-shot workers).
+      profileId: config.profileId ?? "explore",
+      toolsetProfile: config.toolsetProfile ?? config.profileId ?? "explore",
       ...(inheritedModelInfo ? { modelInfo: inheritedModelInfo } : {}),
     };
     const subagent = await this.createManagedAgent(finalConfig, parentId, subagentId);

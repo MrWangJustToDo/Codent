@@ -405,7 +405,7 @@ function fakeSession(id, diskId) {
       iteration: { current: 1, max: 1 },
       subagents: [],
     }),
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: () => () => {},
     dispatch: async () => ({ ok: true }),
   };

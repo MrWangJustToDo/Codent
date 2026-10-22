@@ -11,7 +11,7 @@ import path from "node:path";
 import {
   AgentUIChannel,
   BUILTIN_SKILLS,
-  SummaryStreamHub,
+  AgentStreamHub,
   TodoManager,
   UsageTracker,
   createAgentEventBus,
@@ -47,7 +47,7 @@ function createFake(id, parentId) {
     usage,
     log: null,
     getTodoManager: () => todoManager,
-    summaryStreams: new SummaryStreamHub(),
+    streamHub: new AgentStreamHub(),
     getExtensionRunner: () => null,
     readInteractions: () => ({ approvals: [], askUser: [] }),
     readIteration: () => ({ current: 0, max: 0 }),

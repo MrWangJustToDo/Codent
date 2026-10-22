@@ -88,7 +88,7 @@ function fakeSession(id, diskId) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: () => () => {},
     dispatch: async () => ({ ok: true }),
   };

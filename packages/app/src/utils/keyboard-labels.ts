@@ -62,6 +62,7 @@ export const KeyLabel = {
   n: "n",
   p: "p",
   r: "R",
+  x: "x",
   ctrlA: "Ctrl+A",
   ctrlC: "Ctrl+C",
   ctrlE: "Ctrl+E",

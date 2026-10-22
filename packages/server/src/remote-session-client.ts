@@ -11,7 +11,7 @@
  *   stream for `HEARTBEAT_TIMEOUT_MS` triggers a reconnect.
  */
 
-import { hydrateToolPresentations } from "@codent/core";
+import { AGENT_STREAM_SNAPSHOT_LINE_CAP, hydrateToolPresentations } from "@codent/core";
 
 import type {
   AgentSession,
@@ -21,7 +21,8 @@ import type {
   AgentSessionSnapshot,
   AgentSessionSubscribeOptions,
   AgentSessionSubscriber,
-  SummaryStreamSnapshot,
+  AgentStreamEvent,
+  AgentStreamSnapshot,
 } from "@codent/core";
 
 export interface RemoteSessionClientOptions {
@@ -96,40 +97,64 @@ async function readJson<T>(response: Response): Promise<T> {
 
 type ToolBufferMap = Map<string, { stdout: string; stderr: string }>;
 
-function applySummaryEvent(cache: Map<string, SummaryStreamSnapshot>, payload: unknown): void {
-  const event = payload as
-    | { type: "reset"; key: string; source: SummaryStreamSnapshot["source"]; seq: number }
-    | { type: "append"; key: string; chunk: string; seq: number }
-    | { type: "end"; key: string; seq: number };
+function applySummaryEvent(cache: Map<string, AgentStreamSnapshot>, payload: unknown): void {
+  const event = payload as AgentStreamEvent;
   if (!event?.key) return;
-  const current: SummaryStreamSnapshot = cache.get(event.key) ?? {
-    key: event.key,
-    source: "source" in event ? event.source : "task",
-    seq: 0,
-    lines: [],
-    pendingLine: "",
-    status: "active",
-  };
+
+  if (event.type === "reset") {
+    cache.set(event.key, {
+      key: event.key,
+      source: event.source,
+      channel: event.channel,
+      seq: event.seq,
+      lines: [],
+      pendingLine: "",
+      status: "active",
+      ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+      ...(event.compactId ? { compactId: event.compactId } : {}),
+      ...(event.label ? { label: event.label } : {}),
+      ...(event.epoch ? { epoch: event.epoch } : {}),
+    });
+    return;
+  }
+
+  let current = cache.get(event.key);
+  if (!current) {
+    // A task/compact row can mount after its `reset` (the first SSE subscription may skip a
+    // resync when the snapshot is fresh). The append carries enough identity to reconstruct the
+    // entry; dropping it loses the rest of the stream permanently.
+    if (event.type !== "append") return;
+    current = {
+      key: event.key,
+      source: event.source,
+      channel: event.channel,
+      ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+      seq: event.seq - 1,
+      lines: [],
+      pendingLine: "",
+      status: "active",
+    };
+    cache.set(event.key, current);
+  }
+  if (event.seq <= current.seq) return;
+
   if (event.type === "append") {
+    // A same-epoch append reopens an ended multi-pass stream; mirror the producer contract.
+    current.status = "active";
     const text = current.pendingLine + event.chunk;
     const parts = text.split("\n");
     current.pendingLine = parts.pop() ?? "";
-    current.lines = [...current.lines, ...(parts.length ? parts : [])];
+    current.lines = [...current.lines, ...(parts.length ? parts : [])].slice(-AGENT_STREAM_SNAPSHOT_LINE_CAP);
   } else if (event.type === "end") {
     if (current.pendingLine) {
-      current.lines = [...current.lines, current.pendingLine];
+      current.lines = [...current.lines, current.pendingLine].slice(-AGENT_STREAM_SNAPSHOT_LINE_CAP);
       current.pendingLine = "";
     }
     current.status = "ended";
-  } else if (event.type === "reset") {
-    current.lines = [];
-    current.pendingLine = "";
-    current.status = "active";
   }
   current.seq = event.seq;
   cache.set(event.key, current);
 }
-
 /**
  * JSON transport turns the Date-typed UIMessage `createdAt` into an ISO
  * string; TanStack's wire conversion calls `createdAt.toISOString()` and
@@ -223,7 +248,7 @@ function applyToolEvent(buffers: ToolBufferMap, payload: unknown): void {
 function applyEvent(
   snapshot: AgentSessionSnapshot,
   event: AgentSessionEvent,
-  summaryCache: Map<string, SummaryStreamSnapshot>,
+  summaryCache: Map<string, AgentStreamSnapshot>,
   toolBuffers: ToolBufferMap
 ): AgentSessionSnapshot {
   switch (event.channel) {
@@ -354,7 +379,7 @@ export class RemoteSessionClient implements AgentSession {
   private lastSyncAt = 0;
   /** Shared in-flight resync so concurrent callers fetch the transcript once. */
   private resyncInFlight: Promise<void> | null = null;
-  private readonly summaryCache = new Map<string, SummaryStreamSnapshot>();
+  private readonly summaryCache = new Map<string, AgentStreamSnapshot>();
   private readonly toolBufferCache: ToolBufferMap = new Map();
   /**
    * Set once the server reports this agent id no longer exists (HTTP 404
@@ -402,7 +427,7 @@ export class RemoteSessionClient implements AgentSession {
     return this.snapshot;
   }
 
-  getSummaryStreamSnapshot(key: string): SummaryStreamSnapshot | null {
+  getAgentStreamSnapshot(key: string): AgentStreamSnapshot | null {
     return this.summaryCache.get(key) ?? null;
   }
 
@@ -426,8 +451,19 @@ export class RemoteSessionClient implements AgentSession {
         return { ok: false, code: "not_found", error: "Session not found on server" };
       }
       // State changes propagate via the subscribed channels (state/messages/
-      // usage/todos/plan/...) — no full-snapshot refetch per command.
-      return await readJson<AgentSessionCommandResult>(response);
+      // usage/todos/plan/...) — no full-snapshot refetch per command. A session
+      // switch is the exception: the server cleared its summary/tool remount
+      // seeds, so our caches must be rebuilt from the new session's snapshot.
+      const result = await readJson<AgentSessionCommandResult>(response);
+      if (
+        command.type === "session.new" ||
+        command.type === "session.resume" ||
+        command.type === "session.clone" ||
+        command.type === "session.fork"
+      ) {
+        await this.resync().catch(() => undefined);
+      }
+      return result;
     } catch (error) {
       // Transport failure. The server resolves `send`-style commands only when
       // the whole run has finished, so a run outlasting the HTTP headers
@@ -468,7 +504,7 @@ export class RemoteSessionClient implements AgentSession {
 
     try {
       const sumRes = await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}/summary-streams`));
-      const data = await readJson<{ snapshots: SummaryStreamSnapshot[] }>(sumRes);
+      const data = await readJson<{ snapshots: AgentStreamSnapshot[] }>(sumRes);
       this.summaryCache.clear();
       for (const snapshot of data.snapshots ?? []) this.summaryCache.set(snapshot.key, snapshot);
     } catch {
@@ -623,7 +659,7 @@ function parseSseBlock(block: string): AgentSessionEvent | null {
 export function applyEventForTests(
   snapshot: AgentSessionSnapshot,
   event: AgentSessionEvent,
-  summaryCache = new Map<string, SummaryStreamSnapshot>(),
+  summaryCache = new Map<string, AgentStreamSnapshot>(),
   toolBuffers = new Map()
 ): AgentSessionSnapshot {
   return applyEvent(snapshot, event, summaryCache, toolBuffers);

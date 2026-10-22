@@ -40,7 +40,7 @@ const liveTurnSession = (() => {
   return {
     id: "agent_live",
     getSnapshot: () => baseSnapshot("agent_live", { messages }),
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);

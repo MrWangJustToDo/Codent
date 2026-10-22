@@ -1,3 +1,5 @@
+import { EMPTY_SUMMARY } from "./subagent-output.js";
+
 /**
  * Why a `task` subagent ended, and what its summary says about it.
  *
@@ -164,7 +166,6 @@ export function subagentStopNotice(reason: SubagentStopReason): string {
 }
 
 /** The sentinel `extractAssistantText` yields for a run that produced no final answer. */
-const EMPTY_SUMMARY = "(no summary)";
 
 /**
  * Ensure a stopped run surfaces a clear notice in the summary text returned to the parent (UI +

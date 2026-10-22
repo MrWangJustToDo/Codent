@@ -10,10 +10,10 @@
 
 import { cancelSummaryBuffer, flushSummaryBuffer, scheduleSummaryFlush } from "./summary-stream-throttle.js";
 
-import type { AgentSession, SummaryStreamEvent, SummaryStreamSnapshot } from "@codent/core";
+import type { AgentSession, AgentStreamEvent, AgentStreamSnapshot } from "@codent/core";
 
 /** A reset event (carries the optional phase `label`). */
-export type SummaryStreamResetEvent = Extract<SummaryStreamEvent, { type: "reset" }>;
+export type SummaryStreamResetEvent = Extract<AgentStreamEvent, { type: "reset" }>;
 
 export interface SummaryStreamHandlers {
   /** A reset arrived — clear prior state (the buffer is already cancelled). */
@@ -23,7 +23,7 @@ export interface SummaryStreamHandlers {
   /** The stream ended (after the trailing flush). */
   onEnd: () => void;
   /** Called once after subscribing with the current snapshot, or `null` when none exists. */
-  onSnapshot: (snapshot: SummaryStreamSnapshot | null) => void;
+  onSnapshot: (snapshot: AgentStreamSnapshot | null) => void;
 }
 
 /**
@@ -36,7 +36,7 @@ export function subscribeSummaryStream(
   key: string,
   handlers: SummaryStreamHandlers
 ): () => void {
-  const applyEvent = (event: SummaryStreamEvent) => {
+  const applyEvent = (event: AgentStreamEvent) => {
     if (event.key !== key) return;
     if (event.type === "reset") {
       cancelSummaryBuffer(key);
@@ -54,12 +54,12 @@ export function subscribeSummaryStream(
   const unsubscribe = session.subscribe(
     (evt) => {
       if (evt.channel !== "summary") return;
-      applyEvent(evt.payload as SummaryStreamEvent);
+      applyEvent(evt.payload as AgentStreamEvent);
     },
     { channels: ["summary"] }
   );
 
-  handlers.onSnapshot(session.getSummaryStreamSnapshot(key));
+  handlers.onSnapshot(session.getAgentStreamSnapshot(key));
 
   return () => {
     cancelSummaryBuffer(key);

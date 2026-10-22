@@ -188,25 +188,25 @@ export type { UsageChangeSnapshot, UsageSnapshot } from "./managers/telemetry/us
 // ============================================================================
 
 export {
-  SUMMARY_STREAM_SNAPSHOT_LINE_CAP,
-  SummaryStreamHub,
-  applyAppendToDisplayWindow,
-  applySummaryStreamAppend,
-  displayWindowFromSnapshot,
-  emptySummaryDisplayWindow,
-  emptySummaryLineBuffer,
-  renderSummaryDisplayRows,
-  summaryStreamKey,
-  compactSummaryStreamId,
-  type SummaryDisplayWindow,
-  type SummaryLineBuffer,
-  type SummaryStreamEvent,
-  type SummaryStreamListener,
-  type SummaryStreamResetInput,
-  type SummaryStreamSnapshot,
-  type SummaryStreamSource,
-  type SummaryStreamStatus,
-} from "./agent/summary-stream";
+  AGENT_STREAM_SNAPSHOT_LINE_CAP,
+  AgentStreamHub,
+  applyAppendToAgentStreamWindow,
+  applyAgentStreamAppend,
+  agentStreamWindowFromSnapshot,
+  emptyAgentStreamDisplayWindow,
+  emptyAgentStreamLineBuffer,
+  renderAgentStreamDisplayRows,
+  agentStreamKey,
+  type AgentStreamDisplayWindow,
+  type AgentStreamLineBuffer,
+  type AgentStreamChannel,
+  type AgentStreamEvent,
+  type AgentStreamListener,
+  type AgentStreamResetInput,
+  type AgentStreamSnapshot,
+  type AgentStreamSource,
+  type AgentStreamStatus,
+} from "./agent/stream-hub";
 
 // ============================================================================
 // Models & agent bootstrap helpers

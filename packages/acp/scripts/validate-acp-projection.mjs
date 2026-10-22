@@ -137,8 +137,16 @@ const compactKey = "compact:agent_1";
   // (status, stream, end) must emit none at all.
   const off = capture({ compaction: false, notices: true });
   off.push("state", statusEvent("compacting"));
-  off.push("summary", { type: "reset", key: compactKey, source: "compact", compactId: "agent_1", epoch: "e1", seq: 1 });
-  off.push("summary", { type: "append", key: compactKey, chunk: "sum", seq: 2 });
+  off.push("summary", {
+    type: "reset",
+    channel: "text",
+    key: compactKey,
+    source: "compact",
+    compactId: "agent_1",
+    epoch: "e1",
+    seq: 1,
+  });
+  off.push("summary", { type: "append", channel: "text", key: compactKey, chunk: "sum", seq: 2 });
   off.push("summary", { type: "end", key: compactKey, seq: 3 });
   off.push("state", statusEvent("running"));
   check(
@@ -160,8 +168,8 @@ const compactKey = "compact:agent_1";
     epoch: "e1",
     seq: 1,
   });
-  auto.push("summary", { type: "append", key: compactKey, chunk: "[summary]", seq: 2 });
-  auto.push("summary", { type: "append", key: compactKey, chunk: " part 2", seq: 3 });
+  auto.push("summary", { type: "append", channel: "text", key: compactKey, chunk: "[summary]", seq: 2 });
+  auto.push("summary", { type: "append", channel: "text", key: compactKey, chunk: " part 2", seq: 3 });
   auto.push("summary", { type: "end", key: compactKey, seq: 4 });
   auto.push("state", statusEvent("running"));
 
@@ -197,8 +205,8 @@ const compactKey = "compact:agent_1";
     "a task summary is not a compaction",
     (() => {
       const t = capture();
-      t.push("summary", { type: "reset", key: "task:tc1", source: "task", toolCallId: "tc1", seq: 1 });
-      t.push("summary", { type: "append", key: "task:tc1", chunk: "task text", seq: 2 });
+      t.push("summary", { type: "reset", channel: "text", key: "task:tc1", source: "task", toolCallId: "tc1", seq: 1 });
+      t.push("summary", { type: "append", channel: "text", key: "task:tc1", chunk: "task text", seq: 2 });
       t.push("summary", { type: "end", key: "task:tc1", seq: 3 });
       const ok = t.emitted.every((u) => !String(u.sessionUpdate).startsWith("compaction"));
       t.stop();
@@ -206,6 +214,61 @@ const compactKey = "compact:agent_1";
     })()
   );
   auto.stop();
+
+  // Multi-pass compaction: only the first pass resets; later passes append onto the same epoch.
+  // The row must stay open across the per-pass `end` events and close once at lifecycle completion
+  // with the accumulated summary.
+  {
+    const multi = capture();
+    multi.push("state", statusEvent("compacting"));
+    multi.push("summary", {
+      type: "reset",
+      key: compactKey,
+      source: "compact",
+      compactId: "agent_1",
+      epoch: "multi",
+      seq: 1,
+    });
+    multi.push("summary", { type: "append", channel: "text", key: compactKey, chunk: "pass1 ", seq: 2 });
+    multi.push("summary", { type: "end", key: compactKey, seq: 3 });
+    multi.push("summary", { type: "append", channel: "text", key: compactKey, chunk: "pass2", seq: 4 });
+    multi.push("summary", { type: "end", key: compactKey, seq: 5 });
+    multi.push("lifecycle", { type: "compaction:auto-complete", payload: { payload: {} } });
+
+    const multiUpdates = multi.updates("compaction_update");
+    check(
+      "multi-pass compaction closes once, not after the first pass",
+      multiUpdates.filter((u) => u.status === "completed").length === 1 &&
+        multiUpdates.at(-1)?.summary?.[0]?.text === "pass1 pass2",
+      JSON.stringify(multiUpdates.map((u) => ({ status: u.status, summary: u.summary?.[0]?.text })))
+    );
+    multi.stop();
+  }
+
+  // A compact stream that never emits a completion event intentionally stays open. This pins the
+  // producer contract: `end` is pass-level only; the producer must emit the lifecycle completion
+  // (or the manual command result) to close the row.
+  {
+    const dangling = capture();
+    dangling.push("state", statusEvent("compacting"));
+    dangling.push("summary", {
+      type: "reset",
+      key: compactKey,
+      source: "compact",
+      compactId: "agent_1",
+      epoch: "dangling",
+      seq: 1,
+    });
+    dangling.push("summary", { type: "append", channel: "text", key: compactKey, chunk: "unfinished", seq: 2 });
+    dangling.push("summary", { type: "end", key: compactKey, seq: 3 });
+    const updates = dangling.updates("compaction_update");
+    check(
+      "a compact stream without a completion event stays in progress",
+      updates.at(-1)?.status === "in_progress",
+      JSON.stringify(updates.map((u) => u.status))
+    );
+    dangling.stop();
+  }
 
   // A manual `/compact` emits NO lifecycle event and (when the model returns text) still streams the
   // summary; the status is what makes it visible at all.
@@ -339,7 +402,7 @@ const compactKey = "compact:agent_1";
     epoch: "e1",
     seq: 1,
   });
-  off.push("summary", { type: "append", key: "compact:agent_1", chunk: "body text", seq: 2 });
+  off.push("summary", { type: "append", channel: "text", key: "compact:agent_1", chunk: "body text", seq: 2 });
   off.push("summary", { type: "end", key: "compact:agent_1", seq: 3 });
   off.push("state", { status: "running", name: "probe", sessionId: "s1", error: "", pendingApprovalCount: 0 });
   check(

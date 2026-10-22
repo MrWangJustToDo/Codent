@@ -359,20 +359,19 @@ function walk(dir) {
   }
 
   // The subagent side of the task tool: a cancel is recognized there, not in the tool.
-  const runSubagentSrc = readFileSync(join(SRC, "agent/subagent/run-subagent.ts"), "utf8");
+  const taskResultSrc = readFileSync(join(SRC, "agent/subagent/task-result.ts"), "utf8");
   assert.ok(
-    /applySubagentStopNotice\(output, stopReason\)/.test(runSubagentSrc),
-    "run-subagent: a stopped run appends the notice for its recorded reason, not an assumed one"
+    /applySubagentStopNotice\(output, stopReason\)/.test(taskResultSrc),
+    "task-result: a stopped run appends the notice for its recorded reason, not an assumed one"
   );
   assert.ok(
-    /resolveSubagentStopReason\(\{[\s\S]{0,120}abortSignal\?\.reason/.test(runSubagentSrc),
-    "run-subagent: the reason comes from the abort signal — the channel every abort path uses"
+    /resolveSubagentStopReason\(\{[\s\S]{0,160}abortReason/.test(taskResultSrc),
+    "task-result: the reason comes from the caller abort signal, falling back to the child's own"
   );
-  // The child status is read through the accessor (see validate-accessor-convention.mjs),
-  // so accept either spelling — what matters is that the *status* is one of the two inputs.
+  const spanSrc = readFileSync(join(SRC, "agent/run/managed-span.ts"), "utf8");
   assert.ok(
-    /aborted \|\|[\s\S]{0,200}(?:getStatus\(\)|status) === "aborted"/.test(runSubagentSrc),
-    "run-subagent: derives the flag from the child status AND the abort signal, not one of them"
+    /managed\.getStatus\(\) === "aborted"[\s\S]{0,200}getAbortSignal\(\)\?\.aborted/.test(spanSrc),
+    "managed span: derives the abort flag from the child status AND the abort signal"
   );
   const planSrc = readFileSync(join(SRC, "agent/plan/create-plan-tool.ts"), "utf8");
   assert.ok(
@@ -389,6 +388,7 @@ function walk(dir) {
     /=== BUILTIN_TOOL_NAMES\.task/.test(preforkMiddlewareSrc) && !/=== "task"/.test(preforkMiddlewareSrc),
     "the pre-fork middleware recognizes `task` through BUILTIN_TOOL_NAMES, not a literal"
   );
+  const runSubagentSrc = readFileSync(join(SRC, "agent/subagent/run-subagent.ts"), "utf8");
   assert.ok(
     /=== BEGIN_SUMMARY_TOOL_NAME/.test(runSubagentSrc) && !/=== "begin_summary"/.test(runSubagentSrc),
     "run-subagent recognizes the marker tool through BEGIN_SUMMARY_TOOL_NAME, not a literal"
@@ -538,7 +538,7 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
     "tool-error keeps classifying the throw against the run's signal"
   );
 
-  const runSubagentSrc2 = readFileSync(join(SRC, "agent/subagent/run-subagent.ts"), "utf8");
+  const runSubagentSrc2 = readFileSync(join(SRC, "agent/subagent/task-result.ts"), "utf8");
   // Structural, not proximity-based: `cancelled: true` must be the FIRST key of the abort
   // branch. The branch is where the flag is decided, and leading with it is what keeps a
   // later field insertion (a new id next to the others) from pushing the flag out of a

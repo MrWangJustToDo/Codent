@@ -215,8 +215,8 @@ assert.ok(renamed, `rename must propagate via state channel (got "${session.getS
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.ok(events >= 1, "subscribe should deliver initial state event");
 
-  // getSummaryStreamSnapshot returns cached (empty) — not always-null contract shape
-  assert.equal(client.getSummaryStreamSnapshot("task:none"), null);
+  // getAgentStreamSnapshot returns cached (empty) — not always-null contract shape
+  assert.equal(client.getAgentStreamSnapshot("task:none"), null);
 
   // refresh() hydrates from server routes
   await client.refresh();

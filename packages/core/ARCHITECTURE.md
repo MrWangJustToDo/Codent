@@ -235,7 +235,7 @@ agent-manager.ts
 | Step | Action                                                                                                                                                                                                                                                                                      |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | `AgentLog`, `TodoManager`, `ManagedAgent` (UI channel attached before LLM runs)                                                                                                                                                                                                             |
-| 2    | `buildToolset({ profile })` → root: filesystem/grep/glob/tree/run_command + root-only tools; subagent: read-only set                                                                                                                                                                                                                              |
+| 2    | `buildToolset({ profile })` → root: filesystem/grep/glob/tree/run_command + root-only tools; explore: read-only set; internal: caller-supplied (often empty); general: broad without ask_user/plan/todo/task                                                                                                                                                                                                                              |
 | 3    | `managed.setEventBus(manager.of(agentId, parentId))` — agent-scoped `AgentEventBus` for session projections + telemetry `dispatchEvent` (up-flows to root)                                                                                                                                                                                                                              |
 | 4    | Root tools: `todo`, `webfetch`, `websearch`, `ask_user`, plan tools                                                                                                                                                                                                                         |
 | 5    | `setCompactionConfig` from model context window                                                                                                                                                                                                                                             |
@@ -243,7 +243,7 @@ agent-manager.ts
 | 7    | `BootstrapReport` returned alongside the session context; extension `attempted = active + failed`, including fail-open activation errors                                                                                 |
 | 8    | `SessionStore` → `setSessionStore({ modelStyle, model })`                                                                                                                                                                                                                                   |
 
-**Subagent** (`parentId` set): inherits parent config via `spawnSubagent`; skips docs, skills, MCP, memory, extensions, session, and most root-only tools. `buildToolset` selects the profile once (root vs read-only subagent), so a subagent no longer builds the root set and throws it away; `spawnSubagent` only layers a caller-supplied `subagentTools` override.
+**Subagent** (`parentId` set): inherits parent config via `spawnSubagent`; skips docs, skills, MCP, memory, extensions, session, and most root-only tools. `buildToolset` selects the toolset once (root / explore / general / internal); `spawnSubagent` only layers a caller-supplied `subagentTools` override.
 
 `AgentBootstrap` owns the root-only resource/extension phases and returns a `BootstrapReport`.
 Every loader result goes through `recordExtensionResult` / `recordExtensionError`, so a fail-open
@@ -306,17 +306,20 @@ These also map to hook scripts where applicable (`SessionStart`, `Notification`,
 Inner LLM/tool stream execution is shared. Outer orchestration differs by **profile**:
 
 ```
+agent/run/managed-span.ts (one managed span; only direct runAgentOnce caller)
+  parentTaskToolCallId → ensureUIChannel → manager.runAgentStream
+  → consumeAgentStream(channel) → optional applyRunOutcome(path: chat|detached)
+
 Shared skeleton (agent/run/run-agent-skeleton.ts)
-  ensureUIChannel → manager.runAgentStream → consumeAgentStream(channel)
-  → optional applyRunOutcome(path: chat|detached)
+  runAgentOnce / consumeAgentStream / ensureUIChannel
 
 InteractiveChat profile (AgentChatController)
   pumpToolPhases / queues / approvals / session persist
-  → runAgentOnce(channel) per stream; outcome path "chat" after full pump
+  → managed span per stream; outcome path "chat" after full pump
 
-Worker profile (runSubagent — task / compact)
-  spawn + tool isolation → always ensureUIChannel → runAgentOnce once
-  → bridgeUI only gates parent panel / task-tool streaming
+Worker profile (runSubagent — task / internal compaction/progress-summary)
+  spawn + tool isolation → runManagedSpan once
+  → a non-internal child with a parent task id projects to the task row; internal uses none
   → outcome path "detached" (avoids task-panel ghosts)
 ```
 
@@ -989,7 +992,7 @@ Observer `emit` is synchronous fire-and-forget with per-listener error containme
 **Messages channel:** Session snapshots always carry a full `UIMessage[]`; the `messages` channel delivers the same full array (JSON-patch / delta delivery is deferred). Wire projection for the model loop is cached by channel revision + last-message fingerprint (`WireProjectionCache`).
 
 Tool process chunks (`run_command` stdout/stderr) are scoped by required `agentId`; Session `tool` channel receives them (`chunk` / `clear`).
-Task / compact summary text uses `ManagedAgent.summaryStreams` (`SummaryStreamHub`: `reset` / `append` / `end`) on Session `summary` — not the tool-output registry. Compact stream ids are stable (`compactSummaryStreamId(agentId)` → key `compact:${agentId}`).
+Command output, task summaries and compact summaries share `ManagedAgent.streamHub` (`AgentStreamHub`: `reset` / `append` / `end`). Command source projects onto `tool`, text sources onto `summary`; compact stream keys are stable (`compact:${agentId}`).
 
 ### 8.3 Event types (summary)
 
@@ -1026,6 +1029,8 @@ The seam is deliberately non-removable: ~76 core call sites plus `ctx.logger` wr
 - **Entries emitted before a sink is bound are retained**, bounded by `MAX_PENDING_LOG_ENTRIES` (200), and drained into the first sink that attaches — so bootstrap diagnostics (including every extension activation failure) reach disk. Beyond the cap the oldest are dropped: this is a window, not a history buffer.
 
 **Persistence-only log:** `AgentLog` writes every accepted entry straight to the JSONL file sink (`.agents/logs/{sessionId}/agent.log`, size-based rotation at 5 MiB / 5 files, 250 ms flush interval) — no in-memory ring, query API, or UI channel. Each entry is validated against `logEntrySchema` at the write boundary (a non-conforming entry is rejected with a `console.error` rather than written, so the file never contains an entry a reader would reject). Entries logged while an agent run is in flight carry a short `run` id (`prepareManagedAgentForRun` sets it, finalize clears it).
+
+**Scope:** every entry carries `scope: { profile, taskCallId? }`; root session/agent identity comes from the sink path (`<rootSessionId>/<agentId>.log`). The parent log records only index-only child lifecycle links (`data.indexOnly: true`); the child file is the full timeline. Profile policy may set the min level, never the schema/sink/rotation.
 
 **Payload summarization:** `summarizePayload` turns large fields (`tool_input` / `tool_output` / unknown objects) into `{field}Bytes` + `{field}Preview` (≤200 chars); scalar observability fields (ids/names/counts/bytes/tokens/ms) pass through; the redundant `eventType` is dropped. A `cancelled` payload is written without a synthesized `Error` — a cancelled subagent's `error` text is its partial narration, not a fault.
 
@@ -1187,7 +1192,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Compaction          | `managers/services/compaction-service.ts`, `agent/compaction/*.ts`                                                                                     |
 | Plan                | `agent/plan/*` (domain + plan tool factories)                                                                                                         |
 | Tools               | `agent/tools/*.ts` (universal), `agent/tools/runtime/define-tool.ts`; domain tools under `plan/` / `skills/` / `subagent/` / `todo/`                     |
-| Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`                                                                              |
+| Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`; shared span in `agent/run/managed-span.ts`                              |
 | Models              | `models/model-config.ts`, `models/adapter-factory.ts`, `models/prompt-cache.ts`                                                              |
 | CoreEnv             | `env/index.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
 
@@ -1205,7 +1210,7 @@ pnpm --filter @codent/core run validate:early-tool-result-ui
 pnpm --filter @codent/core run validate:extension-prompt-hooks
 pnpm --filter @codent/core run validate:extension-pi-like
 pnpm --filter @codent/core run validate:streaming-scope
-pnpm --filter @codent/core run validate:summary-stream
+pnpm --filter @codent/core run validate:agent-stream
 pnpm --filter @codent/core run validate:local-agent-session
 pnpm --filter @codent/core run validate:run-agent-skeleton
 pnpm --filter @codent/core run validate:tanstack-tools

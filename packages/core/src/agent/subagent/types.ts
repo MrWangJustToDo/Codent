@@ -3,6 +3,7 @@
  */
 
 import type { SubagentStopReason } from "./subagent-stop-reason.js";
+import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { ToolsRecord } from "../tools/runtime/tools-record.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -42,9 +43,13 @@ export interface SubagentRunDeps {
   manager: AgentManager;
 }
 
+export type SubagentProfile = "explore" | "internal" | "general";
+
 export interface SubagentConfig {
   /** Optional custom ID for the subagent (auto-generated if not provided) */
   subagentId?: string;
+  /** Execution profile. Defaults to `explore`; internal one-shot callers pass `internal`. */
+  profile?: SubagentProfile;
   /** The prompt/task for the subagent to complete */
   prompt: string;
   /** Short description for UI display (default: "subtask") */
@@ -74,14 +79,6 @@ export interface SubagentConfig {
    */
   initialMessages?: ModelMessage[];
   /**
-   * Stream parent-panel / task-tool preview via {@link parentTaskToolCallId}.
-   *
-   * Defaults to `true` when `parentTaskToolCallId` is set, otherwise `false`.
-   * A UI channel is always attached; set `false` to skip parent panel streaming
-   * (compaction, memory extraction).
-   */
-  bridgeUI?: boolean;
-  /**
    * When set, stream assistant text into the parent's compact summary stream
    * (`source: "compact"`). Used by compaction summarizer subagents.
    */
@@ -105,14 +102,11 @@ export interface SubagentConfig {
   onTextDelta?: (delta: string) => void;
 }
 
-/** Resolve whether a subagent run should bridge through {@link AgentUIChannel}. */
-export function resolveSubagentBridgeUI(config: Pick<SubagentConfig, "bridgeUI" | "parentTaskToolCallId">): boolean {
-  return config.bridgeUI ?? Boolean(config.parentTaskToolCallId);
-}
-
 export interface SubagentResult {
   /** Subagent ID - use to get instance via agentManager.getAgent(subagentId) */
   subagentId: string;
+  /** Execution profile, carried for UI-only task metadata. */
+  profile?: AgentProfileId;
   /** Final output text (may be truncated; full output at cachedOutputPath) */
   output: string;
   /** Whether the output was truncated */

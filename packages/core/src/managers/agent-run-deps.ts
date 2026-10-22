@@ -16,6 +16,7 @@ import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
 import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import type { AgentStreamHub } from "../agent/stream-hub/index.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import type { ModelInfo } from "../models/types.js";
@@ -84,6 +85,8 @@ export interface AgentRunDeps {
    * narrow interface, forcing a cast in the assembly this refactor exists to remove.
    */
   getUIChannel: () => AgentUIChannel | null;
+  /** Set-once stream hub used to end command previews when a tool settles. */
+  streamHub: AgentStreamHub;
   /** Assigned once at construction, so capturing it cannot go stale. */
   config: Readonly<ManagedAgentConfig>;
   /** Immutable after construction. */
@@ -144,6 +147,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getSystemPrompt: () => managed.getSystemPrompt(),
     getFrozenSystemPrompt: () => managed.getFrozenSystemPrompt(),
     getUIChannel: () => managed.getUI() ?? null,
+    streamHub: managed.streamHub,
     config: managed.config,
     parentId: managed.parentId,
     coreEnv: resolveCoreEnv(managed.runtime?.env ?? getEnv()),

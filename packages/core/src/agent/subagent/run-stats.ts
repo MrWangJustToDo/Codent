@@ -6,6 +6,7 @@ import { splitStepSegments } from "../stream/extract-assistant-text.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
 import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
+import { EMPTY_SUMMARY } from "./subagent-output.js";
 
 import type { SubagentResult } from "./types.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
@@ -152,7 +153,7 @@ export function deriveSubagentRunStats(
     (finishReason === "tool_calls" || (!calledBeginSummary && toolCalls > 0 && iterations >= input.maxIterations));
   const reachedLimit = hitStepBudget;
 
-  const hasSummary = input.output.trim().length > 0 && input.output !== "(no summary)";
+  const hasSummary = input.output.trim().length > 0 && input.output !== EMPTY_SUMMARY;
   const hitOutputLimit = finishReason != null && OUTPUT_LIMIT_FINISH_REASONS.has(finishReason);
 
   let incomplete = false;

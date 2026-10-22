@@ -59,7 +59,7 @@ import type {
   AgentSessionEvent,
   AgentSessionSnapshot,
   AgentSessionSubagentSummary,
-  SummaryStreamEvent,
+  AgentStreamEvent,
 } from "@codent/core";
 import type { UIMessage } from "@tanstack/ai";
 
@@ -1157,7 +1157,7 @@ export class AcpProjector {
     return undefined;
   }
 
-  private onSummary(event: SummaryStreamEvent): void {
+  private onSummary(event: AgentStreamEvent): void {
     if (event.type === "reset") {
       // A task summary is the PARENT-facing result stream for one task tool call. It is not a
       // compaction row and not a child message: it updates the existing task row's content.
@@ -1223,7 +1223,15 @@ export class AcpProjector {
       }
       return;
     }
-    this.finishCompaction("completed");
+    // A compact stream `end` closes ONE summarization pass, not the whole compaction. Multi-pass
+    // auto-compaction continues with same-epoch appends (segmented input / prefix summary), and
+    // the lifecycle `compaction:*:complete` (or the manual command result) closes the row with the
+    // accumulated summary. Finishing here discarded every pass after the first.
+    //
+    // CONTRACT: every producer that opens a `compact` summary stream MUST eventually emit
+    // `compaction:auto-complete` / `compaction:reactive-complete`, or be a manual `/compact` whose
+    // command result calls `finishManualCompaction`. Without one of those, the row intentionally
+    // stays `in_progress`; `end` is not a completion signal for a multi-pass compaction.
   }
 
   /** An id is only required to be unique within the session, so a counter satisfies it. */

@@ -29,7 +29,7 @@ A pnpm monorepo with ten packages organized in a layered architecture.
 
 | Package | Role |
 |---------|------|
-| `@codent/core` | Runtime-agnostic core: agent loop, tools, LLM model factory, CoreEnv interface |
+| `@codent/core` | Runtime-agnostic core: shared managed run, agent loop, tools, LLM model factory, CoreEnv interface |
 | `@codent/app` | Shared UI layer: React components, hooks, commands, AgentAdapter interface. **Session-only** for agent control — one runtime owns exactly one live root session (a second session means a second runtime, not a second entry in the app store). Reads the workspace env from a host-supplied `CoreEnvProvider` (never ambient `getEnv()`). See [`packages/app/README.md`](packages/app/README.md) import allowlist |
 | `@codent/cli` | Terminal host — thin shell that registers CoreEnv and renders `@codent/app` |
 | `@codent/node` | Node.js CoreEnv implementation: native filesystem, shell, OS sandbox |
@@ -205,6 +205,14 @@ ConnectionGuard(/health) → env = createRemoteEnv(url); provider = apiKey ? dir
 ```
 
 The same shape applies to the other hosts: `codent` (local release host), `acp` (local bootstrap), `playground` (WebContainer env), and `server` (one server-owned `CodentAgent` over its CoreEnv; the `/api/agent/*` plane drives its manager). IM reaches the agent through an external ACP client (cc-connect → `codent acp`); see `docs/acp-im.md`.
+
+### Shared Managed Run
+
+Root and child runs share `agent/run/managed-span.ts`, a helper (not a layer) that owns the
+`runAgentOnce` call plus shared abort/error/empty-stream normalization. Root queueing/approvals and
+child task projection remain with their actual owners. A non-`internal` child projects into the
+parent task row when it carries the parent task id; `general` remains defined as an id but is not
+exposed through `task`.
 
 ### @codent/core Public API
 
@@ -625,8 +633,8 @@ The `@codent/server` package exposes CoreEnv APIs over HTTP using Hono RPC for e
 | `/api/agent/:id/snapshot` | GET | AgentSession snapshot (root or subagent id) |
 | `/api/agent/:id/command` | POST | `dispatch(command)` |
 | `/api/agent/:id/events` | GET | SSE session channels (+ 15s heartbeat ping frames) |
-| `/api/agent/:id/tool-buffers` | GET | Buffered tool stdout/stderr per toolCallId (remount) |
-| `/api/agent/:id/summary-streams` | GET | Live SummaryStreamHub snapshots (remount/cache seed) |
+| `/api/agent/:id/tool-buffers` | GET | Command stdout/stderr snapshots per toolCallId, root + children (remount) |
+| `/api/agent/:id/summary-streams` | GET | Live task/compact summary snapshots (remount/cache seed) |
 | `/api/agent/:id` | DELETE | Close session |
 
 ### Client Usage
@@ -674,7 +682,7 @@ registerModelProvider(await createRemoteProvider("http://localhost:3100"));
 
 **Vision note:** On OpenAI-compatible Chat Completions, multimodal tool results are lifted to a synthetic user `image_url` message (`liftToolMediaForChatCompletions`) so base64 is not stringified into `role: "tool"`. Anthropic keeps native multimodal `tool_result` parts. Official DeepSeek Chat Completions may still reject `image_url` (text-only schema); capability sanitization strips unsupported `image` / `audio` / `video` / `document` parts on the wire and retries once — use a vision-capable provider for real media understanding. Session/UI history always keeps structured image parts (and `.agents/media` binary files); wire stripping must not change persisted message shape.
 
-**Logging (built-in extension):** the emission **seam** is `AgentLog` (`agent/agent-log/agent-log.ts`) — level filtering, `run` stamping, envelope construction, then a direct hand-off to the attached sink. It is deliberately **not** an extension and not disableable: ~76 core call sites plus `ctx.logger` write through it, and they must work during workspace construction, before extensions load, and while an extension is failing to activate. Log **policy** belongs to the built-in log extension (`agent/log/extension.ts` = `createLogExtension`, with `event-log-bridge.ts` for the rules, `event-log-rules.ts` for the table, `schemas.ts` for the entry schema, `jsonl-file-sink.ts` for the sink + rotation). The two domains are coupled **but acyclic**, which is the property to preserve: `agent/log/` reaches `agent-log/` for the `LogEntry` / `AgentLog` **types** (erased) and for the extension-exit-flush registry, while `agent-log/` reaches `agent/log/` for the JSONL sink and the entry schema — opposite directions, but never along a path that returns to its start, so neither domain can break the other by initialising early. The written rule is "no module-level import cycle between these two domains", not "no two-way edge": the value edges in both directions are real and each is load-bearing, and the schema lives in `agent/log/` because the sink is its only runtime consumer. `AgentManager` constructs and `start()`s it; its `bus.on("*")` subscription is the only wildcard consumer in core, and it maps telemetry events to entries — each stamped with the originating event type (`event`) and scoped to the in-flight run (`run`). Override per event type with `EventLogPolicy`. Emit sites should not duplicate lifecycle logs covered by the table. Entries emitted before a sink is bound are retained (bounded, `MAX_PENDING_LOG_ENTRIES`) and drained into the first sink that attaches, so bootstrap diagnostics reach disk. The sink persists every entry to `.agents/logs/<sessionId>/agent.log` (size-rotated), validated against `logEntrySchema` at the write boundary. Subagents have no extension runner but do log, so core hands **each** `AgentLog` to the extension's sink (`attachSink`); the extension's `dispose()` releases them.
+**Logging (built-in extension):** the emission **seam** is `AgentLog` (`agent/agent-log/agent-log.ts`) — level filtering, scope/`run` stamping, envelope construction, then a direct hand-off to the attached sink. It is deliberately **not** an extension and not disableable: ~76 core call sites plus `ctx.logger` write through it, and they must work during workspace construction, before extensions load, and while an extension is failing to activate. Log **policy** belongs to the built-in log extension (`agent/log/extension.ts` = `createLogExtension`, with `event-log-bridge.ts` for the rules, `event-log-rules.ts` for the table, `schemas.ts` for the entry schema, `jsonl-file-sink.ts` for the sink + rotation). The two domains are coupled **but acyclic**, which is the property to preserve: `agent/log/` reaches `agent-log/` for the `LogEntry` / `AgentLog` **types** (erased) and for the extension-exit-flush registry, while `agent-log/` reaches `agent/log/` for the JSONL sink and the entry schema — opposite directions, but never along a path that returns to its start, so neither domain can break the other by initialising early. The written rule is "no module-level import cycle between these two domains", not "no two-way edge": the value edges in both directions are real and each is load-bearing, and the schema lives in `agent/log/` because the sink is its only runtime consumer. `AgentManager` constructs and `start()`s it; its `bus.on("*")` subscription is the only wildcard consumer in core, and it maps telemetry events to entries — each stamped with the originating event type (`event`), committed to its run (`run`), and attributed by `scope` (`profile` + optional `taskCallId`). Override per event type with `EventLogPolicy`. Emit sites should not duplicate lifecycle logs covered by the table. Entries emitted before a sink is bound are retained (bounded, `MAX_PENDING_LOG_ENTRIES`) and drained into the first sink that attaches, so bootstrap diagnostics reach disk. The sink persists every entry to `.agents/logs/<sessionId>/agent.log` (size-rotated), validated against `logEntrySchema` at the write boundary. Subagents have no extension runner but do log, so core hands **each** `AgentLog` to the extension's sink (`attachSink`); the extension's `dispose()` releases them.
 
 ## Prompt Cache (prefix)
 Frozen system text ends with `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` and stays byte-stable across turns.
@@ -782,7 +790,7 @@ Turning it **on** answers every approval the run is currently **parked on** and 
 
 The project supports **subagents** — context-isolated agents spawned to handle delegated tasks.
 
-**Run profiles:** InteractiveChat (`AgentChatController` pump) and Worker (`runSubagent`) share `runAgentOnce` / `consumeAgentStream` in `agent/run/run-agent-skeleton.ts`. Workers use outcome path `"detached"`; chat finalizes with `"chat"` after the full pump. Hosts still observe via `AgentSession` only.
+**Run profiles:** InteractiveChat (`AgentChatController` pump) and Worker (`runSubagent`) share `agent/run/managed-span.ts`, which reuses `runAgentOnce` / `consumeAgentStream` in `agent/run/run-agent-skeleton.ts`. Workers use outcome path `"detached"`; chat finalizes with `"chat"` after the full pump. Hosts still observe via `AgentSession` only.
 
 ### Subagent Characteristics
 
@@ -790,19 +798,20 @@ The project supports **subagents** — context-isolated agents spawned to handle
 |---------|----------|
 | Context | Fresh (starts with empty messages) |
 | Tools | Read-only: `read_file`, `glob`, `grep`, `list_file`, `tree`, `websearch`, `webfetch`, `run_command` (restricted: read-only, project-internal commands only — writes, background commands and external paths are denied by `subagentSafe`), plus marker `begin_summary` (no write tools) |
-| Return | Summary only to parent LLM context; UI keeps a read-only UIMessage preview when `bridgeUI` is enabled |
+| Return | Summary only to parent LLM context; UI keeps a read-only UIMessage preview when the child is projected to the parent task row |
 | Iteration Limit | 50 steps max (TanStack `maxIterations`; cutoff leaves `finishReason: tool_calls`) |
 | Status flags | `toModelOutput` exposes `reachedLimit` / `incomplete` / `aborted` (plus `stopReason` when aborted); explore runs require `begin_summary` for a complete result. `truncated` stays on the output for other callers but is NOT handed to the parent: the `task` tool runs with `SUBAGENT_NO_TRUNCATE`, so it is always false there. A long summary is a head+tail PREVIEW ending with `Full output saved to: <path>` — the model is told to read that file. A terminal **failure** (provider error, context overflow) reports through the same flags — `incomplete: true` with the fault prefixed onto the summary — instead of throwing, so a dead `task` never reaches the parent as a bare tool error, and it takes the same progress-summary fallback (`isProgressSummaryEligible` accepts `failed` as a terminal cause) |
 | Summary Limit | `task`: none (`SUBAGENT_NO_TRUNCATE`). Summaries over the tool-output cache threshold become a head+tail preview in the model context with the full text at `.agents/cache/tool-output/<id>.txt`. Other `runSubagent` callers default to `SUBAGENT_DEFAULT_MAX_OUTPUT_LENGTH` (5000 chars). |
 
-| UI Preview | `bridgeUI: true` (default when `parentTaskToolCallId` is set): parent panel + task-tool streaming via the subagent’s `AgentUIChannel` |
-| No parent bridge | `bridgeUI: false` (default otherwise): still has an internal `AgentUIChannel` (message SoT); skips parent task-tool streaming / preview bridging — used by compaction |
+| UI Preview | A non-`internal` child with a parent task id: parent panel + task-tool streaming via the subagent’s `AgentUIChannel` |
+| No parent bridge | `internal` workers (and any child without a parent task id): still have an internal `AgentUIChannel` (message SoT); skip parent task-tool streaming |
 
 ### Subagent UI Preview
 
 `runSubagent` always attaches an `AgentUIChannel` via `ensureUIChannel`.
-`bridgeUI: true` enables the task panel (`Ctrl+T`) and parent task-tool routing
-(summary stream keyed by the task tool-call id); `bridgeUI: false` keeps the channel internal only.
+A non-`internal` child with a parent task id enables the task panel (`Ctrl+T`) and parent task-tool routing
+(summary stream keyed by the task tool-call id); an `internal` child or one without a task id keeps
+the channel internal only.
 Task-tool subagents use `autoDestroy: false` so the preview stays available; after the stream ends,
 detached outcome finalization marks them `completed`/`aborted`. Esc while a task is active aborts the
 subagent first: `runSubagent` sets `aborted: true` and appends `[Task cancelled by user.]` into the
@@ -812,7 +821,7 @@ Task spawn ids are always auto-generated via `generateId("subagent", { exists })
 does not supply an `id` input.
 The default task tool row shows the current subagent exploration tool during analysis.
 After the subagent calls `begin_summary`, the UI switches to summary phase and streams final text
-via `SummaryStreamHub` (`reset` / `append` / `end` on key `task:${toolCallId}`) into `useSummaryStream` /
+via `AgentStreamHub` (`reset` / `append` / `end` on key `task:${toolCallId}`) into `useSummaryStream` /
 `SummaryStreamView` — not UIMessage diffs or `emitStreamingChunk` (those remain for `run_command`).
 On restart-style stream recovery (429 / capability sanitize), `AgentUIChannel.resetRetryUiState()`
 resets only the attempt-scoped UI state (the streamed summary banner text + phase unlock), for **both**
@@ -846,7 +855,7 @@ coordinator owns. Cap resolution: `resolveMaxConcurrentTasks` (finite integer �
 
 When a subagent hits its iteration limit before `begin_summary`, the **progress-summary fallback**
 (`subagent/progress-summary.ts`) spawns a side-LLM summarizer (parent-spawned, no tools) that turns the
-partial exploration into a report streamed through the same `SummaryStreamHub`, so the task UI always
+partial exploration into a report streamed through the same `AgentStreamHub`, so the task UI always
 shows a readable outcome instead of a bare cutoff. Subagent LLM retries (429/gateway backoff, capability
 strip) are surfaced in the task UI via `AgentRetryState` on the session `state` channel, mirroring the
 main-chat footer.
@@ -867,7 +876,8 @@ main-chat footer.
 ```
 packages/core/src/agent/
 ├── run/
-│   └── run-agent-skeleton.ts  # runAgentOnce / consumeAgentStream / ensureUIChannel
+│   ├── run-agent-skeleton.ts  # runAgentOnce / consumeAgentStream / ensureUIChannel
+│   └── managed-span.ts        # shared stream + abort/error/empty normalization
 ├── subagent/
 │   ├── run-subagent.ts        # Worker profile: runSubagent(), getSubagent(), destroySubagent()
 │   ├── run-stats.ts           # Iteration/limit stats from UI messages + stream
@@ -877,7 +887,8 @@ packages/core/src/agent/
 │   ├── begin-summary-tool.ts  # begin_summary marker tool
 │   ├── progress-summary.ts    # Iteration-limit progress-summary fallback (side-LLM)
 │   ├── task-prefork.ts        # Eager parallel pre-fork (rolling window, MAX_ACTIVE_TASK_PREFORKS=4)
-│   ├── task-run-state.ts      # Per-task phase machine (running → summary)
+│   ├── task-result.ts          # task result projection (stats/notice/progress/usage)
+│   ├── task-run-state.ts      # Per-task phase machine (running → summary | limit)
 │   ├── task-tool.ts           # createTaskTool() for parent agents
 │   └── index.ts
 ├── tools/              # Universal tools (fs/shell/web) + runtime glue
@@ -1149,9 +1160,9 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
   (`chunk` / `clear` by `toolCallId`); throttling is applied in the app layer.
   `useStreamingOutput(toolCallId, { throttleMs })` / `StreamingOutputView` (default `0` = every chunk).
   `ToolCallPartView` defaults `run_command` to 100ms; pass `streamingThrottleMs` to override.
-- **Task / compact summary:** Core `SummaryStreamHub` multicasts `reset` / `append` / `end` on the session
+- **Task / compact summary:** Core `AgentStreamHub` multicasts `reset` / `append` / `end` on the session
   `summary` channel. Task keys are `task:${toolCallId}`; compact keys are stable `compact:${agentId}`
-  (single-flight per agent). App `useSummaryStream` / `useActiveCompactSummaryStream` keep a fixed line window
+  (single-flight per agent). App `useSummaryStream` / `useCompactSummaryText` keep a fixed line window
   (`pendingLine` + overflow indicator). Do not route summary text through `StreamingOutputView`.
 - **Compact transcript (`/appearance compact`):** the density mode has two layers that must agree:
   - *Projection* (`packages/app/src/utils/project-transcript.ts`) folds contiguous **completed**
@@ -1227,7 +1238,7 @@ packages/
 │   │   ├── skills/                    # Skill loading + built-in Skills extension
 │   │   ├── stream/                    # Stream helpers (errors, assistant-text extract)
 │   │   ├── subagent/                  # Subagent spawning + task tool (+ prefork / phase state)
-│   │   ├── summary-stream/            # SummaryStreamHub (task / compact summary streams)
+│   │   ├── stream-hub/                # AgentStreamHub (command / task / compact)
 │   │   ├── todo/                      # Todo tracking + todo tool
 │   │   ├── tools/                     # Universal AI tools (fs, shell, web) + runtime/util
 │   │   ├── turn-context/              # Per-turn dynamic context (<ctx kind=...> payload)

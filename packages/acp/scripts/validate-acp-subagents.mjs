@@ -209,15 +209,22 @@ const check = checker.check;
   // A live summary stream updates the same row; content REPLACES, so every frame re-sends the whole text.
   const stream = projectorScenario();
   stream.setMessages(message(taskCall("input-complete")));
-  stream.push("summary", { type: "reset", key: "task:tc1", source: "task", toolCallId: "tc1", seq: 1 });
+  stream.push("summary", {
+    type: "reset",
+    channel: "text",
+    key: "task:tc1",
+    source: "task",
+    toolCallId: "tc1",
+    seq: 1,
+  });
   // Two chunks past the 300ms flush window: content REPLACES, so the second must carry BOTH.
   const realNow = Date.now;
   let clockOffset = 0;
   Date.now = () => realNow() + clockOffset;
   try {
-    stream.push("summary", { type: "append", key: "task:tc1", chunk: "searching ", seq: 2 });
+    stream.push("summary", { type: "append", channel: "text", key: "task:tc1", chunk: "searching ", seq: 2 });
     clockOffset = 1000;
-    stream.push("summary", { type: "append", key: "task:tc1", chunk: "the repo", seq: 3 });
+    stream.push("summary", { type: "append", channel: "text", key: "task:tc1", chunk: "the repo", seq: 3 });
   } finally {
     Date.now = realNow;
   }
@@ -243,8 +250,15 @@ const check = checker.check;
   // has nothing to do with the result gate. A reset starts a fresh flush window, so the ONLY reason
   // this chunk may be dropped is that the row already received its final result.
   const beforeLate = stream.emitted.length;
-  stream.push("summary", { type: "reset", key: "task:tc1", source: "task", toolCallId: "tc1", seq: 3 });
-  stream.push("summary", { type: "append", key: "task:tc1", chunk: "late tail", seq: 4 });
+  stream.push("summary", {
+    type: "reset",
+    channel: "text",
+    key: "task:tc1",
+    source: "task",
+    toolCallId: "tc1",
+    seq: 3,
+  });
+  stream.push("summary", { type: "append", channel: "text", key: "task:tc1", chunk: "late tail", seq: 4 });
   check(
     "a chunk after the final result is dropped",
     stream.emitted.length === beforeLate &&

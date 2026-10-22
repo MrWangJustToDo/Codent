@@ -6,6 +6,7 @@
  * them to preserve their existing public surface.
  */
 
+import type { AgentProfileId } from "./agent-profile.js";
 import type { AgentRetryState } from "./agent-retry.js";
 import type { AgentStatus } from "./agent-status.js";
 import type { TokenUsage } from "./token-usage.js";
@@ -137,6 +138,8 @@ export interface AgentSessionSubagentSummary {
    * because the run neither errored nor was cancelled).
    */
   taskPhase?: "running" | "summary" | "limit";
+  /** Execution profile (root/explore/internal); useful for distinguishing internal workers. */
+  profile?: AgentProfileId;
   usage?: UsageChangeSnapshot;
 }
 

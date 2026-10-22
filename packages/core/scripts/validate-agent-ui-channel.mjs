@@ -7,7 +7,7 @@
 import { EventType } from "@tanstack/ai/client";
 import assert from "node:assert/strict";
 
-import { AgentUIChannel, SummaryStreamHub, createAgentEventBus, summaryStreamKey } from "../dist/dev.mjs";
+import { AgentUIChannel, AgentStreamHub, createAgentEventBus, agentStreamKey } from "../dist/dev.mjs";
 
 const threadId = "thread-ui";
 const runId = "run-ui";
@@ -183,17 +183,17 @@ assert.equal(emptyChannel.getMessages().length, 1);
 assert.equal(emptyChannel.getMessages()[0].id, "assistant-deny");
 
 // ============================================================================
-// Summary stream via SummaryStreamHub (no UIMessage diff / emitStreamingChunk).
+// Summary stream via AgentStreamHub (no UIMessage diff / emitStreamingChunk).
 // ============================================================================
 
 const summaryStreamId = "task-1";
 const summaryMsgId = "assistant-summary";
 const longText = "x".repeat(200);
 
-const summaryHub = new SummaryStreamHub();
+const summaryHub = new AgentStreamHub();
 const summaryBus = createAgentEventBus();
 summaryHub.setEventBus(summaryBus);
-/** @type {import("../dist/dev.mjs").SummaryStreamEvent[]} */
+/** @type {import("../dist/dev.mjs").AgentStreamEvent[]} */
 const summaryEvents = [];
 const unsubSummary = summaryBus.on("session:summary", (event) => summaryEvents.push(event.payload));
 
@@ -258,7 +258,7 @@ await summaryChannel.consumeRun({
   summaryHub,
 });
 
-const summaryKey = summaryStreamKey("task", summaryStreamId);
+const summaryKey = agentStreamKey("task", summaryStreamId);
 const summarySnap = summaryHub.getSnapshot(summaryKey);
 assert.ok(summarySnap, "expected summary snapshot");
 assert.equal(summarySnap.status, "ended");
@@ -275,7 +275,7 @@ unsubSummary();
 // Trailing-newline growth must stay monotonic (no shrink→clear→restream).
 // ============================================================================
 
-const monoHub = new SummaryStreamHub();
+const monoHub = new AgentStreamHub();
 const monoBus = createAgentEventBus();
 monoHub.setEventBus(monoBus);
 /** @type {string[]} */
@@ -345,7 +345,7 @@ await monoChannel.consumeRun({
 
 const monoJoined = monoAppends.join("");
 assert.equal(monoJoined, monoBase + "\nline2\nline3\nline4\nline5\nline6");
-const monoSnap = monoHub.getSnapshot(summaryStreamKey("task", "task-mono"));
+const monoSnap = monoHub.getSnapshot(agentStreamKey("task", "task-mono"));
 assert.ok(monoSnap);
 assert.equal(monoSnap.status, "ended");
 assert.deepEqual(monoSnap.lines, [monoBase, "line2", "line3", "line4", "line5"]);
@@ -356,7 +356,7 @@ unsubMono();
 // resetRetryUiState keeps the message history, rolls summary phase back, clears hub text
 // ============================================================================
 
-const retryHub = new SummaryStreamHub();
+const retryHub = new AgentStreamHub();
 const retryBus = createAgentEventBus();
 retryHub.setEventBus(retryBus);
 /** @type {Array<{ type: string }>} */
@@ -477,7 +477,7 @@ assert.equal(
   retryChannel.getMessages().some((m) => m.role === "assistant"),
   true
 );
-const retrySnap = retryHub.getSnapshot(summaryStreamKey("task", "task-retry"));
+const retrySnap = retryHub.getSnapshot(agentStreamKey("task", "task-retry"));
 assert.ok(retrySnap);
 assert.equal(retrySnap.status, "ended");
 assert.equal(retrySnap.pendingLine, "C".repeat(80));

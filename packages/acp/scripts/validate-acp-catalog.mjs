@@ -83,7 +83,7 @@ function makeFakeSession(id, diskId = id, initial = {}) {
     id,
     getSnapshot: () => snap,
     state,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
@@ -1109,7 +1109,7 @@ function makeForkSession(id, diskId) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);

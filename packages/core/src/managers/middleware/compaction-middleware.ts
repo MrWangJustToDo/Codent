@@ -75,6 +75,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
 
       const alreadyCompacted = isLatestDurableMessageCompactionSummary(channel.getMessages());
       if (!isSubagent && !alreadyCompacted && deps.shouldTriggerAutoCompact(llmMessages)) {
+        const compactionGeneration = managed?.beginCompactionGeneration();
         try {
           deps.status.beginCompaction("auto");
 
@@ -98,6 +99,12 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             contextWindow,
             ...(runAbortSignal ? { abortSignal: runAbortSignal } : {}),
           });
+
+          // A manual compaction (or a session switch) can claim the status while the auto
+          // summarizer is finishing. Do not apply its checkpoint or report completion in that case.
+          if (managed && !managed.isCompactionCurrent(compactionGeneration)) {
+            return { messages: llmMessages };
+          }
 
           if (
             applyCompactionResult(deps.getCoreEnv(), fromChannel, channel, usage, result, {
@@ -123,12 +130,13 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
         } catch (err) {
           // A user cancel is not a compaction failure — stay silent.
-          if (!isAbortError(err)) {
+          if (!isAbortError(err) && (!managed || managed.isCompactionCurrent(compactionGeneration))) {
             const error = toError(err);
             deps.emitEvent?.("compaction:auto-error", { error: error.message });
           }
         } finally {
-          deps.status.endCompaction();
+          // Only the owner that still holds the compaction generation may restore status.
+          if (!managed || managed.isCompactionCurrent(compactionGeneration)) deps.status.endCompaction();
         }
       }
 

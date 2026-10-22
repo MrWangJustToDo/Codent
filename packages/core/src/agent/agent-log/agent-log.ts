@@ -1,7 +1,7 @@
 import { createSequentialIdGenerator } from "../../utils/generate-id.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
 
-import type { AgentLogFileSinkOptions, LogCategory, LogEntry, LogLevel } from "./types.js";
+import type { AgentLogFileSinkOptions, LogCategory, LogEntry, LogLevel, LogScope } from "./types.js";
 
 // ============================================================================
 // Log ID Generator
@@ -64,6 +64,9 @@ export class AgentLog {
   /** Short run id stamped onto entries while an agent run is in flight. */
   private currentRun: string | null = null;
 
+  /** Profile/task attribution stamped onto every assembled entry. */
+  private scope: LogScope = { profile: "root" };
+
   /** Active file sink's per-entry consumer, or null when no sink is attached. */
   private sinkEntry: ((entry: LogEntry) => void) | null = null;
 
@@ -87,9 +90,10 @@ export class AgentLog {
     error: 3,
   };
 
-  constructor(options?: { enabled?: boolean; minLevel?: LogLevel }) {
+  constructor(options?: { enabled?: boolean; minLevel?: LogLevel; scope?: LogScope }) {
     if (options?.enabled !== undefined) this.enabled = options.enabled;
     if (options?.minLevel) this.minLevel = options.minLevel;
+    if (options?.scope) this.scope = options.scope;
   }
 
   // ============================================================================
@@ -110,6 +114,11 @@ export class AgentLog {
    */
   setRun(run: string | null): void {
     this.currentRun = run;
+  }
+
+  /** Set this agent's profile/task attribution for subsequent entries. */
+  setScope(scope: LogScope): void {
+    this.scope = scope;
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -136,6 +145,7 @@ export class AgentLog {
     if (!this.shouldLog(level)) return null;
 
     const entry: LogEntry = {
+      scope: { ...this.scope },
       id: generateLogId(),
       timestamp: Date.now(),
       level,

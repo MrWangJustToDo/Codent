@@ -28,12 +28,12 @@ process.env.SANDBOX_ENV = "native";
 
 const { createServer, getServerManager } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
-const { RemoteSessionClient } = await import("../dist/remote-session-client.mjs");
+const { RemoteSessionClient, applyEventForTests } = await import("../dist/remote-session-client.mjs");
 
 // The server owns its agent runtime (a `CodentAgent` over the workspace CoreEnv);
 // `getServerManager()` from the server entry reaches the agents it created.
-// `summaryStreamKey` is a pure helper shared through the externalized core.
-const { summaryStreamKey } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
+// `agentStreamKey` is a pure helper shared through the externalized core.
+const { agentStreamKey } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
 
 const waitFor = async (label, fn, timeoutMs = 6000) => {
   const start = Date.now();
@@ -160,7 +160,7 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
 
 // ── 9. tool + summary channels end-to-end (unified bus → session projection → SSE) ──
 // Drives the server-side agent's scoped bus directly (tool:chunk / tool:clear,
-// session:summary via the shared SummaryStreamHub) and asserts the client sees
+// session:summary via the shared AgentStreamHub) and asserts the client sees
 // the projected `tool` / `summary` session events.
 {
   const agentId = session.getSnapshot().agentId;
@@ -188,16 +188,16 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   });
   bus.emit("tool:clear", { kind: "clear", toolCallId: "e2e-run" });
 
-  // Task summary stream: SummaryStreamHub (parent-managed) → session:summary.
-  const taskKey = summaryStreamKey("task", "e2e-task");
-  managed.summaryStreams.reset({ source: "task", toolCallId: "e2e-task" });
-  managed.summaryStreams.append(taskKey, "task text\n");
-  managed.summaryStreams.end(taskKey);
+  // Task summary stream: AgentStreamHub (parent-managed) → session:summary.
+  const taskKey = agentStreamKey("task", "e2e-task");
+  managed.streamHub.reset({ source: "task", toolCallId: "e2e-task" });
+  managed.streamHub.append(taskKey, "task text\n");
+  managed.streamHub.end(taskKey);
 
   // Compact stream: same hub, `compact` source → compact banner events.
-  const compactKey = summaryStreamKey("compact", agentId);
-  managed.summaryStreams.reset({ source: "compact", compactId: agentId, label: "e2e compact" });
-  managed.summaryStreams.append(compactKey, "compact text");
+  const compactKey = agentStreamKey("compact", agentId);
+  managed.streamHub.reset({ source: "compact", compactId: agentId, label: "e2e compact" });
+  managed.streamHub.append(compactKey, "compact text");
 
   await waitFor(
     "tool + summary channels",
@@ -207,6 +207,59 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
       live.some((e) => e.channel === "summary" && e.payload.type === "reset" && e.payload.source === "task") &&
       live.some((e) => e.channel === "summary" && e.payload.type === "append")
   );
+
+  // A summary append can arrive without a preceding reset (the row mounted after the reset,
+  // or the first subscription skipped a resync). The cache must synthesize the entry, and a
+  // same-epoch append must reopen an ended stream.
+  {
+    const cache = new Map();
+    const snapshot = client.getSnapshot();
+    applyEventForTests(
+      snapshot,
+      {
+        channel: "summary",
+        payload: {
+          type: "append",
+          key: "task:late-row",
+          source: "task",
+          channel: "text",
+          toolCallId: "late-row",
+          chunk: "late text\n",
+          seq: 2,
+        },
+      },
+      cache
+    );
+    const late = cache.get("task:late-row");
+    assert.ok(late, "an append without a cached reset creates a stream entry");
+    assert.equal(late.status, "active", "the synthesized entry is active");
+    assert.deepEqual(late.lines, ["late text"], "the first append is retained");
+
+    applyEventForTests(
+      snapshot,
+      { channel: "summary", payload: { type: "end", key: "task:late-row", source: "task", channel: "text", seq: 3 } },
+      cache
+    );
+    assert.equal(cache.get("task:late-row")?.status, "ended", "end closes the synthesized entry");
+
+    applyEventForTests(
+      snapshot,
+      {
+        channel: "summary",
+        payload: {
+          type: "append",
+          key: "task:late-row",
+          source: "task",
+          channel: "text",
+          toolCallId: "late-row",
+          chunk: "next pass\n",
+          seq: 4,
+        },
+      },
+      cache
+    );
+    assert.equal(cache.get("task:late-row")?.status, "active", "an append after end reopens the entry");
+  }
 
   // Late-read fallback: the summary-streams endpoint still serves current hub
   // text (remote clients keep a local summaryCache fed by SSE events only).

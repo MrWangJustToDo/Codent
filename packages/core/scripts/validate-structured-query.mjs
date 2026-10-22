@@ -426,6 +426,7 @@ const makeCapturingLog = () => {
 
 {
   const entry = {
+    scope: { profile: "internal" },
     id: "log_probe",
     timestamp: Date.now(),
     level: "warn",

@@ -9,17 +9,17 @@
  *     re-opens an ended entry that shares the same epoch).
  *   - A plain append after end (no epoch) is still ignored (existing contract).
  *
- * Run: pnpm --filter @codent/core run validate:summary-stream-epoch
+ * Run: pnpm --filter @codent/core run validate:agent-stream-epoch
  */
 
 import assert from "node:assert/strict";
 
-import { SummaryStreamHub, createAgentEventBus, summaryStreamKey } from "../dist/dev.mjs";
+import { AgentStreamHub, createAgentEventBus, agentStreamKey } from "../dist/dev.mjs";
 
 // --- plain append after end is still ignored (existing contract) ---
 {
-  const hub = new SummaryStreamHub();
-  const key = summaryStreamKey("compact", "agent_root");
+  const hub = new AgentStreamHub();
+  const key = agentStreamKey("compact", "agent_root");
   hub.reset({ source: "compact", compactId: "agent_root", label: "first", epoch: "other" });
   hub.append(key, "first line");
   hub.end(key);
@@ -30,12 +30,12 @@ import { SummaryStreamHub, createAgentEventBus, summaryStreamKey } from "../dist
 
 // --- multi-pass flow: pass 1 resets, later passes append contiguously ---
 {
-  const hub = new SummaryStreamHub();
+  const hub = new AgentStreamHub();
   const bus = createAgentEventBus();
   hub.setEventBus(bus);
-  const key = summaryStreamKey("compact", "agent_root");
+  const key = agentStreamKey("compact", "agent_root");
   const epoch = "cmpepoch_shared";
-  /** @type {import("../dist/dev.mjs").SummaryStreamEvent[]} */
+  /** @type {import("../dist/dev.mjs").AgentStreamEvent[]} */
   const events = [];
   const unsub = bus.on("session:summary", (event) => events.push(event.payload));
 
@@ -87,4 +87,4 @@ import { SummaryStreamHub, createAgentEventBus, summaryStreamKey } from "../dist
   unsub();
 }
 
-console.log("summary-stream epoch validation passed");
+console.log("agent-stream epoch validation passed");

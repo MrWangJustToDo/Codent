@@ -152,7 +152,7 @@ function makeFakeSession(id, diskId, overrides = {}) {
   return {
     id,
     getSnapshot: () => snap,
-    getSummaryStreamSnapshot: () => null,
+    getAgentStreamSnapshot: () => null,
     subscribe: (handler) => {
       listeners.add(handler);
       return () => listeners.delete(handler);
