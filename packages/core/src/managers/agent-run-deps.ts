@@ -151,7 +151,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getSystemPrompt: () => managed.getSystemPrompt(),
     getFrozenSystemPrompt: () => managed.getFrozenSystemPrompt(),
     getUIChannel: () => managed.getUI() ?? null,
-    streamHub: managed.streamHub,
+    streamHub: managed.getStreamHub(),
     config: managed.config,
     parentId: managed.parentId,
     coreEnv: resolveCoreEnv(managed.runtime?.env ?? getEnv()),

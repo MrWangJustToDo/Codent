@@ -41,6 +41,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AgentStreamHub,
   PLAN_TODO_TITLE,
   PlanModeController,
   TodoManager,
@@ -126,6 +127,7 @@ function makeManagedStub(controller) {
     session: { getSessionData: () => ({ id: "validation-session" }) },
     getTodoManager: () => undefined,
     getExtensionRunner: () => undefined,
+    getStreamHub: () => new AgentStreamHub(),
     getLog: () => ({
       warn: noop,
       info: noop,

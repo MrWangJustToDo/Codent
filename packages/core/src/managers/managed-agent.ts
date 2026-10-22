@@ -102,6 +102,7 @@ import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
 import { AgentCommandService } from "./services/agent-command-service.js";
+import { AgentToolService } from "./services/agent-tool-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
@@ -115,7 +116,6 @@ import { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentManager } from "./agent-manager.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
-import type { AgentToolService } from "./services/agent-tool-service.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
@@ -352,6 +352,11 @@ export class ManagedAgent {
   // ============================================================================
 
   tools: ToolsRecord;
+  /** Unified per-agent tool service (built-ins + extension registrations). */
+  readonly toolService: AgentToolService;
+  private todoManager: TodoManager | null;
+  private mcpManager: McpManager | null = null;
+  private skillRegistry: SkillRegistry | null = null;
   log: AgentLog;
   /** Session log sink lifetime (bind / re-point / flush-on-destroy). */
   private readonly logBinding: AgentLogBinding;
@@ -383,7 +388,7 @@ export class ManagedAgent {
   /** Package-internal TanStack runner wiring — not part of the host-facing surface. */
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   /** Live command/task/compact streams for the session `summary` / `tool` projection. */
-  readonly streamHub: AgentStreamHub;
+  private readonly streamHub: AgentStreamHub;
   private chatController?: AgentChatController;
   /**
    * Abort controller for a manual `/compact` run. Manual compaction is not a chat pump, so it has
@@ -480,6 +485,8 @@ export class ManagedAgent {
       attachViaManager: (log, options) => this.manager?.getLogExtension()?.attachSink(log, options),
     });
     this.tools = init.tools;
+    this.toolService = new AgentToolService(this.tools);
+    this.todoManager = init.todoManager ?? null;
     // Always its own service, never injectable. It holds per-agent state that cannot be shared:
     // the agent's `tools` record (written straight into by `registerTool`), a single
     // `ExtensionRunner` slot, and the MCP / todo / managed-tools providers. Two agents sharing
@@ -487,8 +494,7 @@ export class ManagedAgent {
     // descriptors — and the owner-id scoping applied at this boundary cannot help, because the
     // later agent's `setExtensionRunner` replaces the first agent's runner outright. Keeping it
     // un-injectable makes "one registry per agent" unexpressible rather than merely conventional.
-    this.extensions = new ExtensionRegistryService(this.tools);
-    if (init.todoManager) this.extensions.setTodoManager(init.todoManager);
+    this.extensions = new ExtensionRegistryService(this.toolService);
     this.parentId = init.parentId;
     this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
@@ -603,6 +609,19 @@ export class ManagedAgent {
     });
 
     this.sessionLifecycle = new SessionLifecycleService({
+      sessionPersistence: this.sessionPersistence,
+      getSessionData: () => this.getSessionData(),
+      setSessionData: (data) => this.setSessionData(data),
+      getSessionStore: () => this.getSessionStore(),
+      clearPersistedSession: () => this.clearPersistedSession(),
+      getChatController: () => this.getChatController(),
+      acquireSessionOwnership: (sessionId) => this.manager?.acquireSessionOwnership(sessionId, this.id) ?? true,
+      releaseSessionOwnership: (sessionId) => this.manager?.releaseSessionOwnership(sessionId, this.id),
+      bindSessionLogSink: (sessionId) => this.bindSessionLogSink(sessionId),
+      emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason: reason as "clear" }),
+      emitSessionSwitch: (fromSessionId, toSessionId, messageCount) =>
+        this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason: "resume" }),
+      refreshState: () => this.refreshState(),
       mode: this.mode,
       approvals: this.approvals,
       run: this.run,
@@ -1178,7 +1197,7 @@ export class ManagedAgent {
   }
 
   getTodoManager(): TodoManager | null {
-    return this.extensions.getTodoManager();
+    return this.todoManager;
   }
 
   setMemoryManager(manager: MemoryManager): void {
@@ -1299,19 +1318,19 @@ export class ManagedAgent {
   }
 
   setSkillRegistry(t: SkillRegistry): void {
-    this.extensions.setSkillRegistry(t);
+    if (!this.skillRegistry) this.skillRegistry = t;
   }
 
   getSkillRegistry(): SkillRegistry | null {
-    return this.extensions.getSkillRegistry();
+    return this.skillRegistry;
   }
 
   setMcpManager(m: McpManager): void {
-    this.extensions.setMcpManager(m);
+    if (!this.mcpManager) this.mcpManager = m;
   }
 
   getMcpManager(): McpManager | null {
-    return this.extensions.getMcpManager();
+    return this.mcpManager;
   }
 
   getExtensionRunner(): ExtensionRunner | null {
@@ -1475,6 +1494,11 @@ export class ManagedAgent {
   }
 
   /** Lazily build the command service (registry is created on first use). */
+  /** Live command/task/compact stream hub for hosts and child-run projections. */
+  getStreamHub(): AgentStreamHub {
+    return this.streamHub;
+  }
+
   getCommandService(): AgentCommandService {
     if (!this.commandService) {
       this.commandService = new AgentCommandService({
@@ -1818,83 +1842,7 @@ export class ManagedAgent {
   }
 
   async restoreSession(sessionId: string): Promise<SessionData> {
-    const manager = this.manager;
-    // Disk-session ownership check: refuse to resume a session already held by
-    // another live agent. Idempotent for the same agent (re-resume is allowed).
-    if (manager && !manager.acquireSessionOwnership(sessionId, this.id)) {
-      throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
-    }
-    let restored = false;
-    const leavingId = this.getSessionData()?.id;
-    try {
-      // A resume replaces the transcript. `restoreManagedSession` below stops the root pump /
-      // registered pre-fork; the explicit cascade reaches children that surface cannot see (a
-      // serial `task` child or a manual compaction) before `clearAll()` clears their streams.
-      this.sessionLifecycle.stop("session-resume");
-      // Clear before the restore emits `session:restore`: a subscriber that fetches
-      // `/summary-streams` during the restore must not see the previous session's snapshots.
-      this.streamHub.clearAll();
-      // Announce the departure BEFORE anything re-points the sink — in particular before the
-      // pre-bind below, which is itself a re-point. Ordering is the whole point: this entry
-      // describes the session being left, so it must be written while the sink still points at it.
-      // A no-op when the id is already the target (a re-resume of the same session), which would
-      // otherwise log a switch from a session to itself.
-      if (leavingId && leavingId !== sessionId) {
-        this.emitEvent("session:switch", {
-          fromSessionId: leavingId,
-          toSessionId: sessionId,
-          messageCount: this.getSessionData()?.uiMessages.length ?? 0,
-          reason: "resume",
-        });
-      }
-      // Bind ahead of the restore: `restoreManagedSession` emits `session:restore` (and the
-      // restore can log its own failures), so pointing the sink at the target first is what makes
-      // "which session was restored" land in that session's log. The target id is passed
-      // explicitly because the session data still holds the transient bootstrap id here.
-      //
-      // Consequence, deliberate: an entry emitted by the restore itself lands in the *target*
-      // session's file even when the restore then throws. The sink is best-effort either way, and
-      // the alternative is losing the record of the attempt entirely.
-      this.bindSessionLogSink(sessionId);
-      const session = await this.sessionPersistence.restore(sessionId);
-      restored = true;
-      // The switch is complete: release the session being left only NOW. Releasing before the
-      // restore would turn a failed resume into "lost the session we were still on"; releasing
-      // never (the previous behavior) leaked a claim for every A→B→C switch, blocking those ids
-      // for every other live agent in the process.
-      if (manager && leavingId && leavingId !== sessionId) {
-        manager.releaseSessionOwnership(leavingId, this.id);
-      }
-      // Re-point the log sink at the restored session's dir so a mid-session
-      // switch keeps logging to the session being viewed. A no-op at bootstrap
-      // (the sink was already bound to this id by `createManagedAgent`).
-      this.bindSessionLogSink();
-      return session;
-    } catch (err) {
-      // `restoreFromStore` adopts the new SessionData before its final save, so a failure after
-      // the swap has already moved the agent: releasing the target claim here would leave a live
-      // agent owning nothing while the old id stayed claimed. Treat a swapped data id as a
-      // completed switch for ownership/tracker/log purposes, then rethrow the failure.
-      const switched = this.getSessionData()?.id === sessionId;
-      if (!restored && !switched) {
-        manager?.releaseSessionOwnership(sessionId, this.id);
-        // …and the log binding, for the same reason: a failed restore leaves the session data on
-        // the transient id, so the sink must go back there or the agent keeps writing into a
-        // directory belonging to a session it is not running.
-        this.bindSessionLogSink();
-      }
-      if (switched) {
-        if (manager && leavingId && leavingId !== sessionId) {
-          manager.releaseSessionOwnership(leavingId, this.id);
-        }
-        this.sessionPersistence.resetTracker(this.getSessionData()?.uiMessages);
-        // The id already moved, so the previous session's stream snapshots are stale even though
-        // the restore failed. Keep the reset/restore cleanup symmetric.
-        this.streamHub.clearAll();
-        this.bindSessionLogSink();
-      }
-      throw err;
-    }
+    return this.sessionLifecycle.resume(sessionId);
   }
 
   isToolNeedsApproval(toolName: string): boolean {
@@ -1905,14 +1853,14 @@ export class ManagedAgent {
 
   /** Agent-local model-output shaping; the live tool entry wins. */
   getToolModelOutput(toolName: string): ToModelOutputFn | undefined {
-    const toolService = this.extensions.getToolService();
+    const toolService = this.toolService;
     toolService.useTools(this.tools);
     return toolService.resolve(toolName)?.toModelOutput ?? getToolMetadata(this.tools[toolName])?.toModelOutput;
   }
 
   /** Agent-local tool presentation; the live tool entry wins. */
   getToolPresentation(toolName: string): ToolPresentation | undefined {
-    const toolService = this.extensions.getToolService();
+    const toolService = this.toolService;
     toolService.useTools(this.tools);
     return (
       toolService.resolve(toolName)?.present ??
@@ -1927,17 +1875,17 @@ export class ManagedAgent {
     fn: Parameters<AgentToolService["registerDecorator"]>[1],
     ownerId = this.id
   ): () => void {
-    return this.extensions.getToolService().registerDecorator(toolName, fn, ownerId);
+    return this.toolService.registerDecorator(toolName, fn, ownerId);
   }
 
   /** Remove every decorator belonging to an owner (extension disable/destroy). */
   removeToolOutputDecoratorOwner(ownerId = this.id): void {
-    this.extensions.getToolService().removeDecoratorOwner(ownerId);
+    this.toolService.removeDecoratorOwner(ownerId);
   }
 
   /** Presentation catalog for this agent's live tools, not the process-wide union. */
   getToolPresentationCatalog() {
-    const toolService = this.extensions.getToolService();
+    const toolService = this.toolService;
     toolService.useTools(this.tools);
     return toolService.catalog();
   }

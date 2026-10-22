@@ -131,8 +131,8 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     incomplete: runStats.incomplete,
   };
 
-  const taskStream = Boolean(parentTaskToolCallId && parentManaged.streamHub);
-  const summaryCurrent = !taskStream || parentManaged.streamHub.isCurrentGeneration(summaryGeneration);
+  const taskStream = Boolean(parentTaskToolCallId && parentManaged.getStreamHub());
+  const summaryCurrent = !taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration);
 
   if (
     summaryCurrent &&
@@ -146,7 +146,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     )
   ) {
     enterPhase("limit");
-    const hub = taskStream ? parentManaged.streamHub : undefined;
+    const hub = taskStream ? parentManaged.getStreamHub() : undefined;
     if (hub && parentTaskToolCallId) {
       hub.reset({
         source: "task",
@@ -180,7 +180,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     );
     // A session switch can land while the summarizer is running. Do not write the old task's
     // report into the new transcript or count its usage there.
-    const progressCurrent = !taskStream || parentManaged.streamHub.isCurrentGeneration(summaryGeneration);
+    const progressCurrent = !taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration);
     if (hub && parentTaskToolCallId && progressCurrent) {
       hub.end(summaryKey, summaryGeneration);
     }
@@ -194,7 +194,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
   const usage = subagentManaged.usage.getTotal();
   const billedInputTokens = subagentManaged.usage.getBilledInputTokens();
   const durationMs = Math.max(0, Date.now() - runStartedAt);
-  const usageCurrent = !taskStream || parentManaged.streamHub.isCurrentGeneration(summaryGeneration);
+  const usageCurrent = !taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration);
 
   if (aggregateUsageToParent && usageCurrent) {
     parentManaged.usage.addTotalWithCost(usage, subagentManaged.usage.getTotalCostUsd());

@@ -209,7 +209,7 @@ function listCommandSnapshots(rootId: string) {
   const root = manager.getAgent(rootId);
   if (!root) return [];
   return [root, ...manager.getAllSubagents(rootId)].flatMap((agent) =>
-    (agent.streamHub.listSnapshots() ?? []).filter((snapshot) => snapshot.source === "command")
+    (agent.getStreamHub().listSnapshots() ?? []).filter((snapshot) => snapshot.source === "command")
   );
 }
 

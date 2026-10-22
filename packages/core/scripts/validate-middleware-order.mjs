@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 
 import {
+  AgentStreamHub,
   CANONICAL_MIDDLEWARE_ORDER,
   buildAgentRunner,
   createApprovalResumeMiddleware,
@@ -103,6 +104,7 @@ function makeManagedStub() {
     config: {},
     run: {},
     getUI: () => undefined,
+    getStreamHub: () => new AgentStreamHub(),
     tools: {},
     statusController: {},
     approvals: { toArray: () => [], upsert: noop },

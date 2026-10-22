@@ -10,10 +10,10 @@ export function createAgentToolContext(managed: ManagedAgent): AgentToolContext 
     getCommandService: () => managed.getCommandService(),
     getStreamSink: () =>
       ({
-        commandStdout: (toolCallId, chunk) => managed.streamHub.appendCommand(toolCallId, "stdout", chunk),
-        commandStderr: (toolCallId, chunk) => managed.streamHub.appendCommand(toolCallId, "stderr", chunk),
-        clearCommand: (toolCallId) => managed.streamHub.clearCommand(toolCallId),
-        endCommand: (toolCallId) => managed.streamHub.endCommand(toolCallId),
+        commandStdout: (toolCallId, chunk) => managed.getStreamHub().appendCommand(toolCallId, "stdout", chunk),
+        commandStderr: (toolCallId, chunk) => managed.getStreamHub().appendCommand(toolCallId, "stderr", chunk),
+        clearCommand: (toolCallId) => managed.getStreamHub().clearCommand(toolCallId),
+        endCommand: (toolCallId) => managed.getStreamHub().endCommand(toolCallId),
       }) satisfies AgentStreamSink,
     getCoreEnv: () => managed.getCoreEnv(),
     addPendingAbortController: (controller) => managed.addPendingAbortController(controller),

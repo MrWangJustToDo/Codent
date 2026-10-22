@@ -14,9 +14,6 @@ import type {
   ExtensionToolDefinition,
 } from "../../agent/extension";
 import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
-import type { McpManager } from "../../agent/mcp/manager.js";
-import type { SkillRegistry } from "../../agent/skills";
-import type { TodoManager } from "../../agent/todo";
 import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 
 /** Callbacks the caller (ManagedAgent) supplies for tool registration. */
@@ -46,11 +43,6 @@ export interface ExtensionToolRegistrationContext {
 }
 
 export class ExtensionRegistryService {
-  // Set-once integration managers
-  private todo: TodoManager | null = null;
-  private mcp: McpManager | null = null;
-  private skills: SkillRegistry | null = null;
-
   // Extension runtime
   private runner: ExtensionRunner | null = null;
   private loader: ExtensionLoader | null = null;
@@ -59,8 +51,8 @@ export class ExtensionRegistryService {
   /** Tool ownership/resolution lives here; this service only carries extension lifecycle. */
   private readonly tools: AgentToolService;
 
-  constructor(tools: ToolsRecord = {}) {
-    this.tools = new AgentToolService(tools);
+  constructor(tools: AgentToolService | ToolsRecord = {}) {
+    this.tools = tools instanceof AgentToolService ? tools : new AgentToolService(tools);
   }
 
   /** The unified tool service owned by this agent. */
@@ -70,37 +62,6 @@ export class ExtensionRegistryService {
 
   /** Dynamic tools provider (defaults to the agent's tools record). */
   private managedToolsProvider?: () => ToolsRecord;
-
-  // ---------------------------------------------------------------------------
-  // Integration managers (set-once)
-  // ---------------------------------------------------------------------------
-
-  setTodoManager(t: TodoManager): void {
-    if (this.todo) return;
-    this.todo = t;
-  }
-
-  getTodoManager(): TodoManager | null {
-    return this.todo;
-  }
-
-  setMcpManager(m: McpManager): void {
-    if (this.mcp) return;
-    this.mcp = m;
-  }
-
-  getMcpManager(): McpManager | null {
-    return this.mcp;
-  }
-
-  setSkillRegistry(t: SkillRegistry): void {
-    if (this.skills) return;
-    this.skills = t;
-  }
-
-  getSkillRegistry(): SkillRegistry | null {
-    return this.skills;
-  }
 
   // ---------------------------------------------------------------------------
   // Extension runner / loader

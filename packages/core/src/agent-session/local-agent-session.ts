@@ -149,11 +149,11 @@ class LocalAgentSessionImpl implements AgentSession {
   }
 
   getAgentStreamSnapshot(key: string) {
-    return this.managed.streamHub?.getSnapshot(key) ?? null;
+    return this.managed.getStreamHub()?.getSnapshot(key) ?? null;
   }
 
   listAgentStreamSnapshots() {
-    return this.managed.streamHub?.listSnapshots() ?? [];
+    return this.managed.getStreamHub()?.listSnapshots() ?? [];
   }
 
   getToolPresentation(name: string) {

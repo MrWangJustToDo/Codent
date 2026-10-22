@@ -127,7 +127,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
   }
   // Capture the hub generation before spawning: a session switch during spawn must make this
   // producer stale, not let it adopt the new session's generation.
-  const summaryGeneration = parentManaged.streamHub.getGeneration();
+  const summaryGeneration = parentManaged.getStreamHub().getGeneration();
   if (abortSignal?.aborted) {
     return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations);
   }
@@ -201,7 +201,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       initialMessages: [...(initialMessages?.length ? modelMessagesToUIMessages(initialMessages) : []), userUIMessage],
     });
 
-    const summaryHub = projectsToTask || compactSummaryStream ? parentManaged.streamHub : undefined;
+    const summaryHub = projectsToTask || compactSummaryStream ? parentManaged.getStreamHub() : undefined;
     const compactId = compactSummaryStream?.compactId;
     const compactLabel = compactSummaryStream?.label;
     const compactEpoch = compactSummaryStream?.epoch;

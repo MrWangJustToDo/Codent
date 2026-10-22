@@ -8,7 +8,7 @@ import { partTextContent } from "../agent/stream/message-parts.js";
 import { isContextUIMessage } from "../agent/turn-context";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
-import { toError } from "../utils/errors.js";
+import { errorMessage, toError } from "../utils/errors.js";
 
 import { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
 
@@ -140,46 +140,12 @@ export async function applySessionRename(
 export async function startNewDiskSession(
   managed: ManagedAgent
 ): Promise<{ ok: true; sessionId: string } | { ok: false; error: string }> {
-  const store = managed.getSessionStore();
-  if (!store) {
-    return { ok: false, error: "Session store not available" };
+  try {
+    const session = await managed.sessionLifecycle.newSession("session-new");
+    return { ok: true, sessionId: session.id };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
   }
-
-  const currentSession = managed.getSessionData();
-
-  // One lifecycle entry point: stop every producer, clear transient state, then rotate below.
-  managed.reset("session-new");
-
-  // Starting a brand-new disk session relinquishes the previous session's
-  // ownership so another live agent may resume it.
-  if (currentSession?.id) {
-    managed.manager?.releaseSessionOwnership(currentSession.id, managed.id);
-  }
-
-  const chatController = managed.getChatController();
-  // Blank the OLD session before rotating. The write is queued in SessionService, so awaiting it
-  // here is what keeps the thunk from resolving after `setSessionData(newSession)`.
-  await managed.clearPersistedSession();
-  chatController?.clearMessages({ persistEmpty: false });
-
-  const newSession = store.create({
-    modelStyle: currentSession?.modelStyle ?? "openai",
-    model: currentSession?.model ?? "unknown",
-  });
-  managed.setSessionData(newSession);
-  // The cleared agent now runs the new session; claim it like any other live root session so the
-  // ownership table describes reality (the previous id was released just above).
-  managed.manager?.acquireSessionOwnership(newSession.id, managed.id);
-  // Announce the switch on the bus *after* the session data is adopted: `setSessionData` re-points
-  // the log sink at the new id, so this entry lands in the new session's log — the only header it
-  // gets, since the new session is written to disk only on its first save and `/clear` may leave
-  // the process before that happens. Emitted through the same telemetry path as `session:start`
-  // (`emitEvent` → scoped bus → up-flow to root), so it reaches the log bridge without a host hook.
-  managed.emitEvent("session:new", { sessionId: newSession.id, reason: "clear" });
-  // Broadcast the new on-disk session id (agent identity is unchanged).
-  managed.refreshState();
-
-  return { ok: true, sessionId: newSession.id };
 }
 
 /** Plain text of a UI message's text parts (used to hand a fork point back to the editor). */
