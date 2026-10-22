@@ -23,7 +23,7 @@ import type { UsageTracker } from "../../../../runtime-types/hosts.js";
 // ============================================================================
 
 /**
- * The shared caps (see `util/output-limits`): the per-result content ceiling, the per-line
+ * The shared caps (see `shared/output-limits`): the per-result content ceiling, the per-line
  * truncation width, and the byte ceiling this tool will actually read from disk. They live in one
  * place so a `read_file` page and a `webfetch` extract cannot drift apart, and so the MEMORY bound
  * (`MAX_FILE_READ_BYTES`, the whole-file read a text/PDF/image needs) stays visibly distinct from

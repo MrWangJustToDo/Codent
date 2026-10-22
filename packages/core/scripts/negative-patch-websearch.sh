@@ -9,7 +9,7 @@ set -e
 # Resolve the repo root (packages/core/scripts -> ../../..)
 cd "$(cd "$(dirname "$0")/../../.." && pwd)" || exit 1
 CORE="packages/core"
-VALIDATOR="$CORE/src/agent/tools/websearch"
+VALIDATOR="$CORE/src/agent/tools/builtin/web/search"
 
 # Restore the current patch's backup if the script is interrupted mid-run.
 backup=""
@@ -64,39 +64,39 @@ run_case() {
 fail=0
 
 run_case "registry drop (parallel)" "$VALIDATOR/registry.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/registry.ts"; s=open(p).read(); s=s.replace("  { name: \"parallel\", create: () => parallelProvider },\n",""); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/registry.ts"; s=open(p).read(); s=s.replace("  { name: \"parallel\", create: () => parallelProvider },\n",""); open(p,"w").write(s)' \
   "registry order" || fail=1
 
 run_case "key wiring dropped (tavily)" "$VALIDATOR/key-fields.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/key-fields.ts"; s=open(p).read(); s=s.replace("  tavily: \"tavilyApiKey\",\n",""); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/key-fields.ts"; s=open(p).read(); s=s.replace("  tavily: \"tavilyApiKey\",\n",""); open(p,"w").write(s)' \
   "key fields are the single key-wiring source" || fail=1
 
 run_case "spread removed" "$VALIDATOR/provider.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/provider.ts"; s=open(p).read(); s=s.replace("    if (available.length > 1 && this.sessionId) {\n      return available[hashToIndex(this.sessionId, available.length)];\n    }\n",""); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/provider.ts"; s=open(p).read(); s=s.replace("    if (available.length > 1 && this.sessionId) {\n      return available[hashToIndex(this.sessionId, available.length)];\n    }\n",""); open(p,"w").write(s)' \
   "spread by session id" || fail=1
 
 run_case "tavily always available" "$VALIDATOR/providers/tavily.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(options?: SearchOptions): boolean {\n    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));\n  },","  isAvailable(options?: SearchOptions): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(options?: SearchOptions): boolean {\n    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));\n  },","  isAvailable(options?: SearchOptions): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
   "tavily must be unavailable" || fail=1
 
 run_case "exa ignores its key" "$VALIDATOR/providers/exa.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
   "exa keyed transport" || fail=1
 
 run_case "abort short-circuit removed" "$VALIDATOR/provider.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/provider.ts"; s=open(p).read(); s=s.replace("      if (options?.signal?.aborted) throw lastError;\n\n      for (const provider of this.providers) {","      for (const provider of this.providers) {",1); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/provider.ts"; s=open(p).read(); s=s.replace("      if (options?.signal?.aborted) throw lastError;\n\n      for (const provider of this.providers) {","      for (const provider of this.providers) {",1); open(p,"w").write(s)' \
   "Missing expected rejection" || fail=1
 
 run_case "keyed priority removed" "$VALIDATOR/provider.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/provider.ts"; s=open(p).read(); s=s.replace("    const keyed = available.find((p) => this.getApiKey(p.name));\n    if (keyed) return keyed;\n\n",""); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/provider.ts"; s=open(p).read(); s=s.replace("    const keyed = available.find((p) => this.getApiKey(p.name));\n    if (keyed) return keyed;\n\n",""); open(p,"w").write(s)' \
   "keyed provider wins auto-selection" || fail=1
 
 run_case "mcp isError ignored" "$VALIDATOR/providers/mcp-client.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/mcp-client.ts"; s=open(p).read(); s=s.replace("    if (parsed?.result?.isError) {","    if (false) {"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/mcp-client.ts"; s=open(p).read(); s=s.replace("    if (parsed?.result?.isError) {","    if (false) {"); open(p,"w").write(s)' \
   "isError" || fail=1
 
 run_case "parallel malformed payload swallowed" "$VALIDATOR/providers/parallel.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/providers/parallel.ts"; s=open(p).read(); s=s.replace("    throw new Error(\"Parallel search returned a malformed payload\");","    return [];"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/parallel.ts"; s=open(p).read(); s=s.replace("    throw new Error(\"Parallel search returned a malformed payload\");","    return [];"); open(p,"w").write(s)' \
   "malformed payload" || fail=1
 
 run_case "legacy key not normalized" "$CORE/src/models/config/models-config.ts" \
@@ -104,7 +104,7 @@ run_case "legacy key not normalized" "$CORE/src/models/config/models-config.ts" 
   "legacy websearchProvider is read as provider" || fail=1
 
 run_case "explicit-unavailable not skipped" "$VALIDATOR/provider.ts" \
-  'p="'"$CORE"'/src/agent/tools/websearch/provider.ts"; s=open(p).read(); s=s.replace("      if (explicit && (await this.isProviderAvailable(explicit))) {\n        return explicit;\n      }","      if (explicit) {\n        return explicit;\n      }"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/provider.ts"; s=open(p).read(); s=s.replace("      if (explicit && (await this.isProviderAvailable(explicit))) {\n        return explicit;\n      }","      if (explicit) {\n        return explicit;\n      }"); open(p,"w").write(s)' \
   "unavailable provider is skipped" || fail=1
 
 # Remote-session create must forward toolConfig (server plane). Patching the host to drop the

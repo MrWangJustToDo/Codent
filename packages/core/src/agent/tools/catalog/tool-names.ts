@@ -81,10 +81,8 @@ export const BUILTIN_TOOL_NAMES = {
 /**
  * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`.
  *
- * A classification over the registry, kept beside it because two planes need the same answer and a
- * second copy is how a new client tool ends up understood by one and ignored by the other: the tool
- * set's composition (`tools/catalog/tool-set.ts` and `tools/runtime/tool-sets.ts`) and the pump predicate that must not treat a
- * client tool as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
+ * A classification over the registry, kept beside it so the pump predicate can recognize a client
+ * tool instead of treating it as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
  */
 export const CLIENT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.askUser]);
 

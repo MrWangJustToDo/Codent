@@ -26,11 +26,11 @@ Domain feature modules MUST own the model-callable tool factories that primarily
 - **THEN** that factory MUST be defined under `agent/todo/`
 
 ### Requirement: Universal tools directory stays tool-focused
-`agent/tools/` MUST contain universal tool factories, the `createTools` assembler, `tool-config`, tool runtime glue (`runtime/`), shared tool helpers (`util/`), and websearch providers. Non-factory helpers that only support a single tool MUST NOT sit as peer files of `*-tool.ts` at the `tools/` root when they can live under `util/` or a feature subfolder.
+`agent/tools/` MUST contain universal tool factories, the `createTools` assembler (`catalog/`), `tool-config`, tool runtime glue (`runtime/`), shared cross-tool helpers (`shared/`), presentation descriptors and formatting (`presentation/`), built-in implementations grouped by domain (`builtin/`), and websearch providers (`builtin/web/search/`). Non-factory helpers that only support a single tool MUST NOT sit as peer files of `*-tool.ts` at the `tools/` root when they can live under `shared/` or a feature subdirectory.
 
 #### Scenario: Webfetch HTML helper is not a root tool peer
 - **WHEN** HTML conversion helpers for webfetch are stored
-- **THEN** they MUST live under `agent/tools/util/` (or a dedicated webfetch helper module under `tools/`), not as `agent/tools/webfetch-html.ts` beside tool factories
+- **THEN** they MUST live under the webfetch feature directory (`agent/tools/builtin/web/fetch/`) or `agent/tools/shared/` when the helper is cross-tool, not as `agent/tools/webfetch-html.ts` beside tool factories
 
 #### Scenario: createTools only builds universal tools
 - **WHEN** `createTools()` runs without a `processTools` hook

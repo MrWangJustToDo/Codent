@@ -84,7 +84,7 @@ if (violations.length > 0) {
     console.error(`    ${v.text}`);
   }
   console.error(
-    "\nUse the argv path instead: `execArgs()` / `execArgsCapture()` from `tools/util/exec-args.js`,\n" +
+    "\nUse the argv path instead: `execArgs()` / `execArgsCapture()` from `agent/tools/builtin/shell/exec-args.ts`,\n" +
       "with truncation via `truncateLines()`. A shell string is only valid for the one shell family\n" +
       "it was written for, which is why these constructs cannot be made portable."
   );

@@ -56,7 +56,7 @@ This change unifies the shared managed-run span at the core level: root and chil
   - `packages/core/src/agent/subagent/progress-summary.ts` and `agent/compaction/auto-compact.ts` — their internal worker calls use the internal profile, never recursively spawn an explore task
   - `packages/core/src/agent-session/` — scoped child identity and complete child panel (Ctrl+T); general approval projection is deferred with general exposure
   - `packages/core/src/agent/log/` — scope-aware log resolution and parent lifecycle index
-  - `packages/core/src/agent/tools/util/file-mutation-queue.ts` — general writes share the root workspace mutation queue
+  - `packages/core/src/agent/tools/builtin/fs/edit/mutation-queue.ts` — general writes share the root workspace mutation queue
   - `packages/app` / `@codent/acp` — consume the same status/task/log projections and the complete child panel; general child approvals are deferred with general exposure
 - Affected APIs:
   - `task` input remains explore-only in this change; no `agent: "general"` exposure yet

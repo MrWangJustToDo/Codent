@@ -6,7 +6,7 @@
  *
  * 1. **A module name states its responsibility.** The placeholder list is small and
  *    deliberate (`helpers.ts` / `misc.ts` / `utils.ts` / `common.ts` / `shared.ts`).
- *    `tools/util/helpers.ts` was the one that had slipped through.
+ *    `tools/shared/helpers.ts` would be the shape that slips through.
  * 2. **A domain directory exposes `index.ts`, and its barrel is consumed.** A barrel that
  *    nothing imports is dead weight that reads as an API; `managers/index.ts` and
  *    `managers/stream-recovery/index.ts` were both exactly that.
@@ -101,10 +101,10 @@ check("no placeholder module names", () => {
 // ============================================================================
 //
 // `openspec/specs/core-tool-layout`: "Non-factory helpers that only support a single tool MUST NOT
-// sit as peer files of `*-tool.ts` at the `tools/` root when they can live under `util/` or a feature
-// subfolder." The rule had no gate, and a client-tool result builder landed at
-// `agent/tools/ask-user-output.ts` — reading like a tool factory beside its real factory. The root is
-// a roster of tool definitions; anything else belongs under `util/` or its feature directory.
+// sit as peer files of `*-tool.ts` at the `tools/` root when they can live under `shared/` or a feature
+// subfolder." The rule had no gate, and a client-tool result builder once landed at the tools root —
+// reading like a tool factory beside its real factory. The root is a roster of tool definitions;
+// anything else belongs under `shared/` or its feature directory.
 
 const TOOLS_ROOT = join(srcRoot, "agent/tools");
 /** Root files that are not `*-tool.ts` but still belong to the tool layer. */
