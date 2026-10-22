@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- the command-job suite keeps record/log/teardown/lifecycle cases together; splitting them would duplicate the filesystem env and temp fixture setup. */
 /**
  * Validates CommandJobRegistry poll/kill/destroyAll semantics plus the durable
  * per-job log: creation, arrival order, stderr marking, terminal footer,
@@ -848,6 +849,49 @@ console.log("teardown log deletion OK");
   assert.deepEqual(await service.collectCompleted(), [], "marking is exactly-once");
   await service.destroy();
   assert.deepEqual(service.list(), [], "destroy tears the registry down");
+}
+
+// ---------------------------------------------------------------------------
+// 18. AgentCommandService: start / poll / kill through the real service
+// ---------------------------------------------------------------------------
+{
+  const owner = "ses_command_service_lifecycle";
+  const service = new AgentCommandService({
+    env: () => env,
+    ownerSessionId: () => owner,
+    onJobsChange: () => {},
+  });
+  const startEnv = {
+    ...env,
+    startCommand: async (_command, options) => {
+      options.onStdout?.("background output\n");
+      options.onStderr?.("background error\n");
+      options.onExit?.(0);
+      return { kill: async () => true, pid: 4242 };
+    },
+  };
+
+  const started = await service.startBackground({
+    command: "echo background",
+    toolCallId: "call_background",
+    coreEnv: startEnv,
+  });
+  assert.equal(typeof started.jobId, "string", "startBackground returns the job id");
+  assert.equal(typeof started.cachedOutputPath, "string", "startBackground returns the durable log path");
+  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${started.jobId}.json`, '"status":"exited"');
+
+  const polled = await service.poll(started.jobId);
+  assert.equal(polled.status, "exited");
+  assert.match(polled.stdout, /background output/);
+  assert.match(polled.stderr, /background error/);
+
+  const killed = await service.kill(started.jobId);
+  assert.equal(killed.killed, false, "an exited job is not killed again");
+  assert.equal(killed.status, "exited");
+  assert.equal(typeof killed.logPath, "string", "kill returns the durable log path");
+
+  await service.destroy();
+  assert.deepEqual(service.list(), [], "destroy tears the command service registry down");
 }
 
 await registry.destroyAll();

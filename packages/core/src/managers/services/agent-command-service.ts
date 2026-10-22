@@ -63,6 +63,9 @@ export class AgentCommandService implements AgentCommandPort {
   /** Start a background command and attach its lifecycle to the owned registry. */
   async startBackground(input: StartBackgroundInput): Promise<StartBackgroundResult> {
     await this.ready();
+    // Capture the registry for the whole command lifetime. A late stdout/stderr/exit
+    // callback must not recreate a destroyed registry after the agent is torn down.
+    const registry = this.registry();
     const { command, toolCallId, cwd, env, coreEnv } = input;
     if (!coreEnv.startCommand) {
       throw new Error(
@@ -70,18 +73,18 @@ export class AgentCommandService implements AgentCommandPort {
           "Omit run_in_background or use a local/node or playground CoreEnv that implements startCommand."
       );
     }
-    const job = this.registry().create(command, toolCallId);
+    const job = registry.create(command, toolCallId);
     try {
       const handle = await coreEnv.startCommand(command, {
         cwd,
         env,
-        onStdout: (chunk) => this.registry().appendStdout(job.id, chunk),
-        onStderr: (chunk) => this.registry().appendStderr(job.id, chunk),
-        onExit: (exitCode) => this.registry().markExited(job.id, exitCode),
+        onStdout: (chunk) => registry.appendStdout(job.id, chunk),
+        onStderr: (chunk) => registry.appendStderr(job.id, chunk),
+        onExit: (exitCode) => registry.markExited(job.id, exitCode),
       });
-      this.registry().setKill(job.id, handle.kill, handle.pid);
+      registry.setKill(job.id, handle.kill, handle.pid);
     } catch (err) {
-      this.registry().markFailed(job.id, errorMessage(err));
+      registry.markFailed(job.id, errorMessage(err));
       throw err;
     }
     return { jobId: job.id, ...(job.logPath ? { cachedOutputPath: job.logPath } : {}) };
@@ -90,7 +93,8 @@ export class AgentCommandService implements AgentCommandPort {
   /** Poll one job, throwing the same unknown-id error the registry's callers relied on. */
   async poll(jobId: string): Promise<CommandJobPollResult> {
     await this.ready();
-    const result = this.registry().poll(jobId);
+    const registry = this.registry();
+    const result = registry.poll(jobId);
     if (!result) throw new Error(`Unknown background jobId: ${jobId}`);
     return result;
   }
@@ -98,10 +102,11 @@ export class AgentCommandService implements AgentCommandPort {
   /** Stop a job and return the terminal state the tools render. */
   async kill(jobId: string): Promise<KillCommandResult> {
     await this.ready();
-    const existing = this.registry().get(jobId);
+    const registry = this.registry();
+    const existing = registry.get(jobId);
     if (!existing) throw new Error(`Unknown background jobId: ${jobId}`);
-    const killed = await this.registry().kill(jobId);
-    const after = this.registry().get(jobId);
+    const killed = await registry.kill(jobId);
+    const after = registry.get(jobId);
     return {
       killed,
       status: after?.status ?? "killed",
