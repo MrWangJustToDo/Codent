@@ -261,7 +261,11 @@ check("watched public symbols have a single definition", () => {
 
 /** Documents whose path claims are checked. */
 function documentationFiles() {
-  const docs = [join(repoRoot, "AGENTS.md"), join(repoRoot, "CLAUDE.md")];
+  const docs = [
+    join(repoRoot, "AGENTS.md"),
+    join(repoRoot, "CLAUDE.md"),
+    join(repoRoot, "packages/core/ARCHITECTURE.md"),
+  ];
   const specRoot = join(repoRoot, "openspec/specs");
   if (existsSync(specRoot)) {
     const stack = [specRoot];

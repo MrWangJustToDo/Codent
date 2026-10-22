@@ -71,16 +71,15 @@ registerBuiltinCommand("resume", {
     const result = await session.dispatch({ type: "session.resume", sessionId });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as
-      { sessionId?: string; name?: string; model?: string; uiMessages?: unknown[] } | undefined;
+    const data = result.data as { sessionId?: string; name?: string; model?: string } | undefined;
 
-    if (ctx.setMessages && Array.isArray(data?.uiMessages)) {
-      ctx.setMessages(data.uiMessages as Parameters<NonNullable<typeof ctx.setMessages>>[0]);
-      bumpAgentUsage();
-      setTimeout(() => {
-        useDynamic.getActions().setDynamicKey(Date.now());
-      }, 200);
-    }
+    // The core session emits the restored transcript through the `messages` channel.
+    // Commands only bump presentation-scoped counters; writing the transcript here too
+    // would apply the same switch twice.
+    bumpAgentUsage();
+    setTimeout(() => {
+      useDynamic.getActions().setDynamicKey(Date.now());
+    }, 200);
 
     return {
       ok: true,

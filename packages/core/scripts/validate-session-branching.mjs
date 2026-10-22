@@ -124,6 +124,7 @@ try {
   // 3. branchSession: clone end-to-end (save + switch), source untouched
   // --------------------------------------------------------------------------
   const fakeManaged = (session, { running = false } = {}) => ({
+    session: { awaitPersistIdle: async () => {} },
     getSessionStore: () => store,
     getSessionData: () => session,
     getChatController: () => ({ isRunActive: () => running }),

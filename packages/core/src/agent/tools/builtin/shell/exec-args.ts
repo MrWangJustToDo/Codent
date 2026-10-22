@@ -1,4 +1,5 @@
 import { ExecutionError } from "../../../../env/types";
+import { truncateToUtf8Bytes } from "../../../../utils/bytes.js";
 import {
   SEARCH_COMMAND_TIMEOUT,
   SEARCH_OUTPUT_BYTE_LIMIT,
@@ -158,19 +159,7 @@ export async function execArgsCapture(
 ): Promise<string | undefined> {
   const result = await execArgs(env, file, args, options);
   if (result.missing || result.killed) return undefined;
-  return truncateToBytes(result.stdout, SEARCH_OUTPUT_BYTE_LIMIT);
-}
-
-/**
- * Cut a string to at most `maxBytes` of UTF-8, without splitting a multi-byte character.
- *
- * `TextEncoder` gives the true byte size, and decoding with `fatal: false` replaces a
- * truncated lead byte rather than throwing, so the result is always valid text.
- */
-export function truncateToBytes(text: string, maxBytes: number): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.length <= maxBytes) return text;
-  return new TextDecoder().decode(bytes.subarray(0, maxBytes));
+  return truncateToUtf8Bytes(result.stdout, SEARCH_OUTPUT_BYTE_LIMIT).text;
 }
 
 /** True when the host can run binaries with an argument vector (no shell). */

@@ -17,16 +17,13 @@ registerBuiltinCommand("clone", {
     const result = await session.dispatch({ type: "session.clone", ...(name ? { name } : {}) });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as
-      { sessionId?: string; name?: string; model?: string; uiMessages?: unknown[] } | undefined;
+    const data = result.data as { sessionId?: string; name?: string; model?: string } | undefined;
 
-    if (ctx.setMessages && Array.isArray(data?.uiMessages)) {
-      ctx.setMessages(data.uiMessages as Parameters<NonNullable<typeof ctx.setMessages>>[0]);
-      bumpAgentUsage();
-      setTimeout(() => {
-        useDynamic.getActions().setDynamicKey(Date.now());
-      }, 200);
-    }
+    // The cloned transcript arrives through the core `messages` channel.
+    bumpAgentUsage();
+    setTimeout(() => {
+      useDynamic.getActions().setDynamicKey(Date.now());
+    }, 200);
 
     return { ok: true, message: `Cloned to a new session: ${data?.name ?? data?.sessionId ?? "session"}` };
   },

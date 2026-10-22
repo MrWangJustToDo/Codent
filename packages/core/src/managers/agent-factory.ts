@@ -101,75 +101,90 @@ export async function buildManagedAgent({
     }
   );
 
-  const toolsRecord = { ...(await buildToolset({ profile: toolsetProfile, managed })) };
-  managed.tools = toolsRecord;
-  managed.runtime = runtime;
-  managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
-  // Scoped unified event bus for this agent. Routes session-channel projections
-  // AND telemetry `dispatchEvent` (up-flows to the root observer / Event→Log bridge).
-  managed.setEventBus(manager.of(managed.id, parentId));
+  try {
+    const toolsRecord = { ...(await buildToolset({ profile: toolsetProfile, managed })) };
+    managed.tools = toolsRecord;
+    managed.runtime = runtime;
+    managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
+    // Scoped unified event bus for this agent. Routes session-channel projections
+    // AND telemetry `dispatchEvent` (up-flows to the root observer / Event→Log bridge).
+    managed.setEventBus(manager.of(managed.id, parentId));
 
-  if (resolvedModelInfo) {
-    managed.setModelInfo(resolvedModelInfo);
-    if (resolvedModelInfo.pricing) {
-      managed.usage.setPricing(resolvedModelInfo.pricing);
+    if (resolvedModelInfo) {
+      managed.setModelInfo(resolvedModelInfo);
+      if (resolvedModelInfo.pricing) {
+        managed.usage.setPricing(resolvedModelInfo.pricing);
+      }
+      managed.usage.setCapabilities(resolvedModelInfo.capabilities);
     }
-    managed.usage.setCapabilities(resolvedModelInfo.capabilities);
-  }
 
-  managed.setLog(log);
+    managed.setLog(log);
 
-  let bootstrapReport: BootstrapReport | undefined;
+    let bootstrapReport: BootstrapReport | undefined;
 
-  if (!parentId) {
-    const compactionInput = { ...compaction };
-    if (!compactionInput?.tokenThreshold && resolvedModelInfo?.contextWindow) {
-      // NOTE: MAX_THRESHOLD caps the compaction trigger threshold, NOT the model's context window.
-      // The model itself (e.g. DeepSeek V4 Flash) may support up to 1M tokens, but the UI
-      // displays tokenLimit (== compaction tokenThreshold) — so users see e.g. "80%/400k"
-      // instead of "32%/1M". The 400k cap is a deliberate middle ground: large-window
-      // models (400k–1M) still compact well before deep-context attention degradation,
-      // while windows <= 400k use their full size (times compactAtPercent). Increase or
-      // remove this cap if you want the UI to show the real model context window.
-      const MAX_THRESHOLD = 400_000;
-      compactionInput.tokenThreshold = Math.min(resolvedModelInfo.contextWindow, MAX_THRESHOLD);
+    if (!parentId) {
+      const compactionInput = { ...compaction };
+      if (!compactionInput?.tokenThreshold && resolvedModelInfo?.contextWindow) {
+        // NOTE: MAX_THRESHOLD caps the compaction trigger threshold, NOT the model's context window.
+        // The model itself (e.g. DeepSeek V4 Flash) may support up to 1M tokens, but the UI
+        // displays tokenLimit (== compaction tokenThreshold) — so users see e.g. "80%/400k"
+        // instead of "32%/1M". The 400k cap is a deliberate middle ground: large-window
+        // models (400k–1M) still compact well before deep-context attention degradation,
+        // while windows <= 400k use their full size (times compactAtPercent). Increase or
+        // remove this cap if you want the UI to show the real model context window.
+        const MAX_THRESHOLD = 400_000;
+        compactionInput.tokenThreshold = Math.min(resolvedModelInfo.contextWindow, MAX_THRESHOLD);
+      }
+      managed.setCompactionConfig(createCompactionConfig(compactionInput));
     }
-    managed.setCompactionConfig(createCompactionConfig(compactionInput));
-  }
 
-  if (!parentId) {
-    bootstrapReport = await new AgentBootstrap({
-      managed,
-      config,
-      env: coreEnv,
-      rootPath: fsRootPath,
-      manager,
-      log,
-      getDefaultSkillDirs,
-    }).bootstrapRoot();
-  }
-
-  if (!parentId) {
-    const sessionStore = new SessionStore(coreEnv);
-    managed.setSessionStore(sessionStore, {
-      modelStyle: config.modelStyle ?? resolvedModelInfo?.style ?? "openai",
-      model: restConfig.model,
-    });
-    // Adopt a pre-resolved restore target's id BEFORE the log sink attaches
-    // (`createManagedAgent`), so bootstrap entries land in the reused session's
-    // log dir instead of a transient id. The full restore runs later in the host.
-    if (initialSessionId) {
-      const restored = await sessionStore.load(initialSessionId);
-      if (restored) managed.setSessionData(restored);
+    if (!parentId) {
+      bootstrapReport = await new AgentBootstrap({
+        managed,
+        config,
+        env: coreEnv,
+        rootPath: fsRootPath,
+        manager,
+        log,
+        getDefaultSkillDirs,
+      }).bootstrapRoot();
     }
+
+    if (!parentId) {
+      const sessionStore = new SessionStore(coreEnv);
+      managed.setSessionStore(sessionStore, {
+        modelStyle: config.modelStyle ?? resolvedModelInfo?.style ?? "openai",
+        model: restConfig.model,
+      });
+      // Adopt a pre-resolved restore target's id BEFORE the log sink attaches
+      // (`createManagedAgent`), so bootstrap entries land in the reused session's
+      // log dir instead of a transient id. Only the id is needed here: the local host
+      // loads the transcript once in `restoreSession`; loading it here too made every
+      // large resume read the log twice.
+      if (initialSessionId) {
+        const placeholder = sessionStore.create({
+          modelStyle: config.modelStyle ?? resolvedModelInfo?.style ?? "openai",
+          model: restConfig.model,
+        });
+        placeholder.id = initialSessionId;
+        managed.setSessionData(placeholder);
+      }
+    }
+
+    managed.name = name;
+
+    let bootstrap: SessionBootstrapContext | undefined;
+    if (!parentId) {
+      bootstrap = { cwd: fsRootPath, report: bootstrapReport! };
+    }
+
+    return { managed, bootstrap };
+  } catch (error) {
+    // Bootstrap acquires MCP stdio processes, extension runners and memory/log
+    // resources before the manager registers the agent. If a later step fails,
+    // no registry/lifecycle owner exists to clean them up.
+    await managed.disposeBuiltResources();
+    manager.releaseAgentScope(managed.id);
+    throw error;
   }
-
-  managed.name = name;
-
-  let bootstrap: SessionBootstrapContext | undefined;
-  if (!parentId) {
-    bootstrap = { cwd: fsRootPath, report: bootstrapReport! };
-  }
-
-  return { managed, bootstrap };
 }

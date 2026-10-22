@@ -83,7 +83,7 @@ export {
 // Node host must ship. `packages/codent` copies exactly these into its tarball
 // (see `scripts/copy-tree-sitter-grammars.mjs`), so a language added to
 // `LANGUAGE_TO_GRAMMAR` reaches the published package without a second edit.
-export { LANGUAGE_TO_GRAMMAR } from "./agent/lsp/tree-sitter/parser-manager.js";
+export { LANGUAGE_TO_GRAMMAR } from "./agent/tree-sitter/parser-manager.js";
 // ============================================================================
 // Built-in Memory extension (internal validation exports — not part of public API)
 // ============================================================================

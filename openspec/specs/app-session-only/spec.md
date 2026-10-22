@@ -14,7 +14,7 @@ The app layer builds its agent control surface on AgentSession only, so a host n
 - **AND** SHALL NOT require a `ManagedAgent` field for UI operation
 
 #### Scenario: Slash commands
-- **WHEN** the user runs `/compact`, `/plan`, `/mcp`, `/clear`, `/resume`, `/rename`, or `/auto`
+- **WHEN** the user runs `/compact`, `/plan`, `/mcp`, `/new`, `/resume`, `/rename`, or `/auto`
 - **THEN** the command handler SHALL use Session dispatch and/or Host catalog APIs only
 
 ### Requirement: Adapter bootstrap is Session-oriented

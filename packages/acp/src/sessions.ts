@@ -190,7 +190,7 @@ export function createSessionCatalog(deps: SessionCatalogDeps) {
         await deps.deleteSession(sessionId);
         return {};
       }
-      // A stable handle may equal a FORMER disk id (after `/clear`/`/clone`/`/resume`). It is not a
+      // A stable handle may equal a FORMER disk id (after `/new`/`/clone`/`/resume`). It is not a
       // disk id now: delete that persisted conversation if it exists, but never close the live one.
       await deps.deleteSession(sessionId);
       return {};

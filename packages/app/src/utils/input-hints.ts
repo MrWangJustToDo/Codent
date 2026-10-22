@@ -52,7 +52,7 @@ export const INPUT_HINTS: readonly string[] = [
   "/models switches model and thinking depth",
   "/settings sets theme, density, diff renderer, thinking line and model config",
   "/resume continues a previous session · /compact compresses context",
-  "/usage shows token usage and cost · /clear starts a new session",
+  "/usage shows token usage and cost · /new starts a new session",
   "/rename retitles this session",
 ];
 

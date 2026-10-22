@@ -59,7 +59,7 @@ export interface DynamicTurnContextInput {
   instructionContext?: string;
   /**
    * Current session id, so the model can address its own history with
-   * `session_search` / `session_read`. Changes on resume/clear → re-admitted.
+   * `session_search` / `session_read`. Changes on resume/new → re-admitted.
    */
   sessionId?: string;
   /** Session-retrieval guidance — where past conversations live and how to read

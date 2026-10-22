@@ -30,7 +30,12 @@ import type { AgentRuntime } from "../runtime/agent-runtime.js";
 export interface LocalAgentSessionHostManager extends LocalAgentSessionManager {
   /** Runtime this host's manager belongs to (env scope for session storage). */
   readonly runtime?: AgentRuntime;
-  createManagedAgent(config: ManagedAgentConfig, parentId?: string): Promise<ManagedAgent>;
+  createManagedAgent(
+    config: ManagedAgentConfig,
+    parentId?: string,
+    id?: string,
+    options?: { deferBootstrapEvents?: boolean }
+  ): Promise<ManagedAgent>;
   getAgents(): ManagedAgent[];
   destroyAgent(id: string): void;
   /**
@@ -80,6 +85,12 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
     ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
     ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
     ...(options.extensionDirs?.length ? { extensionDirs: options.extensionDirs } : {}),
+    ...(options.extensions?.length ? { extensions: options.extensions } : {}),
+    ...(options.builtins?.lsp !== undefined ? { lsp: options.builtins.lsp } : {}),
+    ...(options.builtins?.skills !== undefined ? { skills: options.builtins.skills } : {}),
+    ...(options.builtins?.memory !== undefined ? { memory: options.builtins.memory } : {}),
+    ...(options.builtins?.mcp !== undefined ? { mcp: options.builtins.mcp } : {}),
+    ...(options.builtins?.codeMode !== undefined ? { codeMode: options.builtins.codeMode } : {}),
     ...(options.toolConfig ? { toolConfig: options.toolConfig } : {}),
   };
 }
@@ -132,31 +143,55 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // `initialSessionId`, so the managed agent's session id (and thus the
     // session-scoped log sink) is correct before any bootstrap log entry.
     const targetSessionId = await resolveBootstrapSessionId(options, this.storeEnv);
-    const managed = await this.manager.createManagedAgent({
-      ...toManagedConfig(options),
-      ...(targetSessionId ? { initialSessionId: targetSessionId } : {}),
-    });
-    // Full disk restore — same `restoreSession` path as `session.resume`
-    // (queues cleared + approval/ask_user reconciled inside restore).
-    const restored = targetSessionId ? await managed.restoreSession(targetSessionId) : undefined;
-    const initial = restored?.uiMessages ?? [];
+    let managed: ManagedAgent | undefined;
+    try {
+      managed = await this.manager.createManagedAgent(
+        {
+          ...toManagedConfig(options),
+          ...(targetSessionId ? { initialSessionId: targetSessionId } : {}),
+        },
+        undefined,
+        undefined,
+        { deferBootstrapEvents: true }
+      );
+      // Full disk restore — same `restoreSession` path as `session.resume`
+      // (queues cleared + approval/ask_user reconciled inside restore).
+      const restored = targetSessionId ? await managed.restoreSession(targetSessionId) : undefined;
+      const initial = restored?.uiMessages ?? [];
 
-    // Fix the session id before the first persist (in-memory only; no disk
-    // write until the first save()). The JSONL log sink is attached by the
-    // manager before bootstrap events fire, so the timeline includes them.
-    managed.ensureSessionData();
+      // Fix the session id before the first persist (in-memory only; no disk
+      // write until the first save()). The JSONL log sink is attached by the
+      // manager before bootstrap events fire, so the timeline includes them.
+      managed.ensureSessionData();
 
-    // Chat controller stays behind Session; adapters must not call ManagedAgent.initChat.
-    managed.initChat(this.manager as AgentManager, initial);
-    managed.syncInteractionStateFromUIMessages(initial);
+      // Chat controller stays behind Session; adapters must not call ManagedAgent.initChat.
+      managed.initChat(this.manager as AgentManager, initial);
+      managed.syncInteractionStateFromUIMessages(initial);
 
-    const session = createLocalAgentSession({
-      managed,
-      manager: this.manager,
-    });
-    this.sessions.set(session.id, session);
+      // Bootstrap telemetry is deferred until the transcript and chat controller exist:
+      // session:start handlers inspect the live session, not the empty pre-restore shell.
+      await managed.emitBootstrapEvents?.();
 
-    return { session, ...(initial.length ? { initialMessages: initial } : {}) };
+      const session = createLocalAgentSession({
+        managed,
+        manager: this.manager,
+      });
+      this.sessions.set(session.id, session);
+
+      return { session, ...(initial.length ? { initialMessages: initial } : {}) };
+    } catch (error) {
+      // Once createManagedAgent returns, the agent is registered and holds its
+      // session claim/log sink. A later restore/chat/bootstrap failure must not
+      // leave that half-live agent visible to the manager or owning the session.
+      if (managed) {
+        try {
+          await this.destroy(managed.id);
+        } catch {
+          // Preserve the original construction error; teardown is best-effort.
+        }
+      }
+      throw error;
+    }
   }
 
   connect(agentId: string): AgentSession | null {
@@ -172,7 +207,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     return session;
   }
 
-  list(): AgentSessionListEntry[] {
+  async list(): Promise<AgentSessionListEntry[]> {
     return this.manager.getAgents().map(toListEntry);
   }
 
@@ -254,7 +289,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     this.manager.destroyAgent(agentId);
 
     // `destroyAgent` is synchronous but tears extensions down asynchronously; settle here so
-    // an awaiting caller (CLI exit, `/clear`, tests) is guaranteed the log's final batch is on
+    // an awaiting caller (CLI exit, `/new`, tests) is guaranteed the log's final batch is on
     // disk before this returns. Without it the flush races session teardown.
     await this.manager.settleTeardowns?.();
 

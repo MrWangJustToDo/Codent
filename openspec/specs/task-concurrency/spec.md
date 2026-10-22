@@ -82,13 +82,13 @@ unanswered one does.
 
 - **WHEN** a turn's `task` pre-forks are still registered because the run is waiting for an approval
   or a client tool, and the run is then aborted or reset instead of answered (a user stop,
-  force-submit, an agent destroy, or a `/clear` / new session)
+  force-submit, an agent destroy, or `/new`)
 - **THEN** those pre-forks are discarded and reported with the run-abort cause, rather than surviving
   until a later run reports them as its own orphans
 
-#### Scenario: A session switch or in-place clear while paused stops the eager runs
+#### Scenario: A session switch while paused stops the eager runs
 
-- **WHEN** a session is switched, or the transcript is cleared in place, while a run is paused with
+- **WHEN** a session is switched, or a new session is started, while a run is paused with
   registered pre-forks
 - **THEN** the run is interrupted (a registered pre-fork counts as "still active", even with no pump)
 - **AND** those pre-forks are discarded and their subagents stopped, so nothing keeps streaming into

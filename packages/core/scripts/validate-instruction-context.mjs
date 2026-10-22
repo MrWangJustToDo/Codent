@@ -272,7 +272,7 @@ setFile("CLAUDE.override.md", "# personal override\n");
   const turn5 = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
   assert.ok(!turn5.includes("<instruction_context>"), "resetAdmittedTurnContext re-baselines");
 
-  // The full `/clear` reset owns the same turn-context transaction: it must clear the instruction
+  // The full `/new` reset owns the same turn-context transaction: it must clear the instruction
   // snapshot too, not just the prompt/admission fields (the old inline reset missed these).
   setFile("AGENTS.md", "# AGENTS\n- rule baseline\n- rule RESET\n");
   const turnBeforeReset = (await managed.getDynamicTurnContextSections())

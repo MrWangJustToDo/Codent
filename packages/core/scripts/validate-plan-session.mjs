@@ -117,7 +117,7 @@ assert.equal(
 );
 
 // A stale persisted binding is released once no plan phase is live. This is the latch that used
-// to keep EVERY later agent list rendering as plan steps until /clear.
+// to keep EVERY later agent list rendering as plan steps until /new.
 const staleTodos = new TodoManager();
 staleTodos.restoreTodos(
   [

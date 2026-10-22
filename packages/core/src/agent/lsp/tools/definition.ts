@@ -3,15 +3,15 @@
  */
 
 import { errorMessage } from "../../../utils/errors.js";
+import { findDefinition, getNodeAtPosition } from "../../tree-sitter/symbol-extractor.js";
 import { formatLocation, formatLocationLink } from "../shared/format.js";
-import { findDefinition, getNodeAtPosition } from "../tree-sitter/symbol-extractor.js";
 
 import { resolvePosition, withResolved } from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
+import type { TreeSitterManager } from "../../tree-sitter/parser-manager.js";
+import type { WorkspaceIndex } from "../../tree-sitter/workspace-index.js";
 import type { LspManager } from "../lsp-manager.js";
-import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
-import type { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
 import type { Location, LocationLink } from "vscode-languageserver-protocol";
 
 type DefinitionResult = Location | Location[] | LocationLink[] | null;

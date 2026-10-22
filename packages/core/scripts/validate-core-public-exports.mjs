@@ -25,6 +25,9 @@ const DENY = [
   "ExtensionLoader",
   "getDefaultExtensionDirs",
   "DEFAULT_EXTENSION_DIR",
+  "TaskRunState",
+  "AgentStreamHub",
+  "LspManager",
 ];
 
 const mod = await import(pathToFileURL(indexPath).href);

@@ -16,14 +16,12 @@ import { Spinner } from "./Spinner.js";
 
 import type { SessionListItem } from "../utils/session-list-item.js";
 import type { AgentSession } from "@codent/core";
-import type { UIMessage } from "@tanstack/ai";
 
 interface SessionResumePickerProps {
   session: AgentSession;
-  setMessages: (messages: UIMessage[]) => void;
 }
 
-export const SessionResumePicker = ({ session, setMessages }: SessionResumePickerProps) => {
+export const SessionResumePicker = ({ session }: SessionResumePickerProps) => {
   const [sessions, setSessions] = useState<SessionListItem[] | null>(null);
   const [loadError, setLoadError] = useState("");
 
@@ -83,14 +81,11 @@ export const SessionResumePicker = ({ session, setMessages }: SessionResumePicke
           setLoadError(result.error);
           return;
         }
-        const data = result.data as { uiMessages?: UIMessage[] } | undefined;
-        if (Array.isArray(data?.uiMessages)) {
-          setMessages(data.uiMessages);
-          bumpAgentUsage();
-          setTimeout(() => {
-            useDynamic.getActions().setDynamicKey(Date.now());
-          }, 200);
-        }
+        // The core session emits the restored transcript through `messages`.
+        bumpAgentUsage();
+        setTimeout(() => {
+          useDynamic.getActions().setDynamicKey(Date.now());
+        }, 200);
         useConfig.getActions().setConfig("resumeSession", "");
       }}
       onCancel={() => {

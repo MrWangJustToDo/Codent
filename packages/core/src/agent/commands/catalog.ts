@@ -53,9 +53,9 @@ export interface BuiltinCommandInfo {
 /** The canonical built-in command list. Keep descriptions in sync with the app handlers. */
 export const BUILTIN_COMMAND_CATALOG: readonly BuiltinCommandInfo[] = [
   {
-    name: "clear",
-    description: "Clear the screen and start a new session",
-    usage: "/clear",
+    name: "new",
+    description: "Start a new session",
+    usage: "/new",
     scope: "both",
     command: "session.new",
   },

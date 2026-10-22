@@ -13,10 +13,10 @@
  * `run_command`. See `command-analyzer.ts` for the table-driven fallback.
  */
 
-import { TreeSitterManager } from "../../../../lsp/tree-sitter/parser-manager.js";
+import { TreeSitterManager } from "../../../../tree-sitter/parser-manager.js";
 
 import type { ResolvedCoreEnv } from "../../../../../env";
-import type { TreeSitterEnv } from "../../../../lsp/tree-sitter/parser-manager.js";
+import type { TreeSitterEnv } from "../../../../tree-sitter/parser-manager.js";
 import type { Node, Tree } from "web-tree-sitter";
 
 // ============================================================================

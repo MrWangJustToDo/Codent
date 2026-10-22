@@ -83,7 +83,7 @@ interface SessionBridge {
   /**
    * The stable ACP handle all updates/requests are tagged with.
    *
-   * This is NOT the disk session id: `/clear`, `/clone` and `/resume` replace the underlying
+   * This is NOT the disk session id: `/new`, `/clone` and `/resume` replace the underlying
    * conversation while the client keeps talking on this handle (ACP has no "id changed"
    * notification). It starts equal to the disk id.
    */
@@ -612,7 +612,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   /**
-   * Rebind a stable ACP handle after the underlying conversation changed (`/clear`, `/clone`,
+   * Rebind a stable ACP handle after the underlying conversation changed (`/new`, `/clone`,
    * `/resume`). The client keeps using `bridge.acpId`; `session_info_update._meta.diskSessionId`
    * tells a client that can use it which conversation it now is.
    */
@@ -627,7 +627,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       _meta: { diskSessionId: next },
     } as SessionUpdate);
     // ACP's transcript is append-only; the client cannot retract what it already rendered. Say so
-    // instead of letting `/clear` / `/resume` look like a no-op in a client that keeps the thread.
+    // instead of letting `/new` / `/resume` look like a no-op in a client that keeps the thread.
     // The conversation changed under the same handle: re-diff its child rows (a cleared session
     // has none, so the old projectors stop). No announcement reset is needed — the handle is the
     // same, so unchanged rows stay announced.
@@ -841,7 +841,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // two sets of cursors racing each other.
     //
     // The id may be the stable handle or the disk id: a client can hand back either after a
-    // `/clear`-style replacement, when the two deliberately diverge.
+    // `/new`-style replacement, when the two deliberately diverge.
     const live = findBridge(sessionId);
     if (live) {
       if (cwd && resolveCwd(cwd, live.rootPath) !== live.rootPath) {
@@ -1377,7 +1377,7 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       }
       if (result.entryIndex !== undefined) bridge.selectedModelEntryIndex = result.entryIndex;
       if (result.handled) {
-        // `/clear` / `/clone` / `/resume` replace the underlying conversation while the client keeps
+        // `/new` / `/clone` / `/resume` replace the underlying conversation while the client keeps
         // the same handle. Rebind before advertising, so the next update is tagged correctly.
         if (command === "session.new" || command === "session.clone" || command === "session.resume") {
           bridge.seenApprovals.clear();

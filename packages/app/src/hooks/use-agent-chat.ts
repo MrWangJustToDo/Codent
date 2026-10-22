@@ -9,7 +9,7 @@ import { syncExtensionCommands } from "../commands/utils/sync-extension-commands
 import { useAdapter } from "../context/adapter-context.js";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { relinkSessionModel } from "../utils/apply-model-selection.js";
-import { clearFlatMessageCache } from "../utils/message-flat-cache.js";
+import { clearSessionScopedCaches } from "../utils/session-caches.js";
 import { getActiveHost, resolveAgentSession } from "../utils/session-resolve.js";
 import { resolveStopDecision } from "../utils/stop-decision.js";
 import { handleToolLifecycleEvent } from "../utils/tool-timing-store.js";
@@ -60,8 +60,6 @@ export interface UseAgentChatReturn {
   isLoading: boolean;
   isReady: boolean;
   stop: () => void;
-  clearMessages: () => void;
-  setMessages: (messages: UIMessage[]) => void;
   error: Error | null;
   initLoading: boolean;
   initError: Error | null | undefined;
@@ -95,7 +93,7 @@ export interface UseAgentChatReturn {
   saveError: string;
   /**
    * Persistence is owned by core (user-message / pump-complete / force).
-   * Kept as a no-op for command-context compatibility until `/clear` migrates.
+   * Kept as a no-op for command-context compatibility.
    */
   saveSessionFromChat: () => void;
 }
@@ -164,6 +162,19 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   const [interactions, setInteractions] = useState<SessionInteractionsSnapshot>({ approvals: [], askUser: [] });
 
   const initIdRef = useRef(0);
+  // Last disk-session id observed on the session/state channels. `session.new` and
+  // `session.resume` switch the conversation without replacing the AgentSession handle, so
+  // this is how the UI cache is invalidated for in-place switches too.
+  const activeSessionIdRef = useRef<string | null | undefined>(undefined);
+
+  const noteSessionIdentity = useCallback((nextSessionId: string | null) => {
+    const previousSessionId = activeSessionIdRef.current;
+    if (previousSessionId !== undefined && previousSessionId !== nextSessionId) {
+      clearSessionScopedCaches();
+    }
+    activeSessionIdRef.current = nextSessionId;
+  }, []);
+
   // Last model seen on the session/state channels that has been relinked — dedupes
   // the state-channel watcher against the session-switch effect and repeated
   // state events for the same model.
@@ -227,32 +238,12 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   useEffect(() => {
     if (!session) return;
 
-    // Session switch: repopulate local state from the newly active session's
-    // snapshot so the UI reflects its transcript/status/todos instead of the
-    // previous session's (no destroy/rebuild — the live agent keeps running).
+    // Initial identity only. The retained channel replay in the subscription effect
+    // below is the single source for initial messages/status/queues/interactions;
+    // setting the same snapshot here as well applied every bind/switch twice.
     const snap = session.getSnapshot();
-    setMessages(snap.messages);
-    setStatus(snap.status);
-    setAgentError(snap.error);
-    useAgentStatus.getActions().setStatus(snap.status);
-    setQueuedMessages(snap.queues);
-    setInteractions(snap.interactions);
-
-    // Resume-session linkage: the restored session may carry a model that differs
-    // from the ambient config (e.g. a `/models` switch made before a restart). Core
-    // adopts the persisted model **string**, but `SessionData` stores no connection —
-    // so re-link through the same path `/models` uses: resolve the model against any
-    // models.json entry (not just the active one) and re-dispatch `model.set` with
-    // that entry's baseURL/apiKey + modelInfo, keeping the active entry and the
-    // status surfaces (footer/help/usage) in sync. Unknown models, or no
-    // models.json at all, are left to the core-side adoption.
-    if (snap.model) {
-      // Record it so the state-channel watcher below skips the same model (the
-      // snapshot and the subsequent state event both carry it).
-      relinkedModelRef.current = snap.model;
-      void relinkSessionModel(session, snap.model);
-    }
-  }, [session]);
+    noteSessionIdentity(snap.activeSessionId ?? null);
+  }, [noteSessionIdentity, session]);
 
   useEffect(() => {
     if (!session) return;
@@ -283,6 +274,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
           return;
         }
         if (event.channel === "state") {
+          noteSessionIdentity(event.payload.sessionId ?? null);
           setStatus(event.payload.status);
           setAgentError(event.payload.error);
           setAgentStatus(event.payload.status);
@@ -320,10 +312,13 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     );
 
     return () => {
+      // Drop a trailing throttled message update from the conversation being left;
+      // otherwise it can land after the switch and restore the old transcript.
+      updateUi.cancel();
       unsub();
       clearExtensionCommands();
     };
-  }, [session]);
+  }, [noteSessionIdentity, session]);
 
   useEffect(() => {
     let latestThinking = "";
@@ -360,7 +355,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   const isLoading = isAgentLoading(status);
 
   const saveSessionFromChat = useCallbackRef(() => {
-    // Core owns session disk writes; slash `/clear` still calls this until §3.3.
+    // Core owns session disk writes; `/new` / `/resume` dispatch the session command.
   });
 
   const stop = useCallback(() => {
@@ -421,13 +416,6 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     },
     [session]
   );
-
-  const clearMessages = useCallback(() => {
-    void session?.dispatch({ type: "clear" });
-    clearFlatMessageCache();
-    setMessages([]);
-    setQueuedMessages({ steer: [], followUp: [] });
-  }, [session]);
 
   const addToolApprovalResponse = useCallback(
     async (options: {
@@ -494,15 +482,6 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     isLoading,
     isReady: !initLoading && session !== null,
     stop,
-    clearMessages,
-    setMessages: (next) => {
-      // Local UI mirror only until replaceMessages lands on Session; resume/clear use dispatch.
-      if (next.length === 0) {
-        void session?.dispatch({ type: "clear" });
-        clearFlatMessageCache();
-      }
-      setMessages(next);
-    },
     error,
     initLoading,
     initError,

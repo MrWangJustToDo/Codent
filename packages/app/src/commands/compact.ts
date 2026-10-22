@@ -17,7 +17,8 @@ registerBuiltinCommand("compact", {
     }
 
     const data = result.data as { message?: string } | undefined;
-    ctx.setMessages?.(session.getSnapshot().messages);
+    // Compaction appends its summary through the core `messages` channel; do not
+    // write the same snapshot back into the UI a second time.
     bumpAgentUsage();
     return { ok: true, message: data?.message ?? "Compacted" };
   },

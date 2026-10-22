@@ -8,8 +8,8 @@ import { fileUriToPath } from "../shared/format.js";
 import { truncateHead } from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
+import type { WorkspaceIndex } from "../../tree-sitter/workspace-index.js";
 import type { LspManager } from "../lsp-manager.js";
-import type { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
 import type { DocumentSymbol, SymbolInformation } from "vscode-languageserver-protocol";
 
 const SYMBOL_KIND_NAMES: Record<number, string> = {

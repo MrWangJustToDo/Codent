@@ -48,7 +48,7 @@ try {
   assert.ok(Array.isArray(listed.data?.sessions));
 
   assert.equal((await session.dispatch({ type: "stop" })).ok, true);
-  assert.ok(host.list().some((e) => e.agentId === session.id));
+  assert.ok((await host.list()).some((e) => e.agentId === session.id));
 
   await host.destroy(session.id);
   assert.equal(host.connect(session.id), null);

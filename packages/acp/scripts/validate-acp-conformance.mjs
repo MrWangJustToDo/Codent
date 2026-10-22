@@ -568,7 +568,7 @@ for (const [label, finishReason, iteration, expected] of [
     const s = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
     await cx.request(methods.agent.session.prompt, {
       sessionId: s.sessionId,
-      prompt: [{ type: "text", text: "/clear" }],
+      prompt: [{ type: "text", text: "/new" }],
     });
     await tick(20);
     // The disk id from a rebind must be loadable, and the response must name the stable handle.
@@ -587,7 +587,7 @@ for (const [label, finishReason, iteration, expected] of [
   const info = updates
     .map((u) => u.update)
     .find((u) => u.sessionUpdate === "session_info_update" && u._meta?.diskSessionId === "ses_after");
-  check("the ACP handle stays stable after /clear", value.id === "ses_before");
+  check("the ACP handle stays stable after /new", value.id === "ses_before");
   check("session_info_update exposes the new disk session id", Boolean(info));
   check("load by the new disk id reports the stable handle", value.load?._meta?.sessionId === "ses_before");
   check("a prompt on the stable handle still works", typeof value.snap.stopReason === "string");
@@ -1042,7 +1042,7 @@ for (const [label, finishReason, iteration, expected] of [
     const s = await cx.request(methods.agent.session.new, { cwd: "/ws", mcpServers: [] });
     await cx.request(methods.agent.session.prompt, {
       sessionId: s.sessionId,
-      prompt: [{ type: "text", text: "/clear" }],
+      prompt: [{ type: "text", text: "/new" }],
     });
     await cx.request(methods.agent.session.delete, { sessionId: s.sessionId });
     // The live handle must still address the NEW conversation.

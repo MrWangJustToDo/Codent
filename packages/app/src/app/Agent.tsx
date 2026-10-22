@@ -67,7 +67,6 @@ export const Agent = () => {
     initLoading,
     allPendingApproval,
     allPendingAskUser,
-    setMessages,
     saveSessionFromChat,
     saveError,
   } = useAgentChat(config);
@@ -104,7 +103,6 @@ export const Agent = () => {
     setClientToolWaiting,
     allPendingApproval,
     allPendingAskUser,
-    setMessages,
     saveSessionFromChat,
   });
 
@@ -124,7 +122,7 @@ export const Agent = () => {
   }
 
   if (showResumePicker && activeSession) {
-    return <SessionResumePicker session={activeSession} setMessages={setMessages} />;
+    return <SessionResumePicker session={activeSession} />;
   }
 
   // `/settings config` — the model-config wizard, over the running app. It is a

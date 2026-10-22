@@ -4,6 +4,8 @@
     "declaration": false,
     "declarationMap": false,
     "composite": false,
+    "rootDir": ".",
     "noEmit": true
-  }
+  },
+  "include": ["src/**/*", "scripts/contracts/**/*.ts"]
 }

@@ -1082,7 +1082,7 @@ export class AcpProjector {
     this.taskStreams.clear();
   }
 
-  /** Re-diff the session's current `subagents` rows (fork / rebind after `/clear` · `/clone` · `/resume`). */
+  /** Re-diff the session's current `subagents` rows (fork / rebind after `/new` · `/clone` · `/resume`). */
   resyncSubagents(): void {
     this.onSubagents(this.session.getSnapshot().subagents ?? []);
   }

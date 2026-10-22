@@ -560,4 +560,80 @@ assert.equal(failErrorMessages[1].role, "assistant");
 assert.match(failErrorMessages[1].parts[0].content, /boom/);
 assert.equal(failErrorChannel.getTaskRunPhase(), "tools");
 
+// ----------------------------------------------------------------------------
+// A session generation invalidates a run that started before clearMessages().
+// This is the late-adapter case: Esc/new resets historicalMessageIds, so an
+// old TEXT_MESSAGE_CONTENT arriving after the reset would otherwise append to
+// the new transcript.
+// ----------------------------------------------------------------------------
+{
+  const generationChannel = new AgentUIChannel();
+  const generationBefore = generationChannel.getSessionGeneration();
+  let releaseOldChunk;
+  const oldChunkGate = new Promise((resolve) => {
+    releaseOldChunk = resolve;
+  });
+
+  const oldRun = generationChannel.consumeRun({
+    stream: (async function* () {
+      yield {
+        type: EventType.RUN_STARTED,
+        threadId: "thread-generation-old",
+        runId: "run-generation-old",
+        timestamp: Date.now(),
+      };
+      yield {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "stale-assistant",
+        role: "assistant",
+        threadId: "thread-generation-old",
+        runId: "run-generation-old",
+      };
+      await oldChunkGate;
+      yield {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: "stale-assistant",
+        delta: "stale reply from the old session",
+        threadId: "thread-generation-old",
+        runId: "run-generation-old",
+      };
+      yield {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "stale-assistant",
+        threadId: "thread-generation-old",
+        runId: "run-generation-old",
+      };
+      yield {
+        type: EventType.RUN_FINISHED,
+        threadId: "thread-generation-old",
+        runId: "run-generation-old",
+        timestamp: Date.now(),
+        finishReason: "stop",
+        model: "mock",
+      };
+    })(),
+  });
+
+  generationChannel.clearMessages();
+  assert.equal(
+    generationChannel.getSessionGeneration(),
+    generationBefore + 1,
+    "clearMessages advances the UI session generation"
+  );
+  generationChannel.addUserMessage("new session question");
+  releaseOldChunk();
+  await oldRun;
+
+  const afterClear = generationChannel.getMessages();
+  assert.equal(afterClear.length, 1, "the new session keeps only its own user message");
+  assert.equal(afterClear[0].role, "user");
+  assert.equal(
+    afterClear.some((message) =>
+      message.parts.some((part) => part.type === "text" && part.content.includes("stale reply"))
+    ),
+    false,
+    "a late chunk from the old session generation must be dropped"
+  );
+}
+
 console.log("agent-ui-channel validation passed");

@@ -212,7 +212,7 @@ registerCoreEnv({
     "stopForSessionSwitch reaches a child not tied to the root controller"
   );
 
-  // `reset()` is also a session-switch seat (`/clear` calls it directly in other paths).
+  // `reset()` is also a session-switch seat (`/new` calls it directly in other paths).
   const reset = makePair();
   reset.child.setStatus("running");
   reset.parent.reset();

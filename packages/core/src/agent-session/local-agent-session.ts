@@ -167,6 +167,17 @@ class LocalAgentSessionImpl implements AgentSession {
       unsubs.push(this.events.on(channel, handler));
     }
 
+    // Replay to THIS subscriber only. `this.events` is the shared multicast bus; using
+    // it here would send the new subscriber's initial frame to every existing subscriber
+    // (duplicate messages / transcript re-renders / repeated ACP projection).
+    const deliverInitial = (event: AgentSessionEvent): void => {
+      try {
+        handler(event);
+      } catch {
+        // Initial reconciliation is best-effort; the live subscription remains active.
+      }
+    };
+
     // Per-subscriber reconcile: emit the current retained value for each
     // selected channel so late subscribers see initial state without a refetch.
     const bus = this.managed.getEventBus();
@@ -174,7 +185,7 @@ class LocalAgentSessionImpl implements AgentSession {
       for (const channel of selected) {
         const type = RETAINED_CHANNEL_EVENT.get(channel);
         if (!type) continue;
-        const payload = bus.retainedValue(type);
+        const payload = bus.retainedValue(type, { includeParents: false });
         if (payload === undefined) continue;
         const projected = projectChannelEvent(channel, {
           type,
@@ -183,7 +194,7 @@ class LocalAgentSessionImpl implements AgentSession {
           ...(this.managed.parentId !== undefined ? { parentId: this.managed.parentId } : {}),
           payload,
         } as AgentEvent);
-        if (projected) this.events.emit(channel, projected);
+        if (projected) deliverInitial(projected);
       }
     }
 
@@ -194,7 +205,7 @@ class LocalAgentSessionImpl implements AgentSession {
       if (slots) {
         for (const [surface, entries] of Object.entries(slots)) {
           for (const [key, payload] of Object.entries(entries)) {
-            this.events.emit("extension-ui", {
+            deliverInitial({
               channel: "extension-ui",
               payload: { type: "render", surface, key, payload },
               ts: now(),

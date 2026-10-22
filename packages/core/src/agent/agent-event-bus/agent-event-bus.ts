@@ -122,8 +122,11 @@ export class DefaultAgentEventBus implements AgentEventBus {
     return unsub;
   }
 
-  retainedValue<T extends AgentEventType>(type: T): AgentEvent<T>["payload"] | undefined {
-    const provider = this.findRetained(type);
+  retainedValue<T extends AgentEventType>(
+    type: T,
+    options?: { includeParents?: boolean }
+  ): AgentEvent<T>["payload"] | undefined {
+    const provider = this.findRetained(type, options?.includeParents !== false);
     return provider ? (provider() as AgentEvent<T>["payload"]) : undefined;
   }
 
@@ -244,9 +247,9 @@ export class DefaultAgentEventBus implements AgentEventBus {
     } as AgentEvent<T>;
   }
 
-  /** Nearest retained provider for `type`, walking this node up to the root. */
-  private findRetained(type: string): (() => unknown) | undefined {
-    for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
+  /** Nearest retained provider for `type`; optionally walks this node up to the root. */
+  private findRetained(type: string, includeParents = true): (() => unknown) | undefined {
+    for (let node: EventBusScopeNode | null = this.node; node; node = includeParents ? node.parent : null) {
       const provider = node.retained.get(type);
       if (provider) return provider;
     }

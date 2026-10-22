@@ -203,6 +203,12 @@ export class RunCoordinator {
     this.lastStreamDurationMs = Math.max(0, Date.now() - this.streamStartedAt);
   }
 
+  /** Clear the previous session's completed-run duration before adopting a new transcript. */
+  resetLastStreamDuration(): void {
+    this.lastStreamDurationMs = 0;
+    this.streamStartedAt = 0;
+  }
+
   /** Track the active run id for log run-scoping (see RunLifecycleHost). */
   setCurrentRunId(runId: string | null): void {
     this.currentRunId = runId;

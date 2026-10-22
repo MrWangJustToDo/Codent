@@ -45,11 +45,14 @@ export interface AgentCommandServiceOptions {
 
 export class AgentCommandService implements AgentCommandPort {
   private registryInstance?: CommandJobRegistry;
+  /** Set before session reset/agent destroy; rejects late starts and callback resurrection. */
+  private closing = false;
 
   constructor(private readonly options: AgentCommandServiceOptions) {}
 
   /** The registry tools use. Creates it (and its change listener) on first access. */
   private registry(): CommandJobRegistry {
+    if (this.closing) throw new Error("AgentCommandService is closed");
     if (!this.registryInstance) {
       const registry = new CommandJobRegistry(this.options.env(), {
         ownerSessionId: this.options.ownerSessionId,
@@ -62,7 +65,9 @@ export class AgentCommandService implements AgentCommandPort {
 
   /** Start a background command and attach its lifecycle to the owned registry. */
   async startBackground(input: StartBackgroundInput): Promise<StartBackgroundResult> {
+    if (this.closing) throw new Error("AgentCommandService is closed");
     await this.ready();
+    if (this.closing) throw new Error("AgentCommandService is closed");
     // Capture the registry for the whole command lifetime. A late stdout/stderr/exit
     // callback must not recreate a destroyed registry after the agent is torn down.
     const registry = this.registry();
@@ -74,6 +79,7 @@ export class AgentCommandService implements AgentCommandPort {
       );
     }
     const job = registry.create(command, toolCallId);
+    let handleKill: (() => Promise<void>) | undefined;
     try {
       const handle = await coreEnv.startCommand(command, {
         cwd,
@@ -82,9 +88,22 @@ export class AgentCommandService implements AgentCommandPort {
         onStderr: (chunk) => registry.appendStderr(job.id, chunk),
         onExit: (exitCode) => registry.markExited(job.id, exitCode),
       });
+      handleKill = handle.kill;
+      if (this.closing || registry.get(job.id) === undefined) {
+        // The session was reset/destroyed while startCommand was awaiting. The
+        // registry has already forgotten the job, so setKill would be a no-op and
+        // the real child process would survive as an orphan.
+        await handle.kill().catch(() => {});
+        handleKill = undefined;
+        throw new Error("Background command was cancelled because its session closed.");
+      }
       registry.setKill(job.id, handle.kill, handle.pid);
     } catch (err) {
-      registry.markFailed(job.id, errorMessage(err));
+      if (handleKill && (this.closing || registry.get(job.id) === undefined)) {
+        await handleKill().catch(() => {});
+      } else {
+        registry.markFailed(job.id, errorMessage(err));
+      }
       throw err;
     }
     return { jobId: job.id, ...(job.logPath ? { cachedOutputPath: job.logPath } : {}) };
@@ -150,12 +169,14 @@ export class AgentCommandService implements AgentCommandPort {
 
   /** Session switch: drop this session's jobs and completion queue, and clear the jobs channel. */
   async reset(_reason: string): Promise<void> {
+    this.closing = true;
     this.options.onJobsChange([]);
     await this.destroy();
   }
 
   /** Kill/destroy the registry (agent destroy); terminal un-notified records are preserved. */
   async destroy(): Promise<void> {
+    this.closing = true;
     const registry = this.registryInstance;
     this.registryInstance = undefined;
     registry?.setChangeListener(null);

@@ -299,4 +299,25 @@ console.log("bridged entries persisted to JSONL sink: OK");
 console.log("payload summarization (bytes+preview, no eventType): OK");
 console.log("memory debug streams silent: OK");
 console.log("approval request + resolution bridged: OK");
+// Policy overrides reach the specialized MCP/memory/compaction handlers too. Their
+// default rules are false (the custom handlers decide whether to log), so an explicit
+// `false` must suppress the custom path as well.
+{
+  const policyCapture = await createLogCapture("event-log-bridge-policy");
+  const policyBus = createAgentEventBus();
+  bridgeTelemetryToAgentLog(policyBus, () => policyCapture.log, {
+    events: {
+      "session:mcp": false,
+      "memory:prefetch": false,
+      "compaction:auto-complete": false,
+    },
+  });
+  const before = (await policyCapture.readEntries()).length;
+  policyBus.emit("session:mcp", { servers: [{ name: "hidden", status: "connected" }] });
+  policyBus.emit("memory:prefetch", { status: "error", error: "hidden" });
+  policyBus.emit("compaction:auto-complete", { tokensBefore: 1, tokensAfter: 0 });
+  policyCapture.log.flushSync();
+  assert.equal((await policyCapture.readEntries()).length, before, "explicit false suppresses custom-handler events");
+}
+
 console.log("event-log-bridge validation passed");

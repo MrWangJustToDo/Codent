@@ -33,7 +33,7 @@ TBD - created by archiving change add-acp-agent. Update Purpose after archive.
 
 ### Requirement: 权限选项与既有语义对应
 
-agent SHALL 为每个权限请求提供 ACP `options`，其 `kind` 至少覆盖 `allow_once`/`allow_always`/`reject_once`/`reject_always`。`allow_always` / `reject_always` SHALL 与"本会话记住该决定"的语义一致：选择 `allow_always` 后，同一工具身份的后续审批 SHALL 自动批准而不再次询问 client；`reject_always` SHALL 自动拒绝。若 host 无法实现记忆，则 MUST NOT 广告 `*_always` 选项（只提供一次性选项），以免对用户作出无法兑现的承诺。记忆策略 SHALL 在会话关闭或会话被 `/clear` 替换时清除。
+agent SHALL 为每个权限请求提供 ACP `options`，其 `kind` 至少覆盖 `allow_once`/`allow_always`/`reject_once`/`reject_always`。`allow_always` / `reject_always` SHALL 与"本会话记住该决定"的语义一致：选择 `allow_always` 后，同一工具身份的后续审批 SHALL 自动批准而不再次询问 client；`reject_always` SHALL 自动拒绝。若 host 无法实现记忆，则 MUST NOT 广告 `*_always` 选项（只提供一次性选项），以免对用户作出无法兑现的承诺。记忆策略 SHALL 在会话关闭或会话被 `/new` 替换时清除。
 
 #### Scenario: 提供四类选项
 
@@ -55,7 +55,7 @@ agent SHALL 为每个权限请求提供 ACP `options`，其 `kind` 至少覆盖 
 
 #### Scenario: 记忆随会话结束清除
 
-- **WHEN** 会话被 `session/close` 关闭或被 `/clear` 替换
+- **WHEN** 会话被 `session/close` 关闭或被 `/new` 替换
 - **THEN** 该会话的 always 策略 SHALL 被清除，MUST NOT 影响其它会话或后续新会话
 
 ### Requirement: 取消时收敛挂起权限

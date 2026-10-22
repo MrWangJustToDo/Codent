@@ -20,7 +20,7 @@ process.env.ROOT_PATH = mkdtempSync(join(tmpdir(), "agent-session-http-"));
 process.env.SERVER_PORT = "0";
 process.env.SANDBOX_ENV = "native";
 
-const { createServer } = await import("../dist/index.mjs");
+const { createServer, getServerManager } = await import("../dist/index.mjs");
 const { createRemoteAgentSessionHost } = await import("../dist/remote-session-host.mjs");
 const { applyEventForTests, parseAgentSessionSseBlockForTests, RemoteSessionClient } =
   await import("../dist/remote-session-client.mjs");
@@ -120,6 +120,31 @@ assert.deepEqual((await summaryRes.json()).snapshots ?? [], []);
 const bufferRes = await fetch(`${baseUrl}/api/agent/${snap.agentId}/tool-buffers`);
 assert.equal(bufferRes.status, 200);
 assert.deepEqual((await bufferRes.json()).buffers, {});
+
+// `task` children use `autoDestroy: false`; a session switch aborts but does not destroy them.
+// The remount seed must keep the old child's command buffers out of the current conversation.
+{
+  const manager = getServerManager();
+  const currentChild = await manager.spawnSubagent(snap.agentId, {});
+  const oldChild = await manager.spawnSubagent(snap.agentId, {});
+  oldChild.setSessionScopeId("ses_old");
+  currentChild.getStreamHub().appendCommand("current-command", "stdout", "current output");
+  oldChild.getStreamHub().appendCommand("old-command", "stdout", "old output");
+
+  assert.ok(
+    manager.getAllSubagents(snap.agentId).some((agent) => agent.id === oldChild.id),
+    "the old child is still in the registry (session switch only aborts it)"
+  );
+
+  const scopedRes = await fetch(`${baseUrl}/api/agent/${snap.agentId}/tool-buffers`);
+  assert.equal(scopedRes.status, 200);
+  const scopedBuffers = (await scopedRes.json()).buffers;
+  assert.equal(scopedBuffers["current-command"]?.stdout, "current output", "the current child is seeded");
+  assert.equal(scopedBuffers["old-command"], undefined, "the old child's command buffer is filtered out");
+
+  manager.destroyAgent(currentChild.id);
+  manager.destroyAgent(oldChild.id);
+}
 
 // ── 2b. REST snapshots are gzip-compressed (bodies stay transparent JSON) ──
 const gzipRes = await fetch(`${baseUrl}/api/agent/${snap.agentId}/snapshot`, {

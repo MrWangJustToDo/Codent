@@ -8,7 +8,7 @@
  * A per-job JSON record (`command-job-store.ts`) makes the job's identity, status and notification
  * state survive a process restart: `ready()` restores the owning session's records, a `running`
  * record from a dead process becomes interrupted, and `collectCompleted()` re-delivers a completion
- * that had not reached the model. The record is scoped to the disk session; a fork or `/clear` gets a
+ * that had not reached the model. The record is scoped to the disk session; a fork or `/new` gets a
  * new id and does not inherit another conversation's jobs.
  */
 
@@ -55,7 +55,7 @@ export interface CommandJobRecord {
    */
   logPath: string | null;
   /**
-   * The disk session that STARTED this job. Snapshotted per job: `/clear` / `/resume` can switch
+   * The disk session that STARTED this job. Snapshotted per job: `/new` / `/resume` can switch
    * the registry's current owner while a job is still running, and its record must stay filed under
    * the conversation that started it (not the one that happens to be current when it ends).
    */
@@ -129,8 +129,8 @@ export interface CompletedCommandJob {
 
 export interface CommandJobRegistryOptions {
   /**
-   * The disk session that owns these jobs. Records are restored only for this id: a new session,
-   * `/clear` or a fork must not inherit another conversation's background work. Omitted for the
+   * The disk session that owns these jobs. Records are restored only for this id: a new session
+   * (`/new`) or a fork must not inherit another conversation's background work. Omitted for the
    * ambient/standalone registry (no persistence).
    *
    * A **getter** is allowed because the registry is created while `createTools` builds the agent,
@@ -327,7 +327,7 @@ export class CommandJobRegistry {
   }
 
   /**
-   * A job belongs to the conversation that started it. `/clear`/`/resume` can switch the registry's
+   * A job belongs to the conversation that started it. `/new`/`/resume` can switch the registry's
    * current owner while a job runs; it must not surface (or notify) in the new conversation.
    */
   private isCurrentOwner(job: CommandJobRecord): boolean {
@@ -661,14 +661,16 @@ export class CommandJobRegistry {
         return job !== undefined && job.status !== "running" && !this.notifiedJobIds.has(id);
       })
     );
-    await Promise.all(ids.map((id) => this.kill(id)));
+    // Best-effort teardown: one rejected kill/log cleanup must not leave every other
+    // job registered (and the reset path must still finish its bookkeeping).
+    await Promise.allSettled(ids.map((id) => this.kill(id)));
     for (const id of ids) {
       this.jobs.delete(id);
       this.notifiedJobIds.delete(id);
     }
     const disposable = ids.filter((id) => !preserve.has(id));
-    await Promise.all(disposable.map((id) => this.disposeLog(id)));
-    await Promise.all(disposable.map((id) => this.removeRecord(id)));
+    await Promise.allSettled(disposable.map((id) => this.disposeLog(id)));
+    await Promise.allSettled(disposable.map((id) => this.removeRecord(id)));
     if (ids.length > 0) this.notifyChange();
   }
 

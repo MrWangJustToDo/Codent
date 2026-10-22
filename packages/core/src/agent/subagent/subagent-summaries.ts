@@ -53,18 +53,28 @@ export function buildSubagentSummaries(
   manager: SubagentCatalog | null | undefined
 ): AgentSessionSubagentSummary[] {
   if (!manager) return [];
-  return manager.getSubagents(managed.id).map((child) => {
-    const description = subagentDescription(child.name);
-    const usage: UsageChangeSnapshot = child.usage.getChangeSnapshot();
-    return {
-      id: child.id,
-      status: child.getStatus(),
-      name: child.name,
-      taskPhase: readTaskRunPhase(managed, child.parentTaskId),
-      profile: child.config?.profileId ?? (child.parentId ? "explore" : "root"),
-      ...(description ? { description } : {}),
-      ...(child.parentTaskId ? { parentTaskToolCallId: child.parentTaskId } : {}),
-      usage,
-    };
-  });
+  const currentSessionId = managed.getSessionData()?.id;
+  return manager
+    .getSubagents(managed.id)
+    .filter((child) => {
+      if (!currentSessionId) return true;
+      // Legacy/test children without a scope id remain visible; every child spawned by this
+      // process carries the parent's session id and is hidden after a switch.
+      const childSessionId = child.getSessionScopeId?.();
+      return childSessionId === undefined || childSessionId === currentSessionId;
+    })
+    .map((child) => {
+      const description = subagentDescription(child.name);
+      const usage: UsageChangeSnapshot = child.usage.getChangeSnapshot();
+      return {
+        id: child.id,
+        status: child.getStatus(),
+        name: child.name,
+        taskPhase: readTaskRunPhase(managed, child.parentTaskId),
+        profile: child.config?.profileId ?? (child.parentId ? "explore" : "root"),
+        ...(description ? { description } : {}),
+        ...(child.parentTaskId ? { parentTaskToolCallId: child.parentTaskId } : {}),
+        usage,
+      };
+    });
 }

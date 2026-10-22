@@ -316,6 +316,9 @@ export class ManagedAgent {
   private iterationState: AgentIterationState | null = null;
   /** Live LLM retry visibility (set by stream recovery; cleared when the stream recovers). */
   private retryInfo: AgentRetryState | null = null;
+  /** Session-transition state coalescing: publish one L1 frame after unload/load commits. */
+  private stateBatchDepth = 0;
+  private stateBatchPending = false;
 
   // ============================================================================
   // Composed services / controllers
@@ -340,7 +343,7 @@ export class ManagedAgent {
    * (`AgentSessionSnapshot.activeSessionId`). See ARCHITECTURE.md §1.7.
    */
   readonly planMode: PlanModeController;
-  /** Auto / YOLO mode — skip all tool approvals. Cleared on reset / `/clear`. */
+  /** Auto / YOLO mode — skip all tool approvals. Cleared on reset / `/new`. */
   readonly autoMode: AutoModeController;
   /** Plan/auto mutual exclusion + mode persistence/restore. */
   readonly mode: ModeCoordinator;
@@ -368,6 +371,8 @@ export class ManagedAgent {
   // ============================================================================
 
   parentId?: string;
+  /** Disk session this child belongs to; set by `spawnSubagent` for session-scoped subagent rows. */
+  private sessionScopeId?: string;
   parentTaskId?: string;
   childIds: string[];
   createdAt: number;
@@ -406,6 +411,8 @@ export class ManagedAgent {
   private eventBus?: AgentEventBus;
   /** Owning manager — set when registered via {@link AgentManager.createManagedAgent}. */
   manager?: AgentManager;
+  /** Deferred bootstrap telemetry for hosts that must restore/init chat before session:start. */
+  private bootstrapEvents?: () => Promise<void>;
   /**
    * Runtime this agent belongs to (env + model provider) — set by the factory from the
    * owning manager. `undefined` means the ambient runtime (legacy single-instance hosts).
@@ -613,15 +620,20 @@ export class ManagedAgent {
       getSessionData: () => this.getSessionData(),
       setSessionData: (data) => this.setSessionData(data),
       getSessionStore: () => this.getSessionStore(),
-      clearPersistedSession: () => this.clearPersistedSession(),
+      awaitSessionPersistIdle: () => this.session.awaitPersistIdle(),
       getChatController: () => this.getChatController(),
       acquireSessionOwnership: (sessionId) => this.manager?.acquireSessionOwnership(sessionId, this.id) ?? true,
       releaseSessionOwnership: (sessionId) => this.manager?.releaseSessionOwnership(sessionId, this.id),
       bindSessionLogSink: (sessionId) => this.bindSessionLogSink(sessionId),
-      emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason: reason as "clear" }),
+      emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
       emitSessionSwitch: (fromSessionId, toSessionId, messageCount) =>
         this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason: "resume" }),
       refreshState: () => this.refreshState(),
+      refreshSubagents: () => this.refreshSubagents(),
+      beginStateBatch: () => this.beginStateBatch(),
+      endStateBatch: () => this.endStateBatch(),
+      syncInteractionStateFromUIMessages: (messages) => this.syncInteractionStateFromUIMessages(messages),
+      resetRunOutcome: () => this.resetRunOutcome(),
       mode: this.mode,
       approvals: this.approvals,
       run: this.run,
@@ -645,6 +657,7 @@ export class ManagedAgent {
       resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       resetTurnContext: () => this.turnContext.resetTurnState(),
       resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
+      resetIterationProgress: () => this.resetIterationProgress(),
       resetCommandJobs: (reason) => {
         const service = this.commandService;
         this.commandService = undefined;
@@ -884,7 +897,57 @@ export class ManagedAgent {
     this.eventBus?.emit("agent:iteration", state);
   }
 
+  /** Clear retained run progress and publish the idle value (`current: 0`). */
+  resetIterationProgress(): void {
+    // finalizeRun and resetTransientState can both reach a terminal/reset path;
+    // only publish when there is progress to clear.
+    if (this.iterationState === null) return;
+    this.iterationState = null;
+    this.eventBus?.emit("agent:iteration", this.readIteration());
+  }
+
+  /**
+   * Clear the completed-run surface that is not part of SessionData.
+   *
+   * A new/restored conversation must not inherit the previous session's finish reason or
+   * "completed in" duration; both are L1 state fields and are otherwise only overwritten
+   * by the next run's start/finish.
+   */
+  resetRunOutcome(): void {
+    this.lastFinishReason = null;
+    this.run.resetLastStreamDuration();
+  }
+
+  /**
+   * Coalesce L1 state publication across a session unload/load transaction.
+   *
+   * The individual reset/restore steps still update their own channels, but `state` is
+   * committed once after the target session has been adopted. A nested begin/end pair is
+   * counted, so an outer host transaction can safely wrap a lifecycle operation.
+   * @internal
+   */
+  beginStateBatch(): void {
+    this.stateBatchDepth += 1;
+  }
+
+  /** End a state batch and publish the final L1 frame if anything changed. @internal */
+  endStateBatch(): void {
+    if (this.stateBatchDepth === 0) return;
+    this.stateBatchDepth -= 1;
+    if (this.stateBatchDepth > 0 || !this.stateBatchPending) return;
+    this.stateBatchPending = false;
+    this.publishStateChange();
+  }
+
   private emitStateChange(): void {
+    if (this.stateBatchDepth > 0) {
+      this.stateBatchPending = true;
+      return;
+    }
+    this.publishStateChange();
+  }
+
+  private publishStateChange(): void {
     // L1 state and mode flow exclusively through the scoped bus (`agent:state`
     // retained, `session:mode` projected) — see unified-agent-event-bus.
     this.eventBus?.emit("agent:state", this.getL1State());
@@ -1105,7 +1168,7 @@ export class ManagedAgent {
       this.updateConfig({ reasoningEffort: undefined });
     }
 
-    // Keep new on-disk sessions (`/clear`, session.new) on the switched model.
+    // Keep new on-disk sessions (`/new`, session.new) on the switched model.
     if (updates.model !== undefined || updates.modelStyle !== undefined) {
       this.session.setModelConfig(updates.modelStyle ?? "openai", updates.model ?? "unknown");
     }
@@ -1163,6 +1226,19 @@ export class ManagedAgent {
 
   setLog(c: AgentLog): void {
     this.log = c;
+  }
+
+  /** @internal Defer bootstrap telemetry until the host has restored the session/chat. */
+  setBootstrapEvents(events: () => Promise<void>): void {
+    this.bootstrapEvents = events;
+  }
+
+  /** @internal Emit bootstrap telemetry exactly once, after host restore. */
+  async emitBootstrapEvents(): Promise<void> {
+    const events = this.bootstrapEvents;
+    if (!events) return;
+    this.bootstrapEvents = undefined;
+    await events();
   }
 
   getLog(): AgentLog {
@@ -1236,7 +1312,7 @@ export class ManagedAgent {
    * Adopt session data for the *active* on-disk session.
    *
    * This is the single write point for "which session is active", so the log sink is
-   * re-pointed here rather than at each caller: a resume and `/clear` both change the id
+   * re-pointed here rather than at each caller: a resume and `/new` both change the id
    * mid-process, and binding at the one place that records the change is what keeps the two
    * from drifting. Idempotent — same id rebinds to the same dir and returns.
    *
@@ -1261,26 +1337,11 @@ export class ManagedAgent {
   }
 
   /**
-   * Force-persist session `uiMessages` (slash commands such as `/clear`).
+   * Force-persist session `uiMessages` (slash commands such as `/new`).
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   saveSessionUIMessages(uiMessages: TanStackUIMessage[]): void {
     this.sessionPersistence.save(uiMessages);
-  }
-
-  /**
-   * Persist an **empty** transcript as the session's content (`/clear`).
-   *
-   * `saveSessionUIMessages` refuses to write an empty array (`persistSession`
-   * delegates to `store.save`, whose empty-list path also guards against wiping a
-   * session), so clearing in memory left the messages on disk — and resuming
-   * afterwards brought back the conversation the user had discarded. Here the
-   * empty write is intentional: it is what "clear" means, and the store rewrites
-   * the log to its empty form. The sync tracker is reset to empty so a later
-   * persist is not deduped against the pre-clear fingerprint.
-   */
-  clearPersistedSession(): Promise<boolean> {
-    return this.sessionPersistence.clearNow();
   }
 
   /** Reset fingerprint tracking after restore, clear, or new chat bootstrap. */
@@ -1299,6 +1360,9 @@ export class ManagedAgent {
    * Memory extraction runs only when `reason === "finished"`. Idempotent per turn until {@link resetTurnLifecycle}.
    */
   finalizeRun(reason: RunFinalizeReason): void {
+    // A terminal turn (or an abort) must not leave the retained `iteration` channel
+    // reporting the last model turn of the run.
+    this.resetIterationProgress();
     finalizeManagedAgentRun(this, reason);
   }
 
@@ -1512,6 +1576,51 @@ export class ManagedAgent {
   /** Live command/task/compact stream hub for hosts and child-run projections. */
   getStreamHub(): AgentStreamHub {
     return this.streamHub;
+  }
+
+  /** @internal Bind a child agent to the parent's disk session for task-panel filtering. */
+  setSessionScopeId(sessionId: string | undefined): void {
+    this.sessionScopeId = sessionId;
+  }
+
+  /** @internal Disk session this child belongs to (undefined for legacy/ambient children). */
+  getSessionScopeId(): string | undefined {
+    return this.sessionScopeId;
+  }
+
+  /**
+   * Release resources acquired before this agent reached the manager registry.
+   * Used only by the bootstrap failure path; a registered agent is torn down through
+   * {@link AgentManager} / lifecycle instead (which also releases ownership and scopes).
+   */
+  async disposeBuiltResources(): Promise<void> {
+    try {
+      this.getMcpManager()?.forceKill();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      await this.getExtensionRunner()?.destroyAll();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      await this.destroyCommandService();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      this.getMemoryManager()?.dispose();
+    } catch {
+      // Best-effort teardown.
+    }
+    try {
+      // Flush and unregister the active log guard, not just detach the seam: a
+      // half-released binding leaves the process-exit flush pointing at a dead sink.
+      this.flushLogOnDestroy();
+    } catch {
+      // Best-effort teardown.
+    }
   }
 
   /** Lazily build the command service (registry is created on first use). */
@@ -1743,7 +1852,7 @@ export class ManagedAgent {
    *   local-session dispatch stop, `AgentManager.destroyAgent`). A session switch reaches it too when
    *   the run is PAUSED: `stopIfActive` treats a registered pre-fork as "still active" and
    *   interrupts, because those subagents can still be writing into the channel being replaced;
-   * - `reset()` — `/clear` and a new session rewind the run state through
+   * - `reset()` — a session switch or `/new` rewinds the run state through
    *   `RunCoordinator.resetRunState` without an agent abort, so neither a stream hook nor `abort()`
    *   runs. (`resetRunState` does abort the eager run's controller, which stops the subagent, but the
    *   registry record survives and is misreported by a later run.)

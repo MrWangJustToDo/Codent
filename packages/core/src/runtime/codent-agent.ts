@@ -8,6 +8,10 @@
  *
  * `createSession` merges the runtime defaults into every session; `dispose` destroys the
  * runtime's sessions and releases the provider and environment.
+ *
+ * A session UI conventionally binds one live root session per runtime. `AgentManager` (and a
+ * server catalog) can hold several roots; that one-root rule is a host/UI convention, not an
+ * enforced invariant of the manager.
  */
 
 import { createLocalAgentSessionHost } from "../agent-session/local-agent-session-host.js";
@@ -17,8 +21,10 @@ import { createDirectModelProvider } from "../provider/model-provider.js";
 import { AgentRuntime } from "./agent-runtime.js";
 
 import type { AgentRuntimeOptions } from "./agent-runtime.js";
+import type { ExtensionFactory } from "../agent/extension/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type {
+  AgentSessionBuiltins,
   AgentSessionCreateOptions,
   AgentSessionCreateResult,
   AgentSessionHost,
@@ -37,6 +43,10 @@ export interface CodentAgentDefaults {
   maxConcurrentTasks?: number;
   mcpConfigPath?: string;
   extensionDirs?: string[];
+  /** In-process extension factories applied to every session (local hosts only). */
+  extensions?: ExtensionFactory[];
+  /** Built-in extension switches applied to every session. */
+  builtins?: AgentSessionBuiltins;
   toolConfig?: AgentToolConfig;
 }
 
@@ -89,10 +99,18 @@ export class CodentAgent {
   private readonly manager?: AgentManager;
   private readonly defaults: CodentAgentDefaults;
   private readonly models?: ModelCatalogRead;
+  /** Agent ids this runtime created, and therefore owns for disposal. */
+  private readonly ownedSessionIds = new Set<string>();
   /** Guards {@link dispose} against re-running (double session destroy / env destroy). */
   private disposed = false;
 
-  /** The runtime's session host. */
+  /**
+   * The runtime's session host.
+   *
+   * Direct `host.create()` calls are owned by the caller: `dispose()` only destroys
+   * ids created through {@link createSession}. Use `createSession()` when this runtime
+   * should manage the session lifecycle.
+   */
   readonly host: AgentSessionHost;
 
   private constructor(
@@ -160,9 +178,24 @@ export class CodentAgent {
     return this.models;
   }
 
-  /** Create a root session, applying the runtime defaults. */
-  createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
-    return this.host.create({ ...this.defaults, ...options });
+  /**
+   * Create a root session, applying the runtime defaults.
+   *
+   * Unlike a direct {@link host.create}, the returned session is recorded as owned by
+   * this runtime and will be destroyed by {@link dispose}.
+   */
+  async createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
+    // `builtins` is a group of independent switches: a per-session option must add to the
+    // runtime defaults rather than replace the whole group (a shallow spread of the outer
+    // objects would silently re-enable a default-disabled builtin).
+    const builtins = { ...this.defaults.builtins, ...options.builtins };
+    const result = await this.host.create({
+      ...this.defaults,
+      ...options,
+      ...(Object.keys(builtins).length > 0 ? { builtins } : {}),
+    });
+    this.ownedSessionIds.add(result.session.id);
+    return result;
   }
 
   /** Bind to a live agent id (root or subagent) of this runtime. */
@@ -178,23 +211,45 @@ export class CodentAgent {
   /** Destroy one live agent (cascades to children). */
   async destroySession(agentId: string): Promise<void> {
     await this.host.destroy(agentId);
+    this.ownedSessionIds.delete(agentId);
   }
 
   /**
-   * Destroy every session and release the provider — and the environment only when this
-   * runtime owns it ({@link CodentAgentOptions.ownsEnv}). Idempotent.
+   * Destroy every session this runtime created and release the provider — and the environment
+   * only when this runtime owns it ({@link CodentAgentOptions.ownsEnv}). Idempotent.
+   *
+   * Deliberately never calls `host.list()`: a remote host's catalog is the SERVER's live agents,
+   * not this client's ownership. Enumerating and destroying it would delete other clients'
+   * sessions (and the server's own agents) when a remote CLI exits or rebuilds its adapter.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    const entries = await this.host.list();
-    for (const entry of entries) {
-      await this.host.destroy(entry.agentId);
+
+    const owned = [...this.ownedSessionIds];
+    this.ownedSessionIds.clear();
+    let firstError: unknown;
+    for (const agentId of owned) {
+      try {
+        await this.host.destroy(agentId);
+      } catch (error) {
+        firstError ??= error;
+      }
     }
+
+    try {
+      // A local runtime owns its manager (sessions, log extension and its sinks).
+      // Remote-session runtimes have no manager; their host is the server's.
+      await this.manager?.dispose();
+    } catch (error) {
+      firstError ??= error;
+    }
+
     await this.runtime.modelProvider?.destroy?.();
     if (this.runtime.ownsEnv) {
       await this.runtime.env.destroy?.();
     }
+    if (firstError !== undefined) throw firstError;
   }
 
   /** @internal The owning manager (local runtimes only). */

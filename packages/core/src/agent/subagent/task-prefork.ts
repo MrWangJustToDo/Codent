@@ -373,7 +373,7 @@ export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPre
  *   destroy), and a session switch reaches it too while PAUSED, via `stopIfActive`'s guard;
  * - `ManagedAgent.discardPreforkRuns("run-finish")` — the pump finalizing a turn whose only pending
  *   call could not run, i.e. the case `onFinish` deferred to a join that never came;
- * - `ManagedAgent.reset()` — `/clear` and a new session rewind the run state without an agent abort;
+ * - `ManagedAgent.reset()` — a session switch or `/new` rewinds the run state without an agent abort;
  * - the restart-style recovery path (which ends the attempt that spawned them — see
  *   `prepareRestartStyleRetry`).
  *

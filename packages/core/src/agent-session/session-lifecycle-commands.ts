@@ -209,6 +209,10 @@ export async function branchSession(
     return { ok: false, error: `Cannot ${options.mode} while the agent is running — stop it first (Esc).` };
   }
 
+  // A queued persist still targets the source session. Drain it before branching so the
+  // new session cannot observe or race a late source write.
+  await managed.session.awaitPersistIdle();
+
   // Branch from the live channel so unsaved turns are included. Dehydrate first: the
   // channel holds hydrated media (inline base64 / data URLs), but the session log
   // stores `media://` refs — writing it raw would bake base64 into the append-only log

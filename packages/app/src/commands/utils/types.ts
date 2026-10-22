@@ -11,7 +11,6 @@ export interface CommandContext {
   inputActions: ReturnType<typeof useUserInput.getActions>;
   getInputState: () => ReturnType<typeof useUserInput.getReadonlyState>;
   getSession: () => AgentSession | null;
-  setMessages?: (messages: UIMessage[]) => void;
   getMessages?: () => UIMessage[];
   saveSessionFromChat?: () => void;
   exit?: () => void;

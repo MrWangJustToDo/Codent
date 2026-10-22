@@ -67,6 +67,11 @@ export async function getDefaultSkillDirs(env?: ResolvedCoreEnv): Promise<SkillD
 // AgentManager Class
 // ============================================================================
 
+/**
+ * Agent registry + lifecycle owner. It supports multiple live roots (the server catalog relies
+ * on that); a UI runtime conventionally binds one root, but that is a host convention, not an
+ * invariant enforced here.
+ */
 export class AgentManager {
   /** Live agents + tree queries. */
   private readonly agents = new AgentRegistry();
@@ -91,6 +96,8 @@ export class AgentManager {
 
   /** Destroy/teardown cascade (recursive children + async flush chain). */
   private readonly lifecycle: LifecycleCoordinator;
+  /** Guards {@link dispose} against re-running and rejects construction after teardown. */
+  private disposed = false;
 
   constructor(runtime?: AgentRuntime) {
     this.runtime = runtime;
@@ -121,6 +128,19 @@ export class AgentManager {
   /** The root log extension (sink provider + event→entry consumer). */
   getLogExtension(): LogExtension {
     return this.logExtension;
+  }
+
+  /**
+   * Tear down every live agent, wait for their async extension/log teardown, then
+   * dispose the root log extension (which detaches the sinks and process-exit hook).
+   * Idempotent; a disposed manager cannot create new agents.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.lifecycle.reset();
+    await this.lifecycle.settleTeardowns();
+    this.logExtension.dispose();
   }
 
   // ============================================================================
@@ -156,6 +176,15 @@ export class AgentManager {
     return this.busScope.of(agentId, parentId);
   }
 
+  /**
+   * Release a scope minted for an agent that never finished construction. Registered
+   * agents release their scope through {@link LifecycleCoordinator.destroy}.
+   * @internal
+   */
+  releaseAgentScope(agentId: string): void {
+    this.busScope.delete(agentId);
+  }
+
   // ============================================================================
   // Agent Lifecycle
   // ============================================================================
@@ -169,52 +198,80 @@ export class AgentManager {
    * `id` is the internal provenance seam: core passes it when IT chose the id (a spawned subagent);
    * hosts cannot reach it, because `ManagedAgentConfig` has no id.
    */
-  async createManagedAgent(config: ManagedAgentConfig, parentId?: string, id?: string): Promise<ManagedAgent> {
+  async createManagedAgent(
+    config: ManagedAgentConfig,
+    parentId?: string,
+    id?: string,
+    options: { deferBootstrapEvents?: boolean } = {}
+  ): Promise<ManagedAgent> {
+    if (this.disposed) throw new Error("AgentManager has been disposed");
     if (parentId) {
       const parent = this.agents.get(parentId);
       if (!parent) throw new Error(`Parent agent not found: ${parentId}`);
       if (parent.parentId) throw new Error("Subagents cannot spawn subagents");
     }
-    const { managed, bootstrap } = await buildManagedAgent({
-      config,
-      parentId,
-      manager: this,
-      getDefaultSkillDirs,
-      runtime: this.runtime,
-      ...(id ? { id } : {}),
-    });
+    let managed: ManagedAgent | undefined;
+    try {
+      const built = await buildManagedAgent({
+        config,
+        parentId,
+        manager: this,
+        getDefaultSkillDirs,
+        runtime: this.runtime,
+        ...(id ? { id } : {}),
+      });
+      managed = built.managed;
+      const { bootstrap } = built;
 
-    this.agents.register(managed);
-    managed.manager = this;
+      this.agents.register(managed);
+      managed.manager = this;
 
-    if (bootstrap) {
-      // Attach the JSONL log sink BEFORE bootstrap events so the session
-      // timeline includes session:start/doc/skill/memory (persistence-only
-      // log — pre-attach entries would be dropped).
-      managed.ensureSessionData();
-      // A live root agent holds the disk session it is running from the start, not only after a
-      // resume. Without this, a fresh session was invisible to the ownership table (and became
-      // resumable by another live agent once it hit disk). `restoreSession` re-acquires the same
-      // id idempotently when bootstrap resumed one.
-      const activeSessionId = managed.getSessionData()?.id;
-      if (activeSessionId && !this.acquireSessionOwnership(activeSessionId, managed.id)) {
-        // The target is already held by another live agent. Tear down the half-built agent before
-        // throwing so it cannot appear in the catalog or share the target's log sink.
-        this.lifecycle.destroy(managed.id);
-        throw new Error(
-          `Session "${activeSessionId}" is already active in another live session and cannot be created here.`
-        );
+      if (bootstrap) {
+        // Attach the JSONL log sink BEFORE bootstrap events so the session
+        // timeline includes session:start/doc/skill/memory (persistence-only
+        // log — pre-attach entries would be dropped).
+        managed.ensureSessionData();
+        // A live root agent holds the disk session it is running from the start, not only after a
+        // resume. Without this, a fresh session was invisible to the ownership table (and became
+        // resumable by another live agent once it hit disk). `restoreSession` re-acquires the same
+        // id idempotently when bootstrap resumed one.
+        const activeSessionId = managed.getSessionData()?.id;
+        if (activeSessionId && !this.acquireSessionOwnership(activeSessionId, managed.id)) {
+          // The target is already held by another live agent. The catch below tears down the
+          // half-built agent so it cannot appear in the catalog or share the target's log sink.
+          throw new Error(
+            `Session "${activeSessionId}" is already active in another live session and cannot be created here.`
+          );
+        }
+        managed.bindSessionLogSink();
       }
-      managed.bindSessionLogSink();
+
+      if (bootstrap) {
+        if (options.deferBootstrapEvents) {
+          // Local hosts restore the transcript and initialize chat after this method
+          // returns. Emitting session:start first made extension handlers see an empty
+          // transcript and a half-initialized chat controller.
+          managed.setBootstrapEvents(() => emitSessionBootstrapEvents(managed!, bootstrap));
+        } else {
+          await emitSessionBootstrapEvents(managed, bootstrap);
+        }
+      }
+
+      if (parentId) this.agents.linkChild(parentId, managed.id);
+
+      return managed;
+    } catch (error) {
+      if (managed) {
+        if (this.agents.has(managed.id)) {
+          this.lifecycle.destroy(managed.id);
+          await this.lifecycle.settleTeardowns();
+        } else {
+          await managed.disposeBuiltResources();
+          this.releaseAgentScope(managed.id);
+        }
+      }
+      throw error;
     }
-
-    if (bootstrap) {
-      await emitSessionBootstrapEvents(managed, bootstrap);
-    }
-
-    if (parentId) this.agents.linkChild(parentId, managed.id);
-
-    return managed;
   }
 
   /**
@@ -256,6 +313,9 @@ export class AgentManager {
       ...(inheritedModelInfo ? { modelInfo: inheritedModelInfo } : {}),
     };
     const subagent = await this.createManagedAgent(finalConfig, parentId, subagentId);
+    // Session-scoped task rows: a completed `autoDestroy:false` child from an earlier
+    // conversation must not appear after the root switches sessions.
+    subagent.setSessionScopeId(parent.getSessionData()?.id);
 
     // A per-spawn override wins; otherwise the root agent's configured default applies. `null`
     // remains an explicit "clear all tools" value, so use hasOwn rather than `??`.
@@ -342,15 +402,19 @@ export class AgentManager {
    * root agent, ordered deepest-first.
    *
    * Unlike {@link getActiveSubagents}, this includes subagents that have
-   * already terminated (completed, aborted, error, idle). This is useful for
-   * the app layer's task panel, which should show the full history of all
-   * subagent tasks in the current session.
+   * already terminated (completed, aborted, error, idle).
+   *
+   * `sessionId` scopes the result to the current conversation. A session
+   * switch aborts `autoDestroy: false` task children but does not destroy them,
+   * so an unfiltered walk would still expose their command buffers to the next
+   * conversation. Omit it only for a deliberately cross-session inspection.
    *
    * @param rootAgentId The root agent to search under
+   * @param sessionId Current disk session id; legacy unscoped children remain included
    * @returns All subagents, deepest-first
    */
-  getAllSubagents(rootAgentId: string): ManagedAgent[] {
-    return this.agents.allSubagents(rootAgentId);
+  getAllSubagents(rootAgentId: string, sessionId?: string): ManagedAgent[] {
+    return this.agents.allSubagents(rootAgentId, sessionId);
   }
 
   /**

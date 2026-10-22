@@ -38,7 +38,7 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
   if (part.state !== "complete") return null;
 
   switch (toolName) {
-    case "read_file": {
+    case BUILTIN_TOOL_NAMES.readFile: {
       const totalLines = output.totalLines as number | undefined;
       if (totalLines !== undefined) return `${totalLines} lines`;
       if (output.type === "directory") {
@@ -48,50 +48,50 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       if (output.type === "image" || output.type === "pdf") return output.type as string;
       return null;
     }
-    case "list_file": {
+    case BUILTIN_TOOL_NAMES.listFile: {
       const count = output.count as number | undefined;
       return count !== undefined ? `${count} entries` : null;
     }
-    case "grep": {
+    case BUILTIN_TOOL_NAMES.grep: {
       const matches = output.matches as unknown[] | undefined;
       if (!matches) return null;
       return matches.length === 0 ? "no matches" : `${matches.length} match${matches.length !== 1 ? "es" : ""}`;
     }
-    case "glob": {
+    case BUILTIN_TOOL_NAMES.glob: {
       const files = output.files as string[] | undefined;
       if (!files) return null;
       return files.length === 0 ? "no files" : `${files.length} file${files.length !== 1 ? "s" : ""}`;
     }
-    case "write_file":
+    case BUILTIN_TOOL_NAMES.writeFile:
       return output.created ? "created" : "updated";
-    case "edit_file": {
+    case BUILTIN_TOOL_NAMES.editFile: {
       const replacements = output.replacements as number | undefined;
       if (replacements !== undefined) return `${replacements} replacement${replacements !== 1 ? "s" : ""}`;
       return "applied";
     }
-    case "delete_file":
+    case BUILTIN_TOOL_NAMES.deleteFile:
       return "deleted";
-    case "todo": {
+    case BUILTIN_TOOL_NAMES.todo: {
       const stats = output.stats as { total?: number; completed?: number } | undefined;
       const source = output.source as string | undefined;
       const planTag = source === "plan" ? " plan" : "";
       if (stats) return `${stats.completed ?? 0}/${stats.total ?? 0} done${planTag}`;
       return source === "plan" ? "plan" : null;
     }
-    case "create_plan":
-    case "update_plan": {
+    case BUILTIN_TOOL_NAMES.createPlan:
+    case BUILTIN_TOOL_NAMES.updatePlan: {
       const stepCount = output.stepCount as number | undefined;
       if (typeof stepCount === "number") return `${stepCount} steps`;
       return output.ok === false ? "failed" : "ready";
     }
-    case "complete_plan":
+    case BUILTIN_TOOL_NAMES.completePlan:
       return output.ok === false ? "failed" : "done";
-    case "websearch": {
+    case BUILTIN_TOOL_NAMES.websearch: {
       const results = output.results as unknown[] | undefined;
       if (!results) return null;
       return results.length === 0 ? "no results" : `${results.length} result${results.length !== 1 ? "s" : ""}`;
     }
-    case "task": {
+    case BUILTIN_TOOL_NAMES.task: {
       // A delegated run that was cut short must not read as a clean finish on the
       // row: the parent's result distinguishes a budget cutoff (`reachedLimit`)
       // from a stall (`incomplete` without a limit) from a natural end. Mirrors
@@ -105,20 +105,20 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       if (output.incomplete === true) return "stalled";
       return null;
     }
-    case "webfetch": {
+    case BUILTIN_TOOL_NAMES.webfetch: {
       const truncated = output.truncated === true;
       const contentType = typeof output.contentType === "string" ? output.contentType : null;
       if (contentType) return truncated ? `${contentType} (truncated)` : contentType;
       return truncated ? "truncated" : "fetched";
     }
-    case "tree": {
+    case BUILTIN_TOOL_NAMES.tree: {
       const totalEntries = output.totalEntries as number | undefined;
       if (totalEntries !== undefined) return `${totalEntries} entries`;
       return null;
     }
 
     // --- LSP inspection ---
-    case "lsp_diagnostics": {
+    case BUILTIN_TOOL_NAMES.lspDiagnostics: {
       const errors = output.errors as number | undefined;
       const warnings = output.warnings as number | undefined;
       const count = output.count as number | undefined;
@@ -129,29 +129,29 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       if (count !== undefined && count > 0) return `${count} issue${count !== 1 ? "s" : ""}`;
       return count === 0 ? "clean" : null;
     }
-    case "lsp_definition": {
+    case BUILTIN_TOOL_NAMES.lspDefinition: {
       const count = output.count as number | undefined;
       if (count !== undefined) return count > 0 ? `${count} definition${count !== 1 ? "s" : ""}` : "not found";
       return null;
     }
-    case "lsp_references": {
+    case BUILTIN_TOOL_NAMES.lspReferences: {
       const count = output.count as number | undefined;
       if (count !== undefined) return count > 0 ? `${count} reference${count !== 1 ? "s" : ""}` : "none";
       return null;
     }
-    case "lsp_symbols": {
+    case BUILTIN_TOOL_NAMES.lspSymbols: {
       const count = output.count as number | undefined;
       if (count !== undefined) return count > 0 ? `${count} symbols` : "none";
       return null;
     }
-    case "lsp_completions": {
+    case BUILTIN_TOOL_NAMES.lspCompletions: {
       const count = output.count as number | undefined;
       const total = output.total as number | undefined;
       if (total !== undefined) return `${count ?? 0}/${total} completions`;
       if (count !== undefined) return count > 0 ? `${count} completions` : "none";
       return null;
     }
-    case "lsp_code_actions": {
+    case BUILTIN_TOOL_NAMES.lspCodeActions: {
       const count = output.count as number | undefined;
       const preferredCount = output.preferredCount as number | undefined;
       if (count !== undefined) {
@@ -160,17 +160,17 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       }
       return null;
     }
-    case "lsp_hover":
+    case BUILTIN_TOOL_NAMES.lspHover:
       return output.hasResult === true ? "hover" : output.hasResult === false ? "no info" : null;
 
     // --- AST / structural analysis ---
-    case "ast_search": {
+    case BUILTIN_TOOL_NAMES.astSearch: {
       const matchCount = output.matchCount as number | undefined;
       if (matchCount !== undefined)
         return matchCount > 0 ? `${matchCount} match${matchCount !== 1 ? "es" : ""}` : "no matches";
       return null;
     }
-    case "code_overview": {
+    case BUILTIN_TOOL_NAMES.codeOverview: {
       const files = output.files as number | undefined;
       const symbols = output.symbols as number | undefined;
       if (files !== undefined) {
@@ -179,7 +179,7 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       }
       return null;
     }
-    case "code_rewrite": {
+    case BUILTIN_TOOL_NAMES.codeRewrite: {
       const dryRun = output.dryRun as boolean | undefined;
       const filesModified = output.filesModified as number | undefined;
       if (dryRun === false) {
@@ -193,7 +193,7 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       }
       return null;
     }
-    case "lsp_rename": {
+    case BUILTIN_TOOL_NAMES.lspRename: {
       const editCount = output.editCount as number | undefined;
       const fileCount = output.fileCount as number | undefined;
       if (editCount !== undefined && editCount > 0) {
@@ -203,25 +203,25 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
     }
 
     // --- Memory ---
-    case "memory_list": {
+    case BUILTIN_TOOL_NAMES.memoryList: {
       const count = output.count as number | undefined;
       if (count !== undefined) return `${count} memory${count !== 1 ? "ies" : "y"}`;
       return null;
     }
-    case "memory_read": {
+    case BUILTIN_TOOL_NAMES.memoryRead: {
       const type = output.type as string | undefined;
       return typeof type === "string" ? `[${type}]` : null;
     }
-    case "memory_write":
+    case BUILTIN_TOOL_NAMES.memoryWrite:
       return output.ok === false ? "failed" : "saved";
 
     // --- Skills ---
-    case "list_skills": {
+    case BUILTIN_TOOL_NAMES.listSkills: {
       const count = output.count as number | undefined;
       if (count !== undefined) return `${count} skill${count !== 1 ? "s" : ""}`;
       return null;
     }
-    case "load_skill":
+    case BUILTIN_TOOL_NAMES.loadSkill:
       return typeof output.name === "string" ? "loaded" : null;
 
     default:

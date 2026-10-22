@@ -8,7 +8,7 @@
 
 import { RemoteSessionClient } from "./remote-session-client.js";
 
-import type { AgentSessionHost, AgentSessionSnapshot } from "@codent/core";
+import type { AgentSessionHost, AgentSessionListEntry, AgentSessionSnapshot } from "@codent/core";
 
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/$/, "")}${path}`;
@@ -52,6 +52,14 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
 
   return {
     async create(createOptions) {
+      if (createOptions.extensions?.length) {
+        // ExtensionFactory is executable code, not serializable state. Dropping it would
+        // recreate the silent "configured but not loaded" failure the create contract exists
+        // to prevent; direct the caller to the supported planes instead.
+        throw new Error(
+          "In-process extensions are not supported by a remote session host; use extensionDirs on the server or a local runtime."
+        );
+      }
       const response = await fetch(joinUrl(options.baseUrl, "/api/agent"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -65,7 +73,10 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           maxIterations: createOptions.maxIterations,
           maxConcurrentTasks: createOptions.maxConcurrentTasks,
           mcpConfigPath: createOptions.mcpConfigPath,
+          ...(createOptions.mcpServers ? { mcpServers: createOptions.mcpServers } : {}),
           extensionDirs: createOptions.extensionDirs,
+          ...(createOptions.builtins ? { builtins: createOptions.builtins } : {}),
+          ...(createOptions.modelInfo ? { modelInfo: createOptions.modelInfo } : {}),
           continueSession: createOptions.continueSession,
           resumeSessionId: createOptions.resumeSessionId,
           // Websearch keys / provider preference for the server-side agent loop. The
@@ -122,7 +133,7 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
 
     async list() {
       const response = await fetch(joinUrl(options.baseUrl, "/api/agent"));
-      const data = await readJson<{ agents: ReturnType<AgentSessionHost["list"]> }>(response);
+      const data = await readJson<{ agents: AgentSessionListEntry[] }>(response);
       return data.agents;
     },
 

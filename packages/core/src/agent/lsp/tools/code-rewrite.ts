@@ -7,13 +7,13 @@
 
 import { errorMessage } from "../../../utils/errors.js";
 import { truncateText } from "../../../utils/text-truncation.js";
-import { compilePattern } from "../tree-sitter/pattern-compiler.js";
-import { computeRewrites, applyRewrites } from "../tree-sitter/rewrite-engine.js";
-import { searchFiles } from "../tree-sitter/search-engine.js";
+import { compilePattern } from "../../tree-sitter/pattern-compiler.js";
+import { computeRewrites, applyRewrites } from "../../tree-sitter/rewrite-engine.js";
+import { searchFiles } from "../../tree-sitter/search-engine.js";
 
 import { truncateHead } from "./tool-shared.js";
 
-import type { TreeSitterManager, TreeSitterEnv } from "../tree-sitter/parser-manager.js";
+import type { TreeSitterManager, TreeSitterEnv } from "../../tree-sitter/parser-manager.js";
 
 export interface CodeRewriteToolDeps {
   rootDir: string | (() => string);

@@ -63,6 +63,7 @@ export { RunnerWiring } from "../managers/managed-agent-runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../managers/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";
 export { SessionService } from "../managers/services/session-service.js";
+export { SessionLifecycleService } from "../managers/services/session-lifecycle-service.js";
 export { MemoryService } from "../managers/services/memory-service.js";
 export { ExtensionRegistryService } from "../managers/services/extension-registry-service.js";
 export { AgentCommandService } from "../managers/services/agent-command-service.js";

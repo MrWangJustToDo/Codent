@@ -17,6 +17,7 @@ export {
 } from "./types.js";
 
 export type {
+  AgentSessionBuiltins,
   AgentSessionCreateOptions,
   AgentSessionCreateResult,
   AgentSessionHost,

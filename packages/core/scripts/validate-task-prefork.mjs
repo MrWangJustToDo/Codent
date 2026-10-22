@@ -268,7 +268,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     assert.ok(
       !/hasPendingRunContinuation/.test(body[1]),
       `${hook} discards unconditionally — an abort/error means nothing is coming to join. (A run ` +
-        "abandoned while PAUSED reaches neither hook: a session switch / `/clear` there is covered " +
+        "abandoned while PAUSED reaches neither hook: a session switch / `/new` there is covered " +
         "by `ManagedAgent`'s abandonment seats — see validate:run-abort-ownership.)"
     );
   }

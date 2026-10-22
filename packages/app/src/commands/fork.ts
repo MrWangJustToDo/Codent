@@ -46,16 +46,13 @@ registerBuiltinCommand("fork", {
     const result = await session.dispatch({ type: "session.fork", upToMessageId });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as
-      { sessionId?: string; name?: string; model?: string; uiMessages?: unknown[]; forkText?: string } | undefined;
+    const data = result.data as { sessionId?: string; name?: string; model?: string; forkText?: string } | undefined;
 
-    if (ctx.setMessages && Array.isArray(data?.uiMessages)) {
-      ctx.setMessages(data.uiMessages as Parameters<NonNullable<typeof ctx.setMessages>>[0]);
-      bumpAgentUsage();
-      setTimeout(() => {
-        useDynamic.getActions().setDynamicKey(Date.now());
-      }, 200);
-    }
+    // The restored fork transcript arrives through the core `messages` channel.
+    bumpAgentUsage();
+    setTimeout(() => {
+      useDynamic.getActions().setDynamicKey(Date.now());
+    }, 200);
 
     // Hand the chosen message back so the user edits and resends it to branch.
     if (data?.forkText) {

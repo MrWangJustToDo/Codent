@@ -148,52 +148,52 @@ export function formatToolInput(
     const obj = input as Record<string, unknown>;
 
     switch (toolName) {
-      case "read_file":
+      case BUILTIN_TOOL_NAMES.readFile:
         formatted = formatFilePathInput(obj, toolName);
         break;
-      case "list_file":
-      case "write_file":
-      case "edit_file":
-      case "delete_file":
+      case BUILTIN_TOOL_NAMES.listFile:
+      case BUILTIN_TOOL_NAMES.writeFile:
+      case BUILTIN_TOOL_NAMES.editFile:
+      case BUILTIN_TOOL_NAMES.deleteFile:
         formatted = formatFilePathInput(obj);
         break;
-      case "run_command":
+      case BUILTIN_TOOL_NAMES.runCommand:
         formatted = formatRunCommandInput(obj, compact);
         break;
-      case "grep":
+      case BUILTIN_TOOL_NAMES.grep:
         formatted = formatGrepInput(obj);
         break;
-      case "glob":
+      case BUILTIN_TOOL_NAMES.glob:
         formatted = formatGlobInput(obj);
         break;
-      case "task":
+      case BUILTIN_TOOL_NAMES.task:
         formatted = formatTaskInput(obj);
         break;
-      case "todo":
+      case BUILTIN_TOOL_NAMES.todo:
         formatted = formatTodoInput(obj);
         break;
       case "web_search":
-      case "websearch":
+      case BUILTIN_TOOL_NAMES.websearch:
         formatted = formatWebSearchInput(obj);
         break;
       case "web_fetch":
-      case "webfetch":
+      case BUILTIN_TOOL_NAMES.webfetch:
         formatted = formatWebFetchInput(obj);
         break;
-      case "tree":
+      case BUILTIN_TOOL_NAMES.tree:
         formatted = formatTreeInput(obj);
         break;
-      case "load_skill":
+      case BUILTIN_TOOL_NAMES.loadSkill:
         formatted = formatLoadSkillInput(obj);
         break;
-      case "ask_user":
+      case BUILTIN_TOOL_NAMES.askUser:
         formatted = formatAskUserInput(obj);
         break;
-      case "create_plan":
-      case "update_plan":
+      case BUILTIN_TOOL_NAMES.createPlan:
+      case BUILTIN_TOOL_NAMES.updatePlan:
         formatted = formatCreatePlanInput(obj);
         break;
-      case "list_skills":
+      case BUILTIN_TOOL_NAMES.listSkills:
         formatted = "";
         break;
       default:

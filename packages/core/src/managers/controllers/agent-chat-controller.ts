@@ -49,8 +49,18 @@ export class AgentChatController {
   private currentToken: RunToken | null = null;
   /** Nested-safe depth; reset only by the single interrupt owner (see interruptCurrentRun). */
   private pumpDepth = 0;
-  /** Pumps queued on {@link runChain} but not yet started (see {@link runPending}). */
-  private pendingRuns = 0;
+  /**
+   * Epoch of the single pump queued on {@link runChain} but not yet started. A stale
+   * callback must not clear a newer epoch's slot; `null` means no current-epoch pump
+   * is pending (stale callbacks may still be in the chain).
+   */
+  private pendingRunEpoch: number | null = null;
+  /**
+   * Session-generation token for queued pumps. A pump captures this when scheduled;
+   * `clearTranscript` / `stopIfActive` advance it so work queued for the old
+   * transcript cannot start a real LLM turn after a clear/resume.
+   */
+  private lifecycleEpoch = 0;
 
   private readonly steeringQueue = new PendingMessageQueue<QueuedMessageContent>();
   private readonly followUpQueue = new PendingMessageQueue<QueuedMessageContent>();
@@ -99,34 +109,26 @@ export class AgentChatController {
     this.channel.setMessages(messages);
   }
 
-  /** Drop queued and visible transcript state only; lifecycle owns the other resets. */
-  clearTranscript(): void {
-    this.clearQueuedMessages();
-    this.channel.clearMessages();
+  /** Advance the queued-pump generation and invalidate the current pending slot. */
+  private advanceLifecycleEpoch(): void {
+    this.lifecycleEpoch += 1;
+    this.pendingRunEpoch = null;
   }
 
-  clearMessages(options: { persistEmpty?: boolean } = {}): void {
-    this.clearTranscript();
-    this.managed.resetAdmittedTurnContext();
-    this.managed.resetSessionSyncTracker();
-    this.managed.statusController.resetToIdle();
-    // The unhydratable `media://` refs lived in the transcript just dropped, so the wire seam's arm
-    // goes with it — `/clear` does not run `reset()`, and a stale arm would keep the per-call part
-    // walk alive for the rest of the agent's life. A later restore re-arms it from its own misses.
-    this.managed.setMediaHydrationMisses(0);
-    // The cleared transcript must also leave disk, or a later resume brings the
-    // conversation the user just discarded back. A caller that is about to rotate
-    // sessions flushes the empty write itself against the old session first.
-    if (options.persistEmpty !== false) this.persistEmpty();
+  /** Drop queued and visible transcript state only; lifecycle owns the other resets. */
+  clearTranscript(): void {
+    this.advanceLifecycleEpoch();
+    this.clearQueuedMessages();
+    this.channel.clearMessages();
   }
 
   stop(): void {
     this.interruptCurrentRun("user-cancelled");
   }
 
-  /** Whether a pump is currently executing (used to refuse conflicting commands). */
+  /** Whether a pump is executing or queued (used to refuse conflicting commands). */
   isRunActive(): boolean {
-    return this.pumpDepth > 0;
+    return this.pumpDepth > 0 || this.runPending();
   }
 
   /**
@@ -140,7 +142,7 @@ export class AgentChatController {
    */
   stopIfActive(reason = "session-switch"): void {
     const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
-    if (this.pumpDepth <= 0 && registeredPrefork === 0) return;
+    if (this.pumpDepth <= 0 && !this.runPending() && registeredPrefork === 0) return;
     this.interruptCurrentRun(reason);
   }
 
@@ -153,6 +155,7 @@ export class AgentChatController {
     // something NOW, which must not discard what the user queued before it — that is the `keepQueue` case,
     // and the cleared snapshot would otherwise be thrown away.
     if (!options.keepQueue) this.clearQueuedMessages();
+    this.advanceLifecycleEpoch();
     this.managed.statusController.onUserCancel();
     this.managed.abort(reason);
     // Single owner of token invalidation + depth reset. The stale pump's finally
@@ -343,7 +346,11 @@ export class AgentChatController {
 
   private enqueueRun(): Promise<void> {
     // Recover from a previous rejected pump so later sendMessage/approval calls still run.
-    const run = () => this.pumpToolPhases();
+    const epoch = this.lifecycleEpoch;
+    const run = () => {
+      if (epoch !== this.lifecycleEpoch) return;
+      return this.pumpToolPhases();
+    };
     this.runChain = this.runChain.then(run, run);
     return this.runChain;
   }
@@ -358,7 +365,7 @@ export class AgentChatController {
    * nobody asked for. Counting the pending chain closes that window.
    */
   private runPending(): boolean {
-    return this.pendingRuns > 0;
+    return this.pendingRunEpoch === this.lifecycleEpoch;
   }
 
   /**
@@ -367,10 +374,15 @@ export class AgentChatController {
    * result) is handled by that run rather than needing a second one.
    */
   private enqueueRunOnce(): Promise<void> {
-    if (this.pendingRuns > 0) return this.runChain;
-    this.pendingRuns += 1;
+    if (this.runPending()) return this.runChain;
+    const epoch = this.lifecycleEpoch;
+    this.pendingRunEpoch = epoch;
     const run = () => {
-      this.pendingRuns -= 1;
+      // Only the slot owner may clear it. A callback from an older epoch can run
+      // after a clear + new enqueue; decrementing a shared counter here made that
+      // stale callback consume the NEW pump's slot and let a third pump start.
+      if (this.pendingRunEpoch === epoch) this.pendingRunEpoch = null;
+      if (epoch !== this.lifecycleEpoch) return;
       return this.pumpToolPhases();
     };
     this.runChain = this.runChain.then(run, run);
@@ -437,6 +449,7 @@ export class AgentChatController {
   }
 
   private async pumpToolPhases(): Promise<void> {
+    const epoch = this.lifecycleEpoch;
     const token = this.managed.run.beginRun();
     this.currentToken = token;
     const turnStart = Date.now();
@@ -455,7 +468,7 @@ export class AgentChatController {
     try {
       for (let toolPhase = 0; toolPhase < MAX_TOOL_PHASES; toolPhase++) {
         if (hasError) break;
-        if (!token.isCurrent) return;
+        if (!token.isCurrent || epoch !== this.lifecycleEpoch) return;
 
         let currentMessages = this.channel.getMessages();
         if (hasPendingToolApprovals(currentMessages)) break;
@@ -469,6 +482,7 @@ export class AgentChatController {
 
         await this.executeStream(currentMessages, token);
         toolPhases = toolPhase + 1;
+        if (epoch !== this.lifecycleEpoch) return;
         if (this.managed.getStatus() === "error") {
           hasError = true;
         }
@@ -595,18 +609,6 @@ export class AgentChatController {
     if (messages.length > 0) {
       this.managed.maybeSaveSessionUIMessages(messages, reason);
     }
-  }
-
-  /**
-   * Persist an empty transcript over the current session file.
-   *
-   * `persistMessages` above is a no-op on an empty channel, and the persist
-   * helpers early-return on an empty array too — so `/clear` used to leave the
-   * cleared messages on disk and a later resume resurrected them. This is the one
-   * path that must write the empty list.
-   */
-  persistEmpty(): void {
-    this.managed.clearPersistedSession();
   }
 
   /** Extract ## Plan / [DONE:n] from the latest assistant text while plan mode is active. */

@@ -7,13 +7,13 @@
  * - Dependency manifests
  */
 
+import { extractSymbols } from "../../tree-sitter/symbol-extractor.js";
 import { SKIP_DIRS } from "../shared/constants.js";
-import { extractSymbols } from "../tree-sitter/symbol-extractor.js";
 
 import { truncateHead } from "./tool-shared.js";
 
-import type { TreeSitterManager, TreeSitterEnv } from "../tree-sitter/parser-manager.js";
-import type { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
+import type { TreeSitterManager, TreeSitterEnv } from "../../tree-sitter/parser-manager.js";
+import type { WorkspaceIndex } from "../../tree-sitter/workspace-index.js";
 
 const MANIFESTS = [
   "package.json",

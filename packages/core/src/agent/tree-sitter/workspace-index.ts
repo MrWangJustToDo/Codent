@@ -7,8 +7,7 @@
  * Runtime-agnostic: filesystem access goes through the injected `env`.
  */
 
-import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "../shared/constants.js";
-
+import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "./constants.js";
 import { extractSymbols, type SymbolInfo, type SymbolKindValue } from "./symbol-extractor.js";
 
 import type { TreeSitterEnv, TreeSitterManager } from "./parser-manager.js";

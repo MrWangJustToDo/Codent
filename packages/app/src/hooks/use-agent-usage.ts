@@ -57,12 +57,13 @@ export const useAgentUsage = (): AgentUsageView => {
       return;
     }
 
-    setUsage(toView(session.getSnapshot().usage));
+    // The first render is seeded from the snapshot in useState; the retained
+    // `usage` replay in subscribe() then keeps this handle's view current.
     return session.subscribe(
       (event) => {
         if (event.channel !== "usage") return;
         // Reactive update only — do NOT bump version here. `version` marks a
-        // session identity change (resume/clear/compact, via bumpAgentUsage),
+        // session identity change (resume/new/compact, via bumpAgentUsage),
         // not every token increment; bumping here would remount AnimateNumber
         // and kill the footer token animation.
         setUsage(toView(event.payload));

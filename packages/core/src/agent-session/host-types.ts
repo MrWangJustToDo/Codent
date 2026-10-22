@@ -10,6 +10,7 @@
  */
 
 import type { AgentSession, DiskSessionId } from "./types.js";
+import type { ExtensionFactory } from "../agent/extension/types.js";
 import type { McpServerConfig } from "../agent/mcp";
 import type { SessionMeta } from "../agent/persistence/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
@@ -22,6 +23,22 @@ import type { UIMessage } from "@tanstack/ai";
 // ============================================================================
 // Create options / list entries
 // ============================================================================
+
+/**
+ * Per-session switches for core's built-in extensions.
+ *
+ * Only `false` is meaningful here: `true` (or omission) keeps the built-in's default
+ * configuration, while the richer per-extension objects remain a `ManagedAgentConfig`
+ * detail. A host that needs that level of tuning can still create a runtime with
+ * defaults, but the session contract must cover the common "turn this off" case.
+ */
+export interface AgentSessionBuiltins {
+  lsp?: boolean;
+  skills?: boolean;
+  memory?: boolean;
+  mcp?: boolean;
+  codeMode?: boolean;
+}
 
 /**
  * Options for {@link AgentSessionHost.create}.
@@ -54,6 +71,14 @@ export interface AgentSessionCreateOptions {
    */
   mcpServers?: Record<string, McpServerConfig>;
   extensionDirs?: string[];
+  /**
+   * In-process extension factories for this session. Local hosts load these during
+   * bootstrap; a remote-session host cannot serialize functions and rejects them
+   * explicitly rather than silently dropping them.
+   */
+  extensions?: ExtensionFactory[];
+  /** Disable individual built-in extensions for this session (omit/`true` = default). */
+  builtins?: AgentSessionBuiltins;
   /** Continue the latest on-disk session after the agent is created (bootstrap only). */
   continueSession?: boolean;
   /**
@@ -92,12 +117,19 @@ export interface AgentSessionCreateResult {
  * Session catalog + factory. Prefer this over `agentManager` in hosts and app adapters.
  */
 export interface AgentSessionHost {
-  /** Create a root agent and return its AgentSession. */
+  /**
+   * Create a root agent and return its AgentSession.
+   *
+   * Ownership: the caller owns the returned live agent and must call `destroy()`.
+   * `CodentAgent.dispose()` only destroys sessions created through its
+   * `createSession()` convenience wrapper; calling this method directly bypasses
+   * that ownership set.
+   */
   create(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult>;
   /** Bind an AgentSession to an existing agent id (root or subagent). */
   connect(agentId: string): AgentSession | null;
   /** List live agents currently owned by this host (roots and children). */
-  list(): AgentSessionListEntry[] | Promise<AgentSessionListEntry[]>;
+  list(): Promise<AgentSessionListEntry[]>;
   /** Destroy an agent (cascades to children) and drop its session handle. */
   destroy(agentId: string): Promise<void>;
   /**

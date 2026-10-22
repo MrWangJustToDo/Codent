@@ -14,7 +14,6 @@ import type { ManagedAgent } from "../managers/managed-agent.js";
  */
 export const SUBAGENT_ALLOWED_COMMANDS = new Set<AgentSessionCommand["type"]>([
   "stop",
-  "clear",
   "rename",
   "setClientToolWaiting",
   "respondApproval",
@@ -69,16 +68,6 @@ export async function dispatchLocalAgentSessionCommand(
         } else {
           managed.abort("user-cancelled");
         }
-        return { ok: true };
-      }
-      case "clear": {
-        // In-place message clear only. Brand-new agent sessions use Host.create.
-        if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        // Stop first: a live pump would keep streaming chunks into the channel we
-        // are about to empty (and re-persist the transcript the user just cleared).
-        // Also true without a pump: a paused run's eager `task` subagents are still writing.
-        managed.sessionLifecycle?.stop("session-clear");
-        chat.clearMessages();
         return { ok: true };
       }
       case "respondApproval": {

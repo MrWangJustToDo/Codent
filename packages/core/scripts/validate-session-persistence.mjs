@@ -1,7 +1,7 @@
 /**
  * Validates the agent-side session persistence transaction:
  * - the owned tracker dedupes repeated saves and only advances on a landed write;
- * - clear() is the one forced empty write and resets the tracker;
+ * - there is no in-place clear escape hatch (a new conversation is a new session);
  * - persistState() writes state without a message snapshot;
  * - resetTracker() re-enables a save of identical content.
  *
@@ -71,15 +71,8 @@ persistence.persistState();
 await tick();
 assert.equal(calls.at(-1).uiMessages, undefined);
 
-// Clear is the one forced empty write, and resets the tracker.
-const beforeClear = calls.length;
-persistence.clear();
-await tick();
-assert.equal(calls.length, beforeClear + 1);
-assert.deepEqual(calls.at(-1).uiMessages, []);
-assert.equal(calls.at(-1).forceEmptyMessages, true);
-persistence.maybeSave(messages, "pump-complete");
-await tick();
-assert.equal(calls.length, beforeClear + 2, "clear resets the tracker");
+// SessionPersistence has no clear operation: a conversation is never blanked in place.
+assert.equal(persistence.clear, undefined, "SessionPersistence.clear must not exist");
+assert.equal(persistence.clearNow, undefined, "SessionPersistence.clearNow must not exist");
 
 console.log("session-persistence validation passed");

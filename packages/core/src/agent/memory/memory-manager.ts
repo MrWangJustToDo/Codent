@@ -297,6 +297,14 @@ export class MemoryManager {
   // Index Management
   // ============================================================================
 
+  /** Cancel the pending debounced index refresh. Safe to call more than once. */
+  dispose(): void {
+    if (this.refreshTimeout) {
+      clearTimeout(this.refreshTimeout);
+      this.refreshTimeout = undefined;
+    }
+  }
+
   /**
    * Immediately refresh the index, cancelling any pending debounced refresh.
    * Use after batch operations (extraction, consolidation) to ensure

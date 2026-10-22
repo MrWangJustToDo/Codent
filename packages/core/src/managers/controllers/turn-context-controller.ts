@@ -236,7 +236,7 @@ export class TurnContextController {
     const sessionRetrieval = formatSessionRetrievalSection({ hasHistory: this.sessionHistoryPresent });
 
     // The live session id, so the model can address its own compacted-away history.
-    // Read per turn (not cached): a resume/clear changes it and the section re-admits.
+    // Read per turn (not cached): a resume/new changes it and the section re-admits.
     const sessionId = this.options.getSessionId();
 
     return buildTurnContextSections({

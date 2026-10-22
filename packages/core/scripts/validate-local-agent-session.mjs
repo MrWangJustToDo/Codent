@@ -23,12 +23,12 @@ import { AgentManager } from "../dist/index.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
-function createFake(id, parentId) {
+function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}) {
   const usage = new UsageTracker();
   const todoManager = new TodoManager();
-  const bus = createAgentEventBus(id);
+  const bus = busOverride ?? createAgentEventBus(id);
   usage.setEventBus(bus);
-  todoManager.setEventBus(bus);
+  if (todoProvider) todoManager.setEventBus(bus);
   /** @type {any} */
   const managed = {
     id,
@@ -257,6 +257,40 @@ managed.getEventBus().emit("session:subagents", { subagents: [] });
 assert.ok(channels.includes("subagents"), "session:subagents must reach its channel");
 unsub();
 
+// Retained session projection is scope-local: a child without its own todo/queue
+// provider must not inherit the parent's retained values through the bus scope chain.
+{
+  const parentBus = createAgentEventBus("scope-parent");
+  parentBus.retain("session:todos", () => ({
+    items: [
+      { id: "parent-todo", content: "parent", status: "pending", priority: "medium", createdAt: 1, updatedAt: 1 },
+    ],
+    title: "parent",
+  }));
+  parentBus.retain("session:queues", () => ({
+    steer: [{ text: "parent steer" }],
+    followUp: [],
+  }));
+  const childBus = parentBus.scope("scope-child");
+  const scopedChild = createFake("scope-child", "scope-parent", { bus: childBus, todoProvider: false });
+  const scopedSession = createLocalAgentSession({ managed: scopedChild, manager: null });
+  const replayed = [];
+  const unsubScoped = scopedSession.subscribe((event) => replayed.push(event), {
+    channels: ["todos", "queues"],
+  });
+  unsubScoped();
+  assert.equal(
+    replayed.some((event) => event.channel === "todos"),
+    false,
+    "child session does not inherit parent todos"
+  );
+  assert.equal(
+    replayed.some((event) => event.channel === "queues"),
+    false,
+    "child session does not inherit parent queues"
+  );
+}
+
 const child = createFake("agent_child", "agent_root");
 const childSession = createLocalAgentSession({ managed: child, manager: null });
 const sendDenied = await childSession.dispatch({ type: "send", content: "nope" });
@@ -265,8 +299,8 @@ assert.equal(sendDenied.code, "unsupported");
 const childStop = await childSession.dispatch({ type: "stop" });
 assert.equal(childStop.ok, true);
 const childClear = await childSession.dispatch({ type: "clear" });
-assert.equal(childClear.ok, true);
-assert.equal(child.cleared, true);
+assert.equal(childClear.ok, false, "the session clear command no longer exists");
+assert.equal(childClear.code, "unsupported");
 const childCompactDenied = await childSession.dispatch({ type: "compact" });
 assert.equal(childCompactDenied.ok, false);
 assert.equal(childCompactDenied.code, "unsupported");
@@ -337,6 +371,9 @@ assert.ok(withSubs.subagents[0].usage);
 
   const e2eManager = new AgentManager();
   const parent = await e2eManager.createManagedAgent({ name: "root-messages", model: "test-model" });
+  parent.ensureSessionData();
+  const parentSessionId = parent.getSessionData()?.id;
+  assert.ok(parentSessionId, "parent has a disk session for child scoping");
   const sub = await e2eManager.spawnSubagent(parent.id, { name: "sub-messages" });
   const subManaged = e2eManager.getAgent(sub.id);
   assert.ok(subManaged, "subagent managed agent exists");
@@ -376,6 +413,19 @@ assert.ok(withSubs.subagents[0].usage);
     "subagent channel messages reach the child session messages channel"
   );
   unsubMessages();
+
+  // Completed `autoDestroy:false` children remain registered, but a session switch must
+  // hide rows that belong to the session being left.
+  const beforeSwitch = createLocalAgentSession({ managed: parent, manager: e2eManager }).getSnapshot();
+  assert.equal(beforeSwitch.subagents.length, 1, "the current session shows its child row");
+  parent.setSessionData({
+    ...parent.getSessionData(),
+    id: "ses_other_child_scope",
+    uiMessages: [],
+  });
+  parent.refreshSubagents();
+  const afterSwitch = createLocalAgentSession({ managed: parent, manager: e2eManager }).getSnapshot();
+  assert.equal(afterSwitch.subagents.length, 0, "the old session's child rows do not leak into the next one");
 
   e2eManager.destroyAgent(sub.id);
   e2eManager.destroyAgent(parent.id);

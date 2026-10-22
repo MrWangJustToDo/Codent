@@ -28,13 +28,7 @@ export {
 
 export type { LspServerConfig, LspConnection, LspMessage, LspRequestOptions } from "./env/lsp";
 export type { LspConnectionFactory } from "./env";
-export {
-  LspManager,
-  type LspServerConfigRecord,
-  type ServerStatus,
-  type LspClient,
-  type LspManagerCallbacks,
-} from "./agent/lsp/lsp-manager.js";
+export type { LspServerConfigRecord, ServerStatus, LspClient, LspManagerCallbacks } from "./agent/lsp/lsp-manager.js";
 
 // ============================================================================
 // Model provider plane (orthogonal to CoreEnv)
@@ -102,7 +96,8 @@ export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from 
 // A host that supplies MCP servers per session (`AgentSessionCreateOptions.mcpServers`) must be
 // able to NAME the config it passes, so the union is public even though the manager is not.
 export type { McpServerConfig, McpServerConfigStdio, McpServerConfigHttp } from "./agent/mcp";
-export type { McpConfigSourceKind } from "./runtime-types/mcp-status.js";
+export type { McpConfigSourceKind, McpServerStatus } from "./runtime-types/mcp-status.js";
+export type { SessionJobSummary, SessionJobsSnapshot } from "./runtime-types/session-payloads.js";
 export type { UsageRecord, UsageRecordInput } from "./agent/usage";
 export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage";
 
@@ -119,6 +114,7 @@ export {
   type AgentSession,
   type AgentSessionChannel,
   type AgentSessionCommand,
+  type AgentSessionBuiltins,
   type AgentSessionCommandResult,
   type AgentSessionCreateOptions,
   type AgentSessionCreateResult,
@@ -180,7 +176,7 @@ export type {
   PendingAskUserInteraction,
   SessionInteractionsSnapshot,
 } from "./runtime-types/session-payloads.js";
-export { TaskRunState, type TaskRunPhase } from "./agent/subagent/task-run-state.js";
+export type { TaskRunPhase } from "./agent/subagent/task-run-state.js";
 export type { UsageChangeSnapshot, UsageSnapshot } from "./managers/telemetry/usage-tracker.js";
 
 // ============================================================================
@@ -189,7 +185,6 @@ export type { UsageChangeSnapshot, UsageSnapshot } from "./managers/telemetry/us
 
 export {
   AGENT_STREAM_SNAPSHOT_LINE_CAP,
-  AgentStreamHub,
   applyAppendToAgentStreamWindow,
   applyAgentStreamAppend,
   agentStreamWindowFromSnapshot,

@@ -16,7 +16,7 @@ type ToolCallApproval = ToolCallPart["approval"] & { reason?: string };
  *
  * - `user-message` — user text entered the channel (send / drained steer|follow-up)
  * - `pump-complete` — chat pump idle (finished, waiting, error, or abort cleanup)
- * - `force` — slash commands (`/clear`, etc.)
+ * - `force` — slash commands (`/new`, etc.)
  */
 export type SessionSaveReason = "user-message" | "pump-complete" | "force";
 

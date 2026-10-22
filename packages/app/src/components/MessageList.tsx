@@ -64,7 +64,7 @@ export const MAX_STATIC_LINES = 1200;
 /**
  * Lines charged to a row whose height has never been measured.
  *
- * `onRender` fires after layout, so on a cold mount (resume, `/clear`, first paint) no row
+ * `onRender` fires after layout, so on a cold mount (resume, `/new`, first paint) no row
  * has a height yet. Charging the *average* keeps the budget honest; charging zero — or
  * assuming a truncated row is one line — would select far more rows than fit and drop more
  * history than the message-count cap this replaces.

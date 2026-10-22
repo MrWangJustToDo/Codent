@@ -45,19 +45,11 @@ export interface SessionPersistInput {
   onTitleResolved?: (name: string) => void;
   uiMessages?: UIMessage[];
   /**
-   * Session the caller intended to write. A queued persist may run after a `/resume`/`/clear`
+   * Session the caller intended to write. A queued persist may run after a `/resume`/`/new`
    * has adopted a different session; refusing the stale target prevents the old transcript (or
    * mode/todo state) from landing in the new session.
    */
   sessionId?: string;
-  /**
-   * Allow `uiMessages: []` to be written.
-   *
-   * An empty list is normally refused (an empty persist must not erase a session
-   * whose messages simply were not passed), but `/clear` must: it is the one
-   * caller whose intent *is* "the transcript is now empty".
-   */
-  forceEmptyMessages?: boolean;
 }
 
 export interface SessionRestoreInput {
@@ -206,10 +198,13 @@ export class SessionService {
    * the same content, so the loss never converges. `false` also covers
    * "no store / no data", where there is nothing to persist.
    */
-  private async saveToStore(emitEvent: EmitAgentTelemetryFn | undefined, target: string): Promise<boolean> {
+  private async saveToStore(
+    emitEvent: EmitAgentTelemetryFn | undefined,
+    data: SessionData,
+    target: string
+  ): Promise<boolean> {
     const store = this.store;
-    const data = this.data;
-    if (this.closed || !store || !data) return false;
+    if (this.closed || !store) return false;
     if (store.isDeleted?.(data.id) === true) return false;
     // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
     // `close()` must be able to wait for it before the log is deleted.
@@ -257,6 +252,21 @@ export class SessionService {
     return run;
   }
 
+  /**
+   * Wait for queued session writes to settle before switching the active transcript.
+   *
+   * A resume/branch replaces `this.data`; letting a queued write run afterward would make
+   * a pre-switch payload race the new session even though `persistSessionInner` now
+   * refuses a stale target. The explicit drain makes the switch ordering deterministic.
+   */
+  async awaitPersistIdle(): Promise<void> {
+    while (true) {
+      const pending = this.persistQueue;
+      await pending;
+      if (pending === this.persistQueue) return;
+    }
+  }
+
   private async persistSessionInner(input: SessionPersistInput): Promise<boolean> {
     if (this.closed) return false;
     const {
@@ -276,32 +286,36 @@ export class SessionService {
       this.ensureSession();
       return this.persistSessionInner(input);
     }
-    if (this.store.isDeleted?.(this.data.id) === true) return false;
-    if (input.sessionId !== undefined && this.data.id !== input.sessionId) {
+    // Capture the target object for the whole write. `this.data` may be replaced by a
+    // resume/new while dehydrate/save is awaiting, and a stale write must never be
+    // retargeted onto the newly adopted session.
+    const data = this.data;
+    if (this.store.isDeleted?.(data.id) === true) return false;
+    if (input.sessionId !== undefined && data.id !== input.sessionId) {
       // A write captured before a session switch must not be retargeted onto the new session.
       return false;
     }
-    this.data.usage = { ...usage.getTotal() };
-    this.data.cost = usage.getTotalCostUsd();
-    this.data.contextTokens = usage.getContextFillTokens();
+    data.usage = { ...usage.getTotal() };
+    data.cost = usage.getTotalCostUsd();
+    data.contextTokens = usage.getContextFillTokens();
 
     if (todoManager) {
-      this.data.todos = todoManager.getItems();
-      this.data.todoTitle = todoManager.getTitle();
-      this.data.todoPlanBound = todoManager.isPlanBound();
+      data.todos = todoManager.getItems();
+      data.todoTitle = todoManager.getTitle();
+      data.todoPlanBound = todoManager.isPlanBound();
     }
 
     if (planMode !== undefined) {
-      this.data.planMode = !planMode || planMode.phase === "off" ? null : { ...planMode, steps: [...planMode.steps] };
+      data.planMode = !planMode || planMode.phase === "off" ? null : { ...planMode, steps: [...planMode.steps] };
     }
 
     if (autoMode !== undefined) {
-      this.data.autoMode = autoMode;
+      data.autoMode = autoMode;
     }
 
     // `in` check: explicit undefined (e.g. `/models <model> off`) also clears the field.
     if ("reasoningEffort" in input) {
-      this.data.reasoningEffort = reasoningEffort;
+      data.reasoningEffort = reasoningEffort;
     }
 
     // `messagesPersisted` stays false when dehydrate fails: the messages (the
@@ -309,10 +323,10 @@ export class SessionService {
     // must not mark them persisted — otherwise the retry is suppressed too.
     let messagesPersisted = true;
     if (uiMessages !== undefined) {
-      // An empty list is only written when the caller says so (`/clear`); every
-      // other caller omits `uiMessages` entirely rather than passing an empty one,
-      // so guarding here keeps a stray `[]` from erasing a real transcript.
-      if (uiMessages.length === 0 && !input.forceEmptyMessages) {
+      // An empty list is never written: an empty persist must not erase a session whose
+      // messages simply were not passed. Starting a new conversation creates a new session
+      // instead of blanking the old one.
+      if (uiMessages.length === 0) {
         messagesPersisted = false;
       } else {
         // Dehydrate extracts base64 assets to the media store (disk writes). This
@@ -327,7 +341,10 @@ export class SessionService {
         } else {
           try {
             const dehydrated = await dehydrateUIMessages(uiMessages, { env: store.getEnv() });
-            this.data.uiMessages = dehydrated;
+            // A resume/new can replace `this.data` during the media write. Do not mutate or
+            // save the newly adopted session with the old session's transcript.
+            if (this.data !== data) return false;
+            data.uiMessages = dehydrated;
           } catch (err) {
             messagesPersisted = false;
             emitEvent?.("session:save-error", {
@@ -342,11 +359,11 @@ export class SessionService {
     // Regenerate the title for blank names too, not just "New Session": legacy
     // sessions whose name was overwritten to "" before the empty-title guard
     // would otherwise never retitle again (name !== "New Session").
-    if (!this.data.name || this.data.name === "New Session") {
+    if (!data.name || data.name === "New Session") {
       const firstUserText = getFirstUserInput(uiMessages || []).trim();
       // A brand-new session is persisted *before* its first turn by state-only writes:
-      // state-only persists carry no `uiMessages`, and `/clear` queues one (its mode
-      // resets), whose lazily-resolved payload lands after the new session is adopted. There is
+      // state-only persists carry no `uiMessages`, and a new-session mode reset queues one,
+      // whose lazily-resolved payload lands after the new session is adopted. There is
       // nothing to title at that point — an empty prompt produced a title with no conversation
       // behind it and a wasted side call (some providers reject the empty input outright, which
       // surfaced only as a `side-query` warn). Title only once a persist actually carries a
@@ -355,7 +372,7 @@ export class SessionService {
         // Capture the session identity: the title LLM call is async, and a /new or
         // /resume during it swaps `this.data`. Without this guard the old session's
         // title would be written into (and persisted to) the new session.
-        const target = this.data;
+        const target = data;
         this.generateSessionTitle(firstUserText, { usage, resolveTextAdapter, log }).then((title) => {
           if (this.data !== target) return;
           const trimmed = title.trim();
@@ -365,7 +382,7 @@ export class SessionService {
             // regenerates the title.
             if (!target.name || !target.name.trim()) {
               target.name = "New Session";
-              void this.saveToStore(emitEvent, "session-title");
+              void this.saveToStore(emitEvent, target, "session-title");
             }
             return;
           }
@@ -375,12 +392,12 @@ export class SessionService {
           onTitleResolved?.(trimmed);
           // Reuse the unified save path so a title-write failure also emits
           // `session:save-error` (target "session-title").
-          void this.saveToStore(emitEvent, "session-title");
+          void this.saveToStore(emitEvent, target, "session-title");
         });
       }
     }
 
-    // A session reaches disk only once it has something to write. `/clear` starts a
+    // A session reaches disk only once it has something to write. `/new` starts a
     // brand-new session, and a mode/effort/model toggle issued before the first message
     // persists *state* against it — but an empty session that nothing can be resumed from
     // is not worth a file. Create it on the first save that carries a message; the state
@@ -388,14 +405,15 @@ export class SessionService {
     // empty "New Session" rows. A skip is "nothing to write yet", not a failure — the caller
     // asked for state that is derived and will be written by the next content save.
     const store = this.store;
-    if (store && this.data.uiMessages.length === 0 && !(await store.exists(this.data.id))) {
-      return messagesPersisted;
+    if (store && data.uiMessages.length === 0 && !(await store.exists(data.id))) {
+      return messagesPersisted && this.data === data;
     }
+    if (this.data !== data) return false;
 
     const saveTarget = uiMessages !== undefined ? "session+uiMessages" : "session";
     // Await so callers that `await persistSession` observe durability; emit on
     // failure (do not rethrow — persist remains best-effort for fire-and-forget hosts).
-    const saved = await this.saveToStore(emitEvent, saveTarget);
+    const saved = await this.saveToStore(emitEvent, data, saveTarget);
     return messagesPersisted && saved;
   }
 

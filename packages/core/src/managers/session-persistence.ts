@@ -1,5 +1,5 @@
 /**
- * Agent-side session persistence: the sync fingerprint, save/clear/persist entry points and the
+ * Agent-side session persistence: the sync fingerprint, save/persist entry points and the
  * restore transaction.
  *
  * `SessionService` owns the store and the serialized disk write; this class owns "what this agent
@@ -44,38 +44,12 @@ export class SessionPersistence {
     );
   }
 
-  /** Force-persist `uiMessages` (slash commands such as `/clear`). */
+  /** Force-persist `uiMessages` (explicit slash-command flushes). */
   save(uiMessages: UIMessage[]): void {
     const sessionId = this.host.session.getSessionData()?.id;
     void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
       this.reportBackgroundPersistError(err)
     );
-  }
-
-  /** Persist an empty transcript as the session content (`/clear`). */
-  clear(): void {
-    void this.clearNow().catch((err) => this.reportBackgroundPersistError(err));
-  }
-
-  /**
-   * Await the forced empty write. `/clear` calls this BEFORE rotating sessions, so the old
-   * session is actually blanked instead of the queued thunk resolving against the new one.
-   */
-  async clearNow(): Promise<boolean> {
-    try {
-      const sessionId = this.host.session.getSessionData()?.id;
-      const persisted = await this.host.session.persistSession(() => ({
-        ...getSessionPersistInput(this.host),
-        ...(sessionId ? { sessionId } : {}),
-        uiMessages: [],
-        forceEmptyMessages: true,
-      }));
-      if (persisted) this.tracker.reset([]);
-      return persisted;
-    } catch (err) {
-      this.reportBackgroundPersistError(err);
-      return false;
-    }
   }
 
   /** Persist model/state only (usage, todos, mode); does not write `uiMessages`. */

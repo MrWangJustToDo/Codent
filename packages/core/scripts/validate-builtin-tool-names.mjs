@@ -115,9 +115,9 @@ assert.equal(
 // longer classifies a renamed tool as a write, and nothing fails. This scan is the guard for the two
 // files that had exactly that (`tools/runtime/tool-sets.ts`, `compaction/file-ops-tracker.ts`).
 //
-// Deliberately NOT covered: `case "<name>":` dispatch tables (the presentation renderers), `name: "<x>"`
-// definition sites, and prose in prompts. A switch is exhaustive by tool and its `default` degrades, and
-// it is the tool's own `present` declaration (guarded by `validate:tool-presentation`) that hosts read.
+// `case "<name>":` dispatch tables are covered separately below for the presentation formatters: a
+// renamed built-in otherwise silently falls through to the generic/default renderer. Definition sites
+// (`name: "<x>"`) and prose in prompts are still deliberately out of scope.
 
 /** Files whose strings match a built-in name for another reason; each with the reason. */
 const NAME_LITERAL_EXEMPT = [
@@ -188,6 +188,31 @@ const NAME_LITERAL_EXEMPT = [
       `the file to NAME_LITERAL_EXEMPT with its reason:\n  ${offenders.join("\n  ")}`
   );
   console.log(`validate-builtin-tool-names: ${NAME_LITERAL_EXEMPT.length} exempt files, 0 literal sites`);
+}
+
+// Presentation dispatch tables are a tool-name dispatch surface too. A literal case is not
+// exhaustive: renaming a tool leaves the old case unreachable and silently falls to `default`.
+{
+  const formatDir = join(SRC, "agent/tools/presentation/format");
+  const offenders = [];
+  const walkFormat = (dir) =>
+    readdirSync(dir).flatMap((entry) => {
+      const path = join(dir, entry);
+      return statSync(path).isDirectory() ? walkFormat(path) : path.endsWith(".ts") ? [path] : [];
+    });
+  for (const file of walkFormat(formatDir)) {
+    const rel = file.slice(join(SRC).length).split(sep).join("/");
+    const source = readFileSync(file, "utf8");
+    for (const name of actualSet) {
+      if (new RegExp('case\\s+"' + name + '"\\s*:').test(source)) offenders.push(`${rel}: case "${name}"`);
+    }
+  }
+  assert.equal(
+    offenders.length,
+    0,
+    `presentation formatter dispatch uses a literal built-in name instead of BUILTIN_TOOL_NAMES:\n  ${offenders.join("\n  ")}`
+  );
+  console.log("validate-builtin-tool-names: presentation dispatch uses the registry");
 }
 
 console.log(`validate-builtin-tool-names: ok — ${actualSet.size} built-in tool names`);

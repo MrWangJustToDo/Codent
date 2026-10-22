@@ -316,7 +316,7 @@ export class SessionStore {
    * of creating a fresh one, without racing another process onto the same id.
    *
    * **Defensive.** A session now reaches disk only on its first *content* save
-   * (see `SessionService.persistSessionInner`), so a normal launch and `/clear` no
+   * (see `SessionService.persistSessionInner`), so a normal launch and `/new` no
    * longer leave a reusable empty file behind. What this can still match is a
    * leftover empty file from an older build, or one written empty by
    * {@link reserveSession} / {@link releaseReservation} — so it is kept for those

@@ -9,7 +9,7 @@
  * Runtime-agnostic: all filesystem access goes through the injected `env`.
  */
 
-import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "../shared/constants.js";
+import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "./constants.js";
 
 import type { TreeSitterManager, TreeSitterEnv } from "./parser-manager.js";
 import type { CompiledPattern, PatternNode } from "./pattern-compiler.js";

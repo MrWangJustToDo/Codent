@@ -218,6 +218,16 @@ export function bridgeTelemetryToAgentLog(
     const log = resolveLog(event);
     if (!log) return;
 
+    // Policy overrides must win before the custom handlers: those events have
+    // specialized formatting (MCP/memory/compaction), but an explicit `false` still
+    // means "never write this event" and an explicit rule still means "use this".
+    const override = policy?.events?.[event.type];
+    if (override === false) return;
+    if (override) {
+      writeLog(log, override, event, override.formatMessage(event));
+      return;
+    }
+
     switch (event.type) {
       case "session:mcp":
         logSessionMcp(log, event);

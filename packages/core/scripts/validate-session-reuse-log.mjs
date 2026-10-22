@@ -7,7 +7,7 @@
  * 3. No stray log dirs are created for the reused launch.
  *
  * The leftover empty session file is written directly with `store.save`, because a session
- * now reaches disk only on its first *content* save: a fresh launch and `/clear` no longer
+ * now reaches disk only on its first *content* save: a fresh launch and `/new` no longer
  * leave one, so the reuse path exercised here is defensive (a legacy leftover).
  *
  * Run: pnpm --filter @codent/core run validate:session-reuse-log
@@ -154,6 +154,44 @@ const created3 = await host3.create({ name: "launch-3", model: "test-model" });
 const session3 = manager3.getAgent(created3.session.getSnapshot().agentId)?.getSessionData()?.id;
 assert.equal(session3, sessionE, "launch 3 reuses E after the reservation was released on teardown");
 await host3.destroy(created3.session.id);
+
+// ----------------------------------------------------------------------------
+// Host create options: in-process extension factories load through the real
+// AgentBootstrap, and builtins switches land on the managed config.
+// ----------------------------------------------------------------------------
+const manager4 = new AgentManager();
+const host4 = createLocalAgentSessionHost({ manager: manager4 });
+const created4 = await host4.create({
+  name: "launch-options",
+  model: "test-model",
+  extensions: [
+    {
+      create: () => ({
+        id: "host-create-extension",
+        name: "Host create extension",
+        version: "1.0.0",
+        description: "loaded through AgentSessionCreateOptions.extensions",
+        activate() {},
+      }),
+    },
+  ],
+  builtins: { lsp: false, skills: false, memory: false, mcp: false, codeMode: false },
+});
+const managed4 = manager4.getAgent(created4.session.getSnapshot().agentId);
+assert.ok(managed4, "host create options managed agent");
+assert.ok(
+  managed4
+    .getExtensionRunner()
+    ?.getExtensionInfos()
+    .some((info) => info.id === "host-create-extension"),
+  "an in-process extension factory from host.create is loaded"
+);
+assert.equal(managed4.config.lsp, false, "builtins.lsp reaches the managed config");
+assert.equal(managed4.config.skills, false, "builtins.skills reaches the managed config");
+assert.equal(managed4.config.memory, false, "builtins.memory reaches the managed config");
+assert.equal(managed4.config.mcp, false, "builtins.mcp reaches the managed config");
+assert.equal(managed4.config.codeMode, false, "builtins.codeMode reaches the managed config");
+await host4.destroy(created4.session.id);
 
 console.log("session reuse + log continuity OK");
 console.log("  reused session:", sessionE);

@@ -5,7 +5,7 @@
  */
 
 import type { LspManager } from "./lsp-manager.js";
-import type { TreeSitterManager } from "./tree-sitter/parser-manager.js";
+import type { TreeSitterManager } from "../tree-sitter/parser-manager.js";
 
 export type ProviderResult =
   { type: "lsp" } | { type: "tree-sitter"; languageId: string } | { type: "none"; reason: string };

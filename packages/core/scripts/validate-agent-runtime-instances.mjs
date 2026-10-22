@@ -108,6 +108,69 @@ const fakeEnv = (root) => ({
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Remote-session dispose only destroys sessions this runtime created
+// ---------------------------------------------------------------------------
+{
+  const destroyed = [];
+  const host = {
+    create: async () => ({ session: { id: "agent-owned" } }),
+    connect: (agentId) => ({ id: agentId }),
+    list: async () => {
+      throw new Error("dispose must not enumerate the remote host catalog");
+    },
+    destroy: async (agentId) => {
+      destroyed.push(agentId);
+    },
+  };
+  const runtime = await CodentAgent.create({ env: fakeEnv("/tmp/remote-owned"), host });
+  await runtime.createSession({ name: "owned", model: "m" });
+  const connectedOnly = runtime.getSession("agent-connected-only");
+  assert.equal(connectedOnly?.id, "agent-connected-only");
+
+  await runtime.dispose();
+  assert.deepEqual(destroyed, ["agent-owned"], "dispose destroys only sessions created by this runtime");
+}
+
+// ---------------------------------------------------------------------------
+// 2c. CodentAgent defaults carry extension factories and built-in toggles
+// ---------------------------------------------------------------------------
+{
+  const factory = {
+    create: () => ({
+      id: "runtime-default-extension",
+      name: "Runtime default extension",
+      version: "1.0.0",
+      description: "registered through CodentAgentDefaults.extensions",
+      activate() {},
+    }),
+  };
+  let seen;
+  const host = {
+    create: async (options) => {
+      seen = options;
+      return { session: { id: "agent-options" } };
+    },
+    connect: (agentId) => ({ id: agentId }),
+    list: async () => [],
+    destroy: async () => {},
+  };
+  const runtime = await CodentAgent.create({
+    env: fakeEnv("/tmp/runtime-options"),
+    host,
+    defaults: { extensions: [factory], builtins: { skills: false } },
+  });
+  await runtime.createSession({ name: "options", model: "m", builtins: { lsp: false } });
+
+  assert.equal(seen.extensions?.[0], factory, "default extension factories reach the host");
+  assert.deepEqual(
+    seen.builtins,
+    { skills: false, lsp: false },
+    "per-session builtins merge with the runtime defaults instead of replacing the group"
+  );
+  await runtime.dispose();
+}
+
+// ---------------------------------------------------------------------------
 // 3. Ambient fallback keeps the legacy bootstrap working
 // ---------------------------------------------------------------------------
 {

@@ -9,7 +9,14 @@
 
 import assert from "node:assert/strict";
 
-import { AGENT_EVENT_META, DEFAULT_AGENT_SESSION_CHANNELS, createLifecycleMiddleware } from "../dist/dev.mjs";
+import {
+  AGENT_EVENT_META,
+  AgentLog,
+  DEFAULT_AGENT_SESSION_CHANNELS,
+  ManagedAgent,
+  createAgentEventBus,
+  createLifecycleMiddleware,
+} from "../dist/dev.mjs";
 
 // --- channel / meta wiring ---------------------------------------------------
 
@@ -54,6 +61,23 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
 {
   const mw = createLifecycleMiddleware({ usage: {}, getPricing: () => null, maxIterations: 3 });
   await mw.onIteration?.({}, { iteration: 0, messageId: "m" });
+}
+
+// --- a terminal run clears the retained iteration progress ------------------
+{
+  const managed = new ManagedAgent(
+    { name: "iteration", model: "test-model", maxIterations: 7 },
+    { log: new AgentLog(), tools: {}, todoManager: null }
+  );
+  const bus = createAgentEventBus("iteration-progress");
+  managed.setEventBus(bus);
+  const seen = [];
+  bus.on("agent:iteration", (event) => seen.push(event.payload), { replay: false });
+
+  managed.setIterationProgress({ current: 3, max: 7 });
+  managed.finalizeRun("aborted");
+  assert.deepEqual(managed.readIteration(), { current: 0, max: 7 }, "a terminal run resets iteration to idle");
+  assert.deepEqual(seen.at(-1), { current: 0, max: 7 }, "the retained channel is republished with idle progress");
 }
 
 console.log("agent-iteration-progress validation passed");

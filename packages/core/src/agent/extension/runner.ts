@@ -258,7 +258,7 @@ export class ExtensionRunner {
     this.contextTimer = setTimeout(() => {
       this.contextTimer = null;
       try {
-        this.ui.emitEvent("context", { context: this.ui.getContext() });
+        this.ui.emitEvent({ type: "context", context: this.ui.getContext() });
       } catch {
         // Failure contained: context pushes are best-effort.
       }

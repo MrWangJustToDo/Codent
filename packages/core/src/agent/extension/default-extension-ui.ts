@@ -14,7 +14,7 @@
 import { fingerprintOf, normalizePayload, slotId } from "./render-payload.js";
 
 import type { ExtensionNotificationLevel, ExtensionRenderPayload, ExtensionUI, ExtensionUiContext } from "./types.js";
-import type { AgentEventBus } from "../agent-event-bus";
+import type { AgentEventBus, AgentExtensionUiEvent } from "../agent-event-bus";
 
 /** Throttle window for coalescing render notifications (ms). */
 const RENDER_THROTTLE_MS = 100;
@@ -42,8 +42,8 @@ export class DefaultExtensionUI implements ExtensionUI {
    * `extension-ui` channel projection consumes it). The internal pub/sub registry is gone — the
    * bus is the single mechanism.
    */
-  emitEvent(type: string, data: Record<string, unknown>): void {
-    this.bus?.emit("extension:ui", { type, ...data } as never);
+  emitEvent(event: AgentExtensionUiEvent): void {
+    this.bus?.emit("extension:ui", event);
   }
 
   /**
@@ -51,7 +51,7 @@ export class DefaultExtensionUI implements ExtensionUI {
    * Persistent content belongs in a {@link render} slot.
    */
   notify(message: string, level: ExtensionNotificationLevel = "info"): void {
-    this.emitEvent("notify", { message, level });
+    this.emitEvent({ type: "notify", message, level });
   }
 
   /**
@@ -137,7 +137,7 @@ export class DefaultExtensionUI implements ExtensionUI {
     this.pending.clear();
     this.lastFlushAt = Date.now();
     for (const update of updates) {
-      this.emitEvent("render", { surface: update.surface, key: update.key, payload: update.payload });
+      this.emitEvent({ type: "render", surface: update.surface, key: update.key, payload: update.payload });
     }
   }
 

@@ -15,19 +15,15 @@
  *    used to be updated unconditionally, so after one failed write every later
  *    persist of the same content was skipped as a no-op — the loss never converged.
  *    Old code: `persistSession` returned `void` and `markPersisted` always ran.
- * 3. **`/clear` reaches disk.** Clearing in memory left the log intact, so resuming
- *    resurrected the cleared conversation. Old code: `persistSession` refused an
- *    empty `uiMessages`.
- * 4. **An empty list is only written when the caller says so.** Every other caller
- *    omits `uiMessages` instead of passing `[]`; a stray empty array must not erase
- *    a real transcript.
- * 5. **Auto-title waits for a first user message.** A fresh ("New Session") session is
+ * 3. **An empty list is never written.** `uiMessages: []` must not erase a real transcript;
+ *    starting a new conversation creates a new session instead of blanking the old one.
+ * 4. **Auto-title waits for a first user message.** A fresh ("New Session") session is
  *    persisted before its first turn by state-only writes, so the title path used to hand
  *    the side LLM an empty prompt — a title with no conversation behind it, and a wasted
  *    call (some providers 400 on the empty input, surfacing only as a `side-query` warn).
  *    Old code: the title resolver ran for a persist that carried no user message.
- * 6. **A session reaches disk only on its first content save.** State-only persists (a mode
- *    reset during `/clear`, a mode/effort/model toggle) used to create the log for a session
+ * 5. **A session reaches disk only on its first content save.** State-only persists (a mode
+ *    reset during `/new`, a mode/effort/model toggle) used to create the log for a session
  *    with no content, leaving an empty "New Session" behind. Old code: a state-only persist
  *    wrote the file.
  *
@@ -283,38 +279,7 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. /clear reaches disk (P1-9)
-// ---------------------------------------------------------------------------
-{
-  setupEnv();
-  const { store, service, data } = newService();
-
-  await service.persistSession({
-    usage: new UsageTracker(),
-    getTodoManager: () => null,
-    uiMessages: [textMessage("m1", "first"), textMessage("m2", "second")],
-  });
-  assert.deepEqual(
-    (await store.load(data.id)).uiMessages.map((m) => m.id),
-    ["m1", "m2"],
-    "baseline written"
-  );
-
-  const cleared = await service.persistSession({
-    usage: new UsageTracker(),
-    getTodoManager: () => null,
-    uiMessages: [],
-    forceEmptyMessages: true,
-  });
-  assert.equal(cleared, true, "forced empty persist reports success");
-
-  const after = await store.load(data.id);
-  assert.deepEqual(after.uiMessages, [], "cleared transcript is empty on disk (resume cannot resurrect it)");
-  assert.equal(after.name, "gate", "state survives the empty write");
-}
-
-// ---------------------------------------------------------------------------
-// 4. A stray empty list is NOT written (needs forceEmptyMessages)
+// 3. An empty list is never written
 // ---------------------------------------------------------------------------
 {
   setupEnv();
@@ -327,16 +292,16 @@ function newService() {
   });
 
   const stray = await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null, uiMessages: [] });
-  assert.equal(stray, false, "an unforced empty persist reports failure");
+  assert.equal(stray, false, "an empty persist reports failure");
   assert.deepEqual(
     (await store.load(data.id)).uiMessages.map((m) => m.id),
     ["m1"],
-    "an unforced empty array must not erase the transcript"
+    "an empty array must not erase the transcript"
   );
 }
 
 // ---------------------------------------------------------------------------
-// 5. The sync tracker is only marked on a write that landed (P0-2, host level)
+// 4. The sync tracker is only marked on a write that landed (P0-2, host level)
 // ---------------------------------------------------------------------------
 {
   setupEnv({ failWrites: true });
@@ -371,7 +336,7 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. A successful host-level save marks the snapshot
+// 5. A successful host-level save marks the snapshot
 // ---------------------------------------------------------------------------
 {
   setupEnv({});
@@ -411,14 +376,14 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Auto-title waits for a first user message (no empty-prompt side call)
+// 6. Auto-title waits for a first user message (no empty-prompt side call)
 // ---------------------------------------------------------------------------
 {
   setupEnv();
   const store = new SessionStore();
   const service = new SessionService();
   service.setStore(store, { modelStyle: "openai", model: "test-model" });
-  // Deliberately keep the default "New Session" name: that is the state `/clear` leaves
+  // Deliberately keep the default "New Session" name: that is the state `/new` leaves
   // a fresh session in, and what arms the auto-title path.
   const data = service.ensureSessionData();
   assert.equal(data.name, "New Session", "a fresh session starts on the placeholder name");
@@ -442,8 +407,8 @@ function newService() {
   // The title write is fire-and-forget inside a `.then`, so give it a turn to land.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  // state-only persists carry no `uiMessages` at all (this is what `/clear`'s mode
-  // resets queue); a stray empty list is the same "nothing to title" case. Neither may reach
+  // state-only persists carry no `uiMessages` at all (this is what a new-session mode
+  // reset queues); a stray empty list is the same "nothing to title" case. Neither may reach
   // the side LLM.
   await persist(undefined);
   await persist([]);
@@ -460,7 +425,7 @@ function newService() {
 }
 
 // ---------------------------------------------------------------------------
-// 8. A session reaches disk only on its first content save
+// 7. A session reaches disk only on its first content save
 // ---------------------------------------------------------------------------
 {
   setupEnv();
@@ -471,17 +436,11 @@ function newService() {
   data.name = "gate"; // keep the auto-title path out of this block
   const sessionFiles = () => [...files.keys()].filter((p) => p.endsWith(".session.jsonl"));
 
-  // State-only persists — `/clear`'s mode resets, state-only persists, a mode / effort /
+  // State-only persists — `/new`'s mode resets, state-only persists, a mode / effort /
   // model toggle — must not create a file for a session with no content yet. Old code: each one
   // wrote the log, leaving an empty "New Session" on disk (and a ghost row in `/resume`).
   await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null });
   await service.persistSession({ usage: new UsageTracker(), getTodoManager: () => null, uiMessages: [] });
-  await service.persistSession({
-    usage: new UsageTracker(),
-    getTodoManager: () => null,
-    uiMessages: [],
-    forceEmptyMessages: true,
-  });
   assert.deepEqual(sessionFiles(), [], "no session file before the first content save");
 
   // The first save that carries a message creates the file — and the state the earlier
@@ -499,16 +458,18 @@ function newService() {
     "the message is on disk"
   );
 
-  // Once the file exists, a forced empty write still lands — that is what an in-place clear
-  // over an existing session needs, and it must not be mistaken for the "fresh session" skip.
-  const cleared = await service.persistSession({
+  // A later empty write cannot blank the file either: there is no in-place clear.
+  const strayEmpty = await service.persistSession({
     usage: new UsageTracker(),
     getTodoManager: () => null,
     uiMessages: [],
-    forceEmptyMessages: true,
   });
-  assert.equal(cleared, true, "a forced empty write on an existing file succeeds");
-  assert.deepEqual((await store.load(data.id)).uiMessages, [], "the existing file was emptied");
+  assert.equal(strayEmpty, false, "an empty write on an existing file is refused");
+  assert.deepEqual(
+    (await store.load(data.id)).uiMessages.map((m) => m.id),
+    ["m1"],
+    "the existing file keeps its transcript"
+  );
 }
 
 console.log("session-persist-integrity validation passed");

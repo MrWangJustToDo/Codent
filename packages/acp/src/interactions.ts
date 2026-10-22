@@ -423,7 +423,7 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     }
 
     // Same reconciliation for elicitation: core can resolve an `ask_user` out of band (run stopped,
-    // `/clear`, tool cancelled). Leaving the dialog pending makes the next prompt believe the
+    // `/new`, tool cancelled). Leaving the dialog pending makes the next prompt believe the
     // session is still suspended and cancel it.
     const liveAskUser = new Set((snapshot.askUser ?? []).map((ask) => ask.toolCallId));
     for (const [toolCallId, entry] of bridge.pendingAskUser) {

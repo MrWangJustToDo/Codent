@@ -220,8 +220,12 @@ export interface AgentEventBus {
     options?: { replay?: boolean }
   ): () => void;
 
-  /** Current retained value for an event, if a provider is registered up the scope chain. */
-  retainedValue<T extends AgentEventType>(type: T): AgentEvents[T] | undefined;
+  /**
+   * Current retained value for an event, if a provider is registered up the scope chain.
+   * Pass `{ includeParents: false }` when projecting an agent's own session state: a child
+   * agent must not inherit a parent's todos/queues merely because it lacks a local provider.
+   */
+  retainedValue<T extends AgentEventType>(type: T, options?: { includeParents?: boolean }): AgentEvents[T] | undefined;
 
   /** Emit an observer event. Synchronous, fire-and-forget, errors isolated. */
   emit<T extends AgentEventType>(type: T, payload: AgentEvents[T], meta?: AgentEventMetaInput): void;

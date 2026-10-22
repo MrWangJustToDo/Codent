@@ -124,7 +124,7 @@ agent SHALL 在 `session/new` 响应中返回 `modes`（`availableModes` 与 `cu
 
 ### Requirement: 可用命令广告与调用
 
-agent SHALL 通过 `available_commands_update` 广告可用的 slash 命令（扩展命令来自 `extensions` 摘要的 `commands`，内置命令来自 core 导出的命令目录）。投影层 SHALL 订阅 `extensions` 与 `extension-ui` 通道，并在扩展集合变化时重新广告命令，MUST NOT 只在 attach 时发送一次。当 client 以 `/name args` 作为 prompt 发送时，agent SHALL 解析并以 `dispatch({type:"extension.invokeCommand"})` 或对应内置命令处理，MUST NOT 把它当作普通文本消息发给模型。会替换底层磁盘会话的命令（`/clear` / `/clone` / `/resume`）SHALL 按会话句柄重绑规则处理（见 `acp-session-catalog`），MUST NOT 让 client 持有失效的 id。
+agent SHALL 通过 `available_commands_update` 广告可用的 slash 命令（扩展命令来自 `extensions` 摘要的 `commands`，内置命令来自 core 导出的命令目录）。投影层 SHALL 订阅 `extensions` 与 `extension-ui` 通道，并在扩展集合变化时重新广告命令，MUST NOT 只在 attach 时发送一次。当 client 以 `/name args` 作为 prompt 发送时，agent SHALL 解析并以 `dispatch({type:"extension.invokeCommand"})` 或对应内置命令处理，MUST NOT 把它当作普通文本消息发给模型。会替换底层磁盘会话的命令（`/new` / `/clone` / `/resume`）SHALL 按会话句柄重绑规则处理（见 `acp-session-catalog`），MUST NOT 让 client 持有失效的 id。
 
 #### Scenario: 广告并执行命令
 
@@ -140,7 +140,7 @@ agent SHALL 通过 `available_commands_update` 广告可用的 slash 命令（�
 
 #### Scenario: 替换会话的命令保持句柄有效
 
-- **WHEN** client 调用 `/clear` `/clone` 或 `/resume`
+- **WHEN** client 调用 `/new` `/clone` 或 `/resume`
 - **THEN** 命令结果 SHALL 说明会话已切换，且会话句柄保持有效
 - **AND** 后续 prompt 与 update SHALL 继续使用该句柄
 

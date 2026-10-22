@@ -191,7 +191,7 @@ ctx.registerCommand({
 \`\`\`
 
 Command names must not collide with a **built-in** slash command — a conflicting
-extension command is skipped with a console warning (\`/clear\`, \`/compact\`, \`/mode\`,
+extension command is skipped with a console warning (\`/new\`, \`/compact\`, \`/mode\`,
 \`/models\`, \`/resume\`, \`/rename\`, \`/usage\`, \`/help\`, \`/quit\`, \`/settings\`).
 Prefer a short prefix such as \`/my-\`.
 

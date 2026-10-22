@@ -80,7 +80,7 @@ export class ModeCoordinator {
     return this.setMode(current === "normal" ? "auto" : current === "auto" ? "plan" : "normal");
   }
 
-  /** `/clear` / reset: exit both modes (an actual auto change still fires its onChange persist). */
+  /** `/new` / reset: exit both modes (an actual auto change still fires its onChange persist). */
   reset(): void {
     this.deps.planMode.disable();
     this.deps.autoMode.setEnabled(false);

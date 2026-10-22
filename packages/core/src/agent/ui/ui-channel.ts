@@ -172,6 +172,12 @@ export class AgentUIChannel {
    * (consumeRun / setMessages / clearMessages), never mid-run.
    */
   private historicalMessageIds: ReadonlySet<string> = new Set();
+  /**
+   * Session generation. `clearMessages` (and a restore, through
+   * {@link advanceSessionGeneration}) advances it so a run that started before a
+   * session switch cannot append its late chunks to the new transcript.
+   */
+  private sessionGeneration = 0;
   /** Active agent-loop turn assistant message (per-turn streaming scope). */
   private currentTurnMessageId?: string;
   /** Monotonic revision bumped on every messages change (wire projection cache). */
@@ -185,6 +191,16 @@ export class AgentUIChannel {
   /** Channel generation for cheap wire-projection fingerprints. */
   getRevision(): number {
     return this.revision;
+  }
+
+  /** Current session generation captured by a run before it starts. */
+  getSessionGeneration(): number {
+    return this.sessionGeneration;
+  }
+
+  /** Invalidate chunks from runs belonging to the session being left (restore/new). */
+  advanceSessionGeneration(): void {
+    this.sessionGeneration += 1;
   }
 
   constructor(options: AgentUIChannelOptions = {}) {
@@ -229,6 +245,7 @@ export class AgentUIChannel {
   }
 
   clearMessages(): void {
+    this.advanceSessionGeneration();
     this.processor.clearMessages();
     this.historicalMessageIds = new Set();
   }
@@ -414,7 +431,10 @@ export class AgentUIChannel {
   }
 
   /** Process a single stream chunk (for incremental bridge during `runAgent`). */
-  processChunk(chunk: StreamChunk): void {
+  processChunk(chunk: StreamChunk, generation = this.sessionGeneration): void {
+    // A run from the session being left must not append after clear/restore. The
+    // generation is captured by consumeRun; direct callers default to the current one.
+    if (generation !== this.sessionGeneration) return;
     // Engine snapshots must not replace the chronological channel (summary-first
     // wire, or ordinary interrupt rebuilds that drop approval/state).
     if (shouldSuppressMessagesSnapshot(chunk)) {
@@ -467,6 +487,7 @@ export class AgentUIChannel {
    * Consume a TanStack {@link StreamChunk} stream and return final messages.
    */
   async consumeRun(options: ConsumeRunOptions): Promise<TanStackUIMessage[]> {
+    const generation = this.sessionGeneration;
     this.beginSummaryStream(options);
     // TanStack >= 0.53: getActiveAssistantMessageId() gained a fallback over ALL
     // retained messageStates, but finalizeStream() only clears activeMessageIds.
@@ -485,12 +506,16 @@ export class AgentUIChannel {
 
     try {
       for await (const chunk of throwOnRunError(options.stream)) {
-        this.processChunk(chunk);
+        if (generation !== this.sessionGeneration) return this.getMessages();
+        this.processChunk(chunk, generation);
       }
+      // A clear/restore during the stream invalidates finalization too: finalizeStream
+      // would strip/attach rows on the transcript that has just replaced this run's.
+      if (generation !== this.sessionGeneration) return this.getMessages();
       this.finalizeStream();
       return this.getMessages();
     } finally {
-      this.endSummaryStream();
+      this.endSummaryStream(generation);
     }
   }
 
@@ -531,7 +556,8 @@ export class AgentUIChannel {
     }
   }
 
-  private endSummaryStream(): void {
+  private endSummaryStream(generation = this.sessionGeneration): void {
+    if (generation !== this.sessionGeneration) return;
     if (this.summaryHub && this.activeSummaryKey && this.summaryGenerationCurrent()) {
       this.summaryHub.end(
         this.activeSummaryKey,

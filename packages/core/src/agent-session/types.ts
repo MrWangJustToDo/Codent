@@ -6,8 +6,8 @@
  * delivery for large histories — do not assume patches in hosts yet.
  *
  * Session lifecycle note:
- * - `clear` clears in-place messages (and related chat state) on the current agent.
- * - Creating a brand-new agent / disk session is Host.create (+ switch active id), not `clear`.
+ * - `session.new` starts a fresh disk session; `session.resume` switches to an existing one.
+ * - There is no in-place `clear` command: a new conversation is always a new session.
  */
 
 import type { AgentEvent } from "../agent/agent-event-bus";
@@ -181,8 +181,6 @@ export type AgentSessionCommand =
   /** Take back the last queued message, so a queued message is not a one-way door. */
   | { type: "queue.pop" }
   | { type: "stop" }
-  /** Clear messages on the current agent. New agents use Host.create, not this command. */
-  | { type: "clear" }
   | { type: "respondApproval"; approvalId: string; approved: boolean; reason?: string }
   | { type: "addToolResult"; toolCallId: string; output: Record<string, unknown> }
   | { type: "setClientToolWaiting"; active: boolean }
@@ -223,7 +221,7 @@ export type AgentSessionCommand =
       modelInfo?: ModelInfo | null;
     }
   /**
-   * Start a fresh on-disk session (slash `/clear`): persist current if needed, reset
+   * Start a fresh on-disk session (slash `/new`): persist current if needed, reset
    * transcript/plan/auto/todos, create a new SessionData. Prefer Host.create for a
    * brand-new agent process.
    */

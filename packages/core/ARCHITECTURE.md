@@ -88,7 +88,7 @@ packages/app/src/adapter/create-agent.ts
 
 | API                                                                                | File                                | Use                                                 |
 | ---------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------- |
-| `ManagedAgent.initChat(manager, initialMessages?)`                                 | `managers/agent-chat-controller.ts` | Main CLI chat session                               |
+| `ManagedAgent.initChat(manager, initialMessages?)`                                 | `managers/controllers/agent-chat-controller.ts` | Main CLI chat session                               |
 | `AgentChatController.sendMessage` / `steer` / `followUp` / `respondToToolApproval` | same                                | User turns, mid-run queues, tool-phase continuation |
 | `agentManager.runAgentStream(agentId, input)`                                      | `managers/run-agent.ts`             | Core streaming entry                                |
 | `AgentSession` / `AgentSessionHost`                                                | `agent-session/`                    | Preferred host/UI control surface                   |
@@ -200,8 +200,9 @@ while every other request goes through the agent id.
 
 Today's contract:
 
-- One runtime owns one `AgentManager` → one live root agent → one `AgentSession` (the app layer is
-  session-only: a second conversation is a second runtime).
+- The app/UI layer is session-only and **conventionally** binds one live root per runtime (a second
+  conversation is a second app runtime). The underlying `AgentManager`/server catalog can hold
+  multiple roots, addressed by agent id.
 - A subagent has **no** disk session, but does have its own log file under the root agent's session
   directory — the directory is keyed by the disk session, the file name by the agent.
 - `parentId` always references an **agent id**, never a session.
@@ -323,7 +324,9 @@ Worker profile (runSubagent — task / internal compaction/progress-summary)
   → outcome path "detached" (avoids task-panel ghosts)
 ```
 
-Host observation remains **AgentSession** only. One runtime owns exactly one live root session (a second session is a second runtime); it reuses this same run skeleton. `AgentManager`'s ownership registry (`Map<sessionId, agentId>`) keeps each disk session bound to one live agent (§6.3).
+Host observation remains **AgentSession** only. A UI runtime conventionally binds one live root
+session (a second conversation is a second app runtime); `AgentManager` itself can hold multiple roots.
+Both reuse this same run skeleton. `AgentManager`'s ownership registry (`Map<sessionId, agentId>`) keeps each disk session bound to one live agent (§6.3).
 
 ### 3.2 `runAgentStream` pipeline
 
@@ -367,12 +370,12 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 5. message-transform-middleware  extension message transformers (registerMessageTransformer).
                              MUST run immediately after compaction, and ONLY consumes
                              config.messages — anything placed before the projection is discarded
-6. wire-recovery-middleware  per-run wire overrides that are NOT in the channel: the capability
+6. tool-compact-middleware   per-tool LLM shaping
+7. wire-recovery-middleware  per-run wire overrides that are NOT in the channel: the capability
                              strip (unsupportedMultimodalPartTypes) and the max_tokens
-                             continuation prompt. MUST run after message-transform: a strip
-                             replaces media with a placeholder, so stripping first would hide
-                             the real attachment from an extension transformer
-7. tool-compact-middleware   per-tool LLM shaping
+                             continuation prompt. MUST run after tool-compact (it materializes
+                             tool media) and message-transform (a strip must not hide media
+                             from an extension transformer)
 8. turn-context-middleware   inject changed <ctx kind=...> sections post-compaction (per-kind
                              hash diff; subagents filtered by SUBAGENT_ALLOWED_KINDS whitelist;
                              systemPrompts = frozen only)
@@ -380,10 +383,12 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 10. early-tool-result-ui      apply each tool output to StreamProcessor as soon as it finishes
 11. task-prefork-middleware  subagent task prefork / phase state
 12. plan-mode-middleware     block forbidden tools while plan mode restricts tooling
-13. background-notification-middleware
+13. repeat-reminder-middleware
+                             inject a reminder when repeated tool-call patterns are detected
+14. background-notification-middleware
                              completed background-command notifications as <ctx kind=background_notification>
                              synthetic messages (append; persisted + id-deduped)
-14. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
+15. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
                              (must stay last so cache breakpoints see the final payload)
 ```
 
@@ -424,7 +429,7 @@ no error and no other guard noticing. Rules:
   `parseToolMessageOutput`. Decoding a tool payload (`JSON.parse` of up to ~100KB per result) runs on every
   model call and its result is discarded on a hit — that decode was most of the cost: 0.49 ms/call →
   0.05 ms/call for 60 results × 25 KB payloads.
-- **One projection implementation.** `projectWireFromChannel` (`managers/middleware/wire-projection.ts`) is
+- **One projection implementation.** `projectWireFromChannel` (`agent/compaction/wire-projection.ts`) is
   shared by the compaction middleware and `ManagedAgent.getMessagesForLLM` (manual `/compact`, reactive
   compact, memory extraction, run-outcome previews), over the agent's single `WireProjectionCache`. A second
   projection is what would let a reader disagree with the window the model actually receives.
@@ -434,7 +439,7 @@ Validate: `pnpm --filter @codent/core run validate:message-ops-purity`.
 TanStack runs tools sequentially but emits batched `TOOL_CALL_END` results only after the whole tool phase. `early-tool-result-ui` calls `AgentUIChannel.addToolResult` in `onAfterToolCall` so finished tools (e.g. the first of two `task` calls) show complete while later tools still run. The later stream chunks re-apply the same output idempotently.
 
 **Approval continuation:** After the user (or auto-approve) responds, a second `chat()` run executes pending tools and TanStack may re-emit `TOOL_CALL_START`/`ARGS` with an `argsMap`. `AgentUIChannel` drops those replays when the `toolCallId` already exists in UI messages so the call is not cloned onto a new assistant (approval metadata stays on the original part). `TOOL_CALL_END`/`RESULT` still flow to update that part.
-Status logic is centralized in `AgentStatusController` (`managers/agent-status-controller.ts`). `status-middleware` is the runtime hook for status; `lifecycle-middleware` owns usage and run finalization side-effects. Chat and detached runs converge on `statusController.applyRunOutcome(...)` (see `managers/agent-run-outcome.ts`).
+Status logic is centralized in `AgentStatusController` (`managers/controllers/agent-status-controller.ts`). `status-middleware` is the runtime hook for status; `lifecycle-middleware` owns usage and run finalization side-effects. Chat and detached runs converge on `statusController.applyRunOutcome(...)` (see `managers/agent-run-outcome.ts`).
 
 ### 3.5 Lifecycle status transitions
 
@@ -468,7 +473,7 @@ Core **declares** which tools need approval and **owns agent status** during the
 | `onToolPhaseComplete` | When `info.needsApproval.length > 0`: `waiting`, `setPendingApprovalCount`, emit `agent:tool-approval-request` per tool |
 | `onBeforeToolCall`    | When status is `waiting`: clear count, `running` (approved tool executing)                                              |
 
-Tools with approval required (`defineServerTool` in `runtime/define-tool.ts`):
+Tools with approval required (`defineServerTool` in `agent/tools/runtime/define-tool.ts`):
 
 - `write_file`, `edit_file`, `delete_file`
 - `run_command`
@@ -512,7 +517,7 @@ schedule a pump of their own.
 | `steer`    | After tool execution finishes for the current batch, before the next LLM call |
 | `followUp` | Only when the agent would otherwise stop (no tool continuation)               |
 
-Default drain mode is `one-at-a-time`. `stop()` / `clearMessages()` clear both queues. Mid-run injects call `markNextPrepareAsContinuation()` so prepare skips memory prefetch / `prompt:submit`.
+Default drain mode is `one-at-a-time`. `stop()` clears both queues; `clearTranscript()` also drops them when a session switch replaces the transcript. Mid-run injects call `markNextPrepareAsContinuation()` so prepare skips memory prefetch / `prompt:submit`.
 
 ### 4.4 Client tools (`ask_user`)
 
@@ -565,7 +570,7 @@ That cache has **two** collectors, and neither subsumes the other: compaction's 
 
 | Kind                   | Where                                       | Examples                                                                                                                                                                                                                                                                                                                            |
 | ---------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Adapter-specific**   | `models/adapter-factory.ts`, `*-adapter.ts` | DeepSeek `reasoning_content` echo (`ReasoningChatCompletionsTextAdapter`); Chat Completions tool-image lift (`liftToolMediaForChatCompletions` — tool text stays string, images become a synthetic user `image_url` message); PDF text extract in `read_file` for Completions; Anthropic vs OpenAI Chat Completions style selection |
+| **Adapter-specific**   | `models/adapter/adapter-factory.ts`, `*-adapter.ts` | DeepSeek `reasoning_content` echo (`ReasoningChatCompletionsTextAdapter`); Chat Completions tool-image lift (`liftToolMediaForChatCompletions` — tool text stays string, images become a synthetic user `image_url` message); PDF text extract in `read_file` for Completions; Anthropic vs OpenAI Chat Completions style selection |
 | **Capability-generic** | middleware / reactive retry                 | Multimodal strip via `vision`/`audio`/`video`/`document` (`capability-message-utils`); context-overflow reactive compact (provider `code` first)                                                                                                                  |
 | **Config / metadata**  | `model-config`, `models.dev`, session       | `modelStyle`, pricing, `capabilities[]` (see below), unused-for-now `reasoningConfig` (tag/effort/budget — not yet mapped to request options)                                                                                                                                                                                        |
 
@@ -677,7 +682,7 @@ runStreamWithRecovery catches RUN_ERROR / thrown error
 
 Unhandled `RUN_ERROR` chunks (anything other than a successful recovery strategy) are **thrown** — never yielded. `AgentChatController` / `AgentUIChannel.consumeRun` also wrap streams with `throwOnRunError`, so failures surface as `status: error` + `agent:stream-error` instead of a silent `Completed` with no assistant message. Handled errors are recorded on the agent and **not** rethrown from the chat pump (avoids unhandled rejection crashing the CLI).
 
-**Empty stream guard:** Some OpenAI-compatible gateways return HTTP 200 HTML (e.g. SSO login) for `stream: true`; the SDK iterates zero chunks and does not throw. After each `chat()` consume, `AgentChatController` flags an error when messages show no model progress (no new/updated assistant text, tool calls, or tool results) via `shouldFlagEmptyModelStream` (`agent/run-helpers/empty-model-stream.ts`).
+**Empty stream guard:** Some OpenAI-compatible gateways return HTTP 200 HTML (e.g. SSO login) for `stream: true`; the SDK iterates zero chunks and does not throw. After each `chat()` consume, `AgentChatController` flags an error when messages show no model progress (no new/updated assistant text, tool calls, or tool results) via `shouldFlagEmptyModelStream` (`agent/stream/empty-model-stream.ts`).
 
 **Vision / multimodal:** Some text-only APIs (notably DeepSeek Chat Completions) reject multimodal parts with `unknown variant image_url, expected text`. `runStreamWithRecovery` uses capability-aware sanitization (`vision` / `audio` / `video` / `document`): unsupported parts are stripped from the **wire** copy (and all multimodal parts are stripped once on schema rejection); UI history keeps media for display.
 
@@ -754,11 +759,11 @@ save / clear / persist / restore entry points; `SessionService` remains the seri
 | **Run finalizes** (finish / abort / error) | `ManagedAgent.finalizeRun` → `SessionService.persistSession`                               | Session state: `usage`, `cost`, `contextTokens`, `todos`, `planMode`, `model`/`modelStyle`, `name`; auto-title if `"New Session"` |
 | **User message (core)**                    | `AgentChatController` after `addUserMessage` (send / drained steer                         | follow-up) → `maybeSaveSessionUIMessages(..., "user-message")`                                     | Session state **plus** `uiMessages` when fingerprint changed |
 | **Pump idle (core)**                       | `AgentChatController.persistMessages` → `maybeSaveSessionUIMessages(..., "pump-complete")` | Same; also on Esc/abort after cancelling incomplete tools                                          |
-| **Manual flush**                           | `saveSessionUIMessages` (`/clear`, slash commands)                                         | Force full persist                                                                                 |
+| **Manual flush**                           | `saveSessionUIMessages` (slash commands)                                                   | Force full persist                                                                                 |
 
 App hosts subscribe to Session `messages`/`state` for UI only — they do **not** checkpoint to disk. Approval decisions mutate the tool-call message part (`pending` on request, `approved`/`denied` on `y`/`n` or auto-approve), so they ride the same persist triggers as `uiMessages` (the message line is re-emitted). The decision timestamp is written onto that part by `AgentUIChannel.addToolApprovalResponse`, which returns it so `AgentChatController` hands the *same* value to the in-memory approval table (`approvals.upsert`) — one time value for the log and the table. On restore the table is derived from the messages (`normalizeSessionApprovals`); chat middleware rebuilds `resumeToolState.approvals` from it (pending omitted).
 
-On restore, `ModeCoordinator.restore` rehydrates plan phase (and reloads markdown from `planFilePath` when missing) with plan winning over auto. `/clear` / `ManagedAgent.reset` always leave plan mode through `ModeCoordinator.reset()`.
+On restore, `ModeCoordinator.restore` rehydrates plan phase (and reloads markdown from `planFilePath` when missing) with plan winning over auto. `/new` / `ManagedAgent.reset` always leave plan mode through `ModeCoordinator.reset()`.
 
 `SessionStore.save`: incremental append — content signature (state sans `updatedAt` + per-message fingerprints) is compared **before** `updatedAt` is bumped, so a re-save of unchanged data is a true no-op with zero IO. New/changed messages are appended as lines; a state-only change re-emits the last message line; a session that goes non-empty → empty, any non-append history change, or a save with no delta baseline (`prev === undefined`, e.g. an unprimed store) rewrites the file to converge on the session. Per-session write lock; `delete()` removes the log and clears the cached bookkeeping. The message timestamps (`message.updatedAt` / `part.approval.updatedAt`) are resolved before that comparison and are deliberately not part of it: an unchanged message keeps the stamp it was written with (from disk or from the last write), so a re-emitted line is byte-identical and a state-only re-emit cannot move an approval's decision time. The only mutation of the live objects is `session.updatedAt`, always after the no-op check.
 
@@ -808,7 +813,7 @@ App bootstrap resume still passes `initialMessages` from Host.create into `Manag
 
 **Ownership dedup.** `AgentManager` delegates to `SessionOwnership`
 (`managers/session-ownership.ts`), a process-local claim table (`sessionId → agentId`) so a disk
-session is bound to at most **one** live agent at a time. A live root claims the active id at bootstrap and after `/clear`; `restoreSession`
+session is bound to at most **one** live agent at a time. A live root claims the active id at bootstrap and after `/new`; `restoreSession`
 acquires the target before the switch, releases the session being left **only after the restore
 succeeds**, and rolls the attempted target back when it fails. A refused target (already owned by
 another live agent) is rejected with a clear error and leaves the current claim untouched (the
@@ -835,7 +840,7 @@ Recovery / continuation always re-reads `managed.ui.getMessages()` (not a closed
 - **After run idle** (`AgentChatController` after `pumpToolPhases`, including approval wait / abort cleanup): `maybeSaveSessionUIMessages(messages, "pump-complete")`.
 - **During runs / core**: `persistSession()` and `finalizeRun` write the model-state fields (model / modelStyle / reasoningEffort / usage / todos / plan / approvals / name); they never pass `uiMessages`.
 - **Manual `/compact`**: appends summary checkpoint onto the channel; `persistSession()` + `maybeSaveSessionUIMessages(..., "force")`.
-- **Manual `/clear`**: `saveSessionUIMessages()` force-flushes before rotating session.
+- **Manual `/new`**: `session.new` stops the run, drains any queued persist, then adopts a freshly created session. The previous session is left intact on disk and stays resumable.
 
 ### 6.5 Session events
 
@@ -930,7 +935,7 @@ from `SUBAGENT_ALLOWED_KINDS`. There is no separate transcript archive: the whol
 (including compacted-away messages) stays in the session log, and recall goes through
 `session_search` / `session_read`. Validate: `validate:session-retrieval`, `validate:session-search`.
 
-**Provider cache wiring** (`prompt-cache-middleware`, `models/prompt-cache.ts`):
+**Provider cache wiring** (`prompt-cache-middleware`, `models/cache/prompt-cache.ts`):
 
 | Style                                 | Behavior                                                                                                                                        |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1151,7 +1156,7 @@ executeManagedAgentRun
 [core] user send / drained queues → maybeSaveSessionUIMessages(..., "user-message")
 [core] pump idle / abort cleanup → maybeSaveSessionUIMessages(..., "pump-complete")
 [core] finalizeRun / /compact → persistSession() (model fields only)
-[app] /clear etc. → saveSessionUIMessages() (force)
+[app] /new etc. → Session dispatch (`session.new`, …)
 ```
 
 ---
@@ -1187,13 +1192,13 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Services (extracted) | `managers/services/` — session / memory / compaction / extension-registry / usage-history; `managers/run-coordinator.ts` (run lifecycle)               |
 | Usage               | `agent/usage/usage-store.ts` (pure IO), `managers/services/usage-history-service.ts` (global history)                                                   |
 | Cross-cutting utils | `utils/emitter.ts`, `utils/generate-id.ts`                                                                                                             |
-| Domain helpers      | `agent/run-helpers/*` (tool-phase, empty-stream, pending queue — stay with chat/run)                                                                   |
+| Domain helpers      | `agent/stream/*` (empty-stream), `agent/run/*`, `agent/queue/*` (tool-phase / pending queue — stay with chat/run)                                                                   |
 | Memory              | `managers/services/memory-service.ts`, `agent/memory/*.ts`                                                                                             |
 | Compaction          | `managers/services/compaction-service.ts`, `agent/compaction/*.ts`                                                                                     |
 | Plan                | `agent/plan/*` (domain + plan tool factories)                                                                                                         |
 | Tools               | `agent/tools/*.ts` (universal), `agent/tools/runtime/define-tool.ts`; domain tools under `plan/` / `skills/` / `subagent/` / `todo/`                     |
 | Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`; shared span in `agent/run/managed-span.ts`                              |
-| Models              | `models/model-config.ts`, `models/adapter-factory.ts`, `models/prompt-cache.ts`                                                              |
+| Models              | `models/config/model-config.ts`, `models/adapter/adapter-factory.ts`, `models/cache/prompt-cache.ts`                                                              |
 | CoreEnv             | `env/index.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
 
 ---

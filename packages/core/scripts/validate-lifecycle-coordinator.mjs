@@ -27,6 +27,10 @@ function fakeAgent(id, parentId) {
       destroyAll: async () => events.push(`destroyAll:${id}`),
     }),
     destroyCommandService: async () => events.push(`jobs:${id}`),
+    session: {
+      close: async () => events.push(`close:${id}`),
+      awaitPersistIdle: async () => events.push(`persist:${id}`),
+    },
     flushLogOnDestroy: () => events.push(`flush:${id}`),
     emitEvent: (type, data) => events.push(`event:${id}:${type}:${data.subagentId}`),
   };
@@ -54,8 +58,8 @@ lifecycle.destroy("root");
 assert.equal(registry.has("root"), false, "root removed");
 assert.equal(registry.has("child"), false, "child destroyed recursively");
 assert.equal(registry.has("grandchild"), false, "grandchild destroyed recursively");
-assert.equal(ownership.ownerOf("ses-root"), undefined, "root claim released");
-assert.equal(ownership.ownerOf("ses-child"), undefined, "child claim released");
+assert.equal(ownership.ownerOf("ses-root"), "root", "root claim stays held until teardown drains");
+assert.equal(ownership.ownerOf("ses-child"), "child", "child claim stays held until teardown drains");
 assert.equal(ownership.ownerOf("ses-unrelated"), "other", "other agents' claims untouched");
 assert.deepEqual(scopes, ["root", "child", "grandchild"], "every agent scope is dropped");
 
@@ -68,12 +72,19 @@ assert.ok(events.includes("event:grandchild:subagent:destroyed:grandchild"), "gr
 assert.ok(!events.includes("event:root:subagent:destroyed:root"), "root has no parent event");
 
 await lifecycle.settleTeardowns();
+assert.equal(ownership.ownerOf("ses-root"), undefined, "root claim released after teardown");
+assert.equal(ownership.ownerOf("ses-child"), undefined, "child claim released after teardown");
 for (const id of ["root", "child", "grandchild"]) {
   const shutdown = events.indexOf(`shutdown:${id}`);
   const destroyAll = events.indexOf(`destroyAll:${id}`);
   const jobs = events.indexOf(`jobs:${id}`);
+  const close = events.indexOf(`close:${id}`);
+  const persist = events.indexOf(`persist:${id}`);
   const flush = events.indexOf(`flush:${id}`);
-  assert.ok(shutdown >= 0 && destroyAll > shutdown && jobs > destroyAll && flush > jobs, `${id} teardown order`);
+  assert.ok(
+    shutdown >= 0 && destroyAll > shutdown && jobs > destroyAll && close > jobs && persist > close && flush > persist,
+    `${id} teardown order`
+  );
 }
 
 // A missing id is a no-op, and settle still resolves.

@@ -12,7 +12,7 @@ The AgentSession snapshot SHALL include serializable fields sufficient for Foote
 - **THEN** it SHALL render model status, mode label, duration, queues, and plan progress from `getSnapshot()` and session channel events without importing ManagedAgent
 
 ### Requirement: Session commands cover app control needs
-AgentSession.dispatch SHALL support all app-facing agent controls previously done via ManagedAgent / agentManager, including chat (`send`, `steer`, `followUp`, `forceSubmit`, `stop`, `clear` messages), approvals, tool-result injection, `compact`, plan enable/disable/toggle/execute/cancel/save/load/list/complete, `auto.set`, `rename`, MCP refresh, extension toggle/invoke, and session resume.
+AgentSession.dispatch SHALL support all app-facing agent controls previously done via ManagedAgent / agentManager, including chat (`send`, `steer`, `followUp`, `forceSubmit`, `stop`), approvals, tool-result injection, `compact`, plan enable/disable/toggle/execute/cancel/save/load/list/complete, `auto.set`, `rename`, MCP refresh, extension toggle/invoke, and session lifecycle (`session.new`, `session.resume`, `session.clone`, `session.fork`, `session.list`). There SHALL be no in-place transcript clear command: a new conversation is a new session.
 
 #### Scenario: Compact via dispatch
 - **WHEN** the app dispatches `{ type: "compact" }`
@@ -22,6 +22,15 @@ AgentSession.dispatch SHALL support all app-facing agent controls previously don
 #### Scenario: Unsupported command is explicit
 - **WHEN** a client dispatches an unknown or not-yet-implemented command
 - **THEN** the result SHALL be `{ ok: false, code: "unsupported" | ... }` and MUST NOT throw across the HTTP boundary
+
+#### Scenario: New conversation is a new session
+- **WHEN** a client dispatches `{ type: "session.new" }`
+- **THEN** the current session SHALL stay intact on disk and resumable
+- **AND** the host SHALL create and adopt a fresh disk session instead of clearing the old transcript
+
+#### Scenario: In-place clear is not a command
+- **WHEN** a client dispatches `{ type: "clear" }`
+- **THEN** the result SHALL be `{ ok: false, code: "invalid" | "unsupported" }` and the active session and transcript SHALL be unchanged
 
 ### Requirement: AgentSessionHost catalog
 The system SHALL provide an `AgentSessionHost` API with `create`, `connect`, `list`, and `destroy` so apps can manage sessions without `agentManager` or `SessionStore` imports. `list` SHALL report the live agents currently owned by the host. The host SHALL additionally support a persisted-session catalog through optional members `listPersistedSessions?` (enumerate the workspace's persisted sessions) and `deleteSession?` (remove one), which a host SHALL omit when its backing plane cannot serve them — mirroring the existing optional `getModelProvider?` / `getEnv?` convention. Because these two are optional, adding them SHALL NOT break existing host implementations, and a consumer SHALL treat their absence as "this host cannot enumerate/delete persisted sessions" rather than as an error to be papered over. Naming: this is deliberately NOT `listSessions` — `CodentAgent.listSessions()` already exists and returns the LIVE agents of a runtime, while `Host.list` returns the live agents of a host; both answer "what is running". `listPersistedSessions` answers "what is stored".
@@ -68,7 +77,7 @@ Subscribed session channels (`state`, `messages`, `queues`, `usage`, `todos`, `p
 
 系统 SHALL 提供一个可枚举、可序列化的 slash 命令目录，作为“宿主可广告/可调用命令”的**单一事实来源**：
 
-- **内置命令**：core SHALL 导出一份内置命令目录（至少含 `name` 与 `description`，并标明是否接受参数/选项），覆盖与 `AgentSessionCommand` 对应的内置命令（如 `mode`、`compact`、`clear`、`resume`、`rename`、`models`、`mcp`、plan 相关、`usage`）。应用层的命令注册表 SHALL 从该目录派生，MUST NOT 维护第二份权威列表。
+- **内置命令**：core SHALL 导出一份内置命令目录（至少含 `name` 与 `description`，并标明是否接受参数/选项），覆盖与 `AgentSessionCommand` 对应的内置命令（如 `mode`、`compact`、`new`、`resume`、`rename`、`models`、`mcp`、plan 相关、`usage`）。应用层的命令注册表 SHALL 从该目录派生，MUST NOT 维护第二份权威列表。
 - 目录 MUST NOT 单独广告一个思考强度命令：强度是所选模型的性质，由 `models` 命令的参数（及 ACP 的 `thought_level` 配置选项）承载。原先的 `effort` 条目 SHALL 移除，以免宿主广告一个与模型命令重复、且能选出所选模型并不支持的档位的入口。
 - **扩展命令**：`AgentSession` 暴露的扩展摘要 SHALL 包含每个扩展命令的 `name` 与 `description`（在现有 `hasOptions` 之外），使宿主无需读取 `ManagedAgent` 即可广告这些命令。
 
@@ -168,3 +177,31 @@ MCP 配置的来源 SHALL 可被观测（用于回答「为什么工作区的 mc
 - **THEN** 会话 SHALL 创建成功，另一个服务器的工具 SHALL 可用
 - **AND** 失败服务器 SHALL 在 MCP 状态中显示为未连接
 
+### Requirement: 会话创建可配置进程内扩展与内置扩展
+
+会话创建选项 SHALL 支持进程内扩展工厂（`extensions`）与内置扩展开关（`builtins`），使宿主无需退回已弃用的
+`ManagedAgent` 即可为一个会话注册代码扩展或关闭内置能力。`builtins` SHALL 覆盖 `lsp`、`skills`、
+`memory`、`mcp`、`codeMode`，其值为布尔值；`false` 关闭对应内置扩展，省略或 `true` 保持默认配置。
+`CodentAgentDefaults` SHALL 接受同一组字段，并在 `createSession` 时与单次创建选项合并；嵌套的
+`builtins` 开关 SHALL 按键合并，单次选项不得因整体替换而重新启用 runtime 默认关闭的内置扩展。
+
+#### Scenario: 本地 host 透传进程内扩展
+- **WHEN** 本地 host 以 `extensions: [factory]` 创建会话
+- **THEN** 该工厂 SHALL 进入 `ManagedAgentConfig.extensions` 并在 bootstrap 时加载
+- **AND** 宿主 MUST NOT 需要调用 `createManagedAgent` 或其他已弃用入口
+
+#### Scenario: 关闭内置扩展
+- **WHEN** host 以 `builtins: { lsp: false, skills: false }` 创建会话
+- **THEN** 对应内置扩展 SHALL NOT 注册其工具、命令或 turn-context section
+- **AND** 其他未指定的内置扩展 SHALL 保持默认行为
+
+#### Scenario: 默认值与单次选项合并
+- **WHEN** runtime defaults 设置 `builtins.skills = false`，单次 create 设置 `builtins.lsp = false`
+- **THEN** 最终会话 SHALL 同时关闭 skills 与 lsp
+- **AND** MUST NOT 因单次 `builtins` 覆盖整个对象而重新启用 skills
+
+#### Scenario: HTTP 边界只传输可序列化配置
+- **WHEN** remote-session host 创建会话并携带 `builtins`
+- **THEN** `builtins` SHALL 作为可序列化字段通过 `/api/agent` 到达服务端并进入该会话的 agent 配置
+- **AND** `extensions`（可执行工厂函数）MUST NOT 被静默丢弃；remote host SHALL 明确拒绝并提示使用
+  `extensionDirs` 或本地 runtime

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { AgentRegistry } from "../dist/dev.mjs";
 
-function agent(id, { parentId, status = "idle" } = {}) {
+function agent(id, { parentId, status = "idle", sessionScopeId } = {}) {
   return {
     id,
     parentId,
@@ -18,6 +18,9 @@ function agent(id, { parentId, status = "idle" } = {}) {
     updatedAt: 0,
     getStatus() {
       return this.status;
+    },
+    getSessionScopeId() {
+      return sessionScopeId;
     },
   };
 }
@@ -81,5 +84,38 @@ assert.deepEqual(
   registry.subagents("root").map((a) => a.id),
   ["child-a"]
 );
+
+// Session-scoped walks: task children use `autoDestroy: false`, so a completed child from the
+// conversation being left remains registered after `session.new` / `session.resume`. The optional
+// session id must exclude it from the active conversation's task/command surfaces.
+{
+  const scoped = new AgentRegistry();
+  const scopedRoot = agent("scoped-root");
+  const current = agent("child-current", { parentId: "scoped-root", sessionScopeId: "ses_new" });
+  const old = agent("child-old", { parentId: "scoped-root", sessionScopeId: "ses_old" });
+  const oldGrandchild = agent("grand-old", { parentId: "child-old", sessionScopeId: "ses_old" });
+  const legacy = agent("child-legacy", { parentId: "scoped-root" });
+  for (const a of [scopedRoot, current, old, oldGrandchild, legacy]) scoped.register(a);
+  scoped.linkChild("scoped-root", "child-current");
+  scoped.linkChild("scoped-root", "child-old");
+  scoped.linkChild("child-old", "grand-old");
+  scoped.linkChild("scoped-root", "child-legacy");
+
+  assert.deepEqual(
+    scoped.allSubagents("scoped-root", "ses_new").map((a) => a.id),
+    ["child-legacy", "child-current"],
+    "the active session keeps its own and legacy children, but not the old subtree"
+  );
+  assert.deepEqual(
+    scoped.allSubagents("scoped-root", "ses_old").map((a) => a.id),
+    ["child-legacy", "grand-old", "child-old"],
+    "filtering by the old session still finds the old subtree (legacy children stay visible)"
+  );
+  assert.deepEqual(
+    scoped.allSubagents("scoped-root").map((a) => a.id),
+    ["child-legacy", "grand-old", "child-old", "child-current"],
+    "omitting the session id keeps the full cross-session walk"
+  );
+}
 
 console.log("agent-registry validation passed");

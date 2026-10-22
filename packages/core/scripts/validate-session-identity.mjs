@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { SessionStore } from "../dist/dev.mjs";
 import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
@@ -85,9 +86,26 @@ session.subscribe(
   { channels: ["state"] }
 );
 
+// A late subscriber's retained replay is delivered to that subscriber only. The
+// old path used the shared multicast emitter, so every existing subscriber got
+// an extra full state/messages/extension-ui frame when a new component mounted.
+{
+  const initialEvents = [];
+  const unsubInitial = session.subscribe((event) => initialEvents.push(event), { channels: ["state"] });
+  const beforeLateSubscribe = initialEvents.length;
+  const unsubLate = session.subscribe(() => {}, { channels: ["state"] });
+  assert.equal(
+    initialEvents.length,
+    beforeLateSubscribe,
+    "a late subscriber's retained state replay must not reach existing subscribers"
+  );
+  unsubLate();
+  unsubInitial();
+}
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Session-scoped log routing. The sink is bound per session id, and both a resume and `/clear`
+// Session-scoped log routing. The sink is bound per session id, and both a resume and `/new`
 // change that id mid-process — so these helpers are how the validator holds the binding to the
 // session it claims to be logging.
 const logsRoot = path.join(rootPath, ".agents/logs");
@@ -198,28 +216,33 @@ assert.ok(
 // 3. `session.new` swaps it again and broadcasts
 // ----------------------------------------------------------------------------
 
+const newSessionReasons = [];
+const unsubscribeNew = managed
+  .getEventBus()
+  ?.on("session:new", (event) => newSessionReasons.push(event.payload.reason), { replay: false });
 const newSession = await session.dispatch({ type: "session.new" });
+unsubscribeNew?.();
 assert.equal(newSession.ok, true, "session.new succeeds");
+assert.equal(newSessionReasons.at(-1), "session-new", "session:new carries the real producer reason");
 const nextId = newSession.data.sessionId;
 assert.notEqual(nextId, target.id, "session.new allocates a new disk session");
 assertIdentity(nextId, "session.new");
 
-// `/clear` must blank the session it leaves, not queue a thunk that resolves against the new one.
+// A new conversation is a new session: the session it replaces stays intact and resumable.
 const leftBehind = await store.load(target.id);
-assert.equal(
-  leftBehind?.uiMessages.length ?? 0,
-  0,
-  "session.new writes an empty transcript over the session it replaced"
-);
+assert.ok((leftBehind?.uiMessages.length ?? 0) > 0, "session.new leaves the session it replaced intact on disk");
 
-// `/clear` changes the id the same way a resume does, so the sink must follow here too — a fixed
+// `/new` changes the id the same way a resume does, so the sink must follow here too — a fixed
 // `session:restore` alone would have left this path writing into the session it replaced. The
-// announcement is the new log's only header: the session is written to disk on first save, and a
-// cleared session that never gets a message saves nothing, so there is no `session:start` for it.
+// announcement is the new log's only header: the session is written to disk on first save.
 await wait(450);
 assert.ok(
   (await readLog(nextId)).includes("Session started (new)"),
   "session.new announces itself in the new session's log"
+);
+assert.ok(
+  (await readLog(nextId)).includes('"reason":"session-new"'),
+  "the session:new log entry carries the producer reason"
 );
 assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and not in the session it replaced");
 
@@ -277,6 +300,123 @@ assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and
   } finally {
     store.create = originalCreate;
     owner.releaseSessionOwnership(collisionId, "probe-agent");
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 5b. The retired in-place clear command is rejected; new conversations use session.new
+// ----------------------------------------------------------------------------
+{
+  const beforeId = session.getSnapshot().activeSessionId;
+  const beforeMessages = session.getSnapshot().messages.length;
+  const result = await session.dispatch({ type: "clear" });
+  assert.equal(result.ok, false, "the removed clear command is not accepted");
+  assert.equal(result.code, "invalid", "the dispatcher rejects the unknown command");
+  assert.equal(session.getSnapshot().activeSessionId, beforeId, "the removed clear leaves the active id");
+  assert.equal(session.getSnapshot().messages.length, beforeMessages, "the removed clear leaves the transcript");
+}
+
+// ----------------------------------------------------------------------------
+// 6. Concurrent resumes are serialized by the lifecycle service
+// ----------------------------------------------------------------------------
+{
+  const owner = managed.manager;
+  const store = managed.getSessionStore();
+  assert.ok(owner && store, "concurrent resume probe has a manager + store");
+  const makeTarget = async (name) => {
+    const target = store.create({ modelStyle: "openai", model: "test-model" });
+    target.name = name;
+    target.uiMessages = [{ id: `${name}-message`, role: "user", parts: [{ type: "text", content: name }] }];
+    await store.save(target);
+    return target;
+  };
+  const firstTarget = await makeTarget("concurrent-a");
+  const secondTarget = await makeTarget("concurrent-b");
+
+  const originalRestore = managed.sessionPersistence.restore.bind(managed.sessionPersistence);
+  let releaseRestore;
+  const restoreGate = new Promise((resolve) => {
+    releaseRestore = resolve;
+  });
+  let markRestoreStarted;
+  const restoreStarted = new Promise((resolve) => {
+    markRestoreStarted = resolve;
+  });
+  let restoreCalls = 0;
+  managed.sessionPersistence.restore = async (sessionId) => {
+    restoreCalls += 1;
+    if (restoreCalls === 1) {
+      markRestoreStarted();
+      await restoreGate;
+    }
+    return originalRestore(sessionId);
+  };
+
+  try {
+    const firstResume = managed.restoreSession(firstTarget.id);
+    await restoreStarted;
+    const secondResume = managed.restoreSession(secondTarget.id);
+    await Promise.resolve();
+    assert.equal(restoreCalls, 1, "the second resume waits for the first switch to finish");
+    releaseRestore();
+    await Promise.all([firstResume, secondResume]);
+    assert.equal(restoreCalls, 2, "the queued resume runs after the first completes");
+    assert.equal(session.getSnapshot().activeSessionId, secondTarget.id, "the last serialized resume wins");
+  } finally {
+    managed.sessionPersistence.restore = originalRestore;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// 7. Bootstrap restore has one store load, and session:start follows restore
+// ----------------------------------------------------------------------------
+{
+  const store = managed.getSessionStore();
+  assert.ok(store, "restore ordering probe has a store");
+  const resumeTarget = store.create({ modelStyle: "openai", model: "test-model" });
+  resumeTarget.name = "restore-order";
+  resumeTarget.uiMessages = [
+    { id: "restore-order-message", role: "user", parts: [{ type: "text", content: "restored context" }] },
+  ];
+  await store.save(resumeTarget);
+
+  const order = [];
+  const extensionFactory = {
+    create: () => ({
+      id: "restore-order-extension",
+      name: "Restore order extension",
+      version: "1.0.0",
+      description: "records restore/start ordering",
+      activate(ctx) {
+        ctx.registerInterceptor("session:start", () => {
+          order.push("start");
+        });
+        ctx.events.observe("session:restore", () => {
+          order.push("restore");
+        });
+      },
+    }),
+  };
+
+  const originalLoad = SessionStore.prototype.load;
+  let loadCalls = 0;
+  SessionStore.prototype.load = async function (sessionId) {
+    loadCalls += 1;
+    return originalLoad.call(this, sessionId);
+  };
+  try {
+    const created = await host.create({
+      name: "restore-order",
+      model: "test-model",
+      resumeSessionId: resumeTarget.id,
+      extensions: [extensionFactory],
+      builtins: { lsp: false, skills: false, memory: false, mcp: false, codeMode: false },
+    });
+    assert.equal(loadCalls, 1, "a resumed host create loads the session exactly once");
+    assert.deepEqual(order, ["restore", "start"], "session:start runs after the restore");
+    await host.destroy(created.session.id);
+  } finally {
+    SessionStore.prototype.load = originalLoad;
   }
 }
 

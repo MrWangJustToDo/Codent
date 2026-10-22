@@ -46,8 +46,8 @@ export type AgentEventPayloadMap = {
   "session:new": {
     /** The on-disk id of the session that was just created (replaces the previous one). */
     sessionId?: string;
-    /** Why the switch happened — `/clear` is the only producer today. */
-    reason?: string;
+    /** The session was created by a new-session command. */
+    reason?: "session-new";
   };
   "session:restore": {
     sessionId?: string;

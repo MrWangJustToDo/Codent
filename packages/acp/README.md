@@ -209,7 +209,7 @@ them without a transport.
 ## Sessions
 
 `session/new` returns a **stable ACP handle**. It starts equal to the disk session id (`ses_…`), so
-existing clients are unaffected, but it is not the same identity: `/clear`, `/clone` and `/resume`
+existing clients are unaffected, but it is not the same identity: `/new`, `/clone` and `/resume`
 replace the underlying conversation while the client keeps using the same handle (ACP has no
 "session id changed" notification). `session_info_update._meta.diskSessionId` reports the current
 disk id; `session/list` and `session/delete` address disk ids, and `session/load` accepts either a

@@ -3,6 +3,7 @@ import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
+import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../builtin.js";
 
 import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
@@ -317,36 +318,36 @@ export function formatToolOutput(
     const out = output as Record<string, unknown>;
 
     switch (toolName) {
-      case "list_file":
+      case BUILTIN_TOOL_NAMES.listFile:
         return formatListFileOutput(out as ListFileOutput);
-      case "run_command":
+      case BUILTIN_TOOL_NAMES.runCommand:
         return formatRunCommandOutput(out as RunCommandOutput);
-      case "get_command_output":
+      case BUILTIN_TOOL_NAMES.getCommandOutput:
         return formatGetCommandOutput(out as GetCommandOutput);
-      case "kill_command":
+      case BUILTIN_TOOL_NAMES.killCommand:
         return formatKillCommandOutput(out as KillCommandOutput);
-      case "read_file":
+      case BUILTIN_TOOL_NAMES.readFile:
         return formatReadFileOutput(out as ReadFileOutput);
-      case "write_file":
+      case BUILTIN_TOOL_NAMES.writeFile:
         return formatWriteFileOutput(out as WriteFileOutput);
-      case "edit_file":
+      case BUILTIN_TOOL_NAMES.editFile:
         return formatEditFileOutput(out as EditFileOutput);
-      case "glob":
+      case BUILTIN_TOOL_NAMES.glob:
         return formatGlobOutput(out as GlobOutput);
-      case "grep":
+      case BUILTIN_TOOL_NAMES.grep:
         return formatGrepOutput(out as GrepOutput);
-      case "todo":
+      case BUILTIN_TOOL_NAMES.todo:
         return formatTodoOutput(out as TodoOutput);
-      case "task":
+      case BUILTIN_TOOL_NAMES.task:
         return formatTaskOutput(out as TaskOutput);
-      case "create_plan":
-      case "update_plan":
+      case BUILTIN_TOOL_NAMES.createPlan:
+      case BUILTIN_TOOL_NAMES.updatePlan:
         // Plan body is reviewed via PlanReadyBanner markdown preview — no tool output dump.
         return "";
-      case "complete_plan": {
+      case BUILTIN_TOOL_NAMES.completePlan: {
         return typeof out.message === "string" ? out.message : "Plan complete";
       }
-      case "websearch": {
+      case BUILTIN_TOOL_NAMES.websearch: {
         const results = Array.isArray(out.results) ? out.results : [];
         const query = typeof out.query === "string" ? out.query : "";
         if (results.length === 0) return query ? `No results for ${query}` : "No results";
@@ -356,13 +357,13 @@ export function formatToolOutput(
         });
         return [`Search: ${query}`, ...lines].join("\n");
       }
-      case "webfetch": {
+      case BUILTIN_TOOL_NAMES.webfetch: {
         const url = typeof out.url === "string" ? out.url : "";
         const content = typeof out.content === "string" ? out.content : "";
         const preview = truncateText(content, 400);
         return url ? `${url}\n${preview}` : preview;
       }
-      case "ask_user":
+      case BUILTIN_TOOL_NAMES.askUser:
         return formatAskUserOutput(
           out as {
             question?: string;

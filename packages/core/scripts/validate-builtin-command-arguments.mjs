@@ -64,6 +64,15 @@ assert.deepEqual(parseModeCommand("SAVE My Plan"), { kind: "save", name: "My Pla
 
 // Every advertised subcommand parses — the drift check. The usage is the contract a client renders,
 // so a token it offers but the parser rejects (or misroutes) is the original bug.
+const newCommand = BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "new");
+assert.ok(newCommand, "the new-session command is catalogued");
+assert.equal(newCommand.command, "session.new", "/new routes to session.new");
+assert.equal(
+  BUILTIN_COMMAND_CATALOG.some((entry) => entry.name === "clear"),
+  false,
+  "there is no in-place clear command"
+);
+
 const modeUsage = BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "mode")?.usage ?? "";
 const usageBody = modeUsage.slice(modeUsage.indexOf("[") + 1, modeUsage.lastIndexOf("]"));
 assert.ok(usageBody.length > 0, "the /mode catalog entry advertises its subcommands");

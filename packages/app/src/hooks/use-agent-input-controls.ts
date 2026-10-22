@@ -38,7 +38,6 @@ interface UseAgentInputControlsOptions {
   setClientToolWaiting: UseAgentChatReturn["setClientToolWaiting"];
   allPendingApproval: UseAgentChatReturn["allPendingApproval"];
   allPendingAskUser: UseAgentChatReturn["allPendingAskUser"];
-  setMessages: UseAgentChatReturn["setMessages"];
   saveSessionFromChat: UseAgentChatReturn["saveSessionFromChat"];
 }
 
@@ -61,7 +60,6 @@ export function useAgentInputControls({
   setClientToolWaiting,
   allPendingApproval,
   allPendingAskUser,
-  setMessages,
   saveSessionFromChat,
 }: UseAgentInputControlsOptions): void {
   const hasInitRef = useRef(false);
@@ -175,7 +173,6 @@ export function useAgentInputControls({
     getSession: () => getActiveSession(),
     getMessages: () => messages,
     saveSessionFromChat,
-    setMessages: setMessages as (messages: UIMessage[]) => void,
     exit: () => {
       exitWithSummary({
         adapter,

@@ -353,7 +353,7 @@ MUST NOT 依赖进程级 model provider 注册，也 MUST NOT 因一个会话的
 
 ### Requirement: 会话标识使用稳定句柄
 
-agent SHALL 使用一个 client-facing `sessionId` 句柄，并在 `session/new` 时返回它（初始值等于磁盘会话 id `ses_…`）。句柄 SHALL 在会话生命周期内保持稳定：当会话内的 slash 命令（`/clear` / `/clone` / `/resume`）替换底层磁盘会话时，agent SHALL 把该句柄重绑到新的磁盘会话，MUST NOT 让 `session/update` 改用 client 不知道的新 id。`session/list` / `session/delete` SHALL 使用磁盘 id。`session/load` SHALL 接受句柄或磁盘 id；`session/resume`、`session/close`、`session/fork` 在会话 live 时 SHALL 接受句柄；冷恢复（非 live）的 `session/resume` / `session/fork` SHALL 使用磁盘 id。内部 `sessionId → live 会话` 的映射 SHALL 同时记录句柄与当前磁盘 id，`session_info_update` SHALL 在 `_meta.diskSessionId` 中报告当前磁盘 id。MUST NOT 把 agent 运行时 id 当作 ACP `sessionId` 暴露给 client。
+agent SHALL 使用一个 client-facing `sessionId` 句柄，并在 `session/new` 时返回它（初始值等于磁盘会话 id `ses_…`）。句柄 SHALL 在会话生命周期内保持稳定：当会话内的 slash 命令（`/new` / `/clone` / `/resume`）替换底层磁盘会话时，agent SHALL 把该句柄重绑到新的磁盘会话，MUST NOT 让 `session/update` 改用 client 不知道的新 id。`session/list` / `session/delete` SHALL 使用磁盘 id。`session/load` SHALL 接受句柄或磁盘 id；`session/resume`、`session/close`、`session/fork` 在会话 live 时 SHALL 接受句柄；冷恢复（非 live）的 `session/resume` / `session/fork` SHALL 使用磁盘 id。内部 `sessionId → live 会话` 的映射 SHALL 同时记录句柄与当前磁盘 id，`session_info_update` SHALL 在 `_meta.diskSessionId` 中报告当前磁盘 id。MUST NOT 把 agent 运行时 id 当作 ACP `sessionId` 暴露给 client。
 
 #### Scenario: new 返回的句柄可用于 load
 
@@ -367,7 +367,7 @@ agent SHALL 使用一个 client-facing `sessionId` 句柄，并在 `session/new`
 
 #### Scenario: slash 命令替换会话后句柄保持稳定
 
-- **WHEN** client 在会话内触发 `/clear`、`/clone` 或 `/resume`，底层磁盘会话 id 发生变化
+- **WHEN** client 在会话内触发 `/new`、`/clone` 或 `/resume`，底层磁盘会话 id 发生变化
 - **THEN** 该会话的 ACP 句柄 SHALL 保持不变
 - **AND** 后续 `session/update` SHALL 继续使用该句柄
 - **AND** `session_info_update._meta.diskSessionId` SHALL 报告新的磁盘 id

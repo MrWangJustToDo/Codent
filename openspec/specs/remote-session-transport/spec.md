@@ -74,6 +74,14 @@ The heavy JSON routes (`GET /:id/snapshot`, `GET /:id/tool-buffers`, `GET /:id/s
 - **WHEN** a client subscribes to `/:id/events`
 - **THEN** the response has no content-encoding applied and frames arrive incrementally
 
+### Requirement: Remount seeds are session-scoped
+
+The `/tool-buffers` remount seed MUST include the root agent and only its children belonging to the root's current disk session. A child from a replaced session MUST NOT contribute command buffers, even though `autoDestroy: false` task children can remain registered after a session switch.
+
+#### Scenario: Old session child does not seed the new conversation
+- **WHEN** a root has switched from session A to session B and an A-scoped child remains registered with command output
+- **THEN** `GET /api/agent/:id/tool-buffers` serves no buffer for that child's tool calls
+
 ### Requirement: Bounded tool output buffering
 
 The server's per-agent tool output buffers MUST cap stored output at the configured byte cap with per-chunk cost independent of the accumulated size, preserving the most recent output within the cap.

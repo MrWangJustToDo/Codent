@@ -639,19 +639,19 @@ const compactKey = "compact:agent_1";
   const commands = capture({ compaction: true, notices: true }, () => ({
     builtin: [
       { name: "compact", description: "Compress conversation context" },
-      { name: "clear", description: "Clear the conversation" },
+      { name: "new", description: "Start a new session" },
     ],
     extension: [{ name: "ext_echo", description: "echo" }],
   }));
   const advertised = commands.updates("available_commands_update").at(-1)?.availableCommands ?? [];
   const compact = advertised.find((c) => c.name === "compact");
-  const clear = advertised.find((c) => c.name === "clear");
+  const newCommand = advertised.find((c) => c.name === "new");
   check(
     "a command that takes arguments advertises the hint the catalog already declares",
     compact?.input?.hint === "[focus]",
     JSON.stringify(compact)
   );
-  check("…and one that takes none advertises no input", clear?.input === undefined, JSON.stringify(clear));
+  check("…and one that takes none advertises no input", newCommand?.input === undefined, JSON.stringify(newCommand));
   commands.stop();
 }
 

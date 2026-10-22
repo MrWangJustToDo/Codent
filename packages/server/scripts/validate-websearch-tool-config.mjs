@@ -10,6 +10,7 @@
  *
  * Run: pnpm --filter @codent/server run validate:websearch-tool-config
  */
+/* eslint-disable no-undef */
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -29,6 +30,46 @@ const WEBSEARCH = {
   provider: "parallel",
 };
 
+// The remote host assembles the create body by hand. Assert the optional session
+// fields declared by `AgentSessionCreateOptions` actually cross the client boundary;
+// the server schema accepts them too (unknown fields are silently stripped by Zod).
+{
+  const originalFetch = globalThis.fetch;
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(init.body);
+    return new Response(JSON.stringify({ id: "probe-agent", snapshot: { agentId: "probe-agent", messages: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const probeHost = createRemoteAgentSessionHost({ baseUrl: "http://probe.invalid" });
+    await probeHost.create({
+      name: "probe",
+      model: "probe-model",
+      mcpServers: { demo: { command: "demo-mcp" } },
+      builtins: { lsp: false, skills: false },
+      modelInfo: { id: "probe-model", name: "Probe", style: "openai", apiModel: "probe-model" },
+    });
+    await assert.rejects(
+      () =>
+        probeHost.create({
+          name: "probe-extensions",
+          model: "probe-model",
+          extensions: [{ create: () => ({ id: "x", name: "x", version: "1", description: "", activate() {} }) }],
+        }),
+      /In-process extensions are not supported/,
+      "a remote host must reject in-process extension factories explicitly"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(body.mcpServers, { demo: { command: "demo-mcp" } }, "mcpServers must cross the HTTP boundary");
+  assert.deepEqual(body.builtins, { lsp: false, skills: false }, "builtins must cross the HTTP boundary");
+  assert.equal(body.modelInfo?.id, "probe-model", "modelInfo must cross the HTTP boundary");
+}
+
 const server = createServer();
 await new Promise((resolve) => setTimeout(resolve, 400));
 const address = server.address();
@@ -46,6 +87,8 @@ try {
       model: process.env.MODEL || "test-model",
       maxConcurrentTasks: 7,
       toolConfig: { websearch: WEBSEARCH },
+      builtins: { lsp: false, skills: false },
+      modelInfo: { id: "client-model", name: "Client Model", style: "openai", apiModel: "test-model" },
     });
     const snapshot = session.getSnapshot();
     const agent = getServerManager().getAgent(snapshot.agentId);
@@ -56,6 +99,9 @@ try {
     assert.equal(effective.braveApiKey, WEBSEARCH.braveApiKey, "brave key must be forwarded");
     assert.equal(effective.parallelApiKey, WEBSEARCH.parallelApiKey, "parallel key must be forwarded");
     assert.equal(agent.config.maxConcurrentTasks, 7, "maxConcurrentTasks must be forwarded to the server-side agent");
+    assert.equal(agent.getModelInfo()?.id, "client-model", "modelInfo must be forwarded to the server-side agent");
+    assert.equal(agent.config.lsp, false, "builtins.lsp must reach the server-side agent");
+    assert.equal(agent.config.skills, false, "builtins.skills must reach the server-side agent");
   }
 
   // ── 2. A create WITHOUT toolConfig keeps the server default (no leakage from case 1) ──

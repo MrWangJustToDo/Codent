@@ -8,7 +8,7 @@
  * session can deliver what happened while it was away.
  *
  * Records live beside the logs (`.agents/cache/command-jobs/<jobId>.json`) and are scoped to the
- * owning disk session: a fork/`/clear` creates a new session id and must not inherit another
+ * owning disk session: a fork/`/new` creates a new session id and must not inherit another
  * conversation's jobs. Logs keep the existing 24h sweep; records are smaller and keep 7 days —
  * a record whose log was swept still carries the status and the output tail.
  */

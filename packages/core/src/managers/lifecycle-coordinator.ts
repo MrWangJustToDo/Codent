@@ -32,12 +32,10 @@ export class LifecycleCoordinator {
 
     this.deps.clearAgentScope(id);
 
-    // Release every disk-session claim this agent held. Normally one, but releaseAllFor also
-    // cleans up a pre-fix leak if an older switch left an extra claim behind.
-    this.deps.ownership.releaseAllFor(id);
-
     // Force-kill MCP child processes synchronously to prevent orphans on exit.
     managedAgent.getMcpManager()?.forceKill();
+    // A debounced memory-index refresh can outlive the agent and write after teardown.
+    managedAgent.getMemoryManager?.()?.dispose();
 
     managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed);
 
@@ -81,10 +79,32 @@ export class LifecycleCoordinator {
       }
 
       try {
+        // Close first: it waits both the serialized queue and direct pendingSaves
+        // (e.g. the async title write) and refuses new writes. awaitPersistIdle alone
+        // only covers the queue.
+        await managedAgent.session?.close?.();
+      } catch {
+        // Best effort; the fallback drain/log flush below still runs.
+      }
+      try {
+        // The abort/finalize path may have queued a final session write. Drain it as a
+        // fallback before releasing the disk-session claim: otherwise another agent can
+        // resume the id and receive this agent's late `pump-complete`.
+        await managedAgent.session?.awaitPersistIdle?.();
+      } catch {
+        // Best effort; the log flush below still runs.
+      }
+
+      try {
         // Land buffered teardown/abort entries before the sink is dropped.
         managedAgent.flushLogOnDestroy();
       } catch {
         // The process is going away; a failed flush cannot be retried here.
+      } finally {
+        // Release ownership only after producers stopped, writes drained, and the log
+        // flushed. Releasing at the top let a new resume claim the id while this
+        // teardown was still writing to it.
+        this.deps.ownership.releaseAllFor(id);
       }
     })();
     this.trackTeardown(teardown);

@@ -1,5 +1,5 @@
 // Import command files to trigger registration
-import "./clear.js";
+import "./new.js";
 import "./resume.js";
 import "./clone.js";
 import "./fork.js";

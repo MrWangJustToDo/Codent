@@ -171,8 +171,12 @@ export async function restoreManagedSession(
   host.setReasoningEffort?.(session.reasoningEffort);
 
   // Hydrate UI channel when present; hosts also apply uiMessages via resume APIs.
+  // Bump the UI generation first so a run that started on the session being left
+  // cannot append its late chunks to the restored transcript.
   if (host.getUI) {
-    host.getUI()?.setMessages(session.uiMessages);
+    const ui = host.getUI();
+    ui?.advanceSessionGeneration();
+    ui?.setMessages(session.uiMessages);
   }
   applyRestoredSessionChatState(host, session.uiMessages);
   host.resetAdmittedTurnContext?.();

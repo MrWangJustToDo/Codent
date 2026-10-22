@@ -24,6 +24,8 @@ import type {
   AgentSession,
   AgentSessionChannel,
   AgentSessionCommand,
+  McpServerConfig,
+  ModelInfo,
   ModelsConfig,
   ModelsConfigEntry,
 } from "@codent/core";
@@ -115,7 +117,18 @@ const createBodySchema = z.object({
   maxIterations: z.number().int().positive().optional(),
   maxConcurrentTasks: z.number().optional(),
   mcpConfigPath: z.string().optional(),
+  mcpServers: z.record(z.string(), z.unknown()).optional(),
   extensionDirs: z.array(z.string()).optional(),
+  builtins: z
+    .object({
+      lsp: z.boolean().optional(),
+      skills: z.boolean().optional(),
+      memory: z.boolean().optional(),
+      mcp: z.boolean().optional(),
+      codeMode: z.boolean().optional(),
+    })
+    .optional(),
+  modelInfo: z.record(z.string(), z.unknown()).optional(),
   continueSession: z.boolean().optional(),
   resumeSessionId: z.string().optional(),
   // Websearch secrets / provider preference for the server-side agent loop. Like the
@@ -208,7 +221,10 @@ function listCommandSnapshots(rootId: string) {
   const manager = getServerManager();
   const root = manager.getAgent(rootId);
   if (!root) return [];
-  return [root, ...manager.getAllSubagents(rootId)].flatMap((agent) =>
+  // Task children use `autoDestroy: false`, and a session switch aborts but does not destroy them.
+  // Scope the walk to the active disk session: otherwise a remount of the new conversation seeds
+  // its command buffers from the old child's stream hub.
+  return [root, ...manager.getAllSubagents(rootId, root.getSessionData()?.id)].flatMap((agent) =>
     (agent.getStreamHub().listSnapshots() ?? []).filter((snapshot) => snapshot.source === "command")
   );
 }
@@ -296,11 +312,13 @@ export const agentSessionRoutes = new Hono()
       maxIterations: body.maxIterations,
       ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
       mcpConfigPath: body.mcpConfigPath,
+      ...(body.mcpServers ? { mcpServers: body.mcpServers as Record<string, McpServerConfig> } : {}),
       extensionDirs: body.extensionDirs,
+      ...(body.builtins ? { builtins: body.builtins } : {}),
       modelStyle: connection.style,
       modelBaseURL: connection.baseURL,
       modelApiKey: connection.apiKey,
-      modelInfo,
+      modelInfo: (body.modelInfo as ModelInfo | undefined) ?? modelInfo,
       continueSession: body.continueSession,
       resumeSessionId: body.resumeSessionId,
       ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),

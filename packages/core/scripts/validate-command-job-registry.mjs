@@ -545,7 +545,7 @@ console.log("teardown log deletion OK");
 }
 
 {
-  // Records are scoped to the disk session: a fork/`/clear` must not inherit another conversation's
+  // Records are scoped to the disk session: a fork/`/new` must not inherit another conversation's
   // background jobs.
   const ownerA = new CommandJobRegistry(env, { ownerSessionId: "ses_scope_a" });
   await ownerA.ready();
@@ -902,6 +902,51 @@ console.log("teardown log deletion OK");
 
   await service.destroy();
   assert.deepEqual(service.list(), [], "destroy tears the command service registry down");
+}
+
+// ---------------------------------------------------------------------------
+// 19. A reset during startCommand kills the just-started process
+// ---------------------------------------------------------------------------
+{
+  const owner = "ses_command_service_start_race";
+  const service = new AgentCommandService({
+    env: () => env,
+    ownerSessionId: () => owner,
+    onJobsChange: () => {},
+  });
+  let releaseStart;
+  const startGate = new Promise((resolve) => {
+    releaseStart = resolve;
+  });
+  let markStartEntered;
+  const startEntered = new Promise((resolve) => {
+    markStartEntered = resolve;
+  });
+  let killCalls = 0;
+  const startEnv = {
+    ...env,
+    startCommand: async () => {
+      markStartEntered();
+      await startGate;
+      return {
+        pid: 4242,
+        kill: async () => {
+          killCalls += 1;
+        },
+      };
+    },
+  };
+
+  const starting = service.startBackground({
+    command: "long-lived",
+    toolCallId: "call_start_race",
+    coreEnv: startEnv,
+  });
+  await startEntered;
+  await service.reset("session-switch");
+  releaseStart();
+  await assert.rejects(starting, /cancelled because its session closed/);
+  assert.equal(killCalls, 1, "reset kills a process that returned after the registry was destroyed");
 }
 
 await registry.destroyAll();

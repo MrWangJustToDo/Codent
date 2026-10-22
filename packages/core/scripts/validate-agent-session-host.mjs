@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 
 import {
+  AgentManager,
   AgentStreamHub,
   TodoManager,
   UsageTracker,
@@ -16,7 +17,18 @@ import {
 registerCoreEnv({
   rootPath: "/tmp",
   fs: { exists: async () => false },
-  path: {},
+  path: {
+    join: (...parts) => parts.join("/"),
+    resolve: (...parts) => parts.join("/"),
+    dirname: (p) => p.slice(0, p.lastIndexOf("/")) || "/",
+    basename: (p, ext) => {
+      const base = p.split("/").pop() ?? p;
+      return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+    },
+    extname: (p) => p.slice(p.lastIndexOf(".")),
+    isAbsolute: (p) => p.startsWith("/"),
+    normalize: (p) => p,
+  },
   runCommand: async () => ({}),
   exec: async () => ({}),
   fetch: async () => new Response(""),
@@ -135,9 +147,12 @@ function createFake(id, parentId) {
 /** @type {Map<string, any>} */
 const agents = new Map();
 let seq = 0;
+/** @type {any} */
+let lastCreateConfig;
 
 const manager = {
   async createManagedAgent(config) {
+    lastCreateConfig = config;
     seq += 1;
     const id = `agent_${seq}`;
     const managed = createFake(id);
@@ -201,7 +216,18 @@ function writeSessionFile(id, { name, updatedAt } = {}) {
 
 registerCoreEnv({
   rootPath: "/tmp",
-  path: {},
+  path: {
+    join: (...parts) => parts.join("/"),
+    resolve: (...parts) => parts.join("/"),
+    dirname: (p) => p.slice(0, p.lastIndexOf("/")) || "/",
+    basename: (p, ext) => {
+      const base = p.split("/").pop() ?? p;
+      return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+    },
+    extname: (p) => p.slice(p.lastIndexOf(".")),
+    isAbsolute: (p) => p.startsWith("/"),
+    normalize: (p) => p,
+  },
   runCommand: async () => ({}),
   exec: async () => ({}),
   fetch: async () => new Response(""),
@@ -218,6 +244,21 @@ registerCoreEnv({
       [...sessionFiles.keys()]
         .filter((file) => file.startsWith(`${p}/`))
         .map((file) => ({ name: file.slice(p.length + 1), type: "file" })),
+    writeFile: async (p, content) => {
+      sessionFiles.set(p, content);
+    },
+    appendFile: async (p, content) => {
+      sessionFiles.set(p, (sessionFiles.get(p) ?? "") + content);
+    },
+    appendFileSync: (p, content) => {
+      sessionFiles.set(p, (sessionFiles.get(p) ?? "") + content);
+    },
+    rename: async (from, to) => {
+      const content = sessionFiles.get(from);
+      if (content === undefined) throw new Error(`ENOENT: ${from}`);
+      sessionFiles.delete(from);
+      sessionFiles.set(to, content);
+    },
     remove: async (p) => {
       sessionFiles.delete(p);
     },
@@ -241,22 +282,51 @@ registerCoreEnv({
 
 const { session } = await host.create({ name: "root", model: "test-model" });
 assert.equal(session.getSnapshot().name, "root");
-assert.equal(host.list().length, 1);
-assert.equal(host.list()[0].agentId, session.id);
+assert.equal((await host.list()).length, 1);
+assert.equal((await host.list())[0].agentId, session.id);
+
+// --- create options reach ManagedAgentConfig --------------------------------
+//
+// In-process extension factories and built-in toggles are part of the Host create
+// contract (not only the deprecated ManagedAgent path). The local host must forward
+// both without requiring the deprecated manager API.
+const extensionFactory = {
+  create: () => ({
+    id: "create-options-extension",
+    name: "Create options extension",
+    version: "1.0.0",
+    description: "registered through AgentSessionCreateOptions.extensions",
+    activate() {},
+  }),
+};
+const builtins = { lsp: false, skills: false, memory: false, mcp: false, codeMode: false };
+const withOptions = await host.create({
+  name: "with-options",
+  model: "test-model",
+  extensions: [extensionFactory],
+  builtins,
+});
+assert.equal(lastCreateConfig.extensions?.[0], extensionFactory, "extension factories reach ManagedAgentConfig");
+assert.deepEqual(lastCreateConfig.lsp, builtins.lsp, "lsp toggle reaches ManagedAgentConfig");
+assert.deepEqual(lastCreateConfig.skills, builtins.skills, "skills toggle reaches ManagedAgentConfig");
+assert.deepEqual(lastCreateConfig.memory, builtins.memory, "memory toggle reaches ManagedAgentConfig");
+assert.deepEqual(lastCreateConfig.mcp, builtins.mcp, "mcp toggle reaches ManagedAgentConfig");
+assert.deepEqual(lastCreateConfig.codeMode, builtins.codeMode, "codeMode toggle reaches ManagedAgentConfig");
+await host.destroy(withOptions.session.id);
 
 const child = createFake("agent_child", session.id);
 agents.set(child.id, child);
 const childSession = host.connect(child.id);
 assert.ok(childSession);
 assert.equal(childSession.id, "agent_child");
-assert.equal(host.list().length, 2);
+assert.equal((await host.list()).length, 2);
 
-const listed = host.list();
+const listed = await host.list();
 assert.ok(listed.some((e) => e.agentId === session.id && !e.parentId));
 assert.ok(listed.some((e) => e.agentId === child.id && e.parentId === session.id));
 
 await host.destroy(session.id);
-assert.equal(host.list().length, 0);
+assert.equal((await host.list()).length, 0);
 assert.equal(host.connect(session.id), null);
 assert.equal(host.connect(child.id), null);
 
@@ -276,7 +346,7 @@ assert.ok(
   persisted.some((meta) => meta.id === "ses_ondisk"),
   "listPersistedSessions must include a session that has no live agent"
 );
-assert.equal(host.list().length, 0, "list() still reports only live agents");
+assert.equal((await host.list()).length, 0, "list() still reports only live agents");
 
 // ...and deleting it does not require opening it.
 assert.equal(await host.deleteSession("ses_ondisk"), true);
@@ -307,5 +377,49 @@ assert.ok(
   !(await host.listPersistedSessions()).some((meta) => meta.id === persistedId),
   "deleting a live session removes its log rather than only releasing the live agent"
 );
+
+// ----------------------------------------------------------------------------
+// Real binding: run the same create/list/connect/destroy through an AgentManager
+// and the real LocalHost, not the structural fake above.
+// ----------------------------------------------------------------------------
+{
+  const realManager = new AgentManager();
+  const realHost = createLocalAgentSessionHost({ manager: realManager });
+  const created = await realHost.create({
+    name: "real-host",
+    model: "test-model",
+    builtins: { lsp: false, skills: false, memory: false, mcp: false, codeMode: false },
+  });
+  const realId = created.session.getSnapshot().agentId;
+  assert.ok(realManager.getAgent(realId), "real host create registers a real ManagedAgent");
+  assert.equal((await realHost.list()).length, 1, "real host lists the live agent");
+  assert.equal(realHost.connect(realId)?.id, realId, "real host connects the live session");
+  await realHost.destroy(realId);
+  assert.equal((await realHost.list()).length, 0, "real host destroy removes the agent");
+
+  // A failure after createManagedAgent (invalid resume target) must roll back the
+  // registered agent, its ownership claim and its log sink.
+  await assert.rejects(
+    () =>
+      realHost.create({
+        name: "real-host-invalid-resume",
+        model: "test-model",
+        resumeSessionId: "ses_missing_resume_target",
+        builtins: { lsp: false, skills: false, memory: false, mcp: false, codeMode: false },
+      }),
+    /Session not found/,
+    "an invalid resume target rejects host.create"
+  );
+  assert.equal((await realHost.list()).length, 0, "a failed host.create leaves no live agent");
+  assert.equal(realManager.getAgents().length, 0, "a failed host.create leaves no registered agent");
+  assert.equal(
+    realManager.acquireSessionOwnership("ses_missing_resume_target", "probe-agent"),
+    true,
+    "a failed host.create releases the target claim"
+  );
+  realManager.releaseSessionOwnership("ses_missing_resume_target", "probe-agent");
+
+  await realManager.dispose();
+}
 
 console.log("agent-session-host validation passed");

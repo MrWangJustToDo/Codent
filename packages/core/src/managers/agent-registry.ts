@@ -78,9 +78,21 @@ export class AgentRegistry {
     );
   }
 
-  /** All descendants, deepest-first (the task panel's history order). */
-  allSubagents(rootAgentId: string): ManagedAgent[] {
-    return this.collectSubagents(rootAgentId, (agent) => agent.parentId != null);
+  /**
+   * All descendants, deepest-first (the task panel's history order).
+   *
+   * `sessionId` limits the result to children spawned in that disk session. Legacy children with
+   * no scope id stay visible, matching `buildSubagentSummaries`; an active conversation with
+   * `autoDestroy: false` children must not keep showing rows (or command buffers) from the
+   * conversation it replaced.
+   */
+  allSubagents(rootAgentId: string, sessionId?: string): ManagedAgent[] {
+    return this.collectSubagents(rootAgentId, (agent) => {
+      if (agent.parentId == null) return false;
+      if (sessionId === undefined) return true;
+      const childSessionId = agent.getSessionScopeId?.();
+      return childSessionId === undefined || childSessionId === sessionId;
+    });
   }
 
   private collectSubagents(rootAgentId: string, filter: (agent: ManagedAgent) => boolean): ManagedAgent[] {

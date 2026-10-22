@@ -18,24 +18,41 @@ assert.ok(DEFAULT_AGENT_SESSION_CHANNELS.includes("lifecycle"));
 assert.ok(DEFAULT_AGENT_SESSION_CHANNELS.includes("tool"));
 assert.ok(DEFAULT_AGENT_SESSION_CHANNELS.includes("summary"));
 
+// Live command discriminants. This list is only the JSON half; the typed contract
+// (including the negative assertions for removed commands) is
+// `scripts/contracts/session-contract.ts`, checked by tsconfig.typecheck.json.
 const commands = [
   { type: "send", content: "hi" },
   { type: "steer", content: "fix" },
   { type: "followUp", content: "later" },
+  { type: "queue.pop" },
   { type: "stop" },
-  { type: "clear" },
   { type: "respondApproval", approvalId: "a1", approved: true, reason: "ok" },
   { type: "addToolResult", toolCallId: "t1", output: { done: true } },
   { type: "setClientToolWaiting", active: true },
   { type: "compact" },
   { type: "rename", name: "x" },
-  { type: "auto.set", enabled: true },
-  { type: "plan.enable" },
-  { type: "plan.disable" },
-  { type: "plan.toggle" },
+  { type: "rename.generate" },
+  { type: "mode.set", mode: "normal" },
+  { type: "mode.toggle" },
   { type: "plan.execute", sendSteer: true },
   { type: "plan.cancel" },
+  { type: "plan.save", nameHint: "x" },
+  { type: "plan.load", name: "x" },
+  { type: "plan.list" },
+  { type: "plan.complete" },
+  { type: "mcp.refresh" },
+  { type: "extension.toggle", id: "e", enabled: true },
+  { type: "extension.invokeCommand", name: "e" },
+  { type: "extension.getCommandOptions", name: "e" },
   { type: "session.resume", sessionId: "s1" },
+  { type: "session.list" },
+  { type: "session.new" },
+  { type: "session.clone" },
+  { type: "session.fork", upToMessageId: "m1" },
+  { type: "effort.set", effort: "high" },
+  { type: "model.set", model: "m" },
+  { type: "usage.history" },
 ];
 
 for (const command of commands) {
