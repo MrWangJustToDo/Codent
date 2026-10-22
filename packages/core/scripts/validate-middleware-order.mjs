@@ -107,7 +107,7 @@ function makeManagedStub() {
     getStreamHub: () => new AgentStreamHub(),
     tools: {},
     statusController: {},
-    approvals: { toArray: () => [], upsert: noop },
+    getApprovals: () => ({ toArray: () => [], upsert: noop }),
     usageHistory: { record: noop },
     usage: {},
     memory: { commitSurfacedMemories: noop },

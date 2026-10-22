@@ -134,14 +134,14 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
   const restored = { id: "ses_r", name: "Restored Session", uiMessages: [], approvals: [] };
   await restoreManagedSession(
     {
-      toolCompactCache: { clear: () => {} },
+      getToolCompactCache: () => ({ clear: () => {} }),
       session: { restoreFromStore: async () => restored },
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
-      approvals: { restore: () => {} },
+      getApprovals: () => ({ restore: () => {} }),
       getUI: () => ({ setMessages: () => {} }),
       clearQueuedMessages: () => {},
       syncInteractionStateFromUIMessages: () => {},

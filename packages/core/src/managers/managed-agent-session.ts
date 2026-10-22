@@ -38,8 +38,8 @@ export interface SessionHost {
   /** Set reasoning-effort config (restore path). Optional — older hosts may omit. */
   setReasoningEffort?: (effort: ReasoningEffort | undefined) => void;
   session: SessionService;
-  approvals: ToolApprovalTable;
-  toolCompactCache: ToolCompactCache;
+  getApprovals: () => ToolApprovalTable;
+  getToolCompactCache: () => ToolCompactCache;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent: EmitAgentTelemetryFn;
   /**
@@ -121,7 +121,7 @@ export async function restoreManagedSession(
 ): Promise<SessionData> {
   // The caller's session lifecycle stops a live pump before this helper is entered; the
   // production switch owns that ordering in exactly one place.
-  host.toolCompactCache.clear();
+  host.getToolCompactCache().clear();
   // Read-side dual of `session:save-error`: media files referenced by the
   // transcript can be gone (cache cleared / media dir removed). Hydration
   // degrades to the stored form; count the misses so they surface instead of
@@ -153,9 +153,9 @@ export async function restoreManagedSession(
   // Approvals are not stored separately: derive them from the restored message
   // log (the tool-call parts carry pending/approved/denied + reason), keeping
   // the decision timestamps recorded in the log.
-  host.approvals.restore(
-    normalizeSessionApprovals({ uiMessages: session.uiMessages, approvalTimes: session.approvalTimes })
-  );
+  host
+    .getApprovals()
+    .restore(normalizeSessionApprovals({ uiMessages: session.uiMessages, approvalTimes: session.approvalTimes }));
 
   // Adopt the model this session was saved with: the agent is created from the
   // ambient config (env / CLI flags), which may differ from what the session ran

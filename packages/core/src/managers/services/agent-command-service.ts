@@ -148,6 +148,11 @@ export class AgentCommandService implements AgentCommandPort {
     return this.registry().markNotified(jobIds);
   }
 
+  /** Session switch: drop this session's jobs and completion queue. */
+  async reset(_reason: string): Promise<void> {
+    await this.destroy();
+  }
+
   /** Kill/destroy the registry (agent destroy); terminal un-notified records are preserved. */
   async destroy(): Promise<void> {
     const registry = this.registryInstance;

@@ -121,7 +121,7 @@ function makeManagedStub(controller) {
       read_file: { name: "read_file", description: "", inputSchema: {} },
     },
     statusController: {},
-    approvals: { toArray: () => [], upsert: noop },
+    getApprovals: () => ({ toArray: () => [], upsert: noop }),
     usageHistory: { record: noop },
     usage: {},
     session: { getSessionData: () => ({ id: "validation-session" }) },

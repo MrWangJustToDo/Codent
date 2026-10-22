@@ -345,7 +345,7 @@ export class ManagedAgent {
   /** Plan/auto mutual exclusion + mode persistence/restore. */
   readonly mode: ModeCoordinator;
   /** Session-backed tool-approval interrupt table. */
-  readonly approvals: ToolApprovalTable;
+  private approvals: ToolApprovalTable;
 
   // ============================================================================
   // Tools / registries / extensions
@@ -420,7 +420,7 @@ export class ManagedAgent {
   readonly compaction: CompactionService;
   /** Shared channel → wire projection cache (see `getWireProjectionCache`). */
   private wireProjectionCache: WireProjectionCache | null = null;
-  readonly toolCompactCache: ToolCompactCache;
+  private toolCompactCache: ToolCompactCache;
   readonly sessionPersistence: SessionPersistence;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
@@ -644,6 +644,11 @@ export class ManagedAgent {
       },
       resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       resetTurnContext: () => this.turnContext.resetTurnState(),
+      resetCommandJobs: (reason) => {
+        const service = this.commandService;
+        this.commandService = undefined;
+        void service?.reset(reason);
+      },
     });
 
     if (config.setUp) {
@@ -1198,6 +1203,10 @@ export class ManagedAgent {
 
   getTodoManager(): TodoManager | null {
     return this.todoManager;
+  }
+
+  getApprovals(): ToolApprovalTable {
+    return this.approvals;
   }
 
   setMemoryManager(manager: MemoryManager): void {

@@ -54,6 +54,7 @@ export interface SessionLifecycleHost {
   clearPendingApprovals(): void;
   resetMediaHydrationMisses(): void;
   resetTurnContext(): void;
+  resetCommandJobs(reason: string): void;
 }
 
 export class SessionLifecycleService {
@@ -96,6 +97,7 @@ export class SessionLifecycleService {
     this.host.getTodoManager()?.reset();
     this.host.streamHub.clearAll();
     this.host.resetTurnContext();
+    this.host.resetCommandJobs(reason);
   }
 
   /**
@@ -121,7 +123,7 @@ export class SessionLifecycleService {
     try {
       this.reset(reason);
       await this.host.clearPersistedSession();
-      this.host.getChatController()?.clearMessages({ persistEmpty: false });
+      this.host.getChatController()?.clearTranscript();
 
       this.host.setSessionData(next);
       adopted = true;
@@ -152,6 +154,7 @@ export class SessionLifecycleService {
     try {
       this.stop("session-resume");
       this.host.streamHub.clearAll();
+      this.host.resetCommandJobs("session-resume");
 
       if (leavingId && leavingId !== sessionId) {
         this.host.emitSessionSwitch(leavingId, sessionId, this.host.getSessionData()?.uiMessages.length ?? 0);

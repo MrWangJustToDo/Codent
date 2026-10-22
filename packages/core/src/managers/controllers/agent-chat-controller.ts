@@ -78,7 +78,7 @@ export class AgentChatController {
       getMessages: () => this.channel.getMessages(),
       addToolApprovalResponse: (approvalId, approved, reason) =>
         this.channel.addToolApprovalResponse(approvalId, approved, reason),
-      upsertApproval: (input) => this.managed.approvals.upsert(input),
+      upsertApproval: (input) => this.managed.getApprovals().upsert(input),
       shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
       persist: () => this.persistMessages("pump-complete"),
@@ -99,9 +99,14 @@ export class AgentChatController {
     this.channel.setMessages(messages);
   }
 
-  clearMessages(options: { persistEmpty?: boolean } = {}): void {
+  /** Drop queued and visible transcript state only; lifecycle owns the other resets. */
+  clearTranscript(): void {
     this.clearQueuedMessages();
     this.channel.clearMessages();
+  }
+
+  clearMessages(options: { persistEmpty?: boolean } = {}): void {
+    this.clearTranscript();
     this.managed.resetAdmittedTurnContext();
     this.managed.resetSessionSyncTracker();
     this.managed.statusController.resetToIdle();

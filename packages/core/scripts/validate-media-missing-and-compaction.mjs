@@ -171,7 +171,7 @@ async function testRestoreReportsMediaMissing() {
 
   await restoreManagedSession(
     {
-      toolCompactCache: { clear: () => {} },
+      getToolCompactCache: () => ({ clear: () => {} }),
       session: {
         restoreFromStore: async (_id, input) => {
           input.onMissingMedia?.({ ref: "media://a.png", reason: "not-found", path: "content" });
@@ -184,7 +184,7 @@ async function testRestoreReportsMediaMissing() {
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
-      approvals: { restore: () => {} },
+      getApprovals: () => ({ restore: () => {} }),
       getUI: () => ({ setMessages: () => {} }),
       clearQueuedMessages: () => {},
       syncInteractionStateFromUIMessages: () => {},
@@ -207,14 +207,14 @@ async function testRestoreReportsMediaMissing() {
   const cleanMissCounts = [];
   await restoreManagedSession(
     {
-      toolCompactCache: { clear: () => {} },
+      getToolCompactCache: () => ({ clear: () => {} }),
       session: { restoreFromStore: async () => restored },
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
-      approvals: { restore: () => {} },
+      getApprovals: () => ({ restore: () => {} }),
       getUI: () => ({ setMessages: () => {} }),
       clearQueuedMessages: () => {},
       syncInteractionStateFromUIMessages: () => {},

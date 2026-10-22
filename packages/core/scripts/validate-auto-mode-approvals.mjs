@@ -95,7 +95,11 @@ chat.enqueueRunOnce = async () => {};
 
 const session = createLocalAgentSession({ managed, manager });
 const approvalOf = () => chat.getMessages()[0].parts[0].approval;
-const tableRow = () => managed.approvals.toArray().find((row) => row.toolCallId === "tc1");
+const tableRow = () =>
+  managed
+    .getApprovals()
+    .toArray()
+    .find((row) => row.toolCallId === "tc1");
 
 // ============================================================================
 // 1. Entering auto answers the pending approval

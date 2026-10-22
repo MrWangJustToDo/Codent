@@ -135,7 +135,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     session: managed.session,
     usageHistory: managed.usageHistory,
     statusController: managed.statusController,
-    approvals: managed.approvals,
+    approvals: managed.getApprovals(),
     run: managed.run,
     planMode: managed.planMode,
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
