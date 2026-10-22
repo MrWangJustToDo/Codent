@@ -47,7 +47,12 @@ export const Header = () => {
   useEffect(() => {
     if (!workspacePath) return;
     useStatic.getActions().setStaticHeader(
-      <StaticRender key="header" width={width} deps={[headerKey, width, theme]}>
+      <StaticRender
+        key="header"
+        width={width}
+        deps={[headerKey, width, theme]}
+        onRender={() => useStatic.getActions().setStaticHeaderReady(true)}
+      >
         {() => (
           <WelcomePanel
             variant="ready"

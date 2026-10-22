@@ -39,6 +39,8 @@ export const Agent = () => {
 
   useStatic.getActions().useInitStdout();
 
+  const headerReady = useStatic.useShallowStableSelector((s) => s.headerReady);
+
   // Root-level so it outlives the subagent panel: a destroyed agent's full-transcript
   // flatten snapshot is released even if the user already navigated away from its panel.
   useFlattenCacheCleanup();
@@ -143,12 +145,12 @@ export const Agent = () => {
         <ExtensionPanel />
       ) : (
         <>
-          <MessageViewWithCompact messages={messages} />
           <Content />
-          <PlanReadyBanner />
-          <Footer status={status} queuedMessages={queuedMessages} saveError={saveError} />
+          {headerReady && <MessageViewWithCompact messages={messages} />}
+          {headerReady && <PlanReadyBanner />}
+          {headerReady && <Footer status={status} queuedMessages={queuedMessages} saveError={saveError} />}
           {/* Last region of the normal screen, below the footer: the session's outcome, shown
-              during the ~200ms between the quit and `process.exit`. */}
+            during the ~200ms between the quit and `process.exit`. */}
           <ExitSummary />
         </>
       )}

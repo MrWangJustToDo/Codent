@@ -6,6 +6,7 @@ export const useStatic = createState(
   () => ({
     stdoutRef: markRaw({ current: null as ReturnType<typeof useStdout>["stdout"] | null }),
     header: null as JSX.Element | null,
+    headerReady: false,
     list: [] as JSX.Element[],
     /**
      * One invalidation signature per row in `list`, same order. Each row's `<StaticRender>`
@@ -29,6 +30,7 @@ export const useStatic = createState(
           s.stdoutRef.current = result.stdout;
         },
         setStaticHeader: (item: JSX.Element) => ((s.header = item), s.headerSet++),
+        setStaticHeaderReady: (ready: boolean) => (s.headerReady = ready),
         /**
          * Rows and their signatures are written together: they are positional, so letting
          * them diverge would attach one row's signature to another row's cache.
