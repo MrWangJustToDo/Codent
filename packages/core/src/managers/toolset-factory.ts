@@ -11,11 +11,11 @@ import { createCompletePlanTool, createCreatePlanTool, createUpdatePlanTool } fr
 import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
-import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
+import { createAskUserTool } from "../agent/tools/builtin/interaction/ask-user-tool.js";
 
 import { createAgentToolContext } from "./agent-tool-context.js";
 
-import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
+import type { ToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import type { AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { ManagedAgent } from "../runtime-types/hosts.js";
 

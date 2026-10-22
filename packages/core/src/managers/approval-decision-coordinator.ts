@@ -11,12 +11,12 @@
 
 import { findToolCallIdForApproval, findToolCallNameForApproval } from "../agent/approval/tool-approval-table.js";
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
-import { analyzeCommand, createAnalysisContext } from "../agent/tools/command-safety/command-analyzer.js";
+import { analyzeCommand, createAnalysisContext } from "../agent/tools/builtin/shell/safety/command-analyzer.js";
 import {
   evaluateCommandApproval,
   type CommandApprovalDecision,
-} from "../agent/tools/command-safety/command-approval-policy.js";
-import { BUILTIN_TOOL_NAMES } from "../agent/tools/tool-names.js";
+} from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
+import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
 import type { ResolvedCoreEnv } from "../env";

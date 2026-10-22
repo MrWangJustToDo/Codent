@@ -1,4 +1,4 @@
-import { getBuiltinToolPresentation } from "./builtin-table.js";
+import { getBuiltinToolPresentation } from "./builtin.js";
 
 import type { ToolPresentation } from "./types.js";
 

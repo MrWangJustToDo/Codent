@@ -6,17 +6,17 @@
  * environment, runner, or UI state.
  */
 
-import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin-table.js";
+import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin.js";
 import { describeToolPresentations } from "../../agent/tools/presentation/describe.js";
 import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
 import { AgentToolRegistry, type ResolvedAgentTool } from "../../agent/tools/runtime/tool-registry.js";
-import { withTimeoutAbort } from "../../agent/tools/util/abort-timeout.js";
+import { withTimeoutAbort } from "../../agent/tools/shared/abort-timeout.js";
 
 import type { ExtensionToolDefinition } from "../../agent/extension";
 import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
+import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 import type { ToolPresentationInfo } from "../../agent/tools/presentation/types.js";
-import type { ToModelOutputDecorator, ToModelOutputFn } from "../../agent/tools/runtime/model-output.js";
-import type { ToolsRecord } from "../../agent/tools/runtime/tools-record.js";
+import type { ToModelOutputDecorator, ToModelOutputFn } from "../../agent/tools/runtime/contract.js";
 
 export interface AgentToolRegistrationContext {
   /** Owner of this registration (extension id or agent-scoped id). */

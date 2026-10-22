@@ -41,7 +41,7 @@ import {
   type TaskPreforkCoordinator,
 } from "../../agent/subagent/task-prefork.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
-import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { generateId } from "../../utils/generate-id.js";
 
 import { defineMiddleware } from "./phase.js";

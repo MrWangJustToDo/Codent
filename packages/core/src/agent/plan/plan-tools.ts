@@ -1,8 +1,8 @@
-import { getBuiltinToolPresentation } from "../tools/presentation/builtin-table.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 
 import type { PlanModeController } from "./plan-mode-controller.js";
-import type { ToolsRecord } from "../tools/runtime/tools-record.js";
+import type { ToolsRecord } from "../tools/catalog/tool-set.js";
 
 /**
  * Tools withheld while planning or ready that do NOT write the workspace, each with its reason.

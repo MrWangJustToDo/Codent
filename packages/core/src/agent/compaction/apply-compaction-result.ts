@@ -6,7 +6,7 @@
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
 import { toError } from "../../utils/errors.js";
-import { cleanupOrphanedToolCache } from "../tools/util/tool-output-cache.js";
+import { cleanupOrphanedToolCache } from "../tools/shared/cache/tool-output-cache.js";
 import { appendChannelMessages } from "../ui/channel-write.js";
 
 import { extractCompactionSummaryBody } from "./compaction-summary.js";

@@ -189,8 +189,8 @@ for (const { name, make, raw } of PROJECTIONS) {
 // the guard. Listed explicitly so the exception stays visible instead of being a silent allowlist.
 const DELEGATES = [
   {
-    file: "agent/tools/read-file-tool.ts",
-    to: "agent/tools/util/format-read-file-result.ts",
+    file: "agent/tools/builtin/fs/read-file-tool.ts",
+    to: "agent/tools/builtin/fs/read/format-result.ts",
     why: "the projection delegates to the shared formatter, which owns its guard",
   },
   {
@@ -217,9 +217,13 @@ const DELEGATES = [
 
   // Both spellings, asserted here so the rule is exercised on any platform (`toPosixPath`'s own
   // contract: the Windows-shaped case is reachable and testable on Linux).
-  assert.equal(isDelegating("agent/tools/read-file-tool.ts"), true, "a POSIX checkout matches the delegating entry");
   assert.equal(
-    isDelegating("agent\\tools\\read-file-tool.ts"),
+    isDelegating("agent/tools/builtin/fs/read-file-tool.ts"),
+    true,
+    "a POSIX checkout matches the delegating entry"
+  );
+  assert.equal(
+    isDelegating("agent\\tools\\builtin\\fs\\read-file-tool.ts"),
     true,
     "so does a Windows checkout — the comparison must fold separators"
   );

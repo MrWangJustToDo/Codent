@@ -152,13 +152,13 @@ export type { ReactiveCompactHost } from "../managers/managed-agent-compact.js";
 // Tool presentation (internal validation exports): pure descriptor helpers over the static
 // built-in table plus a supplied resolver.
 export { describeToolPresentations, presentationFromInfo } from "../agent/tools/presentation/describe.js";
-export { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin-table.js";
+export { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 // The row rule a host branches on — asserted alongside the MCP descriptor it consumes.
 export { keepsCompactRow } from "../agent/tools/presentation/row-rules.js";
 export { AgentToolService } from "../managers/services/agent-tool-service.js";
 export { createTools } from "../agent/tools";
 export { buildToolset } from "../managers/toolset-factory.js";
-export { resolveToolsRecord } from "../agent/tools/runtime";
+export { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 export type {
   AgentRunOutcome,
   AgentRunOutcomeKind,

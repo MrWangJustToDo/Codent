@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES } from "../../agent/tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
 

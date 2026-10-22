@@ -1,9 +1,9 @@
 import { z } from "zod";
 
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
-import { withDuration } from "../tools/util/tool-result.js";
-import { toolOutputBaseSchema } from "../tools/util/types.js";
+import { toolOutputBaseSchema } from "../tools/shared/schemas.js";
+import { withDuration } from "../tools/shared/tool-result.js";
 
 import { isUsableVerification, gateCompletePlanVerification } from "./plan-verification.js";
 

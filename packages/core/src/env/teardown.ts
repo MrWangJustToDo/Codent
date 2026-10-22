@@ -5,7 +5,7 @@
  * layers (background shell jobs live under `agent/tools/`). Importing that state
  * from `env/index.ts` would make the bottom of the stack depend on the top, and the
  * dependency is not hypothetical: ~60 modules under `agent/` import `env/`, so
- * `env → agent/tools/util/command-job-registry` closed a real cycle
+ * `env → agent/tools/builtin/shell/jobs/registry` closed a real cycle
  * (`env → command-job-registry → command-output-log → env`).
  *
  * So the direction is inverted: the owner of the state registers a hook at module

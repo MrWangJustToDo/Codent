@@ -3,7 +3,7 @@
  *
  * Run: pnpm --filter @codent/core run validate:tool-presentation
  *
- * `packages/core/src/agent/tools/presentation/builtin-table.ts` keeps a fallback copy
+ * `packages/core/src/agent/tools/presentation/builtin.ts` keeps a fallback copy
  * of the built-in presentation (a remote host that renders before the snapshot catalog
  * lands, unit tests, third-party tools reusing a built-in name). This script makes sure
  * that copy cannot drift away from the real declarations:
@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
-const TABLE_FILE = join(SRC, "agent/tools/presentation/builtin-table.ts");
+const TABLE_FILE = join(SRC, "agent/tools/presentation/builtin.ts");
 
 /**
  * Names assembled at runtime rather than written as a `name:` literal (the lazy-tool

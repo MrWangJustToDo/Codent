@@ -1,11 +1,11 @@
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
-import { withDuration } from "../tools/util/tool-result.js";
-import { todoOutputSchema } from "../tools/util/types.js";
+import { todoOutputSchema } from "../tools/shared/schemas.js";
+import { withDuration } from "../tools/shared/tool-result.js";
 
 import { todoToolInputSchema } from "./types.js";
 
 import type { TodoManager } from "./todo-manager.js";
-import type { TodoOutput } from "../tools/util/types.js";
+import type { TodoOutput } from "../tools/shared/schemas.js";
 
 /**
  * The `todo` tool manages ONE list, whose plan ownership is not its business.

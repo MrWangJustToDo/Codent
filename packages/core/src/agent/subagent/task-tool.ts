@@ -22,9 +22,9 @@ import { z } from "zod";
 import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
 import { generateId } from "../../utils/generate-id.js";
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
-import { maybeCacheOutput } from "../tools/util/tool-output-cache.js";
-import { withDuration } from "../tools/util/tool-result.js";
-import { toolOutputBaseSchema } from "../tools/util/types.js";
+import { maybeCacheOutput } from "../tools/shared/cache/tool-output-cache.js";
+import { toolOutputBaseSchema } from "../tools/shared/schemas.js";
+import { withDuration } from "../tools/shared/tool-result.js";
 
 import { runSubagent } from "./run-subagent.js";
 import { getTaskPreforkCoordinator } from "./task-prefork.js";

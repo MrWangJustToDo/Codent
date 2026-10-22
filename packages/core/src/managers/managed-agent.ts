@@ -69,9 +69,9 @@ import {
   discardRegisteredPrefork,
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
-import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin-table.js";
+import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
-import { registerStreamingEventBus, registerStreamingHub } from "../agent/tools/util/streaming-callback.js";
+import { registerStreamingEventBus, registerStreamingHub } from "../agent/tools/runtime/streaming.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
@@ -139,11 +139,11 @@ import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
 import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
+import type { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
+import type { ToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
-import type { ToModelOutputFn } from "../agent/tools/runtime/model-output.js";
-import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
+import type { ToModelOutputFn } from "../agent/tools/runtime/contract.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
-import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";

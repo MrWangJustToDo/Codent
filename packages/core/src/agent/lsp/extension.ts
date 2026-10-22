@@ -18,7 +18,7 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { defaultPath } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
 import { truncateText } from "../../utils/text-truncation.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import { FileSync } from "./file-sync.js";
 import { EXT_TO_LANGUAGE, getLanguageIdFromPath } from "./language-map.js";

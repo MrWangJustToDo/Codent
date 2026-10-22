@@ -1,8 +1,8 @@
 import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
-import { getBuiltinToolPresentation } from "./builtin-table.js";
-import { inlineSummaryForOutput } from "./inline-summary.js";
+import { getBuiltinToolPresentation } from "./builtin.js";
+import { inlineSummaryForOutput } from "./format/inline-summary.js";
 
 import type { ToolDisplayPayload } from "./types.js";
 

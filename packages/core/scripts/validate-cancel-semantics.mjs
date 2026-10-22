@@ -217,7 +217,7 @@ assert.ok(
 /** Tools whose own `catch` settles the abort must declare the marker they write. */
 const CATCHER_TOOLS = [
   {
-    file: "agent/tools/run-command-tool.ts",
+    file: "agent/tools/builtin/shell/run-command-tool.ts",
     name: "run_command",
     marker: "cancelled",
     // Its `catch` returns a full result (partial stdout, synthesized exit code) with the marker.
@@ -227,7 +227,7 @@ const CATCHER_TOOLS = [
     ],
   },
   {
-    file: "agent/tools/webfetch-tool.ts",
+    file: "agent/tools/builtin/web/fetch/tool.ts",
     name: "webfetch",
     marker: "cancelled",
     evidence: [
@@ -236,7 +236,7 @@ const CATCHER_TOOLS = [
     ],
   },
   {
-    file: "agent/tools/websearch-tool.ts",
+    file: "agent/tools/builtin/web/search/tool.ts",
     name: "websearch",
     marker: "cancelled",
     evidence: [
@@ -245,7 +245,7 @@ const CATCHER_TOOLS = [
     ],
   },
   {
-    file: "agent/tools/grep-tool.ts",
+    file: "agent/tools/builtin/fs/grep-tool.ts",
     name: "grep",
     marker: "cancelled",
     // The search is the only step the run can stop, so the abort is caught there and reported as a
@@ -257,7 +257,7 @@ const CATCHER_TOOLS = [
     ],
   },
   {
-    file: "agent/tools/glob-tool.ts",
+    file: "agent/tools/builtin/fs/glob-tool.ts",
     name: "glob",
     marker: "cancelled",
     evidence: [
@@ -267,7 +267,7 @@ const CATCHER_TOOLS = [
     ],
   },
   {
-    file: "agent/tools/tree-tool.ts",
+    file: "agent/tools/builtin/fs/tree-tool.ts",
     name: "tree",
     marker: "cancelled",
     // Both halves of this tool can run long: the spawn, and the native walk that replaces it.

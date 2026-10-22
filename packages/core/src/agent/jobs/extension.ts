@@ -31,7 +31,7 @@
  *   `get_command_output` / the job's log file.
  */
 
-import { formatDuration } from "../tools/presentation/format.js";
+import { formatDuration } from "../tools/presentation/format/format.js";
 
 import type { SessionJobSummary } from "../../runtime-types/session-payloads.js";
 import type { ExtensionAPI } from "../extension/types.js";

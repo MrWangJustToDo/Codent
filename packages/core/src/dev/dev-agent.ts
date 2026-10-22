@@ -39,7 +39,7 @@ export {
   type RunErrorSignals,
 } from "../agent/stream/stream-errors.js";
 export { AgentConfigSchema } from "../managers/agent-types.js";
-export { formatReadFileToolResult } from "../agent/tools/util/format-read-file-result.js";
+export { formatReadFileToolResult } from "../agent/tools/builtin/fs/read/format-result.js";
 // Code-mode's `execute_typescript` projection: a script that returns a media result from an
 // `external_*` binding must reach the model as multimodal parts, not base64 text.
 export { projectCodeModeModelOutput } from "../agent/code-mode/model-output.js";
@@ -55,7 +55,7 @@ export {
   resolveEditMatch,
   START_LINE_TOLERANCE,
   unescapeCommonEscapes,
-} from "../agent/tools/util/find-edit-match.js";
+} from "../agent/tools/builtin/fs/edit/find-edit-match.js";
 export { BEGIN_SUMMARY_TOOL_NAME } from "../agent/subagent/begin-summary-tool.js";
 export { buildExploreSystemPrompt, SUBAGENT_EXPLORE_SYSTEM_PROMPT } from "../agent/subagent/explore-prompt.js";
 export {
@@ -83,9 +83,9 @@ export {
   buildTimedOutCommandResult,
   commandTimeoutNotice,
   resolveDefaultCommandTimeout,
-} from "../agent/tools/run-command-tool.js";
-export { createWebfetchTool } from "../agent/tools/webfetch-tool.js";
-export { createWebsearchTool } from "../agent/tools/websearch-tool.js";
+} from "../agent/tools/builtin/shell/run-command-tool.js";
+export { createWebfetchTool } from "../agent/tools/builtin/web/fetch/tool.js";
+export { createWebsearchTool } from "../agent/tools/builtin/web/search/tool.js";
 export { truncateSummary } from "../agent/subagent/subagent-output.js";
 export {
   applySubagentFailureNotice,
@@ -149,7 +149,7 @@ export { extractFileOpsFromMessages, formatFileOperations } from "../agent/compa
 export { buildDefaultSystemPrompt } from "../agent/prompt/default-prompt.js";
 export { AgentRuntime } from "../runtime/agent-runtime.js";
 export { CodentAgent } from "../runtime/codent-agent.js";
-export { createListFileTool } from "../agent/tools/list-file-tool.js";
+export { createListFileTool } from "../agent/tools/builtin/fs/list-file-tool.js";
 export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
 export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache } from "../agent/compaction";
 export {
@@ -194,12 +194,12 @@ export {
   PROVIDER_REGISTRY,
   resetWebsearchProviders,
   withTimeoutAbort,
-} from "../agent/tools/websearch";
-export { braveProvider } from "../agent/tools/websearch/providers/brave.js";
-export { tavilyProvider } from "../agent/tools/websearch/providers/tavily.js";
-export { parseParallelResults } from "../agent/tools/websearch/providers/parallel.js";
-export { parseExaResults } from "../agent/tools/websearch/providers/exa.js";
-export { parseMcpResponse } from "../agent/tools/websearch/providers/mcp-client.js";
+} from "../agent/tools/builtin/web/search/index.js";
+export { braveProvider } from "../agent/tools/builtin/web/search/providers/brave.js";
+export { tavilyProvider } from "../agent/tools/builtin/web/search/providers/tavily.js";
+export { parseParallelResults } from "../agent/tools/builtin/web/search/providers/parallel.js";
+export { parseExaResults } from "../agent/tools/builtin/web/search/providers/exa.js";
+export { parseMcpResponse } from "../agent/tools/builtin/web/search/providers/mcp-client.js";
 // models.json global.toolConfig normalization (internal validation exports).
 export {
   normalizeGlobalToolConfig,
@@ -288,10 +288,10 @@ export type {
 } from "../agent/prompt/instruction-files.js";
 export { loadAgentDoc, formatAgentDocResult } from "../agent/prompt/agent-doc-loader.js";
 export type { AgentDocLoadResult, AgentDocLoaderConfig } from "../agent/prompt/agent-doc-loader.js";
-export { toolsToArray } from "../agent/tools/runtime/tools-record.js";
+export { toolsToArray } from "../agent/tools/catalog/tool-set.js";
 export { defineServerTool, getToolMetadata } from "../agent/tools/runtime/define-tool.js";
-export { createSessionSearchTool, sessionSearchOutputSchema } from "../agent/tools/session-search-tool.js";
-export { createSessionReadTool, sessionReadOutputSchema } from "../agent/tools/session-read-tool.js";
+export { createSessionSearchTool, sessionSearchOutputSchema } from "../agent/tools/builtin/session/search-tool.js";
+export { createSessionReadTool, sessionReadOutputSchema } from "../agent/tools/builtin/session/read-tool.js";
 export {
   DEFAULT_SEARCH_ROLES,
   MAX_MATCHES_COLLECTED,
@@ -302,7 +302,7 @@ export {
   readSessionMessageWindow,
   searchHistory,
   sessionExists,
-} from "../agent/tools/session-search/session-reader.js";
+} from "../agent/tools/builtin/session/reader.js";
 export {
   DEFAULT_REFRESH_MESSAGE_THRESHOLD,
   SUBAGENT_ALLOWED_KINDS,
@@ -361,15 +361,15 @@ export {
   collectPendingAskUser,
 } from "../agent/stream/tool-phase-utils.js";
 export { isStaleActiveRunStatus, shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
-export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime";
-export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/tool-names.js";
+export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime/tool-sets.js";
+export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/catalog/tool-names.js";
 export {
   clearStreamingOutput,
   emitStreamingChunk,
   registerStreamingEventBus,
   resetStreamingCallbacksForTests,
   unregisterStreamingEventBus,
-} from "../agent/tools/util/streaming-callback.js";
+} from "../agent/tools/runtime/streaming.js";
 export {
   AGENT_STREAM_SNAPSHOT_LINE_CAP,
   AgentStreamHub,
@@ -382,18 +382,18 @@ export {
   agentStreamKey,
 } from "../agent/stream-hub";
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
-export { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
+export { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
 export type {
   CommandJobChangeListener,
   CommandJobRecord,
   CommandJobPollResult,
   CommandJobSummary,
-} from "../agent/tools/util/command-job-registry.js";
+} from "../agent/tools/builtin/shell/jobs/registry.js";
 export {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
   sweepStaleJobLogs,
-} from "../agent/tools/util/command-output-log.js";
+} from "../agent/tools/builtin/shell/jobs/output-log.js";
 export {
   CACHE_THRESHOLD,
   TOOL_OUTPUT_CACHE_DIR,
@@ -403,7 +403,7 @@ export {
   maybeCacheOutput,
   resetToolOutputSweepForTesting,
   sweepStaleToolOutput,
-} from "../agent/tools/util/tool-output-cache.js";
+} from "../agent/tools/shared/cache/tool-output-cache.js";
 export {
   PlanModeController,
   cleanStepText,

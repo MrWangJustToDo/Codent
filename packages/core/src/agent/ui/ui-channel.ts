@@ -20,7 +20,7 @@ import { shouldSuppressReplayedToolChunk } from "../stream/suppress-replayed-too
 import { shouldSuppressStaleTextChunk } from "../stream/suppress-stale-text-chunks.js";
 import { agentStreamKey, type AgentStreamHub } from "../stream-hub";
 import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
-import { getBuiltinToolPresentation } from "../tools/presentation/builtin-table.js";
+import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 import { computeToolDisplay } from "../tools/presentation/compute-display.js";
 
 import type { AgentEventBus } from "../agent-event-bus";

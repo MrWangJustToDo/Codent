@@ -6,7 +6,8 @@ import {
 import { AgentRunner } from "../agent/runner/agent-runner.js";
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
 import { peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
-import { resolveToolsRecord, SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime";
+import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
+import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime/tool-sets.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
 import { DEFAULT_BASE_URLS } from "../models/config/model-config.js";

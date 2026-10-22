@@ -17,7 +17,7 @@ import type { PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamEvent, AgentStreamSnapshot } from "../agent/stream-hub/types.js";
 import type { TodoItem } from "../agent/todo/types.js";
 import type { ToolPresentation, ToolPresentationInfo } from "../agent/tools/presentation/types.js";
-import type { StreamingChunk } from "../agent/tools/util/streaming-callback.js";
+import type { StreamingChunk } from "../agent/tools/runtime/streaming.js";
 import type { QueuedMessagesSnapshot } from "../managers/controllers/agent-chat-controller.js";
 import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
 import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js";

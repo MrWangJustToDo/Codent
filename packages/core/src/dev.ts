@@ -8,26 +8,26 @@ export * from "./dev/dev-managers.js";
 export * from "./dev/dev-models.js";
 
 // Command safety (internal validation exports — not part of public API)
-export { analyzeCommand, createAnalysisContext } from "./agent/tools/command-safety/command-analyzer.js";
+export { analyzeCommand, createAnalysisContext } from "./agent/tools/builtin/shell/safety/command-analyzer.js";
 export { isAbortError, isTimeoutError } from "./runtime-types/abort.js";
-export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/command-safety/command-parser.js";
-export { tokenizeCommandString } from "./agent/tools/command-safety/command-tokenizer.js";
-export { walkTree, formatAsTree } from "./agent/tools/tree-tool.js";
+export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/builtin/shell/safety/command-parser.js";
+export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
+export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";
 // Tool factories for behavioural validators. These live here (not in the published entry) so a
 // validator can exercise the real tool code with a stubbed CoreEnv — the alternative is testing
 // a replica, which is how a semantic regression (a deleted fallback rule) went unseen while the
 // regex-based shell-ism check stayed green.
-export { createGlobTool } from "./agent/tools/glob-tool.js";
-export { createGrepTool } from "./agent/tools/grep-tool.js";
-export { createReadFileTool } from "./agent/tools/read-file-tool.js";
-export { createTreeTool } from "./agent/tools/tree-tool.js";
+export { createGlobTool } from "./agent/tools/builtin/fs/glob-tool.js";
+export { createGrepTool } from "./agent/tools/builtin/fs/grep-tool.js";
+export { createReadFileTool } from "./agent/tools/builtin/fs/read-file-tool.js";
+export { createTreeTool } from "./agent/tools/builtin/fs/tree-tool.js";
 // The remaining projection-declaring factories: `validate:model-output-idempotency` drives every
 // registered projection, and it can only cover the ones this surface can create.
-export { createGetCommandOutputTool } from "./agent/tools/get-command-output-tool.js";
-export { createKillCommandTool } from "./agent/tools/kill-command-tool.js";
-export { createWriteFileTool } from "./agent/tools/write-file-tool.js";
-export { createEditFileTool } from "./agent/tools/edit-file-tool.js";
-export { createDeleteFileTool } from "./agent/tools/delete-file-tool.js";
+export { createGetCommandOutputTool } from "./agent/tools/builtin/shell/get-command-output-tool.js";
+export { createKillCommandTool } from "./agent/tools/builtin/shell/kill-command-tool.js";
+export { createWriteFileTool } from "./agent/tools/builtin/fs/write-file-tool.js";
+export { createEditFileTool } from "./agent/tools/builtin/fs/edit-file-tool.js";
+export { createDeleteFileTool } from "./agent/tools/builtin/fs/delete-file-tool.js";
 export { createBeginSummaryTool } from "./agent/subagent/begin-summary-tool.js";
 export {
   createSubagentTools,
@@ -37,19 +37,19 @@ export {
 export { isProjectedModelContent } from "./agent/tools/runtime/projected-model-content.js";
 // The per-file mutation queue leaks if it never drains: `validate:file-mutation-queue` reads its
 // size to assert it does, which needs the module (not a replica of it).
-export { fileMutationQueueSize, withFileMutationQueue } from "./agent/tools/util/file-mutation-queue.js";
+export { fileMutationQueueSize, withFileMutationQueue } from "./agent/tools/builtin/fs/edit/mutation-queue.js";
 // The declaration table the presentation registry falls back to: the boundary validator reads it as
 // the declared categories (the definition sites are pinned to it by `validate:tool-presentation`).
-export { BUILTIN_PRESENTATION } from "./agent/tools/presentation/builtin-table.js";
-export { formatToolOutput } from "./agent/tools/presentation/output-format.js";
+export { BUILTIN_PRESENTATION } from "./agent/tools/presentation/builtin.js";
+export { formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
 export { classifyServerFailure } from "./agent/lsp/extension.js";
-export { execArgsCapture, canExecArgs } from "./agent/tools/util/exec-args.js";
+export { execArgsCapture, canExecArgs } from "./agent/tools/builtin/shell/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";
 export {
   evaluateCommandApproval,
   SUBAGENT_DENY_MESSAGE,
-} from "./agent/tools/command-safety/command-approval-policy.js";
-export { commandPrefix, normalizedCommand } from "./agent/tools/command-safety/command-arity.js";
+} from "./agent/tools/builtin/shell/safety/command-approval-policy.js";
+export { commandPrefix, normalizedCommand } from "./agent/tools/builtin/shell/safety/command-arity.js";
 export { defaultPath } from "./env";
 
 // Root-level modules
@@ -92,7 +92,7 @@ export { LANGUAGE_TO_GRAMMAR } from "./agent/lsp/tree-sitter/parser-manager.js";
 // ============================================================================
 // Already reachable through the published entry (`formatDuration`); re-exported here so every
 // validator import stays on `dist/dev.mjs`.
-export { formatDuration } from "./agent/tools/presentation/format.js";
+export { formatDuration } from "./agent/tools/presentation/format/format.js";
 // ============================================================================
 // Built-in Skills extension (internal validation exports — not part of public API)
 // ============================================================================

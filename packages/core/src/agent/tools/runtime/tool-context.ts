@@ -8,8 +8,8 @@
 import type { ResolvedCoreEnv } from "../../../env";
 import type { PlanModeController } from "../../plan/plan-mode-controller.js";
 import type { TodoManager } from "../../todo";
+import type { CommandJobRegistry } from "../builtin/shell/jobs/registry.js";
 import type { AgentToolConfig } from "../tool-config.js";
-import type { CommandJobRegistry } from "../util/command-job-registry.js";
 
 export interface AgentToolContext {
   agentId: string;

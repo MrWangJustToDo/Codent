@@ -281,7 +281,7 @@ function extContext() {
 {
   // The helper moved out of the websearch provider folder — websearch is a consumer, not the owner.
   assert.throws(
-    () => readFileSync(`${SRC}/agent/tools/websearch/abort-timeout.ts`, "utf8"),
+    () => readFileSync(`${SRC}/agent/tools/builtin/web/search/abort-timeout.ts`, "utf8"),
     "the websearch-local abort-timeout module is gone"
   );
 

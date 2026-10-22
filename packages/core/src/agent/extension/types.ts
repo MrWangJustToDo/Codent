@@ -6,7 +6,7 @@ import type { MultimodalPartType } from "../../models/adapter/capability-message
 import type { ModelCapability } from "../../models/types.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
-import type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator } from "../tools/runtime/model-output.js";
+import type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator } from "../tools/runtime/contract.js";
 import type { ModelMessage, SchemaInput } from "@tanstack/ai";
 
 export type { ExtensionZod } from "./extension-zod.js";

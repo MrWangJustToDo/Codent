@@ -2,17 +2,17 @@
  * Read-only tool set for exploration subagents.
  */
 
-import { createGlobTool } from "../tools/glob-tool.js";
-import { createGrepTool } from "../tools/grep-tool.js";
-import { createListFileTool } from "../tools/list-file-tool.js";
-import { createReadFileTool } from "../tools/read-file-tool.js";
-import { createRunCommandTool } from "../tools/run-command-tool.js";
+import { createGlobTool } from "../tools/builtin/fs/glob-tool.js";
+import { createGrepTool } from "../tools/builtin/fs/grep-tool.js";
+import { createListFileTool } from "../tools/builtin/fs/list-file-tool.js";
+import { createReadFileTool } from "../tools/builtin/fs/read-file-tool.js";
+import { createTreeTool } from "../tools/builtin/fs/tree-tool.js";
+import { createRunCommandTool } from "../tools/builtin/shell/run-command-tool.js";
+import { createWebfetchTool } from "../tools/builtin/web/fetch/tool.js";
+import { createWebsearchTool } from "../tools/builtin/web/search/tool.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { type ToolsRecord } from "../tools/catalog/tool-set.js";
 import { type AgentToolContext } from "../tools/runtime/tool-context.js";
-import { type ToolsRecord } from "../tools/runtime/tools-record.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
-import { createTreeTool } from "../tools/tree-tool.js";
-import { createWebfetchTool } from "../tools/webfetch-tool.js";
-import { createWebsearchTool } from "../tools/websearch-tool.js";
 
 import { BEGIN_SUMMARY_TOOL_NAME, createBeginSummaryTool } from "./begin-summary-tool.js";
 

@@ -98,9 +98,12 @@ const hits = [
   rg("env\\s*\\?:\\s*Record", ["**/models/**"]),
   rg("parseModelInfoFromEnv", ["**/models/**", "**/index.ts"]),
   rg("MODEL_ENV_KEYS", ["**/models/**", "**/index.ts"]),
-  rg("(BRAVE|EXA|PARALLEL|TAVILY)_API_KEY", ["**/agent/tools/websearch/**", "**/agent/tools/websearch-tool.ts"]),
-  rg("WEBSEARCH_PROVIDER", ["**/agent/tools/websearch/**", "**/agent/tools/websearch-tool.ts"]),
-  rg("getEnv\\(\\)\\.getEnv\\(\\)", ["**/agent/tools/websearch/**"]),
+  rg("(BRAVE|EXA|PARALLEL|TAVILY)_API_KEY", [
+    "**/agent/tools/builtin/web/search/**",
+    "**/agent/tools/builtin/web/search/tool.ts",
+  ]),
+  rg("WEBSEARCH_PROVIDER", ["**/agent/tools/builtin/web/search/**", "**/agent/tools/builtin/web/search/tool.ts"]),
+  rg("getEnv\\(\\)\\.getEnv\\(\\)", ["**/agent/tools/builtin/web/search/**"]),
   rg("env:\\s*process\\.env", ["**/models/**"]),
 ]
   .filter(Boolean)

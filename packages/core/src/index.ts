@@ -280,8 +280,8 @@ export {
 } from "./agent/commands/arguments.js";
 export { decodeModelChoice, encodeModelChoice } from "./agent/commands/arguments.js";
 export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/session-reference.js";
-export { askUserOutputSchema } from "./agent/tools/ask-user-tool.js";
-export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/util/ask-user-output.js";
+export { askUserOutputSchema } from "./agent/tools/builtin/interaction/ask-user-tool.js";
+export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/builtin/interaction/ask-user-output.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS } from "./managers/agent-types.js";
 export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent";
@@ -291,13 +291,13 @@ export { resolveSummarizationBudget } from "./agent/compaction";
 // UI utilities
 // ============================================================================
 
-export { previewEdit, type PreviewEditResult } from "./agent/tools/util/preview-edit.js";
+export { previewEdit, type PreviewEditResult } from "./agent/tools/builtin/fs/edit/preview-edit.js";
 export { describeToolPresentations, presentationFromInfo } from "./agent/tools/presentation/describe.js";
-export { getBuiltinToolPresentation } from "./agent/tools/presentation/builtin-table.js";
+export { getBuiltinToolPresentation } from "./agent/tools/presentation/builtin.js";
 export { keepsCompactRow } from "./agent/tools/presentation/row-rules.js";
 export { computeToolDisplay } from "./agent/tools/presentation/compute-display.js";
-export { formatDuration } from "./agent/tools/presentation/format.js";
-export { normalizeOutputNewlines, splitStreamingLines } from "./agent/tools/presentation/lines.js";
+export { formatDuration } from "./agent/tools/presentation/format/format.js";
+export { normalizeOutputNewlines, splitStreamingLines } from "./agent/tools/presentation/format/lines.js";
 export {
   buildLineWindow,
   hiddenLinesIndicator,
@@ -332,7 +332,7 @@ export {
   isToolExecuting,
   parseToolInput,
   type UiToolState,
-} from "./agent/tools/presentation/tool-state.js";
+} from "./agent/tools/presentation/state.js";
 export {
   isAbortError,
   isTimeoutError,
@@ -353,10 +353,10 @@ export {
   getCompactOutput,
   getDurationMs,
   getInlineSummary,
-} from "./agent/tools/presentation/inline-summary.js";
-export { formatToolArgs, formatToolOutput } from "./agent/tools/presentation/output-format.js";
-export { formatToolInput } from "./agent/tools/presentation/input-format.js";
-export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "./agent/tools/tool-names.js";
+} from "./agent/tools/presentation/format/inline-summary.js";
+export { formatToolArgs, formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
+export { formatToolInput } from "./agent/tools/presentation/format/input-format.js";
+export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "./agent/tools/catalog/tool-names.js";
 export { BEGIN_SUMMARY_TOOL_NAME } from "./agent/subagent/begin-summary-tool.js";
 
 // ============================================================================
@@ -373,8 +373,8 @@ export type {
   RunCommandOutput,
   TodoOutput,
   WriteFileOutput,
-} from "./agent/tools/util/types.js";
-export type { ReadFileOutput } from "./agent/tools/read-file-tool.js";
+} from "./agent/tools/shared/schemas.js";
+export type { ReadFileOutput } from "./agent/tools/builtin/fs/read-file-tool.js";
 export type { TaskOutput } from "./agent/subagent/task-tool.js";
 
 // ============================================================================

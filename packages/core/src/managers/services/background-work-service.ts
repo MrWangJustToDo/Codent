@@ -11,14 +11,14 @@
  * disk session id; both the env and the owner id are getters for that reason.
  */
 
-import { CommandJobRegistry } from "../../agent/tools/util/command-job-registry.js";
+import { CommandJobRegistry } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import {
   collectRunCommandToolCallIds,
   formatBackgroundJobsSection,
   TURN_CONTEXT_KINDS,
 } from "../../agent/turn-context";
 
-import type { CommandJobSummary, CompletedCommandJob } from "../../agent/tools/util/command-job-registry.js";
+import type { CommandJobSummary, CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { ModelMessage } from "@tanstack/ai";

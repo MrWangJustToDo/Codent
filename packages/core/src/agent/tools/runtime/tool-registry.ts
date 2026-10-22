@@ -9,9 +9,9 @@ import { INCUMBENT_RANK, compareDispatchRank } from "../../extension/dispatch-or
 
 import { getToolMetadata } from "./define-tool.js";
 
-import type { ToModelOutputFn } from "./model-output.js";
-import type { ToolsRecord } from "./tools-record.js";
+import type { ToModelOutputFn } from "./contract.js";
 import type { DispatchRank } from "../../extension/dispatch-order.js";
+import type { ToolsRecord } from "../catalog/tool-set.js";
 import type { ToolPresentation } from "../presentation/types.js";
 
 export interface AgentToolEntry {

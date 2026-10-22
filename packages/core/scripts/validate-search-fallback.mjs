@@ -118,7 +118,7 @@ check(
 // got a content search. (That mismatch is what surfaced the bare-number case below: the first probe
 // of `output_mode` never reached `parseCountLine` at all.)
 {
-  const grepSource = readFileSync(new URL("../src/agent/tools/grep-tool.ts", import.meta.url), "utf8");
+  const grepSource = readFileSync(new URL("../src/agent/tools/builtin/fs/grep-tool.ts", import.meta.url), "utf8");
   check(
     "the grep description names the schema key `outputMode`, not `output_mode`",
     !/output_mode/.test(grepSource),

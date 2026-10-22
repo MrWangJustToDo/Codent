@@ -9,7 +9,7 @@
  */
 
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
-import { unregisterStreamingEventBus } from "../agent/tools/util/streaming-callback.js";
+import { unregisterStreamingEventBus } from "../agent/tools/runtime/streaming.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { SessionOwnership } from "./session-ownership.js";

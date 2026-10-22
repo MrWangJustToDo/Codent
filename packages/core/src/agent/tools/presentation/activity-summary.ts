@@ -1,10 +1,10 @@
 import { truncateText } from "../../../utils/text-truncation.js";
 
-import { getBuiltinToolPresentation } from "./builtin-table.js";
-import { formatDuration } from "./format.js";
-import { DURATION_THRESHOLD_MS, getDurationMs } from "./inline-summary.js";
+import { getBuiltinToolPresentation } from "./builtin.js";
+import { formatDuration } from "./format/format.js";
+import { DURATION_THRESHOLD_MS, getDurationMs } from "./format/inline-summary.js";
 import { keepsCompactRow } from "./row-rules.js";
-import { getUiToolState, parseToolInput } from "./tool-state.js";
+import { getUiToolState, parseToolInput } from "./state.js";
 
 import type { ToolDisplayPayload, ToolPresentation } from "./types.js";
 import type { ToolCallPart } from "@tanstack/ai";

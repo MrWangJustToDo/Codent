@@ -447,7 +447,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   plus its own message text. A host that re-parses the raw string is how ACP's `/mode execute` became
   `mode.toggle` while the catalog advertised `execute`. `/resume`'s id-or-name rule is
   `resolveSessionRef` (`agent-session/session-reference.ts`), and `ask_user` result assembly (including
-  the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/util/ask-user-output.ts`).
+  the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/builtin/interaction/ask-user-output.ts`).
   Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:ask-user-output`.
 - Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
   `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
@@ -891,7 +891,12 @@ packages/core/src/agent/
 │   ├── task-run-state.ts      # Per-task phase machine (running → summary | limit)
 │   ├── task-tool.ts           # createTaskTool() for parent agents
 │   └── index.ts
-├── tools/              # Universal tools (fs/shell/web) + runtime glue
+├── tools/              # Tool subsystem
+│   ├── catalog/         # tool names, base-tool assembly, ToolsRecord/tool-set
+│   ├── runtime/         # define/contract, per-agent registry, context, streaming
+│   ├── builtin/         # fs/ shell/ web/ session/ interaction/ implementations
+│   ├── shared/          # cross-tool helpers, schemas, result/cache utilities
+│   └── presentation/    # descriptors, row rules, display + format/ renderers
 ```
 
 ## Extension Point: Message Transformers
@@ -1240,7 +1245,7 @@ packages/
 │   │   ├── subagent/                  # Subagent spawning + task tool (+ prefork / phase state)
 │   │   ├── stream-hub/                # AgentStreamHub (command / task / compact)
 │   │   ├── todo/                      # Todo tracking + todo tool
-│   │   ├── tools/                     # Universal AI tools (fs, shell, web) + runtime/util
+│   │   ├── tools/                     # Tool subsystem: catalog / runtime / builtin / shared / presentation
 │   │   ├── turn-context/              # Per-turn dynamic context (<ctx kind=...> payload)
 │   │   ├── ui/                        # AgentUIChannel (chat / subagent preview) + channel-write
 │   │   └── usage/                     # Global usage history + per-call pricing records

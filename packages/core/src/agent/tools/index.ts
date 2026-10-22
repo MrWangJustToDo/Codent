@@ -1,20 +1,21 @@
-export { createTools, type Tools } from "./create-tools.js";
+export { createTools, type Tools } from "./catalog/create-base-tools.js";
+export { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "./catalog/tool-names.js";
 
-export * from "./delete-file-tool.js";
-export * from "./edit-file-tool.js";
-export * from "./glob-tool.js";
-export * from "./grep-tool.js";
-export * from "./list-file-tool.js";
-export * from "./read-file-tool.js";
-export * from "./run-command-tool.js";
-export * from "./get-command-output-tool.js";
-export * from "./kill-command-tool.js";
-
-export * from "./util";
-export * from "./tree-tool.js";
-export * from "./webfetch-tool.js";
-export * from "./websearch-tool.js";
-export * from "./write-file-tool.js";
-export * from "./ask-user-tool.js";
+export * from "./builtin/fs/delete-file-tool.js";
+export * from "./builtin/fs/edit-file-tool.js";
+export * from "./builtin/fs/glob-tool.js";
+export * from "./builtin/fs/grep-tool.js";
+export * from "./builtin/fs/list-file-tool.js";
+export * from "./builtin/fs/read-file-tool.js";
+export * from "./builtin/fs/tree-tool.js";
+export * from "./builtin/fs/write-file-tool.js";
+export * from "./builtin/interaction/ask-user-tool.js";
+export * from "./builtin/session/read-tool.js";
+export * from "./builtin/session/search-tool.js";
+export * from "./builtin/shell/get-command-output-tool.js";
+export * from "./builtin/shell/kill-command-tool.js";
+export * from "./builtin/shell/run-command-tool.js";
+export * from "./builtin/web/fetch/tool.js";
+export * from "./builtin/web/search/tool.js";
 
 export * from "./runtime";

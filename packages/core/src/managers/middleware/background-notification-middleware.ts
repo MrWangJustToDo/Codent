@@ -1,11 +1,11 @@
-import { truncateString } from "../../agent/tools/util/output-limits.js";
+import { truncateString } from "../../agent/tools/shared/output-limits.js";
 import { formatContextSectionUserContent } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { CommandJobRegistry, CompletedCommandJob } from "../../agent/tools/util/command-job-registry.js";
+import type { CommandJobRegistry, CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 

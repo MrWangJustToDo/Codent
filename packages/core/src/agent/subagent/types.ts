@@ -5,7 +5,7 @@
 import type { SubagentStopReason } from "./subagent-stop-reason.js";
 import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
 import type { AgentManager } from "../../runtime-types/hosts.js";
-import type { ToolsRecord } from "../tools/runtime/tools-record.js";
+import type { ToolsRecord } from "../tools/catalog/tool-set.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================

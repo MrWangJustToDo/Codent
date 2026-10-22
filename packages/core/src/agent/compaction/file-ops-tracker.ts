@@ -6,7 +6,7 @@
  * rely on memory to list which files were involved.
  */
 
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import type { ModelMessage } from "@tanstack/ai";
 

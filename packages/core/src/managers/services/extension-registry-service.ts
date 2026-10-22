@@ -17,7 +17,7 @@ import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
 import type { McpManager } from "../../agent/mcp/manager.js";
 import type { SkillRegistry } from "../../agent/skills";
 import type { TodoManager } from "../../agent/todo";
-import type { ToolsRecord } from "../../agent/tools/runtime/tools-record.js";
+import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 
 /** Callbacks the caller (ManagedAgent) supplies for tool registration. */
 export interface ExtensionToolRegistrationContext {

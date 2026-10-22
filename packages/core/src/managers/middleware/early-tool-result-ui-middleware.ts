@@ -7,7 +7,7 @@
  * finish — especially visible for long-running `task` tools.
  */
 
-import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin-table.js";
+import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin.js";
 import { computeToolDisplay } from "../../agent/tools/presentation/compute-display.js";
 import { errorMessage } from "../../utils/errors.js";
 

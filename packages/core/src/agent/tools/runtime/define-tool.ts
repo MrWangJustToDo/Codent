@@ -1,9 +1,9 @@
 import { toolDefinition, type InferSchemaType, type SchemaInput, type ServerTool, type ClientTool } from "@tanstack/ai";
 
 import { getAmbientEnv } from "../../../env/ambient.js";
-import { withTimeoutAbort } from "../util/abort-timeout.js";
+import { withTimeoutAbort } from "../shared/abort-timeout.js";
 
-import type { ModelToolContent, ToModelOutputContext, ToModelOutputFn } from "./model-output.js";
+import type { ModelToolContent, ToModelOutputContext, ToModelOutputFn } from "./contract.js";
 import type { ResolvedCoreEnv } from "../../../env";
 import type { ToolRunContext } from "../../runner/run-context.js";
 import type { ToolPresentation } from "../presentation/types.js";

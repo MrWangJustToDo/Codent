@@ -108,7 +108,7 @@ check("no placeholder module names", () => {
 
 const TOOLS_ROOT = join(srcRoot, "agent/tools");
 /** Root files that are not `*-tool.ts` but still belong to the tool layer. */
-const TOOLS_ROOT_ALLOWED = new Set(["create-tools.ts", "tool-config.ts", "tool-names.ts", "index.ts"]);
+const TOOLS_ROOT_ALLOWED = new Set(["tool-config.ts", "index.ts"]);
 
 check("agent/tools root holds only tool factories and the assembler", () => {
   return files
@@ -117,7 +117,7 @@ check("agent/tools root holds only tool factories and the assembler", () => {
     .filter((name) => !name.endsWith("-tool.ts") && !TOOLS_ROOT_ALLOWED.has(name))
     .map(
       (name) =>
-        `agent/tools/${name} — a single-tool helper belongs under tools/util/ (or its domain), not beside the factories`
+        `agent/tools/${name} — a single-tool helper belongs under tools/shared/ (or its domain), not beside the factories`
     );
 });
 

@@ -429,7 +429,7 @@ try {
     );
     assert.equal(resumed.messages[0].index, spilled.returned, "…and resuming there continues without a gap");
 
-    const readSource = readFileSync(`${SRC}/agent/tools/session-read-tool.ts`, "utf8");
+    const readSource = readFileSync(`${SRC}/agent/tools/builtin/session/read-tool.ts`, "utf8");
     assert.ok(
       !/advanced by/.test(readSource),
       "the description must not tell the model to advance by `limit` — the page can stop early"
@@ -470,7 +470,11 @@ try {
     assert.ok(!subagentNames.includes("session_search"), "subagents do not get session_search");
     assert.ok(!subagentNames.includes("session_read"), "subagents do not get session_read");
 
-    for (const file of ["session-search-tool.ts", "session-read-tool.ts", "session-search/session-reader.ts"]) {
+    for (const file of [
+      "builtin/session/search-tool.ts",
+      "builtin/session/read-tool.ts",
+      "builtin/session/reader.ts",
+    ]) {
       const source = readFileSync(`${SRC}/agent/tools/${file}`, "utf8");
       assert.ok(!/\.writeFile\(|\.mkdir\(|\.remove\(/.test(source), `${file} performs no filesystem write`);
     }

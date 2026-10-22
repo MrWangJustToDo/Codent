@@ -148,7 +148,10 @@ function makeEnv() {
 // is how "the full output is on disk" came to look implemented while the cache wrote a truncated tail.
 
 {
-  const source = readFileSync(new URL("../src/agent/tools/util/output-accumulator.ts", import.meta.url), "utf8");
+  const source = readFileSync(
+    new URL("../src/agent/tools/builtin/shell/jobs/output-accumulator.ts", import.meta.url),
+    "utf8"
+  );
   for (const gone of ["tempFilePath", "tempFilePrefix", "getTempFilePath", "persistIfTruncated", "fullOutputPath"]) {
     assert.ok(!source.includes(gone), `the dead \`${gone}\` machinery is gone from the accumulator`);
   }

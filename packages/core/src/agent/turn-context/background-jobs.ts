@@ -12,7 +12,7 @@
  */
 
 import { truncateText } from "../../utils/text-truncation.js";
-import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 export interface BackgroundJobContextRow {
   jobId: string;

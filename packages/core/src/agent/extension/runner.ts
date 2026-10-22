@@ -41,7 +41,7 @@ import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
-import type { ToModelOutputDecorator } from "../tools/runtime/model-output.js";
+import type { ToModelOutputDecorator } from "../tools/runtime/contract.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================

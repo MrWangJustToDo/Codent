@@ -1,7 +1,7 @@
 /**
  * Thin re-exports of the core-owned tool-part helpers, plus the app's own presentation predicates.
  *
- * The implementation moved to `@codent/core` (`agent/tools/presentation/tool-state.ts`)
+ * The implementation moved to `@codent/core` (`agent/tools/presentation/state.ts`)
  * so hosts that render off-process share exactly one implementation; this module keeps
  * the app's public surface stable.
  */

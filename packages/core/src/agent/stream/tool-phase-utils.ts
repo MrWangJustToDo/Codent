@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
 // The classification lives with the name registry: the tool set and this predicate must agree on it.

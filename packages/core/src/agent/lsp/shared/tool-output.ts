@@ -1,6 +1,6 @@
-import { BUILTIN_TOOL_NAMES } from "../../tools/tool-names.js";
+import { BUILTIN_TOOL_NAMES } from "../../tools/catalog/tool-names.js";
 
-import type { ModelToolContent, ToModelOutputContext } from "../../tools/runtime/model-output.js";
+import type { ModelToolContent, ToModelOutputContext } from "../../tools/runtime/contract.js";
 
 /** Extension/LSP tools that return `{ text: string, ... }` for the model. */
 export function lspTextToModelOutput(ctx: ToModelOutputContext): ModelToolContent {
