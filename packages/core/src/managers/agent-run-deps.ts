@@ -15,7 +15,7 @@ import type { ExtensionRunner } from "../agent/extension/runner.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamHub } from "../agent/stream-hub";
 import type { TodoManager } from "../agent/todo";
-import type { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
+import type { AgentCommandService } from "./services/agent-command-service.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
@@ -66,7 +66,7 @@ export interface AgentRunDeps {
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
   /** The agent's background-job registry (drained by the notification middleware). */
-  getCommandJobRegistry: () => CommandJobRegistry;
+  getCommandService: () => AgentCommandService;
   getCompactionConfig: () => CompactionConfig | null;
   getModelInfo: () => ModelInfo | null;
   getToolCompactCache: () => ToolCompactCache;
@@ -142,7 +142,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
-    getCommandJobRegistry: () => managed.getCommandJobRegistry(),
+    getCommandService: () => managed.getCommandService(),
     getCompactionConfig: () => managed.getCompactionConfig(),
     getModelInfo: () => managed.getModelInfo(),
     getToolCompactCache: () => managed.getToolCompactCache(),

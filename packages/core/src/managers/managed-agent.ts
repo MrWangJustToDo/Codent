@@ -101,7 +101,7 @@ import { RunnerWiring } from "./managed-agent-runner-wiring.js";
 import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
-import { BackgroundWorkService } from "./services/background-work-service.js";
+import { AgentCommandService } from "./services/agent-command-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
@@ -139,7 +139,6 @@ import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
 import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
-import type { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
 import type { ToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { ToModelOutputFn } from "../agent/tools/runtime/contract.js";
@@ -395,7 +394,7 @@ export class ManagedAgent {
   /** Owner generation for the current manual compaction; bumped whenever it is cancelled. */
   private compactGeneration = 0;
   /** Per-agent background work ownership (registry + durable restore + turn-context pointer). */
-  private backgroundWork?: BackgroundWorkService;
+  private commandService?: AgentCommandService;
   /** Set by AgentManager to route events to listeners. */
   dispatchEvent?: (event: AgentEvent) => void;
   /** Scoped unified event bus for this agent (set by the factory). */
@@ -597,7 +596,7 @@ export class ManagedAgent {
       getRelevantMemoryContent: () => this.memory.getRelevantContent(),
       getExtensionRunner: () => this.extensions.getExtensionRunner(),
       getParentId: () => this.parentId,
-      getBackgroundJobsSection: (messages, generation) => this.getBackgroundWork().sectionFor(messages, generation),
+      getBackgroundJobsSection: (messages, generation) => this.getCommandService().sectionFor(messages, generation),
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
       invalidateRunner: () => this.invalidateRunner(),
       log: this.log,
@@ -833,7 +832,7 @@ export class ManagedAgent {
    * registry the answer is an explicit empty list instead.
    */
   readJobs(): SessionJobsSnapshot {
-    return { jobs: this.backgroundWork?.list() ?? [] };
+    return { jobs: this.commandService?.list() ?? [] };
   }
 
   /**
@@ -1475,10 +1474,10 @@ export class ManagedAgent {
     return this.turnContext.getBackgroundJobsSection(messages);
   }
 
-  /** Lazily build the background-work owner (registry is created on first use). */
-  private getBackgroundWork(): BackgroundWorkService {
-    if (!this.backgroundWork) {
-      this.backgroundWork = new BackgroundWorkService({
+  /** Lazily build the command service (registry is created on first use). */
+  getCommandService(): AgentCommandService {
+    if (!this.commandService) {
+      this.commandService = new AgentCommandService({
         env: () => this.getCoreEnv(),
         ownerSessionId: () => this.getSessionData?.()?.id,
         onJobsChange: (jobs) => {
@@ -1486,7 +1485,7 @@ export class ManagedAgent {
         },
       });
     }
-    return this.backgroundWork;
+    return this.commandService;
   }
 
   // ============================================================================
@@ -1755,26 +1754,15 @@ export class ManagedAgent {
   }
 
   /**
-   * Per-agent background command-job registry. Each agent (hence each runtime) owns its
-   * own map of `run_in_background` jobs, so job ids/state never leak across agents.
-   *
-   * The registry notifies on every membership/lifecycle change; this agent forwards those
-   * onto the retained `jobs` channel. Without that push a job's end would be invisible to
-   * surfaces that cannot reach the registry (extensions, remote clients).
+   * Kill this agent's background jobs and drop the command service (no-op if none was ever
+   * created). Called on destroy so a disposed runtime does not leak child processes.
    */
-  getCommandJobRegistry(): CommandJobRegistry {
-    return this.getBackgroundWork().registry();
+  destroyCommandService(): Promise<void> {
+    const service = this.commandService;
+    this.commandService = undefined;
+    return service?.destroy() ?? Promise.resolve();
   }
 
-  /**
-   * Kill this agent's background jobs and drop the registry (no-op if none was ever created).
-   * Called on destroy so a disposed runtime does not leak `run_in_background` child processes.
-   */
-  async destroyBackgroundWork(): Promise<void> {
-    const service = this.backgroundWork;
-    this.backgroundWork = undefined;
-    await service?.destroy();
-  }
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).

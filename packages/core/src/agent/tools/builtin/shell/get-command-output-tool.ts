@@ -24,13 +24,9 @@ export const createGetCommandOutputTool = ({ context }: { context?: AgentToolCon
     needsApproval: false,
     lazy: true,
     execute: async ({ jobId }) => {
-      const registry = context?.getCommandJobRegistry();
-      if (!registry) throw new Error("get_command_output requires an AgentToolContext");
-      await registry.ready();
-      const result = registry.poll(jobId);
-      if (!result) {
-        throw new Error(`Unknown background jobId: ${jobId}`);
-      }
+      const commands = context?.getCommandService();
+      if (!commands) throw new Error("get_command_output requires an AgentToolContext");
+      const result = await commands.poll(jobId);
       return {
         ...result,
         cachedOutputPath: result.logPath,

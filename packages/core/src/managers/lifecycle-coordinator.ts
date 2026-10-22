@@ -75,7 +75,7 @@ export class LifecycleCoordinator {
 
       try {
         // Kill this agent's background jobs so a disposed runtime does not leak child processes.
-        await managedAgent.destroyBackgroundWork();
+        await managedAgent.destroyCommandService();
       } catch {
         // A failed job teardown must not skip the log flush below.
       }

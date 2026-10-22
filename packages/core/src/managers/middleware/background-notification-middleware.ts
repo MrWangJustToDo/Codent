@@ -5,8 +5,9 @@ import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-inje
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { CommandJobRegistry, CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
+import type { CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import type { AgentCommandService } from "../services/agent-command-service.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export interface BackgroundNotificationMiddlewareDeps {
@@ -17,7 +18,7 @@ export interface BackgroundNotificationMiddlewareDeps {
   /** Persist the updated UI messages (dehydrate session to disk). */
   persistMessages: (next: UIMessage[]) => void;
   /** The owning agent's background-job registry (drained for completions). */
-  getCommandJobRegistry: () => CommandJobRegistry;
+  getCommandService: () => AgentCommandService;
 }
 
 const BACKGROUND_NOTIFICATION_KIND = "background_notification";
@@ -47,10 +48,10 @@ export function createBackgroundNotificationMiddleware(
   return defineMiddleware("tools", {
     name: "background-notification",
     onConfig: async (_ctx, config) => {
-      const registry = deps.getCommandJobRegistry();
+      const commandService = deps.getCommandService();
       // Do not mark yet: the notification must be persisted first, or a crash between collect and
       // inject loses the completion while the record says it was delivered.
-      const completed = await registry.collectCompleted({ markNotified: false });
+      const completed = await commandService.collectCompleted();
       if (completed.length === 0) return {};
 
       const messages = config.messages as ModelMessage[];
@@ -60,7 +61,7 @@ export function createBackgroundNotificationMiddleware(
         // `<background_jobs>` section either — that also needs a channel). Marking here is the
         // deliberate best-effort for a channel-less caller; callers that can lose a turn should
         // provide a channel. Still returns a new array — the input may be the projection cache.
-        await registry.markNotified(completed.map((job) => job.id));
+        await commandService.markNotified(completed.map((job) => job.id));
         return {
           messages: [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }],
         };
@@ -78,7 +79,7 @@ export function createBackgroundNotificationMiddleware(
       // in this host, so a crash in this window is covered two ways: the content-hash id dedupes a
       // re-delivery if the row landed, and the `<background_jobs>` turn-context section re-admits
       // the job id/log path if it did not.
-      await registry.markNotified(completed.map((job) => job.id));
+      await commandService.markNotified(completed.map((job) => job.id));
 
       return { messages: next };
     },

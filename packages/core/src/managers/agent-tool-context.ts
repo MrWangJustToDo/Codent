@@ -1,4 +1,4 @@
-import type { AgentToolContext } from "../agent/tools/runtime/tool-context.js";
+import type { AgentStreamSink, AgentToolContext } from "../agent/tools/runtime/tool-context.js";
 import type { ManagedAgent } from "../runtime-types/hosts.js";
 
 /** Bind the tool runtime interface to one live agent. This is the manager-side adapter. */
@@ -7,8 +7,14 @@ export function createAgentToolContext(managed: ManagedAgent): AgentToolContext 
     agentId: managed.id,
     ...(managed.parentId ? { parentId: managed.parentId } : {}),
     getSessionId: () => managed.getSessionData()?.id,
-    getCommandJobRegistry: () => managed.getCommandJobRegistry(),
-    getStreamHub: () => managed.streamHub,
+    getCommandService: () => managed.getCommandService(),
+    getStreamSink: () =>
+      ({
+        commandStdout: (toolCallId, chunk) => managed.streamHub.appendCommand(toolCallId, "stdout", chunk),
+        commandStderr: (toolCallId, chunk) => managed.streamHub.appendCommand(toolCallId, "stderr", chunk),
+        clearCommand: (toolCallId) => managed.streamHub.clearCommand(toolCallId),
+        endCommand: (toolCallId) => managed.streamHub.endCommand(toolCallId),
+      }) satisfies AgentStreamSink,
     getCoreEnv: () => managed.getCoreEnv(),
     addPendingAbortController: (controller) => managed.addPendingAbortController(controller),
     removePendingAbortController: (controller) => managed.removePendingAbortController(controller),

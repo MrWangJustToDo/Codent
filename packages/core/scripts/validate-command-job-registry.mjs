@@ -14,7 +14,7 @@ import path from "node:path";
 import {
   COMMAND_JOB_LOG_DIR,
   MAX_JOB_LOG_AGE_MS,
-  BackgroundWorkService,
+  AgentCommandService,
   CommandJobRegistry,
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
@@ -418,7 +418,17 @@ console.log("teardown log deletion OK");
 
   // `kill_command` hands back the job's durable log: killing stops the stream, it does not erase what
   // the job produced, and that file is the one the background `run_command` advertises.
-  const tool = createKillCommandTool({ context: { getCommandJobRegistry: () => registry } });
+  const commandService = {
+    kill: async (jobId) => {
+      await registry.ready();
+      const existing = registry.get(jobId);
+      if (!existing) throw new Error(`Unknown background jobId: ${jobId}`);
+      const killed = await registry.kill(jobId);
+      const after = registry.get(jobId);
+      return { killed, status: after?.status ?? "killed", logPath: after?.logPath };
+    },
+  };
+  const tool = createKillCommandTool({ context: { getCommandService: () => commandService } });
   const logged = registry.create("echo logged");
   registry.appendStdout(logged.id, "some output\n");
   registry.markExited(logged.id, 0); // finished: killing it stops nothing
@@ -470,7 +480,18 @@ console.log("teardown log deletion OK");
   assert.equal(afterNotify.get(finished.id)?.status, "exited");
 
   // The kill tool works on a restored job too (no "unknown jobId" after resume).
-  const getTool = createGetCommandOutputTool({ context: { getCommandJobRegistry: () => afterNotify } });
+  const getTool = createGetCommandOutputTool({
+    context: {
+      getCommandService: () => ({
+        poll: async (jobId) => {
+          await afterNotify.ready();
+          const result = afterNotify.poll(jobId);
+          if (!result) throw new Error(`Unknown background jobId: ${jobId}`);
+          return result;
+        },
+      }),
+    },
+  });
   const out = await getTool.execute({ jobId: finished.id }, {});
   assert.equal(out.status, "exited");
   assert.equal(out.cachedOutputPath, finished.logPath);
@@ -502,7 +523,18 @@ console.log("teardown log deletion OK");
   const logAfter = await waitForLog(running.logPath, "· interrupted ·");
   assert.ok(logAfter.includes("· interrupted ·"), "the log gets an interrupted footer");
 
-  const getTool = createGetCommandOutputTool({ context: { getCommandJobRegistry: () => resumed } });
+  const getTool = createGetCommandOutputTool({
+    context: {
+      getCommandService: () => ({
+        poll: async (jobId) => {
+          await resumed.ready();
+          const result = resumed.poll(jobId);
+          if (!result) throw new Error(`Unknown background jobId: ${jobId}`);
+          return result;
+        },
+      }),
+    },
+  });
   const out = await getTool.execute({ jobId: running.id }, {});
   assert.equal(out.status, "failed");
   assert.equal(out.cachedOutputPath, running.logPath, "the log path survives the restart");
@@ -669,10 +701,14 @@ console.log("teardown log deletion OK");
 
     let notificationMessages = [];
     const ui = { getMessages: () => notificationMessages, setMessages: (next) => (notificationMessages = next) };
+    const commandService = {
+      collectCompleted: () => batch.collectCompleted(),
+      markNotified: (ids) => batch.markNotified(ids),
+    };
     const middleware = createBackgroundNotificationMiddleware({
       getUIChannel: () => ui,
       persistMessages: (next) => (notificationMessages = next),
-      getCommandJobRegistry: () => batch,
+      getCommandService: () => commandService,
     });
     await middleware.onConfig({}, { messages: [], systemPrompts: [] });
     const notificationRows = notificationMessages.filter((message) =>
@@ -772,12 +808,12 @@ console.log("teardown log deletion OK");
 }
 
 // ---------------------------------------------------------------------------
-// 17. BackgroundWorkService: the agent-facing owner (registry + section)
+// 17. AgentCommandService: the agent-facing owner (registry + section)
 // ---------------------------------------------------------------------------
 {
   const owner = "ses_background_service";
   const events = [];
-  const service = new BackgroundWorkService({
+  const service = new AgentCommandService({
     env: () => env,
     ownerSessionId: () => owner,
     onJobsChange: (jobs) => events.push(jobs.map((job) => job.jobId)),

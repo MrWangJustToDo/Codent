@@ -26,7 +26,7 @@ function fakeAgent(id, parentId) {
       emitSessionShutdown: async (agentId) => events.push(`shutdown:${agentId}`),
       destroyAll: async () => events.push(`destroyAll:${id}`),
     }),
-    destroyBackgroundWork: async () => events.push(`jobs:${id}`),
+    destroyCommandService: async () => events.push(`jobs:${id}`),
     flushLogOnDestroy: () => events.push(`flush:${id}`),
     emitEvent: (type, data) => events.push(`event:${id}:${type}:${data.subagentId}`),
   };
@@ -91,7 +91,7 @@ await lifecycle.settleTeardowns();
     getMcpManager: () => null,
     abort: () => {},
     getExtensionRunner: () => null,
-    destroyBackgroundWork: async () => {
+    destroyCommandService: async () => {
       throw new Error("job teardown failed");
     },
     flushLogOnDestroy: () => events2.push("flush"),

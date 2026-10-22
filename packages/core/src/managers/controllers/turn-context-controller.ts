@@ -47,7 +47,7 @@ export interface TurnContextControllerOptions {
   getRelevantMemoryContent: () => string;
   getExtensionRunner: () => ExtensionRunner | null;
   getParentId: () => string | undefined;
-  /** Current model-visible wire → `<background_jobs>` section (owned by BackgroundWorkService). */
+  /** Current model-visible wire → `<background_jobs>` section (owned by AgentCommandService). */
   getBackgroundJobsSection?: (
     messages: readonly ModelMessage[],
     generation: number

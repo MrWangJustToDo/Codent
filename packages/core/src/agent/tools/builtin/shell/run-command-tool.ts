@@ -2,7 +2,6 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
 import { isAbortError, isTimeoutError } from "../../../../runtime-types/abort.js";
-import { errorMessage } from "../../../../utils/errors.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { runCommandOutputSchema } from "../../shared/schemas.js";
@@ -82,9 +81,9 @@ export function buildTimedOutCommandResult(params: {
 }
 
 export const createRunCommandTool = (options?: { subagentSafe?: boolean; context?: AgentToolContext }) => {
-  const registry = options?.context?.getCommandJobRegistry();
+  const commandService = options?.context?.getCommandService();
   const subagentSafe = options?.subagentSafe ?? false;
-  const streamHub = options?.context?.getStreamHub();
+  const streamSink = options?.context?.getStreamSink();
   // `RUN_COMMAND_TIMEOUT_MS` is resolved once per tool instance: the env is stable for the session,
   // and under `--remote-env` `coreEnv.getEnv()` is an HTTP round-trip we should not pay per command.
   let resolvedDefaultTimeout: number | undefined;
@@ -180,40 +179,16 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
       }
 
       if (run_in_background) {
-        if (!registry) {
-          throw new Error("Background commands require an AgentToolContext with a command job registry.");
+        if (!commandService) {
+          throw new Error("Background commands require an AgentToolContext with an AgentCommandService.");
         }
-        // Restore this session's previous jobs first: `ready()` is a no-op after the first call.
-        await registry.ready();
-        if (!coreEnv.startCommand) {
-          throw new Error(
-            "Background commands are not supported in this environment. " +
-              "Omit run_in_background or use a local/node or playground CoreEnv that implements startCommand."
-          );
-        }
-
-        const job = registry.create(command, toolCallId);
-
-        try {
-          const handle = await coreEnv.startCommand(command, {
-            cwd,
-            env,
-            onStdout: (chunk) => {
-              registry.appendStdout(job.id, chunk);
-            },
-            onStderr: (chunk) => {
-              registry.appendStderr(job.id, chunk);
-            },
-            onExit: (exitCode) => {
-              registry.markExited(job.id, exitCode);
-            },
-          });
-          registry.setKill(job.id, handle.kill, handle.pid);
-        } catch (err) {
-          const message = errorMessage(err);
-          registry.markFailed(job.id, message);
-          throw err;
-        }
+        const started = await commandService.startBackground({
+          command,
+          toolCallId,
+          cwd,
+          env,
+          coreEnv,
+        });
 
         return {
           command,
@@ -222,10 +197,10 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
           exitCode: -1,
           durationMs: 0,
           success: true,
-          jobId: job.id,
+          jobId: started.jobId,
           status: "running" as const,
           runInBackground: true,
-          cachedOutputPath: job.logPath,
+          cachedOutputPath: started.cachedOutputPath ?? null,
         };
       }
 
@@ -256,11 +231,11 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
           signal: abortSignal,
           onStdout: (chunk) => {
             stdoutAccumulator.append(encoder.encode(chunk));
-            streamHub?.appendCommand(toolCallId, "stdout", chunk);
+            streamSink?.commandStdout(toolCallId, chunk);
           },
           onStderr: (chunk) => {
             stderrAccumulator.append(encoder.encode(chunk));
-            streamHub?.appendCommand(toolCallId, "stderr", chunk);
+            streamSink?.commandStderr(toolCallId, chunk);
           },
         });
       } catch (err) {

@@ -21,22 +21,16 @@ export const createKillCommandTool = ({ context }: { context?: AgentToolContext 
     needsApproval: true,
     lazy: true,
     execute: async ({ jobId }) => {
-      const registry = context?.getCommandJobRegistry();
-      if (!registry) throw new Error("kill_command requires an AgentToolContext");
-      await registry.ready();
-      const existing = registry.get(jobId);
-      if (!existing) {
-        throw new Error(`Unknown background jobId: ${jobId}`);
-      }
-      const killed = await registry.kill(jobId);
-      const after = registry.get(jobId);
+      const commands = context?.getCommandService();
+      if (!commands) throw new Error("kill_command requires an AgentToolContext");
+      const result = await commands.kill(jobId);
       return {
         jobId,
-        status: after?.status ?? "killed",
-        killed,
+        status: result.status,
+        killed: result.killed,
         // The job's durable log. Killing stops the stream; it does not erase what the job produced, and
         // this is the same field the background `run_command` hands back for that file.
-        cachedOutputPath: after?.logPath ?? null,
+        cachedOutputPath: result.logPath ?? null,
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: KillCommandOutput }) {

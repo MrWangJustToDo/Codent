@@ -264,7 +264,7 @@ export function buildAgentRunner(
     createBackgroundNotificationMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
-      getCommandJobRegistry: () => deps.getCommandJobRegistry(),
+      getCommandService: () => deps.getCommandService(),
     }),
     createPromptCacheMiddleware({
       getModelStyle: () => config.modelStyle,

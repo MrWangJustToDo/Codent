@@ -1,6 +1,6 @@
 /**
- * Background-work ownership: the per-agent command-job registry, its durable restore, and the
- * `<background_jobs>` turn-context pointer.
+ * Agent command service: the per-agent command-job registry, durable restore, background start /
+ * poll / kill, and the `<background_jobs>` turn-context pointer.
  *
  * This used to be three responsibilities spread across `ManagedAgent` (lazy registry + change
  * listener + section builder), the registry itself, and the turn-context middleware. The service is
@@ -12,18 +12,29 @@
  */
 
 import { CommandJobRegistry } from "../../agent/tools/builtin/shell/jobs/registry.js";
+import { errorMessage } from "../../utils/errors.js";
+import type {
+  AgentCommandPort,
+  StartBackgroundInput,
+  StartBackgroundResult,
+  KillCommandResult,
+} from "../../agent/tools/runtime/command-service.js";
 import {
   collectRunCommandToolCallIds,
   formatBackgroundJobsSection,
   TURN_CONTEXT_KINDS,
 } from "../../agent/turn-context";
 
-import type { CommandJobSummary, CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
+import type {
+  CommandJobPollResult,
+  CommandJobSummary,
+  CompletedCommandJob,
+} from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { ModelMessage } from "@tanstack/ai";
 
-export interface BackgroundWorkServiceOptions {
+export interface AgentCommandServiceOptions {
   /** Resolved lazily; the agent's runtime env may not exist when the service is constructed. */
   env: () => ResolvedCoreEnv;
   /** The disk session that owns the jobs; resolved lazily for the same reason. */
@@ -32,10 +43,10 @@ export interface BackgroundWorkServiceOptions {
   onJobsChange: (jobs: CommandJobSummary[]) => void;
 }
 
-export class BackgroundWorkService {
+export class AgentCommandService implements AgentCommandPort {
   private registryInstance?: CommandJobRegistry;
 
-  constructor(private readonly options: BackgroundWorkServiceOptions) {}
+  constructor(private readonly options: AgentCommandServiceOptions) {}
 
   /** The registry tools use. Creates it (and its change listener) on first access. */
   registry(): CommandJobRegistry {
@@ -47,6 +58,55 @@ export class BackgroundWorkService {
       this.registryInstance = registry;
     }
     return this.registryInstance;
+  }
+
+  /** Start a background command and attach its lifecycle to the owned registry. */
+  async startBackground(input: StartBackgroundInput): Promise<StartBackgroundResult> {
+    await this.ready();
+    const { command, toolCallId, cwd, env, coreEnv } = input;
+    if (!coreEnv.startCommand) {
+      throw new Error(
+        "Background commands are not supported in this environment. " +
+          "Omit run_in_background or use a local/node or playground CoreEnv that implements startCommand."
+      );
+    }
+    const job = this.registry().create(command, toolCallId);
+    try {
+      const handle = await coreEnv.startCommand(command, {
+        cwd,
+        env,
+        onStdout: (chunk) => this.registry().appendStdout(job.id, chunk),
+        onStderr: (chunk) => this.registry().appendStderr(job.id, chunk),
+        onExit: (exitCode) => this.registry().markExited(job.id, exitCode),
+      });
+      this.registry().setKill(job.id, handle.kill, handle.pid);
+    } catch (err) {
+      this.registry().markFailed(job.id, errorMessage(err));
+      throw err;
+    }
+    return { jobId: job.id, ...(job.logPath ? { cachedOutputPath: job.logPath } : {}) };
+  }
+
+  /** Poll one job, throwing the same unknown-id error the registry's callers relied on. */
+  async poll(jobId: string): Promise<CommandJobPollResult> {
+    await this.ready();
+    const result = this.registry().poll(jobId);
+    if (!result) throw new Error(`Unknown background jobId: ${jobId}`);
+    return result;
+  }
+
+  /** Stop a job and return the terminal state the tools render. */
+  async kill(jobId: string): Promise<KillCommandResult> {
+    await this.ready();
+    const existing = this.registry().get(jobId);
+    if (!existing) throw new Error(`Unknown background jobId: ${jobId}`);
+    const killed = await this.registry().kill(jobId);
+    const after = this.registry().get(jobId);
+    return {
+      killed,
+      status: after?.status ?? "killed",
+      ...(after?.logPath ? { logPath: after.logPath } : {}),
+    };
   }
 
   /** Non-creating read: a status snapshot must not mint a registry before any job exists. */

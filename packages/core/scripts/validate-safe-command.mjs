@@ -15,12 +15,11 @@
 import assert from "node:assert/strict";
 
 import {
-  AgentStreamHub,
+  AgentCommandService,
   SUBAGENT_DENY_MESSAGE,
   clearCoreEnv,
   commandPrefix,
   createRunCommandTool,
-  CommandJobRegistry,
   defaultPath,
   evaluateCommandApproval,
   normalizedCommand,
@@ -296,9 +295,23 @@ for (const command of MUTATING_COMMANDS) {
   const mainEnv = makeEnv();
   clearCoreEnv();
   registerCoreEnv(mainEnv);
+  const commandService = new AgentCommandService({
+    env: () => mainEnv,
+    ownerSessionId: () => undefined,
+    onJobsChange: () => {},
+  });
   const mainAgent = await createRunCommandTool({
-    context: { getCommandJobRegistry: () => new CommandJobRegistry(), getStreamHub: () => new AgentStreamHub() },
+    context: {
+      getCommandService: () => commandService,
+      getStreamSink: () => ({
+        commandStdout: () => {},
+        commandStderr: () => {},
+        clearCommand: () => {},
+        endCommand: () => {},
+      }),
+    },
   }).execute({ command: "ls -la", run_in_background: true }, { toolCallId: "t", coreEnv: mainEnv });
+  await commandService.destroy();
   assert.equal(mainAgent.runInBackground, true, "the main agent can still start a background job");
   assert.equal(typeof mainAgent.jobId, "string", "…and gets a job id back");
 }
