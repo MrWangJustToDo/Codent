@@ -76,6 +76,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let buffer: string[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  /** Serializes async flushes; a second flush must not overtake an older batch. */
+  let flushChain: Promise<void> = Promise.resolve();
+  /** True while `flushBatch` owns the buffer. `flushSync` must yield to it. */
+  let flushInFlight = false;
   /** Whether the session-boundary divider has been decided for this sink. */
   let boundaryWritten = false;
 
@@ -99,8 +103,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     await envFs.writeFile(filePath, "");
   };
 
-  const flush = async (): Promise<void> => {
+  const flushBatch = async (): Promise<void> => {
     if (buffer.length === 0) return;
+    flushInFlight = true;
     const lines = buffer;
     buffer = [];
     try {
@@ -134,7 +139,18 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       await appendFile(filePath, content);
     } catch {
       // Non-fatal: log persistence must never break agent execution.
+    } finally {
+      flushInFlight = false;
     }
+  };
+
+  const flush = (): Promise<void> => {
+    // Chain rather than run concurrently. The buffer is captured by `flushBatch` when the
+    // chained turn actually starts, so a queued turn writes the newest batch and an older
+    // in-flight turn cannot be overtaken by a newer one.
+    const run = flushChain.then(flushBatch);
+    flushChain = run.catch(() => undefined);
+    return run;
   };
 
   const schedule = (): void => {
@@ -146,6 +162,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   };
 
   const handleEntry = (entry: LogEntry): void => {
+    if (disposed) return;
     // The persisted schema is the last gate before the bytes: an entry outside it is not written,
     // because a caller reading the file back cannot tell "this entry is malformed" from "this
     // never happened" once it is on disk. Reported, not thrown — the sink is on the agent's path.
@@ -182,6 +199,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
    */
   const flushSync = (): void => {
     if (buffer.length === 0) return;
+    // An async batch already owns the write path. Let `flush()` queue this buffer after it
+    // instead of writing newer lines first and letting the older batch land last.
+    if (flushInFlight) return;
     const appendFileSync = envFs.appendFileSync;
     if (!appendFileSync) {
       void flush();
@@ -218,8 +238,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         clearTimeout(timer);
         timer = null;
       }
-      flushSync(); // best-effort final flush that survives exit
-      void flush(); // and drain anything a sync-unaware runtime failed to write
+      // If an async batch is in flight, leave the buffer for the queued flush. Otherwise land
+      // it synchronously, then queue any remainder (a sync-unaware runtime).
+      if (!flushInFlight) flushSync();
+      void flush();
     },
   };
 }

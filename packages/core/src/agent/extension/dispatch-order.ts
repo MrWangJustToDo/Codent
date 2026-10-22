@@ -49,11 +49,6 @@ export function compareDispatchRank(a: DispatchRank, b: DispatchRank): number {
   return a.order - b.order || a.seq - b.seq;
 }
 
-/** Whether `a` is a strictly later position than `b` (the winner in a resolution surface). */
-export function isLaterRank(a: DispatchRank, b: DispatchRank): boolean {
-  return compareDispatchRank(a, b) > 0;
-}
-
 /** Sort a copy of `items` by rank (never mutates the input). */
 export function sortByDispatchRank<T extends { rank: DispatchRank }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => compareDispatchRank(a.rank, b.rank));

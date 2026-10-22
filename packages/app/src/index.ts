@@ -49,7 +49,6 @@ export { formatToolInput, formatToolOutput, formatToolArgs, formatDuration } fro
 export {
   getToolCallColor,
   getInlineSummary,
-  getCompactOutput,
   buildToolHeader,
   getDurationMs,
   DURATION_THRESHOLD_MS,

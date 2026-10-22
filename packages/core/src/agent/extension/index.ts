@@ -20,6 +20,7 @@ export type {
   ExtensionContext,
   ExtensionConfig,
   ExtensionInstance,
+  ExtensionRegistrations,
   ExtensionToolDefinition,
   ExtensionCommand,
   ExtensionEventBus,

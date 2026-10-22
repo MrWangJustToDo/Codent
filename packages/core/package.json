@@ -183,7 +183,7 @@
     "validate:summarization-segments": "pnpm run build && node scripts/validate-summarization-segments.mjs",
     "validate:compaction-prompt": "pnpm run build && node scripts/validate-compaction-prompt.mjs",
     "validate:default-prompt": "pnpm run build && node scripts/validate-default-prompt.mjs",
-    "validate:subagent-ui-projection": "pnpm run build && node scripts/validate-subagent-ui-projection.mjs",
+    "validate:subagent-ui-projection": "pnpm run build && node scripts/validate-subagent-task-projection.mjs",
     "validate:unified-agent-execution": "pnpm run build && node scripts/validate-unified-agent-execution.mjs",
     "validate:mcp-prefer-multimodal": "pnpm run build && node scripts/validate-mcp-prefer-multimodal.mjs",
     "validate:command-job-registry": "pnpm run build && node scripts/validate-command-job-registry.mjs",
@@ -278,7 +278,13 @@
     "validate:edit-preview": "pnpm run build && node scripts/validate-edit-preview.mjs",
     "validate:command-output-cache": "pnpm run build && node scripts/validate-command-output-cache.mjs",
     "validate:plan-tool-boundary": "pnpm run build && node scripts/validate-plan-tool-boundary.mjs",
-    "validate:file-write": "pnpm run build && node scripts/validate-file-write.mjs"
+    "validate:file-write": "pnpm run build && node scripts/validate-file-write.mjs",
+    "validate:session-close-drain": "pnpm run build && node scripts/validate-session-close-drain.mjs",
+    "validate:file-size": "node scripts/validate-file-size.mjs",
+    "validate:agent-tool-isolation": "pnpm run build && node scripts/validate-agent-tool-isolation.mjs",
+    "validate:format-read-file-result": "pnpm run build && node scripts/validate-format-read-file-result.mjs",
+    "validate:mcp-session-servers": "pnpm run build && node scripts/validate-mcp-session-servers.mjs",
+    "validate:subagent-task-projection": "pnpm run build && node scripts/validate-subagent-task-projection.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.70.0",

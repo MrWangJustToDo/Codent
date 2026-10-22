@@ -14,7 +14,6 @@ import {
   DURATION_THRESHOLD_MS,
   formatDuration,
   formatToolInput,
-  // getCompactOutput, // temporarily commented out with the error block below
   getDurationMs,
   getInlineSummary,
   getToolCallColor,

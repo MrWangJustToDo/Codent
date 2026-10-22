@@ -96,9 +96,9 @@ async function fetchGlobalHistory(
   if (!session) return null;
   const result = await session.dispatch({ type: "usage.history", weeks });
   if (!result.ok) return null;
-  const data = result.data as { daily?: DailyUsageBucket[]; models?: ModelUsageTotal[] } | undefined;
+  const data = result.data;
   if (!data) return null;
-  return { daily: data.daily ?? [], models: data.models ?? [] };
+  return { daily: data.daily, models: data.models };
 }
 
 // ============================================================================

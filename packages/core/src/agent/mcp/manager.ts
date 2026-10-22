@@ -151,7 +151,12 @@ export class McpManager {
             prefix: `mcp__${name}_`,
           });
 
-          const tools = await client.tools();
+          const tools = await client.tools().catch(async (error: unknown) => {
+            // `createMCPClient` has already connected; a failed `tools()` would otherwise leave
+            // the child process alive because it is not in `clients` for `shutdown()`.
+            await client.close().catch(() => undefined);
+            throw error;
+          });
 
           for (const tool of tools) {
             // TanStack prefers structuredContent and drops content[] images; re-wrap execute.

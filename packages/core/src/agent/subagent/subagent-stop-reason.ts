@@ -165,8 +165,6 @@ export function subagentStopNotice(reason: SubagentStopReason): string {
   }
 }
 
-/** The sentinel `extractAssistantText` yields for a run that produced no final answer. */
-
 /**
  * Ensure a stopped run surfaces a clear notice in the summary text returned to the parent (UI +
  * `toModelOutput`), not only an `aborted` flag.

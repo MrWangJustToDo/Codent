@@ -93,15 +93,6 @@ function buildFindArgs(
 }
 
 /**
- * POSIX-quote one argument for the legacy shell path.
- *
- * Only reached when the host cannot execute with an argv vector — a remote environment on a
- * server that predates the exec-file route. That makes this a compatibility shim, so it
- * keeps the POSIX assumption the previous implementation already made. It must not
- * reintroduce a `pipefail` prefix, stderr redirection, or a `head` pipeline: truncation
- * stays in JS on both paths so the shell is never responsible for correctness.
- */
-/**
  * Run the glob search, preferring `fd` and falling back to `find`.
  *
  * Availability, not failure, drives the fallback: binaries are probed before spawning (and

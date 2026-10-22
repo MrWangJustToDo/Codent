@@ -109,7 +109,7 @@ registerBuiltinCommand("mode", {
     if (session && phase !== "executing" && phase !== "retro") {
       try {
         const listed = await session.dispatch({ type: "plan.list" });
-        const files = listed.ok ? ((listed.data as { files?: string[] } | undefined)?.files ?? []) : [];
+        const files = listed.ok ? (listed.data?.files ?? []) : [];
         for (const file of files.slice(0, PLAN_LOAD_LIMIT)) {
           const name = file.replace(/\.md$/i, "");
           options.push({
@@ -142,7 +142,7 @@ registerBuiltinCommand("mode", {
     const applyMode = async (target: AgentMode): Promise<CommandResult> => {
       const result = await session.dispatch({ type: "mode.set", mode: target });
       if (!result.ok) return { ok: false, error: result.error };
-      const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? target;
+      const applied = result.data?.mode ?? target;
       if (applied === "auto") {
         return { ok: true, message: "Auto mode on — tools run without approval" };
       }
@@ -168,7 +168,7 @@ registerBuiltinCommand("mode", {
         // Same cycle as Shift+Tab: normal → auto → plan → off
         const result = await session.dispatch({ type: "mode.toggle" });
         if (!result.ok) return { ok: false, error: result.error };
-        const applied = (result.data as { mode?: AgentMode } | undefined)?.mode ?? "normal";
+        const applied = result.data?.mode ?? "normal";
         if (applied === "auto") {
           return { ok: true, message: "Auto mode on — tools run without approval" };
         }
@@ -190,7 +190,7 @@ registerBuiltinCommand("mode", {
       case "execute": {
         const result = await session.dispatch({ type: "plan.execute" });
         if (!result.ok) return { ok: false, error: result.error ?? "Cannot execute plan" };
-        const data = result.data as { queued?: boolean; replacedExistingTodos?: boolean } | undefined;
+        const data = result.data;
         const parts = ["Building approved plan…"];
         if (data?.queued) parts.push("(queued — starts after the current run finishes)");
         if (data?.replacedExistingTodos) parts.push("(replaced existing todos with plan steps)");
@@ -212,14 +212,14 @@ registerBuiltinCommand("mode", {
       case "save": {
         const result = await session.dispatch({ type: "plan.save", nameHint: intent.name });
         if (!result.ok) return { ok: false, error: result.error ?? "Save failed" };
-        const path = (result.data as { path?: string } | undefined)?.path;
+        const path = result.data?.path;
         return { ok: true, message: `Plan saved to ${path ?? "workspace"}` };
       }
 
       case "load": {
         const result = await session.dispatch({ type: "plan.load", name: intent.name });
         if (!result.ok) return { ok: false, error: result.error ?? "Load failed" };
-        const data = result.data as { path?: string; stepCount?: number } | undefined;
+        const data = result.data;
         return {
           ok: true,
           message: `Loaded ${data?.path ?? intent.name} (${data?.stepCount ?? 0} steps) — review. Run /mode execute to Build.`,
@@ -229,7 +229,7 @@ registerBuiltinCommand("mode", {
       case "list": {
         const result = await session.dispatch({ type: "plan.list" });
         if (!result.ok) return { ok: false, error: result.error };
-        const files = (result.data as { files?: string[] } | undefined)?.files ?? [];
+        const files = result.data?.files ?? [];
         if (files.length === 0) return { ok: true, message: "No saved plans in .agents/plans/" };
         return { ok: true, message: `Saved plans:\n${files.map((file) => `- ${file}`).join("\n")}` };
       }

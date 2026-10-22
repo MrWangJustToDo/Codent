@@ -46,7 +46,7 @@ registerBuiltinCommand("fork", {
     const result = await session.dispatch({ type: "session.fork", upToMessageId });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as { sessionId?: string; name?: string; model?: string; forkText?: string } | undefined;
+    const data = result.data;
 
     // The restored fork transcript arrives through the core `messages` channel.
     bumpAgentUsage();

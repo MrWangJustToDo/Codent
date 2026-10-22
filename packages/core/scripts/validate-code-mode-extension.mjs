@@ -79,6 +79,33 @@ function check(label, cond) {
   check("context provider -> non-empty code-mode guidance", typeof guidance === "string" && guidance.length > 0);
 }
 
+// ---- Path 1c: approval-gated tools are excluded by default ------------------
+{
+  const { ctx, providers, warns } = makeCtx({ driver: fakeDriver });
+  const gated = { ...tool("run_command"), needsApproval: true };
+  const ext = createCodeModeExtension({ tools: [tool("read_file"), gated] });
+  await ext.activate(ctx);
+  const guidance = await providers.find((p) => typeof p.content === "function")?.content?.();
+  check(
+    "approval-gated tools are not exposed to the sandbox",
+    !String(guidance).includes("external_run_command") && !String(guidance).includes("run_command")
+  );
+  check(
+    "skipping an approval-gated tool is explained",
+    warns.some((warning) => warning.includes("approval-gated") && warning.includes("run_command"))
+  );
+}
+
+// ---- Path 1d: explicit opt-in can expose approval-gated tools ----------------
+{
+  const { ctx, providers } = makeCtx({ driver: fakeDriver });
+  const gated = { ...tool("run_command"), needsApproval: true };
+  const ext = createCodeModeExtension({ tools: [tool("read_file"), gated], allowApprovalTools: true });
+  await ext.activate(ctx);
+  const guidance = await providers.find((p) => typeof p.content === "function")?.content?.();
+  check("explicit opt-in exposes an approval-gated tool", String(guidance).includes("external_run_command"));
+}
+
 // ---- Path 1b: driver present, no lazy tools => no discover_tools ------------
 {
   const { ctx, registered } = makeCtx({ driver: fakeDriver, tools: [] });

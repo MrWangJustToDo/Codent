@@ -127,6 +127,16 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.equal(bEvents.length, 0, "sibling scope isolated");
   assert.equal(aEvents[0].agentId, "agent-a", "agentId defaults to scope id");
 
+  // Retained replay is agent-local by default: a child scope must not inherit the parent's
+  // todos/queues first frame merely because it has no local provider.
+  root.retain("session:todos", () => ({ items: [], title: "parent" }));
+  const childTodos = [];
+  subA.on("session:todos", (event) => childTodos.push(event.payload.title));
+  assert.deepEqual(childTodos, [], "child on() does not replay a parent retained value");
+  const parentTodos = [];
+  subA.on("session:todos", (event) => parentTodos.push(event.payload.title), { includeParents: true });
+  assert.deepEqual(parentTodos, ["parent"], "includeParents opts into the parent replay");
+
   subA.emit("session:messages", []);
   assert.equal(aEvents.length, 2, "descendant event up-flows to parent scope");
   assert.equal(rootIds.length, 2, "descendant event reaches root");

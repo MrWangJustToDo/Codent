@@ -13,7 +13,7 @@
 import { readTextPieces } from "../../utils/read-text-pieces.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
-import { SESSION_DIR, SESSION_LOG_MESSAGE, SESSION_LOG_SUFFIX } from "./types.js";
+import { SESSION_DIR, SESSION_LOG_SUFFIX } from "./types.js";
 
 import type { PersistedToolCallPart, PersistedUIMessage, SessionLogLine, SessionStateFields } from "./types.js";
 import type { CoreEnvFs } from "../../env";
@@ -414,9 +414,4 @@ export function foldLog(lines: SessionLogLine[]): FoldedSessionLog {
     if (message) uiMessages.push(message as UIMessage);
   }
   return { state, uiMessages, approvalAt };
-}
-
-/** Whether a line's kind is understood by this reader. */
-export function isMessageLogLine(line: SessionLogLine): boolean {
-  return line.t === SESSION_LOG_MESSAGE;
 }

@@ -26,7 +26,7 @@ registerBuiltinCommand("rename", {
     ctx.inputActions.setInputFeedback("Generating title...", "info");
     const result = await session.dispatch({ type: "rename.generate" });
     if (!result.ok) return { ok: false, error: result.error };
-    const name = (result.data as { name?: string } | undefined)?.name;
+    const name = result.data?.name;
     return { ok: true, message: `Session renamed: ${name ?? "(generated)"}` };
   },
 });

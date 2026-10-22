@@ -406,7 +406,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     if (!session) return null;
     const result = await session.dispatch({ type: "queue.pop" });
     if (!result.ok) return null;
-    return (result.data as { kind: "steer" | "followUp"; content: string | ContentPart[] } | null) ?? null;
+    return result.data ?? null;
   }, [session]);
 
   const forceSubmit = useCallback(

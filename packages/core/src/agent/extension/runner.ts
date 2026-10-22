@@ -407,6 +407,17 @@ export class ExtensionRunner {
   }
 
   async loadExtension(api: ExtensionAPI, config?: ExtensionConfig): Promise<ExtensionInstance> {
+    // The loader dedupes discovered FILES by basename, but a module declares the id. Two files
+    // can therefore yield the same id; without this replacement the second instance is active but
+    // `setEnabled(id, false)` always targets the first one, leaving a permanently "on" copy.
+    const duplicate = this.extensions.find((entry) => entry.api.id === api.id);
+    if (duplicate) {
+      await this.destroyExtension(duplicate);
+      this.extensions = this.extensions.filter((entry) => entry !== duplicate);
+      this.ranks.delete(api.id);
+      this.disabledExtensionNotices.delete(api.id);
+    }
+
     const registrations: ExtensionRegistrations = {
       tools: [],
       commands: [],

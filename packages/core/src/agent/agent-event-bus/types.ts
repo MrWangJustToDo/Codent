@@ -222,8 +222,9 @@ export interface AgentEventBus {
 
   /**
    * Current retained value for an event, if a provider is registered up the scope chain.
-   * Pass `{ includeParents: false }` when projecting an agent's own session state: a child
-   * agent must not inherit a parent's todos/queues merely because it lacks a local provider.
+   * Parent scopes are opt-in: a child agent must not inherit a parent's todos/queues merely
+   * because it lacks a local provider. Pass `{ includeParents: true }` for an explicit
+   * aggregate view.
    */
   retainedValue<T extends AgentEventType>(type: T, options?: { includeParents?: boolean }): AgentEvents[T] | undefined;
 

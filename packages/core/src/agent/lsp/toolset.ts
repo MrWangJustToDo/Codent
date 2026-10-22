@@ -83,41 +83,55 @@ export function registerLspTools({
     }
   };
 
-  ctx.registerTool(
-    withLspTextOutput(createDiagnosticsTool({ manager: managerProxy, fallback: tsDiagnosticsFallback }))
-  );
-  ctx.registerTool(withLazy(withLspTextOutput(createHoverTool({ manager: managerProxy, fallback: tsHoverFallback }))));
-  ctx.registerTool(
-    withLazy(
-      withLspTextOutput(
-        createDefinitionTool({
-          manager: managerProxy,
-          treeSitter,
-          workspaceIndex,
-          readFile: (p) => treeSitterEnv.readFile(p),
-        })
+  if (shouldRegister("lsp_diagnostics")) {
+    ctx.registerTool(
+      withLspTextOutput(createDiagnosticsTool({ manager: managerProxy, fallback: tsDiagnosticsFallback }))
+    );
+  }
+  if (shouldRegister("lsp_hover")) {
+    ctx.registerTool(
+      withLazy(withLspTextOutput(createHoverTool({ manager: managerProxy, fallback: tsHoverFallback })))
+    );
+  }
+  if (shouldRegister("lsp_definition")) {
+    ctx.registerTool(
+      withLazy(
+        withLspTextOutput(
+          createDefinitionTool({
+            manager: managerProxy,
+            treeSitter,
+            workspaceIndex,
+            readFile: (p) => treeSitterEnv.readFile(p),
+          })
+        )
       )
-    )
-  );
-  ctx.registerTool(withLazy(withLspTextOutput(createReferencesTool({ manager: managerProxy }))));
-  ctx.registerTool(withLazy(withLspTextOutput(createSymbolsTool({ manager: managerProxy, workspaceIndex }))));
+    );
+  }
+  if (shouldRegister("lsp_references")) {
+    ctx.registerTool(withLazy(withLspTextOutput(createReferencesTool({ manager: managerProxy }))));
+  }
+  if (shouldRegister("lsp_symbols")) {
+    ctx.registerTool(withLazy(withLspTextOutput(createSymbolsTool({ manager: managerProxy, workspaceIndex }))));
+  }
   if (shouldRegister("lsp_rename")) {
     ctx.registerTool(withLspTextOutput(createRenameTool({ manager: managerProxy })));
   }
   if (shouldRegister("lsp_code_actions")) {
     ctx.registerTool(withLspTextOutput(createCodeActionsTool({ manager: managerProxy })));
   }
-  ctx.registerTool(
-    withLazy(
-      withLspTextOutput(
-        createCompletionsTool({
-          manager: managerProxy,
-          versionTracker: fileSync,
-          readFile: (p) => treeSitterEnv.readFile(p),
-        })
+  if (shouldRegister("lsp_completions")) {
+    ctx.registerTool(
+      withLazy(
+        withLspTextOutput(
+          createCompletionsTool({
+            manager: managerProxy,
+            versionTracker: fileSync,
+            readFile: (p) => treeSitterEnv.readFile(p),
+          })
+        )
       )
-    )
-  );
+    );
+  }
 
   // ---- Tree-sitter tools (degrade when grammar locator is absent) ----
   if (shouldRegister("ast_search")) {

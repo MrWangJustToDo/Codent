@@ -89,8 +89,11 @@ export class SessionService {
    * `SessionService` belongs to one agent, and an agent whose session was deleted is destroyed.
    */
   async close(): Promise<void> {
+    // Snapshot the admitted tail before flipping the gate. `persistSession` refuses writes
+    // submitted after this point, but writes already admitted must still run to completion.
+    const admitted = this.persistQueue;
     this.closed = true;
-    await this.persistQueue;
+    await admitted;
     // A title save is a direct `saveToStore` call, not part of `persistQueue`; wait for those
     // too. Loop because a queued save can start another one while we await.
     while (this.pendingSaves.size > 0) {
@@ -201,10 +204,13 @@ export class SessionService {
   private async saveToStore(
     emitEvent: EmitAgentTelemetryFn | undefined,
     data: SessionData,
-    target: string
+    target: string,
+    options: { admitted?: boolean } = {}
   ): Promise<boolean> {
     const store = this.store;
-    if (this.closed || !store) return false;
+    // A queued persist was admitted before `close()`; it must still land. Direct writers
+    // (the async title save) are not admitted and must stop once the writer is closed.
+    if ((this.closed && !options.admitted) || !store) return false;
     if (store.isDeleted?.(data.id) === true) return false;
     // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
     // `close()` must be able to wait for it before the log is deleted.
@@ -268,7 +274,8 @@ export class SessionService {
   }
 
   private async persistSessionInner(input: SessionPersistInput): Promise<boolean> {
-    if (this.closed) return false;
+    // Reaching here means `persistSession` admitted this write before `close()`. Drain it:
+    // rejecting at execution time would silently drop the final pump-complete on teardown.
     const {
       usage,
       todoManager,
@@ -413,7 +420,7 @@ export class SessionService {
     const saveTarget = uiMessages !== undefined ? "session+uiMessages" : "session";
     // Await so callers that `await persistSession` observe durability; emit on
     // failure (do not rethrow — persist remains best-effort for fire-and-forget hosts).
-    const saved = await this.saveToStore(emitEvent, data, saveTarget);
+    const saved = await this.saveToStore(emitEvent, data, saveTarget, { admitted: true });
     return messagesPersisted && saved;
   }
 
@@ -429,7 +436,6 @@ export class SessionService {
     if (!session) throw new Error(`Session not found: ${sessionId}`);
 
     const { usage, todoManager } = input;
-    usage.reset();
 
     // Hydrate reads media files; canonicalize re-extracts media:// refs (writes).
     // Neither must abort a resume on media IO failure, so degrade to the stored
@@ -450,6 +456,21 @@ export class SessionService {
     } catch {
       hydrated = session.uiMessages;
     }
+    // Repair legacy sessions whose name was overwritten to a blank string before
+    // the empty-title guard existed. Reset to the default so the UI never shows
+    // an empty label and the next persist retitles via auto-title.
+    if (!session.name?.trim()) {
+      session.name = "New Session";
+    }
+
+    // Adopt only after the canonical rewrite landed. A save failure must leave the agent on the
+    // session it was actually running, otherwise ownership/log/tracker and live state disagree.
+    await this.store.save(session);
+
+    // Live state is the transaction's second half. Keep it after the canonical save: a
+    // failed save must leave the current session's usage/todos untouched, or the next
+    // persistState would write the target's counters into the session that is still active.
+    usage.reset();
     if (session.usage) {
       usage.addTotal(session.usage);
     }
@@ -477,16 +498,6 @@ export class SessionService {
       }
     }
 
-    // Repair legacy sessions whose name was overwritten to a blank string before
-    // the empty-title guard existed. Reset to the default so the UI never shows
-    // an empty label and the next persist retitles via auto-title.
-    if (!session.name?.trim()) {
-      session.name = "New Session";
-    }
-
-    // Adopt only after the canonical rewrite landed. A save failure must leave the agent on the
-    // session it was actually running, otherwise ownership/log/tracker and live state disagree.
-    await this.store.save(session);
     this.setSessionData(session);
 
     return {

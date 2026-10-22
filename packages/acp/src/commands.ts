@@ -79,8 +79,7 @@ export async function dispatchSlashCommand(
     const extensionNames = new Set(snapshot.extensions.extensions.flatMap((e) => e.commands.map((c) => c.name)));
     if (extensionNames.has(parsed.name)) {
       const result = await session.dispatch({ type: "extension.invokeCommand", name: parsed.name, args: parsed.args });
-      const data = result.ok ? (result.data as { message?: string } | undefined) : undefined;
-      return { handled: true, message: data?.message };
+      return { handled: true, message: result.ok ? result.data?.message : undefined };
     }
     return { handled: false };
   }
@@ -111,7 +110,7 @@ export async function dispatchSlashCommand(
       if (!query) return { handled: true, message: "Usage: /resume <session-id or name>" };
       const listed = await session.dispatch({ type: "session.list" });
       if (!listed.ok) return finish(listed);
-      const sessions = (listed.data as { sessions?: Array<{ id: string; name: string }> } | undefined)?.sessions ?? [];
+      const sessions = listed.data?.sessions ?? [];
       // `/resume <name>` is what the catalog advertises; resolving the query is core's rule
       // (`resolveSessionRef`), not this host's, so the id-vs-name grammar cannot drift.
       const match = resolveSessionRef(sessions, query);
@@ -163,7 +162,7 @@ async function dispatchModeCommand(session: AgentSession, rawArgs: string): Prom
     case "execute": {
       const result = await session.dispatch({ type: "plan.execute" });
       if (!result.ok) return finish(result);
-      const data = result.data as { queued?: boolean } | undefined;
+      const data = result.data;
       return {
         handled: true,
         message: data?.queued ? "Plan queued — starts after the current run finishes" : "Building approved plan…",
@@ -180,13 +179,13 @@ async function dispatchModeCommand(session: AgentSession, rawArgs: string): Prom
     case "save": {
       const result = await session.dispatch({ type: "plan.save", nameHint: intent.name });
       if (!result.ok) return finish(result);
-      const path = (result.data as { path?: string } | undefined)?.path;
+      const path = result.data?.path;
       return { handled: true, message: `Plan saved to ${path ?? "workspace"}` };
     }
     case "load": {
       const result = await session.dispatch({ type: "plan.load", name: intent.name });
       if (!result.ok) return finish(result);
-      const data = result.data as { path?: string; stepCount?: number } | undefined;
+      const data = result.data;
       return {
         handled: true,
         message: `Loaded ${data?.path ?? intent.name} (${data?.stepCount ?? 0} steps) — review, then /mode execute`,
@@ -195,7 +194,7 @@ async function dispatchModeCommand(session: AgentSession, rawArgs: string): Prom
     case "list": {
       const result = await session.dispatch({ type: "plan.list" });
       if (!result.ok) return finish(result);
-      const files = (result.data as { files?: string[] } | undefined)?.files ?? [];
+      const files = result.data?.files ?? [];
       return {
         handled: true,
         message: files.length > 0 ? `Saved plans:\n${files.map((file) => `- ${file}`).join("\n")}` : "No saved plans",

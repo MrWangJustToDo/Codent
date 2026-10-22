@@ -13,7 +13,7 @@ import {
   type AgentSession,
   type AgentSessionChannel,
   type AgentSessionCommand,
-  type AgentSessionCommandResult,
+  type AgentSessionCommandResultFor,
   type AgentSessionEvent,
   type AgentSessionSnapshot,
   type AgentSessionSubscribeOptions,
@@ -298,8 +298,12 @@ class LocalAgentSessionImpl implements AgentSession {
     return event.parentId === this.managed.id && event.type.startsWith("subagent:");
   }
 
-  async dispatch(command: AgentSessionCommand): Promise<AgentSessionCommandResult> {
-    return dispatchLocalAgentSessionCommand(this.managed, this.manager, command);
+  async dispatch<C extends AgentSessionCommand["type"]>(
+    command: Extract<AgentSessionCommand, { type: C }>
+  ): Promise<AgentSessionCommandResultFor<C>> {
+    return dispatchLocalAgentSessionCommand(this.managed, this.manager, command) as Promise<
+      AgentSessionCommandResultFor<C>
+    >;
   }
 }
 

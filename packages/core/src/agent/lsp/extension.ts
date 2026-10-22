@@ -64,14 +64,6 @@ export const DEFAULT_DISABLED_LSP_TOOLS: readonly string[] = [
 const NOT_FOUND_ON_PATH = /not found on PATH/i;
 
 /**
- * Emit an LSP lifecycle notification for one server. Only terminal states are
- * surfaced (success / failure); the in-between "starting / restarting" stages
- * are intentionally silent so the transient input feedback is not serialized
- * into an error→loading→success flicker. A server binary missing on PATH is a
- * predictable degrade (falls back to tree-sitter), so it is reported as `info`
- * rather than `error`.
- */
-/**
  * One line for a notice, collapsed to a single line; the full reason goes to the log.
  *
  * Truncation itself is `truncateText` (the shared helper) — a hand-rolled `slice` here is what
@@ -128,6 +120,14 @@ function notifyServerFailure(
   ui.notify(`LSP: ${languageId} ${display.text}`, display.level);
 }
 
+/**
+ * Emit an LSP lifecycle notification for one server. Only terminal states are
+ * surfaced (success / failure); the in-between "starting / restarting" stages
+ * are intentionally silent so the transient input feedback is not serialized
+ * into an error→loading→success flicker. A server binary missing on PATH is a
+ * predictable degrade (falls back to tree-sitter), so it is reported as `info`
+ * rather than `error`.
+ */
 function notifyServerLifecycle(
   ui: ExtensionUI,
   logger: ExtensionContext["logger"],
@@ -154,6 +154,7 @@ function notifyServerLifecycle(
 /** Create the built-in LSP extension. */
 export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
   let shutdownCurrent: (() => Promise<void>) | undefined;
+  let shutdownTreeSitter: (() => void) | undefined;
   return {
     id: "codent-lsp",
     name: "LSP Integration",
@@ -161,16 +162,26 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
     description:
       "Language Server Protocol tools: diagnostics, hover, definition, references, symbols, rename, completions, code actions + auto file-sync",
     async activate(ctx) {
-      await activateLsp(ctx, options, (manager) => {
-        // The manager is swapped on session:start; this closure always points at the
-        // one the extension currently owns, so deactivate never shuts down a stale one.
-        shutdownCurrent = () => manager.shutdownAll().catch(() => {});
-      });
+      await activateLsp(
+        ctx,
+        options,
+        (manager) => {
+          // The manager is swapped on session:start; this closure always points at the
+          // one the extension currently owns, so deactivate never shuts down a stale one.
+          shutdownCurrent = () => manager.shutdownAll().catch(() => {});
+        },
+        (treeSitter) => {
+          shutdownTreeSitter = () => treeSitter.shutdown();
+        }
+      );
     },
     async deactivate() {
       const shutdown = shutdownCurrent;
+      const shutdownTs = shutdownTreeSitter;
       shutdownCurrent = undefined;
+      shutdownTreeSitter = undefined;
       await shutdown?.();
+      shutdownTs?.();
     },
   };
 }
@@ -178,7 +189,8 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
 async function activateLsp(
   ctx: ExtensionContext,
   options?: LspExtensionConfig,
-  onManager?: (manager: LspManager) => void
+  onManager?: (manager: LspManager) => void,
+  onTreeSitter?: (treeSitter: TreeSitterManager) => void
 ): Promise<void> {
   const env = ctx.coreEnv;
   const corePath = env.path ?? defaultPath;
@@ -283,6 +295,7 @@ async function activateLsp(
     locateGrammar: env.locateTreeSitterGrammar,
   };
   const treeSitter = new TreeSitterManager(treeSitterEnv, getLanguageIdFromPath);
+  onTreeSitter?.(treeSitter);
   const workspaceIndex = new WorkspaceIndex(ctx.cwd, treeSitter, treeSitterEnv);
   if (treeSitter.available()) {
     treeSitter.init().catch((err) => {
@@ -350,6 +363,9 @@ async function activateLsp(
     const payload = (event as { payload?: { cwd?: string } }).payload;
     if (!payload?.cwd) return;
     const newRoot = corePath.resolve(payload.cwd);
+    // The bootstrap `session:start` uses the same cwd that activate() just set up. Rebuilding
+    // there starts every eager language server twice (and loses the first diagnostics window).
+    if (corePath.resolve(getManager().resolvePath(".")) === newRoot) return;
 
     // Shut down the old manager before swapping.
     await getManager()
@@ -390,6 +406,7 @@ async function activateLsp(
     await getManager()
       .shutdownAll()
       .catch(() => {});
+    treeSitter.shutdown();
   });
 
   // ---- Turn-context provider (Phase 8): light LSP guidance ----

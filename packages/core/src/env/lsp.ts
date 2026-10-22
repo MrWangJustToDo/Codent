@@ -45,11 +45,6 @@ export interface LspMessage {
   error?: { code: number; message: string; data?: unknown };
 }
 
-/**
- * A live connection to a Language Server.
- * Wraps the host-provided transport and exposes the low-level JSON-RPC surface
- * the LSP client builds on (`initialize`, `textDocument/*`, `shutdown`, etc.).
- */
 /** Per-request bounds. Both halves are optional; a host applies its default deadline either way. */
 export interface LspRequestOptions {
   /** How long to wait for a response before cancelling the request. */
@@ -58,6 +53,11 @@ export interface LspRequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A live connection to a Language Server.
+ * Wraps the host-provided transport and exposes the low-level JSON-RPC surface
+ * the LSP client builds on (`initialize`, `textDocument/*`, `shutdown`, etc.).
+ */
 export interface LspConnection {
   /** The language this server handles (e.g. `typescript`). */
   readonly languageId: string;

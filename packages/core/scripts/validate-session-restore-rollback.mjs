@@ -91,5 +91,27 @@ assert.equal(claims.get("ses_A"), managed.id, "the old claim is kept");
 assert.equal(claims.has("ses_B"), false, "the attempted target claim is rolled back");
 assert.deepEqual(released, ["ses_B"]);
 
+// Live usage/todos are the restore transaction's second half. A failed disk rewrite must not
+// leave them carrying the target session's counters/todos while SessionData still names A.
+{
+  const events = [];
+  const usage = {
+    reset: () => events.push("usage.reset"),
+    addTotal: () => events.push("usage.addTotal"),
+    setWindowUsage: () => events.push("usage.setWindow"),
+    setTotalCostUsd: () => events.push("usage.setCost"),
+  };
+  const todos = {
+    restoreTodos: () => events.push("todos.restore"),
+    reset: () => events.push("todos.reset"),
+  };
+  const failing = new SessionService();
+  failing.setStore(store, { modelStyle: "openai", model: "m" });
+  failing.setSessionData({ ...target, id: "ses_A", name: "A" });
+  await assert.rejects(() => failing.restoreFromStore("ses_B", { usage, todoManager: todos }), /disk full/);
+  assert.deepEqual(events, [], "a failed restore does not touch live usage or todos");
+  assert.equal(failing.getSessionData()?.id, "ses_A", "the failed restore leaves SessionData on A");
+}
+
 clearCoreEnv();
 console.log("session-restore-rollback validation passed");

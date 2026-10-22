@@ -97,13 +97,7 @@ export function getToolStatusGlyph(
 
 // Re-exported from core so a host cannot drift from the owning process: these are the
 // same thresholds and functions the core layer uses when it renders a call.
-export {
-  DURATION_THRESHOLD_MS,
-  LIVE_DURATION_THRESHOLD_MS,
-  getCompactOutput,
-  getDurationMs,
-  getInlineSummary,
-} from "@codent/core";
+export { DURATION_THRESHOLD_MS, LIVE_DURATION_THRESHOLD_MS, getDurationMs, getInlineSummary } from "@codent/core";
 
 export function buildToolHeader(
   toolName: string,

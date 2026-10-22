@@ -244,37 +244,3 @@ export function inlineSummaryForOutput(output: unknown, toolName: string): strin
   } as ToolCallPart;
   return getInlineSummary(part, toolName);
 }
-
-const SHOW_COMPACT_OUTPUT: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.runCommand]);
-
-/**
- * Get a compact multi-line output summary only for tools where it adds value.
- *
- * @deprecated No call site — the transcript's compact mode is produced by the projection layer
- * (`packages/app/src/utils/project-transcript.ts`), which folded this lane away. Its `run_command`
- * failure wording (`Command failed with exit code -1`) also predates the structured `timedOut`
- * reason, so a deadline kill would be mislabelled as a plain failure carrying the "not finished"
- * `-1`. Route any revival through `timedOut` / `timeoutMs` (as `formatRunCommandOutput` does) rather
- * than restoring it as-is.
- */
-export function getCompactOutput(part: ToolCallPart, toolName: string): string | null {
-  if (!SHOW_COMPACT_OUTPUT.has(toolName)) return null;
-  const output = part.output as Record<string, unknown> | undefined;
-  if (!output) return null;
-  // run_command: derive a compact summary from exit code / success.
-  // Previously this read output.message; now we generate it from structured fields.
-  if (toolName === BUILTIN_TOOL_NAMES.runCommand) {
-    if (output.runInBackground && output.jobId) {
-      return `Background job ${String(output.jobId)} started`;
-    }
-    const success = output.success as boolean | undefined;
-    // Success is already visible from the header icon (and the duration once
-    // it exceeds the threshold) — only failures need an explicit line.
-    if (success !== false) return null;
-    const exitCode = output.exitCode as number | undefined;
-    const durationMs = output.durationMs as number | undefined;
-    const dur = typeof durationMs === "number" ? ` in ${durationMs}ms` : "";
-    return `Command failed with exit code ${exitCode ?? "?"}${dur}`;
-  }
-  return null;
-}

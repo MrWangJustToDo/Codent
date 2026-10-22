@@ -27,6 +27,7 @@ export function readLocalAgentSessionSnapshot(
     ...(managed.getRetry() ? { retry: managed.getRetry() } : {}),
     mode: managed.getAgentMode(),
     lastStreamDurationMs: managed.getLastStreamDurationMs(),
+    lastFinishReason: managed.getLastFinishReason?.() ?? null,
     ...(managed.config?.model ? { model: managed.config.model } : {}),
     ...(managed.modelInfo ? { modelInfo: managed.modelInfo } : {}),
     ...(typeof managed.getReasoningEffort === "function" && managed.getReasoningEffort()

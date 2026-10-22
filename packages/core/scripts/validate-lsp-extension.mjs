@@ -303,18 +303,20 @@ record(
   String(cleanEvent.payload.modifiedResult?._lspDiagnostics ?? "(none)")
 );
 
-// ---- 12. session:start re-creates manager for new cwd ----
+// ---- 12. session:start with the same cwd reuses the active manager ----
+// The bootstrap session:start follows activate() with the same root. Rebuilding there used to
+// shut down and eagerly start every server a second time. The active manager (and its running
+// mock server) must survive that event; a later disable/shutdown still reaps it.
+const beforeStart = countMockServers();
 await runner.emitSessionStart(projectDir, "sess-1");
-// emitSessionStart is fire-and-forget, and tearing the old manager down is a
-// graceful multi-second shutdown: wait for it, otherwise this script exits
-// mid-teardown and orphans the mock server child.
-const afterStart = await waitForMockServers(mockBaseline);
+await new Promise((r) => setTimeout(r, 100));
+const afterStart = countMockServers();
 record("session:start handler runs without throwing", true);
 if (canCount) {
   record(
-    "session:start leaves no orphaned mock server",
-    afterStart <= mockBaseline,
-    `${afterStart} alive (baseline ${mockBaseline})`
+    "same-cwd session:start does not double-start language servers",
+    afterStart <= beforeStart,
+    `${afterStart} alive (before ${beforeStart}, baseline ${mockBaseline})`
   );
 }
 

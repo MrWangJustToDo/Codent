@@ -11,12 +11,18 @@
  */
 
 import type { AgentEvent } from "../agent/agent-event-bus";
-import type { ExtensionInfo, ExtensionRenderPayload, ExtensionUiContext } from "../agent/extension/types.js";
+import type {
+  ExtensionCommandOption,
+  ExtensionInfo,
+  ExtensionRenderPayload,
+  ExtensionUiContext,
+} from "../agent/extension/types.js";
 import type { McpServerStatus } from "../agent/mcp/manager.js";
-import type { PlanModeState } from "../agent/plan/plan-mode-controller.js";
+import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamEvent, AgentStreamSnapshot, StreamingChunk } from "../agent/stream-hub/types.js";
 import type { TodoItem } from "../agent/todo/types.js";
 import type { ToolPresentation, ToolPresentationInfo } from "../agent/tools/presentation/types.js";
+import type { UsageHistoryResult } from "../agent/usage/usage-store.js";
 import type { QueuedMessagesSnapshot } from "../managers/controllers/agent-chat-controller.js";
 import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
 import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js";
@@ -27,6 +33,7 @@ import type {
   AgentSessionSubagentSummary,
   AgentIterationState,
   SessionInteractionsSnapshot,
+  QueuedMessageContent,
   SessionJobsSnapshot,
 } from "../runtime-types/session-payloads.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
@@ -136,6 +143,8 @@ export interface AgentSessionSnapshot {
   retry?: AgentRetryState | null;
   mode: AgentMode;
   lastStreamDurationMs: number;
+  /** The last run's model finish reason, or null before one. */
+  lastFinishReason: string | null;
   /** Model name (informational). */
   model?: string;
   /** Model metadata (incl. reasoningConfig / effortValues) for UI display. */
@@ -240,9 +249,89 @@ export type AgentSessionCommand =
   /** Query the global usage history store for the contribution graph (`/usage`). */
   | { type: "usage.history"; weeks?: number };
 
-export type AgentSessionCommandResult =
-  | { ok: true; data?: unknown }
-  | { ok: false; error: string; code?: "unsupported" | "not_found" | "invalid" | "failed" };
+/** One row of `session.list` / the resume picker's disk catalog. */
+export interface AgentSessionListRow {
+  id: DiskSessionId;
+  name: string;
+  model: string;
+  updatedAt: number;
+  createdAt: number;
+}
+
+/**
+ * Per-command success payloads. The command side now has the same single source of truth the
+ * channel side has: adding a command without a row is a compile error, and hosts consume
+ * `result.data` without re-declaring its shape at every call site.
+ */
+export interface AgentSessionCommandResultData {
+  send: undefined;
+  steer: undefined;
+  followUp: undefined;
+  forceSubmit: undefined;
+  "queue.pop": { kind: "steer" | "followUp"; content: QueuedMessageContent } | null;
+  stop: undefined;
+  respondApproval: undefined;
+  addToolResult: undefined;
+  setClientToolWaiting: undefined;
+  compact: { ok: true; message: string; tokensBefore?: number; tokensAfter?: number };
+  rename: { name: string };
+  "rename.generate": { name: string };
+  "mode.set": { mode: AgentMode };
+  "mode.toggle": { mode: AgentMode };
+  "plan.execute": BeginPlanExecutionResult;
+  "plan.cancel": undefined;
+  "plan.save": { ok: boolean; path?: string; error?: string };
+  "plan.load": { ok: boolean; path?: string; error?: string; stepCount?: number };
+  "plan.list": { files: string[] };
+  "plan.complete": undefined;
+  "mcp.refresh": { servers: McpServerStatus[] };
+  "extension.toggle": { ok: boolean; message: string };
+  "extension.invokeCommand": { message?: string };
+  "extension.getCommandOptions": { options: ExtensionCommandOption[] };
+  "session.resume": {
+    sessionId: DiskSessionId;
+    name: string;
+    model: string;
+    uiMessages: UIMessage[];
+  };
+  "session.list": { sessions: AgentSessionListRow[] };
+  "session.new": { sessionId: DiskSessionId };
+  "session.clone": {
+    sessionId: DiskSessionId;
+    name: string;
+    model: string;
+    uiMessages: UIMessage[];
+  };
+  "session.fork": {
+    sessionId: DiskSessionId;
+    name: string;
+    model: string;
+    uiMessages: UIMessage[];
+    forkText?: string;
+  };
+  "usage.history": UsageHistoryResult & { weeks: number };
+  "effort.set": { effort: ReasoningEffort | undefined };
+  "model.set": { model: string; modelStyle: ModelStyle; modelBaseURL?: string };
+}
+
+type _MissingCommandResultKeys = Exclude<keyof AgentSessionCommandResultData, AgentSessionCommand["type"]>;
+type _ExtraCommandResultKeys = Exclude<AgentSessionCommand["type"], keyof AgentSessionCommandResultData>;
+type _AssertCommandResultMapComplete = [_MissingCommandResultKeys | _ExtraCommandResultKeys] extends [never]
+  ? true
+  : _MissingCommandResultKeys | _ExtraCommandResultKeys;
+const _commandResultMapComplete: _AssertCommandResultMapComplete = true;
+void _commandResultMapComplete;
+
+export type AgentSessionCommandFailure = {
+  ok: false;
+  error: string;
+  code?: "unsupported" | "not_found" | "invalid" | "failed";
+};
+
+export type AgentSessionCommandResultFor<C extends AgentSessionCommand["type"]> =
+  { ok: true; data?: AgentSessionCommandResultData[C] } | AgentSessionCommandFailure;
+
+export type AgentSessionCommandResult = { ok: true; data?: unknown } | AgentSessionCommandFailure;
 
 // ============================================================================
 // Subscribe payloads
@@ -337,7 +426,9 @@ export interface AgentSession {
   listAgentStreamSnapshots?(): AgentStreamSnapshot[];
   /** Session-scoped tool presentation (local agent catalog or a remote snapshot's descriptors). */
   getToolPresentation?(name: string): ToolPresentation | undefined;
-  dispatch(command: AgentSessionCommand): Promise<AgentSessionCommandResult>;
+  dispatch<C extends AgentSessionCommand["type"]>(
+    command: Extract<AgentSessionCommand, { type: C }>
+  ): Promise<AgentSessionCommandResultFor<C>>;
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void;
   close?(): Promise<void>;
 }

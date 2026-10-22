@@ -61,6 +61,15 @@ export class LifecycleCoordinator {
     const runner = managedAgent.getExtensionRunner();
     const teardown = (async () => {
       try {
+        // A switch can still be between its awaits. Let it finish before closing persistence,
+        // flushing the sink, and releasing the disk-session claim; otherwise it can adopt a new
+        // session and re-bind writers after teardown has already run.
+        await managedAgent.sessionLifecycle?.settle?.();
+      } catch {
+        // Best-effort: teardown still has to close and flush what exists.
+      }
+
+      try {
         if (runner) {
           // Awaited: the shutdown hook is how an extension lands final work, and the teardown
           // below unregisters its interceptor — so it must not still be running.

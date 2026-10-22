@@ -102,7 +102,7 @@ export class CodentAgent {
   /** Agent ids this runtime created, and therefore owns for disposal. */
   private readonly ownedSessionIds = new Set<string>();
   /** Guards {@link dispose} against re-running (double session destroy / env destroy). */
-  private disposed = false;
+  private disposePromise: Promise<void> | undefined;
 
   /**
    * The runtime's session host.
@@ -143,7 +143,15 @@ export class CodentAgent {
       ...(options.rootPath ? { rootPath: options.rootPath } : {}),
       ...(options.ownsEnv !== undefined ? { ownsEnv: options.ownsEnv } : {}),
     };
-    const runtime = new AgentRuntime(runtimeOptions);
+    // An injected manager already carries the runtime its agents actually use. Reusing it is the
+    // only way `getEnv()` / the provider / the model catalog describe the same workspace as the
+    // manager; constructing a second runtime here silently split those two planes.
+    if (options.manager?.runtime && options.manager.runtime.env.rootPath !== options.env.rootPath) {
+      throw new Error(
+        `Injected AgentManager is bound to ${options.manager.runtime.env.rootPath}, not ${options.env.rootPath}.`
+      );
+    }
+    const runtime = options.manager?.runtime ?? new AgentRuntime(runtimeOptions);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
     const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
     return new CodentAgent(runtime, host, manager, options.defaults ?? {}, options.models);
@@ -203,7 +211,11 @@ export class CodentAgent {
     return this.host.connect(agentId) ?? undefined;
   }
 
-  /** List live agents owned by this runtime. */
+  /**
+   * List live agents visible through this runtime's host. Local runtimes return their own
+   * agents; a remote-session host returns the SERVER's catalog. Ownership for teardown is
+   * tracked separately by {@link ownedSessionIds} (see {@link dispose}).
+   */
   async listSessions(): Promise<AgentSessionListEntry[]> {
     return await this.host.list();
   }
@@ -223,9 +235,12 @@ export class CodentAgent {
    * sessions (and the server's own agents) when a remote CLI exits or rebuilds its adapter.
    */
   async dispose(): Promise<void> {
-    if (this.disposed) return;
-    this.disposed = true;
+    // Cache the in-flight teardown: a second caller must await the same completion, not observe
+    // a half-finished shutdown because `disposed` was set before the first await.
+    return (this.disposePromise ??= this.disposeInner());
+  }
 
+  private async disposeInner(): Promise<void> {
     const owned = [...this.ownedSessionIds];
     this.ownedSessionIds.clear();
     let firstError: unknown;
@@ -245,9 +260,17 @@ export class CodentAgent {
       firstError ??= error;
     }
 
-    await this.runtime.modelProvider?.destroy?.();
+    try {
+      await this.runtime.modelProvider?.destroy?.();
+    } catch (error) {
+      firstError ??= error;
+    }
     if (this.runtime.ownsEnv) {
-      await this.runtime.env.destroy?.();
+      try {
+        await this.runtime.env.destroy?.();
+      } catch (error) {
+        firstError ??= error;
+      }
     }
     if (firstError !== undefined) throw firstError;
   }

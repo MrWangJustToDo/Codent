@@ -116,6 +116,10 @@ export {
   type AgentSessionCommand,
   type AgentSessionBuiltins,
   type AgentSessionCommandResult,
+  type AgentSessionCommandResultData,
+  type AgentSessionCommandResultFor,
+  type AgentSessionCommandFailure,
+  type AgentSessionListRow,
   type AgentSessionCreateOptions,
   type AgentSessionCreateResult,
   type AgentSessionEvent,
@@ -258,6 +262,7 @@ export type {
   ReasoningConfig,
   ReasoningEffort,
   RemoteProviderConfigEntry,
+  ResolveModelConfigInput,
   ResolvedModelConfig,
 } from "./models";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
@@ -345,7 +350,6 @@ export type {
 export {
   DURATION_THRESHOLD_MS,
   LIVE_DURATION_THRESHOLD_MS,
-  getCompactOutput,
   getDurationMs,
   getInlineSummary,
 } from "./agent/tools/presentation/format/inline-summary.js";
@@ -399,6 +403,7 @@ export type {
   ExtensionContext,
   ExtensionConfig,
   ExtensionInstance,
+  ExtensionRegistrations,
   ExtensionToolDefinition,
   ExtensionCommand,
   ExtensionEventBus,

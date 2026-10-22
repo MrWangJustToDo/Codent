@@ -335,13 +335,6 @@ export class ManagedAgent {
   /** End-of-run sequence (outcome → persist → finalize → turn summary). */
   readonly runFinalizer: RunFinalizer;
   /** Plan mode (read-only planning → execute). Root agents only; subagents leave phase off. */
-  /**
-   * Instance id — an agent *bound to one conversation*: the conversation-scoped state below
-   * (`planMode`, `approvals`, the UI channel, `SessionData`, todos, queues, usage) lives here, which
-   * is why `/resume` re-binds this instance instead of creating a second one. Process-scoped: it is
-   * re-minted on restart, so it is NOT a correlation key — the disk session is
-   * (`AgentSessionSnapshot.activeSessionId`). See ARCHITECTURE.md §1.7.
-   */
   readonly planMode: PlanModeController;
   /** Auto / YOLO mode — skip all tool approvals. Cleared on reset / `/new`. */
   readonly autoMode: AutoModeController;
@@ -706,6 +699,11 @@ export class ManagedAgent {
 
   getLastStreamDurationMs(): number {
     return this.run.getLastStreamDurationMs();
+  }
+
+  /** Model finish reason of the last completed run, or null before one. */
+  getLastFinishReason(): string | null {
+    return this.lastFinishReason;
   }
 
   /**

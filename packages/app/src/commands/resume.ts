@@ -15,9 +15,7 @@ registerBuiltinCommand("resume", {
 
     const listed = await session.dispatch({ type: "session.list" });
     if (!listed.ok) return [];
-    const sessions =
-      (listed.data as { sessions?: Array<{ id: string; name: string; model: string; updatedAt: number }> } | undefined)
-        ?.sessions ?? [];
+    const sessions = listed.data?.sessions ?? [];
 
     // Which disk sessions are already owned by a live agent (can't be resumed).
     const bound = new Set<string>();
@@ -57,8 +55,7 @@ registerBuiltinCommand("resume", {
 
     const listed = await session.dispatch({ type: "session.list" });
     if (!listed.ok) return { ok: false, error: listed.error };
-    const sessions =
-      (listed.data as { sessions?: Array<{ id: string; name: string; model: string }> } | undefined)?.sessions ?? [];
+    const sessions = listed.data?.sessions ?? [];
 
     // `id` → exact name → name contains, in list order — core's rule, so `/resume <name>` means the
     // same thing here and in every other host (the ACP slash command used to require an id).
@@ -71,7 +68,7 @@ registerBuiltinCommand("resume", {
     const result = await session.dispatch({ type: "session.resume", sessionId });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as { sessionId?: string; name?: string; model?: string } | undefined;
+    const data = result.data;
 
     // The core session emits the restored transcript through the `messages` channel.
     // Commands only bump presentation-scoped counters; writing the transcript here too

@@ -17,7 +17,7 @@ registerBuiltinCommand("clone", {
     const result = await session.dispatch({ type: "session.clone", ...(name ? { name } : {}) });
     if (!result.ok) return { ok: false, error: result.error };
 
-    const data = result.data as { sessionId?: string; name?: string; model?: string } | undefined;
+    const data = result.data;
 
     // The cloned transcript arrives through the core `messages` channel.
     bumpAgentUsage();

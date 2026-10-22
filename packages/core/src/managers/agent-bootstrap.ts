@@ -215,6 +215,16 @@ export class AgentBootstrap {
     const extensionLoader = new ExtensionLoader(env);
     managed.extensions.setExtensionLoader(extensionLoader);
 
+    // Snapshot the built-in bindings before user extensions load. Code Mode's external_* bindings
+    // are static for the lifetime of an isolate; a later extension that shadows `read_file` or
+    // `run_command` must not silently become the implementation used inside the sandbox (and must
+    // not resurrect a previously-disabled override).
+    const codeModeNames = ["read_file", "grep", "glob", "list_file", "tree", "run_command", "websearch"];
+    const codeModeTools = codeModeNames
+      .map((name) => managed.tools[name])
+      .filter((tool): tool is AnyServerTool => Boolean(tool && "execute" in tool));
+    const codeModeLazyNames = ["run_command", "websearch"];
+
     const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, env);
     log.debug("system", "Extension search directories", { dirs: extensionDirs });
 
@@ -356,18 +366,14 @@ export class AgentBootstrap {
       try {
         const codeModeConfig =
           typeof config.codeMode === "object" && config.codeMode !== null ? config.codeMode : undefined;
-        const eagerNames = ["read_file", "grep", "glob", "list_file", "tree"];
-        const lazyNames = ["run_command", "websearch"];
-        const curated = [...eagerNames, ...lazyNames]
-          .map((name) => managed.tools[name])
-          .filter((tool): tool is AnyServerTool => Boolean(tool && "execute" in tool));
         const instance = await extensionRunner.loadExtension(
           createCodeModeExtension({
-            tools: curated,
-            lazyToolNames: lazyNames,
+            tools: codeModeTools,
+            lazyToolNames: codeModeLazyNames,
             timeout: codeModeConfig?.timeout,
             memoryLimit: codeModeConfig?.memoryLimit,
             lazyToolsConfig: codeModeConfig?.lazyToolsConfig,
+            allowApprovalTools: codeModeConfig?.allowApprovalTools,
           })
         );
         if (!recordExtensionResult(report, "codent-code-mode", instance)) {

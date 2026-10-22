@@ -25,7 +25,7 @@ function extensionSlashCommand(session: AgentSession, name: string, description:
         args: splitExtensionCommandArgs(args),
       });
       if (!result.ok) return { ok: false, error: result.error };
-      const message = (result.data as { message?: string } | undefined)?.message;
+      const message = result.data?.message;
       return message ? { ok: true, message } : { ok: true };
     },
   };
@@ -49,9 +49,8 @@ function extensionSlashCommand(session: AgentSession, name: string, description:
         name,
       });
       if (!result.ok) return [];
-      const options = (result.data as { options?: Array<{ label: string; value: string; description?: string }> })
-        ?.options;
-      return (options ?? []).map((o) => ({ label: o.label, value: o.value, description: o.description }));
+      const options = result.data?.options ?? [];
+      return options.map((o) => ({ label: o.label, value: o.value, description: o.description }));
     };
   }
 

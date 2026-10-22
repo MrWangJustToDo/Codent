@@ -67,16 +67,31 @@ export interface SessionLifecycleHost {
 export class SessionLifecycleService {
   /** Serializes complete session transitions; each switch has multiple awaits and one owner. */
   private switchInFlight: Promise<unknown> = Promise.resolve();
+  /** Set by {@link settle}; prevents a teardown window from admitting a new switch. */
+  private disposed = false;
 
   constructor(private readonly host: SessionLifecycleHost) {}
 
   private serializeSwitch<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.disposed) return Promise.reject(new Error("Agent is being destroyed; session switch refused."));
     const run = this.switchInFlight.then(operation, operation);
     this.switchInFlight = run.then(
       () => undefined,
       () => undefined
     );
     return run;
+  }
+
+  /**
+   * Stop accepting switches and wait for an already-admitted transition to finish.
+   *
+   * Teardown calls this before closing persistence and releasing ownership: otherwise a
+   * `resume`/`new` that started just before destroy can adopt a session, bind a log sink, and
+   * reattach producers after the sink was flushed and the claim was released.
+   */
+  async settle(): Promise<void> {
+    this.disposed = true;
+    await this.switchInFlight;
   }
 
   /**

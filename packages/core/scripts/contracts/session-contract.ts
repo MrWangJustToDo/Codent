@@ -10,6 +10,7 @@
 
 import type {
   AgentSessionCommand,
+  AgentSessionCommandResultFor,
   AgentSessionSnapshot,
   McpServerStatus,
   SessionJobSummary,
@@ -52,6 +53,18 @@ void jobs;
 
 const mcp: McpServerStatus = { name: "m", transport: "stdio", toolCount: 0, status: "connected" };
 void mcp;
+
+const sessionList: AgentSessionCommandResultFor<"session.list"> = {
+  ok: true,
+  data: { sessions: [{ id: "ses_x", name: "Session", model: "m", updatedAt: 2, createdAt: 1 }] },
+};
+void sessionList;
+const badSessionList: AgentSessionCommandResultFor<"session.list"> = {
+  ok: true,
+  // @ts-expect-error a session row must carry the full disk-catalog shape
+  data: { sessions: [{ id: "ses_x", name: "Session" }] },
+};
+void badSessionList;
 
 type SnapshotJobs = AgentSessionSnapshot["jobs"];
 const snapshotJobs: SnapshotJobs = jobs;

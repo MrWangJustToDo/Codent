@@ -36,10 +36,7 @@ export const SessionResumePicker = ({ session }: SessionResumePickerProps) => {
           useConfig.getActions().setConfig("resumeSession", "");
           return;
         }
-        const rows =
-          (listed.data as { sessions?: SessionListItem[] } | undefined)?.sessions
-            ?.slice()
-            .sort((a, b) => b.updatedAt - a.updatedAt) ?? [];
+        const rows = (listed.data?.sessions ?? []).slice().sort((a, b) => b.updatedAt - a.updatedAt);
         if (rows.length === 0) {
           useConfig.getActions().setConfig("resumeSession", "");
           return;

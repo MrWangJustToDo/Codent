@@ -622,4 +622,34 @@ const ext = (id) => ({
   await runner.destroyAll();
 }
 
+// A module-declared id is the identity, not the discovered filename. Loading two files that both
+// declare `dup-ext` replaces the first; `setEnabled("dup-ext", false)` must then reach the live
+// copy instead of leaving an unreachable active instance behind.
+{
+  const { managed, builtinReadFile } = await makeBuiltinAgent("dup-id-agent");
+  const runner = runnerFor(managed);
+  const makeDup = (description) => ({
+    id: "dup-ext",
+    name: `Dup ${description}`,
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerTool(extTool(description));
+    },
+  });
+
+  await runner.loadExtension(makeDup("first"));
+  await runner.loadExtension(makeDup("second"));
+  assert.equal(
+    runner.getExtensionInfos().filter((info) => info.id === "dup-ext").length,
+    1,
+    "a duplicate module id replaces the previous instance"
+  );
+  assert.equal(managed.tools.read_file.description, "second", "the later copy owns the tool name");
+
+  const disabled = await runner.setEnabled("dup-ext", false);
+  assert.equal(disabled.ok, true, "the live duplicate can be disabled by id");
+  assert.equal(managed.tools.read_file, builtinReadFile, "its disable restores the built-in");
+  await runner.destroyAll();
+}
+
 console.log("extension-tool-restore validation passed");

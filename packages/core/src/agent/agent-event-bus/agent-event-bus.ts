@@ -97,7 +97,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
   on(
     type: AgentEventType | "*",
     listener: AgentEventListener | AgentEventWildcardListener,
-    options?: { replay?: boolean }
+    options?: { replay?: boolean; includeParents?: boolean }
   ): () => void {
     if (type === "*") {
       const wildcard = listener as AgentEventWildcardListener;
@@ -113,7 +113,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
     // Retained replay: late subscribers synchronously receive the current value.
     // Callers that reconcile retained values themselves opt out via `replay:false`.
     if (options?.replay !== false) {
-      const provider = this.findRetained(type);
+      const provider = this.findRetained(type, options?.includeParents === true);
       if (provider) {
         typed(this.buildEvent(type, provider() as never));
       }
@@ -126,7 +126,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
     type: T,
     options?: { includeParents?: boolean }
   ): AgentEvent<T>["payload"] | undefined {
-    const provider = this.findRetained(type, options?.includeParents !== false);
+    const provider = this.findRetained(type, options?.includeParents === true);
     return provider ? (provider() as AgentEvent<T>["payload"]) : undefined;
   }
 
@@ -248,7 +248,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
   }
 
   /** Nearest retained provider for `type`; optionally walks this node up to the root. */
-  private findRetained(type: string, includeParents = true): (() => unknown) | undefined {
+  private findRetained(type: string, includeParents = false): (() => unknown) | undefined {
     for (let node: EventBusScopeNode | null = this.node; node; node = includeParents ? node.parent : null) {
       const provider = node.retained.get(type);
       if (provider) return provider;

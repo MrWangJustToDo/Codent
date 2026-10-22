@@ -29,7 +29,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
 import { projectCodeModeModelOutput } from "./model-output.js";
 
-import type { ExtensionAPI, ExtensionContext, ExtensionToolDefinition, ToolCallResult } from "../extension/types.js";
+import type { ExtensionAPI, ExtensionToolDefinition, ToolCallResult } from "../extension/types.js";
 import type { AnyServerTool, LazyToolsConfig, SchemaInput } from "@tanstack/ai";
 import type { CodeModeTool } from "@tanstack/ai-code-mode";
 
@@ -58,6 +58,12 @@ export interface CodeModeExtensionConfig {
   memoryLimit?: number;
   /** Optional lazy-tool discovery config (defaults to `{ includeDescription: 'none' }`). */
   lazyToolsConfig?: LazyToolsConfig;
+  /**
+   * Expose tools that declare `needsApproval: true` inside the sandbox. Disabled by
+   * default: the sandbox calls a tool's raw `execute`, so it cannot participate in the
+   * host approval/interceptor chain. Enable only when the host accepts that boundary.
+   */
+  allowApprovalTools?: boolean;
   /** Hard-disable the extension regardless of driver availability. */
   disabled?: boolean;
 }
@@ -95,19 +101,6 @@ function formatLogArgs(args: unknown[]): string {
     .join(" ");
 }
 
-async function withoutCodeModeConsole<T>(log: ExtensionContext["logger"], run: () => Promise<T>): Promise<T> {
-  const originalError = console.error;
-  const originalInfo = console.info;
-  console.error = (...args: unknown[]) => log.error(formatLogArgs(args));
-  console.info = (...args: unknown[]) => log.info(formatLogArgs(args));
-  try {
-    return await run();
-  } finally {
-    console.error = originalError;
-    console.info = originalInfo;
-  }
-}
-
 // ============================================================================
 // Extension factory
 // ============================================================================
@@ -117,7 +110,7 @@ async function withoutCodeModeConsole<T>(log: ExtensionContext["logger"], run: (
  * can be registered through `ctx.registerTool` (which re-wraps via
  * `defineServerTool`). Preserves name/description/schemas/execute.
  */
-function toExtensionTool(tool: AnyServerTool, log: ExtensionContext["logger"]): ExtensionToolDefinition {
+function toExtensionTool(tool: AnyServerTool): ExtensionToolDefinition {
   return {
     name: tool.name,
     description: tool.description,
@@ -126,12 +119,14 @@ function toExtensionTool(tool: AnyServerTool, log: ExtensionContext["logger"]): 
     execute: async (input, options) => {
       const signal = options.abortSignal;
       signal?.throwIfAborted();
+      // `execute_typescript` runs a sandbox, so there is no global console interception here:
+      // upstream receives the extension logger through its `debug` option instead.
       const run = tool.execute?.(input, {
         toolCallId: options.toolCallId,
         abortSignal: signal,
       });
       if (!run) return {} as ToolCallResult;
-      if (!signal) return ((await withoutCodeModeConsole(log, () => run)) ?? {}) as ToolCallResult;
+      if (!signal) return ((await run) ?? {}) as ToolCallResult;
 
       // The upstream isolate tool (ai-code-mode) ignores the abort signal, so an
       // Esc would otherwise wait out the isolate timeout. Race it: reject the
@@ -142,7 +137,7 @@ function toExtensionTool(tool: AnyServerTool, log: ExtensionContext["logger"]): 
           onAbort = () => reject(signal.reason ?? new Error("Aborted"));
           signal.addEventListener("abort", onAbort, { once: true });
         });
-        const result = await Promise.race([withoutCodeModeConsole(log, () => run), aborted]);
+        const result = await Promise.race([run, aborted]);
         return (result ?? {}) as ToolCallResult;
       } finally {
         if (onAbort) signal.removeEventListener("abort", onAbort);
@@ -181,7 +176,21 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
         return;
       }
 
-      const tools = options.tools ?? [];
+      const requestedTools = options.tools ?? [];
+      const approvalGated = requestedTools.filter(
+        (tool) => (tool as { needsApproval?: boolean }).needsApproval === true
+      );
+      const tools =
+        options.allowApprovalTools === true
+          ? requestedTools
+          : requestedTools.filter((tool) => (tool as { needsApproval?: boolean }).needsApproval !== true);
+      if (approvalGated.length > 0 && options.allowApprovalTools !== true) {
+        ctx.logger.warn(
+          `Code Mode: skipped approval-gated tool(s) because the sandbox bypasses the approval chain: ${approvalGated
+            .map((tool) => tool.name)
+            .join(", ")}`
+        );
+      }
       if (tools.length === 0) {
         ctx.logger.warn("Code Mode disabled: no external tools provided. execute_typescript not registered.");
         return;
@@ -210,17 +219,37 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
         timeout: options.timeout,
         memoryLimit: options.memoryLimit,
         lazyToolsConfig: options.lazyToolsConfig,
+        // Route upstream diagnostics through the extension logger. The default logger writes to
+        // the process console, which corrupts Ink's frame and, under parallel tool execution,
+        // cannot be scoped back to the code-mode call that produced it.
+        debug: {
+          logger: {
+            debug: (message, meta) => ctx.logger.info(formatLogArgs([message, meta])),
+            info: (message, meta) => ctx.logger.info(formatLogArgs([message, meta])),
+            warn: (message, meta) => ctx.logger.warn(formatLogArgs([message, meta])),
+            error: (message, meta) => ctx.logger.error(formatLogArgs([message, meta])),
+          },
+          errors: true,
+          tools: false,
+          provider: false,
+          output: false,
+          middleware: false,
+          agentLoop: false,
+          config: false,
+          request: false,
+          sandbox: false,
+        },
       });
 
       // `external_*` bindings call a tool's RAW execute, bypassing its own `toModelOutput`, so
       // media a script returns arrives wrapped as `{ success, result: { type: "image", base64 } }`.
       // Lift it back to multimodal parts here or the model only ever sees base64 text.
       ctx.registerTool({
-        ...toExtensionTool(tool, ctx.logger),
+        ...toExtensionTool(tool),
         toModelOutput: ({ output }) => projectCodeModeModelOutput(output),
       });
       if (discoveryTool) {
-        ctx.registerTool(toExtensionTool(discoveryTool, ctx.logger));
+        ctx.registerTool(toExtensionTool(discoveryTool));
       }
 
       // Inject code-mode guidance each turn as its own context section. Disabled

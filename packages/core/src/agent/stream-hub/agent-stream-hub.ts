@@ -67,12 +67,12 @@ function resolveId(input: AgentStreamResetInput): { id: string; channel: AgentSt
   return { id: input.compactId, channel: "text" };
 }
 
-/** Owns live stream state for one ManagedAgent and multicasts events to listeners. */
 /** Max completed commands retained for remount (both stdout/stderr channels count as one). */
 const MAX_COMPLETED_COMMAND_ENTRIES = 16;
 /** Max settled command ids remembered to reject late transport chunks. */
 const MAX_CLOSED_COMMAND_IDS = 1024;
 
+/** Owns live stream state for one ManagedAgent and multicasts events to listeners. */
 export class AgentStreamHub {
   private readonly streams = new Map<string, StreamEntry>();
   /**

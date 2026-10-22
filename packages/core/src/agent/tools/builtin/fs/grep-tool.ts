@@ -215,17 +215,6 @@ function buildGrepArgs(
 }
 
 /**
- * Quote one argument for the legacy shell path.
- *
- * Reached only when the host cannot execute with an argv vector (a remote environment on a
- * server predating the exec-file route). POSIX quoting is kept because that is the
- * assumption the previous implementation already made — but no `pipefail` prefix, no stderr
- * redirection, and no `head` pipeline: truncation stays in JS on both paths.
- */
-/**
- * Parse a positive integer line number; rejects NaN (JSON.stringify(NaN) → null).
- */
-/**
  * Run the content search, preferring ripgrep and falling back to grep.
  *
  * Availability drives the choice: binaries are probed rather than relying on exit code 127,

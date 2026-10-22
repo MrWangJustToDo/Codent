@@ -16,7 +16,7 @@ registerBuiltinCommand("compact", {
       return { ok: false, error: result.error };
     }
 
-    const data = result.data as { message?: string } | undefined;
+    const data = result.data;
     // Compaction appends its summary through the core `messages` channel; do not
     // write the same snapshot back into the UI a second time.
     bumpAgentUsage();

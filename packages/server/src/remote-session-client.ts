@@ -17,6 +17,7 @@ import type {
   AgentSession,
   AgentSessionCommand,
   AgentSessionCommandResult,
+  AgentSessionCommandResultFor,
   AgentSessionEvent,
   AgentSessionSnapshot,
   AgentSessionSubscribeOptions,
@@ -51,6 +52,7 @@ function emptySnapshot(agentId: string): AgentSessionSnapshot {
     pendingApprovalCount: 0,
     mode: "normal",
     lastStreamDurationMs: 0,
+    lastFinishReason: null,
     messages: [],
     queues: { steer: [], followUp: [] },
     // UsageChangeSnapshot shape — the shell must stay valid before first resync.
@@ -270,6 +272,7 @@ function applyEvent(
         // ride this event. Without it the footer's "Completed in 1.2s" only appeared after an
         // unrelated full resync — `dispatch()` deliberately does not refetch the snapshot.
         lastStreamDurationMs: event.payload.lastStreamDurationMs,
+        lastFinishReason: event.payload.lastFinishReason,
         // On-disk session identity (agent identity is the connection, not this).
         ...(event.payload.sessionId ? { sessionId: event.payload.sessionId } : {}),
       };
@@ -454,7 +457,9 @@ export class RemoteSessionClient implements AgentSession {
     return Object.fromEntries(this.toolBufferCache);
   }
 
-  async dispatch(command: AgentSessionCommand): Promise<AgentSessionCommandResult> {
+  async dispatch<C extends AgentSessionCommand["type"]>(
+    command: Extract<AgentSessionCommand, { type: C }>
+  ): Promise<AgentSessionCommandResultFor<C>> {
     if (this.terminated) {
       return { ok: false, code: "not_found", error: this.terminatedReason || "Session not found on server" };
     }
@@ -472,7 +477,7 @@ export class RemoteSessionClient implements AgentSession {
       // usage/todos/plan/...) — no full-snapshot refetch per command. A session
       // switch is the exception: the server cleared its summary/tool remount
       // seeds, so our caches must be rebuilt from the new session's snapshot.
-      const result = await readJson<AgentSessionCommandResult>(response);
+      const result = (await readJson<AgentSessionCommandResult>(response)) as AgentSessionCommandResultFor<C>;
       if (
         command.type === "session.new" ||
         command.type === "session.resume" ||

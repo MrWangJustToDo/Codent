@@ -190,9 +190,6 @@ export class AgentManager {
   // ============================================================================
 
   /**
-   * Create a new agent
-   */
-  /**
    * Create a root agent (`parentId` undefined) or a subagent.
    *
    * `id` is the internal provenance seam: core passes it when IT chose the id (a spawned subagent);

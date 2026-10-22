@@ -98,7 +98,6 @@ export interface CommandJobSummary {
  * lifecycle state changes. Output appends do NOT notify (see the class doc). */
 export type CommandJobChangeListener = (jobs: CommandJobSummary[]) => void;
 
-/** A finished background job surfaced to the model as a completion notification. */
 /**
  * Max retained chars per stream once a job has finished (older output is
  * dropped from the head). Generous vs. the 2000-char completion notification
