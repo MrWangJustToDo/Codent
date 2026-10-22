@@ -12,6 +12,11 @@
  *   `-i` flag is present). Letters inside a pattern/replacement (`s/world/earth/`) must NOT count.
  * - `git diff` / `log` / `show` — `--output[=]` writes a file; `--output-indicator-*` does not.
  *
+ * The second half covers the invocation-level table (`readonly-rules.ts`): every command newly
+ * admitted without a prompt is paired with the form that WOULD write, and that form must still
+ * ask. A bare allow-list without its write counterpart is what let `sort -o` and `uniq in out`
+ * through, so the pairs are the point of the block rather than an extra.
+ *
  * The read-only axis asserted here is the analyzer's own (`isReadOnly` per command, no write op).
  * External-path prompting is a *separate* axis — `find . -name "*.ts"` is read-only yet its
  * `*.ts` glob argument counts as unresolvable/external — so it is deliberately not folded in.
@@ -193,6 +198,121 @@ for (const [label, cmd] of [
 ]) {
   const report = await analyze(cmd, "powershell");
   check(`fallback: ${label} is read-only`, isReadOnly(report), true);
+}
+
+// ----------------------------------------------------------------------------
+// Invocation-level table: each newly admitted command, and the form that writes.
+//
+// The pair is the assertion. `sort -o out.txt` was auto-approved because `sort` had a
+// name-only entry; `uniq in.txt out.txt` had the same shape through its second POSITIONAL
+// operand. A new entry therefore has to ship with the write form it is guarding against, or
+// the next flag someone adds reopens the hole silently.
+// ----------------------------------------------------------------------------
+
+const admitted = [
+  // plain read-only
+  ["tail", "tail -5 f"],
+  ["stat", "stat f"],
+  ["file", "file f"],
+  ["diff", "diff a b"],
+  ["du", "du -sh src"],
+  ["df", "df -h"],
+  ["tr", "tr a-z A-Z"],
+  ["jq", "jq '.a' f"],
+  ["column", "column -t f"],
+  ["md5sum", "md5sum f"],
+  ["base64", "base64 f"],
+  ["id", "id"],
+  ["whoami", "whoami"],
+  ["hostname", "hostname"],
+  ["date", "date"],
+  ["printenv", "printenv HOME"],
+  ["sleep", "sleep 1"],
+  ["expr", "expr 1 + 1"],
+  ["seq", "seq 1 5"],
+  ["true", "true"],
+  ["tree (no -o)", "tree -L 2 src"],
+  ["rg", "rg TODO src"],
+  ["eslint (no --fix)", "eslint src"],
+  ["prettier --check", "prettier --check src"],
+  ["tsc --noEmit", "tsc --noEmit"],
+
+  // git, by subcommand
+  ["git branch -a", "git branch -a"],
+  ["git tag -l", "git tag -l"],
+  ["git remote -v", "git remote -v"],
+  ["git rev-parse", "git rev-parse HEAD"],
+  ["git blame", "git blame f"],
+  ["git ls-files", "git ls-files"],
+  ["git config --get", "git config --get user.name"],
+  ["git config lone key", "git config user.name"],
+  ["git -C dir log", "git -C /repo log --oneline"],
+  ["git stash list", "git stash list"],
+];
+
+for (const [label, cmd] of admitted) {
+  const report = await analyze(cmd, "bash");
+  check(`admitted: ${label} is read-only`, isReadOnly(report), true);
+  check(
+    `admitted: ${label} is auto-allowed for root`,
+    evaluateCommandApproval(report, { agentKind: "root" }).action,
+    "allow"
+  );
+}
+
+// Each admitted name's writing form. These must never be read-only on either path.
+const writeForms = [
+  ["tree -o", "tree -o out.txt src"],
+  ["tree --output", "tree --output out.txt src"],
+  ["date -s", "date -s 2020-01-01"],
+  ["date --set", "date --set=2020-01-01"],
+  ["eslint --fix", "eslint --fix src"],
+  ["eslint --output-file", "eslint --output-file out.json src"],
+  ["prettier --write", "prettier --write src"],
+  ["prettier -w", "prettier -w src"],
+  ["rg --pre", "rg --pre sh foo"],
+  ["rg --pre=", "rg --pre=sh foo"],
+  ["rg --pager", "rg --pager less foo"],
+  ["jq -i", "jq -i '.a=1' f"],
+  ["jq --in-place", "jq --in-place '.a=1' f"],
+
+  // The `uniq` hole this change closes: the SECOND operand is an output file.
+  ["uniq two operands", "uniq in.txt out.txt"],
+  ["uniq two operands -c", "uniq -c in.txt out.txt"],
+
+  ["hostname rename", "hostname evil"],
+  ["command runs a program", "command ls"],
+
+  // `tsc` emits JavaScript unless told not to.
+  ["tsc plain", "tsc"],
+  ["tsc -p", "tsc -p tsconfig.json"],
+
+  // git subcommands that mutate on their ARGUMENTS, not on a flag.
+  ["git branch create", "git branch newbranch"],
+  ["git branch -D", "git branch -D main"],
+  ["git tag create", "git tag v1.0"],
+  ["git tag -d", "git tag -d v1.0"],
+  ["git config assign", "git config user.name x"],
+  ["git config --global assign", "git config --global user.name x"],
+  ["git remote add", "git remote add origin url"],
+  ["git stash pop", "git stash pop"],
+  ["git reflog expire", "git reflog expire --all"],
+  ["git push", "git push"],
+  ["git commit", "git commit -m x"],
+  ["git checkout", "git checkout main"],
+];
+
+for (const [label, cmd] of writeForms) {
+  const parsed = await analyze(cmd, "bash");
+  check(`write-form: ${label} is not read-only`, isReadOnly(parsed), false);
+  check(
+    `write-form: ${label} is not auto-allowed for root`,
+    evaluateCommandApproval(parsed, { agentKind: "root" }).action === "allow",
+    false
+  );
+  // The grammar-less fallback shares the tables, so the same form must stay closed there.
+  const fallbackReport = await analyze(cmd, "powershell");
+  check(`write-form (fallback): ${label} is not read-only`, isReadOnly(fallbackReport), false);
 }
 
 if (failures > 0) {

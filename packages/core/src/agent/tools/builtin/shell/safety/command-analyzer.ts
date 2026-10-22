@@ -18,6 +18,7 @@ import { toPosixPathKey } from "../../../../../utils/posix-path.js";
 import { canonicalizeCommandName, commandName, commandPrefix } from "./command-arity.js";
 import { extractCommands, parseCommandTree, resolveShellKind } from "./command-parser.js";
 import { hasCommandSubstitution, tokenizeCommandString } from "./command-tokenizer.js";
+import { isReadOnlyInvocation } from "./readonly-rules.js";
 
 import type { ParsedCommand, ShellKind } from "./command-parser.js";
 import type { ResolvedCoreEnv, CoreEnvPath } from "../../../../../env";
@@ -134,62 +135,6 @@ const WRITE_OPS = new Set([
 
 /** All commands whose arguments are file paths (path-external analysis applies). */
 const FILE_COMMANDS = new Set([...CWD_COMMANDS, ...READ_FILE_COMMANDS, ...WRITE_OPS]);
-
-/** Normalized prefixes that are considered read-only (safe to auto-approve). */
-const READONLY_PREFIXES = new Set([
-  "ls",
-  "cat",
-  "head",
-  "tail",
-  "grep",
-  "pwd",
-  "echo",
-  "printf",
-  "wc",
-  "which",
-  "uname",
-  "dirname",
-  "basename",
-  "ps",
-  // Text filters that are read-only on their own. `sed` / `sort` / `awk` are deliberately NOT
-  // here: each has a write mode (`-i` / `-o` / `system()`), so they are classified separately by
-  // {@link classifyReadOnly}. Listing `sort` alongside `cat` auto-approved `sort -o`, i.e. a file
-  // write wearing a filter's name; `sed -i` was likewise one `sed` entry away from the same hole.
-  // `env` and `find` are absent for the same reason: both are write-capable through their
-  // *arguments*, not surfaced by a flag. `env rm -rf x` / `env -i sh -c …` launch another
-  // program, and `find . -delete` / `find . -exec rm {} ;` mutate — a name-only entry
-  // auto-approved all of them. Both are now classified from their tokens by
-  // {@link classifyReadOnly}.
-  "cut",
-  "uniq",
-  "test",
-  "git status",
-  "git log",
-  "git diff",
-  "git show",
-  "git stash list",
-  "git remote -v",
-  "node -v",
-  "node --version",
-  "npm -v",
-  "npm --version",
-  "pnpm -v",
-  "pnpm --version",
-  "yarn -v",
-  "yarn --version",
-  "python -V",
-  "python --version",
-
-  // ---- Windows-native read-only commands ----
-  // `where` is the platform counterpart of `which`; `dir`/`type`/`more`/`findstr` are the
-  // read-only file commands. Grouped separately so the POSIX list stays visually intact.
-  "dir",
-  "type",
-  "more",
-  "findstr",
-  "where",
-  "tasklist",
-]);
 
 // ============================================================================
 // Path argument expansion (opencode unquote/home/envValue/expand/prefix)
@@ -608,7 +553,7 @@ function classifyReadOnly(
   if (normalized in MUTATING_FILTER_FLAGS) return !usesMutatingFilterFlag(normalized, tokens);
 
   // `node -v` style prefixes are the only multi-token entries; keep the original lookup for them.
-  return READONLY_PREFIXES.has(normalized) || READONLY_PREFIXES.has(prefix.join(" "));
+  return isReadOnlyInvocation(normalized, prefix, tokens);
 }
 
 /**
