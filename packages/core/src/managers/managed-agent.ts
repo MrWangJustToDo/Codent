@@ -417,7 +417,7 @@ export class ManagedAgent {
   // Compaction / session sync
   // ============================================================================
 
-  readonly compaction: CompactionService;
+  private compaction: CompactionService;
   /** Shared channel → wire projection cache (see `getWireProjectionCache`). */
   private wireProjectionCache: WireProjectionCache | null = null;
   private toolCompactCache: ToolCompactCache;
@@ -625,7 +625,7 @@ export class ManagedAgent {
       mode: this.mode,
       approvals: this.approvals,
       run: this.run,
-      compaction: this.compaction,
+      getCompaction: () => this.compaction,
       statusController: this.statusController,
       memory: this.memory,
       usage: this.usage,
@@ -1207,6 +1207,10 @@ export class ManagedAgent {
 
   getApprovals(): ToolApprovalTable {
     return this.approvals;
+  }
+
+  getCompaction(): CompactionService {
+    return this.compaction;
   }
 
   setMemoryManager(manager: MemoryManager): void {
@@ -2033,7 +2037,7 @@ export function createManualCompactHost(
     usage: managed.usage,
     getTodoManager: () => managed.getTodoManager(),
     statusController: managed.statusController,
-    compactionConfig: managed.compaction.getConfig(),
+    compactionConfig: managed.getCompaction().getConfig(),
     getContextWindow: () => managed.getContextWindow(),
     getCoreEnv: () => managed.getCoreEnv(),
     resetAdmittedTurnContext: (preserveInstructionContext) =>

@@ -302,7 +302,7 @@ setFile("CLAUDE.override.md", "# personal override\n");
     usage: {},
     getTodoManager: () => null,
     statusController: {},
-    compaction: { getConfig: () => null },
+    getCompaction: () => ({ getConfig: () => null }),
     getContextWindow: () => undefined,
     getCoreEnv: () => ({ rootPath: ws }),
     resetAdmittedTurnContext: (preserveInstructionContext) => seen.push(preserveInstructionContext),

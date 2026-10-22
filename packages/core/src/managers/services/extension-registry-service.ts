@@ -56,11 +56,6 @@ export class ExtensionRegistryService {
     this.tools = tools instanceof AgentToolService ? tools : new AgentToolService(tools);
   }
 
-  /** The unified tool service owned by this agent. */
-  getToolService(): AgentToolService {
-    return this.tools;
-  }
-
   /** Dynamic tools provider (defaults to the agent's tools record). */
   private managedToolsProvider?: () => ToolsRecord;
 

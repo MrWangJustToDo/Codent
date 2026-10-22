@@ -819,10 +819,20 @@ console.log("teardown log deletion OK");
     ownerSessionId: () => owner,
     onJobsChange: (jobs) => events.push(jobs.map((job) => job.jobId)),
   });
-  const serviceRegistry = service.registry();
-  const job = serviceRegistry.create("echo service", "call_service");
-  serviceRegistry.appendStdout(job.id, "service output\n");
-  serviceRegistry.markExited(job.id, 0);
+  const startEnv = {
+    ...env,
+    startCommand: async (_command, options) => {
+      options.onStdout?.("service output\n");
+      options.onExit?.(0);
+      return { kill: async () => true, pid: 4343 };
+    },
+  };
+  const started = await service.startBackground({
+    command: "echo service",
+    toolCallId: "call_service",
+    coreEnv: startEnv,
+  });
+  const job = { id: started.jobId };
   await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
   await service.ready();
 
@@ -847,8 +857,8 @@ console.log("teardown log deletion OK");
   );
   await service.markNotified([job.id]);
   assert.deepEqual(await service.collectCompleted(), [], "marking is exactly-once");
-  await service.destroy();
-  assert.deepEqual(service.list(), [], "destroy tears the registry down");
+  await service.reset("session-switch");
+  assert.deepEqual(service.list(), [], "reset tears the session registry down");
 }
 
 // ---------------------------------------------------------------------------

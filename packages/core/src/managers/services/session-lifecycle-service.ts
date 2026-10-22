@@ -40,7 +40,7 @@ export interface SessionLifecycleHost {
   readonly mode: ModeCoordinator;
   readonly approvals: ToolApprovalTable;
   readonly run: RunCoordinator;
-  readonly compaction: CompactionService;
+  getCompaction(): CompactionService;
   readonly statusController: AgentStatusController;
   readonly memory: MemoryService;
   readonly usage: UsageTracker;
@@ -87,7 +87,7 @@ export class SessionLifecycleService {
     this.host.approvals.clear();
     this.host.run.resetRunState();
     this.host.run.resetTurnLifecycle();
-    this.host.compaction.resetReactiveCompactRetries();
+    this.host.getCompaction().resetReactiveCompactRetries();
     this.host.statusController.resetToIdle();
     this.host.clearErrorAndRetry();
     this.host.clearPendingApprovals();

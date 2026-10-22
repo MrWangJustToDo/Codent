@@ -31,7 +31,7 @@ export interface ReactiveCompactHost {
   parentId?: string;
   getUI: () => AgentUIChannel | undefined;
   usage: UsageTracker;
-  compaction: CompactionService;
+  getCompaction(): CompactionService;
   statusController: AgentStatusController;
   getCanonicalFromUI: () => ModelMessage[];
   getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
@@ -56,7 +56,7 @@ export async function handleManagedReactiveCompact(
 ): Promise<boolean> {
   if (host.parentId) return false;
   if (!isPromptTooLongError(error)) return false;
-  if (!host.compaction.canRetryReactiveCompact()) {
+  if (!host.getCompaction().canRetryReactiveCompact()) {
     host.emitEvent("compaction:reactive-max-retries");
     return false;
   }
@@ -64,14 +64,14 @@ export async function handleManagedReactiveCompact(
   const channel = host.getUI();
   if (!channel) return false;
 
-  const retry = host.compaction.recordReactiveCompactRetry();
+  const retry = host.getCompaction().recordReactiveCompactRetry();
   const generation = host.beginCompactionGeneration?.();
   const current = () => host.isCompactionCurrent?.(generation) !== false;
 
   try {
     host.statusController.beginCompaction("reactive", {
       retry,
-      maxRetries: host.compaction.getMaxReactiveCompactRetries(),
+      maxRetries: host.getCompaction().getMaxReactiveCompactRetries(),
     });
     const canon = host.getCanonicalFromUI();
     const llmMessages = host.getMessagesForLLM(canon);

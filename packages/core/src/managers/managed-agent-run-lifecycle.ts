@@ -46,7 +46,7 @@ export interface RunLifecycleHost {
   usage: UsageTracker;
   getUI?: () => AgentUIChannel | undefined;
   run: RunCoordinator;
-  compaction: CompactionService;
+  getCompaction(): CompactionService;
   memory: MemoryService;
 }
 
@@ -88,7 +88,7 @@ export async function prepareManagedAgentForRun(
       }
     },
   });
-  host.compaction.resetReactiveCompactRetries();
+  host.getCompaction().resetReactiveCompactRetries();
 
   // Always consume the flag (avoid `||` short-circuit leaving a stale continuation mark).
   const flaggedContinuation = host.consumePrepareAsContinuation() === true;

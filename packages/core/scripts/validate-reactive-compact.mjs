@@ -302,7 +302,7 @@ function oversizedWire() {
     id: "agent-rc",
     getUI: () => channel,
     usage,
-    compaction,
+    getCompaction: () => compaction,
     statusController: createAgentStatusController({
       getStatus: () => status,
       setStatus: (next) => {
@@ -422,7 +422,7 @@ for (const [label, error, expectSilent] of [
     id: `agent-${label.replace(/\s+/g, "-")}`,
     getUI: () => channel,
     usage,
-    compaction,
+    getCompaction: () => compaction,
     statusController: createAgentStatusController({
       getStatus: () => status,
       setStatus: (next) => {

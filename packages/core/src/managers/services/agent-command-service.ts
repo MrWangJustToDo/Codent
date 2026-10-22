@@ -49,7 +49,7 @@ export class AgentCommandService implements AgentCommandPort {
   constructor(private readonly options: AgentCommandServiceOptions) {}
 
   /** The registry tools use. Creates it (and its change listener) on first access. */
-  registry(): CommandJobRegistry {
+  private registry(): CommandJobRegistry {
     if (!this.registryInstance) {
       const registry = new CommandJobRegistry(this.options.env(), {
         ownerSessionId: this.options.ownerSessionId,
