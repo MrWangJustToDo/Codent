@@ -292,14 +292,8 @@ export { resolveSummarizationBudget } from "./agent/compaction";
 // ============================================================================
 
 export { previewEdit, type PreviewEditResult } from "./agent/tools/util/preview-edit.js";
-export {
-  declareToolPresentation,
-  registerToolPresentation,
-  getToolPresentation,
-  describeToolPresentations,
-  clearToolPresentation,
-} from "./agent/tools/presentation/registry.js";
-export { forgetToolPresentation, hydrateToolPresentations } from "./agent/tools/presentation/registry.js";
+export { describeToolPresentations, presentationFromInfo } from "./agent/tools/presentation/describe.js";
+export { getBuiltinToolPresentation } from "./agent/tools/presentation/builtin-table.js";
 export { keepsCompactRow } from "./agent/tools/presentation/row-rules.js";
 export { computeToolDisplay } from "./agent/tools/presentation/compute-display.js";
 export { formatDuration } from "./agent/tools/presentation/format.js";
@@ -349,6 +343,7 @@ export type {
   ToolActivityCategory,
   ToolPresentation,
   ToolPresentationInfo,
+  ToolPresentationResolver,
   ToolDisplayPayload,
   DisplayToolCallPart,
 } from "./agent/tools/presentation/types.js";
@@ -454,4 +449,3 @@ export { EXTENSION_EVENT_VISIBILITY, observableExtensionEvents } from "./agent/e
 export { generateId } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
 export type { GenerateIdOptions } from "./utils/generate-id.js";
-export { destroyAllCommandJobs } from "./agent/tools/util/command-job-registry.js";

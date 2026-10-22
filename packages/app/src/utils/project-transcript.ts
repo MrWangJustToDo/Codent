@@ -1,6 +1,8 @@
 import { formatExploredActivitySummary, shouldFoldToolRow } from "./tool-activity-summary.js";
 import { isToolCallPart } from "./tool-part.js";
+import { resolveToolPresentation } from "./tool-presentation.js";
 
+import type { ToolPresentation } from "@codent/core";
 import type { TextPart, ToolCallPart, UIMessage } from "@tanstack/ai";
 
 export type TranscriptDisplayMode = "compact" | "full";
@@ -77,7 +79,9 @@ function emitPartMessage(source: UIMessage, part: UIMessage["parts"][number], pa
  * - Errored tool rows fold into the summary too, counted as errors (aggregation stays contiguous)
  * - Folded segments use path-aware activity summaries
  */
-function collapseTurn(turn: Turn): UIMessage[] {
+type ResolvePresentation = (name: string) => ToolPresentation | undefined;
+
+function collapseTurn(turn: Turn, resolve: ResolvePresentation): UIMessage[] {
   const out: UIMessage[] = [];
   let pendingFoldable: PendingFoldable[] = [];
   let summarySeq = 0;
@@ -91,7 +95,10 @@ function collapseTurn(turn: Turn): UIMessage[] {
 
     // Fold: every completed tool (incl. errored ones, counted as errors) folds
     // into a single activity summary (no count threshold).
-    const summary = formatExploredActivitySummary(folded.map((f) => f.part));
+    const summary = formatExploredActivitySummary(
+      folded.map((f) => f.part),
+      resolve
+    );
     if (!summary) {
       for (const item of folded) {
         out.push(emitPartMessage(item.source, item.part, item.partIndex));
@@ -147,7 +154,7 @@ function collapseTurn(turn: Turn): UIMessage[] {
 
       // Errored tool rows fold into the pending run like completed ones;
       // they surface in the summary as an error count instead of vanishing.
-      if (shouldFoldToolRow(part)) {
+      if (shouldFoldToolRow(part, resolve)) {
         pendingFoldable.push({ part, source: message, partIndex: i });
         continue;
       }
@@ -177,11 +184,16 @@ function collapseTurn(turn: Turn): UIMessage[] {
 // Memo storage for {@link projectTranscriptForDisplay} — one entry per display
 // mode (bounded set of modes), compared by message reference identity.
 const PROJECTION_MEMO_LIMIT = 4;
-const projectionMemo = new Map<TranscriptDisplayMode, { refs: UIMessage[]; projected: UIMessage[] }>();
+const projectionMemo = new Map<string, { refs: UIMessage[]; projected: UIMessage[]; resolve: ResolvePresentation }>();
 
 export function projectTranscriptForDisplay(
   messages: UIMessage[],
-  options: { mode: TranscriptDisplayMode }
+  options: {
+    mode: TranscriptDisplayMode;
+    resolvePresentation?: ResolvePresentation;
+    /** Cache namespace for a session switch; message refs normally cover this too. */
+    sessionId?: string;
+  }
 ): UIMessage[] {
   if (options.mode !== "compact" || messages.length === 0) return messages;
 
@@ -190,8 +202,15 @@ export function projectTranscriptForDisplay(
   // to recompute whenever any message is rebuilt (covers tool-state changes in
   // the static portion too, since those arrive as new message objects).
   // Explicit FIFO eviction (insertion-order delete of the oldest key).
-  const cached = projectionMemo.get(options.mode);
-  if (cached && cached.refs.length === messages.length && cached.refs.every((ref, i) => ref === messages[i])) {
+  const resolve = options.resolvePresentation ?? resolveToolPresentation;
+  const memoKey = `${options.mode}:${options.sessionId ?? ""}`;
+  const cached = projectionMemo.get(memoKey);
+  if (
+    cached &&
+    cached.resolve === resolve &&
+    cached.refs.length === messages.length &&
+    cached.refs.every((ref, i) => ref === messages[i])
+  ) {
     return cached.projected;
   }
 
@@ -199,10 +218,10 @@ export function projectTranscriptForDisplay(
   const result: UIMessage[] = [];
 
   for (const turn of turns) {
-    result.push(...collapseTurn(turn));
+    result.push(...collapseTurn(turn, resolve));
   }
 
-  projectionMemo.set(options.mode, { refs: messages.slice(), projected: result });
+  projectionMemo.set(memoKey, { refs: messages.slice(), projected: result, resolve });
   if (projectionMemo.size > PROJECTION_MEMO_LIMIT) {
     const oldest = projectionMemo.keys().next().value;
     if (oldest !== undefined) projectionMemo.delete(oldest);

@@ -24,7 +24,7 @@ import { isContentPartArray } from "@tanstack/ai";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 import { describeReadFileMedia } from "../tools/util/format-read-file-result.js";
 
-import type { ModelToolContent } from "../tools/runtime/to-model-output-registry.js";
+import type { ModelToolContent } from "../tools/runtime/model-output.js";
 import type { MediaRenderInput } from "../tools/util/format-read-file-result.js";
 import type { ContentPart } from "@tanstack/ai";
 import type { ExecuteTypescriptOutput } from "@tanstack/ai-code-mode";

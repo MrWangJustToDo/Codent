@@ -12,7 +12,6 @@
  * new id and does not inherit another conversation's jobs.
  */
 
-import { registerEnvTeardownHook } from "../../../env/teardown";
 import { generateId } from "../../../utils/generate-id.js";
 
 import {
@@ -689,18 +688,3 @@ export class CommandJobRegistry {
     if (ids.length > 0) this.notifyChange();
   }
 }
-
-/** Session-scoped registry (reset when CoreEnv is cleared). */
-export const commandJobRegistry = new CommandJobRegistry();
-
-/** Kill all background jobs and clear the registry (CoreEnv destroy / clear). */
-export async function destroyAllCommandJobs(): Promise<void> {
-  await commandJobRegistry.destroyAll();
-}
-
-// Teardown is registered rather than called: `env.ts` sits at the bottom of the layer
-// stack and importing this module from there closes a cycle (this module → its log
-// writer → env). The hook is fire-and-forget because `clearCoreEnv()` is synchronous.
-registerEnvTeardownHook(() => {
-  void commandJobRegistry.destroyAll();
-});

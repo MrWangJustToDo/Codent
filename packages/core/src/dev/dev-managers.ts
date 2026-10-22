@@ -149,19 +149,13 @@ export { createAgentStatusController, AgentStatusController } from "../managers/
 export { handleManagedReactiveCompact } from "../managers/managed-agent-compact.js";
 export type { ReactiveCompactHost } from "../managers/managed-agent-compact.js";
 
-// Tool presentation registry (internal validation exports — the live descriptor for a tool name,
-// which the public entry only exposes as an event payload).
-export {
-  declareToolPresentation,
-  declaredStackDepth,
-  describeToolPresentations,
-  forgetToolPresentation,
-  forgetToolPresentationOwner,
-  getToolPresentation,
-  hydrateToolPresentations,
-} from "../agent/tools/presentation/registry.js";
+// Tool presentation (internal validation exports): pure descriptor helpers over the static
+// built-in table plus a supplied resolver.
+export { describeToolPresentations, presentationFromInfo } from "../agent/tools/presentation/describe.js";
+export { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin-table.js";
 // The row rule a host branches on — asserted alongside the MCP descriptor it consumes.
 export { keepsCompactRow } from "../agent/tools/presentation/row-rules.js";
+export { AgentToolService } from "../managers/services/agent-tool-service.js";
 export { createTools } from "../agent/tools";
 export { buildToolset } from "../managers/toolset-factory.js";
 export { resolveToolsRecord } from "../agent/tools/runtime";

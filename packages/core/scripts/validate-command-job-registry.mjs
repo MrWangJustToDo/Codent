@@ -18,7 +18,6 @@ import {
   CommandJobRegistry,
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
-  commandJobRegistry,
   collectRunCommandToolCallIds,
   createBackgroundNotificationMiddleware,
   createGetCommandOutputTool,
@@ -31,7 +30,7 @@ import {
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
-const registry = commandJobRegistry;
+const registry = new CommandJobRegistry();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MIB = 1024 * 1024;
 /** The size cap this feature deliberately does NOT have any more (regression guard). */
@@ -419,7 +418,7 @@ console.log("teardown log deletion OK");
 
   // `kill_command` hands back the job's durable log: killing stops the stream, it does not erase what
   // the job produced, and that file is the one the background `run_command` advertises.
-  const tool = createKillCommandTool();
+  const tool = createKillCommandTool({ context: { getCommandJobRegistry: () => registry } });
   const logged = registry.create("echo logged");
   registry.appendStdout(logged.id, "some output\n");
   registry.markExited(logged.id, 0); // finished: killing it stops nothing
@@ -471,7 +470,7 @@ console.log("teardown log deletion OK");
   assert.equal(afterNotify.get(finished.id)?.status, "exited");
 
   // The kill tool works on a restored job too (no "unknown jobId" after resume).
-  const getTool = createGetCommandOutputTool({ managed: { getCommandJobRegistry: () => afterNotify } });
+  const getTool = createGetCommandOutputTool({ context: { getCommandJobRegistry: () => afterNotify } });
   const out = await getTool.execute({ jobId: finished.id }, {});
   assert.equal(out.status, "exited");
   assert.equal(out.cachedOutputPath, finished.logPath);
@@ -503,7 +502,7 @@ console.log("teardown log deletion OK");
   const logAfter = await waitForLog(running.logPath, "· interrupted ·");
   assert.ok(logAfter.includes("· interrupted ·"), "the log gets an interrupted footer");
 
-  const getTool = createGetCommandOutputTool({ managed: { getCommandJobRegistry: () => resumed } });
+  const getTool = createGetCommandOutputTool({ context: { getCommandJobRegistry: () => resumed } });
   const out = await getTool.execute({ jobId: running.id }, {});
   assert.equal(out.status, "failed");
   assert.equal(out.cachedOutputPath, running.logPath, "the log path survives the restart");

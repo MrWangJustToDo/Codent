@@ -20,8 +20,7 @@ import assert from "node:assert/strict";
 import { ExtensionRegistryService } from "../dist/dev.mjs";
 
 /** Minimal registration context — mutates the tools record like ManagedAgent does. */
-function context() {
-  const tools = {};
+function context(tools = {}) {
   return {
     tools,
     ownerId: "ext_test",
@@ -58,7 +57,7 @@ function context() {
   );
 
   // And an extension that does not ask stays ungated.
-  const ctx2 = context();
+  const ctx2 = context(ctx.tools);
   service.registerTool(
     { name: "safe_read", description: "reads", inputSchema: { type: "object" }, execute: async () => ({ ok: true }) },
     ctx2
@@ -122,7 +121,7 @@ function context() {
   assert.deepEqual(result, { value: 42 }, "a fast tool returns its result unchanged");
 
   // No budget at all = unbounded, the historical behaviour.
-  const ctx2 = context();
+  const ctx2 = context(ctx.tools);
   service.registerTool(
     { name: "unbounded", description: "no budget", inputSchema: { type: "object" }, execute: async () => ({ ok: 1 }) },
     ctx2

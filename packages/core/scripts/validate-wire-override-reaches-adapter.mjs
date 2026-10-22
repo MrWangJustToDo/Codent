@@ -60,6 +60,7 @@ import {
   createCompactionMiddleware,
   createReadFileTool,
   createToolCompactMiddleware,
+  getToolMetadata,
   createTruncationState,
   createTurnContextMiddleware,
   createWireRecoveryMiddleware,
@@ -252,7 +253,10 @@ function makeRunner(channel, run, { parentId } = {}) {
       getCompactionConfig: () => ({}),
       getToolCompactCache: () => new ToolCompactCache(),
       // A subagent skips the tool-output projection, so its tool result stays JSON text.
-      getManagedAgent: () => ({ parentId }),
+      getManagedAgent: () => ({
+        parentId,
+        getToolModelOutput: (name) => (name === "read_file" ? getToolMetadata(readFileTool)?.toModelOutput : undefined),
+      }),
     }),
     createWireRecoveryMiddleware({ getRun: () => run }),
   ]);
@@ -371,13 +375,8 @@ function rawImageReadOutput() {
   };
 }
 
-/**
- * Register the real `read_file` tool: `tool-compact` projects a tool result through the
- * tool's `toModelOutput` looked up in the process-global registry, so without this the
- * projection is a no-op and this whole section would assert nothing (which is exactly how
- * the case went uncovered — every fixture that existed merely *looked* covered).
- */
-createReadFileTool();
+/** Register the real `read_file` tool so `tool-compact` resolves its live `toModelOutput`. */
+const readFileTool = createReadFileTool();
 
 /** The projected form of that same result, as text — what a string `tool` content looks like. */
 function stringifiedPartsImage() {

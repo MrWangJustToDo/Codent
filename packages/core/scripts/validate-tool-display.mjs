@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 
 const core = await import("../dist/index.mjs");
+const dev = await import("../dist/dev.mjs");
 
 // --- 1. built-in rendering ---------------------------------------------------
 const readFile = core.computeToolDisplay("read_file", { type: "file", totalLines: 42, content: "x" });
@@ -74,20 +75,39 @@ assert.equal(core.computeToolDisplay("", { ok: true }), undefined);
 
 // --- 4. a tool's own renderer wins ------------------------------------------
 assert.equal(core.keepsCompactRow("ext_echo"), false, "unknown tool keeps no row");
-core.registerToolPresentation("ext_echo", {
-  category: "searches",
-  text: (result) => (result?.echoed ? `echo → ${result.echoed}` : ""),
-  label: (input) => input?.message,
-});
-assert.equal(core.getToolPresentation("ext_echo")?.category, "searches");
-assert.equal(core.keepsCompactRow("ext_echo"), true, "a text renderer owns its compact row");
-assert.deepEqual(core.computeToolDisplay("ext_echo", { echoed: "hi" }, { message: "hi" }), {
+const service = new dev.AgentToolService();
+service.register(
+  {
+    name: "ext_echo",
+    description: "echo",
+    inputSchema: { type: "object", properties: {} },
+    execute: async () => ({ echoed: "hi" }),
+    present: {
+      category: "searches",
+      text: (result) => (result?.echoed ? `echo → ${result.echoed}` : ""),
+      label: (input) => input?.message,
+    },
+  },
+  { ownerId: "test-extension" }
+);
+const resolveService = (name) => service.resolve(name)?.present;
+assert.equal(service.resolve("ext_echo")?.present?.category, "searches");
+assert.equal(core.keepsCompactRow("ext_echo", resolveService), true, "a text renderer owns its compact row");
+assert.deepEqual(core.computeToolDisplay("ext_echo", { echoed: "hi" }, { message: "hi" }, resolveService), {
   text: "echo → hi",
   label: "hi",
 });
-assert.equal(core.computeToolDisplay("ext_echo", {}), undefined, "empty renderer output yields no payload");
-core.clearToolPresentation();
-assert.equal(core.computeToolDisplay("ext_echo", { echoed: "hi" }), undefined, "cleared registry");
+assert.equal(
+  core.computeToolDisplay("ext_echo", {}, undefined, resolveService),
+  undefined,
+  "empty renderer output yields no payload"
+);
+service.unregisterOwner("ext_echo", "test-extension");
+assert.equal(
+  core.computeToolDisplay("ext_echo", { echoed: "hi" }, undefined, (name) => service.resolve(name)?.present),
+  undefined,
+  "unregistering the owner removes the descriptor"
+);
 
 // --- 5. never on the model wire ---------------------------------------------
 // The projection is TanStack's (`uiMessagesToModelMessages`), and core never calls it
@@ -168,17 +188,27 @@ assert.ok(
   "catalog entries are serializable data"
 );
 
-core.registerToolPresentation("ext_catalog", { category: "searches", text: (r) => String(r?.n ?? "") });
+const catalogService = new dev.AgentToolService();
+catalogService.register(
+  {
+    name: "ext_catalog",
+    description: "catalog probe",
+    inputSchema: { type: "object", properties: {} },
+    execute: async () => ({ n: 1 }),
+    present: { category: "searches", text: (r) => String(r?.n ?? "") },
+  },
+  { ownerId: "catalog-extension" }
+);
 assert.equal(
-  core.describeToolPresentations().find((entry) => entry.name === "ext_catalog")?.hasText,
+  catalogService.catalog().find((entry) => entry.name === "ext_catalog")?.hasText,
   true,
   "a registered extension tool joins the catalog"
 );
-core.clearToolPresentation();
+catalogService.unregisterOwner("ext_catalog", "catalog-extension");
 assert.equal(
-  core.describeToolPresentations().some((entry) => entry.name === "ext_catalog"),
+  catalogService.catalog().some((entry) => entry.name === "ext_catalog"),
   false,
-  "disabling (clearing) an extension drops it from the catalog"
+  "disabling an extension drops it from the catalog"
 );
 
 console.log("validate-tool-display: catalog ok");
@@ -228,22 +258,27 @@ assert.equal(
   "a failed edit_file carries no payload"
 );
 
-// A host that never created the tools (remote session, publisher) adopts the owning
-// process's catalog and then folds/labels identically.
+// A host that never created the tools (remote session, publisher) receives the owner's
+// serializable descriptor and resolves it through that session — never a process-global layer.
 const remoteTool = "remote_only_tool";
-assert.equal(core.getToolPresentation(remoteTool), undefined, "unknown before hydration");
-core.hydrateToolPresentations([
-  { name: remoteTool, category: "other", keepRow: true, detailed: true, clientSide: false },
-]);
-assert.equal(core.keepsCompactRow(remoteTool), true, "hydration restores the row rules");
-assert.equal(core.getToolPresentation(remoteTool)?.detailed, true, "hydration restores the flags");
+assert.equal(core.getBuiltinToolPresentation(remoteTool), undefined, "unknown before the session descriptor");
+const remotePresent = core.presentationFromInfo({
+  name: remoteTool,
+  category: "other",
+  keepRow: true,
+  detailed: true,
+  clientSide: false,
+});
+const resolveRemote = (name) => (name === remoteTool ? remotePresent : undefined);
+assert.equal(core.keepsCompactRow(remoteTool, resolveRemote), true, "the session descriptor restores row rules");
+assert.equal(remotePresent.detailed, true, "and the flags");
 assert.equal(
   core.describeToolPresentations().some((entry) => entry.name === remoteTool),
   false,
-  "adopted entries stay out of the published catalog"
+  "a session descriptor stays out of the host's published catalog"
 );
 
-console.log("validate-tool-display: failure + hydration ok");
+console.log("validate-tool-display: failure + session descriptor ok");
 
 // --- 11. failure shapes and registry lifecycle -------------------------------
 // `{ ok: false }` / `{ success: false }` are failures just like `{ error }`: none of them may
@@ -303,23 +338,16 @@ assert.equal(
 
 console.log("validate-tool-display: cut-off task summary ok");
 
-// --- 12. hydration fidelity --------------------------------------------------
+// --- 12. session-descriptor fidelity ------------------------------------------
 // `hasText` is what keeps a text-only tool's row alive (`keepRow || clientSide || text`), so it
-// must survive adoption even though the renderer itself cannot.
-core.hydrateToolPresentations([{ name: "hydrated_text_only", category: "other", hasText: true }]);
-assert.equal(core.keepsCompactRow("hydrated_text_only"), true, "a text-only tool keeps its row");
-assert.equal(typeof core.getToolPresentation("hydrated_text_only")?.text, "function", "as a presence stub");
-
-// Adoption replaces the previous catalog, and a payload without descriptors is tolerated.
-core.hydrateToolPresentations([{ name: "hydrated_other", category: "other", hasText: true }]);
-assert.equal(core.keepsCompactRow("hydrated_text_only"), false, "the old adoption is dropped");
-
-// A malformed payload must be a no-op, *not* a wipe: the host keeps ruling rows the way the
-// owner does until a real catalog arrives.
-core.hydrateToolPresentations(undefined);
-assert.equal(core.keepsCompactRow("hydrated_other"), true, "undefined catalog keeps the adoption");
-core.hydrateToolPresentations([]);
-assert.equal(core.keepsCompactRow("hydrated_other"), false, "an empty catalog really does clear it");
+// must survive rehydration even though the renderer itself cannot cross the process boundary.
+const textOnly = core.presentationFromInfo({ name: "session_text_only", category: "other", hasText: true });
+assert.equal(
+  core.keepsCompactRow("session_text_only", () => textOnly),
+  true,
+  "a text-only tool keeps its row"
+);
+assert.equal(typeof textOnly.text, "function", "as a presence stub");
 
 // A row that already shipped its rendered text must not fold, even when the local lookup has
 // never heard of the tool (pre-change history replayed into a remote host).

@@ -6,15 +6,25 @@
 /* eslint-disable no-undef */
 import assert from "node:assert/strict";
 
-import { applyToolCompact, formatReadFileToolResult, toModelOutputRegistry, ToolCompactCache } from "../dist/dev.mjs";
+import {
+  applyToolCompact,
+  createReadFileTool,
+  createRunCommandTool,
+  createWriteFileTool,
+  getToolMetadata,
+  ToolCompactCache,
+} from "../dist/dev.mjs";
 
 const cache = new ToolCompactCache();
 
-toModelOutputRegistry.register("read_file", ({ output }) => formatReadFileToolResult(output));
-toModelOutputRegistry.register("run_command", ({ output }) => [
-  { type: "text", content: `Exit code: ${output.exitCode}` },
-  { type: "text", content: output.stdout ?? "" },
-]);
+const tools = {
+  read_file: createReadFileTool(),
+  run_command: createRunCommandTool(),
+  write_file: createWriteFileTool(),
+};
+const registry = {
+  get: (name) => getToolMetadata(tools[name])?.toModelOutput,
+};
 
 const messages = [
   {
@@ -67,7 +77,7 @@ const inputBefore = JSON.stringify(cloned);
 // `applyToolCompact` is pure: it returns replacements and never edits its input.
 const compacted = await applyToolCompact(cloned, {
   config: {},
-  registry: toModelOutputRegistry,
+  registry,
   cache,
 });
 assert.notEqual(compacted, cloned, "a transformed wire must be a new array");
@@ -89,7 +99,7 @@ assert.equal(cache.has("call-3"), true);
 const replay = structuredClone(messages);
 const replayed = await applyToolCompact(replay, {
   config: {},
-  registry: toModelOutputRegistry,
+  registry,
   cache,
 });
 
@@ -123,20 +133,13 @@ const pendingApproval = [
 const pendingClone = structuredClone(pendingApproval);
 const pendingOut = await applyToolCompact(pendingClone, {
   config: {},
-  registry: toModelOutputRegistry,
+  registry,
   cache: new ToolCompactCache(),
 });
 
 const pendingTool = pendingOut.find((m) => m.role === "tool" && m.toolCallId === "call-cmd");
 assert.ok(pendingTool);
 assert.match(String(pendingTool.content), /pendingExecution/);
-
-toModelOutputRegistry.register("write_file", ({ output }) => [
-  {
-    type: "text",
-    content: `${output.created ? "Created" : "Overwrote"} file: ${output.path}`,
-  },
-]);
 
 const errorMessages = [
   {
@@ -166,7 +169,7 @@ const errorMessages = [
 const errorClone = structuredClone(errorMessages);
 const errorOut = await applyToolCompact(errorClone, {
   config: {},
-  registry: toModelOutputRegistry,
+  registry,
   cache: new ToolCompactCache(),
 });
 

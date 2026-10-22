@@ -2,9 +2,8 @@ import { createMCPClient } from "@tanstack/ai-mcp";
 
 import { getEnv } from "../../env";
 import { toError } from "../../utils/errors.js";
-import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
-import { resolveMcpModelOutput, wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
+import { wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
 
 import type { McpConfigSourceKind } from "./options.js";
 import type { McpConfig, McpServerConfig } from "./types.js";
@@ -24,15 +23,10 @@ export type { McpServerStatus };
 export type McpToolsRecord = Record<string, AnyServerTool>;
 
 /**
- * Owner recorded for every MCP registration (model-output shaping), so shutting the
- * servers down can remove exactly its own entries.
+ * Legacy owner id used by standalone MCP-presentation tests.
  *
- * Deliberately === the MCP extension's id. Every one of these registrations is removed by
- * `forgetToolPresentationOwner` / `toModelOutputRegistry.removeOwner` on extension unload
- * (`extension-registry-service.ts`), so a different owner here would make the removal a
- * no-op that silently leaks one stacked handler per server per connect — and, for a name
- * that is also a built-in, leave the stale MCP handler shadowing the built-in's own
- * shaping for the rest of the process.
+ * Live MCP tools carry their `toModelOutput` on the registered tool definition, so the agent
+ * tool service owns publication/removal; no process registry entry exists to clean up.
  */
 export const MCP_TOOL_OWNER = "codent-mcp";
 
@@ -162,19 +156,6 @@ export class McpManager {
           for (const tool of tools) {
             // TanStack prefers structuredContent and drops content[] images; re-wrap execute.
             allTools[tool.name] = wrapMcpToolForMultimodalContent(tool, client);
-
-            // MCP tools are created dynamically (never via `defineServerTool`), so no
-            // `toModelOutput` is registered for them. `applyToolCompact` then leaves the
-            // persisted tool result untouched — and TanStack persists array results as
-            // JSON text, so image base64 reaches the model as plain text: vision models
-            // still need another tool to "read" the image, and the base64 is re-sent
-            // every turn. Register the default resolver so media is revived to
-            // ContentPart[] and lifted to `image_url` by the adapter.
-            //
-            // Owner-scoped, not the default (the tool name): the extension registry removes
-            // these by owner when the MCP extension unloads, and the default would make that
-            // removal miss — leaking the entry and shadowing a same-named built-in's shaping.
-            this.registerModelOutputFor(tool.name);
           }
 
           this.clients.set(name, client);
@@ -212,24 +193,6 @@ export class McpManager {
     return allTools;
   }
 
-  /** Every tool name this manager registered, so shutdown can remove its entries. */
-  private registeredToolNames: string[] = [];
-
-  /**
-   * Record this manager's model-output shaping for one tool, under {@link MCP_TOOL_OWNER},
-   * and remember the name so {@link clearModelOutputRegistrations} can drop it.
-   *
-   * A named method rather than an inline `register` call so the owner is stated once, at a
-   * seam a validator can drive directly. The owner is the part that used to be wrong — the
-   * inline call took the default (the tool name) while the extension registry removes by the
-   * extension's id — and an inline call is not reachable without a live MCP server, which is
-   * exactly why the mismatch went unnoticed.
-   */
-  registerModelOutputFor(toolName: string): void {
-    toModelOutputRegistry.register(toolName, ({ output }) => resolveMcpModelOutput(output), MCP_TOOL_OWNER);
-    this.registeredToolNames.push(toolName);
-  }
-
   getServerStatuses(): McpServerStatus[] {
     return Array.from(this.serverStatuses.values());
   }
@@ -240,23 +203,6 @@ export class McpManager {
    */
   getServerInstructions(): Array<{ server: string; instructions: string }> {
     return Array.from(this.serverInstructions, ([server, instructions]) => ({ server, instructions }));
-  }
-
-  /**
-   * Drop this manager's model-output registrations and forget the names.
-   *
-   * `forceKill`/`shutdown` closed the clients but left these behind — nothing else removes
-   * them, because the extension-registry removal runs per *registered extension tool* and the
-   * MCP extension never unregisters on deactivate. Without this, each connect leaves one more
-   * handler stacked under a name (its own owner, so it replaced its previous entry — but the
-   * name stayed occupied), and a name shared with a built-in kept shadowing that built-in's
-   * shaping for the rest of the process.
-   */
-  private clearModelOutputRegistrations(): void {
-    for (const name of this.registeredToolNames) {
-      toModelOutputRegistry.removeOwner(name, MCP_TOOL_OWNER);
-    }
-    this.registeredToolNames = [];
   }
 
   forceKill(): void {
@@ -281,7 +227,6 @@ export class McpManager {
     this.clients.clear();
     this.serverStatuses.clear();
     this.serverInstructions.clear();
-    this.clearModelOutputRegistrations();
   }
 
   async shutdown(): Promise<void> {
@@ -296,7 +241,6 @@ export class McpManager {
     this.stdioTransports = [];
     this.serverStatuses.clear();
     this.serverInstructions.clear();
-    this.clearModelOutputRegistrations();
   }
 
   getConnectedServers(): string[] {

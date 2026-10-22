@@ -7,14 +7,13 @@ import { errorMessage } from "../../utils/errors.js";
 import { analyzeCommand, createAnalysisContext } from "./command-safety/command-analyzer.js";
 import { evaluateCommandApproval } from "./command-safety/command-approval-policy.js";
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
-import { commandJobRegistry } from "./util/command-job-registry.js";
 import { OutputAccumulator } from "./util/output-accumulator.js";
 import { emitStreamingChunk } from "./util/streaming-callback.js";
 import { maybeCacheOutput } from "./util/tool-output-cache.js";
 import { runCommandOutputSchema } from "./util/types.js";
 
+import type { AgentToolContext } from "./runtime/tool-context.js";
 import type { RunCommandOutput } from "./util/types.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 const COMMAND_CANCELLED_NOTICE = "[Command cancelled by user.]";
 
@@ -83,8 +82,8 @@ export function buildTimedOutCommandResult(params: {
   };
 }
 
-export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed?: ManagedAgent }) => {
-  const registry = options?.managed?.getCommandJobRegistry() ?? commandJobRegistry;
+export const createRunCommandTool = (options?: { subagentSafe?: boolean; context?: AgentToolContext }) => {
+  const registry = options?.context?.getCommandJobRegistry();
   const subagentSafe = options?.subagentSafe ?? false;
   // `RUN_COMMAND_TIMEOUT_MS` is resolved once per tool instance: the env is stable for the session,
   // and under `--remote-env` `coreEnv.getEnv()` is an HTTP round-trip we should not pay per command.
@@ -184,6 +183,9 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; managed
       }
 
       if (run_in_background) {
+        if (!registry) {
+          throw new Error("Background commands require an AgentToolContext with a command job registry.");
+        }
         // Restore this session's previous jobs first: `ready()` is a no-op after the first call.
         await registry.ready();
         if (!coreEnv.startCommand) {

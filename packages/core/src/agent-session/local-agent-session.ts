@@ -156,6 +156,10 @@ class LocalAgentSessionImpl implements AgentSession {
     return this.managed.streamHub?.listSnapshots() ?? [];
   }
 
+  getToolPresentation(name: string) {
+    return this.managed.getToolPresentation(name);
+  }
+
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void {
     const selected = resolveChannels(options);
     const unsubs: Array<() => void> = [];

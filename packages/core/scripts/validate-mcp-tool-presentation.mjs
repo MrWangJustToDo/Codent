@@ -25,26 +25,29 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 
 import {
+  AgentToolService,
   ExtensionRunner,
-  MCP_TOOL_OWNER,
-  McpManager,
   createMcpExtension,
-  declareToolPresentation,
-  describeToolPresentations,
-  forgetToolPresentationOwner,
-  getToolPresentation,
-  hydrateToolPresentations,
+  createReadFileTool,
+  presentationFromInfo,
   keepsCompactRow,
   registerCoreEnv,
-  toModelOutputRegistry,
 } from "../dist/dev.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
+
+const mcpExtensionSource = readFileSync(new URL("../src/agent/mcp/extension.ts", import.meta.url), "utf8");
+assert.match(
+  mcpExtensionSource,
+  /toModelOutput:[\s\S]{0,100}resolveMcpModelOutput\(output\)/,
+  "MCP tools carry their model-output resolver on the registered tool definition"
+);
 
 // ============================================================================
 // CoreEnv — the extension reads it while activating
@@ -160,9 +163,6 @@ function makeStubManager() {
   };
 }
 
-/** The descriptor the extension is expected to declare, for assertions that need it directly. */
-const MCP_DESCRIPTOR = { category: "other", keepRow: true, detailed: true };
-
 /**
  * Activate the real MCP extension and collect what it registered.
  *
@@ -242,190 +242,91 @@ console.log(`✓ ${toolDefs.length} MCP tools declare keepRow + detailed under a
 console.log("✓ MCP handshake instructions surface as a turn-context section");
 
 // ============================================================================
-// 2. The declared descriptor actually resolves, and it is what decides rows
+// 2. The registered definition resolves through the agent tool service
 // ============================================================================
 
 const MCP_NAME = "mcp__probe_do_thing";
-
 const MCP_OWNER = "agent:codent-mcp";
+const service = new AgentToolService();
+for (const def of toolDefs) service.register(def, { ownerId: MCP_OWNER });
+const resolvePresent = (name) => service.resolve(name)?.present;
 
-// Pre-condition: this name means nothing to core, so before the declaration it resolved to
-// no descriptor and folded. Asserted so "it resolves now" is not vacuous.
-assert.equal(getToolPresentation(`${MCP_NAME}_never_declared`), undefined, "an undeclared MCP name has no descriptor");
-
-declareToolPresentation(MCP_NAME, MCP_DESCRIPTOR, MCP_OWNER);
-
-const resolved = getToolPresentation(MCP_NAME);
-assert.ok(resolved, "a declared MCP tool resolves a descriptor");
+const resolved = service.resolve(MCP_NAME)?.present;
+assert.ok(resolved, "the registered MCP tool resolves a descriptor");
 assert.equal(resolved.category, "other");
 assert.equal(resolved.keepRow, true);
 assert.equal(resolved.detailed, true);
 
-// The two host-side gates the descriptor feeds. These are the whole point: `false` on either
-// is a tool whose result the user cannot see in compact display.
-assert.equal(keepsCompactRow(MCP_NAME), true, "an MCP tool keeps its compact row");
+assert.equal(keepsCompactRow(MCP_NAME, resolvePresent), true, "an MCP tool keeps its compact row");
 assert.equal(
-  keepsCompactRow("mcp__undeclared_thing"),
+  keepsCompactRow("mcp__undeclared_thing", resolvePresent),
   false,
   "…and a name with no descriptor still folds, so the row rule is doing the work"
 );
 
-console.log("✓ a declared MCP tool keeps its row, and an undeclared one does not");
+console.log("✓ a registered MCP tool keeps its row, and an undeclared one does not");
 
 // ============================================================================
 // 3. The descriptor ships to hosts
 // ============================================================================
 
-const catalogEntry = describeToolPresentations().find((entry) => entry.name === MCP_NAME);
-assert.ok(catalogEntry, "an MCP tool is in the published catalog");
+const catalogEntry = service.catalog().find((entry) => entry.name === MCP_NAME);
+assert.ok(catalogEntry, "an MCP tool is in the agent's published catalog");
 assert.equal(catalogEntry.keepRow, true, "its row rule ships");
 assert.equal(catalogEntry.detailed, true, "its block rule ships");
 assert.equal(catalogEntry.hasText, false, "and no renderer is claimed, because there is none");
 
-// A host that never created the tools (remote session) learns the rules by adoption.
-// MCP entries must survive that path, or a remote renderer folds MCP rows again.
-hydrateToolPresentations([{ name: "mcp__adopted_thing", category: "other", keepRow: true, detailed: true }]);
-assert.equal(keepsCompactRow("mcp__adopted_thing"), true, "an adopted MCP descriptor keeps its row remotely");
+// A host that never created the tools (remote session) resolves the descriptor carried by
+// its own session; MCP entries must survive that path or a remote renderer folds MCP rows again.
+const remoteMcp = presentationFromInfo({
+  name: "mcp__adopted_thing",
+  category: "other",
+  keepRow: true,
+  detailed: true,
+});
+assert.equal(
+  keepsCompactRow("mcp__adopted_thing", () => remoteMcp),
+  true,
+  "a session MCP descriptor keeps its row"
+);
 
-console.log("✓ MCP descriptors ship in the catalog and survive adoption");
+console.log("✓ MCP descriptors ship in the catalog and survive a session boundary");
 
 // ============================================================================
 // 4. Owner-scoped removal — no leak, no cross-owner damage
 // ============================================================================
 
-// The extension registry removes by owner on unload; the MCP declaration must come off and
-// leave nothing behind.
-forgetToolPresentationOwner(MCP_NAME, MCP_OWNER);
-assert.equal(getToolPresentation(MCP_NAME), undefined, "removing the owner drops the MCP descriptor");
+service.unregisterOwner(MCP_NAME, MCP_OWNER);
+assert.equal(service.resolve(MCP_NAME), undefined, "removing the owner drops the MCP descriptor");
 assert.equal(
-  describeToolPresentations().some((entry) => entry.name === MCP_NAME),
+  service.catalog().some((entry) => entry.name === MCP_NAME),
   false,
   "and it leaves the catalog, so a remote host stops ruling dead rows"
 );
 
-// Two servers exposing the same tool name must not clobber each other. This is the property
-// the owner-scoped path exists for, and the reason the unscoped registration is gone.
-declareToolPresentation(MCP_NAME, MCP_DESCRIPTOR, "server-a");
-declareToolPresentation(MCP_NAME, MCP_DESCRIPTOR, "server-b");
-forgetToolPresentationOwner(MCP_NAME, "server-b");
-assert.equal(getToolPresentation(MCP_NAME)?.keepRow, true, "server-a's declaration survives server-b's removal");
-forgetToolPresentationOwner(MCP_NAME, "server-a");
+// Two owners exposing the same tool name must not clobber each other.
+const mcpDef = toolDefs.find((def) => def.name === MCP_NAME);
+assert.ok(mcpDef);
+service.register(mcpDef, { ownerId: "server-a" });
+service.register(mcpDef, { ownerId: "server-b" });
+service.unregisterOwner(MCP_NAME, "server-b");
+assert.equal(service.resolve(MCP_NAME)?.present?.keepRow, true, "server-a's registration survives server-b's removal");
+service.unregisterOwner(MCP_NAME, "server-a");
 
-// A tool shadowing a built-in must restore the built-in's own declaration, not leave the
-// name undescribed — the failure that would silently drop a built-in's row out of compact view.
-declareToolPresentation("read_file", MCP_DESCRIPTOR, "mcp-server");
-assert.equal(getToolPresentation("read_file")?.category, "other", "the MCP declaration is live over the built-in");
-forgetToolPresentationOwner("read_file", "mcp-server");
-assert.equal(getToolPresentation("read_file")?.category, "reads", "the built-in's own declaration returns");
+// A tool shadowing a built-in must restore the built-in's own descriptor.
+const shadowService = new AgentToolService({ read_file: createReadFileTool() });
+const mcpReadFile = toolDefs.find((def) => def.name === "read_file");
+assert.ok(mcpReadFile);
+shadowService.register(mcpReadFile, { ownerId: "mcp-server" });
+assert.equal(
+  shadowService.resolve("read_file")?.present?.category,
+  "other",
+  "the MCP descriptor is live over the built-in"
+);
+shadowService.unregisterOwner("read_file", "mcp-server");
+assert.equal(shadowService.resolve("read_file")?.present?.category, "reads", "the built-in's own descriptor returns");
 
 console.log("✓ owner-scoped removal is exact: no leak, no cross-owner damage");
-
-// ============================================================================
-// 5. The model-output registration carries the owner the removal looks for
-// ============================================================================
-//
-// Bug 2. `toModelOutputRegistry.register(name, fn)` defaults `ownerId` to the tool name, but
-// the extension registry removes by the extension's id — so the removal missed and the entry
-// stayed, shadowing a same-named built-in's shaping for the rest of the process.
-//
-// The owner is asserted through the manager's **composed observable** rather than by reading
-// its source or re-issuing the registration here: a validator that registers with the owner
-// itself only proves the registry works, and would pass with the manager still calling the
-// default. `ownerKeyFor` asks what a removal must pass to make the entry go away, which is
-// only the owner if the manager actually used it.
-
-assert.equal(MCP_TOOL_OWNER, "codent-mcp", "the owner is the MCP extension's id, so its removals match");
-
-{
-  const probe = "mcp__probe_shaping";
-  const mcpManager = new McpManager();
-  mcpManager.registerModelOutputFor(probe);
-
-  const live = () =>
-    toModelOutputRegistry.get(probe)?.({
-      toolCallId: "c1",
-      input: {},
-      output: { content: [{ type: "text", text: "hi" }] },
-    });
-
-  // The extension registry's removal, using the owner it derives for the MCP extension.
-  toModelOutputRegistry.removeOwner(probe, MCP_TOOL_OWNER);
-  assert.equal(
-    await live(),
-    undefined,
-    "removing under the MCP owner drops the manager's registration — a different owner would leave it behind"
-  );
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 0, "and the entry is gone, not merely shadowed");
-}
-
-// Re-connecting must not accumulate: same owner, one entry.
-{
-  const probe = "mcp__probe_repeat";
-  const mcpManager = new McpManager();
-  mcpManager.registerModelOutputFor(probe);
-  mcpManager.registerModelOutputFor(probe);
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 1, "a re-registration replaces the owner's own entry");
-  toModelOutputRegistry.removeOwner(probe, MCP_TOOL_OWNER);
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 0, "and one removal clears it");
-}
-
-// A built-in's own shaping survives the MCP tool that shadowed it, once the server goes away.
-{
-  const shared = "read_file";
-  toModelOutputRegistry.register(shared, () => "builtin-shaped", shared);
-  const mcpManager = new McpManager();
-  mcpManager.registerModelOutputFor(shared);
-
-  const live = () => toModelOutputRegistry.get(shared)?.({ toolCallId: "c1", input: {}, output: {} });
-  assert.equal(await live(), await toModelOutputRegistry.get(shared)({ toolCallId: "c", input: {}, output: {} }));
-  assert.equal(toModelOutputRegistry.stackDepth(shared), 2, "the MCP entry stacks over the built-in's");
-
-  toModelOutputRegistry.removeOwner(shared, MCP_TOOL_OWNER);
-  assert.equal(await live(), "builtin-shaped", "dropping the MCP owner restores the built-in's shaping");
-  assert.equal(toModelOutputRegistry.stackDepth(shared), 1, "the built-in's entry was never touched");
-}
-
-console.log("✓ the MCP model-output entry is owner-scoped and removable");
-
-// ============================================================================
-// 6. The manager's own teardown drops its registrations
-// ============================================================================
-//
-// Nothing else removes them: the extension registry's removal runs per *registered extension
-// tool*, and the MCP extension never unregisters on deactivate. So the manager has to clean up
-// after itself, or every connect/reconnect cycle leaves the name occupied — and a name shared
-// with a built-in keeps shadowing that built-in's shaping for the rest of the process.
-
-for (const lifecycle of [
-  ["shutdown", (m) => m.shutdown()],
-  ["forceKill", (m) => m.forceKill()],
-]) {
-  const [label, run] = lifecycle;
-  const probe = `mcp__probe_${label}`;
-  const mcpManager = new McpManager();
-  mcpManager.registerModelOutputFor(probe);
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 1, `${label}: registration exists before teardown`);
-
-  // `forceKill` reads CoreEnv for stdio transports; there are none here, but the env is
-  // registered in the harness above so the call does not throw before reaching the cleanup.
-  await run(mcpManager);
-
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 0, `${label} drops this manager's registrations`);
-}
-
-// A reconnect after teardown must start clean rather than stack on top of a leaked entry.
-{
-  const probe = "mcp__probe_reconnect";
-  const first = new McpManager();
-  first.registerModelOutputFor(probe);
-  await first.shutdown();
-  const second = new McpManager();
-  second.registerModelOutputFor(probe);
-  assert.equal(toModelOutputRegistry.stackDepth(probe), 1, "a reconnect leaves exactly one entry, not a growing stack");
-  toModelOutputRegistry.removeOwner(probe, MCP_TOOL_OWNER);
-}
-
-console.log("✓ teardown drops the manager's registrations, and a reconnect starts clean");
 
 // ============================================================================
 // 7. Deactivation shuts the manager down (no dangling servers)

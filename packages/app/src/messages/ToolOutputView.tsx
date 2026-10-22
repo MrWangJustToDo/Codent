@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES, getToolPresentation, splitStreamingLines } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, splitStreamingLines } from "@codent/core";
 import { Box, Text } from "ink";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
@@ -8,6 +8,7 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatToolOutput } from "../utils/format";
 import { hasDetailedOutputBlock, keepsCompactRow } from "../utils/tool-display.js";
 import { isCancelledToolCall } from "../utils/tool-part.js";
+import { resolveToolPresentation } from "../utils/tool-presentation.js";
 
 import { TodoToolOutputView } from "./TodoToolOutputView.js";
 
@@ -65,7 +66,7 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // Extension (and other) tools: show the default block only when the tool rendered
   // non-empty text (`present.text`, in-process or precomputed into the payload).
   if (!isDetailed) {
-    const hasRenderer = Boolean(display?.text) || Boolean(getToolPresentation(toolName)?.text);
+    const hasRenderer = Boolean(display?.text) || Boolean(resolveToolPresentation(toolName)?.text);
     if (!hasRenderer || !output.trim()) return null;
   }
 
@@ -74,7 +75,7 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   const outputLines = splitStreamingLines(output);
   // Structured tools (row-keeping, no result renderer) keep their full block in both
   // modes; anything else allowed to render in compact is one clamped line.
-  const structured = keepsCompactRow(toolName) && !getToolPresentation(toolName)?.text;
+  const structured = keepsCompactRow(toolName) && !resolveToolPresentation(toolName)?.text;
   const lines = mode === "compact" && !structured ? [clampCompactLine(outputLines[0] ?? "")] : outputLines;
   // A cancelled command carries `success: false`, so the old check painted its output block in
   // the failure color while the header showed a neutral ⚠ — one row, two verdicts. It did not

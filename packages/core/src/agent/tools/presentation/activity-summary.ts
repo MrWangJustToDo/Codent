@@ -1,12 +1,12 @@
 import { truncateText } from "../../../utils/text-truncation.js";
 
+import { getBuiltinToolPresentation } from "./builtin-table.js";
 import { formatDuration } from "./format.js";
 import { DURATION_THRESHOLD_MS, getDurationMs } from "./inline-summary.js";
-import { getToolPresentation } from "./registry.js";
 import { keepsCompactRow } from "./row-rules.js";
 import { getUiToolState, parseToolInput } from "./tool-state.js";
 
-import type { ToolDisplayPayload } from "./types.js";
+import type { ToolDisplayPayload, ToolPresentation } from "./types.js";
 import type { ToolCallPart } from "@tanstack/ai";
 
 /** Count buckets for Cursor-style turn activity lines. */
@@ -41,7 +41,10 @@ const BUCKET_LABEL: Record<ToolActivityBucket, { one: string; many: string }> = 
  * `toUI` lines — see {@link keepsCompactRow}). Errored tool rows may fold into an
  * activity summary (counted as errors); other completed tools may fold into one too.
  */
-export function shouldKeepToolRow(part: ToolCallPart): boolean {
+export function shouldKeepToolRow(
+  part: ToolCallPart,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): boolean {
   const ui = getUiToolState(part);
   if (
     ui === "approval-requested" ||
@@ -63,14 +66,17 @@ export function shouldKeepToolRow(part: ToolCallPart): boolean {
 
   // Completed rows that own their compact representation stay visible; errored
   // rows still fold as an error count (the render layer hides them in compact).
-  if (ui === "output-available" && keepsCompactRow(part.name)) return true;
+  if (ui === "output-available" && keepsCompactRow(part.name, resolve)) return true;
 
   return false;
 }
 
 /** Successfully completed tools of any kind may fold into an activity summary. */
-export function shouldFoldToolRow(part: ToolCallPart): boolean {
-  return !shouldKeepToolRow(part);
+export function shouldFoldToolRow(
+  part: ToolCallPart,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): boolean {
+  return !shouldKeepToolRow(part, resolve);
 }
 
 /** Errored tool rows fold into the activity summary as an error count. */
@@ -86,12 +92,18 @@ export function emptyToolActivityCounts(): ToolActivityCounts {
  * Map a tool name to a summary bucket: display metadata registered by the tool
  * (extensions / custom tools) wins over the built-in table, then `"other"`.
  */
-export function getToolActivityBucket(toolName: string): ToolActivityBucket {
-  return getToolPresentation(toolName)?.category ?? "other";
+export function getToolActivityBucket(
+  toolName: string,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): ToolActivityBucket {
+  return resolve(toolName)?.category ?? "other";
 }
 
 /** Count tool-call parts into activity buckets (dedupe by tool call id). Errored calls count as errors only — not double-counted in their own bucket. */
-export function countToolActivity(parts: Iterable<ToolCallPart>): ToolActivityCounts {
+export function countToolActivity(
+  parts: Iterable<ToolCallPart>,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): ToolActivityCounts {
   const counts = emptyToolActivityCounts();
   const seen = new Set<string>();
 
@@ -103,7 +115,7 @@ export function countToolActivity(parts: Iterable<ToolCallPart>): ToolActivityCo
       counts.errors += 1;
       continue;
     }
-    counts[getToolActivityBucket(part.name)] += 1;
+    counts[getToolActivityBucket(part.name, resolve)] += 1;
   }
 
   return counts;
@@ -114,7 +126,10 @@ export function countToolActivity(parts: Iterable<ToolCallPart>): ToolActivityCo
  * tools, structured tools. Lets a folded run name the tools it swallowed instead
  * of printing an opaque `N other`. Deduped by tool-call id, errored calls skipped.
  */
-export function collectOtherToolNames(parts: Iterable<ToolCallPart>): Array<{ name: string; count: number }> {
+export function collectOtherToolNames(
+  parts: Iterable<ToolCallPart>,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): Array<{ name: string; count: number }> {
   const seen = new Set<string>();
   const counts = new Map<string, number>();
 
@@ -123,7 +138,7 @@ export function collectOtherToolNames(parts: Iterable<ToolCallPart>): Array<{ na
     if (seen.has(id)) continue;
     seen.add(id);
     if (isErrorToolRow(part)) continue;
-    if (getToolActivityBucket(part.name) !== "other") continue;
+    if (getToolActivityBucket(part.name, resolve) !== "other") continue;
     counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
   }
 
@@ -195,7 +210,10 @@ function looksLikeFile(basename: string): boolean {
  * Extract a short path / pattern / query label from a tool call for activity lines,
  * ranked by usefulness: file basename > search pattern/query > directory basename.
  */
-export function extractActivityLabelInfo(part: ToolCallPart): ActivityLabel | null {
+export function extractActivityLabelInfo(
+  part: ToolCallPart,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): ActivityLabel | null {
   const input = parseToolInput(part);
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
@@ -204,7 +222,7 @@ export function extractActivityLabelInfo(part: ToolCallPart): ActivityLabel | nu
   // has no descriptor functions, so it reads the label the owner already rendered.
   const payloadLabel = (part as { display?: ToolDisplayPayload }).display?.label;
   if (payloadLabel) return { text: shortenLabel(payloadLabel), tier: TIER_CURATED };
-  const curated = getToolPresentation(part.name)?.label;
+  const curated = resolve(part.name)?.label;
   if (curated) {
     const text = curated(input);
     if (text) return { text: shortenLabel(text), tier: TIER_CURATED };
@@ -243,8 +261,11 @@ export function extractActivityLabelInfo(part: ToolCallPart): ActivityLabel | nu
 }
 
 /** Extract a short path / pattern / query label from a tool call for activity lines. */
-export function extractActivityLabel(part: ToolCallPart): string | null {
-  return extractActivityLabelInfo(part)?.text ?? null;
+export function extractActivityLabel(
+  part: ToolCallPart,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): string | null {
+  return extractActivityLabelInfo(part, resolve)?.text ?? null;
 }
 
 /**
@@ -253,18 +274,21 @@ export function extractActivityLabel(part: ToolCallPart): string | null {
  * Labels prefer file basenames over directories; a total elapsed time is appended
  * when the folded run is slow enough to be meaningful.
  */
-export function formatExploredActivitySummary(parts: ToolCallPart[]): string | null {
+export function formatExploredActivitySummary(
+  parts: ToolCallPart[],
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): string | null {
   const list = Array.from(parts);
   if (list.length === 0) return null;
 
-  const counts = countToolActivity(list);
-  const countText = formatToolActivitySummary(counts, collectOtherToolNames(list));
+  const counts = countToolActivity(list, resolve);
+  const countText = formatToolActivitySummary(counts, collectOtherToolNames(list, resolve));
   if (!countText) return null;
 
   const labels: ActivityLabel[] = [];
   const seen = new Set<string>();
   for (const part of list) {
-    const label = extractActivityLabelInfo(part);
+    const label = extractActivityLabelInfo(part, resolve);
     if (!label || seen.has(label.text)) continue;
     seen.add(label.text);
     labels.push(label);
@@ -301,6 +325,9 @@ export function formatExploredActivitySummary(parts: ToolCallPart[]): string | n
 }
 
 /** Count + format in one step (counts only). */
-export function summarizeToolActivity(parts: Iterable<ToolCallPart>): string | null {
-  return formatToolActivitySummary(countToolActivity(parts));
+export function summarizeToolActivity(
+  parts: Iterable<ToolCallPart>,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): string | null {
+  return formatToolActivitySummary(countToolActivity(parts, resolve));
 }

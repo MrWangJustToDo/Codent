@@ -12,7 +12,7 @@
  *
  * Two more things the same overwrite broke, both silent:
  *
- *   - `toModelOutputRegistry` is process-global and was never rolled back, so the unloaded
+ *   - `AgentToolService` retains a stale handler, so the unloaded
  *     extension's shaper kept formatting the restored tool's results for the model
  *     (`apply-tool-compact.ts` reads it on every model call).
  *   - The presentation descriptor went with it, so the restored tool was described by the
@@ -26,8 +26,7 @@
  * The design being pinned is a per-name stack in all three registries, keyed by owner:
  *
  *   - `ExtensionRegistryService.toolStacks` — what each owner registered, per name
- *   - `presentation/registry.ts` `declared` — what each owner declared, per name
- *   - `toModelOutputRegistry.stacks` — what each owner shapes with, per name
+ *   - `AgentToolService` stacks — what each owner declared / shapes with, per name
  *
  * Entries carry their own implementation, never the one they displaced, so "remove this owner,
  * re-read the top" is the only rule — the same operation whether the owner was on top or buried.
@@ -51,15 +50,7 @@
 
 import assert from "node:assert/strict";
 
-import {
-  createTools,
-  resolveToolsRecord,
-  declaredStackDepth,
-  ExtensionRunner,
-  getToolPresentation,
-  ManagedAgent,
-  toModelOutputRegistry,
-} from "../dist/dev.mjs";
+import { createTools, resolveToolsRecord, ExtensionRunner, ManagedAgent } from "../dist/dev.mjs";
 
 // ============================================================================
 // Harness
@@ -105,13 +96,13 @@ function extTool(description, shaper, present) {
 }
 
 /** Shape a stored result the way the wire does, so "whose handler won" is observable. */
-function shaped() {
-  return toModelOutputRegistry.get("read_file")?.({ toolCallId: "c1", input: {}, output: {} });
+function shaped(managed) {
+  return managed.getToolModelOutput("read_file")?.({ toolCallId: "c1", input: {}, output: {} });
 }
 
 /** The live folder/row flags for `read_file` — `undefined` when nothing describes it. */
-function presentation() {
-  const present = getToolPresentation("read_file");
+function presentation(managed) {
+  const present = managed.getToolPresentation("read_file");
   return present ? { category: present.category, keepRow: present.keepRow } : undefined;
 }
 
@@ -150,7 +141,7 @@ const ext = (id) => ({
 
 {
   const { managed, builtinReadFile } = await makeBuiltinAgent();
-  const builtinShaper = shaped();
+  const builtinShaper = shaped(managed);
   assert.equal(
     typeof builtinShaper,
     "string",
@@ -160,7 +151,7 @@ const ext = (id) => ({
   managed.registerTool(extTool("extension read (overwrites the built-in)", "EXTENSION SHAPING"));
   assert.notEqual(managed.tools.read_file, builtinReadFile, "the extension must have taken the name");
   assert.equal(
-    shaped(),
+    shaped(managed),
     "EXTENSION SHAPING",
     "the extension's shaper must win while it is registered (otherwise this probe proves nothing)"
   );
@@ -181,18 +172,18 @@ const ext = (id) => ({
 
 {
   const { managed } = await makeBuiltinAgent();
-  const builtinShaper = shaped();
+  const builtinShaper = shaped(managed);
 
   managed.registerTool(extTool("extension read", "EXTENSION SHAPING"), "ext_a");
   managed.unregisterExtensionTool("read_file", "ext_a");
 
   assert.equal(
-    shaped(),
+    shaped(managed),
     builtinShaper,
     "the restored tool must shape results with its own handler — a leftover extension handler " +
       "silently formats every later `read_file` result for the model"
   );
-  assert.notEqual(shaped(), "EXTENSION SHAPING", "the unloaded extension's handler must not survive");
+  assert.notEqual(shaped(managed), "EXTENSION SHAPING", "the unloaded extension's handler must not survive");
 }
 
 // ============================================================================
@@ -234,17 +225,21 @@ const ext = (id) => ({
   const secondTool = managed.tools.read_file;
   assert.notEqual(firstTool, builtinReadFile);
   assert.notEqual(secondTool, firstTool);
-  assert.equal(shaped(), "second", "the newest registration is the one in force");
-  assert.deepEqual(presentation(), { category: "commands", keepRow: false }, "and its descriptor is the live one");
+  assert.equal(shaped(managed), "second", "the newest registration is the one in force");
+  assert.deepEqual(
+    presentation(managed),
+    { category: "commands", keepRow: false },
+    "and its descriptor is the live one"
+  );
 
   // The newer extension is disabled first: the name goes back to the older one, NOT to the
   // built-in underneath both (popping the wrong entry would expose it early).
   managed.unregisterExtensionTool("read_file", "second");
   assert.equal(managed.tools.read_file, firstTool, "disabling the newer extension must restore the older one's tool");
   assert.notEqual(managed.tools.read_file, builtinReadFile, "the built-in is still shadowed by the first extension");
-  assert.equal(shaped(), "first", "the older extension's shaper must be back in force");
+  assert.equal(shaped(managed), "first", "the older extension's shaper must be back in force");
   assert.deepEqual(
-    presentation(),
+    presentation(managed),
     { category: "reads", keepRow: false },
     "and the older extension's descriptor, not the disabled one's"
   );
@@ -252,9 +247,9 @@ const ext = (id) => ({
   // Only the last one out removes the name for good — which is the built-in returning.
   managed.unregisterExtensionTool("read_file", "first");
   assert.equal(managed.tools.read_file, builtinReadFile, "the built-in returns once every extension is gone");
-  assert.notEqual(shaped(), "first", "no extension shaper may survive the last unregister");
+  assert.notEqual(shaped(managed), "first", "no extension shaper may survive the last unregister");
   assert.deepEqual(
-    presentation(),
+    presentation(managed),
     BUILTIN_PRESENTATION,
     "and the built-in's own descriptor is what remains — an extension's flags left here would " +
       "keep folding read_file rows the built-in wants kept"
@@ -336,7 +331,7 @@ const ext = (id) => ({
 
   managed.registerTool(extTool("registration one", "one"), "same-owner");
   managed.registerTool(extTool("registration two", "two"), "same-owner");
-  assert.equal(shaped(), "two", "the newest registration of the owner is live");
+  assert.equal(shaped(managed), "two", "the newest registration of the owner is live");
 
   managed.unregisterExtensionTool("read_file", "same-owner");
   assert.equal(
@@ -344,13 +339,13 @@ const ext = (id) => ({
     builtinReadFile,
     "releasing the owner must settle the name on what it shadowed, not leave its own tool behind"
   );
-  assert.equal(shaped(), "{}", "and the built-in's own shaper is in force again");
+  assert.equal(shaped(managed), "{}", "and the built-in's own shaper is in force again");
 
   // The runner calls the hook once per registration, so it calls again here. Nothing is left
   // to remove; that must not re-write the record or resurrect anything.
   managed.unregisterExtensionTool("read_file", "same-owner");
   assert.equal(managed.tools.read_file, builtinReadFile, "the redundant release must be a no-op");
-  assert.equal(shaped(), "{}", "and must not disturb the handler either");
+  assert.equal(shaped(managed), "{}", "and must not disturb the handler either");
 }
 
 // ============================================================================
@@ -405,8 +400,12 @@ const ext = (id) => ({
     const { managed, runner, builtinReadFile, oldTool } = await newSeq();
     await runner.setEnabled("ext_new", false);
     assert.equal(managed.tools.read_file, oldTool, "disabling the owner hands the name back to the older tool");
-    assert.equal(shaped(), "SHAPER-ext_old", "and to that tool's own handler");
-    assert.deepEqual(presentation(), { category: "edits", keepRow: false }, "…and to that tool's own descriptor");
+    assert.equal(shaped(managed), "SHAPER-ext_old", "and to that tool's own handler");
+    assert.deepEqual(
+      presentation(managed),
+      { category: "edits", keepRow: false },
+      "…and to that tool's own descriptor"
+    );
 
     await runner.setEnabled("ext_old", false);
 
@@ -416,8 +415,8 @@ const ext = (id) => ({
       "the last holder leaving must RESTORE, not merely drop its entry — only dropping it leaves " +
         "the built-in shadowed by an extension that is already disabled"
     );
-    assert.equal(shaped(), "{}", "and its process-global handler must be rolled back to the built-in's");
-    assert.deepEqual(presentation(), BUILTIN_PRESENTATION, "and the built-in's descriptor takes over again");
+    assert.equal(shaped(managed), "{}", "and its process-global handler must be rolled back to the built-in's");
+    assert.deepEqual(presentation(managed), BUILTIN_PRESENTATION, "and the built-in's descriptor takes over again");
     await runner.destroyAll();
   }
 
@@ -428,17 +427,17 @@ const ext = (id) => ({
     await runner.setEnabled("ext_old", false);
     assert.equal(managed.tools.read_file, newTool, "the surviving extension's tool must stay in place");
     assert.notEqual(managed.tools.read_file, oldTool, "the disabled extension's tool must not resurface");
-    assert.equal(shaped(), "SHAPER-ext_new", "and the surviving extension's handler must still be in force");
+    assert.equal(shaped(managed), "SHAPER-ext_new", "and the surviving extension's handler must still be in force");
     assert.deepEqual(
-      presentation(),
+      presentation(managed),
       { category: "edits", keepRow: false },
       "and its descriptor must survive the buried owner's release"
     );
 
     await runner.setEnabled("ext_new", false);
     assert.equal(managed.tools.read_file, builtinReadFile, "disabling both, buried first, must leave the built-in");
-    assert.equal(shaped(), "{}", "with its handler");
-    assert.deepEqual(presentation(), BUILTIN_PRESENTATION, "and its descriptor");
+    assert.equal(shaped(managed), "{}", "with its handler");
+    assert.deepEqual(presentation(managed), BUILTIN_PRESENTATION, "and its descriptor");
     await runner.destroyAll();
   }
 }
@@ -460,22 +459,22 @@ const ext = (id) => ({
 
   managed.registerTool(extTool("buried owner", "buried", { category: "reads", keepRow: false }), "ext_buried");
   managed.registerTool(extTool("surviving owner", "survivor", { category: "searches", keepRow: true }), "ext_survivor");
-  assert.deepEqual(presentation(), { category: "searches", keepRow: true }, "the survivor's descriptor is live");
+  assert.deepEqual(presentation(managed), { category: "searches", keepRow: true }, "the survivor's descriptor is live");
 
   // Releasing the buried owner must drop only ITS descriptor. Clear the whole entry instead and
   // the live tool is described by the fallback table (or, for a name that is not a built-in, by
   // nothing at all).
   managed.unregisterExtensionTool("read_file", "ext_buried");
   assert.deepEqual(
-    presentation(),
+    presentation(managed),
     { category: "searches", keepRow: true },
     "releasing a buried owner must leave the survivor's descriptor exactly as it was"
   );
-  assert.equal(shaped(), "survivor", "and its handler");
+  assert.equal(shaped(managed), "survivor", "and its handler");
 
   managed.unregisterExtensionTool("read_file", "ext_survivor");
   assert.deepEqual(
-    presentation(),
+    presentation(managed),
     BUILTIN_PRESENTATION,
     "and when the survivor does leave, the built-in's descriptor is the one that remains"
   );
@@ -496,35 +495,22 @@ const ext = (id) => ({
 
   // The built-in already registered `read_file`; re-creating the agent's tools must not add
   // another entry for it.
-  const before = toModelOutputRegistry.stackDepth("read_file");
-  const declaredBefore = declaredStackDepth("read_file");
   const { managed: second } = await makeBuiltinAgent();
   assert.ok(second.tools.read_file, "a second agent also gets read_file");
-  assert.equal(
-    toModelOutputRegistry.stackDepth("read_file"),
-    before,
-    "re-registering a name under the same owner must REPLACE its entry, not stack another — " +
-      "otherwise the shared registry grows once per agent created in the process"
-  );
-  assert.equal(
-    declaredStackDepth("read_file"),
-    declaredBefore,
-    "and the presentation registry must replace it too — both are process-global and both see " +
-      "one `defineServerTool` call per agent"
-  );
+  assert.notEqual(second.tools.read_file, managed.tools.read_file, "each agent owns its own live tool objects");
   assert.ok(managed.tools.read_file);
 
   // Two owners on one name: the newest is live, and releasing the buried one leaves it alone.
   managed.registerTool(extTool("owner a", "shaper-a"), "owner_a");
   managed.registerTool(extTool("owner b", "shaper-b"), "owner_b");
-  assert.equal(shaped(), "shaper-b", "the newest owner's handler is live");
+  assert.equal(shaped(managed), "shaper-b", "the newest owner's handler is live");
 
   managed.unregisterExtensionTool("read_file", "owner_a");
-  assert.equal(shaped(), "shaper-b", "releasing a buried owner must not disturb the live one");
+  assert.equal(shaped(managed), "shaper-b", "releasing a buried owner must not disturb the live one");
   assert.ok(managed.tools.read_file, "and must not delete the name");
 
   managed.unregisterExtensionTool("read_file", "owner_b");
-  assert.notEqual(shaped(), "shaper-b", "releasing the live owner rolls its handler back");
+  assert.notEqual(shaped(managed), "shaper-b", "releasing the live owner rolls its handler back");
 }
 
 // ============================================================================
@@ -537,7 +523,7 @@ const ext = (id) => ({
 //
 // `ManagedAgent` namespaces the id by agent, which is the only place that knows which agent a
 // registration belongs to. Without it, `removeOwner(name, id)` cannot tell the two apart and
-// `forgetToolPresentationOwner(name, id)` empties the survivor's stack too — the leak this
+// unregistering one owner empties the survivor's stack too — the leak this
 // section pins. It is driven through the real runner because the runner's callback is the
 // production path for a disable.
 // ============================================================================
@@ -571,8 +557,8 @@ const ext = (id) => ({
   await runnerB.loadExtension(shared("B"));
   const bTool = agentB.tools.read_file;
   assert.notEqual(bTool, bBuiltin, "agent B's extension took the name");
-  assert.equal(shaped(), "SHAPER-B", "B's extension is the live owner of the shared name");
-  assert.deepEqual(presentation(), { category: "edits", keepRow: true }, "with B's descriptor");
+  assert.equal(shaped(agentB), "SHAPER-B", "B's extension is the live owner of the shared name");
+  assert.deepEqual(presentation(agentB), { category: "edits", keepRow: true }, "with B's descriptor");
 
   // Disable it on A only. B's extension is still loaded and running.
   await runnerA.setEnabled("shared-author/shared-ext", false);
@@ -585,13 +571,13 @@ const ext = (id) => ({
       "id is a separate claim once it is scoped by agent"
   );
   assert.equal(
-    shaped(),
+    shaped(agentB),
     "SHAPER-B",
     "and B's model-output handler must still be the one in force — a shared owner id used to " +
       "release B's handler as well"
   );
   assert.deepEqual(
-    presentation(),
+    presentation(agentB),
     { category: "edits", keepRow: true },
     "and B's descriptor must survive too — clearing it leaves B's live tool described by the " + "fallback table"
   );
@@ -599,11 +585,41 @@ const ext = (id) => ({
   // And B can still release its own claim, which restores the built-in.
   await runnerB.setEnabled("shared-author/shared-ext", false);
   assert.equal(agentB.tools.read_file, bBuiltin, "B's own disable restores its built-in");
-  assert.equal(shaped(), "{}", "with the built-in's handler");
-  assert.deepEqual(presentation(), BUILTIN_PRESENTATION, "and the built-in's descriptor");
+  assert.equal(shaped(agentB), "{}", "with the built-in's handler");
+  assert.deepEqual(presentation(agentB), BUILTIN_PRESENTATION, "and the built-in's descriptor");
 
   await runnerA.destroyAll();
   await runnerB.destroyAll();
+}
+
+// A runtime registration (a command/async callback registering a tool after activate) must publish
+// the catalog immediately; activation itself publishes once at the batch boundary.
+{
+  const events = [];
+  const runner = new ExtensionRunner({
+    getEnvVar: () => undefined,
+    onRegisterTool: () => {},
+    onToolRegistrationBatchComplete: () => events.push("batch"),
+    onToolRegistrationComplete: () => events.push("runtime"),
+  });
+  const def = (name) => ({
+    name,
+    description: name,
+    inputSchema: { type: "object", properties: {} },
+    execute: async () => ({}),
+  });
+  const instance = await runner.loadExtension({
+    id: "runtime-catalog-ext",
+    name: "runtime-catalog-ext",
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerTool(def("probe_activation"));
+    },
+  });
+  assert.deepEqual(events, ["batch"], "activation publishes once after the tool batch");
+  instance.context.registerTool(def("probe_runtime"));
+  assert.deepEqual(events, ["batch", "runtime"], "runtime registration publishes immediately");
+  await runner.destroyAll();
 }
 
 console.log("extension-tool-restore validation passed");

@@ -44,6 +44,8 @@ export interface ToolPresentation {
   labelKey?: string;
 }
 
+export type ToolPresentationResolver = (name: string) => ToolPresentation | undefined;
+
 /** Host-facing, serializable projection of {@link ToolPresentation} (functions dropped). */
 export interface ToolPresentationInfo {
   name: string;

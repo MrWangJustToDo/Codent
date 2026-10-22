@@ -151,7 +151,7 @@ export { AgentRuntime } from "../runtime/agent-runtime.js";
 export { CodentAgent } from "../runtime/codent-agent.js";
 export { createListFileTool } from "../agent/tools/list-file-tool.js";
 export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
-export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache, toModelOutputRegistry } from "../agent/compaction";
+export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache } from "../agent/compaction";
 export {
   buildCompactionPrompt,
   buildSegmentedConversationText,
@@ -289,7 +289,7 @@ export type {
 export { loadAgentDoc, formatAgentDocResult } from "../agent/prompt/agent-doc-loader.js";
 export type { AgentDocLoadResult, AgentDocLoaderConfig } from "../agent/prompt/agent-doc-loader.js";
 export { toolsToArray } from "../agent/tools/runtime/tools-record.js";
-export { defineServerTool } from "../agent/tools/runtime/define-tool.js";
+export { defineServerTool, getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 export { createSessionSearchTool, sessionSearchOutputSchema } from "../agent/tools/session-search-tool.js";
 export { createSessionReadTool, sessionReadOutputSchema } from "../agent/tools/session-read-tool.js";
 export {
@@ -382,7 +382,7 @@ export {
   agentStreamKey,
 } from "../agent/stream-hub";
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
-export { CommandJobRegistry, commandJobRegistry } from "../agent/tools/util/command-job-registry.js";
+export { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 export type {
   CommandJobChangeListener,
   CommandJobRecord,

@@ -3,7 +3,6 @@
  *
  * Run: node packages/app/test/project-transcript.test.mjs
  */
-import { clearToolPresentation, registerToolPresentation } from "@codent/core";
 import assert from "node:assert/strict";
 
 import {
@@ -201,9 +200,12 @@ const structured = projectTranscriptForDisplay(
 assert.equal(structured[1].id, "a-todo");
 
 // A curated present.text line is the tool's compact representation — the row survives.
-registerToolPresentation("ext_echo", { text: (result) => `echo → ${result?.echoed ?? ""}` });
-const extKept = projectTranscriptForDisplay([user, extTools, final], { mode: "compact" });
+const extPresentation = { text: (result) => `echo → ${result?.echoed ?? ""}` };
+const resolveExt = (name) => (name === "ext_echo" ? extPresentation : undefined);
+const extKept = projectTranscriptForDisplay([user, extTools, final], {
+  mode: "compact",
+  resolvePresentation: resolveExt,
+});
 assert.equal(extKept[1].id, "a-ext");
-clearToolPresentation();
 
 console.log("project-transcript.test.mjs: ok");

@@ -1,6 +1,6 @@
 import { isContentPartArray } from "@tanstack/ai";
 
-import type { ModelToolContent } from "./to-model-output-registry.js";
+import type { ModelToolContent } from "./model-output.js";
 
 /**
  * Is this already a model-facing projection, rather than a tool's own output?

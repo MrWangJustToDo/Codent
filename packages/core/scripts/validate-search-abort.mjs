@@ -23,7 +23,7 @@ import {
   formatToolOutput,
   registerCoreEnv,
   TOOL_CANCELLED_MESSAGE,
-  toModelOutputRegistry,
+  getToolMetadata,
   walkTree,
   isAbortError,
 } from "../dist/dev.mjs";
@@ -174,8 +174,8 @@ for (const [name, make, output, expectedEmpty] of [
     "[Search cancelled by user.]",
   ],
 ]) {
-  make({}); // registration is a side effect; the registry is what the engine calls
-  const projection = toModelOutputRegistry.get(name);
+  const tool = make({});
+  const projection = getToolMetadata(tool)?.toModelOutput;
   assert.equal(typeof projection, "function", `${name}: registered a model-facing projection`);
   const out = await projection({ toolCallId: "t", input: {}, output });
   const body = (Array.isArray(out) ? out : [out]).map((part) => part?.content ?? "").join("\n");
@@ -185,7 +185,7 @@ for (const [name, make, output, expectedEmpty] of [
 
 // A stopped search that DID print matches says both things: it stopped, and what it had.
 {
-  const projection = toModelOutputRegistry.get("grep");
+  const projection = getToolMetadata(createGrepTool({}))?.toModelOutput;
   const out = await projection({
     toolCallId: "t",
     input: {},

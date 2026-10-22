@@ -23,7 +23,7 @@ import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 import { createConfiguredProviderManager, filterResultsByDomain } from "./websearch";
 
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
+import type { AgentToolContext } from "./runtime/tool-context.js";
 
 // ============================================================================
 // Constants
@@ -79,7 +79,7 @@ export type WebsearchOutput = z.infer<typeof websearchOutputSchema>;
  * - Domain filtering (allow/block specific domains)
  * - Returns titles, snippets, and URLs
  */
-export const createWebsearchTool = ({ managed }: { managed?: ManagedAgent }) => {
+export const createWebsearchTool = ({ context }: { context?: AgentToolContext } = {}) => {
   // Agent-scoped provider manager: its own providers + key/session state, so two agents
   // (or runtimes) never share selection or credentials.
   const providerManager = createConfiguredProviderManager();
@@ -136,8 +136,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
         const limit = maxResults ?? DEFAULT_RESULTS;
 
         const controller = new AbortController();
-        const managedAgent = managed;
-        const hasParentAgent = managedAgent?.parentId;
+        const hasParentAgent = context?.parentId;
 
         // Carry the run's abort reason (`"user-cancelled"`, …) rather than a bare abort — a
         // reason-less abort becomes the platform `AbortError`, which reads as a cancel only by
@@ -146,7 +145,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
         abortSignal?.addEventListener("abort", onAbort, { once: true });
 
         if (!hasParentAgent) {
-          managedAgent?.addPendingAbortController(controller);
+          context?.addPendingAbortController(controller);
         }
 
         try {
@@ -155,11 +154,11 @@ Use the current year from <current_date> in turn context for time-sensitive quer
           // providers (so one public endpoint is not the single dependency) and lets a
           // provider forward it upstream (Parallel's `session_id`). Subagents have no
           // session data of their own, so fall back to the agent id — still stable per agent.
-          const sessionId = managed?.getSessionData()?.id ?? managed?.id;
+          const sessionId = context?.getSessionId() ?? context?.agentId;
           // configure + search run under one lock: both mutate/read the process-global
           // manager, so concurrent runs must not interleave (see ProviderManager.runExclusive).
           const { results: rawResults, provider } = await pm.runExclusive(async (m) => {
-            m.configure(managed?.config?.toolConfig?.websearch);
+            m.configure(context?.getWebsearchConfig());
             m.setSessionId(sessionId);
             return m.search(query, {
               maxResults: limit,
@@ -187,7 +186,7 @@ Use the current year from <current_date> in turn context for time-sensitive quer
         } finally {
           abortSignal?.removeEventListener("abort", onAbort);
           if (!hasParentAgent) {
-            managedAgent?.removePendingAbortController(controller);
+            context?.removePendingAbortController(controller);
           }
         }
       });

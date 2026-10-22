@@ -1,4 +1,6 @@
-import { getToolPresentation } from "./registry.js";
+import { getBuiltinToolPresentation } from "./builtin-table.js";
+
+import type { ToolPresentation } from "./types.js";
 
 /**
  * Row-visibility rules — owned by core so every host folds a completed tool run the
@@ -9,7 +11,10 @@ import { getToolPresentation } from "./registry.js";
  * tool has a result renderer (`text`): that rendered line *is* the row's content, so
  * folding it away would hide the tool's output entirely.
  */
-export function keepsCompactRow(name: string): boolean {
-  const present = getToolPresentation(name);
+export function keepsCompactRow(
+  name: string,
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): boolean {
+  const present = resolve(name);
   return Boolean(present?.keepRow || present?.clientSide || present?.text);
 }

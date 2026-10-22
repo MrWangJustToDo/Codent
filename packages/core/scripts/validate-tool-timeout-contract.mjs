@@ -299,7 +299,7 @@ function extContext() {
     "ToolExecutionOptions exposes a separate deadlineSignal"
   );
 
-  const extSrc = readFileSync(`${SRC}/managers/services/extension-registry-service.ts`, "utf8");
+  const extSrc = readFileSync(`${SRC}/managers/services/agent-tool-service.ts`, "utf8");
   assert.ok(/withTimeoutAbort/.test(extSrc), "the extension path uses the same shared wrapper");
   assert.ok(
     !/function withTimeout\b/.test(extSrc),

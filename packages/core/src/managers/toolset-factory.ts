@@ -13,6 +13,8 @@ import { createTodoTool } from "../agent/todo/todo-tool.js";
 import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/ask-user-tool.js";
 
+import { createAgentToolContext } from "./agent-tool-context.js";
+
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { ManagedAgent } from "../runtime-types/hosts.js";
@@ -26,7 +28,7 @@ export interface BuildToolsetOptions {
 
 export async function buildToolset({ profile, managed }: BuildToolsetOptions): Promise<ToolsRecord> {
   if (profile === "explore") {
-    return createSubagentTools(managed);
+    return createSubagentTools({ context: createAgentToolContext(managed), usage: managed.usage });
   }
   if (profile === "internal") {
     // Internal one-shot workers are caller-supplied (often `{}`); never pay for a root tool
@@ -39,11 +41,12 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
     throw new Error(`Unsupported toolset profile: "${String(profile)}"`);
   }
 
-  const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, managed })) };
-  const todoManager = managed.getTodoManager();
+  const context = createAgentToolContext(managed);
+  const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, context })) };
+  const todoManager = context.getTodoManager();
   if (profile !== "general" && todoManager) tools.todo = createTodoTool({ todoManager });
-  tools.webfetch = createWebfetchTool({ managed });
-  tools.websearch = createWebsearchTool({ managed });
+  tools.webfetch = createWebfetchTool({ context });
+  tools.websearch = createWebsearchTool({ context });
 
   if (profile === "general") {
     // General is a writable child profile, but interactive/headless-incompatible tools stay out:
@@ -52,8 +55,8 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
   }
 
   tools.ask_user = createAskUserTool();
-  tools.create_plan = createCreatePlanTool({ getPlanMode: () => managed.planMode });
-  tools.update_plan = createUpdatePlanTool({ getPlanMode: () => managed.planMode });
-  tools.complete_plan = createCompletePlanTool({ getPlanMode: () => managed.planMode });
+  tools.create_plan = createCreatePlanTool({ getPlanMode: () => context.getPlanMode() });
+  tools.update_plan = createUpdatePlanTool({ getPlanMode: () => context.getPlanMode() });
+  tools.complete_plan = createCompletePlanTool({ getPlanMode: () => context.getPlanMode() });
   return tools;
 }

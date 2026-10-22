@@ -1,4 +1,7 @@
+import { isProjectedModelContent } from "../tools/runtime/define-tool.js";
+
 import { loadMcpConfig } from "./config.js";
+import { resolveMcpModelOutput } from "./prefer-multimodal-content.js";
 
 import type { McpManager, McpServerStatus } from "./manager.js";
 import type { McpConfig } from "./types.js";
@@ -129,6 +132,9 @@ async function activateMcp(
       // curated line exists, which is a contract this repo cannot define for output a
       // server produced.
       present: { category: "other", keepRow: true, detailed: true },
+      // MCP tools are created dynamically, so this is the registration point for their
+      // model-output revival (structuredContent vs content[] images).
+      toModelOutput: ({ output }) => (isProjectedModelContent(output) ? output : resolveMcpModelOutput(output)),
       execute: async (input, options) =>
         tool.execute?.(input, {
           toolCallId: options.toolCallId,

@@ -1107,7 +1107,7 @@ Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. E
 - one file per job, chunks appended in arrival order, stderr lines marked `[stderr] `;
 - header (`# <command>` + start time) on creation, terminal footer `[exit <code> · <status> · finished <iso>]` — **no footer means still running**;
 - **unbounded by design**: the log is never sized against a cap and never truncated — background output is always written. Disk growth is bounded by the 24 h stale sweep plus deletion with the job record, not by cutting the file, so `read_file` line offsets stay valid for as long as the file exists;
-- deleted with the job record (registry eviction / `destroyAllCommandJobs`); logs older than 24 h are swept once per process; a host whose fs lacks `appendFile` degrades to `cachedOutputPath: null`;
+- deleted with the job record (registry eviction / the agent-owned registry's `destroyAll()`); logs older than 24 h are swept once per process; a host whose fs lacks `appendFile` degrades to `cachedOutputPath: null`;
 - it must **not** live under `.agents/cache/tool-output/`, which `cleanupOrphanedToolCache` GCs against message references (it would delete a running job's log).
 
 This is also how a code-mode sandbox reads background output: `read_file` is exposed there, `get_command_output` is not.
@@ -1184,7 +1184,7 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
     in the summary (`ext_echo ×2`) rather than collapsing into an opaque `N other`; `present.label(input)`
     adds a short label. Tools (extensions included) declare all of this through one field —
     `defineServerTool({ present })` / `registerTool({ present })` — read back via
-    `getToolPresentation` / `registerToolPresentation`; see `packages/core/src/agent/tools/presentation/types.ts`.
+    `getToolPresentation` on the session (or the built-in fallback); see `packages/core/src/agent/tools/presentation/types.ts`.
     Every descriptor function must be a pure function of the stored output (or parsed input).
 
 ## CLI Keyboard Shortcuts
@@ -1365,4 +1365,4 @@ Validate **once at the end of the task** (not after every small edit). Prefer sc
 5. **CoreEnv is the single source of truth** — `rootPath` comes only from `getEnv().rootPath`, never from config objects. Tools access all platform APIs via `getEnv()`.
 6. **Tests** — The only `node:test` suite lives in `@codent/app` (`pnpm --filter @codent/app test`, which imports its own `dist`); everything else is validated by `validate:*` scripts and `pnpm typecheck`. CI runs lint + typecheck + build + the app suite on every PR.
 7. **Adapter pattern** — Both hosts (CLI, extension) implement `AgentAdapter` and delegate shared init logic to `createAgentSessionFromConfig()` in `@codent/app`.
-8. **Process-global code registries (known multi-runtime limitation)** — the tool-presentation registry (`agent/tools/presentation/registry.ts`) and the `toModelOutput` registry (`agent/tools/runtime/to-model-output-registry.ts`) are **process-global**, keyed by tool name + `ownerId`. `ManagedAgent` namespaces `ownerId` by agent, which makes *removal* per-agent, but lookup (`getToolPresentation` / the tool-compact middleware) still returns the top of the global stack. Consequence: two runtimes that load different extensions declaring the **same tool name** with different `present`/`toModelOutput` cross-bind (last registered wins for both). Built-ins are unaffected (identical handlers, re-registration replaces the same owner). A per-agent registry threaded through the tool factories is the fix; it is deliberately out of scope here (a design change, not a migration gap).
+8. **Tools are owned by one per-agent service** — `defineServerTool` / `defineClientTool` are pure definitions that attach `present` / `toModelOutput` metadata to the live tool object. `AgentToolRegistry` owns the per-agent tool stacks, owner/rank and live record; `AgentToolService` is the only orchestration path for registration, removal, catalog, decorators, and model-output resolution. `ManagedAgent` owns the service; tool-compact, UI presentation, plan mode and session catalogs resolve through it. LSP decorators are agent-scoped and released with the extension; MCP tools carry their resolver on the registered def. No process-global presentation or `toModelOutput` registry remains in the agent path. A remote session keeps its descriptors on its own `RemoteSessionClient` and exposes them through `AgentSession.getToolPresentation`; only the static built-in table is a fallback.

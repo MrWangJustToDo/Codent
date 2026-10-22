@@ -1,7 +1,9 @@
-import { getToolPresentation, keepsCompactRow as coreKeepsCompactRow } from "@codent/core";
+import { keepsCompactRow as coreKeepsCompactRow } from "@codent/core";
 import chalk from "chalk";
 
 import { COLORS } from "../theme/colors.js";
+
+import { resolveToolPresentation } from "./tool-presentation.js";
 
 import type { UiToolState } from "./tool-part.js";
 
@@ -13,7 +15,7 @@ import type { UiToolState } from "./tool-part.js";
  * still gets the right answer, and there is no host-side name set that can drift.
  */
 export function hasDetailedOutputBlock(toolName: string): boolean {
-  const present = getToolPresentation(toolName);
+  const present = resolveToolPresentation(toolName);
   return present?.detailed === true || present?.keepRow === true;
 }
 
@@ -24,7 +26,12 @@ export function hasDetailedOutputBlock(toolName: string): boolean {
  * (the host supplies the result) or `text` (a curated line *is* the row's content) keeps its row.
  * Delegated to core so the two hosts cannot disagree about the same tool.
  */
-export const keepsCompactRow = coreKeepsCompactRow;
+export function keepsCompactRow(
+  toolName: string,
+  resolver: (name: string) => ReturnType<typeof resolveToolPresentation> = resolveToolPresentation
+): boolean {
+  return coreKeepsCompactRow(toolName, resolver);
+}
 
 /** Get status color for tool invocation state. */
 export function getToolCallColor(state: UiToolState | string): string {

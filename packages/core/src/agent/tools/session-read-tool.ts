@@ -21,7 +21,6 @@ import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
 import type { SessionMessage } from "./session-search/session-reader.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 /** Default number of messages rendered per page. */
 const DEFAULT_LIMIT = 50;
@@ -76,7 +75,7 @@ export type SessionReadOutput = z.infer<typeof sessionReadOutputSchema>;
  * `managed` is accepted for parity with the other tool factories but is unused: reading a named
  * session does not depend on which session is live.
  */
-export const createSessionReadTool = (_options: { managed?: ManagedAgent } = {}) => {
+export const createSessionReadTool = () => {
   return defineServerTool({
     name: "session_read",
     present: { category: "reads" },

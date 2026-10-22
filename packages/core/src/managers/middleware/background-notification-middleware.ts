@@ -1,8 +1,3 @@
-import {
-  commandJobRegistry,
-  type CommandJobRegistry,
-  type CompletedCommandJob,
-} from "../../agent/tools/util/command-job-registry.js";
 import { truncateString } from "../../agent/tools/util/output-limits.js";
 import { formatContextSectionUserContent } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
@@ -10,6 +5,7 @@ import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-inje
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
+import type { CommandJobRegistry, CompletedCommandJob } from "../../agent/tools/util/command-job-registry.js";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
@@ -20,12 +16,8 @@ export interface BackgroundNotificationMiddlewareDeps {
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (dehydrate session to disk). */
   persistMessages: (next: UIMessage[]) => void;
-  /**
-   * The owning agent's background-job registry (drained for completions). Falls back to the
-   * process-global registry when omitted, so standalone/legacy callers keep working — but the
-   * run path must pass the agent's own registry, or jobs it started live in a different map.
-   */
-  getCommandJobRegistry?: () => CommandJobRegistry;
+  /** The owning agent's background-job registry (drained for completions). */
+  getCommandJobRegistry: () => CommandJobRegistry;
 }
 
 const BACKGROUND_NOTIFICATION_KIND = "background_notification";
@@ -34,7 +26,7 @@ const BACKGROUND_NOTIFICATION_KIND = "background_notification";
  * Lightweight completion notification for background jobs.
  *
  * Before each LLM call (including mid-loop iterations), drain the completed-job
- * queue from {@link commandJobRegistry} and append a single synthetic user
+ * queue from the owning agent's command-job registry and append a single synthetic user
  * message listing every newly-finished job. Each job is notified exactly once
  * (registry marks it notified). Kept out of turn-context so a background job
  * finishing does not re-emit the large per-turn context snapshot.
@@ -55,7 +47,7 @@ export function createBackgroundNotificationMiddleware(
   return defineMiddleware("tools", {
     name: "background-notification",
     onConfig: async (_ctx, config) => {
-      const registry = deps.getCommandJobRegistry?.() ?? commandJobRegistry;
+      const registry = deps.getCommandJobRegistry();
       // Do not mark yet: the notification must be persisted first, or a crash between collect and
       // inject loses the completion while the record says it was delivered.
       const completed = await registry.collectCompleted({ markNotified: false });

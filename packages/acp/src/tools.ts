@@ -7,7 +7,7 @@
  * coupled to ACP, and we never fabricate a diff we cannot reconstruct.
  */
 
-import { BUILTIN_TOOL_NAMES, formatToolInput, getToolPresentation } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, formatToolInput, getBuiltinToolPresentation } from "@codent/core";
 
 import { textBlock } from "./content.js";
 import { toWirePath } from "./paths.js";
@@ -38,7 +38,7 @@ const NAME_KIND_OVERRIDES: Record<string, ToolKind> = {
 
 /** Map a tool name to an ACP {@link ToolKind}, from core's presentation catalog. */
 export function toolKindFor(name: string): ToolKind {
-  const category = getToolPresentation(name)?.category ?? "other";
+  const category = getBuiltinToolPresentation(name)?.category ?? "other";
   return NAME_KIND_OVERRIDES[name] ?? CATEGORY_KIND[category];
 }
 

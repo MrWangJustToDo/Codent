@@ -40,6 +40,7 @@ import {
   cancelIncompleteToolCalls,
   createTaskTool,
   deriveSubagentRunStats,
+  getToolMetadata,
   taskOutputSchema,
 } from "../dist/dev.mjs";
 import {
@@ -401,12 +402,9 @@ function walk(dir) {
 // ============================================================================
 
 {
-  // `defineServerTool` moves the projection into the registry, so the composed chain the engine
-  // calls is `toModelOutputRegistry.get(name)` — that is what must carry the cancel notice.
-  const toModelOutputRegistry = (await import("../dist/dev.mjs")).toModelOutputRegistry;
-
-  createTaskTool({ parentAgentId: "a", manager: { getAgent: () => undefined } });
-  const taskProjection = toModelOutputRegistry.get("task");
+  // The projection is attached to the live tool object; this is what the engine composes.
+  const taskTool = createTaskTool({ parentAgentId: "a", manager: { getAgent: () => undefined } });
+  const taskProjection = getToolMetadata(taskTool)?.toModelOutput;
   assert.equal(typeof taskProjection, "function", "the task tool registers its model-facing projection");
   const projected = await taskProjection({
     toolCallId: "c",
@@ -442,8 +440,8 @@ function walk(dir) {
     ],
   ]) {
     assert.equal(typeof make, "function", `${name}: factory is reachable for the projection check`);
-    make({ managed: undefined }); // registration is a side effect; the registry is what runs
-    const toModelOutput = toModelOutputRegistry.get(name);
+    const tool = make({ managed: undefined });
+    const toModelOutput = getToolMetadata(tool)?.toModelOutput;
     assert.equal(typeof toModelOutput, "function", `${name}: registered its model-facing projection`);
     const out = await toModelOutput({ toolCallId: "c", input: {}, output });
     const body = (Array.isArray(out) ? out : [out]).map((p) => p?.content ?? "").join("\n");

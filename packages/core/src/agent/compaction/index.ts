@@ -65,7 +65,6 @@ export {
 
 export { applyToolCompact, type ApplyToolCompactOptions } from "./tool-compact";
 export { ToolCompactCache } from "./tool-compact/tool-compact-cache.js";
-export { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 
 // Message-chain projection (summary-first wire)
 export {

@@ -195,11 +195,17 @@ export class AgentBootstrap {
       // Extensions access the environment primarily via ctx.coreEnv.getEnv() (async).
       // getEnvVar stays a sync best-effort hook for convenience fields like API keys.
       getEnvVar: () => undefined,
-      onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank),
+      onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank, { publishCatalog: false }),
       onRegisterCommand: (cmd) => managed.registerCommand(cmd),
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
       onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
+      onRegisterToolOutputDecorator: (name, decorator, ownerId) =>
+        managed.registerToolOutputDecorator(name, decorator, ownerId),
+      onRemoveToolOutputDecoratorOwner: (ownerId) => managed.removeToolOutputDecoratorOwner(ownerId),
+      onToolRegistrationBatchComplete: () => managed.publishToolPresentationCatalog(),
+      onToolRegistrationComplete: () => managed.publishToolPresentationCatalog(),
       cwd: rootPath,
+      agentId: managed.id,
       getCoreEnv: () => env,
       eventBus: manager.of(managed.id, undefined),
       log,

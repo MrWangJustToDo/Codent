@@ -13,11 +13,8 @@ import { createSessionSearchTool } from "./session-search-tool.js";
 import { createTreeTool } from "./tree-tool.js";
 import { createWriteFileTool } from "./write-file-tool.js";
 
-import type { createAskUserTool } from "./ask-user-tool.js";
-import type { ManagedAgent, UsageTracker } from "../../runtime-types/hosts.js";
-import type { createCompletePlanTool, createCreatePlanTool, createUpdatePlanTool } from "../plan/create-plan-tool.js";
-import type { createTaskTool } from "../subagent/task-tool.js";
-import type { createTodoTool } from "../todo/todo-tool.js";
+import type { AgentToolContext } from "./runtime/tool-context.js";
+import type { UsageTracker } from "../../runtime-types/hosts.js";
 
 export type Tools = ToolsRecord & {
   delete_file: ReturnType<typeof createDeleteFileTool>;
@@ -33,24 +30,15 @@ export type Tools = ToolsRecord & {
   kill_command: ReturnType<typeof createKillCommandTool>;
   session_search: ReturnType<typeof createSessionSearchTool>;
   session_read: ReturnType<typeof createSessionReadTool>;
-
-  todo?: ReturnType<typeof createTodoTool>;
-  task?: ReturnType<typeof createTaskTool>;
-  ask_user?: ReturnType<typeof createAskUserTool>;
-  create_plan?: ReturnType<typeof createCreatePlanTool>;
-  update_plan?: ReturnType<typeof createUpdatePlanTool>;
-  complete_plan?: ReturnType<typeof createCompletePlanTool>;
 };
 
 export const createTools = async ({
   usage,
-  managed,
-  processTools,
+  context,
 }: {
   usage?: UsageTracker;
-  /** Owning agent, so session tools can exclude the live session by default. */
-  managed?: ManagedAgent;
-  processTools?: (t: Tools) => Promise<void>;
+  /** Agent instance bindings for session/job/abort-aware tools. */
+  context?: AgentToolContext;
 } = {}): Promise<Tools> => {
   const res: Tools = {
     delete_file: createDeleteFileTool(),
@@ -61,14 +49,12 @@ export const createTools = async ({
     glob: createGlobTool(),
     grep: createGrepTool(),
     tree: createTreeTool(),
-    run_command: createRunCommandTool({ managed }),
-    get_command_output: createGetCommandOutputTool({ managed }),
-    kill_command: createKillCommandTool({ managed }),
-    session_search: createSessionSearchTool({ managed }),
-    session_read: createSessionReadTool({ managed }),
+    run_command: createRunCommandTool({ context }),
+    get_command_output: createGetCommandOutputTool({ context }),
+    kill_command: createKillCommandTool({ context }),
+    session_search: createSessionSearchTool({ context }),
+    session_read: createSessionReadTool(),
   };
-
-  await processTools?.(res);
 
   return res;
 };

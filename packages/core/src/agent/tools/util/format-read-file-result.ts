@@ -2,7 +2,7 @@ import { formatByteSize } from "../../../utils/byte-size.js";
 import { isProjectedModelContent } from "../runtime/projected-model-content.js";
 
 import type { ReadFileOutput } from "../read-file-tool.js";
-import type { ModelToolContent } from "../runtime/to-model-output-registry.js";
+import type { ModelToolContent } from "../runtime/model-output.js";
 import type { ContentPart } from "@tanstack/ai";
 
 /**

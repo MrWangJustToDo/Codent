@@ -26,7 +26,13 @@
 
 import assert from "node:assert/strict";
 
-import { ToolCompactCache, applyToolCompact, injectSyntheticMessages, toModelOutputRegistry } from "../dist/dev.mjs";
+import {
+  ToolCompactCache,
+  applyToolCompact,
+  defineServerTool,
+  getToolMetadata,
+  injectSyntheticMessages,
+} from "../dist/dev.mjs";
 
 const noop = () => {};
 
@@ -46,9 +52,15 @@ function makeChannel(ids) {
 // 1. applyToolCompact is pure — the input survives byte-identical
 // ============================================================================
 
-{
-  toModelOutputRegistry.register("purity_probe", ({ output }) => `shaped:${output.value}`);
+const purityProbe = defineServerTool({
+  name: "purity_probe",
+  description: "purity probe",
+  execute: async () => ({ value: "A" }),
+  toModelOutput: ({ output }) => `shaped:${output.value}`,
+});
+const registry = { get: (name) => (name === "purity_probe" ? getToolMetadata(purityProbe)?.toModelOutput : undefined) };
 
+{
   const messages = [
     {
       role: "assistant",
@@ -60,7 +72,7 @@ function makeChannel(ids) {
   const cache = new ToolCompactCache();
   const before = JSON.stringify(messages);
 
-  const out = await applyToolCompact(messages, { registry: toModelOutputRegistry, cache });
+  const out = await applyToolCompact(messages, { registry, cache });
 
   assert.notEqual(out, messages, "a transformed wire must be a NEW array");
   assert.equal(
@@ -86,7 +98,7 @@ function makeChannel(ids) {
     { role: "tool", toolCallId: "p2", content: payload },
   ];
   const cache = new ToolCompactCache();
-  await applyToolCompact(messages, { registry: toModelOutputRegistry, cache }); // warm the cache
+  await applyToolCompact(messages, { registry, cache }); // warm the cache
   assert.equal(cache.has("p2"), true, "first pass must populate the cache");
 
   // Count BYTES decoded, not call count: `buildToolCallInputMap` legitimately parses the
@@ -98,7 +110,7 @@ function makeChannel(ids) {
     return realParse(text, ...rest);
   };
   try {
-    const out = await applyToolCompact(messages, { registry: toModelOutputRegistry, cache });
+    const out = await applyToolCompact(messages, { registry, cache });
     assert.equal(out[1].content, "shaped:A", "the cached content is applied");
     assert.ok(
       bytes < payload.length / 10,

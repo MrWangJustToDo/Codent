@@ -25,6 +25,7 @@ import {
   createSessionReadTool,
   createSessionSearchTool,
   createSubagentTools,
+  getToolMetadata,
   resolveToolsRecord,
   listSessionIds,
   makeSnippet,
@@ -336,7 +337,7 @@ try {
   // 6. The tools: exclusion, pagination, unknown id
   // ==========================================================================
   {
-    const searchTool = createSessionSearchTool({ managed: { getSessionData: () => ({ id: "ses_current" }) } });
+    const searchTool = createSessionSearchTool({ context: { getSessionId: () => "ses_current" } });
     const managedResult = await searchTool.execute(
       { query: "secret token", limit: 10 },
       { toolCallId: "s1", context: {} }
@@ -352,8 +353,7 @@ try {
       truncated: false,
       durationMs: 1,
     };
-    const { toModelOutputRegistry } = await import("../dist/dev.mjs");
-    const renderNoMatch = toModelOutputRegistry.get("session_search");
+    const renderNoMatch = getToolMetadata(searchTool)?.toModelOutput;
     const rendered = await renderNoMatch({ toolCallId: "s0", input: { query: "no-such-token" }, output: noMatch });
     assert.match(
       rendered[0].content,

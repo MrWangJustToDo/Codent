@@ -11,7 +11,7 @@
  *   stream for `HEARTBEAT_TIMEOUT_MS` triggers a reconnect.
  */
 
-import { AGENT_STREAM_SNAPSHOT_LINE_CAP, hydrateToolPresentations } from "@codent/core";
+import { AGENT_STREAM_SNAPSHOT_LINE_CAP, presentationFromInfo } from "@codent/core";
 
 import type {
   AgentSession,
@@ -23,6 +23,7 @@ import type {
   AgentSessionSubscriber,
   AgentStreamEvent,
   AgentStreamSnapshot,
+  ToolPresentation,
 } from "@codent/core";
 
 export interface RemoteSessionClientOptions {
@@ -308,8 +309,6 @@ function applyEvent(
     case "extensions":
       return { ...snapshot, extensions: event.payload };
     case "tool-presentation":
-      // The owning process decided how its tools fold and label; adopt it before rendering.
-      hydrateToolPresentations(event.payload.descriptors);
       return { ...snapshot, toolDescriptors: event.payload.descriptors };
     case "mcp":
       return { ...snapshot, mcp: event.payload };
@@ -381,6 +380,8 @@ export class RemoteSessionClient implements AgentSession {
   private resyncInFlight: Promise<void> | null = null;
   private readonly summaryCache = new Map<string, AgentStreamSnapshot>();
   private readonly toolBufferCache: ToolBufferMap = new Map();
+  /** This session's tool descriptors; never a process-global hydration layer. */
+  private readonly toolPresentations = new Map<string, ToolPresentation>();
   /**
    * Set once the server reports this agent id no longer exists (HTTP 404
    * "Session not found"). Terminated clients stop reconnecting and fail fast:
@@ -396,7 +397,7 @@ export class RemoteSessionClient implements AgentSession {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.snapshot = options.initialSnapshot ?? emptySnapshot(options.agentId);
     reviveMessageTimestamps(this.snapshot.messages);
-    if (this.snapshot.toolDescriptors.length > 0) hydrateToolPresentations(this.snapshot.toolDescriptors);
+    this.setToolDescriptors(this.snapshot.toolDescriptors);
     if (options.initialSnapshot) this.lastSyncAt = Date.now();
   }
 
@@ -427,8 +428,25 @@ export class RemoteSessionClient implements AgentSession {
     return this.snapshot;
   }
 
+  private setToolDescriptors(descriptors: AgentSessionSnapshot["toolDescriptors"]): void {
+    // A publisher that predates the field sends nothing; keep what we already learned.
+    if (!Array.isArray(descriptors)) return;
+    this.toolPresentations.clear();
+    for (const descriptor of descriptors) {
+      if (descriptor?.name) this.toolPresentations.set(descriptor.name, presentationFromInfo(descriptor));
+    }
+  }
+
   getAgentStreamSnapshot(key: string): AgentStreamSnapshot | null {
     return this.summaryCache.get(key) ?? null;
+  }
+
+  /** Session-scoped presentation from this client's snapshot/SSE descriptors. */
+  getToolPresentation(name: string): ToolPresentation | undefined {
+    const present = this.toolPresentations.get(name);
+    // A publisher that omitted metadata serializes as `{ name }`; treat that as "no descriptor"
+    // so the host can fall back to its static built-in table.
+    return present && Object.keys(present).length > 0 ? present : undefined;
   }
 
   /** Latest buffered tool output per toolCallId (client-side remount source). */
@@ -499,7 +517,7 @@ export class RemoteSessionClient implements AgentSession {
     }
     this.snapshot = await readJson<AgentSessionSnapshot>(snapRes);
     reviveMessageTimestamps(this.snapshot.messages);
-    if (this.snapshot.toolDescriptors.length > 0) hydrateToolPresentations(this.snapshot.toolDescriptors);
+    this.setToolDescriptors(this.snapshot.toolDescriptors);
     this.lastSyncAt = Date.now();
 
     try {
@@ -595,6 +613,9 @@ export class RemoteSessionClient implements AgentSession {
                   continue;
                 }
                 this.snapshot = applyEvent(this.snapshot, event, this.summaryCache, this.toolBufferCache);
+                if (event.channel === "tool-presentation") {
+                  this.setToolDescriptors(this.snapshot.toolDescriptors);
+                }
                 handler(event);
               }
             }

@@ -13,7 +13,6 @@
  * ```
  */
 
-import { destroyAllCommandJobs } from "@codent/core";
 import { stdioTransport } from "@tanstack/ai-mcp/stdio";
 import mime from "mime-types";
 import { exec, execFile } from "node:child_process";
@@ -281,7 +280,6 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
     },
 
     destroy: async () => {
-      await destroyAllCommandJobs();
       if (useOsSandbox) {
         await resetOsSandbox();
       }

@@ -69,7 +69,8 @@ import {
   discardRegisteredPrefork,
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
-import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin-table.js";
+import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { registerStreamingEventBus, registerStreamingHub } from "../agent/tools/util/streaming-callback.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
@@ -114,6 +115,7 @@ import { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentManager } from "./agent-manager.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
+import type { AgentToolService } from "./services/agent-tool-service.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
@@ -137,6 +139,8 @@ import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
 import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { TodoManager } from "../agent/todo";
+import type { ToolPresentation } from "../agent/tools/presentation/types.js";
+import type { ToModelOutputFn } from "../agent/tools/runtime/model-output.js";
 import type { ToolsRecord } from "../agent/tools/runtime/tools-record.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
@@ -482,7 +486,7 @@ export class ManagedAgent {
     // descriptors — and the owner-id scoping applied at this boundary cannot help, because the
     // later agent's `setExtensionRunner` replaces the first agent's runner outright. Keeping it
     // un-injectable makes "one registry per agent" unexpressible rather than merely conventional.
-    this.extensions = new ExtensionRegistryService();
+    this.extensions = new ExtensionRegistryService(this.tools);
     if (init.todoManager) this.extensions.setTodoManager(init.todoManager);
     this.parentId = init.parentId;
     this.runtime = init.runtime;
@@ -884,7 +888,7 @@ export class ManagedAgent {
     bus.retain("session:extensions", () => ({
       extensions: this.extensions.getExtensionRunner()?.getExtensionInfos() ?? [],
     }));
-    bus.retain("session:tool-presentation", () => ({ descriptors: describeToolPresentations() }));
+    bus.retain("session:tool-presentation", () => ({ descriptors: this.getToolPresentationCatalog() }));
     bus.retain("session:mcp", () => ({ servers: this.getMcpManager()?.getServerStatuses() ?? [] }));
     bus.retain("session:interaction", () => this.readInteractions());
     bus.retain("agent:iteration", () => this.readIteration());
@@ -1302,12 +1306,20 @@ export class ManagedAgent {
    * same extension id twice, and the two entries must stay independent — they describe tools in
    * two different agents' tool sets, and a disable on one agent has to leave the other alone.
    */
-  registerTool(def: ExtensionToolDefinition, extensionId = this.id, rank?: DispatchRank): void {
+  registerTool(
+    def: ExtensionToolDefinition,
+    extensionId = this.id,
+    rank?: DispatchRank,
+    options: { publishCatalog?: boolean } = {}
+  ): void {
     this.extensions.registerTool(def, {
       tools: this.tools,
       ownerId: this.scopedOwnerId(extensionId),
       warn: (message) => this.log?.warn("system", message),
-      onToolsChanged: () => this.setRunnerConfigKey(undefined),
+      onToolsChanged: () => {
+        this.setRunnerConfigKey(undefined);
+        if (options.publishCatalog !== false) this.publishToolPresentationCatalog();
+      },
       agentId: this.id,
       rank,
     });
@@ -1332,7 +1344,7 @@ export class ManagedAgent {
       warn: (message) => this.log?.warn("system", message),
       onToolsChanged: () => this.setRunnerConfigKey(undefined),
     });
-    this.emitToolPresentationCatalog();
+    this.publishToolPresentationCatalog();
   }
 
   /**
@@ -1353,8 +1365,8 @@ export class ManagedAgent {
   }
 
   /** Publish the current presentation catalog (tool set changed). */
-  private emitToolPresentationCatalog(): void {
-    this.getEventBus()?.emit("session:tool-presentation", { descriptors: describeToolPresentations() });
+  publishToolPresentationCatalog(): void {
+    this.getEventBus()?.emit("session:tool-presentation", { descriptors: this.getToolPresentationCatalog() });
   }
 
   /** Unregister a command previously added by an extension (used when disabling). */
@@ -1879,6 +1891,45 @@ export class ManagedAgent {
     return tool != null && "needsApproval" in tool && (tool as { needsApproval?: boolean }).needsApproval === true;
   }
 
+  /** Agent-local model-output shaping; the live tool entry wins. */
+  getToolModelOutput(toolName: string): ToModelOutputFn | undefined {
+    const toolService = this.extensions.getToolService();
+    toolService.useTools(this.tools);
+    return toolService.resolve(toolName)?.toModelOutput ?? getToolMetadata(this.tools[toolName])?.toModelOutput;
+  }
+
+  /** Agent-local tool presentation; the live tool entry wins. */
+  getToolPresentation(toolName: string): ToolPresentation | undefined {
+    const toolService = this.extensions.getToolService();
+    toolService.useTools(this.tools);
+    return (
+      toolService.resolve(toolName)?.present ??
+      getToolMetadata(this.tools[toolName])?.present ??
+      getBuiltinToolPresentation(toolName)
+    );
+  }
+
+  /** Register a decorator on this agent's tool service (owner-scoped). */
+  registerToolOutputDecorator(
+    toolName: string,
+    fn: Parameters<AgentToolService["registerDecorator"]>[1],
+    ownerId = this.id
+  ): () => void {
+    return this.extensions.getToolService().registerDecorator(toolName, fn, ownerId);
+  }
+
+  /** Remove every decorator belonging to an owner (extension disable/destroy). */
+  removeToolOutputDecoratorOwner(ownerId = this.id): void {
+    this.extensions.getToolService().removeDecoratorOwner(ownerId);
+  }
+
+  /** Presentation catalog for this agent's live tools, not the process-wide union. */
+  getToolPresentationCatalog() {
+    const toolService = this.extensions.getToolService();
+    toolService.useTools(this.tools);
+    return toolService.catalog();
+  }
+
   /** Create or replace the core-owned main chat session (StreamProcessor + run loop). */
   initChat(manager: AgentManager, initialMessages?: TanStackUIMessage[]): AgentChatController {
     this.chatController = new AgentChatController(this, manager, initialMessages);
@@ -2016,6 +2067,7 @@ export class ManagedAgent {
 
   /** @internal Wire chat / subagent UI channel (hosts read via {@link getUI}). */
   setUIChannel(ui: AgentUIChannel | undefined): void {
+    ui?.setToolPresentationResolver((name) => this.getToolPresentation(name));
     this.runnerWiring.setUIChannel(ui);
   }
 }

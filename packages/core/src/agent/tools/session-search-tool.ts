@@ -15,7 +15,7 @@ import { DEFAULT_SEARCH_ROLES, searchHistory } from "./session-search/session-re
 import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
+import type { AgentToolContext } from "./runtime/tool-context.js";
 
 /** Default number of matches returned. */
 const DEFAULT_LIMIT = 20;
@@ -52,6 +52,8 @@ export const sessionSearchOutputSchema = z.object({
       "True when the result was cut short (session cap, match/content cap, or an unreadable log), so `total` may be a floor."
     ),
   durationMs: z.number().describe("Execution duration in milliseconds."),
+  /** The live session excluded by default; persisted so model-output shaping stays agent-local. */
+  excludedSessionId: z.string().optional().describe("Session id omitted from this search, when any."),
   ...toolOutputBaseSchema.shape,
 });
 
@@ -63,7 +65,7 @@ export type SessionSearchOutput = z.infer<typeof sessionSearchOutputSchema>;
  * `managed` supplies the current session id so it can be excluded by default (the live
  * conversation already holds it). Pass no `sessionId` to search all other sessions.
  */
-export const createSessionSearchTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
+export const createSessionSearchTool = ({ context }: { context?: AgentToolContext } = {}) => {
   return defineServerTool({
     name: "session_search",
     present: { category: "searches" },
@@ -106,7 +108,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
     outputSchema: sessionSearchOutputSchema,
     execute: async ({ query, sessionId, role, since, until, limit }, { coreEnv }) => {
       return withDuration(async () => {
-        const currentSessionId = managed?.getSessionData()?.id;
+        const currentSessionId = context?.getSessionId();
         const result = await searchHistory(coreEnv, {
           query,
           sessionId,
@@ -125,6 +127,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
           returned: result.matches.length,
           withheld: Math.max(0, result.total - result.matches.length),
           truncated: result.truncated,
+          ...(sessionId ? {} : currentSessionId ? { excludedSessionId: currentSessionId } : {}),
         };
       });
     },
@@ -132,7 +135,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
       if (isProjectedModelContent(output)) return output;
       if (output.matches.length === 0) {
         const note = output.truncated ? " (results may be incomplete: match/content bound reached)" : "";
-        const currentId = managed?.getSessionData()?.id;
+        const currentId = output.excludedSessionId ?? context?.getSessionId();
         const asked = (input as { sessionId?: unknown } | undefined)?.sessionId;
         // The default excludes the live session. Say so with the id, or a model that searched for
         // something it just discussed reads "no matches" as "this tool is broken".

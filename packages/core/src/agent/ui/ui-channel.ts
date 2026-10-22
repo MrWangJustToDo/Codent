@@ -20,10 +20,11 @@ import { shouldSuppressReplayedToolChunk } from "../stream/suppress-replayed-too
 import { shouldSuppressStaleTextChunk } from "../stream/suppress-stale-text-chunks.js";
 import { agentStreamKey, type AgentStreamHub } from "../stream-hub";
 import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
+import { getBuiltinToolPresentation } from "../tools/presentation/builtin-table.js";
 import { computeToolDisplay } from "../tools/presentation/compute-display.js";
 
 import type { AgentEventBus } from "../agent-event-bus";
-import type { ToolDisplayPayload } from "../tools/presentation/types.js";
+import type { ToolDisplayPayload, ToolPresentation } from "../tools/presentation/types.js";
 import type { StreamChunk, StreamProcessorEvents, UIMessage as TanStackUIMessage, ContentPart } from "@tanstack/ai";
 
 // ============================================================================
@@ -135,11 +136,22 @@ export class AgentUIChannel {
   private readonly processor: StreamProcessor;
   /** Unified event bus for the owning agent (session `messages` projection). */
   private eventBus?: AgentEventBus;
+  private toolPresentationResolver: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation;
 
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
     this.eventBus = bus;
     bus.retain("session:messages", () => (this.getMessages() ?? []) as never);
+  }
+
+  /** @internal Bind this channel to its owning agent's tool presentations. */
+  setToolPresentationResolver(resolver: (name: string) => ToolPresentation | undefined): void {
+    this.toolPresentationResolver = resolver;
+  }
+
+  /** Resolve a tool presentation through the owning agent, with the global registry as fallback. */
+  resolveToolPresentation(name: string): ToolPresentation | undefined {
+    return this.toolPresentationResolver(name);
   }
   private readonly approvalListeners = new Set<ApprovalListener>();
   private readonly customEventListeners = new Set<UICustomEventListener>();
@@ -441,7 +453,10 @@ export class AgentUIChannel {
     // Safety net for the tool paths the early-result middleware does not see
     // (batched tool phase, replayed results): attach each completed call's display
     // payload once, here, before the turn becomes historical.
-    const withDisplay = attachMissingToolDisplays(this.getMessages());
+    const withDisplay = attachMissingToolDisplays(
+      this.getMessages(),
+      (name) => this?.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name)
+    );
     if (withDisplay) this.processor.setMessages(withDisplay);
     // End of run: everything now materialized becomes historical for the next
     // one (matters when the next stream is fed via processChunk directly).
@@ -586,7 +601,10 @@ export class AgentUIChannel {
  * idempotent (a part that already has a payload is left untouched), so restored
  * sessions keep the payload they were persisted with — no history rewrite.
  */
-function attachMissingToolDisplays(messages: TanStackUIMessage[]): TanStackUIMessage[] | null {
+function attachMissingToolDisplays(
+  messages: TanStackUIMessage[],
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+): TanStackUIMessage[] | null {
   type ToolCallPartLike = {
     type?: string;
     id?: string;
@@ -617,7 +635,7 @@ function attachMissingToolDisplays(messages: TanStackUIMessage[]): TanStackUIMes
         }
       }
 
-      const display = computeToolDisplay(part.name, part.output, input);
+      const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
       if (!display) return part;
 
       touched = true;

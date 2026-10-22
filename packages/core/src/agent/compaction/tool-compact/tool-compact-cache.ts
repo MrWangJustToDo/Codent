@@ -1,4 +1,4 @@
-import type { ModelToolContent } from "../../tools/runtime/to-model-output-registry.js";
+import type { ModelToolContent } from "../../tools/runtime/model-output.js";
 
 // ============================================================================
 // In-memory cache for per-toolCallId LLM-facing compact output

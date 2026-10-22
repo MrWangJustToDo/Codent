@@ -1,8 +1,8 @@
 import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
+import { getBuiltinToolPresentation } from "./builtin-table.js";
 import { inlineSummaryForOutput } from "./inline-summary.js";
-import { getToolPresentation } from "./registry.js";
 
 import type { ToolDisplayPayload } from "./types.js";
 
@@ -42,7 +42,12 @@ function safe<T>(render: () => T): T | undefined {
  * output / parsed input (see {@link ToolPresentation}), so the payload can be persisted
  * with the session and replayed without changing the prompt prefix.
  */
-export function computeToolDisplay(name: string, output: unknown, input?: unknown): ToolDisplayPayload | undefined {
+export function computeToolDisplay(
+  name: string,
+  output: unknown,
+  input?: unknown,
+  resolvePresentation: (name: string) => ReturnType<typeof getBuiltinToolPresentation> = getBuiltinToolPresentation
+): ToolDisplayPayload | undefined {
   if (!name) return undefined;
 
   // A failed call is rendered by the error path (the part's `errorText`), never by the
@@ -50,7 +55,7 @@ export function computeToolDisplay(name: string, output: unknown, input?: unknow
   // "updated" / "applied" / "saved", and that wrong text is persisted with the session.
   if (isErrorOutput(output)) return undefined;
 
-  const present = getToolPresentation(name);
+  const present = resolvePresentation(name);
   // Only the SYNTHETIC framework payload is replaced wholesale: it carries no output at all (the
   // tool never returned). A tool that caught its own abort DOES have output, and its own `text`
   // renderer is what renders it — see {@link isSyntheticCancelOutput}.

@@ -7,6 +7,7 @@
  * finish — especially visible for long-running `task` tools.
  */
 
+import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin-table.js";
 import { computeToolDisplay } from "../../agent/tools/presentation/compute-display.js";
 import { errorMessage } from "../../utils/errors.js";
 
@@ -59,6 +60,11 @@ function attachToolDisplay(
   output: unknown
 ): void {
   if (!info.toolName) return;
-  const display = computeToolDisplay(info.toolName, output, info.input);
+  const display = computeToolDisplay(
+    info.toolName,
+    output,
+    info.input,
+    (name) => channel.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name)
+  );
   if (display) channel.attachToolDisplay(toolCallId, display);
 }

@@ -4,14 +4,13 @@ export {
   type ExternalBridgedTool,
 } from "./bridge-external-tool.js";
 
-export {
-  defineClientTool,
-  defineServerTool,
-  toModelOutputRegistry,
-  type ModelToolContent,
-  type ToModelOutputContext,
-  type ToolExecuteCtx,
-} from "./define-tool.js";
+export { defineClientTool, defineServerTool, type ToolExecuteCtx, type ToolMetadata } from "./define-tool.js";
+export type {
+  ModelToolContent,
+  ToModelOutputContext,
+  ToModelOutputDecorator,
+  ToModelOutputFn,
+} from "./model-output.js";
 
 export {
   CLIENT_TOOL_NAMES,

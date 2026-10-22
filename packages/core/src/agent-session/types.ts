@@ -16,7 +16,7 @@ import type { McpServerStatus } from "../agent/mcp/manager.js";
 import type { PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamEvent, AgentStreamSnapshot } from "../agent/stream-hub/types.js";
 import type { TodoItem } from "../agent/todo/types.js";
-import type { ToolPresentationInfo } from "../agent/tools/presentation/types.js";
+import type { ToolPresentation, ToolPresentationInfo } from "../agent/tools/presentation/types.js";
 import type { StreamingChunk } from "../agent/tools/util/streaming-callback.js";
 import type { QueuedMessagesSnapshot } from "../managers/controllers/agent-chat-controller.js";
 import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
@@ -338,6 +338,8 @@ export interface AgentSession {
   getAgentStreamSnapshot(key: string): AgentStreamSnapshot | null;
   /** All live summary streams (client cache seeding / remount over HTTP). */
   listAgentStreamSnapshots?(): AgentStreamSnapshot[];
+  /** Session-scoped tool presentation (local agent catalog or a remote snapshot's descriptors). */
+  getToolPresentation?(name: string): ToolPresentation | undefined;
   dispatch(command: AgentSessionCommand): Promise<AgentSessionCommandResult>;
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void;
   close?(): Promise<void>;

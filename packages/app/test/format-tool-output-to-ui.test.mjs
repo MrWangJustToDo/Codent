@@ -1,24 +1,23 @@
-import { clearToolPresentation, registerToolPresentation } from "@codent/core";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { URL } from "node:url";
 
 const { formatToolOutput } = await import(new URL("../dist/index.mjs", import.meta.url).href);
 
-test("formatToolOutput prefers a registered present.text for extension tools", () => {
-  clearToolPresentation();
-  registerToolPresentation("ext_echo", {
-    text: (result) => {
-      const echoed = result && typeof result === "object" && "echoed" in result ? String(result.echoed) : "";
-      return `echo → ${echoed}`;
-    },
-  });
+test("formatToolOutput prefers a session-resolved present.text for extension tools", () => {
+  const resolve = (name) =>
+    name === "ext_echo"
+      ? {
+          text: (result) => {
+            const echoed = result && typeof result === "object" && "echoed" in result ? String(result.echoed) : "";
+            return `echo → ${echoed}`;
+          },
+        }
+      : undefined;
 
-  assert.equal(formatToolOutput({ echoed: "hi" }, "ext_echo"), "echo → hi");
-  assert.equal(formatToolOutput({ echoed: "hi" }, "unknown_ext"), "");
-
-  clearToolPresentation();
-  assert.equal(formatToolOutput({ echoed: "hi" }, "ext_echo"), "");
+  assert.equal(formatToolOutput({ echoed: "hi" }, "ext_echo", resolve), "echo → hi");
+  assert.equal(formatToolOutput({ echoed: "hi" }, "unknown_ext", resolve), "");
+  assert.equal(formatToolOutput({ echoed: "hi" }, "ext_echo"), "", "no resolver / no descriptor falls back empty");
 });
 
 test("formatToolOutput echoes ask_user multi-select as one item per line", () => {

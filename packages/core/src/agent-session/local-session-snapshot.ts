@@ -1,5 +1,5 @@
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
-import { describeToolPresentations } from "../agent/tools/presentation/registry.js";
+import { describeToolPresentations } from "../agent/tools/presentation/describe.js";
 /**
  * Project ManagedAgent → AgentSessionSnapshot (serializable, no live handles).
  */
@@ -41,7 +41,10 @@ export function readLocalAgentSessionSnapshot(
     autoMode: managed.isAutoModeEnabled(),
     mcp: { servers: managed.getMcpManager()?.getServerStatuses() ?? [] },
     extensions: { extensions: managed.getExtensionRunner()?.getExtensionInfos() ?? [] },
-    toolDescriptors: describeToolPresentations(),
+    toolDescriptors:
+      typeof managed.getToolPresentationCatalog === "function"
+        ? managed.getToolPresentationCatalog()
+        : describeToolPresentations(),
     interactions: managed.readInteractions(),
     iteration: managed.readIteration(),
     jobs: managed.readJobs(),

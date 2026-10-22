@@ -41,8 +41,8 @@ import {
   createWebfetchTool,
   createWebsearchTool,
   createWriteFileTool,
+  getToolMetadata,
   isProjectedModelContent,
-  toModelOutputRegistry,
   toPosixPath,
 } from "../dist/dev.mjs";
 
@@ -111,7 +111,7 @@ const PROJECTIONS = [
   { name: "write_file", make: () => createWriteFileTool(), raw: { created: true, path: "a.ts" } },
   {
     name: "webfetch",
-    make: () => createWebfetchTool({ managed: undefined }),
+    make: () => createWebfetchTool(),
     raw: {
       url: "https://x",
       finalUrl: "https://x",
@@ -123,13 +123,13 @@ const PROJECTIONS = [
   },
   {
     name: "websearch",
-    make: () => createWebsearchTool({ managed: undefined }),
+    make: () => createWebsearchTool(),
     raw: { query: "q", provider: "duckduckgo", results: [] },
   },
-  { name: "session_read", make: () => createSessionReadTool({ managed: undefined }), raw: { content: "page" } },
+  { name: "session_read", make: () => createSessionReadTool(), raw: { content: "page" } },
   {
     name: "session_search",
-    make: () => createSessionSearchTool({ managed: undefined }),
+    make: () => createSessionSearchTool(),
     raw: { query: "q", matches: [], truncated: false },
   },
   {
@@ -151,8 +151,8 @@ const PROJECTIONS = [
 const PART_ARRAY = [{ type: "text", content: "already shaped" }];
 
 for (const { name, make, raw } of PROJECTIONS) {
-  make();
-  const project = toModelOutputRegistry.get(name);
+  const tool = make();
+  const project = getToolMetadata(tool)?.toModelOutput;
   assert.equal(typeof project, "function", `${name}: registers its projection through the real factory`);
 
   // 1a. Its own output, as an array — the shape TanStack stringifies into the content a later

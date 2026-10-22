@@ -1,4 +1,4 @@
-import { getToolPresentation } from "../tools/presentation/registry.js";
+import { getBuiltinToolPresentation } from "../tools/presentation/builtin-table.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
 import type { PlanModeController } from "./plan-mode-controller.js";
@@ -33,8 +33,8 @@ export const PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES: ReadonlySet<string> = new S
  * that is genuinely read-only declares its presentation (and therefore becomes visible to the UI
  * as well).
  */
-export function isWorkspaceEditingTool(toolName: string): boolean {
-  const presentation = getToolPresentation(toolName);
+export function isWorkspaceEditingTool(toolName: string, resolve = getBuiltinToolPresentation): boolean {
+  const presentation = resolve(toolName);
   if (!presentation) return true;
   return presentation.category === "edits";
 }
@@ -53,18 +53,20 @@ export function isMcpToolName(name: string): boolean {
 }
 
 /** Build exclude set for {@link resolveToolsRecord} during planning/ready. */
-export function getPlanModeToolExcludeSet(tools: ToolsRecord): Set<string> {
+export function getPlanModeToolExcludeSet(tools: ToolsRecord, resolve = getBuiltinToolPresentation): Set<string> {
   const exclude = new Set(PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES);
   for (const name of Object.keys(tools)) {
-    if (isMcpToolName(name) || isWorkspaceEditingTool(name)) exclude.add(name);
+    if (isMcpToolName(name) || isWorkspaceEditingTool(name, resolve)) exclude.add(name);
   }
   return exclude;
 }
 
 /** Whether plan mode withholds `toolName` — every editing tool, the named exceptions, and MCP. */
-export function isPlanModeForbiddenTool(toolName: string): boolean {
+export function isPlanModeForbiddenTool(toolName: string, resolve = getBuiltinToolPresentation): boolean {
   return (
-    isWorkspaceEditingTool(toolName) || PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has(toolName) || isMcpToolName(toolName)
+    isWorkspaceEditingTool(toolName, resolve) ||
+    PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES.has(toolName) ||
+    isMcpToolName(toolName)
   );
 }
 
@@ -75,11 +77,12 @@ export function isPlanModeForbiddenTool(toolName: string): boolean {
 export function getPlanModeToolBlockReason(
   planMode: PlanModeController | null | undefined,
   toolName: string,
-  args: unknown
+  args: unknown,
+  resolve = getBuiltinToolPresentation
 ): string | null {
   if (!planMode?.isRestrictingTools()) return null;
 
-  if (isPlanModeForbiddenTool(toolName)) {
+  if (isPlanModeForbiddenTool(toolName, resolve)) {
     return `Plan mode: "${toolName}" is blocked while planning. Use /mode execute after the plan is ready.`;
   }
 

@@ -1,4 +1,3 @@
-import { destroyAllCommandJobs } from "@codent/core";
 import { WebContainer } from "@webcontainer/api";
 
 import { createWebContainerFs } from "./create-fs.js";
@@ -189,7 +188,6 @@ export async function createWebContainerEnv(options: CreateWebContainerEnvOption
     getMimeType: async (filePath) => mimeFromPath(filePath),
     locateTreeSitterGrammar,
     destroy: async () => {
-      await destroyAllCommandJobs();
       // WebContainer API does not expose a stable teardown; drop references.
     },
   };

@@ -18,7 +18,6 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { defaultPath } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
 import { truncateText } from "../../utils/text-truncation.js";
-import { toModelOutputRegistry } from "../tools/runtime/to-model-output-registry.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/tool-names.js";
 
 import { FileSync } from "./file-sync.js";
@@ -231,7 +230,7 @@ async function activateLsp(
   // handlers so the summary survives the `onConfig` / tool-compact rewrite.
   const AUTO_DIAG_TOOLS = ["write_file", "edit_file"] as const;
   for (const toolName of AUTO_DIAG_TOOLS) {
-    toModelOutputRegistry.registerDecorator(toolName, async (ctx, next) => {
+    ctx.registerToolOutputDecorator(toolName, async (ctx, next) => {
       const base = await next(ctx);
       const output = ctx.output as Record<string, unknown> | undefined;
       const diag = output?._lspDiagnostics;

@@ -4,10 +4,11 @@ import { formatByteSize } from "../../../utils/byte-size.js";
 import { truncateText } from "../../../utils/text-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
+import { getBuiltinToolPresentation } from "./builtin-table.js";
 import { ENTRY_VALUE_MAX_CHARS } from "./format.js";
 import { splitStreamingLines } from "./lines.js";
-import { getToolPresentation } from "./registry.js";
 
+import type { ToolPresentationResolver } from "./types.js";
 import type { TaskOutput } from "../../subagent/task-tool.js";
 import type { ReadFileOutput } from "../read-file-tool.js";
 import type {
@@ -282,7 +283,11 @@ function formatTaskOutput(output: TaskOutput): string {
 }
 
 /** Format tool output for display based on tool name. */
-export function formatToolOutput(output: unknown, toolName?: string): string {
+export function formatToolOutput(
+  output: unknown,
+  toolName?: string,
+  resolvePresentation: ToolPresentationResolver = getBuiltinToolPresentation
+): string {
   if (output === undefined || output === null) return "";
 
   // The framework's abort fallback (`cancelInFlightToolCalls` / `cancelIncompleteToolCalls`)
@@ -301,7 +306,7 @@ export function formatToolOutput(output: unknown, toolName?: string): string {
   if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;
 
   if (toolName) {
-    const uiRenderer = getToolPresentation(toolName)?.text;
+    const uiRenderer = resolvePresentation(toolName)?.text;
     if (uiRenderer) {
       const rendered = uiRenderer(output);
       return typeof rendered === "string" ? rendered : "";

@@ -1,14 +1,25 @@
 import { toolDefinition, type InferSchemaType, type SchemaInput, type ServerTool, type ClientTool } from "@tanstack/ai";
 
 import { getAmbientEnv } from "../../../env/ambient.js";
-import { declareToolPresentation } from "../presentation/registry.js";
 import { withTimeoutAbort } from "../util/abort-timeout.js";
 
-import { toModelOutputRegistry, type ModelToolContent, type ToModelOutputContext } from "./to-model-output-registry.js";
-
+import type { ModelToolContent, ToModelOutputContext, ToModelOutputFn } from "./model-output.js";
 import type { ResolvedCoreEnv } from "../../../env";
 import type { ToolRunContext } from "../../runner/run-context.js";
 import type { ToolPresentation } from "../presentation/types.js";
+
+/** Per-tool metadata attached to the live tool object, independent of the process registries. */
+export interface ToolMetadata {
+  present?: ToolPresentation;
+  toModelOutput?: ToModelOutputFn;
+}
+
+const toolMetadata = new WeakMap<object, ToolMetadata>();
+
+/** Read the agent-local metadata attached by {@link defineServerTool} / {@link defineClientTool}. */
+export function getToolMetadata(tool: unknown): ToolMetadata | undefined {
+  return typeof tool === "object" && tool !== null ? toolMetadata.get(tool) : undefined;
+}
 
 // ============================================================================
 // Tool execute context (maps TanStack ToolExecutionContext)
@@ -44,8 +55,7 @@ export interface ToolExecuteCtx {
   timeoutMs?: number;
 }
 
-export type { ModelToolContent, ToModelOutputContext };
-export { toModelOutputRegistry };
+export type { ModelToolContent, ToModelOutputContext, ToModelOutputFn };
 export { isProjectedModelContent } from "./projected-model-content.js";
 
 // ============================================================================
@@ -108,37 +118,17 @@ export function defineServerTool<
    * for the same reason as {@link toModelOutput}.
    */
   present?: ToolPresentation;
-  /**
-   * Who owns this tool's presentation declaration and model-output registration.
-   *
-   * Defaults to the tool name, which is right for a built-in: it IS its own registration and
-   * nothing ever removes it. An extension registering a tool passes its own id instead, so
-   * disabling the extension drops exactly its entries and the shadowed tool's own descriptor
-   * and shaping return — the whole reason both registries are owner-keyed. The scope an agent
-   * adds on top is applied by its caller (`ManagedAgent.scopedOwnerId`), which is the only
-   * place that knows which agent the tool set belongs to.
-   */
-  ownerId?: string;
 }): ServerTool<TInput, TOutput, TName> {
-  if (config.toModelOutput) {
-    const toModel = config.toModelOutput;
-    toModelOutputRegistry.register(
-      config.name,
-      (ctx) =>
-        toModel({
+  const modelOutput: ToModelOutputFn | undefined = config.toModelOutput
+    ? (ctx) =>
+        config.toModelOutput!({
           toolCallId: ctx.toolCallId,
           input: ctx.input as InferSchemaType<TInput>,
           output: ctx.output as InferSchemaType<TOutput>,
-        }),
-      config.ownerId
-    );
-  }
+        })
+    : undefined;
 
-  if (config.present) {
-    declareToolPresentation(config.name, config.present, config.ownerId);
-  }
-
-  return toolDefinition({
+  const serverTool = toolDefinition({
     name: config.name,
     description: config.description,
     inputSchema: config.inputSchema,
@@ -171,6 +161,14 @@ export function defineServerTool<
       timeoutMessage: `Tool "${config.name}" timed out after ${config.timeoutMs}ms`,
     });
   }) as ServerTool<TInput, TOutput, TName>;
+
+  // The live tool object carries its own metadata; the owning agent resolves it through
+  // AgentToolService, so no process registry is involved.
+  toolMetadata.set(serverTool, {
+    ...(config.present ? { present: config.present } : {}),
+    ...(modelOutput ? { toModelOutput: modelOutput } : {}),
+  });
+  return serverTool;
 }
 
 /**
@@ -190,14 +188,8 @@ export function defineClientTool<
   lazy?: boolean;
   /** See {@link defineServerTool} `present` — how the tool is displayed. */
   present?: ToolPresentation;
-  /** See {@link defineServerTool} `ownerId` — who owns the declaration. */
-  ownerId?: string;
 }): ClientTool<TInput, TOutput, TName> {
-  if (config.present) {
-    declareToolPresentation(config.name, config.present, config.ownerId);
-  }
-
-  return toolDefinition({
+  const clientTool = toolDefinition({
     name: config.name,
     description: config.description,
     inputSchema: config.inputSchema,
@@ -205,4 +197,7 @@ export function defineClientTool<
     needsApproval: config.needsApproval,
     lazy: config.lazy,
   }).client() as ClientTool<TInput, TOutput, TName>;
+
+  if (config.present) toolMetadata.set(clientTool, { present: config.present });
+  return clientTool;
 }

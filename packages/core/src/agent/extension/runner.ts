@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- the extension runner co-locates activation, dispatch ordering, registration rollback, and context construction; splitting it would duplicate the shared registration lifecycle. */
 import { getEnv, hasCoreEnv } from "../../env";
 // The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
 // it on the same two hooks (fatal handler + `exit`) that already land the active logs.
@@ -40,6 +41,7 @@ import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
+import type { ToModelOutputDecorator } from "../tools/runtime/model-output.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -68,8 +70,20 @@ export interface ExtensionRunnerOptions {
   onUnregisterTool?: (name: string, ownerId: string) => void;
   /** Unregister a previously registered command (used when disabling an extension). */
   onUnregisterCommand?: (name: string) => void;
-  /** Working directory (rootPath) injected into {@link ExtensionContext.cwd}. */
+  /** Register an agent-scoped model-output decorator. */
+  onRegisterToolOutputDecorator?: (
+    toolName: string,
+    decorator: ToModelOutputDecorator,
+    ownerId: string
+  ) => (() => void) | void;
+  /** Fallback cleanup for a host whose registration callback returns no disposer. */
+  onRemoveToolOutputDecoratorOwner?: (ownerId: string) => void;
+  /** Called once after an extension activation finishes registering its tools. */
+  onToolRegistrationBatchComplete?: () => void;
+  /** Called after a tool registered outside activation (runtime registration). */
+  onToolRegistrationComplete?: () => void;
   cwd?: string;
+  agentId?: string;
   /**
    * Resolve the runtime CoreEnv to inject into {@link ExtensionContext.coreEnv}.
    * Defaults to the globally registered CoreEnv (`getEnv()`).
@@ -115,6 +129,8 @@ export class ExtensionRunner {
    * `ExtensionRegistryService`, which receives the same rank through `onRegisterTool`.
    */
   private toolStacks = new Map<string, Array<{ ownerId: string; def: ExtensionToolDefinition; rank: DispatchRank }>>();
+  /** Extension ids currently inside activate(); runtime registrations publish immediately. */
+  private readonly activating = new Set<string>();
   private commandRegistry = new Map<string, ExtensionCommand>();
   private commandOwners = new Map<string, string>();
   /** Per-extension context injection (extension id → provider and its rank). */
@@ -397,6 +413,7 @@ export class ExtensionRunner {
       unsubInterceptors: [],
       unsubObservers: [],
       unsubTurnContext: [],
+      toolOutputDecoratorDisposers: [],
       messageTransformers: [],
       flush: null,
       exitFlush: null,
@@ -417,10 +434,12 @@ export class ExtensionRunner {
     };
 
     this.extensions.push(instance);
+    this.activating.add(api.id);
 
     try {
       await api.activate(ctx);
       instance.state = "active";
+      this.options.onToolRegistrationBatchComplete?.();
     } catch (err) {
       const error = toError(err);
       // Release anything acquired before the throw (MCP clients, LSP servers). Artifact rollback
@@ -437,6 +456,8 @@ export class ExtensionRunner {
         phase: "activate",
         error: error.message,
       });
+    } finally {
+      this.activating.delete(api.id);
     }
 
     return instance;
@@ -564,11 +585,13 @@ export class ExtensionRunner {
     if (!enabled && instance.state === "inactive") return { ok: true, message: `Extension "${id}" already disabled` };
 
     if (enabled) {
+      this.activating.add(instance.api.id);
       try {
         await instance.api.activate(instance.context);
         instance.state = "active";
         instance.error = undefined;
         this.disabledExtensionNotices.delete(instance.api.id);
+        this.options.onToolRegistrationBatchComplete?.();
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
         const error = toError(err);
@@ -580,6 +603,8 @@ export class ExtensionRunner {
         instance.state = "error";
         instance.error = error;
         return { ok: false, message: `Failed to enable "${id}": ${error.message}` };
+      } finally {
+        this.activating.delete(instance.api.id);
       }
     }
 
@@ -639,6 +664,9 @@ export class ExtensionRunner {
     for (const id of instance.registrations.messageTransformers) {
       this.messageTransformers.clearExtension(id);
     }
+    for (const dispose of [...instance.registrations.toolOutputDecoratorDisposers]) {
+      dispose();
+    }
     // Clear in place (`.length = 0`) rather than reassigning: the `createContext`
     // closures reference `registrations` and may read/capture these arrays at call
     // time. Reassigning would silently desync re-enabled registrations from the
@@ -648,6 +676,7 @@ export class ExtensionRunner {
     instance.registrations.unsubInterceptors.length = 0;
     instance.registrations.unsubObservers.length = 0;
     instance.registrations.unsubTurnContext.length = 0;
+    instance.registrations.toolOutputDecoratorDisposers.length = 0;
     instance.registrations.messageTransformers.length = 0;
     // One flush per extension, and the sync one is registered process-wide too — so releasing it
     // here is what stops a destroyed extension from running on `process.on("exit")`.
@@ -664,6 +693,7 @@ export class ExtensionRunner {
   ): ExtensionContext {
     return {
       id: api.id,
+      agentId: this.options.agentId ?? "standalone",
       env: this.resolveEnv(api.id, config?.config),
       z,
       cwd: this.options.cwd ?? "",
@@ -681,6 +711,26 @@ export class ExtensionRunner {
         // The rank travels with the registration: the authoritative tool stack (which entry is
         // live) lives in the host's registry, which cannot see the extension's own order.
         this.options.onRegisterTool?.(def, api.id, rank);
+        // Activation publishes one catalog after ALL tools are in. A runtime registration has no
+        // such batch boundary, so publish immediately after it lands.
+        if (!this.activating.has(api.id)) this.options.onToolRegistrationComplete?.();
+      },
+
+      registerToolOutputDecorator: (toolName, decorator) => {
+        const ownerId = `${this.options.agentId ?? "standalone"}:${api.id}`;
+        const disposeOwned =
+          this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId) ??
+          (() => this.options.onRemoveToolOutputDecoratorOwner?.(ownerId));
+        let active = true;
+        const dispose = () => {
+          if (!active) return;
+          active = false;
+          const index = registrations?.toolOutputDecoratorDisposers.indexOf(dispose) ?? -1;
+          if (index >= 0) registrations!.toolOutputDecoratorDisposers.splice(index, 1);
+          disposeOwned();
+        };
+        registrations?.toolOutputDecoratorDisposers.push(dispose);
+        return dispose;
       },
 
       registerCommand: (cmd: ExtensionCommand) => {

@@ -26,7 +26,7 @@ import { withDuration } from "./util/tool-result.js";
 import { toolOutputBaseSchema } from "./util/types.js";
 import { convertHTMLToMarkdown, extractHtmlTitle, extractTextFromHTML } from "./util/webfetch-html.js";
 
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
+import type { AgentToolContext } from "./runtime/tool-context.js";
 
 // ============================================================================
 // Constants
@@ -101,7 +101,7 @@ export type WebfetchOutput = z.infer<typeof webfetchOutputSchema>;
  * const webfetchTool = createWebfetchTool();
  * ```
  */
-export const createWebfetchTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
+export const createWebfetchTool = ({ context }: { context?: AgentToolContext } = {}) => {
   return defineServerTool({
     name: "webfetch",
     present: { category: "searches" },
@@ -160,13 +160,11 @@ Usage notes:
         // reported to the model as `[Fetch cancelled by user.]`.
         const { controller, cleanup: cleanupAbort } = createTimeoutAbort({ timeoutMs, signal: abortSignal });
 
-        const managedAgent = managed;
-
-        const hasParentAgent = managedAgent?.parentId;
+        const hasParentAgent = context?.parentId;
 
         try {
           if (!hasParentAgent) {
-            managedAgent?.addPendingAbortController(controller);
+            context?.addPendingAbortController(controller);
           }
 
           const headers = {
@@ -303,7 +301,7 @@ Usage notes:
         } finally {
           cleanupAbort();
           if (!hasParentAgent) {
-            managedAgent?.removePendingAbortController(controller);
+            context?.removePendingAbortController(controller);
           }
         }
       });

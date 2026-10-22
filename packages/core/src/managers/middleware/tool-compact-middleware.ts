@@ -1,5 +1,4 @@
 import { applyToolCompact } from "../../agent/compaction/tool-compact/apply-tool-compact.js";
-import { toModelOutputRegistry } from "../../agent/tools/runtime/to-model-output-registry.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -25,7 +24,11 @@ export interface ToolCompactMiddlewareDeps {
  * strip placed earlier cannot see a tool's media at all.
  */
 export function createToolCompactMiddleware(deps: ToolCompactMiddlewareDeps): ChatMiddleware<ToolRunContext> {
-  const registry = deps.registry ?? toModelOutputRegistry;
+  const registry =
+    deps.registry ??
+    ({
+      get: (toolName: string) => deps.getManagedAgent().getToolModelOutput?.(toolName),
+    } satisfies Pick<ToModelOutputRegistry, "get">);
 
   return defineMiddleware("context-transform", {
     name: "tool-compact",

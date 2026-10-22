@@ -10,8 +10,8 @@ import {
   countSubagentIterations,
   createTaskTool,
   deriveSubagentRunStats,
+  getToolMetadata,
   hasBeginSummaryCall,
-  toModelOutputRegistry,
 } from "../dist/dev.mjs";
 
 const exploreDone = [
@@ -341,12 +341,10 @@ const noBudget = deriveSubagentRunStats({
 assert.equal(noBudget.maxIterations, 0, "an unknown budget stays 0 so the readout drops the `/0`");
 
 {
-  // `defineServerTool` does not carry `toModelOutput` on the tool object — it registers it in
-  // `toModelOutputRegistry`, which is how the production path reads it (`applyToolCompact`). So
-  // the projection is asserted through the registry, not through a method on the tool. The tool
-  // needs no live manager for this: `toModelOutput` is a pure projection of the output.
+  // `toModelOutput` is attached to the live tool object; the production path resolves it through
+  // the agent tool service. The tool needs no live manager for this pure projection.
   const taskTool = createTaskTool({ parentAgentId: "parent", manager: {} });
-  const project = toModelOutputRegistry.get("task");
+  const project = getToolMetadata(taskTool)?.toModelOutput;
   assert.ok(project, "the task tool must register a model-output projection");
 
   // The description is the other model-facing surface: a field the model is never handed must

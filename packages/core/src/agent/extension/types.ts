@@ -6,7 +6,7 @@ import type { MultimodalPartType } from "../../models/adapter/capability-message
 import type { ModelCapability } from "../../models/types.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
-import type { ModelToolContent, ToModelOutputContext } from "../tools/runtime/to-model-output-registry.js";
+import type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator } from "../tools/runtime/model-output.js";
 import type { ModelMessage, SchemaInput } from "@tanstack/ai";
 
 export type { ExtensionZod } from "./extension-zod.js";
@@ -591,6 +591,8 @@ export interface ExtensionUI {
 
 export interface ExtensionContext {
   id: string;
+  /** Owning ManagedAgent id; scopes per-agent extension resources such as output decorators. */
+  agentId: string;
   env: Record<string, string>;
   /** Working directory (rootPath) of the agent session. */
   cwd: string; /**
@@ -607,6 +609,11 @@ export interface ExtensionContext {
   z: ExtensionZod;
 
   registerTool(def: ExtensionToolDefinition): void;
+  /**
+   * Decorate a tool's model-facing output for this agent. The runner removes the decorator when
+   * the extension is disabled or destroyed; the returned disposer removes it earlier.
+   */
+  registerToolOutputDecorator(toolName: string, decorator: ToModelOutputDecorator): () => void;
   registerCommand(cmd: ExtensionCommand): void;
   registerInterceptor<T extends InterceptableEvent>(eventType: string, handler: EventInterceptor<T>): () => void;
   /**
@@ -732,6 +739,8 @@ export interface ExtensionRegistrations {
   unsubObservers: Array<() => void>;
   /** Unsubscribe callbacks for turn-context providers. */
   unsubTurnContext: Array<() => void>;
+  /** Per-registration model-output decorator disposers. */
+  toolOutputDecoratorDisposers: Array<() => void>;
   /**
    * Extension ids holding a message transformer. Cleared on disable/destroy so a
    * disabled extension stops rewriting the wire.

@@ -79,7 +79,7 @@ export function builtinPresentationNames(): string[] {
 }
 
 /** Fallback descriptor for a built-in name (flags only; text/summary/input come from the ported formatters). */
-export function builtinPresentation(name: string): ToolPresentation | undefined {
+export function getBuiltinToolPresentation(name: string): ToolPresentation | undefined {
   const entry = BUILTIN_PRESENTATION[name];
   if (!entry) return undefined;
   return { ...entry };

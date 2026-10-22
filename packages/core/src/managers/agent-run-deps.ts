@@ -13,10 +13,11 @@ import type { CompactionConfig } from "../agent/compaction/types.js";
 import type { WireProjectionCache } from "../agent/compaction/wire-projection-cache.js";
 import type { ExtensionRunner } from "../agent/extension/runner.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
+import type { AgentStreamHub } from "../agent/stream-hub";
 import type { TodoManager } from "../agent/todo";
+import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { CommandJobRegistry } from "../agent/tools/util/command-job-registry.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
-import type { AgentStreamHub } from "../agent/stream-hub/index.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import type { ModelInfo } from "../models/types.js";
@@ -58,6 +59,8 @@ export interface AgentRunDeps {
   approvals: ToolApprovalTable;
   run: RunCoordinator;
   planMode: PlanModeController;
+  /** Agent-local tool presentation, for plan-mode policy decisions. */
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined;
   /** Set-once in practice, but `setLog` is public — read live to be safe. */
   getLog: () => AgentLog;
   getTodoManager: () => TodoManager | null;
@@ -135,6 +138,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     approvals: managed.approvals,
     run: managed.run,
     planMode: managed.planMode,
+    resolveToolPresentation: (name) => managed.getToolPresentation(name),
     getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),

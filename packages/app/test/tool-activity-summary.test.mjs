@@ -3,7 +3,7 @@
  *
  * Run: node packages/app/test/tool-activity-summary.test.mjs
  */
-import { clearToolPresentation, registerToolPresentation } from "@codent/core";
+import { getBuiltinToolPresentation } from "@codent/core";
 import assert from "node:assert/strict";
 
 import { keepsCompactRow } from "../dist/index.mjs";
@@ -260,25 +260,32 @@ assert.equal(
   "1 read, ext_echo · a.ts"
 );
 
-// Registered presentation metadata wins over the built-in table and supplies labels.
-registerToolPresentation("ext_echo", { category: "searches", label: (input) => input?.message });
-assert.equal(getToolActivityBucket("ext_echo"), "searches");
-assert.equal(getToolActivityBucket("read_file"), "reads");
-assert.equal(getToolActivityBucket("never_registered_tool"), "other");
-const curated = extractActivityLabelInfo({
-  id: "1",
-  name: "ext_echo",
-  type: "tool-call",
-  arguments: JSON.stringify({ message: "hi" }),
-});
+// A session descriptor wins over the built-in table and supplies labels.
+const labelOnly = { category: "searches", label: (input) => input?.message };
+const resolveLabel = (name) => (name === "ext_echo" ? labelOnly : getBuiltinToolPresentation(name));
+assert.equal(getToolActivityBucket("ext_echo", resolveLabel), "searches");
+assert.equal(getToolActivityBucket("read_file", resolveLabel), "reads");
+assert.equal(getToolActivityBucket("never_registered_tool", resolveLabel), "other");
+const curated = extractActivityLabelInfo(
+  {
+    id: "1",
+    name: "ext_echo",
+    type: "tool-call",
+    arguments: JSON.stringify({ message: "hi" }),
+  },
+  resolveLabel
+);
 assert.equal(curated.text, "hi");
 assert.ok(curated.tier < 0, "curated labels outrank file basenames");
 assert.equal(
-  formatExploredActivitySummary([
-    { id: "1", name: "ext_echo", type: "tool-call", arguments: JSON.stringify({ message: "hi" }), output: {} },
-    { id: "2", name: "ext_echo", type: "tool-call", arguments: JSON.stringify({ message: "ho" }), output: {} },
-    { id: "3", name: "run_command", type: "tool-call", arguments: JSON.stringify({ command: "ls" }), output: {} },
-  ]),
+  formatExploredActivitySummary(
+    [
+      { id: "1", name: "ext_echo", type: "tool-call", arguments: JSON.stringify({ message: "hi" }), output: {} },
+      { id: "2", name: "ext_echo", type: "tool-call", arguments: JSON.stringify({ message: "ho" }), output: {} },
+      { id: "3", name: "run_command", type: "tool-call", arguments: JSON.stringify({ command: "ls" }), output: {} },
+    ],
+    resolveLabel
+  ),
   "2 searches, 1 command · hi, ho"
 );
 
@@ -286,12 +293,12 @@ assert.equal(
 assert.equal(keepsCompactRow("read_file"), false);
 assert.equal(keepsCompactRow("todo"), true);
 assert.equal(keepsCompactRow("ext_echo"), false);
-registerToolPresentation("ext_echo", {
-  category: "searches",
-  label: (input) => input?.message,
+const extPresentation = {
+  ...labelOnly,
   text: (result) => `echo → ${result?.echoed ?? ""}`,
-});
-assert.equal(keepsCompactRow("ext_echo"), true);
+};
+const resolveExt = (name) => (name === "ext_echo" ? extPresentation : getBuiltinToolPresentation(name));
+assert.equal(keepsCompactRow("ext_echo", resolveExt), true);
 
 const completed = (name) => ({
   id: "1",
@@ -307,14 +314,16 @@ assert.equal(shouldKeepToolRow(completed("todo")), true);
 assert.equal(shouldFoldToolRow(completed("todo")), false);
 assert.equal(shouldKeepToolRow(completed("ask_user")), true);
 assert.equal(shouldKeepToolRow(completed("complete_plan")), true);
-assert.equal(shouldKeepToolRow(completed("ext_echo")), true);
+assert.equal(shouldKeepToolRow(completed("ext_echo"), resolveExt), true);
 assert.equal(shouldKeepToolRow(completed("run_command")), false);
 assert.equal(shouldFoldToolRow(completed("edit_file")), true);
 // Errored rows still fold (the render layer hides them in compact).
 assert.equal(shouldKeepToolRow({ ...completed("todo"), state: "error", output: { error: "x" } }), false);
-assert.equal(shouldKeepToolRow({ ...completed("ext_echo"), state: "error", output: { error: "x" } }), false);
+assert.equal(
+  shouldKeepToolRow({ ...completed("ext_echo"), state: "error", output: { error: "x" } }, resolveExt),
+  false
+);
 
-clearToolPresentation();
 assert.equal(getToolActivityBucket("ext_echo"), "other");
 
 console.log("tool-activity-summary.test.mjs: ok");

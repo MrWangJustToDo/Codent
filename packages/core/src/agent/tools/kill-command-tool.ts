@@ -1,14 +1,12 @@
 import { z } from "zod";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
-import { commandJobRegistry } from "./util/command-job-registry.js";
 import { killCommandOutputSchema } from "./util/types.js";
 
+import type { AgentToolContext } from "./runtime/tool-context.js";
 import type { KillCommandOutput } from "./util/types.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
-export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
-  const registry = managed?.getCommandJobRegistry() ?? commandJobRegistry;
+export const createKillCommandTool = ({ context }: { context?: AgentToolContext } = {}) => {
   return defineServerTool({
     name: "kill_command",
     present: {
@@ -23,6 +21,8 @@ export const createKillCommandTool = ({ managed }: { managed?: ManagedAgent } = 
     needsApproval: true,
     lazy: true,
     execute: async ({ jobId }) => {
+      const registry = context?.getCommandJobRegistry();
+      if (!registry) throw new Error("kill_command requires an AgentToolContext");
       await registry.ready();
       const existing = registry.get(jobId);
       if (!existing) {

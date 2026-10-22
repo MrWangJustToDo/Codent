@@ -14,8 +14,9 @@
  * a store + event handler.
  */
 
-import { getToolPresentation } from "@codent/core";
 import { createState } from "reactivity-store";
+
+import { resolveToolPresentation } from "./tool-presentation.js";
 
 import type { AgentEvent } from "@codent/core";
 
@@ -40,7 +41,7 @@ export interface ToolTimingEntry {
  * this is the same flag core uses for its row rules.
  */
 function isClientTool(name: string): boolean {
-  return getToolPresentation(name)?.clientSide === true;
+  return resolveToolPresentation(name)?.clientSide === true;
 }
 
 // ============================================================================

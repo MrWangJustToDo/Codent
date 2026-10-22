@@ -37,6 +37,7 @@ import { createEmitTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent } from "./managed-agent.js";
+import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelMessage, ServerTool, StreamChunk, UIMessage } from "@tanstack/ai";
 
@@ -90,7 +91,10 @@ export async function resolveTextAdapterForManaged(managed: ManagedAgent): Promi
 // TanStack tools
 // ============================================================================
 
-function resolveTanStackTools(managed: ManagedAgent): ServerTool[] {
+function resolveTanStackTools(
+  managed: ManagedAgent,
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined
+): ServerTool[] {
   const toolset = managed.config.toolsetProfile ?? (managed.parentId ? "explore" : "root");
   if (toolset === "explore") {
     return resolveToolsRecord(managed.tools, { exclude: SUBAGENT_EXCLUDED_TOOL_NAMES }) as ServerTool[];
@@ -104,7 +108,7 @@ function resolveTanStackTools(managed: ManagedAgent): ServerTool[] {
     throw new Error(`Unsupported toolset profile: "${String(toolset)}"`);
   }
   if (managed.planMode.isRestrictingTools()) {
-    const exclude = getPlanModeToolExcludeSet(managed.tools);
+    const exclude = getPlanModeToolExcludeSet(managed.tools, resolveToolPresentation);
     for (const name of PLAN_COMPLETION_TOOL_NAMES) exclude.add(name);
     return resolveToolsRecord(managed.tools, { exclude }) as ServerTool[];
   }
@@ -244,6 +248,7 @@ export function buildAgentRunner(
     }),
     createPlanModeMiddleware({
       getPlanMode: () => planMode,
+      resolveToolPresentation: deps.resolveToolPresentation,
     }),
     // Advisory loop hygiene: nudge the model out of identical tool-call loops. Counts
     // attempts and injects a synthetic reminder before the next LLM call (after the
@@ -274,7 +279,7 @@ export function buildAgentRunner(
     model: textAdapter.model,
     maxIterations: midIterationMax,
     systemPrompts: systemPrompt ? [systemPrompt] : undefined,
-    tools: resolveTanStackTools(managed),
+    tools: resolveTanStackTools(managed, deps.resolveToolPresentation),
     middleware: instrumentMiddlewareLog(middleware, deps.getLog()),
     temperature: config.temperature,
     maxOutputTokens,

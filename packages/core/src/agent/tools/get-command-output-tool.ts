@@ -1,14 +1,12 @@
 import { z } from "zod";
 
 import { defineServerTool, isProjectedModelContent } from "./runtime/define-tool.js";
-import { commandJobRegistry } from "./util/command-job-registry.js";
 import { getCommandOutputSchema } from "./util/types.js";
 
+import type { AgentToolContext } from "./runtime/tool-context.js";
 import type { GetCommandOutput } from "./util/types.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
-export const createGetCommandOutputTool = ({ managed }: { managed?: ManagedAgent } = {}) => {
-  const registry = managed?.getCommandJobRegistry() ?? commandJobRegistry;
+export const createGetCommandOutputTool = ({ context }: { context?: AgentToolContext } = {}) => {
   return defineServerTool({
     name: "get_command_output",
     present: {
@@ -26,6 +24,8 @@ export const createGetCommandOutputTool = ({ managed }: { managed?: ManagedAgent
     needsApproval: false,
     lazy: true,
     execute: async ({ jobId }) => {
+      const registry = context?.getCommandJobRegistry();
+      if (!registry) throw new Error("get_command_output requires an AgentToolContext");
       await registry.ready();
       const result = registry.poll(jobId);
       if (!result) {
