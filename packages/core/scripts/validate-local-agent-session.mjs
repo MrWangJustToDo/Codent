@@ -48,6 +48,7 @@ function createFake(id, parentId) {
     log: null,
     getTodoManager: () => todoManager,
     streamHub: new AgentStreamHub(),
+    sessionLifecycle: { stop: () => {} },
     getExtensionRunner: () => null,
     readInteractions: () => ({ approvals: [], askUser: [] }),
     readIteration: () => ({ current: 0, max: 0 }),

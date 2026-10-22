@@ -106,6 +106,7 @@ import { BackgroundWorkService } from "./services/background-work-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
+import { SessionLifecycleService, type SessionLifecycleReason } from "./services/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
 import { UsageHistoryService } from "./services/usage-history-service.js";
 import { SessionPersistence } from "./session-persistence.js";
@@ -418,6 +419,8 @@ export class ManagedAgent {
   private wireProjectionCache: WireProjectionCache | null = null;
   readonly toolCompactCache: ToolCompactCache;
   readonly sessionPersistence: SessionPersistence;
+  /** Session switch/reset transaction owner (stop producers, clear transient state). */
+  readonly sessionLifecycle: SessionLifecycleService;
 
   // ============================================================================
   // Run lifecycle flags + timing
@@ -599,6 +602,31 @@ export class ManagedAgent {
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
       invalidateRunner: () => this.invalidateRunner(),
       log: this.log,
+    });
+
+    this.sessionLifecycle = new SessionLifecycleService({
+      mode: this.mode,
+      approvals: this.approvals,
+      run: this.run,
+      compaction: this.compaction,
+      statusController: this.statusController,
+      memory: this.memory,
+      usage: this.usage,
+      streamHub: this.streamHub,
+      getTodoManager: () => this.getTodoManager(),
+      stopActiveRun: (reason) => this.stopActiveRun(reason),
+      abortManualCompaction: (reason) => this.abortManualCompaction(reason),
+      cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
+      discardPreforkRuns: () => this.discardPreforkRuns(),
+      clearErrorAndRetry: () => {
+        this.setError("");
+        this.retryInfo = null;
+      },
+      clearPendingApprovals: () => {
+        this.pendingApprovalCount = 0;
+      },
+      resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
+      resetTurnContext: () => this.turnContext.resetTurnState(),
     });
 
     if (config.setUp) {
@@ -1817,8 +1845,7 @@ export class ManagedAgent {
       // A resume replaces the transcript. `restoreManagedSession` below stops the root pump /
       // registered pre-fork; the explicit cascade reaches children that surface cannot see (a
       // serial `task` child or a manual compaction) before `clearAll()` clears their streams.
-      this.abortManualCompaction("session-switch");
-      this.cascadeAbortToChildren("session-switch");
+      this.sessionLifecycle.stop("session-resume");
       // Clear before the restore emits `session:restore`: a subscriber that fetches
       // `/summary-streams` during the restore must not see the previous session's snapshots.
       this.streamHub.clearAll();
@@ -1972,12 +1999,8 @@ export class ManagedAgent {
    * surface, and `endAllCommands` settles the root's command previews. Call this before
    * `clearAll()`.
    */
-  stopForSessionSwitch(reason = "session-switch"): void {
-    this.abortManualCompaction(reason);
-    this.stopActiveRun(reason);
-    this.cascadeAbortToChildren(reason);
-    this.discardPreforkRuns();
-    this.streamHub.endAllCommands();
+  stopForSessionSwitch(reason: SessionLifecycleReason = "session-switch"): void {
+    this.sessionLifecycle.stop(reason);
   }
 
   /**
@@ -1992,38 +2015,13 @@ export class ManagedAgent {
     this.compactAbortController?.abort(reason);
   }
 
-  reset(): void {
-    const prevStatus = this.getStatus();
+  reset(reason: SessionLifecycleReason = "session-switch"): void {
     this.log?.info("agent", "Resetting agent", {
-      previousStatus: prevStatus,
+      reason,
+      previousStatus: this.getStatus(),
       hadTodos: this.getTodoManager()?.hasTodos() ?? false,
     });
-    // Exit plan / auto-approve first so approval bypass cannot stick across sessions.
-    this.mode.reset();
-    this.approvals.clear();
-    this.abortManualCompaction("session-switch");
-    this.run.resetRunState();
-    // `resetRunState` stops the run's controllers — the eager runs included, through the run's
-    // pending-abort surface — but not their registry records, which would be reported later as some
-    // other run's orphans. Same reason as `abort()`: a PAUSED run reaches no stream terminal hook,
-    // and a serial task child is not registered on the root's controller at all. Cascade here so a
-    // `/clear` cannot leave a child writing task/compact streams into the next session.
-    this.cascadeAbortToChildren("session-switch");
-    this.discardPreforkRuns();
-    this.compaction.resetReactiveCompactRetries();
-    this.statusController.resetToIdle();
-    this.setError("");
-    this.retryInfo = null;
-    this.pendingApprovalCount = 0;
-    this.memory.resetState();
-    this.usage.reset();
-    this.unhydratedMediaCount = 0;
-    this.getTodoManager()?.reset();
-    this.run.resetTurnLifecycle();
-    this.streamHub.clearAll();
-    // Keep chatController + uiChannel alive — /clear calls clearMessages() separately.
-    // Resetting these would break subsequent sendMessage() calls.
-    this.turnContext.resetTurnState();
+    this.sessionLifecycle.reset(reason);
   }
 
   // ============================================================================

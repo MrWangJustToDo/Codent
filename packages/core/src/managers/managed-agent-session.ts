@@ -65,12 +65,6 @@ export interface SessionHost {
   setMediaHydrationMisses?: (count: number) => void;
   /** Drop steer/follow-up queues without clearing the transcript (no-op before initChat). */
   clearQueuedMessages: () => void;
-  /**
-   * Stop an in-flight pump before its transcript is replaced. No-op when idle.
-   * Without it a restore swaps the channel under a live pump, whose stale chunks
-   * then interleave with the resumed history and get persisted as one session.
-   */
-  stopActiveRun?: (reason: string) => void;
   /** Reconcile approval / ask_user pause from restored UIMessages. */
   syncInteractionStateFromUIMessages: (
     messages: TanStackUIMessage[],
@@ -125,11 +119,8 @@ export async function restoreManagedSession(
   sessionId: string,
   tracker: SessionSyncTracker = createSessionSyncTracker()
 ): Promise<SessionData> {
-  // The transcript is about to be replaced, so any run still pumping into the
-  // current channel must stop first: its later chunks would interleave with the
-  // restored history and its pump-complete persist would write that mixture as the
-  // resumed session. No-op when idle, so a plain resume is unaffected.
-  host.stopActiveRun?.("session-switch");
+  // The caller's session lifecycle stops a live pump before this helper is entered; the
+  // production switch owns that ordering in exactly one place.
   host.toolCompactCache.clear();
   // Read-side dual of `session:save-error`: media files referenced by the
   // transcript can be gone (cache cleared / media dir removed). Hydration

@@ -145,17 +145,10 @@ export async function startNewDiskSession(
     return { ok: false, error: "Session store not available" };
   }
 
-  const usage = managed.usage;
   const currentSession = managed.getSessionData();
 
-  managed.disablePlanMode();
-  managed.setAutoModeEnabled(false);
-  // Stop task/compaction producers before the stream hub is cleared. `reset()` aborts the root
-  // controller and pre-forks, but a serial `task` child and a manual compaction need the explicit
-  // cascade in this seat; otherwise they can recreate task/compact previews after `clearAll()`.
-  managed.stopForSessionSwitch("session-switch");
-  managed.reset();
-  usage.reset();
+  // One lifecycle entry point: stop every producer, clear transient state, then rotate below.
+  managed.reset("session-new");
 
   // Starting a brand-new disk session relinquishes the previous session's
   // ownership so another live agent may resume it.
@@ -177,9 +170,6 @@ export async function startNewDiskSession(
   // The cleared agent now runs the new session; claim it like any other live root session so the
   // ownership table describes reality (the previous id was released just above).
   managed.manager?.acquireSessionOwnership(newSession.id, managed.id);
-  managed.resetAdmittedTurnContext();
-  managed.resetSystemPrompt();
-  managed.getTodoManager()?.reset();
   // Announce the switch on the bus *after* the session data is adopted: `setSessionData` re-points
   // the log sink at the new id, so this entry lands in the new session's log — the only header it
   // gets, since the new session is written to disk only on its first save and `/clear` may leave
