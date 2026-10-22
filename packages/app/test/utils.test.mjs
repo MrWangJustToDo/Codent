@@ -60,7 +60,7 @@ const runCmd = (input) => `run_command ${input} (1.2s)`;
 test("a settled row's arguments never exceed the row budget", () => {
   const inputs = [
     // A heredoc: three physical lines the model wrote verbatim.
-    'cat <<EOF\nline one\nline two\nline three\nEOF',
+    "cat <<EOF\nline one\nline two\nline three\nEOF",
     // One long line that only wraps.
     'find . -name "*.ts" | xargs grep -l foo | head -20 | sort | uniq -c | sort -rn',
     // Forty lines — the shape that made the row own the transcript.
@@ -128,7 +128,10 @@ test("clamping never makes the row taller than its own fixed segments", () => {
     const baseline = wrapTextToLines(heavyParen(""), width).length;
     for (const input of ["a\nb\nc", "x".repeat(300), "中文".repeat(40)]) {
       const rows = wrapTextToLines(heavyParen(clampHeaderInput(input, heavyParen, width, 2)), width).length;
-      assert.ok(rows <= baseline, `width=${width} rows=${rows} baseline=${baseline} input=${JSON.stringify(input.slice(0, 20))}`);
+      assert.ok(
+        rows <= baseline,
+        `width=${width} rows=${rows} baseline=${baseline} input=${JSON.stringify(input.slice(0, 20))}`
+      );
     }
   }
 });
