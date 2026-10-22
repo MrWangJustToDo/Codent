@@ -94,6 +94,36 @@ check(
   `files=${JSON.stringify(globResult.files)}`
 );
 
+// `find -path` treats `*` as matching `/`, so the old `**/` -> `*/` rewrite added one
+// mandatory directory between every double-star segment and the target. A nested glob
+// such as `**/code-mode/**/*.ts` therefore missed the actual files and returned [].
+{
+  let findArgs;
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file, args) => {
+      if (file === "fd" || file === "fdfind") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      findArgs = args;
+      return { stdout: "/repo/packages/core/src/agent/code-mode/extension.ts\n", stderr: "", code: 0 };
+    },
+  });
+  const nested = await createGlobTool().execute(
+    { pattern: "**/code-mode/**/*.ts", path: "." },
+    { toolCallId: "t-glob-nested" }
+  );
+  const pathIdx = findArgs?.indexOf("-path") ?? -1;
+  check(
+    "nested double-star glob uses a gap-tolerant find predicate",
+    pathIdx >= 0 && findArgs[pathIdx + 1] === "*code-mode/*.ts",
+    `find args=${JSON.stringify(findArgs)}`
+  );
+  check("nested double-star glob returns the matching file", nested.files.length === 1, JSON.stringify(nested.files));
+}
+
+clearCoreEnv();
+registerCoreEnv(envWithoutRipgrep());
+
 // ---------------------------------------------------------------------------
 // grep
 // ---------------------------------------------------------------------------

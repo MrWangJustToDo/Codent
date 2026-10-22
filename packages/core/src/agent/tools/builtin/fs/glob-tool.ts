@@ -66,6 +66,22 @@ function buildFdArgs(
 const FD_BINARIES = ["fd", "fdfind"];
 
 /**
+ * Convert a glob into a `find -path` pattern.
+ *
+ * `find -path` treats `*` as matching `/` too, so a double-star slash segment can be
+ * collapsed to a single `*` instead of the old star-slash rewrite. That rewrite required
+ * one directory between every double-star segment and the target, so a nested code-mode
+ * glob missed `packages/core/src/agent/code-mode/extension.ts` and returned an empty list.
+ */
+function findPathPattern(pattern: string): string {
+  return pattern
+    .replace(/\/\*\*\//g, "/*")
+    .replace(/^\*\*\//, "*")
+    .replace(/\/\*\*$/g, "/*")
+    .replace(/\*\*/g, "*");
+}
+
+/**
  * `find` arguments, as an argv vector.
  */
 function buildFindArgs(
@@ -80,7 +96,7 @@ function buildFindArgs(
   const args: string[] = [searchPath];
   if (typeFlag) args.push("-type", typeFlag);
   if (hasPathSeparator) {
-    args.push("-path", pattern.replace(/\*\*/g, "*"));
+    args.push("-path", findPathPattern(pattern));
   } else {
     args.push("-name", namePattern);
   }
