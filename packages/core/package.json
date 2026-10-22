@@ -164,6 +164,7 @@
     "validate:tool-denial-reason": "pnpm run build && node scripts/validate-tool-denial-reason.mjs",
     "validate:tool-run-agentid": "pnpm run build && node scripts/validate-tool-run-agentid.mjs",
     "validate:agent-stream": "pnpm run build && node scripts/validate-agent-stream.mjs",
+    "validate:command-stream-scope": "pnpm run build && node scripts/validate-command-stream-scope.mjs",
     "validate:agent-stream-epoch": "pnpm run build && node scripts/validate-agent-stream-epoch.mjs",
     "validate:turn-context": "pnpm run build && node scripts/validate-turn-context.mjs",
     "validate:prompt-cache": "pnpm run build && node scripts/validate-prompt-cache.mjs",

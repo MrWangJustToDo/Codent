@@ -1209,7 +1209,6 @@ pnpm --filter @codent/core run validate:suppress-replayed-tool-chunks
 pnpm --filter @codent/core run validate:early-tool-result-ui
 pnpm --filter @codent/core run validate:extension-prompt-hooks
 pnpm --filter @codent/core run validate:extension-pi-like
-pnpm --filter @codent/core run validate:streaming-scope
 pnpm --filter @codent/core run validate:agent-stream
 pnpm --filter @codent/core run validate:local-agent-session
 pnpm --filter @codent/core run validate:run-agent-skeleton

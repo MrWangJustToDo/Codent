@@ -179,9 +179,8 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   const bus = managed.getEventBus();
   assert.ok(bus, "managed agent has a scoped unified bus");
 
-  // Command stream: run_command → emitStreamingChunk → tool:chunk / tool:clear.
-  // (The streaming-callback bridge itself is covered by core validate:streaming-scope;
-  // here we drive the scoped bus to exercise the full session projection + SSE hop.)
+  // Command stream: run_command → per-agent AgentStreamHub → tool:chunk / tool:clear.
+  // Here we drive the scoped bus directly to exercise the full session projection + SSE hop.
   bus.emit("tool:chunk", {
     kind: "chunk",
     chunk: { toolCallId: "e2e-run", type: "stdout", chunk: "hello e2e" },

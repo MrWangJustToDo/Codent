@@ -6,12 +6,12 @@
  * resets the transient state they write into.
  */
 
-import type { AgentStreamHub } from "../../agent/stream-hub/agent-stream-hub.js";
-import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
-import type { TodoManager } from "../../agent/todo";
-import type { AgentStatusController } from "../controllers/agent-status-controller.js";
 import type { CompactionService } from "./compaction-service.js";
 import type { MemoryService } from "./memory-service.js";
+import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
+import type { AgentStreamHub } from "../../agent/stream-hub/agent-stream-hub.js";
+import type { TodoManager } from "../../agent/todo";
+import type { AgentStatusController } from "../controllers/agent-status-controller.js";
 import type { ModeCoordinator } from "../mode-coordinator.js";
 import type { RunCoordinator } from "../run-coordinator.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
@@ -60,9 +60,10 @@ export class SessionLifecycleService {
   /**
    * Stop producers and clear all transient session state.
    *
-   * This is the only reset path for `/clear`, session.new and session.resume entry points.
-   * It deliberately does not clear the UI transcript, rotate the session, or touch ownership;
-   * those remain part of the switch transaction in `session-lifecycle-commands.ts`.
+   * This is the reset path for session.new and agent reset; session.resume uses `stop()` and
+   * restores its own state. It deliberately does not clear the UI transcript, rotate the
+   * session, or touch ownership; those remain part of the switch transaction in
+   * `session-lifecycle-commands.ts`.
    */
   reset(reason: SessionLifecycleReason = "session-switch"): void {
     this.stop(reason);

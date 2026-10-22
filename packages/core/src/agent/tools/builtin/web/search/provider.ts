@@ -40,11 +40,11 @@ export class ProviderManager {
   private apiKeys = new Map<string, string>();
   private sessionId?: string;
   /**
-   * Serializes configure-and-search. `configure`/`setSessionId` mutate process-global
-   * instance state that `search` (and every provider, via `getApiKey`) reads after an
-   * `await`; two concurrent runs would otherwise interleave — run A's configure, run B's
-   * configure, then A's search reading B's keys. Held only around the call, so searches
-   * run one at a time (search is not a hot path; correctness beats parallelism here).
+   * Serializes configure-and-search. `configure`/`setSessionId` mutate this manager's
+   * state that `search` (and every provider, via `getApiKey`) reads after an `await`;
+   * two concurrent runs on the same manager would otherwise interleave — run A's configure,
+   * run B's configure, then A's search reading B's keys. Held only around the call, so
+   * searches run one at a time (search is not a hot path; correctness beats parallelism here).
    */
   private mutex: Promise<unknown> = Promise.resolve();
 

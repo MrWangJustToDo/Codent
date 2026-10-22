@@ -76,11 +76,11 @@ run_case "spread removed" "$VALIDATOR/provider.ts" \
   "spread by session id" || fail=1
 
 run_case "tavily always available" "$VALIDATOR/providers/tavily.ts" \
-  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(options?: SearchOptions): boolean {\n    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));\n  },","  isAvailable(options?: SearchOptions): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/tavily.ts"; s=open(p).read(); s=s.replace("  isAvailable(options?: SearchOptions): boolean {\n    return Boolean(options?.getApiKey?.(PROVIDER_NAME));\n  },","  isAvailable(options?: SearchOptions): boolean {\n    return true;\n  },"); open(p,"w").write(s)' \
   "tavily must be unavailable" || fail=1
 
 run_case "exa ignores its key" "$VALIDATOR/providers/exa.ts" \
-  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
+  'p="'"$CORE"'/src/agent/tools/builtin/web/search/providers/exa.ts"; s=open(p).read(); s=s.replace("    const apiKey = options?.getApiKey?.(PROVIDER_NAME);\n\n    const url = apiKey","    const apiKey = undefined;\n\n    const url = apiKey"); open(p,"w").write(s)' \
   "exa keyed transport" || fail=1
 
 run_case "abort short-circuit removed" "$VALIDATOR/provider.ts" \
