@@ -165,7 +165,7 @@ console.log("pre-attach retention + JSONL OK:", lines.length, "lines");
   capDetach();
   const secondDetach = capLog.attachFileSink({ dir: capDir, filename: "agent.log", flushIntervalMs: 10 });
   capLog.info("system", "after-reattach");
-  await sleep(40);
+  await capLog.flush();
   const afterReattach = (await fs.promises.readFile(capFile, "utf-8")).split("\n").filter(Boolean);
   const replayed = afterReattach.filter((l) => l.includes('pending-0"') || l.includes('pending-1"')).length;
   assert.equal(replayed, 0, "drained entries are not replayed by a later attach");
@@ -181,6 +181,9 @@ console.log("pre-attach retention + JSONL OK:", lines.length, "lines");
   staleHandle(); // A's handle, called after B replaced it — the late/superseded call
   capLog.info("system", "after-stale-detach");
   capLog.flushSync();
+  // The exit path writes synchronously, but it yields to a batch already in the chain; drain that
+  // too or the read below races the queued write on a slow runner.
+  await capLog.flush();
   const afterStale = await fs.promises.readFile(capFile, "utf-8");
   assert.ok(afterStale.includes("after-stale-detach"), "a superseded detach handle must not unbind the live sink");
   liveHandle();
@@ -194,7 +197,10 @@ for (let batch = 0; batch < 6; batch++) {
   for (let i = 0; i < 3; i++) {
     log.info("system", `padding-${batch}-${i}-` + "x".repeat(60));
   }
-  await sleep(40);
+  // Drain the batch instead of sleeping past the flush interval: rotation is decided from the
+  // active file's size, so a fixed sleep both raced the flush and left the chain behind for the
+  // assertions below.
+  await log.flush();
 }
 
 const entries = (await fs.promises.readdir(logDir)).sort();
@@ -232,10 +238,17 @@ console.log("rotation OK:", entries.join(", "));
 // ----------------------------------------------------------------------------
 // 4. Detach stops writes.
 // ----------------------------------------------------------------------------
+// Drain BEFORE detaching. `detach()` lands the pending buffer but queues whatever batch is already
+// in the flush chain (`void flush()`), and those lines are entries emitted *before* the detach — not
+// writes that outlived it. Sleeping a fixed 40ms here assumed the chain was always caught up: true
+// on a fast runner, false on Windows, where the queued batches landed between the snapshot and the
+// comparison and the assertion read as "writes after detach" (this is the flake that failed CI).
+await log.flush();
 detach();
-await sleep(40);
 const afterDetach = await fs.promises.readFile(filePath, "utf-8");
 log.info("system", "post-detach");
+// Still wait, so a genuine write-after-detach has a chance to appear — that is what gives the
+// assertion teeth.
 await sleep(40);
 assert.equal(await fs.promises.readFile(filePath, "utf-8"), afterDetach, "no writes after detach");
 console.log("detach OK");
@@ -251,7 +264,7 @@ const detach2 = log2.attachFileSink({
   flushIntervalMs: 20,
 });
 log2.info("system", "launch-2");
-await sleep(60);
+await log2.flush();
 
 const content2 = await fs.promises.readFile(filePath, "utf-8");
 const markerMatch = content2.match(/---------- [^\n]+ new session ----------/);
