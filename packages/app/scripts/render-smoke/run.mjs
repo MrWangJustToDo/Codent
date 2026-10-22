@@ -1254,6 +1254,182 @@ instance.unmount();
 
 console.error = realConsoleError;
 
+// ── a settled row's arguments occupy at most two rows ────────────────────────
+//
+// The header is a single `wrap="wrap"` Text, so Ink gave a finished `run_command` whatever
+// height its arguments needed — a heredoc or a long pipeline pushed the result block far
+// below the command that produced it. `clampHeaderInput` bounds it, but only a real mount can
+// prove the HEIGHT: the unit test measures with the same wrapper the assertion calls, so it
+// cannot catch a row that Ink lays out differently (padding, the icon column).
+//
+// Counted from the frame instead: the rows that carry argument text. A live row must keep
+// its arguments verbatim, which is the other half of the rule.
+{
+  // `rows` matches the physical rows the arguments occupy; `mustTruncate` says whether this
+  // input is guaranteed to overflow 110 columns (the header's text column at the fake
+  // stdout's 120). A command that fits must NOT grow a marker — an ellipsis on a complete
+  // command would claim something was cut when nothing was.
+  const ARGS_ROWS = [
+    {
+      label: "40 physical lines",
+      command: Array.from({ length: 40 }, (_, i) => `echo line${i}`).join("\n"),
+      rows: /echo line\d+/,
+      mustTruncate: true,
+    },
+    {
+      label: "one long wrapping line",
+      // Four-plus rows at 110 columns: long enough that the settled row MUST be cut, so the
+      // "shows verbatim while live" half has room to differ.
+      command:
+        `find . -name "*.ts" -not -path "*/node_modules/*" | xargs grep -l TODO | head -20 | sort | uniq -c ` +
+        `| sort -rn | awk '{print $2}' | tee /tmp/out | wc -l | while read n; do echo "count=$n"; done ` +
+        `| sed 's/^/  /' | tail -5 | tr a-z A-Z | rev | head -3`,
+      rows: /xargs|uniq|awk|\/tmp\/out|wc -l|count=|sed|tail|tr a-z/,
+      mustTruncate: true,
+    },
+    {
+      label: "a command that fits",
+      command: "pnpm build",
+      rows: /pnpm build/,
+      mustTruncate: false,
+    },
+  ];
+
+  const mountArgsRow = async (label, { command, settled }) => {
+    const argsRow = {
+      id: `msg-args-${label}`,
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: `call-args-${label}`,
+          name: "run_command",
+          // A settled part carries an output; a live one does not.
+          state: settled ? "complete" : "input-available",
+          arguments: JSON.stringify({ command }),
+          ...(settled
+            ? { output: { command, stdout: "", stderr: "", exitCode: 0, durationMs: 5, success: true } }
+            : {}),
+        },
+      ],
+    };
+    const rowStdout = new FakeStdout();
+    const instance = render(createElement(Screen, { messages: [argsRow] }), {
+      stdout: rowStdout,
+      stdin: fakeStdin(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+      maxFps: 30,
+    });
+    await settle(220);
+    const lines = frameLines(rowStdout);
+    instance.unmount();
+    return lines;
+  };
+
+  for (const [i, c] of ARGS_ROWS.entries()) {
+    const settledLines = await mountArgsRow(`settled-${i}`, { command: c.command, settled: true });
+    const argRows = settledLines.filter((l) => c.rows.test(l)).length;
+    // A budget of two rows total, and the marker only when the input genuinely overflowed.
+    record(
+      `a settled run_command's arguments stay within two rows (${c.label})`,
+      argRows > 0 && argRows <= 2 && settledLines.some((l) => l.includes("…")) === c.mustTruncate,
+      { argRows, mustTruncate: c.mustTruncate, frame: settledLines.slice(6, 12) }
+    );
+
+    const liveLines = await mountArgsRow(`live-${i}`, { command: c.command, settled: false });
+    const liveRows = liveLines.filter((l) => c.rows.test(l)).length;
+    // The point of the split: before the call has an output the arguments are what the user
+    // must read, so they stay verbatim — all 40 rows of them.
+    record(
+      `a live run_command still shows its arguments verbatim (${c.label})`,
+      c.mustTruncate ? liveRows > 2 : liveRows === 1,
+      { liveRows, frame: liveLines.slice(6, 12) }
+    );
+  }
+}
+
+// ── a settled result block keeps its row budget ───────────────────────────────
+//
+// The result block is fed logical lines (`splitStreamingLines`), and `formatRunCommandOutput`
+// budgets those to three per stream. But its `<Text>` has no `wrap` prop, so Ink wraps each
+// logical line at the terminal width — one 400-char line of compiler output occupies four
+// rows. Five logical lines measured 17 rendered rows at 114 columns: the truncation was
+// counted in lines while the height was spent in rows, so the budget it enforced was not the
+// budget the screen paid.
+{
+  const wide = (ch) => ch.repeat(400);
+  const mountOutputRow = async (label, output, stdoutWidth = 120) => {
+    const row = {
+      id: `msg-out-${label}`,
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: `call-out-${label}`,
+          name: "run_command",
+          state: "complete",
+          arguments: JSON.stringify({ command: "build" }),
+          output,
+        },
+      ],
+    };
+    const rowStdout = new FakeStdout();
+    rowStdout.columns = stdoutWidth;
+    const instance = render(createElement(Screen, { messages: [row] }), {
+      stdout: rowStdout,
+      stdin: fakeStdin(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+      maxFps: 30,
+    });
+    await settle(220);
+    const lines = frameLines(rowStdout);
+    instance.unmount();
+    return lines;
+  };
+
+  const stdoutRows = {
+    command: "build",
+    // Four long lines: the formatter keeps three and collapses the rest, but each kept line
+    // wraps to several rows on its own.
+    stdout: [wide("a"), wide("b"), wide("c"), wide("d")].join("\n"),
+    stderr: "",
+    exitCode: 0,
+    durationMs: 5,
+    success: true,
+  };
+  const outLines = await mountOutputRow("wide-stdout", stdoutRows);
+  // The block is ▄ bar + content + ▀ bar, inside a half-line padded box. Count only the
+  // content rows: those between the two bars.
+  const topBar = outLines.findIndex((l) => /^\s*▄/.test(l));
+  const bottomBar = outLines.findIndex((l, i) => i > topBar && /^\s*▀/.test(l));
+  const contentRows = topBar >= 0 && bottomBar > topBar ? bottomBar - topBar - 1 : -1;
+  record("a settled result block's rows match the line budget it enforces", contentRows > 0 && contentRows <= 6, {
+    contentRows,
+    topBar,
+    bottomBar,
+    tail: outLines.slice(-6),
+  });
+
+  const bothStreams = {
+    command: "build",
+    stdout: [wide("a"), wide("b"), wide("c"), wide("d")].join("\n"),
+    stderr: [wide("e"), wide("f"), wide("g"), wide("h")].join("\n"),
+    exitCode: 1,
+    durationMs: 5,
+    success: false,
+  };
+  const bothLines = await mountOutputRow("wide-both", bothStreams);
+  const bothTop = bothLines.findIndex((l) => /^\s*▄/.test(l));
+  const bothBottom = bothLines.findIndex((l, i) => i > bothTop && /^\s*▀/.test(l));
+  const bothRows = bothTop >= 0 && bothBottom > bothTop ? bothBottom - bothTop - 1 : -1;
+  record("stdout and stderr each keep their own row budget", bothRows > 0 && bothRows <= 12, {
+    bothRows,
+    tail: bothLines.slice(-8),
+  });
+}
+
 // ── footer-relative exit summary ─────────────────────────────────────────────
 // The exit summary is appended BELOW the footer, set off by its own top border. Mounted with a
 // stand-in for the first line rather than the real transcript: the question is whether the

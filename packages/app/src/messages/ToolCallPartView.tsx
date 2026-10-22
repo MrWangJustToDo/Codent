@@ -11,6 +11,7 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatUsageBrief, resolvePromptTokens } from "../utils/format-usage.js";
 import {
   buildToolHeader,
+  clampHeaderInput,
   DURATION_THRESHOLD_MS,
   formatDuration,
   formatToolInput,
@@ -79,6 +80,27 @@ export interface ToolCallPartViewProps {
 }
 
 const RUN_COMMAND_STREAM_THROTTLE_MS = 100;
+
+/**
+ * Rows a settled row's arguments may occupy.
+ *
+ * A running call shows its arguments verbatim — that is the text the user has to read to
+ * know what is about to happen (and what they are approving). Once the call has an output
+ * the arguments are history: the output block below already folds its own content, so a
+ * wrapped command only inflated the row (the reported symptom), sometimes by a dozen lines
+ * for a heredoc or a long pipeline. Two rows keep the command identifiable without letting
+ * it own the transcript.
+ */
+const SETTLED_INPUT_MAX_LINES = 2;
+
+/**
+ * Columns the header's text column loses to its own chrome.
+ *
+ * Outer message container `paddingX={1}` (2) + this component's `paddingLeft={2}` (2) +
+ * the status icon's fixed `width={2}` (2). Mirrors `ToolOutputView`'s `screenWidth - 4`, plus
+ * the icon column that only the header has.
+ */
+const HEADER_CHROME_WIDTH = 6;
 
 /** Render a tool invocation part — unified compact style for all tools */
 export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartViewProps) => {
@@ -225,7 +247,19 @@ export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartView
     );
   }
   const parenText = parenParts.length > 0 ? ` (${parenParts.join(", ")})` : "";
-  const headerText = buildToolHeader(toolName, displayInput, parenText, headerColor);
+  // A settled row clamps its arguments; a live one (including a pending approval, whose
+  // arguments are exactly what the user must review) keeps them verbatim. Keyed on the
+  // OUTPUT, not on the static/dynamic region: a completed call inside the streaming tail is
+  // just as much history as one above the boundary.
+  const headerInput = hasOutput
+    ? clampHeaderInput(
+        displayInput,
+        (input: string) => `${toolName} ${input}${parenText}`,
+        boxWidth - HEADER_CHROME_WIDTH,
+        SETTLED_INPUT_MAX_LINES
+      )
+    : displayInput;
+  const headerText = buildToolHeader(toolName, headerInput, parenText, headerColor);
 
   return (
     <Box flexDirection="column" paddingLeft={2}>

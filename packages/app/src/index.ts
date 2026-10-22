@@ -50,6 +50,8 @@ export {
   getToolCallColor,
   getInlineSummary,
   buildToolHeader,
+  clampHeaderInput,
+  CLAMP_MARKER,
   getDurationMs,
   DURATION_THRESHOLD_MS,
 } from "./utils/format.js";

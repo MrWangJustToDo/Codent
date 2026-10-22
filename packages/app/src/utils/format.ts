@@ -15,6 +15,8 @@ export {
   DURATION_THRESHOLD_MS,
   LIVE_DURATION_THRESHOLD_MS,
   buildToolHeader,
+  clampHeaderInput,
+  CLAMP_MARKER,
   getDurationMs,
   getInlineSummary,
   getToolCallColor,

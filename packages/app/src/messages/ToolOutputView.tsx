@@ -92,7 +92,13 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
     <HalfLinePaddedBox backgroundColor={BG.toolResult} width={boxWidth}>
       <Box flexDirection="column" paddingLeft={2}>
         {lines.map((line, i) => (
-          <Text key={i} color={lineColor} dimColor={!failed}>
+          // `truncate-end`, NOT the default `wrap`: the formatters above budget by LOGICAL line
+          // (`formatRunCommandOutput` keeps three stdout / three stderr lines), but a wrapping
+          // Text spends one PHYSICAL row per `width` columns. A 400-char compiler diagnostic or
+          // a line of minified JS therefore cost four rows against a three-line budget — five
+          // logical lines measured 17 rendered rows at 114 columns. Truncating each line makes
+          // the budget real: one logical line is one row, always.
+          <Text key={i} color={lineColor} dimColor={!failed} wrap="truncate-end">
             {line.length > 0 ? line : " "}
           </Text>
         ))}
