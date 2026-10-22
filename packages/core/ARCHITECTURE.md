@@ -992,7 +992,7 @@ Observer `emit` is synchronous fire-and-forget with per-listener error containme
 **Messages channel:** Session snapshots always carry a full `UIMessage[]`; the `messages` channel delivers the same full array (JSON-patch / delta delivery is deferred). Wire projection for the model loop is cached by channel revision + last-message fingerprint (`WireProjectionCache`).
 
 Tool process chunks (`run_command` stdout/stderr) are scoped by required `agentId`; Session `tool` channel receives them (`chunk` / `clear`).
-Command output, task summaries and compact summaries share `ManagedAgent.streamHub` (`AgentStreamHub`: `reset` / `append` / `end`). Command source projects onto `tool`, text sources onto `summary`; compact stream keys are stable (`compact:${agentId}`).
+Command output, task summaries and compact summaries share the per-agent `AgentStreamHub` (`reset` / `append` / `end`), exposed through `ManagedAgent.getStreamHub()` for the runner/host wiring; the field itself is private. Command source projects onto `tool`, text sources onto `summary`; compact stream keys are stable (`compact:${agentId}`). Command-job lifecycle is the separate `AgentCommandService`; session switching resets it together with the other transient session state.
 
 ### 8.3 Event types (summary)
 

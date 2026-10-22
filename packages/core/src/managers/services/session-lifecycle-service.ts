@@ -54,6 +54,7 @@ export interface SessionLifecycleHost {
   clearPendingApprovals(): void;
   resetMediaHydrationMisses(): void;
   resetTurnContext(): void;
+  resetSessionSyncTracker(): void;
   resetCommandJobs(reason: string): void;
 }
 
@@ -97,6 +98,7 @@ export class SessionLifecycleService {
     this.host.getTodoManager()?.reset();
     this.host.streamHub.clearAll();
     this.host.resetTurnContext();
+    this.host.resetSessionSyncTracker();
     this.host.resetCommandJobs(reason);
   }
 

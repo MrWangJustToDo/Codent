@@ -644,6 +644,7 @@ export class ManagedAgent {
       },
       resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       resetTurnContext: () => this.turnContext.resetTurnState(),
+      resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
       resetCommandJobs: (reason) => {
         const service = this.commandService;
         this.commandService = undefined;
