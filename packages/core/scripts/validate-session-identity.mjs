@@ -250,6 +250,36 @@ assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and
   owner.releaseSessionOwnership(missing, "probe-agent");
 }
 
+// ----------------------------------------------------------------------------
+// 5. A refused ownership claim aborts `session.new` before it changes state
+// ----------------------------------------------------------------------------
+{
+  const owner = managed.manager;
+  const store = managed.getSessionStore();
+  assert.ok(owner && store, "session.new ownership probe has a manager + store");
+  const before = session.getSnapshot().activeSessionId;
+  const collisionId = "ses_new_ownership_collision";
+  const originalCreate = store.create.bind(store);
+  const template = originalCreate({ modelStyle: "openai", model: "test-model" });
+  store.create = () => ({ ...template, id: collisionId });
+  assert.equal(owner.acquireSessionOwnership(collisionId, "probe-agent"), true, "the target is claimed elsewhere");
+
+  try {
+    const result = await session.dispatch({ type: "session.new" });
+    assert.equal(result.ok, false, "session.new refuses an already-claimed target");
+    assert.match(result.error, /already active in another live session/);
+    assert.equal(session.getSnapshot().activeSessionId, before, "a refused new session leaves the active id unchanged");
+    assert.equal(
+      owner.acquireSessionOwnership(before, "probe-agent"),
+      false,
+      "the current session remains claimed by this agent"
+    );
+  } finally {
+    store.create = originalCreate;
+    owner.releaseSessionOwnership(collisionId, "probe-agent");
+  }
+}
+
 // ============================================================================
 // Teardown
 // ============================================================================

@@ -1,8 +1,9 @@
 /**
  * ExtensionRegistryService — extension lifecycle plus the agent's registration domain.
  *
- * Extension tools are delegated to {@link AgentToolService}; this service owns the set-once
- * integration managers, extension runner/loader, and extension commands.
+ * Extension tools are delegated to {@link AgentToolService}; this service owns extension
+ * runner/loader, commands, and registration lifecycle. Integration managers (todo, MCP, skills)
+ * belong to the owning agent.
  */
 
 import { AgentToolService } from "./agent-tool-service.js";

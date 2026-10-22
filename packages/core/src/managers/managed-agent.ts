@@ -487,13 +487,13 @@ export class ManagedAgent {
     this.tools = init.tools;
     this.toolService = new AgentToolService(this.tools);
     this.todoManager = init.todoManager ?? null;
-    // Always its own service, never injectable. It holds per-agent state that cannot be shared:
-    // the agent's `tools` record (written straight into by `registerTool`), a single
-    // `ExtensionRunner` slot, and the MCP / todo / managed-tools providers. Two agents sharing
-    // one would overwrite each other's tool objects and handlers, not just their presentation
-    // descriptors — and the owner-id scoping applied at this boundary cannot help, because the
-    // later agent's `setExtensionRunner` replaces the first agent's runner outright. Keeping it
-    // un-injectable makes "one registry per agent" unexpressible rather than merely conventional.
+    // Always its own service, never injectable. It holds per-agent extension state that cannot be
+    // shared: the AgentToolService's owner stacks, a single `ExtensionRunner` slot, and extension
+    // commands. Two agents sharing one would overwrite each other's tool objects and handlers, not
+    // just their presentation descriptors — and the owner-id scoping applied at this boundary
+    // cannot help, because the later agent's `setExtensionRunner` replaces the first agent's runner
+    // outright. Keeping it un-injectable makes "one registry per agent" unexpressible rather than
+    // merely conventional. MCP / todo / skill state lives on this agent, not the extension service.
     this.extensions = new ExtensionRegistryService(this.toolService);
     this.parentId = init.parentId;
     this.runtime = init.runtime;
@@ -1493,12 +1493,12 @@ export class ManagedAgent {
     return this.turnContext.getBackgroundJobsSection(messages);
   }
 
-  /** Lazily build the command service (registry is created on first use). */
   /** Live command/task/compact stream hub for hosts and child-run projections. */
   getStreamHub(): AgentStreamHub {
     return this.streamHub;
   }
 
+  /** Lazily build the command service (registry is created on first use). */
   getCommandService(): AgentCommandService {
     if (!this.commandService) {
       this.commandService = new AgentCommandService({

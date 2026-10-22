@@ -109,21 +109,30 @@ export class SessionLifecycleService {
     if (!store) throw new Error("Session store not available");
 
     const current = this.host.getSessionData();
-    this.reset(reason);
-
-    if (current?.id) this.host.releaseSessionOwnership(current.id);
-    await this.host.clearPersistedSession();
-    this.host.getChatController()?.clearMessages({ persistEmpty: false });
-
     const next = store.create({
       modelStyle: current?.modelStyle ?? "openai",
       model: current?.model ?? "unknown",
     });
-    this.host.setSessionData(next);
-    this.host.acquireSessionOwnership(next.id);
-    this.host.emitSessionNew(next.id, "clear");
-    this.host.refreshState();
-    return next;
+    if (!this.host.acquireSessionOwnership(next.id)) {
+      throw new Error(`Session "${next.id}" is already active in another live session and cannot be started here.`);
+    }
+
+    let adopted = false;
+    try {
+      this.reset(reason);
+      await this.host.clearPersistedSession();
+      this.host.getChatController()?.clearMessages({ persistEmpty: false });
+
+      this.host.setSessionData(next);
+      adopted = true;
+      if (current?.id) this.host.releaseSessionOwnership(current.id);
+      this.host.emitSessionNew(next.id, "clear");
+      this.host.refreshState();
+      return next;
+    } catch (error) {
+      if (!adopted) this.host.releaseSessionOwnership(next.id);
+      throw error;
+    }
   }
 
   /**
