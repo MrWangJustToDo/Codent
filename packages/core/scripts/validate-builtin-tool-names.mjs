@@ -115,6 +115,16 @@ assert.equal(
 // longer classifies a renamed tool as a write, and nothing fails. This scan is the guard for the two
 // files that had exactly that (`tools/runtime/tool-sets.ts`, `compaction/file-ops-tracker.ts`).
 //
+// Two blind spots this used to have, both found by the code-mode wired list in
+// `managers/agent-bootstrap.ts` slipping through:
+//
+// - **The scan root was `agent/`**, so `managers/` — which wires the curated code-mode subset out of
+//   `BUILTIN_TOOL_NAMES` names — was never read at all. `managers` is the layer that consumes the
+//   registry most heavily, so it is exactly where a stale literal hides.
+// - **Only `new Set([...])` arrays were recognised.** A plain `const NAMES = ["read_file", …]` is
+//   the same identity-position literal and was invisible, because the wrapped form was the only one
+//   anyone had written when the pattern was authored.
+//
 // `case "<name>":` dispatch tables are covered separately below for the presentation formatters: a
 // renamed built-in otherwise silently falls through to the generic/default renderer. Definition sites
 // (`name: "<x>"`) and prose in prompts are still deliberately out of scope.
@@ -163,7 +173,10 @@ const NAME_LITERAL_EXEMPT = [
     });
 
   const offenders = [];
-  for (const file of walkTs(join(SRC, "agent"))) {
+  // `agent/` and `managers/`: the two layers that classify/wire built-ins. A root file is a layer too,
+  // and a literal there would be no less stale, so the scan walks the whole `src/` tree rather than a
+  // hand-kept list that the next module can fall outside of.
+  for (const file of walkTs(SRC)) {
     const rel = repoRelative(file);
     if (exempt.has(rel)) continue;
     const source = readFileSync(file, "utf8");
@@ -171,7 +184,13 @@ const NAME_LITERAL_EXEMPT = [
       const patterns = [
         new RegExp(`(?:===|!==)\\s*"${name}"`),
         new RegExp(`includes\\(\\s*"${name}"`),
+        // A list of names, however it is wrapped: `new Set(["x", …])` and `const N = ["x", …]`
+        // (the `[^\]]` span crosses newlines, so a one-name-per-line list is still one array). The
+        // `= [` anchor is what separates a list from a look-alike: a shell binary argument
+        // (`execArgsCapture(env, "grep", …)`), an indexed config key (`AgentToolConfig["websearch"]`)
+        // and a doc comment's example array are none of them a list of tool names.
         new RegExp(`new Set\\(\\[[^\\]]*"${name}"`),
+        new RegExp(`=\\s*\\[[^\\]]*"${name}"`),
         // `\r?$`: a Windows checkout has CRLF, and a bare `$` straight after `,` never matches
         // there — the one-name-per-line array form (which is how an LSP-style list is written)
         // would then be invisible on Windows instead of reported.

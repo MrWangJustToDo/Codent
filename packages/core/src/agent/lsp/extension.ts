@@ -212,7 +212,7 @@ async function activateLsp(
   // Those tools' own `toModelOutput` rebuild the model-facing text from a few
   // fields, which would drop the summary on the next turn. Decorate the base
   // handlers so the summary survives the `onConfig` / tool-compact rewrite.
-  const AUTO_DIAG_TOOLS = ["write_file", "edit_file"] as const;
+  const AUTO_DIAG_TOOLS = [BUILTIN_TOOL_NAMES.writeFile, BUILTIN_TOOL_NAMES.editFile] as const;
   for (const toolName of AUTO_DIAG_TOOLS) {
     ctx.registerToolOutputDecorator(toolName, async (ctx, next) => {
       const base = await next(ctx);

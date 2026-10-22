@@ -103,3 +103,6 @@ export { createCodeModeExtension, type CodeModeExtensionConfig } from "./agent/c
 // Binding-name normalisation: a validator must exercise the real helper against the
 // real upstream `createCodeMode`, not a replica of the rename rule.
 export { normalizeBindingName, renameCodeModeTools } from "./agent/code-mode/binding-names.js";
+// The curated binding subset the agent actually wires up: the validator asserts the prompt is
+// built from the real list, not a copy that can drift from `agent-bootstrap`.
+export { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES } from "./agent/code-mode/curated-tools.js";

@@ -23,7 +23,13 @@
 
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
-import { createCodeModeExtension, normalizeBindingName, renameCodeModeTools } from "../dist/dev.mjs";
+import {
+  CODE_MODE_LAZY_TOOL_NAMES,
+  CODE_MODE_TOOL_NAMES,
+  createCodeModeExtension,
+  normalizeBindingName,
+  renameCodeModeTools,
+} from "../dist/dev.mjs";
 
 // ============================================================================
 // Harness
@@ -151,9 +157,11 @@ function declaredBindings(prompt) {
 // 3. Current curated list => byte-identical prompt (no behaviour change)
 // ============================================================================
 {
-  // The curated list as wired in agent-factory: eager = fs/read tools, lazy = shell/web.
-  const curated = ["read_file", "grep", "glob", "list_file", "tree", "run_command", "websearch"];
-  const lazy = ["run_command", "websearch"];
+  // The curated list as wired in agent-bootstrap, imported rather than copied: a literal here
+  // would be a second list that keeps passing after the real one changes (that is exactly how the
+  // binding names drifted out of the registry in the first place).
+  const curated = [...CODE_MODE_TOOL_NAMES];
+  const lazy = [...CODE_MODE_LAZY_TOOL_NAMES];
 
   const after = await surfaces({ tools: curated.map((n) => tool(n)), lazyToolNames: lazy });
 

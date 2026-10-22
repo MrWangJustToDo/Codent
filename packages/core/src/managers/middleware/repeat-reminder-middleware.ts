@@ -22,6 +22,7 @@
  * is the accepted cost of a heuristic nudge.
  */
 
+import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { formatContextSectionUserContent, isContextModelMessage } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 
@@ -44,7 +45,7 @@ export const DEFAULT_ARGUMENTS_PREVIEW_CHARS = 500;
  * Tools excluded by default: `get_command_output` is meant to be polled, so the
  * same call repeated while a background job runs is legitimate, not a loop.
  */
-export const DEFAULT_REPEAT_EXCLUDED_TOOLS = ["get_command_output"] as const;
+export const DEFAULT_REPEAT_EXCLUDED_TOOLS = [BUILTIN_TOOL_NAMES.getCommandOutput] as const;
 
 /** Synthetic-message kind (also the `<ctx kind=...>` tag). */
 export const REPEAT_REMINDER_KIND = "repeat_tool_reminder";

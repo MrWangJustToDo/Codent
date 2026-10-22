@@ -7,7 +7,7 @@
  * single accounting point, so `attempted === active + failed` is an invariant rather than a hope.
  */
 
-import { createCodeModeExtension } from "../agent/code-mode";
+import { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES, createCodeModeExtension } from "../agent/code-mode";
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
 import { createJobsExtension } from "../agent/jobs/extension.js";
 import { createLspExtension } from "../agent/lsp";
@@ -219,11 +219,10 @@ export class AgentBootstrap {
     // are static for the lifetime of an isolate; a later extension that shadows `read_file` or
     // `run_command` must not silently become the implementation used inside the sandbox (and must
     // not resurrect a previously-disabled override).
-    const codeModeNames = ["read_file", "grep", "glob", "list_file", "tree", "run_command", "websearch"];
-    const codeModeTools = codeModeNames
-      .map((name) => managed.tools[name])
-      .filter((tool): tool is AnyServerTool => Boolean(tool && "execute" in tool));
-    const codeModeLazyNames = ["run_command", "websearch"];
+    const codeModeTools = CODE_MODE_TOOL_NAMES.map((name) => managed.tools[name]).filter(
+      (tool): tool is AnyServerTool => Boolean(tool && "execute" in tool)
+    );
+    const codeModeLazyNames = [...CODE_MODE_LAZY_TOOL_NAMES];
 
     const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, env);
     log.debug("system", "Extension search directories", { dirs: extensionDirs });
