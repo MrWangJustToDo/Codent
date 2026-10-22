@@ -12,24 +12,24 @@
  */
 
 import { CommandJobRegistry } from "../../agent/tools/builtin/shell/jobs/registry.js";
-import { errorMessage } from "../../utils/errors.js";
-import type {
-  AgentCommandPort,
-  StartBackgroundInput,
-  StartBackgroundResult,
-  KillCommandResult,
-} from "../../agent/tools/runtime/command-service.js";
 import {
   collectRunCommandToolCallIds,
   formatBackgroundJobsSection,
   TURN_CONTEXT_KINDS,
 } from "../../agent/turn-context";
+import { errorMessage } from "../../utils/errors.js";
 
 import type {
   CommandJobPollResult,
   CommandJobSummary,
   CompletedCommandJob,
 } from "../../agent/tools/builtin/shell/jobs/registry.js";
+import type {
+  AgentCommandPort,
+  StartBackgroundInput,
+  StartBackgroundResult,
+  KillCommandResult,
+} from "../../agent/tools/runtime/command-service.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { ModelMessage } from "@tanstack/ai";
