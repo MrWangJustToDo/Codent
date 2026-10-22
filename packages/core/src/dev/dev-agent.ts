@@ -185,14 +185,12 @@ export {
 export { extractTextFromContent } from "../agent/compaction/message-utils.js";
 export {
   createConfiguredProviderManager,
+  ProviderManager,
   createTimeoutAbort,
   filterResultsByDomain,
-  getProviderManager,
   hashToIndex,
-  initializeProviders,
   PROVIDER_KEY_FIELDS,
   PROVIDER_REGISTRY,
-  resetWebsearchProviders,
   withTimeoutAbort,
 } from "../agent/tools/builtin/web/search/index.js";
 export { braveProvider } from "../agent/tools/builtin/web/search/providers/brave.js";
@@ -363,13 +361,6 @@ export {
 export { isStaleActiveRunStatus, shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
 export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime/tool-sets.js";
 export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/catalog/tool-names.js";
-export {
-  clearStreamingOutput,
-  emitStreamingChunk,
-  registerStreamingEventBus,
-  resetStreamingCallbacksForTests,
-  unregisterStreamingEventBus,
-} from "../agent/tools/runtime/streaming.js";
 export {
   AGENT_STREAM_SNAPSHOT_LINE_CAP,
   AgentStreamHub,

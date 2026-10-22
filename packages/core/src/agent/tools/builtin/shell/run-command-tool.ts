@@ -4,7 +4,6 @@ import { z } from "zod";
 import { isAbortError, isTimeoutError } from "../../../../runtime-types/abort.js";
 import { errorMessage } from "../../../../utils/errors.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
-import { emitStreamingChunk } from "../../runtime/streaming.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { runCommandOutputSchema } from "../../shared/schemas.js";
 
@@ -85,6 +84,7 @@ export function buildTimedOutCommandResult(params: {
 export const createRunCommandTool = (options?: { subagentSafe?: boolean; context?: AgentToolContext }) => {
   const registry = options?.context?.getCommandJobRegistry();
   const subagentSafe = options?.subagentSafe ?? false;
+  const streamHub = options?.context?.getStreamHub();
   // `RUN_COMMAND_TIMEOUT_MS` is resolved once per tool instance: the env is stable for the session,
   // and under `--remote-env` `coreEnv.getEnv()` is an HTTP round-trip we should not pay per command.
   let resolvedDefaultTimeout: number | undefined;
@@ -153,10 +153,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
     }),
     outputSchema: runCommandOutputSchema,
     needsApproval: !subagentSafe,
-    execute: async (
-      { command, cwd, env, timeout, run_in_background },
-      { toolCallId, abortSignal, agentId, coreEnv }
-    ) => {
+    execute: async ({ command, cwd, env, timeout, run_in_background }, { toolCallId, abortSignal, coreEnv }) => {
       // Hard safety policy for subagents (no approval UI): only read-only,
       // project-internal commands execute; anything else is denied with a
       // reason surfaced to the model (insufficient permissions).
@@ -259,11 +256,11 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
           signal: abortSignal,
           onStdout: (chunk) => {
             stdoutAccumulator.append(encoder.encode(chunk));
-            if (agentId) emitStreamingChunk(toolCallId, "stdout", chunk, { agentId });
+            streamHub?.appendCommand(toolCallId, "stdout", chunk);
           },
           onStderr: (chunk) => {
             stderrAccumulator.append(encoder.encode(chunk));
-            if (agentId) emitStreamingChunk(toolCallId, "stderr", chunk, { agentId });
+            streamHub?.appendCommand(toolCallId, "stderr", chunk);
           },
         });
       } catch (err) {

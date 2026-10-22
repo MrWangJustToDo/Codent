@@ -71,7 +71,6 @@ import {
 } from "../agent/subagent/task-prefork.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
-import { registerStreamingEventBus, registerStreamingHub } from "../agent/tools/runtime/streaming.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
@@ -904,8 +903,6 @@ export class ManagedAgent {
    */
   setEventBus(bus: AgentEventBus): void {
     this.eventBus = bus;
-    registerStreamingEventBus(this.id, bus);
-    registerStreamingHub(this.id, this.streamHub);
     this.usage.setEventBus(bus);
     this.streamHub.setEventBus(bus);
     this.planMode.setEventBus(bus);

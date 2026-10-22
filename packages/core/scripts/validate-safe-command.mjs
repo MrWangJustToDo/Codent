@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 
 import {
+  AgentStreamHub,
   SUBAGENT_DENY_MESSAGE,
   clearCoreEnv,
   commandPrefix,
@@ -296,7 +297,7 @@ for (const command of MUTATING_COMMANDS) {
   clearCoreEnv();
   registerCoreEnv(mainEnv);
   const mainAgent = await createRunCommandTool({
-    context: { getCommandJobRegistry: () => new CommandJobRegistry() },
+    context: { getCommandJobRegistry: () => new CommandJobRegistry(), getStreamHub: () => new AgentStreamHub() },
   }).execute({ command: "ls -la", run_in_background: true }, { toolCallId: "t", coreEnv: mainEnv });
   assert.equal(mainAgent.runInBackground, true, "the main agent can still start a background job");
   assert.equal(typeof mainAgent.jobId, "string", "…and gets a job id back");

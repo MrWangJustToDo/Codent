@@ -26,6 +26,7 @@ import {
   defaultPath,
   evaluateCommandApproval,
   isShellParsable,
+  getEnv,
   registerCoreEnv,
   tokenizeCommandString,
 } from "../dist/dev.mjs";
@@ -96,6 +97,7 @@ function check(label, actual, expected) {
 }
 
 const ctx = {
+  coreEnv: getEnv(),
   rootPath: "/repo",
   cwd: "/repo",
   home: "/home/user",

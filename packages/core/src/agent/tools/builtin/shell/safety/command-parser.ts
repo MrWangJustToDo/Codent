@@ -3,9 +3,8 @@
  *
  * Uses the existing {@link TreeSitterManager} (web-tree-sitter WASM) with the
  * `bash` grammar, mirroring how opencode parses shell commands
- * (`tmp/sst-opencode/.../tool/shell.ts`). The manager is a module-level lazy
- * singleton built exclusively from CoreEnv (via `getEnv()`), so it stays
- * runtime-agnostic: no direct `process`/`os`/global access.
+ * (`tmp/sst-opencode/.../tool/shell.ts`). Managers are cached per owning
+ * `ResolvedCoreEnv`, so two runtimes never share a grammar loader or workspace.
  *
  * Only the bash grammar ships today. PowerShell/cmd are recognised as distinct shells and
  * reported as unparsed rather than being fed to the bash grammar, which would mis-read them:
@@ -14,9 +13,9 @@
  * `run_command`. See `command-analyzer.ts` for the table-driven fallback.
  */
 
-import { getEnv, defaultPath } from "../../../../../env";
 import { TreeSitterManager } from "../../../../lsp/tree-sitter/parser-manager.js";
 
+import type { ResolvedCoreEnv } from "../../../../../env";
 import type { TreeSitterEnv } from "../../../../lsp/tree-sitter/parser-manager.js";
 import type { Node, Tree } from "web-tree-sitter";
 
@@ -64,9 +63,8 @@ export function classifyShell(shell: string | undefined): ShellKind {
  * runs bash, so `win32` must not imply "no bash grammar". Returns `unknown` when the host
  * does not report a shell, which callers must treat conservatively.
  */
-export async function resolveShellKind(): Promise<ShellKind> {
-  const env = getEnv();
-  if (!env.getShellInfo) return "unknown";
+export async function resolveShellKind(env?: ResolvedCoreEnv): Promise<ShellKind> {
+  if (!env?.getShellInfo) return "unknown";
   try {
     const info = await env.getShellInfo();
     return classifyShell(info.shell);
@@ -90,11 +88,12 @@ export interface ParsedCommand {
 // Tree-sitter manager singleton
 // ============================================================================
 
-let managerPromise: Promise<TreeSitterManager> | null = null;
+// Grammar loading is workspace-scoped, not agent-scoped. `resolveCoreEnv()` returns a fresh
+// wrapper on each read, so the key is the stable root path rather than object identity.
+const managerPromises = new Map<string, Promise<TreeSitterManager | null>>();
 
-function createTreeSitterEnv(): TreeSitterEnv {
-  const env = getEnv();
-  const path = env.path ?? defaultPath;
+function createTreeSitterEnv(env: ResolvedCoreEnv): TreeSitterEnv {
+  const path = env.path;
   return {
     readFile: (p) => env.fs.readFile(p),
     writeFile: (p, content) => env.fs.writeFile(p, content),
@@ -116,13 +115,16 @@ function createTreeSitterEnv(): TreeSitterEnv {
  * {@link TreeSitterManager.parseWithLanguage} with the explicit `bash`
  * language, so the file-path → language resolver is a no-op.
  */
-async function getCommandTreeSitterManager(): Promise<TreeSitterManager | null> {
+async function getCommandTreeSitterManager(env: ResolvedCoreEnv): Promise<TreeSitterManager | null> {
+  const key = env.rootPath;
+  let managerPromise = managerPromises.get(key);
   if (!managerPromise) {
     managerPromise = (async () => {
-      const manager = new TreeSitterManager(createTreeSitterEnv(), () => undefined);
+      const manager = new TreeSitterManager(createTreeSitterEnv(env), () => undefined);
       await manager.init();
       return manager;
     })();
+    managerPromises.set(key, managerPromise);
   }
   return managerPromise;
 }
@@ -139,10 +141,10 @@ async function getCommandTreeSitterManager(): Promise<TreeSitterManager | null> 
  * rather than `parseBashCommandTree` for call-site stability, but the grammar is bash and a
  * non-bash command will either fail to parse or parse into misleading nodes.
  */
-export async function parseCommandTree(command: string): Promise<Tree | null> {
+export async function parseCommandTree(command: string, env: ResolvedCoreEnv): Promise<Tree | null> {
   if (!command || !command.trim()) return null;
   try {
-    const manager = await getCommandTreeSitterManager();
+    const manager = await getCommandTreeSitterManager(env);
     if (!manager || !manager.available()) return null;
     return await manager.parseWithLanguage("command:bash", command, "bash");
   } catch {

@@ -183,7 +183,7 @@ assert.equal(emptyChannel.getMessages().length, 1);
 assert.equal(emptyChannel.getMessages()[0].id, "assistant-deny");
 
 // ============================================================================
-// Summary stream via AgentStreamHub (no UIMessage diff / emitStreamingChunk).
+// Summary stream via AgentStreamHub (no UIMessage diff / command stream sink).
 // ============================================================================
 
 const summaryStreamId = "task-1";

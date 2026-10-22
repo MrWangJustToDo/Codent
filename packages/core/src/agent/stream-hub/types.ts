@@ -6,6 +6,13 @@ export type AgentStreamSource = "command" | "task" | "compact";
 
 export type AgentStreamChannel = "stdout" | "stderr" | "text";
 
+/** One live output chunk for a command stream. */
+export interface StreamingChunk {
+  toolCallId: string;
+  type: "stdout" | "stderr";
+  chunk: string;
+}
+
 export type AgentStreamStatus = "active" | "ended";
 
 export function agentStreamKey(source: AgentStreamSource, id: string, channel?: AgentStreamChannel): string {

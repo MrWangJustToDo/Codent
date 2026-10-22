@@ -8,6 +8,7 @@ export function createAgentToolContext(managed: ManagedAgent): AgentToolContext 
     ...(managed.parentId ? { parentId: managed.parentId } : {}),
     getSessionId: () => managed.getSessionData()?.id,
     getCommandJobRegistry: () => managed.getCommandJobRegistry(),
+    getStreamHub: () => managed.streamHub,
     getCoreEnv: () => managed.getCoreEnv(),
     addPendingAbortController: (controller) => managed.addPendingAbortController(controller),
     removePendingAbortController: (controller) => managed.removePendingAbortController(controller),

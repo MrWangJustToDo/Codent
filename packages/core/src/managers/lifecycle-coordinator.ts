@@ -9,7 +9,6 @@
  */
 
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
-import { unregisterStreamingEventBus } from "../agent/tools/runtime/streaming.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { SessionOwnership } from "./session-ownership.js";
@@ -31,7 +30,6 @@ export class LifecycleCoordinator {
     const managedAgent = this.deps.registry.get(id);
     if (!managedAgent) return;
 
-    unregisterStreamingEventBus(id);
     this.deps.clearAgentScope(id);
 
     // Release every disk-session claim this agent held. Normally one, but releaseAllFor also

@@ -137,7 +137,7 @@ export function useStreamingOutput(
   // Do not clear ingest on unmount. MessageList rebuilds / task phase toggles can
   // remount this view while the producer still tracks streamedSummaryLength —
   // wiping the buffer leaves an empty window until the next delta (indicator flicker).
-  // Clears come from core `clearStreamingOutput` → streaming clear events only.
+  // Clears come from core stream-clear events only.
 
   return output;
 }

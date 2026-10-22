@@ -163,8 +163,6 @@
     "validate:tool-compact": "pnpm run build && node scripts/validate-tool-compact.mjs",
     "validate:tool-denial-reason": "pnpm run build && node scripts/validate-tool-denial-reason.mjs",
     "validate:tool-run-agentid": "pnpm run build && node scripts/validate-tool-run-agentid.mjs",
-    "validate:streaming-callback": "pnpm run build && node scripts/validate-streaming-callback.mjs",
-    "validate:streaming-scope": "pnpm run build && node scripts/validate-streaming-scope.mjs",
     "validate:agent-stream": "pnpm run build && node scripts/validate-agent-stream.mjs",
     "validate:agent-stream-epoch": "pnpm run build && node scripts/validate-agent-stream-epoch.mjs",
     "validate:turn-context": "pnpm run build && node scripts/validate-turn-context.mjs",

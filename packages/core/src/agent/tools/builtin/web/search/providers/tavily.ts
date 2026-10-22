@@ -13,7 +13,6 @@ import { getEnv } from "../../../../../../env";
 import { createTimeoutAbort } from "../../../../shared/abort-timeout.js";
 import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../fetch/bounded-body.js";
 import { filterResultsByDomain } from "../domain-filter.js";
-import { getProviderManager } from "../provider.js";
 
 import type { SearchProvider, SearchResult, SearchOptions } from "../types.js";
 
@@ -44,11 +43,11 @@ export const tavilyProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
   isAvailable(options?: SearchOptions): boolean {
-    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME));
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME));
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME);
     if (!apiKey) {
       throw new Error("Tavily API key not configured. Pass toolConfig.websearch.tavilyApiKey when creating the agent.");
     }

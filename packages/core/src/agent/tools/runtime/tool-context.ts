@@ -7,6 +7,7 @@
 
 import type { ResolvedCoreEnv } from "../../../env";
 import type { PlanModeController } from "../../plan/plan-mode-controller.js";
+import type { AgentStreamHub } from "../../stream-hub/agent-stream-hub.js";
 import type { TodoManager } from "../../todo";
 import type { CommandJobRegistry } from "../builtin/shell/jobs/registry.js";
 import type { AgentToolConfig } from "../tool-config.js";
@@ -16,6 +17,7 @@ export interface AgentToolContext {
   parentId?: string;
   getSessionId(): string | undefined;
   getCommandJobRegistry(): CommandJobRegistry;
+  getStreamHub(): AgentStreamHub;
   getCoreEnv(): ResolvedCoreEnv;
   addPendingAbortController(controller: AbortController): void;
   removePendingAbortController(controller: AbortController): void;

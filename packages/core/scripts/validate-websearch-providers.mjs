@@ -13,22 +13,32 @@ import {
   createConfiguredProviderManager,
   createTimeoutAbort,
   filterResultsByDomain,
-  getProviderManager,
   hashToIndex,
-  initializeProviders,
   normalizeRawGlobalToolConfig,
   parseMcpResponse,
   parseModelsConfig,
   parseParallelResults,
   PROVIDER_KEY_FIELDS,
   PROVIDER_REGISTRY,
+  ProviderManager,
   registerCoreEnv,
-  resetWebsearchProviders,
   tavilyProvider,
 } from "../dist/dev.mjs";
 // The cancel verdict is a render-layer reader and lives on the public entry, not the
 // internal one — same split as validate-cancel-semantics.mjs.
 import { isAbortError } from "../dist/index.mjs";
+
+// The production path owns one provider manager per agent. These tests model that with a
+// fresh manager per case instead of the removed process-global singleton.
+let currentProviderManager = new ProviderManager();
+const resetWebsearchProviders = () => {
+  currentProviderManager = new ProviderManager();
+};
+const initializeProviders = (config) => {
+  currentProviderManager = createConfiguredProviderManager();
+  currentProviderManager.configure(config);
+};
+const getProviderManager = () => currentProviderManager;
 
 // Domain filter
 const results = [

@@ -14,7 +14,6 @@
  */
 
 import { filterResultsByDomain } from "../domain-filter.js";
-import { getProviderManager } from "../provider.js";
 
 import { callMcpTool } from "./mcp-client.js";
 
@@ -78,7 +77,7 @@ export const parallelProvider: SearchProvider = {
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const maxResults = options?.maxResults ?? 10;
     const timeoutMs = options?.timeoutMs ?? 30000;
-    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getProviderManager().getApiKey(PROVIDER_NAME);
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME);
     const sessionId = options?.sessionId;
 
     // Parallel's Search MCP authenticates with `Authorization: Bearer <key>` — never a

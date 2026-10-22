@@ -822,7 +822,7 @@ does not supply an `id` input.
 The default task tool row shows the current subagent exploration tool during analysis.
 After the subagent calls `begin_summary`, the UI switches to summary phase and streams final text
 via `AgentStreamHub` (`reset` / `append` / `end` on key `task:${toolCallId}`) into `useSummaryStream` /
-`SummaryStreamView` — not UIMessage diffs or `emitStreamingChunk` (those remain for `run_command`).
+`SummaryStreamView` — not UIMessage diffs or the command stream sink (those remain for `run_command`).
 On restart-style stream recovery (429 / capability sanitize), `AgentUIChannel.resetRetryUiState()`
 resets only the attempt-scoped UI state (the streamed summary banner text + phase unlock), for **both**
 profiles. It must never touch the message history: the retry's wire is re-projected from the channel
@@ -1161,7 +1161,7 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
     stores before adding a cache unit.
 - **Truncation marker** (`... N older messages hidden`) caches with the rows it describes and is a
   single element (`key="truncation-marker"`), counted in MESSAGES while the budget is counted in LINES.
-- **`run_command`:** Core emits every chunk via `emitStreamingChunk` onto the session `tool` channel
+- **`run_command`:** Core emits every chunk through the per-agent `AgentStreamHub` onto the session `tool` channel
   (`chunk` / `clear` by `toolCallId`); throttling is applied in the app layer.
   `useStreamingOutput(toolCallId, { throttleMs })` / `StreamingOutputView` (default `0` = every chunk).
   `ToolCallPartView` defaults `run_command` to 100ms; pass `streamingThrottleMs` to override.

@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { analyzeCommand, defaultPath, evaluateCommandApproval, registerCoreEnv } from "../dist/dev.mjs";
+import { analyzeCommand, defaultPath, evaluateCommandApproval, getEnv, registerCoreEnv } from "../dist/dev.mjs";
 
 // ----------------------------------------------------------------------------
 // Minimal CoreEnv so the AST path can actually run (see the portability validator
@@ -88,6 +88,7 @@ function check(label, actual, expected) {
 }
 
 const ctx = {
+  coreEnv: getEnv(),
   rootPath: "/repo",
   cwd: "/repo",
   home: "/home/user",

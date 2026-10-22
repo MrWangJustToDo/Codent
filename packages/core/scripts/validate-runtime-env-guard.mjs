@@ -44,10 +44,6 @@ const SCAN_DIRS = [
 /** Files allowed to reference the global env, with the reason. */
 const ALLOWLIST = new Map([
   [
-    "agent/tools/builtin/shell/safety/command-parser.ts",
-    "resolves the host's shell kind + grammar; host-level, not workspace-scoped data",
-  ],
-  [
     "agent/extension/runner.ts",
     "resolveCoreEnv()'s final fallback: injected getCoreEnv wins, then a hasCoreEnv()-guarded ambient read, then a non-throwing stub for standalone runners",
   ],

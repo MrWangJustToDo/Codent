@@ -50,10 +50,8 @@ export interface SearchOptions {
    */
   sessionId?: string;
   /**
-   * API-key lookup scoped to the {@link ProviderManager} running the search. Providers
-   * MUST prefer this over the process-global manager, so a key configured for one agent
-   * is used by that agent (two runtimes never share key state). Absent only for
-   * standalone provider use, where the ambient manager is the intended source.
+   * API-key lookup scoped to the {@link ProviderManager} running the search. Providers read
+   * keys only from this resolver; there is no process-global key source.
    */
   getApiKey?: (providerName: string) => string | undefined;
 }

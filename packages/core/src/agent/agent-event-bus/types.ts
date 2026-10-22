@@ -36,10 +36,9 @@ import type {
   InterceptableEvent,
 } from "../extension/types.js";
 import type { PlanModeState } from "../plan/plan-mode-controller.js";
-import type { AgentStreamEvent } from "../stream-hub/types.js";
+import type { AgentStreamEvent, StreamingChunk } from "../stream-hub/types.js";
 import type { TodoItem } from "../todo/types.js";
 import type { ToolPresentationInfo } from "../tools/presentation/types.js";
-import type { StreamingChunk } from "../tools/runtime/streaming.js";
 import type { UIMessage } from "@tanstack/ai";
 
 // ============================================================================

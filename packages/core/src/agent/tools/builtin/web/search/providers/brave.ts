@@ -14,7 +14,6 @@ import { getEnv } from "../../../../../../env";
 import { createTimeoutAbort } from "../../../../shared/abort-timeout.js";
 import { DEFAULT_MAX_BODY_BYTES, readBodyTextBounded } from "../../fetch/bounded-body.js";
 import { filterResultsByDomain } from "../domain-filter.js";
-import { getProviderManager } from "../provider.js";
 
 import type { SearchProvider, SearchResult, SearchOptions } from "../types.js";
 
@@ -52,11 +51,11 @@ export const braveProvider: SearchProvider = {
   name: PROVIDER_NAME,
 
   async isAvailable(options?: SearchOptions): Promise<boolean> {
-    return Boolean(options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey());
+    return Boolean(options?.getApiKey?.(PROVIDER_NAME));
   },
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-    const apiKey = options?.getApiKey?.(PROVIDER_NAME) ?? getBraveApiKey();
+    const apiKey = options?.getApiKey?.(PROVIDER_NAME);
     if (!apiKey) {
       throw new Error(
         "Brave Search API key not configured. Pass toolConfig.websearch.braveApiKey when creating the agent."
@@ -116,11 +115,3 @@ export const braveProvider: SearchProvider = {
     }
   },
 };
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function getBraveApiKey(): string | undefined {
-  return getProviderManager().getBraveApiKey();
-}

@@ -228,26 +228,3 @@ export class ProviderManager {
     return Boolean(await provider.isAvailable({ getApiKey: (name) => this.getApiKey(name) }));
   }
 }
-
-// ============================================================================
-// Singleton
-// ============================================================================
-
-let instance: ProviderManager | null = null;
-
-/**
- * Get or create the global ProviderManager singleton.
- */
-export function getProviderManager(): ProviderManager {
-  if (!instance) {
-    instance = new ProviderManager();
-  }
-  return instance;
-}
-
-/**
- * Reset the singleton (for testing). Prefer {@link resetWebsearchProviders} from the barrel.
- */
-export function resetProviderManager(): void {
-  instance = null;
-}

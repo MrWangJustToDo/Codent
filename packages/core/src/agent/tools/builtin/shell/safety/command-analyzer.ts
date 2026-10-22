@@ -37,6 +37,8 @@ export interface CommandAnalysisContext {
   env?: Record<string, string | undefined>;
   /** Path utilities (CoreEnvPath — POSIX via pathe by default). */
   path: CoreEnvPath;
+  /** Owning runtime environment; command parsing/grammar lookup is scoped to it. */
+  coreEnv?: ResolvedCoreEnv;
   /**
    * Shell the command will run under. Resolved from the host when omitted; callers that
    * already know it should pass it so the grammar choice and the execution agree.
@@ -681,14 +683,14 @@ function isBackgroundCommand(command: string, source: string): boolean {
  * they keep the conservative outcome.
  */
 export async function analyzeCommand(command: string, ctx: CommandAnalysisContext): Promise<CommandSafetyReport> {
-  const shellKind = ctx.shellKind ?? (await resolveShellKind());
+  const shellKind = ctx.shellKind ?? (await resolveShellKind(ctx.coreEnv));
 
   // `unknown` means the host did not report a shell. Try the grammar anyway — plenty of hosts
   // are bash and simply do not advertise it — but only trust a *productive* parse. If the
   // bash grammar finds nothing, the command is more likely some other shell's syntax, so fall
   // through to the tables rather than reporting an empty (and therefore always-ask) report.
   if (shellKind === "bash" || shellKind === "unknown") {
-    const tree = await parseCommandTree(command);
+    const tree = ctx.coreEnv ? await parseCommandTree(command, ctx.coreEnv) : null;
     if (tree) {
       const parsed = extractCommands(tree);
       // A command substitution is itself a command that runs, and the substitution body is
@@ -795,5 +797,6 @@ export async function createAnalysisContext(
     home: overrides?.home ?? home,
     env: overrides?.env ?? envVars,
     path: overrides?.path ?? env.path,
+    coreEnv: env,
   };
 }

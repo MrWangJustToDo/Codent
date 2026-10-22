@@ -2,7 +2,7 @@
  * Provider registry — the single declaration of which search providers exist, in what
  * order they are preferred, and which config key enables each.
  *
- * The table is the only place "add a provider" touches: `initializeProviders` registers
+ * The table is the only place "add a provider" touches: `createConfiguredProviderManager` registers
  * `create` in listed order, and `ProviderManager` reads availability + keys by name.
  * Selection and fallback logic live in `provider.ts` and must not need edits to add a
  * provider.
