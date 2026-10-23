@@ -74,8 +74,14 @@ export interface TodoManagerConfig {
   maxTodos?: number;
   /** Number of rounds without todo update before nag reminder (default: 3) */
   nagReminderThreshold?: number;
-  /** Minimum rounds between nag reminders once the threshold is crossed (default: 5) */
+  /** Initial rounds between nag reminders once the threshold is crossed (default: 5) */
   nagCooldownRounds?: number;
+  /**
+   * Extra rounds added to the cooldown after each nag (default: the value of
+   * `nagCooldownRounds`). This makes the reminder back off: e.g. with the defaults
+   * the first gap is 5 rounds, the next is 10, then 15.
+   */
+  nagCooldownGrowth?: number;
 }
 
 // ============================================================================

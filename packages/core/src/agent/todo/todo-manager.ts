@@ -73,14 +73,17 @@ export class TodoManager {
   private maxTodos: number;
   private nagReminderThreshold: number;
   private nagCooldownRounds: number;
+  private nagCooldownGrowth: number;
 
   /** Rounds since last todo update */
   private roundsSinceUpdate = 0;
 
   /** `roundsSinceUpdate` value at the last nag; -Infinity when not yet nagged in
-   *  the current cycle. Throttles nags to `nagCooldownRounds` apart so a stale
-   *  list isn't reminded every single round (token cost). Reset on update. */
+   *  the current cycle. Reset on update. */
   private lastNagRound = -Infinity;
+
+  /** Nags in the current cycle, used to grow the next cooldown. Reset on update. */
+  private nagCountInCycle = 0;
 
   /** Monotonic nag counter — makes every nag content unique so re-injection is
    *  never swallowed by content-hash / stable-id dedupe after a reset (rounds
@@ -114,6 +117,7 @@ export class TodoManager {
     this.maxTodos = config.maxTodos ?? DEFAULT_MAX_TODOS;
     this.nagReminderThreshold = config.nagReminderThreshold ?? DEFAULT_NAG_REMINDER_THRESHOLD;
     this.nagCooldownRounds = config.nagCooldownRounds ?? DEFAULT_NAG_COOLDOWN_ROUNDS;
+    this.nagCooldownGrowth = config.nagCooldownGrowth ?? this.nagCooldownRounds;
     this.createdAt = Date.now();
     this.updatedAt = Date.now();
   }
@@ -171,6 +175,7 @@ export class TodoManager {
     // Reset rounds counter + nag throttle (fresh cycle after an update)
     this.roundsSinceUpdate = 0;
     this.lastNagRound = -Infinity;
+    this.nagCountInCycle = 0;
 
     this.touch();
     this.notifyListeners();
@@ -228,10 +233,11 @@ export class TodoManager {
   shouldNag(): boolean {
     if (this.items.length === 0) return false;
     if (this.roundsSinceUpdate < this.nagReminderThreshold) return false;
-    // Throttle: don't remind every round — wait `nagCooldownRounds` since the last
-    // nag. `lastNagRound` starts at -Infinity so the first nag fires as soon as the
-    // threshold is crossed, then subsequent nags are spaced out.
-    if (this.roundsSinceUpdate - this.lastNagRound < this.nagCooldownRounds) return false;
+    // Back off after every nag: the first cooldown is `nagCooldownRounds`, then it
+    // grows by `nagCooldownGrowth` for each reminder in this stale cycle. This keeps
+    // a long-running task from receiving the same nag every few rounds.
+    const cooldown = this.nagCooldownRounds + this.nagCountInCycle * this.nagCooldownGrowth;
+    if (this.roundsSinceUpdate - this.lastNagRound < cooldown) return false;
 
     // Only nag if there are incomplete todos
     const hasIncomplete = this.items.some((item) => item.status !== "completed");
@@ -245,7 +251,8 @@ export class TodoManager {
    */
   getNagReminder(roundsSinceUpdate: number): string {
     this.nagEpisode += 1;
-    // Record when we nagged so shouldNag() can throttle the next one.
+    this.nagCountInCycle += 1;
+    // Record when we nagged so shouldNag() can grow the next cooldown.
     this.lastNagRound = roundsSinceUpdate;
     return [
       "<reminder>",
@@ -261,6 +268,7 @@ export class TodoManager {
   resetRoundCounter(): void {
     this.roundsSinceUpdate = 0;
     this.lastNagRound = -Infinity;
+    this.nagCountInCycle = 0;
   }
 
   /**
@@ -362,6 +370,7 @@ export class TodoManager {
     this.planBound = options?.planBound === true;
     this.roundsSinceUpdate = 0;
     this.lastNagRound = -Infinity;
+    this.nagCountInCycle = 0;
     this.touch();
     this.notifyListeners();
   }
@@ -411,6 +420,7 @@ export class TodoManager {
     this.items = [];
     this.roundsSinceUpdate = 0;
     this.lastNagRound = -Infinity;
+    this.nagCountInCycle = 0;
     this.title = null;
     this.planBound = false;
     this.clearAutoClearTimer();

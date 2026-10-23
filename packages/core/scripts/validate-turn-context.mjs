@@ -132,8 +132,8 @@ const tm = new TodoManager({
 assert.notEqual(tm.getNagReminder(3), tm.getNagReminder(5), "nag content varies per episode");
 assert.match(tm.getNagReminder(7), /unchanged for 7 rounds/);
 
-// Nag throttling: after a nag, shouldNag() stays false until `nagCooldownRounds`
-// more rounds elapse (token saving), then re-fires; an update resets the throttle.
+// Nag backoff: the first gap is `nagCooldownRounds`, then each reminder adds
+// `nagCooldownGrowth` to the next gap; an update resets the cycle.
 const tm2 = new TodoManager({
   log: {
     debug: () => {},
@@ -157,8 +157,17 @@ tm2.incrementRound(); // 4
 tm2.incrementRound(); // 5
 tm2.incrementRound(); // 6
 tm2.incrementRound(); // 7
-tm2.incrementRound(); // 8 == 3 + cooldown(5)
-assert.equal(tm2.shouldNag(), true, "cooldown elapsed -> re-fires");
+tm2.incrementRound(); // 8 == 3 + initial cooldown(5)
+assert.equal(tm2.shouldNag(), false, "first backoff extends the next gap to 10 rounds");
+for (let round = 9; round <= 12; round++) tm2.incrementRound();
+assert.equal(tm2.shouldNag(), false, "still inside the grown cooldown");
+tm2.incrementRound(); // 13 == 3 + cooldown(10)
+assert.equal(tm2.shouldNag(), true, "second nag fires after the grown cooldown");
+tm2.getNagReminder(tm2.getRoundsSinceUpdate());
+for (let round = 14; round <= 27; round++) tm2.incrementRound();
+assert.equal(tm2.shouldNag(), false, "third gap is larger again");
+tm2.incrementRound(); // 28 == 13 + cooldown(15)
+assert.equal(tm2.shouldNag(), true, "third nag fires after the larger gap");
 tm2.update([{ content: "B", status: "in_progress", priority: "high" }], "Plan"); // reset
 assert.equal(tm2.shouldNag(), false, "update resets throttle -> below threshold");
 
