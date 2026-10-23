@@ -174,6 +174,62 @@ registerCoreEnv(usingEnv);
 }
 
 // ============================================================================
+// 2b. Uncached input is the cache-miss share under BOTH conventions
+// ============================================================================
+
+{
+  // The reported session, in the shape the panel printed it: a 44.3M prompt of which 44.1M was
+  // served from cache. `total.inputTokens` holds the WHOLE prompt here (inclusive upstream), so
+  // rendering it as "Input (uncached)" showed 44.3M where 0.2M was — the same number as the
+  // `Prompt:` line above, under a second label.
+  const tracker = new UsageTracker();
+  tracker.updateWindowUsage({
+    inputTokens: 44_300_000,
+    outputTokens: 118_800,
+    totalTokens: 0,
+    cacheReadTokens: 44_100_000,
+  });
+
+  assert.equal(tracker.getTotal().inputTokens, 44_300_000, "an inclusive upstream puts the whole prompt here");
+  assert.equal(
+    tracker.getUncachedInputTokens(),
+    200_000,
+    "the uncached share is billed prompt minus cache, not the raw field — 44.3M under an `(uncached)` label was the bug"
+  );
+  assert.equal(
+    tracker.getChangeSnapshot().uncachedInputTokens,
+    tracker.getUncachedInputTokens(),
+    "the snapshot must project the tracker's own reading, so every host prints one number"
+  );
+
+  // Exclusive upstream (Anthropic/DeepSeek native): `inputTokens` is already the cache-miss part,
+  // and the subtraction must still agree with it rather than double-count.
+  const exclusive = new UsageTracker();
+  exclusive.updateWindowUsage({
+    inputTokens: 8_720,
+    outputTokens: 4_298,
+    totalTokens: 0,
+    cacheReadTokens: 835_333,
+  });
+  assert.equal(
+    exclusive.getUncachedInputTokens(),
+    8_720,
+    "under the exclusive convention the two readings coincide — the derivation must not depend on which one the upstream reports"
+  );
+  assert.equal(
+    exclusive.getBilledInputTokens(),
+    8_720 + 835_333,
+    "while the billed prompt is the sum, which is why the share is computed from it"
+  );
+
+  // Cache write counts as cached too: an Anthropic-style call bills it at its own rate, but it is
+  // not uncached input.
+  const withWrite = new UsageTracker();
+  withWrite.updateWindowUsage({ inputTokens: 1_000, outputTokens: 10, totalTokens: 0, cacheWriteTokens: 900 });
+  assert.equal(withWrite.getUncachedInputTokens(), 100, "cache WRITE tokens are cached, not uncached input");
+}
+
+// ============================================================================
 // 3. The usage store records the billed prompt, not the upstream's raw field
 // ============================================================================
 //

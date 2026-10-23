@@ -148,10 +148,19 @@ registerBuiltinCommand("usage", {
     // — 1.0% of the real figure, under a "(cumulative)" label. `pct()` below already used
     // this same denominator, so the block was showing a share of a total it never printed.
     lines.push(`  Prompt:       ${fmt(billedInput)} tokens (cumulative, billed)`);
-    lines.push(`    Input:      ${fmt(totalUsage.inputTokens)} (uncached)`);
-
     const totalCacheRead = totalUsage.cacheReadTokens ?? 0;
     const totalCacheWrite = totalUsage.cacheWriteTokens ?? 0;
+    // `usage.uncachedInputTokens`, not `totalUsage.inputTokens`. The latter is the upstream's own
+    // convention: on an inclusive upstream (OpenAI, most gateways) it IS the whole prompt, so this
+    // line printed `Input: 44.3M (uncached)` on a session whose uncached share was 0.2M — the
+    // "Prompt" line above and this one rendering the same number under two labels. The tracker
+    // subtracts both cache counters from the billed prompt, which is exact under either convention.
+    //
+    // The expression after `??` is for a server built before that field existed: an absent field
+    // would reach `formatCompactNumber` as `undefined` and print a confident `0`.
+    const uncachedInput = usage.uncachedInputTokens ?? Math.max(0, billedInput - totalCacheRead - totalCacheWrite);
+    lines.push(`    Input:      ${fmt(uncachedInput)} (uncached)`);
+
     if (totalCacheRead > 0) {
       lines.push(`    Cache read:   ${fmt(totalCacheRead)}${pct(totalCacheRead, billedInput)}`);
     }

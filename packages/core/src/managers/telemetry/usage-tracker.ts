@@ -233,6 +233,21 @@ export class UsageTracker {
     return (this.total.cacheReadTokens ?? 0) / prompt;
   }
 
+  /**
+   * Uncached share of the lifetime billed prompt — the "Input (uncached)" a usage panel prints.
+   *
+   * Derived from {@link billedInputTotal} rather than from `total.inputTokens`: that field is the
+   * upstream's own convention, so an inclusive upstream reports the WHOLE prompt there and the
+   * line printed 44.3M as "uncached" when 44.1M of it came from cache (0.2M was uncached).
+   * Subtraction is exact because the billed prompt and both cache counters are accumulated from
+   * the same per-sample readings, so their difference is cache-miss by construction — no second
+   * convention judgement, and no way for the two sides to disagree.
+   */
+  getUncachedInputTokens(): number {
+    const cache = (this.total.cacheReadTokens ?? 0) + (this.total.cacheWriteTokens ?? 0);
+    return Math.max(0, this.billedInputTotal - cache);
+  }
+
   getTotalCostUsd(): number {
     return this.totalCostUsd;
   }
@@ -329,6 +344,7 @@ export class UsageTracker {
       percent: this.getTokenLimitPercent(),
       contextFillTokens: this.getContextFillTokens(),
       billedInputTokens: this.getBilledInputTokens(),
+      uncachedInputTokens: this.getUncachedInputTokens(),
       tokenLimit: this.tokenLimit,
       cost: this.totalCostUsd,
       llmDurationMs: this.totalLlmMs,

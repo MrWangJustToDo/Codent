@@ -173,6 +173,16 @@ export interface UsageChangeSnapshot {
    * at 428.5%). See `UsageTracker.getBilledInputTokens()`.
    */
   billedInputTokens: number;
+  /**
+   * Cache-miss share of the lifetime billed prompt — the honest "Input (uncached)" figure.
+   *
+   * `total.inputTokens` cannot serve as it: on an inclusive upstream (OpenAI, gateways) that field
+   * holds the WHOLE prompt, so a session at 99.6% cache read printed 44.3M as "uncached" where
+   * 0.2M was. `billedInputTokens - cacheRead - cacheWrite` is exact under both conventions because
+   * all three are accumulated from the same per-sample readings. See
+   * `UsageTracker.getUncachedInputTokens()`.
+   */
+  uncachedInputTokens: number;
   tokenLimit: number;
   cost: number;
   /** Cumulative wall-clock time of measured main-loop LLM calls (ms). */
