@@ -144,6 +144,10 @@ const NAME_LITERAL_EXEMPT = [
     why: "shell command names (`grep`, `rg`, …) that happen to share a spelling with a tool name",
   },
   {
+    file: "agent/tools/builtin/shell/safety/readonly-rules.ts",
+    why: "the shell read-only table — `grep` / `tree` are commands here, not the built-in tools",
+  },
+  {
     file: "agent/log/schemas.ts",
     why: "log categories, one of which is named `todo`",
   },

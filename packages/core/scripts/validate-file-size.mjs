@@ -25,10 +25,6 @@ const ALLOWLIST = new Map([
   ],
   ["agent/extension/runner.ts", "Extension registration/lifecycle orchestrator; owns the five registration channels."],
   ["agent/extension/types.ts", "Declarative extension API; moving type groups would fragment one contract."],
-  [
-    "agent/tools/builtin/shell/safety/command-analyzer.ts",
-    "Shell mutation/read-only classifier and path expansion in one policy unit.",
-  ],
 ]);
 
 async function collect(dir) {
