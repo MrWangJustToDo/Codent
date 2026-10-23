@@ -1,5 +1,10 @@
-## ADDED Requirements
+# unified-agent-execution Specification
 
+## Purpose
+
+Every agent kind reaches the model through one managed span, so a root turn, a `task` child and an internal one-shot share execution, abort/error normalization and one status vocabulary instead of each keeping its own lifecycle. This capability fixes that boundary — what the shared helper owns, what stays with each pump and adapter, how child runs are projected and logged — and names the host, event and log contracts unification may not change.
+
+## Requirements
 ### Requirement: All agent kinds use one managed span
 
 Root, general, explore, and internal agents SHALL use one shared managed span for each stream: LLM/tool execution, abort/error normalization, and the root empty-stream guard. `AgentChatController` SHALL remain the root conversation pump that owns queueing, user input, approval waits, and deciding when to start another run. The task adapter SHALL call the same helper and MUST NOT introduce a second stream implementation or a second base lifecycle.

@@ -1,5 +1,10 @@
-## ADDED Requirements
+# acp-subagents Specification
 
+## Purpose
+
+ACP 客户端在同一个父会话里通过 `subagents` 能力看到被委派的子代理：公告、工作状态、child transcript 与 task 行的结果。这个能力固定三件事：能力协商决定是否允许任何 child 流量，child 的 id 只是父会话的资源而不可以当顶层会话使用，以及子代理事件如何投影成协议帧而不改变 core 的状态、取消与日志。
+
+## Requirements
 ### Requirement: 子代理能力协商门控全部 child 流量
 
 `initialize` SHALL 记录 `clientCapabilities.subagents`：对象（包括 `{}`）表示客户端支持子代理，
