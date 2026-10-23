@@ -381,7 +381,9 @@ check(
   );
   check(
     "a real match beginning with [context] is not dropped",
-    sentinel.matches.some((match) => match.lineNumber === 1 && match.content === "[context] needle here"),
+    sentinel.matches.some(
+      (match) => match.lineNumber === 1 && match.content === "[context] needle here" && match.kind === "match"
+    ),
     JSON.stringify(sentinel.matches)
   );
 
@@ -407,6 +409,93 @@ check(
   });
   const partial = await execArgsCapture(getEnv(), "grep", ["x"]);
   check("truncated capture keeps usable partial output", partial === "partial", JSON.stringify(partial));
+}
+
+// ---------------------------------------------------------------------------
+// fd parse errors, exclude filtering, and grep failures
+// ---------------------------------------------------------------------------
+
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file) => {
+      if (file === "fd" || file === "fdfind") {
+        return { stdout: "", stderr: "error parsing glob: unclosed character class", code: 1 };
+      }
+      if (file === "find") return { stdout: "./a[b.txt\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  const escapedFallback = await createGlobTool().execute(
+    { pattern: "a[b*", path: "." },
+    { toolCallId: "t-fd-parse-fallback" }
+  );
+  check(
+    "a malformed fd glob falls back to find instead of returning empty",
+    escapedFallback.files.length === 1 && escapedFallback.files[0] === "a[b.txt",
+    JSON.stringify(escapedFallback.files)
+  );
+}
+
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file) => {
+      if (file === "rg") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      if (file === "grep") return { stdout: "", stderr: "grep: Invalid regular expression", code: 2 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  let failed = false;
+  try {
+    await createGrepTool().execute({ pattern: "foo[", path: "src" }, { toolCallId: "t-grep-error" });
+  } catch (err) {
+    failed = err instanceof Error && /Invalid regular expression/.test(err.message);
+  }
+  check("grep surfaces a command failure instead of reporting zero matches", failed);
+}
+
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file) => {
+      if (file === "fd" || file === "fdfind") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      if (file === "find") return { stdout: "./src/a.ts\n./nested/b.ts\n", stderr: "", code: 0 };
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  const excluded = await createGlobTool().execute(
+    { pattern: "**/*.ts", path: ".", exclude: "src" },
+    { toolCallId: "t-glob-exclude" }
+  );
+  check(
+    "exclude is applied consistently in JS",
+    excluded.files.length === 1 && excluded.files[0] === "nested/b.ts",
+    JSON.stringify(excluded.files)
+  );
+}
+
+{
+  const base = envWithoutRipgrep();
+  clearCoreEnv();
+  registerCoreEnv({
+    ...base,
+    fs: {
+      ...base.fs,
+      realpath: async (path) => (path === "escape" || path.endsWith("/escape") ? "/outside/escape" : "/repo"),
+    },
+    execFile: async () => ({ stdout: "", stderr: "", code: 0 }),
+  });
+  let blocked = false;
+  try {
+    await createGlobTool().execute({ pattern: "**/*.ts", path: "escape" }, { toolCallId: "t-realpath" });
+  } catch (err) {
+    blocked = err instanceof Error && /resolves outside workspace root/.test(err.message);
+  }
+  check("an in-root symlink resolved outside the workspace is rejected", blocked);
 }
 
 // ---------------------------------------------------------------------------

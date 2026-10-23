@@ -81,10 +81,19 @@ export async function cacheToolOutput(env: ResolvedCoreEnv, content: string, id:
 /**
  * The line telling the model where the rest of the output is, and whether it is all of it.
  */
-function noteLine(cachedPath: string, totalLines: number, chars: number, truncated: boolean): string {
+function noteLine(
+  cachedPath: string,
+  totalLines: number,
+  chars: number,
+  truncated: boolean,
+  pageOnly: boolean
+): string {
   const size = `${totalLines} lines, ${chars} chars`;
-  return truncated
-    ? `Output saved to: ${cachedPath} (${size} — this run kept only its tail, so earlier output is gone)`
+  if (truncated) {
+    return `Output saved to: ${cachedPath} (${size} — this run kept only its tail, so earlier output is gone)`;
+  }
+  return pageOnly
+    ? `Output for this page saved to: ${cachedPath} (${size})`
     : `Full output saved to: ${cachedPath} (${size})`;
 }
 
@@ -99,7 +108,7 @@ export function buildCachedPreview(
    * only a tail, which is all a cancelled or timed-out run can offer) — so the note must not promise a
    * full copy the file does not hold.
    */
-  opts?: { headLines?: number; tailLines?: number; truncated?: boolean }
+  opts?: { headLines?: number; tailLines?: number; truncated?: boolean; pageOnly?: boolean }
 ): string {
   const headLines = opts?.headLines ?? DEFAULT_HEAD_LINES;
   const tailLines = opts?.tailLines ?? DEFAULT_TAIL_LINES;
@@ -125,7 +134,7 @@ export function buildCachedPreview(
       "",
       tail,
       "",
-      noteLine(cachedPath, totalLines, content.length, opts?.truncated === true),
+      noteLine(cachedPath, totalLines, content.length, opts?.truncated === true, opts?.pageOnly === true),
       `Use read_file with path="${cachedPath}" and offset/limit to read specific sections.`,
     ].join("\n");
   }
@@ -139,7 +148,7 @@ export function buildCachedPreview(
   const head = content.slice(0, DEFAULT_HEAD_CHARS);
   const tail = content.slice(Math.max(DEFAULT_HEAD_CHARS, content.length - DEFAULT_TAIL_CHARS));
   const omitted = content.length - DEFAULT_HEAD_CHARS - DEFAULT_TAIL_CHARS;
-  const note = noteLine(cachedPath, totalLines, content.length, opts?.truncated === true);
+  const note = noteLine(cachedPath, totalLines, content.length, opts?.truncated === true, opts?.pageOnly === true);
 
   if (omitted > 0) {
     return [
@@ -178,7 +187,7 @@ export async function maybeCacheOutput(
   env: ResolvedCoreEnv,
   content: string,
   id: string,
-  opts?: { headLines?: number; tailLines?: number; truncated?: boolean }
+  opts?: { headLines?: number; tailLines?: number; truncated?: boolean; pageOnly?: boolean }
 ): Promise<{ content: string; cachedOutputPath: string | null }> {
   if (!shouldCache(content)) {
     return { content, cachedOutputPath: null };

@@ -97,6 +97,19 @@ export const fsRoutes = new Hono()
       return c.json(body, status);
     }
   })
+  .post("/realpath", zValidator("json", pathSchema), async (c) => {
+    try {
+      const { path } = c.req.valid("json");
+      const env = getServerEnv();
+      if (!env.fs.realpath) {
+        return c.json({ error: true, name: "Error", code: "not_supported", message: "realpath not available" }, 400);
+      }
+      return c.json({ path: await env.fs.realpath(path) });
+    } catch (err) {
+      const { body, status } = handleFsError(err);
+      return c.json(body, status);
+    }
+  })
   .post("/readdir", zValidator("json", pathSchema), async (c) => {
     try {
       const { path } = c.req.valid("json");

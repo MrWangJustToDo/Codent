@@ -121,6 +121,22 @@ function createRemoteFs(client: Client): CoreEnvFs {
       return { ...data, mtime: new Date(data.mtime) };
     },
 
+    realpath: async (path: string): Promise<string> => {
+      const res = await client.fs.realpath.$post({ json: { path } });
+      if (!res.ok) {
+        const payload = (await res
+          .clone()
+          .json()
+          .catch(() => null)) as { code?: string } | null;
+        // An older server (or one without the capability) degrades to the lexical path,
+        // matching the optional-capability contract used elsewhere on CoreEnv.
+        if (res.status === 404 || payload?.code === "not_supported") return path;
+        return await unwrap(res);
+      }
+      const data = await unwrap<{ path: string }>(res);
+      return data.path;
+    },
+
     readdir: async (path: string): Promise<FileEntry[]> => {
       const res = await client.fs.readdir.$post({ json: { path } });
       const data = await unwrap<{

@@ -1,12 +1,13 @@
 import { z } from "zod";
 
+import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { grepOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
-import { canExecArgs, execArgsCapture } from "../shell/exec-args.js";
+import { canExecArgs, execArgs } from "../shell/exec-args.js";
 
 import { expandBraceGlobs, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
 import {
@@ -256,17 +257,49 @@ async function runGrepSearch(
       : options.context > 0
         ? options.fetchCount * (2 * options.context + 3) + 10
         : options.fetchCount;
+
+  const failure = (
+    binary: string,
+    result: { code: number | null; stderr: string; stdout: string }
+  ): ExecutionError | null => {
+    // rg/grep use 0 for matches and 1 for a clean no-match. A non-zero other status with
+    // no stdout is a real failure (invalid regex, missing path, unreadable input), not an
+    // empty result; the model must not be told "0 matches" for a search that never ran.
+    if (result.code !== null && result.code !== 0 && result.code !== 1 && result.stdout.length === 0) {
+      return new ExecutionError(
+        "unknown",
+        `${binary} failed with exit code ${result.code}: ${result.stderr.trim() || "no diagnostic output"}`
+      );
+    }
+    return null;
+  };
+
   if (canExecArgs(env)) {
-    const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options), {
+    const rgResult = await execArgs(env, "rg", buildRgArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (rgStdout !== undefined) return truncateLines(rgStdout, lineCap);
-    const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options), {
+    if (!rgResult.missing) {
+      if (rgResult.killed && !rgResult.truncated) {
+        throw new ExecutionError("timeout", "rg was killed before it produced a complete result");
+      }
+      const error = failure("rg", rgResult);
+      if (error) throw error;
+      return truncateLines(rgResult.stdout, lineCap);
+    }
+
+    const grepResult = await execArgs(env, "grep", buildGrepArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (grepStdout !== undefined) return truncateLines(grepStdout, lineCap);
+    if (!grepResult.missing) {
+      if (grepResult.killed && !grepResult.truncated) {
+        throw new ExecutionError("timeout", "grep was killed before it produced a complete result");
+      }
+      const error = failure("grep", grepResult);
+      if (error) throw error;
+      return truncateLines(grepResult.stdout, lineCap);
+    }
     // Neither binary is available — an empty result is the honest answer.
     return "";
   }
@@ -280,13 +313,23 @@ async function runGrepSearch(
     cwd: env.rootPath,
     signal: options.signal,
   });
-  if (!isCommandNotFound(rgResult.exitCode)) return truncateLines(rgResult.stdout, lineCap);
+  if (!isCommandNotFound(rgResult.exitCode)) {
+    const error = failure("rg", { code: rgResult.exitCode ?? null, stderr: rgResult.stderr, stdout: rgResult.stdout });
+    if (error) throw error;
+    return truncateLines(rgResult.stdout, lineCap);
+  }
   const grepArgv = buildGrepArgs(pattern, searchPath, options).map(quoteForShell);
   const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, {
     timeout,
     cwd: env.rootPath,
     signal: options.signal,
   });
+  const error = failure("grep", {
+    code: grepResult.exitCode ?? null,
+    stderr: grepResult.stderr,
+    stdout: grepResult.stdout,
+  });
+  if (error) throw error;
   return truncateLines(grepResult.stdout, lineCap);
 }
 
@@ -484,7 +527,7 @@ export const createGrepTool = () => {
         const normalized = stripOuterQuotes(pattern);
         const searchPattern = normalized.pattern;
 
-        const searchPath = resolveSearchPath(coreEnv, path);
+        const searchPath = await resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
         const mode = outputMode ?? "content";
@@ -553,7 +596,7 @@ export const createGrepTool = () => {
           };
         }
 
-        let allMatches: { file: string; lineNumber: number; content: string }[] = [];
+        let allMatches: { file: string; lineNumber: number; content: string; kind?: "match" | "context" }[] = [];
         let totalContentLength = 0;
 
         // `include` is omitted from the grep fallback when it contains a path glob
@@ -567,10 +610,7 @@ export const createGrepTool = () => {
           includePatterns.some((pattern) => matchesGlobPath(file, searchPath, pattern, coreEnv.rootPath));
 
         // Context is a structural fact, not a rendered prefix: a real match can begin with
-        // the literal text `[context] `. Mark the parsed object itself so pagination never
-        // has to inspect its display string.
-        const contextMatches = new WeakSet<object>();
-
+        // the literal text `[context] `.
         if (mode === "files_with_matches") {
           allMatches = lines.map((file) => ({
             file: normalizeSearchPath(file, coreEnv),
@@ -589,9 +629,10 @@ export const createGrepTool = () => {
             if (!parsed) continue;
 
             const { context: isContextLine, ...fields } = parsed;
-            const entry = {
+            const entry: { file: string; lineNumber: number; content: string; kind?: "match" | "context" } = {
               ...fields,
               file: normalizeSearchPath(parsed.file, coreEnv),
+              kind: isContextLine ? "context" : "match",
             };
             if (!includeMatch(entry.file)) continue;
 
@@ -604,7 +645,6 @@ export const createGrepTool = () => {
               entry.content = "[content omitted - total size limit reached]";
             }
 
-            if (isContextLine) contextMatches.add(entry);
             allMatches.push(entry);
           }
         }
@@ -621,7 +661,7 @@ export const createGrepTool = () => {
 
         // Drop any match with an invalid line number (NaN serializes to null in JSON).
         const validMatches = withoutZeroCounts.filter((m) => Number.isFinite(m.lineNumber));
-        const actualMatches = validMatches.filter((match) => !contextMatches.has(match));
+        const actualMatches = validMatches.filter((match) => match.kind !== "context");
         const selectedMatches = actualMatches.slice(skip, skip + take);
         let paginatedMatches = selectedMatches;
         if (mode === "content" && contextLines > 0 && selectedMatches.length > 0) {
@@ -636,14 +676,14 @@ export const createGrepTool = () => {
             let before = 0;
             for (let i = index - 1; i >= 0 && before < contextLines; i--) {
               const candidate = validMatches[i]!;
-              if (!contextMatches.has(candidate)) break;
+              if (candidate.kind !== "context") break;
               indexes.add(i);
               before++;
             }
             let after = 0;
             for (let i = index + 1; i < validMatches.length && after < contextLines; i++) {
               const candidate = validMatches[i]!;
-              if (!contextMatches.has(candidate)) break;
+              if (candidate.kind !== "context") break;
               indexes.add(i);
               after++;
             }
@@ -660,7 +700,7 @@ export const createGrepTool = () => {
             : mode === "count"
               ? paginatedMatches.map((m) => `${m.file}: ${m.content.slice("Count: ".length)}`).join("\n")
               : paginatedMatches.map((m) => `${m.file}:${m.lineNumber}:${m.content}`).join("\n");
-        const cached = await maybeCacheOutput(coreEnv, fullMatchText, `${toolCallId}-grep`);
+        const cached = await maybeCacheOutput(coreEnv, fullMatchText, `${toolCallId}-grep`, { pageOnly: true });
         const { cachedOutputPath } = cached;
 
         // matches always carries the requested page (structured metadata for the UI
@@ -696,12 +736,15 @@ export const createGrepTool = () => {
         ];
       }
       const matches = output.matches ?? [];
-      const isFilesMode = matches.length > 0 && matches.every((m) => m.lineNumber === 0 && m.content === "");
+      // Context rows are additional display lines; `limit`/`offset` count only real matches.
+      const actualMatches = matches.filter((m) => m.kind !== "context");
+      const isFilesMode =
+        actualMatches.length > 0 && actualMatches.every((m) => m.lineNumber === 0 && m.content === "");
       const body = output.content
         ? output.content
         : isFilesMode
-          ? `${matches.length} files:\n${matches.map((m) => m.file).join("\n")}`
-          : `${matches.length} matches:\n${lines?.join("\n")}`;
+          ? `${actualMatches.length} files:\n${actualMatches.map((m) => m.file).join("\n")}`
+          : `${actualMatches.length} matches:\n${lines?.join("\n")}`;
       return [
         {
           type: "text" as const,

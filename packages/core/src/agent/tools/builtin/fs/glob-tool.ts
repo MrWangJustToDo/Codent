@@ -1,14 +1,16 @@
 import { z } from "zod";
 
+import { defaultPath } from "../../../../env";
+import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { globOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
-import { canExecArgs, execArgsCapture } from "../shell/exec-args.js";
+import { canExecArgs, execArgs, execArgsCapture } from "../shell/exec-args.js";
 
-import { expandBraceGlobs, filterGlobOutput, findPathPattern } from "./search/glob-pattern.js";
+import { expandBraceGlobs, filterGlobOutput, findPathPattern, normalizeExcludePattern } from "./search/glob-pattern.js";
 import {
   activeExcludeDirs,
   SEARCH_COMMAND_TIMEOUT,
@@ -38,6 +40,7 @@ function buildFdArgs(
   options: {
     type: string;
     exclude: string | undefined;
+    absoluteSearchPath?: string;
   }
 ): string[] {
   const args: string[] = ["--color=never"];
@@ -54,7 +57,17 @@ function buildFdArgs(
   // JS result filter applies the exact segment semantics afterwards.
   const normalized = pattern.replace(/^\.\//, "");
   const hasPathSegment = normalized.includes("/");
-  const fdPattern = hasPathSegment && !normalized.startsWith("**/") ? `**/${normalized}` : normalized;
+  // Anchor full-path patterns to the search root instead of `**/`. The latter finds a
+  // path segment at any depth, so a huge repository can spend the capture budget on
+  // irrelevant `dist`/`tmp` trees before the real page. Absolute patterns are accepted by
+  // fd's --full-path on every supported version; the JS filter still owns exact semantics.
+  const absoluteRoot = options.absoluteSearchPath?.replace(/\/+$/, "");
+  const fdPattern =
+    hasPathSegment && absoluteRoot
+      ? `${absoluteRoot}/${normalized.replace(/^\/+/, "")}`
+      : hasPathSegment && !normalized.startsWith("**/")
+        ? `**/${normalized}`
+        : normalized;
   args.push("--glob", fdPattern);
   // With `--full-path`, `*.json` is matched against `./package.json`, where `*` cannot
   // cross the leading slash and therefore finds nothing. Only switch on full-path mode
@@ -70,7 +83,9 @@ function buildFdArgs(
     args.push("--exclude", dir);
   }
 
-  if (options.exclude) {
+  if (options.exclude && !options.exclude.includes("/") && !options.exclude.includes("**")) {
+    // Path-shaped excludes are filtered in JS; fd's --exclude is basename-oriented and
+    // disagreed with find for values like `src/*.ts`.
     args.push("--exclude", options.exclude);
   }
 
@@ -108,10 +123,9 @@ function buildFindArgs(
   for (const dir of activeExcludeDirs(searchPath)) {
     args.push("-not", "-path", `*/${dir}/*`, "-not", "-path", `*/${dir}`);
   }
-  if (options.exclude) {
-    // `fd --exclude` accepts a file glob (e.g. `*.log`) as well as a directory name.
-    // Mirror both cases here: path pruning handles descendants of an excluded directory,
-    // `-name` handles file names and the directory entry itself.
+  if (options.exclude && !options.exclude.includes("/") && !options.exclude.includes("**")) {
+    // Simple basename excludes get a command-side pre-filter. Path-shaped excludes are
+    // applied by the JS result filter, where fd and find cannot disagree.
     args.push(
       "-not",
       "-path",
@@ -145,23 +159,36 @@ async function runGlobSearch(
   options: {
     type: string;
     exclude: string | undefined;
+    absoluteSearchPath?: string;
     fetchCount: number;
     signal?: AbortSignal;
   }
 ): Promise<string> {
   if (canExecArgs(env)) {
     for (const binary of FD_BINARIES) {
-      const stdout = await execArgsCapture(env, binary, buildFdArgs(pattern, searchPath, options), {
+      const result = await execArgs(env, binary, buildFdArgs(pattern, searchPath, options), {
         cwd: env.rootPath,
         signal: options.signal,
       });
-      if (stdout !== undefined) return filterGlobOutput(stdout, pattern, searchPath, options.fetchCount, env);
+      if (result.missing) continue;
+      if (result.killed && !result.truncated) {
+        throw new ExecutionError("timeout", `${binary} was killed before it produced a complete result`);
+      }
+      // fd exits 1 for a clean no-match, but a malformed glob also exits non-zero with
+      // a diagnostic and no stdout. Treat any such diagnostic-bearing result as "this
+      // candidate cannot answer" and let find try the same pattern instead of returning
+      // a false empty result.
+      if (result.code !== 0 && result.stdout.length === 0 && result.stderr.length > 0) {
+        continue;
+      }
+      return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
     }
     const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (findStdout !== undefined) return filterGlobOutput(findStdout, pattern, searchPath, options.fetchCount, env);
+    if (findStdout !== undefined)
+      return filterGlobOutput(findStdout, pattern, searchPath, options.fetchCount, env, options.exclude);
     // Both binaries are absent — an empty result is the honest answer. Falling through to
     // the shell path would only re-attempt the same missing binaries.
     return "";
@@ -176,8 +203,10 @@ async function runGlobSearch(
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (!isCommandNotFound(result.exitCode))
-      return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env);
+    if (!isCommandNotFound(result.exitCode)) {
+      if (result.exitCode !== 0 && !result.stdout && result.stderr) continue;
+      return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
+    }
   }
   const findArgv = buildFindArgs(pattern, searchPath, options).map(quoteForShell);
   const findResult = await env.runCommand(`find ${findArgv.join(" ")}`, {
@@ -185,7 +214,7 @@ async function runGlobSearch(
     cwd: env.rootPath,
     signal: options.signal,
   });
-  return filterGlobOutput(findResult.stdout, pattern, searchPath, options.fetchCount, env);
+  return filterGlobOutput(findResult.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
 }
 
 export const createGlobTool = () => {
@@ -226,7 +255,7 @@ export const createGlobTool = () => {
     outputSchema: globOutputSchema,
     execute: async ({ pattern, path, type, offset, limit, exclude }, { toolCallId, abortSignal, coreEnv }) => {
       return withDuration(async () => {
-        const searchPath = resolveSearchPath(coreEnv, path);
+        const searchPath = await resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
         // A trailing slash is the conventional directory spelling (`src/`, `src/**/`).
@@ -236,10 +265,15 @@ export const createGlobTool = () => {
         const effectivePattern = directoryPattern ? pattern.replace(/\/+$/, "") : pattern;
         const fileType = directoryPattern ? "directory" : (type ?? "file");
         const fetchCount = skip + take + 1;
+        const normalizedExclude = exclude ? normalizeExcludePattern(exclude) : undefined;
+        const absoluteSearchPath = (coreEnv.path ?? defaultPath)
+          .resolve(coreEnv.rootPath, searchPath)
+          .replace(/\\/g, "/");
 
         const searchOptions = {
           type: fileType,
-          exclude,
+          exclude: normalizedExclude,
+          absoluteSearchPath,
           offset: skip,
           limit: take,
           fetchCount,
@@ -284,7 +318,7 @@ export const createGlobTool = () => {
         const paginatedFiles = allFiles.slice(skip, skip + take);
 
         const fullOutputText = paginatedFiles.join("\n");
-        const cached = await maybeCacheOutput(coreEnv, fullOutputText, `${toolCallId}-glob`);
+        const cached = await maybeCacheOutput(coreEnv, fullOutputText, `${toolCallId}-glob`, { pageOnly: true });
         const { cachedOutputPath } = cached;
 
         // files always carries the requested page (structured metadata for the UI

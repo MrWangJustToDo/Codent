@@ -173,6 +173,11 @@ export const grepOutputSchema = z.object({
           .nonnegative()
           .describe("Line number of the match (1-indexed). 0 when not applicable (e.g. files_with_matches)."),
         content: z.string().describe("Content of the matching line (empty in files_with_matches mode)."),
+        /**
+         * Context rows are returned for display but are not counted by offset/limit.
+         * Older consumers may ignore this field; `content` still carries the `[context] ` marker.
+         */
+        kind: z.enum(["match", "context"]).optional().describe("Whether this row is a match or context."),
       })
     )
     .describe("Array of matches found."),

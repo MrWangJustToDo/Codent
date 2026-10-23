@@ -117,10 +117,12 @@ export function quoteForShell(arg: string): string {
  *
  * Returns the caller's original path string (relative stays relative), so the binary's output
  * paths remain root-relative exactly as before; only the `cwd` handed to the spawn anchors
- * resolution to the root. Throws the fs layer's own traversal error
- * ({@link FileError} `permission_denied`) on an escape, so callers surface one error shape.
+ * resolution to the root. When the host exposes `fs.realpath`, the real path is also required
+ * to stay inside the real workspace root (a lexical check alone cannot see a symlink).
+ * Throws the fs layer's traversal error ({@link FileError} `permission_denied`) on an escape,
+ * so callers surface one error shape.
  */
-export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefined): string {
+export async function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefined): Promise<string> {
   const path = coreEnv.path ?? defaultPath;
   // Keep a legitimate path whose name starts/ends with a space; only fall back to the
   // workspace root when the value is missing or contains no non-whitespace characters.
@@ -143,7 +145,26 @@ export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefine
     const normalized = path.normalize(raw);
     if (/^[A-Za-z]:[\\/]$/.test(normalized)) return normalized;
     const trailing = path.getSep() === "\\" ? /\\+$/ : /\/+$/;
-    return normalized.length > 1 ? normalized.replace(trailing, "") : normalized;
+    const result = normalized.length > 1 ? normalized.replace(trailing, "") : normalized;
+
+    // The lexical check above cannot see symlinks. Search binaries bypass CoreEnv.fs, so
+    // resolve the real path here when the host exposes the capability and require it to
+    // remain inside the real workspace root.
+    if (coreEnv.fs.realpath) {
+      const realPath = path.normalize(await coreEnv.fs.realpath(result));
+      const realRoot = path.normalize(await coreEnv.fs.realpath(path.normalize(coreEnv.rootPath)));
+      const realPathKey = foldCase(toPosixPathKey(realPath));
+      const realRootKey = foldCase(toPosixPathKey(realRoot));
+      const rootPrefix = realRootKey.endsWith("/") ? realRootKey : `${realRootKey}/`;
+      if (realPathKey !== realRootKey && !realPathKey.startsWith(rootPrefix)) {
+        throw new FileError(
+          "permission_denied",
+          `Path traversal blocked: "${raw}" resolves outside workspace root`,
+          raw
+        );
+      }
+    }
+    return result;
   }
 
   throw new FileError("permission_denied", `Path traversal blocked: "${raw}" resolves outside workspace root`, raw);

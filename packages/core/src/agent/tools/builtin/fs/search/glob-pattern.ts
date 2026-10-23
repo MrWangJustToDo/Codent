@@ -52,6 +52,20 @@ export function findPathPattern(pattern: string): string {
     .replace(/\*\*/g, "*");
 }
 
+/**
+ * Convert path-separator backslashes to `/` while preserving glob escapes.
+ *
+ * `src\*.ts` is ambiguous: on Windows the backslash is a separator, while `a\*b.ts`
+ * means a literal star. We preserve a backslash before a glob metacharacter (escape
+ * semantics) and normalize every other backslash as a separator.
+ */
+function normalizeGlobSeparators(pattern: string, rootPath?: string): string {
+  // On Windows a backslash is overwhelmingly a path separator. Treat it as such there;
+  // the escape-preserving branch is for POSIX patterns.
+  if (rootPath?.includes("\\")) return pattern.replace(/\\/g, "/");
+  return pattern.replace(/\\(?![*?[\]{}()!+@\\])/g, "/");
+}
+
 /** Escape one non-pattern character for a JavaScript regular expression. */
 function escapeRegexChar(char: string): string {
   return /[.*+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
@@ -67,7 +81,12 @@ export function globToRegExp(pattern: string): RegExp {
   let source = "^";
   for (let i = 0; i < pattern.length; i++) {
     const char = pattern[i]!;
-    if (char === "*") {
+    if (char === "\\") {
+      // Backslash escapes the next glob metacharacter (`a\*b.ts`, `\[slug\].tsx`).
+      i += 1;
+      if (i < pattern.length) source += escapeRegexChar(pattern[i]!);
+      else source += "\\\\";
+    } else if (char === "*") {
       if (pattern[i + 1] === "*") {
         i += 1;
         if (pattern[i + 1] === "/") {
@@ -122,7 +141,7 @@ function relativeToSearchPath(file: string, searchPath: string, rootPath?: strin
  * form before comparing; callers that already normalize result paths pass {@link CoreEnv.rootPath}.
  */
 export function matchesGlobPath(file: string, searchPath: string, pattern: string, rootPath?: string): boolean {
-  const raw = pattern.replace(/\\/g, "/");
+  const raw = normalizeGlobSeparators(pattern, rootPath);
   const rootAnchored = raw.startsWith("./");
   const normalizedPattern = rootAnchored ? raw.slice(2) : raw;
   const relative = relativeToSearchPath(file, searchPath, rootPath);
@@ -130,6 +149,30 @@ export function matchesGlobPath(file: string, searchPath: string, pattern: strin
   const candidate =
     !rootAnchored && !normalizedPattern.includes("/") ? (relative.split("/").pop() ?? relative) : relative;
   return globToRegExp(normalizedPattern).test(candidate);
+}
+
+/** Normalize a caller's `exclude` value for both command-side and JS-side filtering. */
+export function normalizeExcludePattern(exclude: string): string {
+  return exclude.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+/**
+ * Whether a result path is covered by an `exclude` value.
+ *
+ * A bare name (`vendor`, `*.log`) matches any path segment; a path pattern is relative to the
+ * search root, but also matches at any depth so fd/find cannot disagree with the JS filter.
+ */
+export function matchesExcludePath(file: string, searchPath: string, exclude: string, rootPath?: string): boolean {
+  if (!exclude) return false;
+  const relative = relativeToSearchPath(file, searchPath, rootPath);
+  if (!relative || relative === ".") return false;
+  const pattern = normalizeExcludePattern(exclude);
+  if (!pattern) return false;
+  const direct = globToRegExp(pattern);
+  if (direct.test(relative)) return true;
+  if (!pattern.includes("/") && relative.split("/").some((segment) => direct.test(segment))) return true;
+  const depthTolerant = pattern.startsWith("**/") ? pattern : `**/${pattern}`;
+  return globToRegExp(depthTolerant).test(relative);
 }
 
 /**
@@ -151,13 +194,15 @@ export function filterGlobOutput(
   pattern: string,
   searchPath: string,
   count: number,
-  env: CoreEnv
+  env: CoreEnv,
+  exclude?: string
 ): string {
   return output
     .split("\n")
     .map((line) => line.replace(/\r$/, ""))
     .filter((line) => line.length > 0)
     .filter((file) => matchesGlobPath(file, searchPath, pattern, env.rootPath))
+    .filter((file) => !exclude || !matchesExcludePath(file, searchPath, exclude, env.rootPath))
     .slice(0, count)
     .map((file) => normalizeSearchPath(file, env))
     .join("\n");

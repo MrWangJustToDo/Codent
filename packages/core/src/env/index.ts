@@ -129,6 +129,14 @@ export interface CoreEnvFs {
   readFileRange?(path: string, start: number, end: number): Promise<string>;
   /** Get file/directory stats */
   stat(path: string): Promise<CoreEnvFsStat>;
+  /**
+   * Resolve a path's real filesystem location (following symlinks).
+   *
+   * Optional: external search binaries (`fd`/`find`/`rg`/`grep`) bypass `CoreEnv.fs`, so the
+   * search tools use this to reject a lexically in-root symlink that points outside the
+   * workspace. Hosts without it keep the previous lexical-only behaviour.
+   */
+  realpath?(path: string): Promise<string>;
   /** List direct children of a directory */
   readdir(path: string): Promise<FileEntry[]>;
   /** Create or overwrite a file (UTF-8 string or binary bytes), creating parent dirs when supported */

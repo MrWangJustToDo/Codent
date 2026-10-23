@@ -184,7 +184,7 @@ export const createTreeTool = () => {
       { toolCallId, abortSignal, coreEnv }
     ) => {
       return withDuration(async () => {
-        const rootPath = resolveSearchPath(coreEnv, path);
+        const rootPath = await resolveSearchPath(coreEnv, path);
         const depth = maxDepth ?? 3;
 
         // A stopped walk has no tree to report — and an empty tree would read as "this directory is

@@ -191,6 +191,10 @@ export function createNativeFilesystem(
       };
     },
 
+    // External search binaries bypass `CoreEnv.fs`; expose the same real-path gate so
+    // `resolveSearchPath` can reject an in-root symlink pointing outside the workspace.
+    realpath: async (filePath: string) => realpathAllowMissing(resolvePath(filePath)),
+
     writeFile: async (filePath: string, content: string | Uint8Array) => {
       const fullPath = resolvePath(filePath);
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
