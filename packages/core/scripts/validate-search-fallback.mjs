@@ -498,6 +498,27 @@ check(
   check("an in-root symlink resolved outside the workspace is rejected", blocked);
 }
 
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file) => {
+      if (file === "fd" || file === "fdfind") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      if (file === "find") {
+        return { stdout: "", stderr: "find: './missing': No such file or directory", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  let failed = false;
+  try {
+    await createGlobTool().execute({ pattern: "**/*.ts", path: "missing" }, { toolCallId: "t-find-error" });
+  } catch (err) {
+    failed = err instanceof Error && /find failed with exit code 1/.test(err.message);
+  }
+  check("find surfaces a command failure instead of reporting no files", failed);
+}
+
 // ---------------------------------------------------------------------------
 // the invariant: a genuinely empty search must still read as empty, not as a failure
 // ---------------------------------------------------------------------------

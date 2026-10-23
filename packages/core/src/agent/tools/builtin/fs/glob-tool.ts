@@ -8,7 +8,7 @@ import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { globOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
-import { canExecArgs, execArgs, execArgsCapture } from "../shell/exec-args.js";
+import { canExecArgs, execArgs } from "../shell/exec-args.js";
 
 import { expandBraceGlobs, filterGlobOutput, findPathPattern, normalizeExcludePattern } from "./search/glob-pattern.js";
 import {
@@ -183,15 +183,27 @@ async function runGlobSearch(
       }
       return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
     }
-    const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options), {
+    const findResult = await execArgs(env, "find", buildFindArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (findStdout !== undefined)
-      return filterGlobOutput(findStdout, pattern, searchPath, options.fetchCount, env, options.exclude);
-    // Both binaries are absent — an empty result is the honest answer. Falling through to
-    // the shell path would only re-attempt the same missing binaries.
-    return "";
+    if (findResult.missing) {
+      // No search binary is installed. Keep the existing graceful-degrade behaviour;
+      // "no candidates" is still a better answer than crashing the tool.
+      return "";
+    }
+    if (findResult.killed && !findResult.truncated) {
+      throw new ExecutionError("timeout", "find was killed before it produced a complete result");
+    }
+    // `find` uses 0 even for no matches. A non-zero status with no stdout is a real
+    // failure (missing path, unreadable root, bad predicate), not an empty result.
+    if (findResult.code !== 0 && findResult.stdout.length === 0) {
+      throw new ExecutionError(
+        "unknown",
+        `find failed with exit code ${findResult.code}: ${findResult.stderr.trim() || "no diagnostic output"}`
+      );
+    }
+    return filterGlobOutput(findResult.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
   }
 
   // Legacy path for hosts without argument-vector execution (task 1.7): the same argv,
@@ -214,6 +226,13 @@ async function runGlobSearch(
     cwd: env.rootPath,
     signal: options.signal,
   });
+  if (isCommandNotFound(findResult.exitCode)) return "";
+  if (findResult.exitCode !== 0 && !findResult.stdout) {
+    throw new ExecutionError(
+      "unknown",
+      `find failed with exit code ${findResult.exitCode ?? "unknown"}: ${findResult.stderr.trim() || "no diagnostic output"}`
+    );
+  }
   return filterGlobOutput(findResult.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
 }
 
