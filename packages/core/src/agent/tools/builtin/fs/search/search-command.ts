@@ -1,7 +1,7 @@
 import { defaultPath } from "../../../../../env";
 import { FileError } from "../../../../../env/types";
 import { splitDisplayLines } from "../../../../../utils/display-lines.js";
-import { toPosixPathKey } from "../../../../../utils/posix-path.js";
+import { toPosixPath, toPosixPathKey } from "../../../../../utils/posix-path.js";
 
 import type { CoreEnv } from "../../../../../env";
 
@@ -18,7 +18,7 @@ export const DEFAULT_EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage",
  * `dist` directory would make that explicit request return nothing.
  */
 export function activeExcludeDirs(searchPath: string): string[] {
-  const basename = searchPath.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
+  const basename = toPosixPath(searchPath).replace(/\/+$/, "").split("/").pop();
   return basename ? DEFAULT_EXCLUDE_DIRS.filter((dir) => dir !== basename) : DEFAULT_EXCLUDE_DIRS;
 }
 
@@ -153,15 +153,20 @@ export async function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | un
     if (coreEnv.fs.realpath) {
       const realPath = path.normalize(await coreEnv.fs.realpath(result));
       const realRoot = path.normalize(await coreEnv.fs.realpath(path.normalize(coreEnv.rootPath)));
-      const realPathKey = foldCase(toPosixPathKey(realPath));
-      const realRootKey = foldCase(toPosixPathKey(realRoot));
-      const rootPrefix = realRootKey.endsWith("/") ? realRootKey : `${realRootKey}/`;
-      if (realPathKey !== realRootKey && !realPathKey.startsWith(rootPrefix)) {
-        throw new FileError(
-          "permission_denied",
-          `Path traversal blocked: "${raw}" resolves outside workspace root`,
-          raw
-        );
+      // A pre-capability remote server answers 404 with the lexical path, which may be
+      // relative ("."). Only compare when both sides are real absolute paths; the client
+      // itself already degrades a missing route to the lexical path.
+      if (path.isAbsolute(realPath) && path.isAbsolute(realRoot)) {
+        const realPathKey = foldCase(toPosixPathKey(realPath));
+        const realRootKey = foldCase(toPosixPathKey(realRoot));
+        const rootPrefix = realRootKey.endsWith("/") ? realRootKey : `${realRootKey}/`;
+        if (realPathKey !== realRootKey && !realPathKey.startsWith(rootPrefix)) {
+          throw new FileError(
+            "permission_denied",
+            `Path traversal blocked: "${raw}" resolves outside workspace root`,
+            raw
+          );
+        }
       }
     }
     return result;

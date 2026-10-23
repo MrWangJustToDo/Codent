@@ -6,6 +6,8 @@
  * normalization, and neither tool should own the other's implementation.
  */
 
+import { toPosixPath } from "../../../../../utils/posix-path.js";
+
 import type { CoreEnv } from "../../../../../env";
 
 /**
@@ -62,7 +64,7 @@ export function findPathPattern(pattern: string): string {
 function normalizeGlobSeparators(pattern: string, rootPath?: string): string {
   // On Windows a backslash is overwhelmingly a path separator. Treat it as such there;
   // the escape-preserving branch is for POSIX patterns.
-  if (rootPath?.includes("\\")) return pattern.replace(/\\/g, "/");
+  if (rootPath?.includes("\\")) return toPosixPath(pattern);
   return pattern.replace(/\\(?![*?[\]{}()!+@\\])/g, "/");
 }
 
@@ -118,10 +120,10 @@ export function globToRegExp(pattern: string): RegExp {
 
 /** Normalize a command-output path to the part relative to the search root. */
 function relativeToSearchPath(file: string, searchPath: string, rootPath?: string): string {
-  let normalized = file.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
-  let root = searchPath.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+  let normalized = toPosixPath(file).replace(/\/+$/, "").replace(/^\.\//, "");
+  let root = toPosixPath(searchPath).replace(/\/+$/, "").replace(/^\.\//, "");
   if (rootPath) {
-    const workspaceRoot = rootPath.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+    const workspaceRoot = toPosixPath(rootPath).replace(/\/+$/, "").replace(/^\.\//, "");
     if (normalized.startsWith(`${workspaceRoot}/`)) normalized = normalized.slice(workspaceRoot.length + 1);
     else if (normalized === workspaceRoot) normalized = ".";
     if (root.startsWith(`${workspaceRoot}/`)) root = root.slice(workspaceRoot.length + 1);
@@ -153,7 +155,7 @@ export function matchesGlobPath(file: string, searchPath: string, pattern: strin
 
 /** Normalize a caller's `exclude` value for both command-side and JS-side filtering. */
 export function normalizeExcludePattern(exclude: string): string {
-  return exclude.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  return toPosixPath(exclude).replace(/^\.\//, "").replace(/\/+$/, "");
 }
 
 /**
@@ -181,8 +183,8 @@ export function matchesExcludePath(file: string, searchPath: string, exclude: st
  * on the search root; the model and UI should see one form.
  */
 export function normalizeSearchPath(file: string, env: CoreEnv): string {
-  let normalized = file.replace(/\\/g, "/").replace(/\/+$/, "");
-  const root = env.rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  let normalized = toPosixPath(file).replace(/\/+$/, "");
+  const root = toPosixPath(env.rootPath).replace(/\/+$/, "");
   if (root && normalized.startsWith(`${root}/`)) normalized = normalized.slice(root.length + 1);
   else if (root && normalized === root) normalized = ".";
   return normalized.replace(/^\.\//, "");

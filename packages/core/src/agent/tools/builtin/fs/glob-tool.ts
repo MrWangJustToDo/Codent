@@ -3,6 +3,7 @@ import { z } from "zod";
 import { defaultPath } from "../../../../env";
 import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
+import { toPosixPath } from "../../../../utils/posix-path.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
@@ -171,7 +172,7 @@ async function runGlobSearch(
         signal: options.signal,
       });
       if (result.missing) continue;
-      if (result.killed && !result.truncated) {
+      if (result.killed && !result.truncated && result.stdout.length === 0) {
         throw new ExecutionError("timeout", `${binary} was killed before it produced a complete result`);
       }
       // fd exits 1 for a clean no-match, but a malformed glob also exits non-zero with
@@ -192,7 +193,7 @@ async function runGlobSearch(
       // "no candidates" is still a better answer than crashing the tool.
       return "";
     }
-    if (findResult.killed && !findResult.truncated) {
+    if (findResult.killed && !findResult.truncated && findResult.stdout.length === 0) {
       throw new ExecutionError("timeout", "find was killed before it produced a complete result");
     }
     // `find` uses 0 even for no matches. A non-zero status with no stdout is a real
@@ -285,9 +286,7 @@ export const createGlobTool = () => {
         const fileType = directoryPattern ? "directory" : (type ?? "file");
         const fetchCount = skip + take + 1;
         const normalizedExclude = exclude ? normalizeExcludePattern(exclude) : undefined;
-        const absoluteSearchPath = (coreEnv.path ?? defaultPath)
-          .resolve(coreEnv.rootPath, searchPath)
-          .replace(/\\/g, "/");
+        const absoluteSearchPath = toPosixPath((coreEnv.path ?? defaultPath).resolve(coreEnv.rootPath, searchPath));
 
         const searchOptions = {
           type: fileType,

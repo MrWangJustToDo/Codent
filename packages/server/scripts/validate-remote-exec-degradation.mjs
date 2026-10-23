@@ -67,7 +67,7 @@ async function withServer(execFileHandler, run) {
     // The string path the tools must fall back to.
     if (req.url?.includes("/api/command/run")) {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ stdout: "found-one\n", stderr: "", exitCode: 0, durationMs: 1 }));
+      res.end(JSON.stringify({ stdout: "src/a.ts\n", stderr: "", exitCode: 0, durationMs: 1 }));
       return;
     }
     res.writeHead(404, { "content-type": "text/plain" });

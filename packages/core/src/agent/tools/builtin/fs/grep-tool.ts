@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
+import { toPosixPath } from "../../../../utils/posix-path.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
@@ -75,7 +76,7 @@ function stripOuterQuotes(pattern: string): { pattern: string; hadQuotes: boolea
 
 /** The basename part of a path-shaped include glob, for GNU grep's basename-only flag. */
 function includeBasename(glob: string): string {
-  return glob.replace(/\\/g, "/").split("/").pop() ?? glob;
+  return toPosixPath(glob).split("/").pop() ?? glob;
 }
 
 /** Whether an include glob carries path semantics that GNU grep's --include cannot express. */
@@ -280,7 +281,7 @@ async function runGrepSearch(
       signal: options.signal,
     });
     if (!rgResult.missing) {
-      if (rgResult.killed && !rgResult.truncated) {
+      if (rgResult.killed && !rgResult.truncated && rgResult.stdout.length === 0) {
         throw new ExecutionError("timeout", "rg was killed before it produced a complete result");
       }
       const error = failure("rg", rgResult);
@@ -293,7 +294,7 @@ async function runGrepSearch(
       signal: options.signal,
     });
     if (!grepResult.missing) {
-      if (grepResult.killed && !grepResult.truncated) {
+      if (grepResult.killed && !grepResult.truncated && grepResult.stdout.length === 0) {
         throw new ExecutionError("timeout", "grep was killed before it produced a complete result");
       }
       const error = failure("grep", grepResult);
