@@ -102,7 +102,7 @@ export const WorkspaceModeHeader = ({
           </Text>
         ) : null}
         <Text color={COLORS.muted} dimColor>
-          {busyLabel ? "" : SEP}
+          {SEP}
           {pathText ? `${mode}${SEP}${pathText}` : mode}
         </Text>
         {branch ? (
