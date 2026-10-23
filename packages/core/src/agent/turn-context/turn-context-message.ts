@@ -94,6 +94,21 @@ export function formatContextSectionUserContent(section: TurnContextSection, opt
   return `${CONTEXT_OPEN_PREFIX}${section.key}>\n${body}\n${CONTEXT_CLOSE}`;
 }
 
+/**
+ * Recover the synthetic kind from a stable id.
+ *
+ * Kind names are arbitrary strings (extension ids can contain `-`), so a
+ * `^ctx-([^-]+)-` split is not sufficient. Modern ids are
+ * `ctx-<kind>-<8hex>[-<nonce>]`; older persisted ids used a bare numeric nonce.
+ */
+export function syntheticKindFromId(id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  const modern = /^ctx-(.+)-([0-9a-f]{8})(?:-\d+)?$/.exec(id);
+  if (modern) return modern[1];
+  const legacy = /^ctx-(.+)-\d+$/.exec(id);
+  return legacy?.[1];
+}
+
 export function isContextText(text: string | undefined | null): boolean {
   if (!text) return false;
   return text.trimStart().startsWith(CONTEXT_OPEN_PREFIX);

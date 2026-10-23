@@ -246,6 +246,7 @@ export {
   contextKindFromText,
   isContextModelMessage,
   isContextUIMessage,
+  syntheticKindFromId,
   extractContextSection,
   hashTurnContextSection,
   findLatestTurnContextSectionHashes,

@@ -240,4 +240,36 @@ assert.equal(
   assert.equal(channel.messages.length, 1, "no stale reminder is injected into the unrelated turn");
 }
 
+// A pending reminder belongs to its chain: a different tracked call must cancel it,
+// not inject a nudge about a loop the model already left.
+{
+  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "go" }] }]);
+  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
+  const wire = [userMessage("go")];
+  await config(mw, wire);
+  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`); // pending
+  call(mw, "glob", { pattern: "*.ts" }); // different call breaks the chain
+  const out = await config(mw, wire);
+  assert.deepEqual(out, {}, "a different call cancels the pending reminder");
+  assert.equal(channel.messages.length, 1, "no stale repeat reminder is injected");
+}
+
+// Compaction can lower the genuine-user-message count without adding a prompt.
+// That wire change is still a chain boundary; keeping the old count would make the
+// next loop inherit the pre-compaction repetition count.
+{
+  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "first" }] }]);
+  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
+  const wireBefore = [userMessage("first"), { role: "assistant", content: "ok" }, userMessage("second")];
+  await config(mw, wireBefore); // seen = 2
+  call(mw, "grep", { pattern: "foo" });
+  call(mw, "grep", { pattern: "foo" }); // count 2
+  const wireAfter = [{ role: "assistant", content: "summary" }, userMessage("second")];
+  await config(mw, wireAfter); // count drops to 1 -> reset
+  call(mw, "grep", { pattern: "foo" }); // count 1, NOT 3
+  const out = await config(mw, wireAfter);
+  assert.deepEqual(out, {}, "a compaction-shaped wire resets the repeat chain");
+  assert.equal(channel.messages.length, 1, "no reminder from the pre-compaction chain");
+}
+
 console.log("repeat-reminder validation passed");

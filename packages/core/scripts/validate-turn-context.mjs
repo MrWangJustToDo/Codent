@@ -32,6 +32,7 @@ import {
   injectSyntheticMessages,
   isContextModelMessage,
   isContextUIMessage,
+  syntheticKindFromId,
   syntheticMessageId,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   TurnContextController,
@@ -375,6 +376,13 @@ assert.ok(!SUBAGENT_ALLOWED_KINDS.has("codent-memory"), "no extension context fo
 assert.ok(!SUBAGENT_ALLOWED_KINDS.has("instruction_context"), "no instruction context for subagents");
 assert.ok(!SUBAGENT_ALLOWED_KINDS.has("extension_system_append"), "no extension append channel for subagents");
 
+// Extension ids may contain hyphens. The nonce counter must recover the whole kind,
+// not stop at the first dash, or a state cycle back to identical content is deduped.
+assert.equal(syntheticKindFromId("ctx-codent-memory-deadbeef"), "codent-memory");
+assert.equal(syntheticKindFromId("ctx-codent-memory-deadbeef-2"), "codent-memory");
+assert.equal(syntheticKindFromId("ctx-current_date-1"), "current_date");
+assert.equal(syntheticKindFromId("not-a-ctx-id"), undefined);
+
 // Shell prefix constant is the single detection anchor.
 assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
 
@@ -657,6 +665,48 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     2,
     "an old ctx row in the channel must not suppress current_date after compaction"
   );
+}
+
+// Hyphenated extension kinds must count their whole prefix when deriving the
+// admission nonce; otherwise a state cycle back to identical content collides.
+{
+  const { AgentUIChannel, createTurnContextMiddleware } = await import("../dist/dev.mjs");
+  const channel = new AgentUIChannel();
+  let hashes;
+  let admitCount = 0;
+  let current = { key: "codent-memory", content: "<memory_index>a</memory_index>" };
+  const middleware = createTurnContextMiddleware({
+    getFrozenSystemPrompt: () => undefined,
+    getSections: async () => [current],
+    getUIChannel: () => channel,
+    persistMessages: () => {},
+    getManagedAgent: () => null,
+    getAdmittedHashes: () => hashes,
+    setAdmittedHashes: (next) => {
+      hashes = next;
+    },
+    getAdmitMessageCount: () => admitCount,
+    setAdmitMessageCount: (count) => {
+      admitCount = count;
+    },
+  });
+  channel.setMessages([{ id: "u0", role: "user", parts: [{ type: "text", content: "hello" }] }]);
+  const run = async () => {
+    const wire = [{ role: "user", content: "hi" }];
+    const result = await middleware.onConfig({}, { messages: wire });
+    return result.messages ?? wire;
+  };
+  const ids = () =>
+    channel
+      .getMessages()
+      .map((message) => message.id)
+      .filter((id) => id?.startsWith("ctx-codent-memory-"));
+  await run();
+  current = { key: "codent-memory", content: "<memory_index>b</memory_index>" };
+  await run();
+  current = { key: "codent-memory", content: "<memory_index>a</memory_index>" };
+  await run();
+  assert.equal(ids().length, 3, "hyphenated extension kind cycles get fresh nonces");
 }
 
 console.log("turn-context validation passed");

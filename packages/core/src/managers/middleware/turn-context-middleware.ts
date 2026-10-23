@@ -5,6 +5,7 @@ import {
   formatContextSectionUserContent,
   hashTurnContextSection,
   isContextUIMessage,
+  syntheticKindFromId,
 } from "../../agent/turn-context/turn-context-message.js";
 import { buildSystemPromptWithTurnContext, buildProjectInstructionsSection } from "../managed-agent-prompt.js";
 
@@ -132,8 +133,8 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       // each admission gets a unique id even when content repeats (state cycles).
       const kindCounts = new Map<string, number>();
       for (const message of uiMessages) {
-        const match = /^ctx-([^-]+)-/.exec(message.id);
-        if (match) kindCounts.set(match[1], (kindCounts.get(match[1]) ?? 0) + 1);
+        const kind = syntheticKindFromId(message.id);
+        if (kind) kindCounts.set(kind, (kindCounts.get(kind) ?? 0) + 1);
       }
 
       const entries = changed.map(({ section, isUpdate }) => ({

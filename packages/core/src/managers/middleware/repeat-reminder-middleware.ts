@@ -23,7 +23,7 @@
  */
 
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
-import { formatContextSectionUserContent, isContextModelMessage } from "../../agent/turn-context";
+import { formatContextSectionUserContent, isContextModelMessage, syntheticKindFromId } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -161,6 +161,7 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
   let chain: Chain | undefined;
   let pending: string | undefined;
   let seenUserMessages = 0;
+  let seenUserSignature = "";
 
   return defineMiddleware("tools", {
     name: "repeat-reminder",
@@ -170,7 +171,13 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
 
       const canonical = canonicalizeRepeatArguments(hookCtx.args);
       const key = JSON.stringify([toolName, canonical]);
-      const count = chain !== undefined && chain.key === key ? chain.count + 1 : 1;
+      const sameChain = chain !== undefined && chain.key === key;
+      if (!sameChain) {
+        // The pending nudge belongs to the old chain. A different tracked call has
+        // already broken the loop, so injecting it next turn would misattribute it.
+        pending = undefined;
+      }
+      const count = sameChain ? chain!.count + 1 : 1;
       chain = { key, count };
 
       if (thresholdSet.has(count)) {
@@ -182,14 +189,18 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
       const messages = config.messages as ModelMessage[];
 
       // A new user prompt changes the context; repetition across it is not a loop.
-      // Drop any un-delivered reminder too: it belongs to the chain being abandoned,
-      // and injecting it into an unrelated turn would misattribute the loop.
-      const userMessages = messages.filter(isGenuineUserMessage).length;
-      if (userMessages > seenUserMessages) {
+      // The count alone is not enough after compaction (old prompts are dropped), so
+      // also compare the latest prompt's content. Drop any un-delivered reminder too:
+      // it belongs to the chain being abandoned.
+      const genuineUserMessages = messages.filter(isGenuineUserMessage);
+      const signature = genuineUserMessages.at(-1)?.content;
+      const userSignature = signature === undefined ? "" : JSON.stringify(signature);
+      if (genuineUserMessages.length !== seenUserMessages || userSignature !== seenUserSignature) {
         chain = undefined;
         pending = undefined;
       }
-      seenUserMessages = userMessages;
+      seenUserMessages = genuineUserMessages.length;
+      seenUserSignature = userSignature;
 
       if (pending === undefined) return {};
       const content = pending;
@@ -207,9 +218,8 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
       // (the gentle body is constant, the detailed one is stable per tool/args) and
       // `injectSyntheticMessages` dedupes it away — so the second loop got no nudge.
       let kindCount = 0;
-      const prefix = `ctx-${REPEAT_REMINDER_KIND}-`;
       for (const message of ui.getMessages()) {
-        if (typeof message.id === "string" && message.id.startsWith(prefix)) kindCount++;
+        if (syntheticKindFromId(message.id) === REPEAT_REMINDER_KIND) kindCount++;
       }
 
       const { messages: next } = injectSyntheticMessages(

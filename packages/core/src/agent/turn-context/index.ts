@@ -5,6 +5,7 @@ export {
   TURN_CONTEXT_KINDS,
   formatContextSectionUserContent,
   isContextText,
+  syntheticKindFromId,
   contextKindFromText,
   isContextModelMessage,
   isContextUIMessage,
