@@ -16,6 +16,7 @@ import { basename } from "pathe";
 import { resolveCoreEnv } from "../env";
 
 import type { CoreEnv, ResolvedCoreEnv } from "../env";
+import type { LoadedModelEntry } from "../models/config/models-config.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 
 export interface AgentRuntimeOptions {
@@ -34,6 +35,15 @@ export interface AgentRuntimeOptions {
    * destructive teardown to the server.
    */
   ownsEnv?: boolean;
+  /**
+   * The model catalog this runtime may run: one `loadModels(...)` read, carried on the runtime so
+   * managers can answer "does this runtime offer model X?" without resolving anything again.
+   *
+   * `CodentAgent` also exposes it (`readModels()`); agents read it here when they adopt a model
+   * they did not choose themselves (a resumed session's persisted model). Absent when the runtime
+   * has no model plane, which makes such a selection trusted instead of checked.
+   */
+  models?: { entries: readonly LoadedModelEntry[] };
 }
 
 export class AgentRuntime {
@@ -43,6 +53,8 @@ export class AgentRuntime {
   readonly rootPath: string;
   /** True when `dispose` may call `env.destroy()`. See {@link AgentRuntimeOptions.ownsEnv}. */
   readonly ownsEnv: boolean;
+  /** The model catalog this runtime may run, when the host read one. See {@link AgentRuntimeOptions.models}. */
+  readonly models?: { entries: readonly LoadedModelEntry[] };
 
   constructor(options: AgentRuntimeOptions) {
     // Resolve defaults once so tools read a fully-formed env off the runtime.
@@ -51,5 +63,6 @@ export class AgentRuntime {
     this.rootPath = options.rootPath ?? this.env.rootPath;
     this.name = options.name?.trim() || basename(this.rootPath) || "agent";
     this.ownsEnv = options.ownsEnv ?? false;
+    this.models = options.models;
   }
 }

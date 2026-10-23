@@ -23,6 +23,8 @@ import { registerModelProvider } from "../../provider/model-provider-registry.js
 import { createDirectModelProvider } from "../../provider/model-provider.js";
 import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../../provider/remote-model-provider.js";
 
+import { selectModel } from "./model-selection.js";
+
 import type { ModelInfo, ModelStyle } from "../types.js";
 
 // ============================================================================
@@ -158,10 +160,10 @@ export interface LoadedModelEntry {
   models: string[];
   /**
    * Remote entries only: the model the provider server serves (its `/api/provider/info`
-   * `model`). Remote mode forces this onto every request
-   * ({@link resolveModelConfigFromProvider}), so it — not the client's recorded
-   * selection — is the entry's effective model, and {@link loadModels} reports it as
-   * `active.model`. Absent when the server declares none.
+   * `model`). It is the FALLBACK for a selection the entry does not offer — the client picks
+   * from {@link LoadedModelEntry.models} and `selectModel` drops a pick outside it — so
+   * {@link loadModels} reports `active.model` as the selection when it is selectable and as
+   * this model otherwise. Absent when the server declares none.
    */
   servedModel?: string;
 }
@@ -470,17 +472,37 @@ export async function loadModels(source: ModelsConfigSource): Promise<LoadedMode
   if (!config) return null;
   const entries = await loadModelEntries(config);
   let active: ModelsConfigActive = config.active ?? { entryIndex: 0 };
-  // A remote entry cannot honor a client-side model choice: the provider forces its own
-  // served model onto every request ({@link resolveModelConfigFromProvider}), so the
-  // recorded selection — a file's `active.model`, or the server's models.json `active`
-  // echoed by {@link resolveModelsConfigFromProvider} — is not what runs. Reporting it
-  // made the host display (footer / help) and the `/models` "(current)" marker name a
-  // model the client never sends.
+  // The recorded selection is the client's choice, so it stands — unless the entry does not offer
+  // it. Then the entry's served model is what a request will carry (`selectModel` applies the same
+  // rule on the wire), and reporting the un-offered id would make the host display (footer / help)
+  // and the `/models` "(current)" marker name a model this client never sends.
   const activeEntry = entries[active.entryIndex];
-  if (activeEntry?.servedModel && activeEntry.servedModel !== active.model) {
-    active = { ...active, model: activeEntry.servedModel };
+  if (activeEntry) {
+    const selection = selectModel({
+      requested: active.model,
+      fallback: activeEntry.servedModel,
+      allowed: activeEntry.models,
+    });
+    if (selection.model && selection.model !== active.model) active = { ...active, model: selection.model };
   }
   return { config, entries, active };
+}
+
+/**
+ * Every model id the runtime's catalog advertises, or `undefined` when it advertises none.
+ *
+ * This is the allowlist a *session* checks a model against when it adopts a selection it did not
+ * make itself (a resumed session's persisted model — see `ManagedAgent.applyPersistedModel`).
+ * The union across entries is deliberate: the catalog says which ids this runtime can run, and
+ * which entry serves the running one is the session's separate decision.
+ */
+export function selectableModelIds(
+  catalog: { entries: readonly Pick<LoadedModelEntry, "models">[] } | null | undefined
+): readonly string[] | undefined {
+  if (!catalog) return undefined;
+  const ids = new Set<string>();
+  for (const entry of catalog.entries) for (const id of entry.models) if (id) ids.add(id);
+  return ids.size > 0 ? [...ids] : undefined;
 }
 
 // ============================================================================

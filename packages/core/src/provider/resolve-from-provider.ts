@@ -1,8 +1,12 @@
 /**
  * Resolve model connection using the registered {@link ModelProvider}.
  *
- * When the provider reports `mode: "remote"`, baseURL and apiKey are forced from
- * the provider so clients cannot bypass the key-holding remote provider.
+ * When the provider reports `mode: "remote"`, baseURL / apiKey / style are forced from the
+ * provider so clients cannot bypass the key-holding remote provider. The MODEL is not: a remote
+ * provider supplies a selectable catalog, and the client picks from it (see
+ * {@link selectModel}). A pick the provider does not offer falls back to the model it serves
+ * rather than being forwarded to be refused, and the fallback rides back on the result so the
+ * caller can report it.
  */
 
 import {
@@ -10,6 +14,7 @@ import {
   type ResolveModelConfigInput,
   type ResolvedModelConfig,
 } from "../models/config/model-config.js";
+import { selectModel, type ModelSelection } from "../models/config/model-selection.js";
 
 import { getModelProvider } from "./model-provider-registry.js";
 import { type ModelProvider, type ModelProviderMode } from "./model-provider.js";
@@ -24,6 +29,11 @@ function asStyle(value: string | undefined): ModelStyle | undefined {
 export interface ResolvedModelConfigFromProvider extends ResolvedModelConfig {
   /** Mode reported by the registered {@link ModelProvider}. */
   providerMode: ModelProviderMode;
+  /**
+   * Set when the client's model was dropped because the provider does not offer it (remote mode),
+   * naming both sides so the caller can log the substitution instead of hiding it.
+   */
+  modelFallback?: ModelSelection["fallback"];
 }
 
 /**
@@ -48,18 +58,24 @@ export async function resolveModelConfigFromProvider(
   };
 
   if (providerConn.mode === "remote") {
-    // Remote mode: never allow client baseURL/apiKey (or mismatched style/model) to bypass the
-    // server. The server is the single source of truth for model too — otherwise a non-empty
-    // local model (e.g. a default like "gpt-4o-mini") leaks into the forwarded request body.
+    // Remote mode: never allow client baseURL/apiKey (or mismatched style) to bypass the server.
+    // The MODEL is the client's: the provider advertises a catalog and the proxy validates
+    // against it, so a selection from that catalog is what a request must carry ("silently
+    // swapping the model in a client's request body is the worse failure" — the same rule the
+    // proxy states on its own side). A selection the provider does NOT offer falls back to the
+    // served model, and the substitution is reported rather than hidden.
+    const selection = selectModel({
+      requested: merged.model,
+      fallback: providerConn.model,
+      allowed: providerConn.models,
+    });
     merged.baseURL = providerConn.baseURL;
     merged.apiKey = providerConn.apiKey;
     merged.style = providerConn.style;
-    merged.model = providerConn.model;
-  }
+    merged.model = selection.model;
 
-  const resolved = await resolveModelConfig(merged);
+    const resolved = await resolveModelConfig(merged);
 
-  if (providerConn.mode === "remote") {
     // resolveModelConfig may overwrite baseURL from models.dev metadata —
     // re-force the remote endpoint so LLM traffic stays on the provider server.
     return {
@@ -68,14 +84,15 @@ export async function resolveModelConfigFromProvider(
         style: providerConn.style,
         baseURL: providerConn.baseURL,
         apiKey: providerConn.apiKey,
-        // Server is the single source of truth for model in remote mode.
-        model: providerConn.model,
+        model: selection.model,
       },
       modelInfo: resolved.modelInfo ? { ...resolved.modelInfo, baseURL: undefined } : undefined,
       providerMode: "remote",
+      ...(selection.fallback ? { modelFallback: selection.fallback } : {}),
     };
   }
 
+  const resolved = await resolveModelConfig(merged);
   return {
     ...resolved,
     providerMode: providerConn.mode,

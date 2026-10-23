@@ -231,6 +231,8 @@ export {
   resolveModelsConfig,
   resolveModelsConfigFromProvider,
   saveModelsConfig,
+  selectModel,
+  selectableModelIds,
   writeModelsConfigFile,
 } from "./models";
 
@@ -252,6 +254,8 @@ export type {
   ModelPricing,
   ModelStyle,
   ModelConnection,
+  ModelSelection,
+  ModelSelectionRequest,
   ModelsConfig,
   ModelsConfigActive,
   ModelsConfigEntry,

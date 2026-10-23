@@ -27,6 +27,15 @@ export interface ModelProviderConnection {
   model: string;
   baseURL: string;
   apiKey: string;
+  /**
+   * Selectable model ids the plane advertises (`/api/provider/info`'s model list, remote mode).
+   *
+   * The MODEL a session runs is the client's choice from this list — the provider supplies the
+   * connection and every id the server will accept, not the selection. `undefined` / empty means
+   * the plane advertises no list, which makes a client request trusted rather than checked (see
+   * `selectModel`); `model` remains the fallback for a request the list does not offer.
+   */
+  models?: readonly string[];
 }
 
 /** LLM connection source — orthogonal to {@link import("../env").CoreEnv}. */

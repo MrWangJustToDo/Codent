@@ -214,8 +214,9 @@ const ALLOWED_EDGES = {
   // cannot widen into a blanket.
   "provider → models": {
     mode: "allow",
-    reason: "resolveModelConnection/resolveModelConfig + models.dev metadata types",
-    onlyTargets: ["config/model-config", "types"],
+    reason:
+      "resolveModelConnection/resolveModelConfig + models.dev metadata types, and the model-selection rule (whose choice wins) that the remote merge applies",
+    onlyTargets: ["config/model-config", "config/model-selection", "types"],
   },
   "provider → env": { mode: "allow", reason: "CoreEnv.fetch for models.dev lookup" },
   "provider → utils": { mode: "allow", reason: "ids" },

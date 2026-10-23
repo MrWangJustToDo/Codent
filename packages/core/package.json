@@ -126,6 +126,7 @@
     "validate:model-capabilities": "pnpm run build && node scripts/validate-model-capabilities.mjs",
     "validate:capability-unknown-vs-none": "pnpm run build && node scripts/validate-capability-unknown-vs-none.mjs",
     "validate:model-config": "pnpm run build && node scripts/validate-model-config.mjs",
+    "validate:model-selection": "pnpm run build && node scripts/validate-model-selection.mjs",
     "validate:core-no-env-config": "node scripts/validate-core-no-env-config.mjs",
     "validate:context-fill-tokens": "pnpm run build && node scripts/validate-context-fill-tokens.mjs",
     "validate:core-public-exports": "pnpm run build && node scripts/validate-core-public-exports.mjs",

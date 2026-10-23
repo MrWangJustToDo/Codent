@@ -74,6 +74,8 @@ import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
+import { selectModel } from "../models/config/model-selection.js";
+import { selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { generateId } from "../utils/generate-id.js";
 
@@ -1056,16 +1058,38 @@ export class ManagedAgent {
   /**
    * Adopt the model a resumed session was persisted with.
    *
-   * No-op under remote-provider: there the provider server owns the model (see
-   * {@link setModel}), so a local override would desync the connection. Also a no-op
-   * when the persisted model already matches the live config.
+   * The persisted model is a CLIENT choice (it is what `/models` last wrote), so it stands —
+   * unless this runtime's catalog does not offer it. Then the model the session already runs
+   * (`config.model`, resolved at bootstrap) is the fallback, because a resume that reintroduces an
+   * id the provider refuses would fail on the first request rather than degrade. Under
+   * remote-provider the STYLE is not adopted: the server owns it, and a persisted `anthropic`
+   * style against an OpenAI-style proxy is a hard error.
+   *
+   * A no-op when the effective model already matches the live config.
    */
   applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): void {
-    if (this.config.providerMode === "remote") return;
-    const sameModel = next.model === this.config.model;
-    const sameStyle = !next.modelStyle || next.modelStyle === this.config.modelStyle;
+    const remote = this.config.providerMode === "remote";
+    const selection = remote
+      ? selectModel({
+          requested: next.model,
+          fallback: this.config.model,
+          allowed: selectableModelIds(this.runtime?.models),
+        })
+      : { model: next.model };
+
+    if (selection.fallback) {
+      this.log?.warn(
+        "agent",
+        "Persisted model is not in this provider's catalog; keeping the session's model",
+        selection.fallback
+      );
+    }
+
+    const style = remote ? this.config.modelStyle : next.modelStyle;
+    const sameModel = selection.model === this.config.model;
+    const sameStyle = !style || style === this.config.modelStyle;
     if (sameModel && sameStyle) return;
-    this.setModel({ model: next.model, ...(next.modelStyle ? { modelStyle: next.modelStyle } : {}) });
+    this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) });
   }
 
   /** Current reasoning-effort level, or undefined when unset (model default). */
@@ -1114,9 +1138,12 @@ export class ManagedAgent {
    * live session are preserved. Only the provided fields are changed; omitted
    * ones keep their current value.
    *
-   * NOTE: local provider mode only. Under remote-provider the server re-supplies
-   * the model on the next (re)create, so callers should gate this on
-   * `providerMode !== "remote"` (see resolve-from-provider.ts).
+   * Under remote-provider the switch is honoured like any other: the adapter is rebuilt from
+   * `config.model`, so the new id is what the proxy receives. What that plane constrains is the
+   * CATALOG, not the seat of the decision — a switch to an id the provider does not advertise is
+   * refused by the proxy (`model_not_allowed`), which is why the callers that can see the catalog
+   * (`/models`, `applyPersistedModel`, `resolveModelConfigFromProvider`) resolve the choice through
+   * `selectModel` first.
    */
   setModel(next: {
     model?: string;

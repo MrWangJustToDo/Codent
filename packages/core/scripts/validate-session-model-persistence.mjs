@@ -16,7 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AgentManager, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
+import { AgentManager, CodentAgent, createLocalAgentSessionHost, registerCoreEnv } from "../dist/index.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
@@ -29,7 +29,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-model-"));
 const toAbs = (p) => (path.isAbsolute(p) ? p : path.join(rootPath, p));
 
-registerCoreEnv({
+/** The mock workspace env — kept in a variable because the remote-provider case builds a runtime from it. */
+const mockEnv = {
   rootPath,
   getPlatform: async () => "linux",
   getArch: async () => "x64",
@@ -70,7 +71,9 @@ registerCoreEnv({
   runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
   exec: async () => ({ stdout: "", stderr: "", code: 0 }),
   fetch: async () => new Response(),
-});
+};
+
+registerCoreEnv(mockEnv);
 
 const waitFor = async (check, label) => {
   for (let i = 0; i < 50; i++) {
@@ -131,23 +134,81 @@ assert.equal(managed2.getL1State().model, "switched-model");
 assert.equal(created2.session.getSnapshot().model, "switched-model");
 
 // ============================================================================
-// 3. remote-provider keeps the provider-supplied model
+// 3. remote-provider: the persisted model is adopted when the catalog offers it
 // ============================================================================
+//
+// The client owns the model under remote-provider too (the provider supplies the CATALOG and
+// the proxy), so a resumed session must come back on the model it was switched to — and fall
+// back to the model the session already runs when the catalog no longer offers it, because that
+// id would be refused on the first request.
 
 manager2.releaseSessionOwnership(sessionId, managed2.id);
 
-const manager3 = new AgentManager();
-const host3 = createLocalAgentSessionHost({ manager: manager3 });
-const created3 = await host3.create({
-  name: "model-remote",
+const REMOTE_CATALOG = ["provider-model", "switched-model"];
+const remoteProvider = {
+  getConnection: async () => ({
+    mode: "remote",
+    style: "openai",
+    model: "provider-model",
+    baseURL: "http://remote/api/provider/openai/v1",
+    apiKey: "remote-provider",
+    models: REMOTE_CATALOG,
+  }),
+};
+
+// (a) The catalog still offers the persisted model → the resume comes back on it. The STYLE is
+// deliberately not adopted under remote-provider (the proxy owns it; a persisted `anthropic`
+// style against an OpenAI-style proxy is a hard `style_mismatch`), which
+// `validate:resolve-from-provider` pins on the connection side.
+const offering = await CodentAgent.create({
+  env: mockEnv,
+  provider: remoteProvider,
+  models: { entries: [{ type: "remote", style: "openai", baseURL: "", models: REMOTE_CATALOG }] },
+});
+const offeringCreated = await offering.host.create({
+  name: "model-remote-offered",
   model: "provider-model",
   modelStyle: "openai",
   providerMode: "remote",
   resumeSessionId: sessionId,
 });
-const managed3 = manager3.getAgent(created3.session.getSnapshot().agentId);
-assert.equal(managed3.config.model, "provider-model", "remote-provider must keep its own model");
-assert.notEqual(managed3.getL1State().model, "switched-model");
+const offeringAgent = offering.host.connect(offeringCreated.session.id);
+assert.equal(
+  offeringAgent?.getSnapshot().model,
+  "switched-model",
+  "remote-provider adopts a persisted model the catalog still offers"
+);
+await offering.dispose();
+
+// (b) The catalog no longer offers it → the session keeps the model it was created with.
+const retired = await CodentAgent.create({
+  env: mockEnv,
+  provider: {
+    getConnection: async () => ({
+      mode: "remote",
+      style: "openai",
+      model: "provider-model",
+      baseURL: "http://remote/api/provider/openai/v1",
+      apiKey: "remote-provider",
+      models: ["provider-model"],
+    }),
+  },
+  models: { entries: [{ type: "remote", style: "openai", baseURL: "", models: ["provider-model"] }] },
+});
+const retiredCreated = await retired.host.create({
+  name: "model-remote-retired",
+  model: "provider-model",
+  modelStyle: "openai",
+  providerMode: "remote",
+  resumeSessionId: sessionId,
+});
+const retiredAgent = retired.host.connect(retiredCreated.session.id);
+assert.equal(
+  retiredAgent?.getSnapshot().model,
+  "provider-model",
+  "a persisted model the catalog dropped must not be revived"
+);
+await retired.dispose();
 
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 console.log("session-model-persistence validation passed");

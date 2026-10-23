@@ -142,6 +142,10 @@ export class CodentAgent {
       ...(options.name ? { name: options.name } : {}),
       ...(options.rootPath ? { rootPath: options.rootPath } : {}),
       ...(options.ownsEnv !== undefined ? { ownsEnv: options.ownsEnv } : {}),
+      // The catalog travels with the runtime as well as with this handle: agents consult it when
+      // they adopt a model they did not choose themselves (resume), and `readModels()` stays the
+      // host-facing read of the same value.
+      ...(options.models ? { models: options.models } : {}),
     };
     // An injected manager already carries the runtime its agents actually use. Reusing it is the
     // only way `getEnv()` / the provider / the model catalog describe the same workspace as the

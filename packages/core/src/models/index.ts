@@ -22,6 +22,9 @@ export {
   type ResolvedModelConfig,
 } from "./config/model-config.js";
 
+// One rule for "whose model choice wins" (client request vs the model a plane already serves).
+export { selectModel, type ModelSelection, type ModelSelectionRequest } from "./config/model-selection.js";
+
 export {
   MODELS_CONFIG_DIR,
   MODELS_CONFIG_FILE,
@@ -37,6 +40,7 @@ export {
   resolveModelsConfig,
   resolveModelsConfigFromProvider,
   saveModelsConfig,
+  selectableModelIds,
   writeModelsConfigFile,
   type DirectModelsConfigEntry,
   type LoadedModelEntry,
