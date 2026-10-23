@@ -78,6 +78,8 @@ agent SHALL 为每个权限请求提供 ACP `options`，其 `kind` 至少覆盖 
 
 当工具需要结构化用户输入（`ask_user`）且 client 声明了 `elicitation` 能力时，agent SHALL 调用 `elicitation/create`（form 模式），把返回的结构化数据作为 `ask_user` 的答案。`ask_user` 的问题/字段 SHALL 映射为 elicitation 的 JSON Schema 形态。client 返回 `decline` / `cancel`，或请求本身失败（连接异常、client 未实现）时，agent SHALL 以 `cancelled: true` 的 tool result 结算该交互，MUST NOT 把它当作空字符串回答，也 MUST NOT 让运行永久停在 `awaiting_user`。
 
+client 未声明 form elicitation 时，agent SHALL 把问题（含编号选项）作为一条 agent message 呈现，并 **把当前 `session/prompt` 以 `end_turn` 结算、同时保持该 tool 处于 pending**：答案由下一条纯文本 `session/prompt` 提供，并以 `addToolResult` 结算（编号映射到选项标签）。该应答 prompt SHALL NOT 进入会话的 prompt 队列（挂起的 `ask_user` 使状态保持 ACTIVE，排队在它之后的应答永远无法出队）；它以消息到达即处理的路径执行，并作为后续 prompt 的队列尾部。收到 `session/cancel`、连接关闭或等待上限时，仍 SHALL 以 `cancelled: true` 结算。
+
 #### Scenario: 支持 elicitation 时使用表单
 
 - **WHEN** `ask_user` 需要用户选择，且 client 声明了 form elicitation
@@ -86,8 +88,10 @@ agent SHALL 为每个权限请求提供 ACP `options`，其 `kind` 至少覆盖 
 #### Scenario: 不支持 elicitation 时降级
 
 - **WHEN** `ask_user` 需要输入但 client 未声明 `elicitation`
-- **THEN** agent SHALL 以一条 agent message 呈现问题（说明当前 client 不支持结构化输入）
-- **AND** SHALL 以"取消/默认"方式收束该交互，MUST NOT 使运行永久挂起
+- **THEN** agent SHALL 以一条 agent message 呈现问题（含编号选项）
+- **AND** SHALL 以 `end_turn` 结算当前 prompt，并保持该 tool 为 pending，使 client 能够提交答案
+- **AND** 下一条纯文本 `session/prompt` SHALL 作为该问题的答案（`addToolResult`），MUST NOT 排队在挂起的 turn 之后
+- **AND** 若无答案且在等待上限内未收到，SHALL 以 `cancelled: true` 结算，运行 MUST NOT 停在 `awaiting_user`
 
 #### Scenario: 用户取消表单
 

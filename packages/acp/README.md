@@ -269,9 +269,12 @@ it is approving is not a decision anyone can make. `allow_always` / `reject_alwa
 per session and keyed by tool identity (for `run_command`, the leading program, so allowing `git`
 does not allow `rm`); a matching future approval is answered without another dialog. `ask_user`
 becomes an `elicitation/create` form. When the client does not advertise `elicitation.form`, the
-question (and its numbered options) is posted as an agent message and the tool stays pending: the next
-plain-text prompt becomes its answer (`addToolResult`), instead of cancelling the question at t=0. A
-slash command is still a command; the question remains pending.
+question (and its numbered options) is posted as an agent message and **the turn is handed back**
+(`end_turn`) with the tool still pending: the next plain-text prompt becomes its answer
+(`addToolResult`, numbered options map to their labels) and resumes the run. That prompt is routed
+**outside the prompt queue** — a parked `ask_user` keeps the status ACTIVE, so an answer queued behind
+that turn could never be dequeued (it was a deadlock, not a pause). A slash command is still a
+command: it force-submits, which settles the parked question as cancelled.
 
 Every suspend point settles. A client-cancelled permission dispatches `respondApproval(false)`; a
 declined/cancelled/failed elicitation settles the tool as `cancelled`; `session/cancel` and
@@ -377,7 +380,7 @@ the model command (and to the `thought_level` selector above).
 | model selector (`configOptions`, `category: "model"`) | ✅ whenever a model catalog is readable: a single-model plane advertises one fixed value; `.agents/config/models.json` (or a multi-model provider) yields a switchable list. The legacy `models` field and `session/set_model` are still served for older pickers — `set_model` answers with the updated `models` + `configOptions`, and `load`/`resume` carry `models` too, so a picker cannot stay on the previous model |
 | thinking-depth selector (`configOptions`, `category: "thought_level"`) | ✅ for a model that advertises reasoning levels; absent otherwise |
 | `session/request_permission` | ✅ approvals → four-option round-trip; cancel/timeout/disconnect settle as a denial; `allow_always` / `reject_always` are remembered per session |
-| `elicitation/create` | ✅ `ask_user` (multi-select included; the next prompt answers when the client has no form support); decline/cancel/empty-accept/failure settle as a cancelled tool result |
+| `elicitation/create` | ✅ `ask_user` (multi-select included); without form support the question is posted as text and the turn ends so the next prompt can answer it; decline/cancel/empty-accept/failure settle as a cancelled tool result |
 | `compaction_update` / `compaction_summary_chunk` / `notice` | ✅ gated by the client capability (open as `in_progress`, stream the summary, close as `completed` / `failed` / `cancelled`) |
 | `subagent_update` + child sessions | ✅ gated by `subagents` (announce → patch; child transcripts under the child id; the parent `task` row is the formatted result) — see [Subagents](#subagents) |
 | child ownership | ✅ children are absent from `session/list`; `load` / `resume` / `prompt` / `fork` refuse a child id; `close` / `delete` are no-ops and never destroy one |

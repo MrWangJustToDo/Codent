@@ -154,7 +154,7 @@ Use `/whoami` or `/status` in chat to learn your platform user id.
 | `agent_message_chunk` / `agent_thought_chunk` | streaming reply / thinking (subject to the display mode) |
 | `tool_call` / `tool_call_update` | tool rows; streamed command output where supported; long tool text is subject to `[display] tool_max_len` |
 | `session/request_permission` | approve / deny buttons (four standard options) |
-| `elicitation/create` (`ask_user`) | cc-connect does **not** declare the elicitation capability, so the fallback runs: the question and its numbered options are posted as an agent message and the tool stays pending. The next plain-text message answers it (the tool result), rather than starting a new turn; a slash command is still a command. |
+| `elicitation/create` (`ask_user`) | cc-connect does **not** declare the elicitation capability, so the fallback runs: the question and its numbered options are posted as an agent message, the turn ends (`end_turn`) with the tool still pending, and the next plain-text message answers it (the tool result) and resumes the run. That answering message is not queued behind the parked turn; a slash command is still a command (it force-submits and settles the question as cancelled). |
 | `modes` / `set_mode` | `/mode` works (cc-connect reads the legacy field and calls `session/set_mode`) |
 | `configOptions` (`model`, `thought_level`) | not projected by cc-connect; `/model` targets its own provider registry. Use the agent's `/models` command (it is forwarded as a prompt). |
 | `available_commands_update` | not projected; `/help` lists cc-connect's commands only. Agent commands such as `/models` still work when typed (unknown commands are forwarded). |
@@ -172,8 +172,9 @@ Run these after configuring; do not declare the migration done until all pass.
 1. **Prompt / streaming** — send a message; the reply streams (or updates in place) and finishes.
 2. **Tools** — ask for a file read and a command; tool rows and their results appear.
 3. **Approval** — trigger a write; approve/deny buttons appear; each resolves the run.
-4. **`ask_user` fallback** — trigger it; the question appears as an agent message and the tool ends
-   cancelled (cc-connect does not implement the elicitation form).
+4. **`ask_user` fallback** — trigger it; the question appears as an agent message, the turn ends with
+   the question still pending, and a reply (option number or free text) settles the tool and resumes
+   the run (cc-connect does not implement the elicitation form).
 5. **Model** — `/models` (forwarded to the agent) lists and switches a model when `models.json`
    exists; a single-model setup reports one fixed value.
 6. **Mode / resume** — `/mode` switches the mode; restart cc-connect, then `/list` + `/switch` restores
@@ -207,7 +208,9 @@ Run these after configuring; do not declare the migration done until all pass.
   consumed as a cc-connect command.
 - **A write has no approval prompt** — check the selected cc-connect `/mode` and whether the bridge
   forwards `session/request_permission`.
-- **`ask_user` becomes a normal message** — expected; cc-connect does not implement elicitation.
+- **`ask_user` becomes a normal message** — expected; cc-connect does not implement elicitation. The
+  turn ends so the reply can answer the question; if the reply never comes, the question times out
+  and is cancelled.
 - **Images are not understood** — cc-connect passes a file path, not image content; use a model that
   can read files (and check the attachment directory is inside the workspace).
 

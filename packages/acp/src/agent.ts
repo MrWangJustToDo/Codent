@@ -27,7 +27,7 @@ import { createHash } from "node:crypto";
 import { createChildProjector, type ChildProjectorHandle } from "./child-projector.js";
 import { commandsFromSnapshot, dispatchSlashCommand, parseSlashCommand } from "./commands.js";
 import { promptBlocksToContent, type PromptCaps } from "./content.js";
-import { createInteractionHandlers, type InteractionHandlers } from "./interactions.js";
+import { createInteractionHandlers, hasPendingTextAsk, type InteractionHandlers } from "./interactions.js";
 import { mapAcpMcpServers } from "./mcp.js";
 import { resolveRoot } from "./paths.js";
 import { AcpProjector } from "./projector.js";
@@ -679,6 +679,15 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
 
   app.onRequest(methods.agent.initialize, (ctx) => {
     initCaps = ctx.params.clientCapabilities;
+    // The interaction-facing capabilities, as one line on stderr: a tool path that looks wrong (a
+    // picker that never appears, a question that degrades to plain text) is almost always a
+    // capability the client never declared, and there was no way to see that from the outside.
+    // Shape only — booleans, never values.
+    process.stderr.write(
+      `[codent-acp] client capabilities: elicitation.form=${Boolean(initCaps?.elicitation?.form)} ` +
+        `notices=${Boolean(initCaps?.session?.notices)} compaction=${Boolean(initCaps?.session?.compaction)} ` +
+        `subagents=${Boolean(initCaps?.subagents)}\n`
+    );
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
@@ -1288,18 +1297,42 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     // A prompt arriving while the turn is SUSPENDED on the client (approval / form elicitation) is
     // force-submit: the answer it waits for was replaced by typing, so queueing waits on a client
     // that will never answer. The ONE exception is a text-mode question (a client without form
-    // elicitation): its answer IS a plain prompt, so let `runPrompt` settle the tool instead of
-    // cancelling the question and starting a new turn.
+    // elicitation): its answer IS a plain prompt — but that prompt MUST NOT join `bridge.chain`,
+    // because the turn it would queue behind is the very turn it answers. A parked `ask_user` keeps
+    // the status ACTIVE, so that turn waits for the answer and the queue never drains: the answer
+    // was unreachable until the interaction timed out.
     const answerText =
       ctx.params.prompt.length === 1 && ctx.params.prompt[0]?.type === "text"
         ? ctx.params.prompt[0].text.trim()
         : undefined;
-    const textAskPending =
+    const answersTextAsk =
       Boolean(answerText) &&
       !answerText?.startsWith("/") &&
       bridge.pendingApprovals.size === 0 &&
-      [...bridge.pendingAskUser.values()].every((entry) => entry.mode === "text");
-    if (bridge.pending.size > 0 && !textAskPending) await interruptBridge(bridge);
+      hasPendingTextAsk(bridge);
+    if (answersTextAsk) {
+      // Deliberately NOT chained: `bridge.chain` already holds the suspended turn. It becomes the
+      // chain's new tail instead, so a later prompt still serializes behind the resumed run rather
+      // than starting a second turn on the same session.
+      const answered = (async () => {
+        if (TRACE_UPDATES) {
+          process.stderr.write(
+            `[codent-acp] <- session/prompt ${ctx.params.sessionId} (answers a text-mode ask_user)\n`
+          );
+        }
+        if (await answerPendingTextAsk(bridge, answerText ?? "")) {
+          // The tool result resumes the parked run, and this prompt owns it until the TURN ends.
+          await waitForTurnEnd(bridge);
+          return { stopReason: stopReasonFor(bridge) };
+        }
+        // The question was settled out of band between the check and here: an ordinary prompt.
+        if (bridge.pending.size > 0) await interruptBridge(bridge);
+        return runPrompt(bridge, ctx.params);
+      })();
+      bridge.chain = answered.catch(() => undefined);
+      return answered;
+    }
+    if (bridge.pending.size > 0) await interruptBridge(bridge);
     const run = bridge.chain.then(async () => {
       if (TRACE_UPDATES) process.stderr.write(`[codent-acp] <- session/prompt ${ctx.params.sessionId}\n`);
       const startedAt = Date.now();
@@ -1419,10 +1452,17 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   /** Resolve when the turn is over (not merely suspended), or when this session was cancelled.
-   *  A hang here blocks the client's next submission (`bridge.chain` serializes prompts). */
-  const waitForTurnEnd = (bridge: { session: AgentSession; cancelled: boolean }): Promise<void> =>
+   *  A hang here blocks the client's next submission (`bridge.chain` serializes prompts).
+   *
+   *  A text-mode question is the one suspend point that must NOT be waited on, for that same reason:
+   *  its answer arrives as the next `session/prompt`, so this turn has to end (`end_turn`) and hand
+   *  the pen back. Waiting for the status to leave ACTIVE kept that answer queued behind the turn
+   *  that was waiting for it — a deadlock, not a pause. The tool row stays pending until the answer
+   *  arrives (or the interaction timeout settles it). */
+  const waitForTurnEnd = (bridge: SessionBridge): Promise<void> =>
     new Promise((resolve) => {
-      const isOver = (): boolean => bridge.cancelled || !isActiveStatus(bridge.session.getSnapshot().status);
+      const isOver = (): boolean =>
+        bridge.cancelled || hasPendingTextAsk(bridge) || !isActiveStatus(bridge.session.getSnapshot().status);
       if (isOver()) {
         resolve();
         return;

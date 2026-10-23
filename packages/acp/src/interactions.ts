@@ -141,6 +141,18 @@ export function approvalPolicyKey(
   return `${approval.toolName}:${program}`;
 }
 
+/**
+ * Whether the session is parked on a TEXT-mode question — the no-form fallback, where the answer
+ * arrives as the NEXT plain prompt instead of as a client request.
+ *
+ * The owning turn must END when this is true (see `waitForTurnEnd`): that answer prompt cannot be
+ * queued behind the very turn it answers, or the queue never drains.
+ */
+export function hasPendingTextAsk(bridge: Pick<InteractionBridge, "pendingAskUser">): boolean {
+  for (const entry of bridge.pendingAskUser.values()) if (entry.mode === "text") return true;
+  return false;
+}
+
 export function createInteractionHandlers(context: InteractionHandlerContext): InteractionHandlers {
   const { client, emit } = context;
   // A zero/negative timeout would fire on the next tick and cancel every interaction; clamp to a

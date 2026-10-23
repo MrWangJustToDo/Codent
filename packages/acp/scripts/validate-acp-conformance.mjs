@@ -33,6 +33,7 @@ import {
 } from "../dist/index.mjs";
 
 import { createChecker, finish } from "./acp-report.mjs";
+import { TOOL_CALL, makeHost, makeSession, runClient } from "./acp-session-double.mjs";
 import { baseSnapshot } from "./session-fixture.mjs";
 
 const checker = createChecker();
@@ -142,112 +143,10 @@ check("tool status: approval-responded is in progress", toolStatusFor("approval-
 // ===========================================================================
 // B. In-process session doubles
 // ===========================================================================
-
-/**
- * A session double whose `dispatch` is a per-test hook.
- *
- * `subscribe` delivers the retained `messages` value synchronously, exactly like core — that is
- * what makes the cold-resume check meaningful.
- */
-function makeSession({ id, diskId = `ses_${id}`, messages = [], model, modelInfo, retained = false, onCommand }) {
-  let snap = baseSnapshot(id, {
-    activeSessionId: diskId,
-    messages,
-    ...(model ? { model } : {}),
-    ...(modelInfo ? { modelInfo } : {}),
-  });
-  const listeners = new Set();
-  const dispatched = [];
-  const emit = (channel, payload) => {
-    for (const listener of listeners) listener({ channel, payload, ts: Date.now() });
-  };
-  const api = {
-    id,
-    dispatched,
-    emit,
-    setSnapshot(overrides) {
-      snap = baseSnapshot(id, { activeSessionId: diskId, ...overrides });
-      return snap;
-    },
-    get snapshot() {
-      return snap;
-    },
-    get diskId() {
-      return diskId;
-    },
-  };
-  const session = {
-    id,
-    getSnapshot: () => snap,
-    getAgentStreamSnapshot: () => null,
-    subscribe(handler, options) {
-      listeners.add(handler);
-      if (!options?.channels || options.channels.includes("messages")) {
-        handler({ channel: "messages", payload: snap.messages, ts: Date.now() });
-      }
-      if (retained) {
-        handler({ channel: "extensions", payload: { extensions: [] }, ts: Date.now() });
-        handler({ channel: "todos", payload: { items: [], title: null }, ts: Date.now() });
-        handler({ channel: "usage", payload: { contextFillTokens: 0, tokenLimit: 200000 }, ts: Date.now() });
-        handler({ channel: "state", payload: snap, ts: Date.now() });
-      }
-      return () => listeners.delete(handler);
-    },
-    async dispatch(command) {
-      dispatched.push(command);
-      const result = await onCommand?.(command, api);
-      return result ?? { ok: true };
-    },
-  };
-  return { session, api };
-}
-
-function makeHost(factory) {
-  const created = [];
-  return {
-    created,
-    async create(options) {
-      const built = factory(options);
-      created.push({ options, ...built });
-      return { session: built.session };
-    },
-    connect: () => null,
-    list: () => [],
-    async destroy() {},
-  };
-}
-
-async function runClient(app, fn, handlers = {}) {
-  const updates = [];
-  let clientApp = createClient({ name: "conformance-client" }).onNotification(methods.client.session.update, (ctx) =>
-    updates.push(ctx.params)
-  );
-  for (const [method, handler] of Object.entries(handlers)) {
-    clientApp = clientApp.onRequest(method, handler);
-  }
-  let value;
-  await clientApp.connectWith(app, async (cx) => {
-    await cx.request(methods.agent.initialize, {
-      protocolVersion: 1,
-      clientCapabilities: {
-        session: { notices: {}, compaction: {}, configOptions: {} },
-        elicitation: { form: {} },
-      },
-    });
-    value = await fn(cx, updates);
-  });
-  return { updates, value };
-}
-
-const TOOL_CALL = (overrides = {}) => ({
-  type: "tool-call",
-  id: "tc1",
-  name: "run_command",
-  input: { command: "echo hi" },
-  state: "input-complete",
-  approval: { needsApproval: true, id: "ap1" },
-  ...overrides,
-});
+//
+// The doubles (session / host / real SDK client) live in `acp-session-double.mjs` so the text-mode
+// `ask_user` check drives the same fakes — a second copy is how a fake drifts from production and a
+// validator starts passing for the wrong reason.
 
 // --- cancelled permission settles ------------------------------------------
 {
