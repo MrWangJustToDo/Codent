@@ -37,6 +37,7 @@ export default defineConfig({
     // Mounted to pin that the resume picker scrolls its window to follow the cursor instead of
     // slicing the first N rows and letting the cursor walk off the rendered set.
     `${src}/components/SessionPicker.tsx`,
+    `${src}/components/WorkspaceModeHeader.tsx`,
     // The central keybindings' panel gate, so the smoke can assert that an open overlay really
     // does own the keyboard (`isAnyPanelOpen()`), which is what stops arrows/characters from
     // reaching the chat handlers underneath. It reads config state, hence the store entry too.

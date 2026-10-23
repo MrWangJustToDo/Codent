@@ -85,6 +85,13 @@ export {
 } from "./utils/tool-part.js";
 export { resolveSubagentRowDisplay } from "./utils/subagent-status.js";
 export { truncateTextToMaxLines, wrapTextToLines, textDisplayWidth } from "./utils/user-message-lines.js";
+export {
+  planWorkspaceHeader,
+  workspaceHeaderWidth,
+  type WorkspaceHeaderContent,
+  type WorkspaceHeaderPlan,
+  type WorkspacePathDetail,
+} from "./utils/workspace-header-layout.js";
 export { resolveStopDecision, type StopDecision } from "./utils/stop-decision.js";
 export { resolveTaskSubagent } from "./utils/task-subagent.js";
 export {

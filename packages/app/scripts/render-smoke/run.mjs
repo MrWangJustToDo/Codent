@@ -44,6 +44,7 @@ import { ExitSummary } from "./dist/components/ExitSummary.mjs";
 import { MessageList, selectVisibleRows, MAX_STATIC_LINES } from "./dist/components/MessageList.mjs";
 import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
 import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
+import { WorkspaceModeHeader } from "./dist/components/WorkspaceModeHeader.mjs";
 import { StaticContext } from "./dist/context/static-context.mjs";
 import { isAnyPanelOpen } from "./dist/hooks/keybindings/context.mjs";
 import { useAgentStatus } from "./dist/hooks/use-agent-status.mjs";
@@ -1747,6 +1748,65 @@ console.error = realConsoleError;
   });
 
   titleInstance.unmount();
+}
+
+// ── workspace header: a narrow bar shortens, it does not shred ─────────────
+// Every group in the bar is a `<Text>`, and Ink boxes default to `flexShrink: 1`. Without a
+// width-aware plan a narrow terminal shrinks ALL of them and the renderer truncates inside each
+// one — the reported symptom was `Worksp · ● diff · … · mai 1 +−1`, i.e. five half-words, with
+// the root path gone entirely. `planWorkspaceHeader` (tested directly in
+// `test/workspace-header-layout.test.mjs`) drops the least informative groups instead; this check
+// pins that the assembled component actually renders that way.
+{
+  const gitInfo = { branch: "main", shortSha: "abc1234", dirty: true, ahead: 1, behind: 0 };
+  const diffStats = {
+    files: new Map([
+      ["a.ts", { added: 1, deleted: 0 }],
+      ["b.ts", { added: 2, deleted: 1 }],
+    ]),
+    totalAdded: 3,
+    totalDeleted: 1,
+  };
+  const rootPath = "/Users/example/Documents/GitHub/translate";
+
+  const Screen = () => {
+    useSize.getActions().useInitTerminalSize();
+    return createElement(WorkspaceModeHeader, { mode: "diff", rootPath, gitInfo, diffStats });
+  };
+
+  const headerStdout = new FakeStdout();
+  const headerInstance = render(createElement(Screen), {
+    stdout: headerStdout,
+    stdin: fakeStdin(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  for (const cols of [120, 90, 60, 40]) {
+    await resizeAndPaint(headerStdout, cols);
+    const row = frameLines(headerStdout)[0] ?? "";
+
+    // The groups that identify the view: a torn word here is the bug itself.
+    for (const word of ["Workspace", "diff", "main*"]) {
+      record(`the workspace header keeps ${word} intact at width ${cols}`, row.includes(word), { cols, row });
+    }
+    record(`the workspace header fits the terminal at width ${cols}`, row.length <= cols, {
+      cols,
+      length: row.length,
+      row,
+    });
+  }
+
+  // Degradation is visible in the bar rather than in a torn word: at 40 the full path is gone,
+  // while the totals it gave way for are still there.
+  const narrowRow = frameLines(headerStdout)[0] ?? "";
+  record("the workspace header drops the path instead of shredding it", !narrowRow.includes(rootPath), {
+    row: narrowRow,
+  });
+
+  headerInstance.unmount();
 }
 
 // ── the loading splash names startup, not the sandbox ────────────────────────
