@@ -159,16 +159,17 @@ tm2.incrementRound(); // 5
 tm2.incrementRound(); // 6
 tm2.incrementRound(); // 7
 tm2.incrementRound(); // 8 == 3 + initial cooldown(5)
-assert.equal(tm2.shouldNag(), false, "first backoff extends the next gap to 10 rounds");
-for (let round = 9; round <= 12; round++) tm2.incrementRound();
-assert.equal(tm2.shouldNag(), false, "still inside the grown cooldown");
-tm2.incrementRound(); // 13 == 3 + cooldown(10)
-assert.equal(tm2.shouldNag(), true, "second nag fires after the grown cooldown");
+assert.equal(tm2.shouldNag(), true, "second nag fires after the initial cooldown");
 tm2.getNagReminder(tm2.getRoundsSinceUpdate());
-for (let round = 14; round <= 27; round++) tm2.incrementRound();
-assert.equal(tm2.shouldNag(), false, "third gap is larger again");
-tm2.incrementRound(); // 28 == 13 + cooldown(15)
-assert.equal(tm2.shouldNag(), true, "third nag fires after the larger gap");
+for (let round = 9; round <= 17; round++) tm2.incrementRound();
+assert.equal(tm2.shouldNag(), false, "the next gap grew to 10 rounds");
+tm2.incrementRound(); // 18 == 8 + cooldown(10)
+assert.equal(tm2.shouldNag(), true, "third nag fires after the grown cooldown");
+tm2.getNagReminder(tm2.getRoundsSinceUpdate());
+for (let round = 19; round <= 32; round++) tm2.incrementRound();
+assert.equal(tm2.shouldNag(), false, "the third gap is larger again");
+tm2.incrementRound(); // 33 == 18 + cooldown(15)
+assert.equal(tm2.shouldNag(), true, "fourth nag fires after the larger gap");
 tm2.update([{ content: "B", status: "in_progress", priority: "high" }], "Plan"); // reset
 assert.equal(tm2.shouldNag(), false, "update resets throttle -> below threshold");
 

@@ -234,9 +234,11 @@ export class TodoManager {
     if (this.items.length === 0) return false;
     if (this.roundsSinceUpdate < this.nagReminderThreshold) return false;
     // Back off after every nag: the first cooldown is `nagCooldownRounds`, then it
-    // grows by `nagCooldownGrowth` for each reminder in this stale cycle. This keeps
-    // a long-running task from receiving the same nag every few rounds.
-    const cooldown = this.nagCooldownRounds + this.nagCountInCycle * this.nagCooldownGrowth;
+    // grows by `nagCooldownGrowth` for each additional reminder in this stale cycle.
+    // `nagCountInCycle` is already 1 after the first nag, so subtract that one to
+    // make the first gap the configured base rather than base + growth.
+    const growthSteps = Math.max(0, this.nagCountInCycle - 1);
+    const cooldown = this.nagCooldownRounds + growthSteps * this.nagCooldownGrowth;
     if (this.roundsSinceUpdate - this.lastNagRound < cooldown) return false;
 
     // Only nag if there are incomplete todos
