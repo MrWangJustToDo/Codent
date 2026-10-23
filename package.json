@@ -28,7 +28,7 @@
     "build:app": "pnpm --filter @codent/app build",
     "build:app:release": "pnpm --filter @codent/app build:release",
     "build:cli": "pnpm --filter @codent/cli build",
-    "build:codent": "pnpm run build:core && pnpm run build:app:release && pnpm --filter @codent/node build && pnpm --filter @codent/acp build && pnpm --filter codent-cli build",
+    "build:codent": "pnpm run build:core && pnpm run build:app:release && pnpm --filter @codent/node build && pnpm --filter @codent/acp build && pnpm --filter @codent/cli build && pnpm --filter codent-cli build",
     "build:extension": "pnpm --filter @codent/extension build",
     "build:server": "pnpm --filter @codent/server build",
     "build:playground": "pnpm --filter @codent/playground build",
