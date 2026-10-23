@@ -13,6 +13,7 @@
  * ```
  */
 
+import { renderRgbaAsTerminalText } from "@codent/core";
 import { stdioTransport } from "@tanstack/ai-mcp/stdio";
 import mime from "mime-types";
 import { exec, execFile } from "node:child_process";
@@ -31,7 +32,7 @@ import { resolveCommandPath } from "./lsp/resolve-command.js";
 import { createLspConnection as createNodeLspConnection } from "./lsp/transport.js";
 
 import type { LocalEnvironmentConfig } from "./environment/local.js";
-import type { CoreEnv, CoreEnvExecResult } from "@codent/core";
+import type { CoreEnv, CoreEnvExecResult, CoreEnvImageRegion } from "@codent/core";
 import type { ChildProcess } from "node:child_process";
 
 // Re-export environment implementations
@@ -122,9 +123,13 @@ let warnedResizeUnavailable = false;
  * fix (install the matching `@img/sharp-*` or build it) and should read differently
  * from a decoder that rejected the specific bytes.
  */
+function isSharpMissing(message: string): boolean {
+  return /Cannot find (package|module) 'sharp'/.test(message);
+}
+
 function describeResizeFailure(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  if (/Cannot find (package|module) 'sharp'/.test(message)) {
+  if (isSharpMissing(message)) {
     return (
       `the optional dependency "sharp" is not installed. npm omits it on platforms ` +
       `without a prebuilt binding, so images over the token budget are rejected instead ` +
@@ -132,6 +137,78 @@ function describeResizeFailure(err: unknown): string {
     );
   }
   return message;
+}
+
+/**
+ * Set once the first image-preview failure is reported.
+ *
+ * Same reasoning as the resize flag: `imageToText` runs for whichever file is selected in the
+ * workspace panel, so an unguarded warning would repeat on every selection instead of saying once
+ * that previews are unavailable here.
+ */
+let warnedImageTextUnavailable = false;
+
+function describeImageTextFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (isSharpMissing(message)) {
+    return (
+      `the optional dependency "sharp" is not installed, so the workspace preview cannot ` +
+      `decode images (the file placeholder is shown instead).`
+    );
+  }
+  return message;
+}
+
+/**
+ * Positive integer dimension for a `sharp` resize, capped like the renderer caps its own.
+ *
+ * The sizes come from the UI, so they are untrusted here: a zero width throws inside sharp, and an
+ * enormous one is work we refuse to do (the renderer caps at the same numbers).
+ */
+function clampImageDimension(value: number, max: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(max, Math.max(1, Math.floor(value)));
+}
+
+/**
+ * Mild unsharp applied after the downsample, before the pixels become cells.
+ *
+ * Measured on a 2172×1282 screenshot reduced to 77×45 samples: mean |∇luma| goes 7.44 with the
+ * plain lanczos downscale to 12.80 here, and the row/column count does not change. sharp's default
+ * `sigma 1` reaches 15.94, but the halos around text become visible, so the mild end is the choice.
+ */
+const PREVIEW_SHARPEN_SIGMA = 0.7;
+
+/**
+ * Clamp a requested source window into the image, so a zoom/pan request can never throw.
+ *
+ * The client computes the window from the size it was told, so a mismatch (an image replaced
+ * underneath, a rounding difference, a stale client) has to degrade to the nearest legal window
+ * rather than fail the preview. The result reports the clamped rectangle, so the caller adopts it
+ * instead of keeping a request the host silently changed.
+ */
+function clampImageRegion(
+  region: CoreEnvImageRegion | undefined,
+  imageWidth: number,
+  imageHeight: number
+): CoreEnvImageRegion {
+  if (!region) return { x: 0, y: 0, width: imageWidth, height: imageHeight };
+  const width = clampImageDimension(region.width, imageWidth);
+  const height = clampImageDimension(region.height, imageHeight);
+  const x = Math.min(imageWidth - width, Math.max(0, clampImageOrigin(region.x)));
+  const y = Math.min(imageHeight - height, Math.max(0, clampImageOrigin(region.y)));
+  return { x, y, width, height };
+}
+
+/**
+ * Integer origin for an `extract` window.
+ *
+ * `Math.floor` alone turns NaN into NaN, and sharp rejects a non-integer `left` by THROWING — which
+ * the caller of `imageToText` turns into a `null` preview, i.e. a clamped window would have become
+ * "this image cannot be previewed". Clamping is only useful if it survives garbage input.
+ */
+function clampImageOrigin(value: number): number {
+  return Number.isFinite(value) ? Math.floor(value) : 0;
 }
 
 // ============================================================================
@@ -353,6 +430,71 @@ export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
         if (!warnedResizeUnavailable) {
           warnedResizeUnavailable = true;
           console.warn(`[node] image resizing unavailable (degrading): ${describeResizeFailure(err)}`);
+        }
+        return null;
+      }
+    },
+
+    /**
+     * Decode an image and hand the pixels to core's renderer.
+     *
+     * The split matters: a screenshot-class PNG decodes to tens of MB of RGBA at source size, so the
+     * downsample has to happen inside `sharp` (native, streaming) rather than in JS. `inside` keeps
+     * the aspect ratio and `withoutEnlargement` matches the renderer's own no-upsampling rule; the
+     * box filter in `renderRgbaAsTerminalText` then does the final reduction to cells, so the glyph
+     * algebra stays in one place and the workspace preview looks identical on every host.
+     *
+     * A `region` (zoom/pan) is extracted before the resize, so only that window is decoded into RGBA
+     * and the payload stays one screenful however far the user zooms in.
+     */
+    imageToText: async (buffer, { maxCols, maxRows, color = true, region }) => {
+      try {
+        const sharp = (await import("sharp")).default;
+        // EXIF orientation must be resolved BEFORE the region is interpreted: the window arrives in
+        // the coordinates of what the user sees. `autoOrient` reports the oriented size, so this
+        // costs one metadata read instead of a throwaway decode.
+        const meta = await sharp(buffer).metadata();
+        const imageWidth = meta.autoOrient?.width ?? meta.width ?? 0;
+        const imageHeight = meta.autoOrient?.height ?? meta.height ?? 0;
+        if (!imageWidth || !imageHeight) return null;
+        const window = clampImageRegion(region, imageWidth, imageHeight);
+        const sampleCols = clampImageDimension(maxCols, 200);
+        const sampleRows = clampImageDimension(maxRows * 2, 400);
+        const pipeline = sharp(buffer).rotate();
+        // `extract` is only worth taking on the whole-image path when there is nothing to cut: a
+        // pre-resize extract disables libjpeg's shrink-on-load, so a large JPEG would be decoded at
+        // full size before being thrown away.
+        if (region !== undefined) {
+          pipeline.extract({ left: window.x, top: window.y, width: window.width, height: window.height });
+        }
+        pipeline.resize({
+          width: sampleCols,
+          height: sampleRows,
+          fit: "inside",
+          // Zooming in on a window smaller than the cell grid is the whole point of `region`, so
+          // only the whole-image path refuses to invent pixels.
+          withoutEnlargement: region === undefined,
+        });
+        // Sharpen only when the resize actually REDUCED the image: that is the step that softens
+        // edges. At 1:1 (and when enlarging a zoom window) there is no lost detail to compensate,
+        // and an unsharp mask there would just ring a pixel-exact picture.
+        const downscaled = window.width > sampleCols || window.height > sampleRows;
+        if (downscaled) {
+          // Mild on purpose: `sigma 0.7` measured +72% edge energy over the plain downscale, where
+          // sharp's default `sigma 1` makes the halos around text visible.
+          pipeline.sharpen({ sigma: PREVIEW_SHARPEN_SIGMA, m1: 1, m2: 1.5 });
+        }
+        const { data, info } = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+
+        const rows = renderRgbaAsTerminalText(
+          { width: info.width, height: info.height, data },
+          { maxCols, maxRows, color }
+        );
+        return { rows, imageWidth, imageHeight, region: window };
+      } catch (err) {
+        if (!warnedImageTextUnavailable) {
+          warnedImageTextUnavailable = true;
+          console.warn(`[node] image preview unavailable (degrading): ${describeImageTextFailure(err)}`);
         }
         return null;
       }

@@ -38,6 +38,13 @@ export default defineConfig({
     // slicing the first N rows and letting the cursor walk off the rendered set.
     `${src}/components/SessionPicker.tsx`,
     `${src}/components/WorkspaceModeHeader.tsx`,
+    // Mounted to pin the image preview's zoom/pan wiring: the component must ask the HOST for a
+    // source window (not render bigger and crop), and the window it asks for has to match the pane.
+    `${src}/components/WorkspaceImagePreview.tsx`,
+    `${src}/context/core-env-context.ts`,
+    // The zoom state lives in the panel store because the keys and the drawing are in different
+    // components; the smoke drives the same store the keys write to.
+    `${src}/hooks/use-workspace-panel.ts`,
     // The central keybindings' panel gate, so the smoke can assert that an open overlay really
     // does own the keyboard (`isAnyPanelOpen()`), which is what stops arrows/characters from
     // reaching the chat handlers underneath. It reads config state, hence the store entry too.

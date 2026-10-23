@@ -15,6 +15,7 @@ import { commandRoutes } from "./routes/command.js";
 import { envRoutes, filterSensitiveVars } from "./routes/env.js";
 import { fetchRoutes } from "./routes/fetch.js";
 import { fsRoutes } from "./routes/fs.js";
+import { createImageRoutes, imageRoutes } from "./routes/image.js";
 import { mcpRoutes } from "./routes/mcp.js";
 import {
   anthropicProxyBasePath,
@@ -31,7 +32,9 @@ import type { CoreEnv } from "@codent/core";
 export {
   REMOTE_PROVIDER_API_KEY,
   anthropicProxyBasePath,
+  createImageRoutes,
   filterSensitiveVars,
+  imageRoutes,
   mapProviderPathToUpstream,
   normalizeProviderRequestPath,
   openaiProxyBasePath,
@@ -99,6 +102,7 @@ function getLocalIP() {
 const api = new Hono()
   .route("/env", envRoutes)
   .route("/fs", fsRoutes)
+  .route("/image", imageRoutes)
   .route("/command", commandRoutes)
   .route("/fetch", fetchRoutes)
   .route("/mcp", mcpRoutes)

@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 
 import { COLORS } from "../theme/colors.js";
+import { sanitizeAnsi } from "../utils/ansi.js";
 
 import type { ExtensionRenderPayload } from "@codent/core";
 import type { ReactNode } from "react";
@@ -16,32 +17,6 @@ const MAX_SPACING = 8;
 
 /** The closed set of layout primitives the generic renderer understands. */
 const NODE_TYPES = new Set(["text", "row", "column", "box"]);
-
-/**
- * Keep SGR styling (`ESC [ … m`) — extensions legitimately colorize their output
- * — while neutralizing destructive terminal control sequences (screen clear,
- * cursor movement/positioning, window title, OSC 8 hyperlinks) that could wreck
- * the host layout.
- */
-export function sanitizeAnsi(text: string): string {
-  // OSC sequences (hyperlinks, window title): ESC ] … BEL | ESC \
-  // Note: the terminator is optional, so a truncated OSC swallows the remainder
-  // of that text rather than leaving half an escape sequence on screen.
-  // eslint-disable-next-line no-control-regex -- ANSI escapes are control characters by definition.
-  let out = text.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "");
-  // CSI sequences: keep SGR (`m`), drop cursor/screen/erase codes.
-  // eslint-disable-next-line no-control-regex -- ANSI escapes are control characters by definition.
-  out = out.replace(/\u001b\[([0-9;?]*)([A-Za-z])/g, (_match, params: string, final: string) =>
-    final === "m" ? `\u001b[${params}m` : ""
-  );
-  // Any remaining two-character escape (ESC 7, ESC c, …) is destructive too — but `[` is excluded
-  // here, because this pass runs over the SGR the line above just KEPT: `\u001b[33m` starts with
-  // `ESC[`, so matching it would leave the literal `33m` on screen and strip the color the
-  // sequence exists to apply. A real CSI always has its parameters, so it was consumed above.
-  // eslint-disable-next-line no-control-regex -- ANSI escapes are control characters by definition.
-  out = out.replace(/\u001b(?!\[)[\s\S]/g, "");
-  return out;
-}
 
 /** Sanitize, then bound the length; a truncated payload gets a reset suffix. */
 function limitText(value: string): string {

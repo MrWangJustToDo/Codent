@@ -185,7 +185,129 @@ if (env.createMCPStdioTransport) {
   assert.ok(existsSync(marker), "control: the same command does write the marker without an abort");
 }
 
-// ── 12. cleanup ──
+// ── 12. image preview (workspace panel) ──
+//
+// The panel decodes an image through the host that owns the codec, so this plane has to carry the
+// bytes and the rendered rows. Two properties matter here: a preview never fails loudly (an
+// undecodable buffer is `null`, not a 500 — the panel has no error state for it), and the request
+// is bounded, because `sharp` would otherwise decode whatever a caller uploads.
+{
+  assert.equal(typeof env.imageToText, "function", "the remote env exposes the image preview capability");
+
+  // 8×2 PNG rendered by the server's own decoder. A Node server without `sharp` answers `null`
+  // instead, which is the same contract, so accept either and assert the shape.
+  const png = new Uint8Array(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAACCAIAAADq9gq6AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4z8CAFTHgEP8PAI6xD/GRc0rlAAAAAElFTkSuQmCC",
+      "base64"
+    )
+  );
+  const preview = await env.imageToText(png, { maxCols: 8, maxRows: 2, color: true });
+  assert.ok(preview === null || Array.isArray(preview?.rows), "a valid PNG renders or degrades to null");
+  if (preview) {
+    assert.ok(preview.rows.length > 0 && preview.rows.length <= 2, "row budget respected over the wire");
+    assert.equal(preview.imageWidth, 8, "the source geometry survives the wire");
+    assert.equal(preview.imageHeight, 2, "the source geometry survives the wire");
+    assert.deepEqual(preview.region, { x: 0, y: 0, width: 8, height: 2 }, "the fitted window is reported");
+    for (const line of preview.rows) {
+      // `new RegExp` from an interpolated ESC keeps the control character out of the source pattern
+      // literal (`no-control-regex` flags that shape, and the escape is deliberate here).
+      const ESC = "\u001b";
+      const visible = line.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+      assert.ok(visible.length <= 8, "column budget respected over the wire");
+    }
+  }
+
+  assert.equal(
+    await env.imageToText(new Uint8Array([0, 1, 2, 3, 255]), { maxCols: 8, maxRows: 2 }),
+    null,
+    "undecodable bytes answer null instead of a failed request"
+  );
+
+  // A zoom window has to survive the wire: the decoded side owns the clamping, and the client's
+  // pan bounds come from the echoed rectangle rather than from a second, possibly divergent clamp.
+  if (preview) {
+    const zoomed = await env.imageToText(png, {
+      maxCols: 4,
+      maxRows: 2,
+      color: true,
+      region: { x: 4, y: 0, width: 4, height: 2 },
+    });
+    assert.ok(zoomed, "a window renders over the wire");
+    assert.deepEqual(zoomed.region, { x: 4, y: 0, width: 4, height: 2 }, "the requested window round-trips");
+
+    const clamped = await env.imageToText(png, {
+      maxCols: 4,
+      maxRows: 2,
+      color: true,
+      region: { x: 99, y: 99, width: 99, height: 99 },
+    });
+    assert.ok(clamped, "an impossible window still renders");
+    assert.deepEqual(clamped.region, { x: 0, y: 0, width: 8, height: 2 }, "and comes back clamped");
+  }
+
+  // The branch a Node-hosted server cannot reach: an env with no decoder at all (browser or
+  // WebContainer hosts). The route must answer `{ rows: null }` instead of throwing on a missing
+  // member — that answer is what makes the panel show its placeholder.
+  {
+    const { createImageRoutes } = await import("../dist/index.mjs");
+    const routes = createImageRoutes(() => ({}));
+    const response = await routes.request("/text", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ data: "AAAA", maxCols: 8, maxRows: 4 }),
+    });
+    assert.equal(response.status, 200, "a host without a decoder still answers");
+    assert.deepEqual(await response.json(), { result: null }, "and reports 'no preview'");
+  }
+
+  // An oversized cell budget is CLAMPED, not rejected. The local host clamps (`@codent/node` floors
+  // to [1, 200]), so rejecting here would make the same picture preview on one plane and show
+  // "Cannot preview" on the other — a terminal wider than ~313 columns was enough to hit it, because
+  // the panel's own budget is derived from the terminal width.
+  const oversized = await fetch(`${baseUrl}/api/image/text`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ data: png.toString("base64"), maxCols: 5000, maxRows: 5000 }),
+  });
+  assert.equal(oversized.status, 200, "an oversized preview budget is still answered");
+  const oversizedBody = await oversized.json();
+  if (oversizedBody.result) {
+    // `new RegExp` from an interpolated ESC keeps the control character out of a source pattern
+    // literal (`no-control-regex` flags that shape, and the escape is deliberate here).
+    const ESC = "\u001b";
+    const SGR = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
+    const widest = Math.max(...oversizedBody.result.rows.map((line) => line.replace(SGR, "").length));
+    assert.ok(widest <= 200, `the grid is clamped to 200 columns (got ${widest})`);
+  }
+
+  // A caller that is not our client cannot hang the server on a non-numeric size either.
+  const malformed = await fetch(`${baseUrl}/api/image/text`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ data: "AAAA", maxCols: "big", maxRows: 4 }),
+  });
+  assert.equal(malformed.status, 400, "a non-numeric size is refused by validation");
+
+  // The client degrades a transport failure to `null`, like the local host does for every failure
+  // mode: a rejected promise here reads as a broken panel rather than "no preview". The failure is
+  // induced by replacing `fetch` (the Hono RPC client uses the global) because `createRemoteEnv`
+  // itself probes the server on construction, so an unreachable URL never gets this far.
+  {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new Error("induced transport failure");
+    };
+    try {
+      const answer = await env.imageToText(png, { maxCols: 8, maxRows: 4, color: true });
+      assert.equal(answer, null, "a transport failure answers null instead of throwing");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+}
+
+// ── 13. cleanup ──
 await env.fs.remove("hello.txt");
 await env.fs.remove("blob.bin");
 assert.equal(await env.fs.exists("hello.txt"), false);

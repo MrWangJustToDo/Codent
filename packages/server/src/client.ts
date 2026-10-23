@@ -27,6 +27,7 @@ import type {
   CoreEnvExecResult,
   CoreEnvFs,
   CoreEnvFsStat,
+  CoreEnvImageTextResult,
   CoreEnvPath,
   FileEntry,
   McpProcessHandle,
@@ -487,6 +488,36 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
       const res = await client.fs.mimeType.$post({ json: { path: filePath } });
       const data = await unwrap<{ mimeType: string | false }>(res);
       return data.mimeType;
+    },
+
+    /**
+     * Image preview, rendered by the SERVER's decoder.
+     *
+     * The bytes travel up because the client holds them (the panel has already read the file) and
+     * the server owns the codec. `null` is a first-class answer: this host may have no decoder, or
+     * the bytes may not be an image — the client shows its placeholder either way.
+     */
+    imageToText: async (buffer, options) => {
+      try {
+        let binary = "";
+        for (let i = 0; i < buffer.length; i++) binary += String.fromCharCode(buffer[i]!);
+        const res = await client.image.text.$post({
+          json: {
+            data: btoa(binary),
+            maxCols: options.maxCols,
+            maxRows: options.maxRows,
+            ...(options.color === undefined ? {} : { color: options.color }),
+            ...(options.region === undefined ? {} : { region: options.region }),
+          },
+        });
+        const data = await unwrap<{ result: CoreEnvImageTextResult | null }>(res);
+        return data.result;
+      } catch {
+        // `null` is this capability's whole failure story (see `CoreEnv.imageToText`): a rejected
+        // promise here would read as a broken panel, and the local host already degrades every
+        // failure — a remote body-limit rejection or a dropped connection is no different.
+        return null;
+      }
     },
 
     destroy: async () => {

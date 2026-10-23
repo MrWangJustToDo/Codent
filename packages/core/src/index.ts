@@ -18,6 +18,9 @@ export {
   type CoreEnvFsStat,
   type CoreEnvExecOptions,
   type CoreEnvExecResult,
+  type CoreEnvImageRegion,
+  type CoreEnvImageTextResult,
+  type CoreEnvImageToTextOptions,
   type McpStdioTransportConfig,
   type McpProcessHandle,
 } from "./env";
@@ -310,6 +313,14 @@ export {
   type LineWindow,
   type LineWindowOptions,
 } from "./utils/line-window.js";
+// Image → text for the workspace preview pane. Public because the decoding hosts (`@codent/node`)
+// and the UI both call it: the host decodes, this decides what the cells look like.
+export {
+  renderRgbaAsTerminalText,
+  TERMINAL_ASCII_RAMP,
+  type RgbaImage,
+  type TerminalImageOptions,
+} from "./utils/image-text.js";
 export {
   countToolActivity,
   collectOtherToolNames,

@@ -140,6 +140,22 @@ export function isLikelyBinaryPath(filePath: string): boolean {
   return BINARY_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
 }
 
+/**
+ * Extensions the workspace preview can actually decode.
+ *
+ * Deliberately narrower than {@link BINARY_EXTENSIONS}: attempting a preview on bytes the host's
+ * decoder cannot read costs a file read and, worse, renders as "no preview" for no visible reason.
+ * `sharp` reads these five (an animated GIF yields its first frame). `.ico` is excluded on purpose
+ * (no `sharp` support) and `.svg` because it is text a diff can still show.
+ */
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+export function isImagePath(filePath: string): boolean {
+  const dot = filePath.lastIndexOf(".");
+  if (dot === -1) return false;
+  return IMAGE_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+}
+
 function extensionOf(filePath: string): string {
   const base = filePath.split("/").pop() || filePath;
   const dot = base.lastIndexOf(".");

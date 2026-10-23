@@ -1,11 +1,14 @@
 import { CodeView, type CodeViewRef, type ScrollState } from "@git-diff-view/cli";
-import { Box, Text } from "ink";
+import { Box, Text, useIsScreenReaderEnabled } from "ink";
 import { forwardRef, useEffect, useMemo, useState } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useDiffHighlighter } from "../hooks/use-diff-highlighter.js";
 import { COLORS } from "../theme/colors.js";
-import { isLikelyBinaryPath } from "../utils/file-icons.js";
+import { isImagePath, isLikelyBinaryPath } from "../utils/file-icons.js";
+import { clearImagePreviewCache } from "../utils/image-preview-cache.js";
+
+import { WorkspaceImagePreview } from "./WorkspaceImagePreview.js";
 
 import type { CoreEnv } from "@codent/core";
 
@@ -30,14 +33,31 @@ function fetchFileContent(env: CoreEnv, path: string): Promise<string> {
 
 export function clearContentCache(): void {
   contentCache.clear();
+  // The image previews are the same kind of cache and are invalidated by the same events (panel
+  // close, workspace refresh); clearing one without the other would keep a stale picture.
+  clearImagePreviewCache();
 }
 
 const MAX_PREVIEW_CHARS = 120_000;
+
+const BINARY_PREVIEW_MESSAGE = "Binary file — preview not available in workspace.";
 
 type PreviewState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; content: string; truncated: boolean; totalLines: number };
+
+/**
+ * Whether the preview may use 24-bit color.
+ *
+ * Decided here rather than in the host: over a remote env the terminal being drawn on is ours, not
+ * the server's. `NO_COLOR` is honoured by presence with a non-empty value, per no-color.org.
+ */
+function colorEnabled(): boolean {
+  if (typeof process === "undefined") return true;
+  const value = process.env?.NO_COLOR;
+  return value === undefined || value === "";
+}
 
 // ============================================================================
 // FileContent
@@ -57,6 +77,7 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
 ) {
   const env = useCoreEnv();
   const highlighter = useDiffHighlighter();
+  const screenReader = useIsScreenReaderEnabled();
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [scrollState, setScrollState] = useState<ScrollState | null>(null);
   const fileName = useMemo(() => filePath.split("/").pop() || filePath, [filePath]);
@@ -65,14 +86,22 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
     return extension ? extension.toLowerCase() : undefined;
   }, [filePath]);
   const codeHeight = height ? Math.max(1, height - 1) : undefined;
+  const color = colorEnabled();
+  // Screen readers skip the raster: a block of colored half-cell glyphs reads as noise.
+  const isImagePreview = isImagePath(filePath) && Boolean(env.imageToText) && !screenReader;
 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
     setScrollState(null);
 
+    // An image with a decoder behind it renders `WorkspaceImagePreview`, which owns its own loading,
+    // error and zoom state; every other binary (and an image on a host without a decoder) keeps the
+    // placeholder it has always had.
+    if (isImagePreview) return;
+
     if (isLikelyBinaryPath(filePath)) {
-      setState({ status: "error", message: "Binary file — preview not available in workspace." });
+      setState({ status: "error", message: BINARY_PREVIEW_MESSAGE });
       return;
     }
 
@@ -99,12 +128,23 @@ export const FileContent = forwardRef<CodeViewRef, FileContentProps>(function Fi
     return () => {
       cancelled = true;
     };
-  }, [env, filePath]);
+  }, [env, filePath, color, screenReader, isImagePreview]);
 
   const handleScrollChange = (next: ScrollState) => {
     setScrollState(next);
     onScrollChange?.(next);
   };
+
+  if (isImagePreview) {
+    return (
+      <WorkspaceImagePreview
+        filePath={filePath}
+        width={width}
+        {...(height === undefined ? {} : { height })}
+        color={color}
+      />
+    );
+  }
 
   if (state.status === "loading") {
     return (

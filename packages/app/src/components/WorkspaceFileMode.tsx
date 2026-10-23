@@ -1,4 +1,4 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, useIsScreenReaderEnabled } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
@@ -6,6 +6,7 @@ import { useSize } from "../hooks/use-size.js";
 import { useWorkspaceGit } from "../hooks/use-workspace-git.js";
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { COLORS } from "../theme/colors.js";
+import { isImagePath } from "../utils/file-icons.js";
 import { workspacePanelHint } from "../utils/keyboard-labels.js";
 import { clearWorkspaceDiffStatsCache } from "../utils/workspace-diff-stats.js";
 import { changedFileJumpTarget } from "../utils/workspace-diff-tree.js";
@@ -48,8 +49,11 @@ export const WorkspaceFileMode = () => {
   const selectedPath = useWorkspacePanel((s) => s.selectedPath);
   const treeScrollTop = useWorkspacePanel((s) => s.treeScrollTop);
   const quickOpen = useWorkspacePanel((s) => s.quickOpen);
+  const imageZoom = useWorkspacePanel((s) => s.imageZoom);
+  const screenReader = useIsScreenReaderEnabled();
   const { close, openQuickOpen, selectFile, setPaneFocus, toggleMode, setTreeScrollTop } =
     useWorkspacePanel.getActions();
+  const { zoomImage, panImage, resetImageView } = useWorkspacePanel.getActions();
 
   const previewRef = useRef<CodeViewRef>(null);
   const diffRef = useRef<DiffViewRef>(null);
@@ -362,9 +366,48 @@ export const WorkspaceFileMode = () => {
     [cursorIndex, items, moveCursor, handleToggleDir, selectedPath, selectFile, setPaneFocus]
   );
 
-  /** Preview-pane navigation (scroll the file/diff, ← returns to the tree). */
+  /**
+   * Whether the preview pane is showing the zoomable image view.
+   *
+   * Only then do `+`/`-`/`0` and the arrow keys mean zoom and pan. Everything else in this pane is
+   * text or a diff, where the arrows must keep scrolling exactly as before.
+   */
+  const imageViewActive =
+    mode === "preview" &&
+    selectedPath !== null &&
+    isImagePath(selectedPath) &&
+    Boolean(env.imageToText) &&
+    !screenReader;
+
+  /** Preview-pane navigation (scroll the file/diff, ← returns to the tree, `+`/`-`/`0` zoom images). */
   const handlePreviewKey = useCallback(
     (key: Key) => {
+      if (imageViewActive) {
+        // Zoom/pan owns the arrow keys only while zoomed: at 1× the window is the whole image, so
+        // there is nothing to pan and scrolling keeps its old meaning.
+        const zoomed = imageZoom > 1;
+        if (zoomed) {
+          // Directions, not distances: the store sizes the step from the visible window, so a press
+          // moves the same number of CELLS at 2× and at 8× (a constant step skipped a whole screen
+          // at deep zoom, where the pannable range is large and the window is small).
+          if (key.upArrow) return panImage(0, -1);
+          if (key.downArrow) return panImage(0, 1);
+          if (key.leftArrow) return panImage(-1, 0);
+          if (key.rightArrow) return panImage(1, 0);
+        }
+        if (key.leftArrow) {
+          setPaneFocus("tree");
+          return;
+        }
+        if (key.rightArrow) return;
+        if (key.upArrow) {
+          scrollActivePane("up");
+          return;
+        }
+        if (key.downArrow) scrollActivePane("down");
+        return;
+      }
+
       if (key.leftArrow) {
         setPaneFocus("tree");
         return;
@@ -377,7 +420,28 @@ export const WorkspaceFileMode = () => {
       }
       if (key.downArrow) scrollActivePane("down");
     },
-    [selectedPath, scrollActivePane, setPaneFocus]
+    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus]
+  );
+
+  /** Zoom keys, only while an image preview is on screen. Returns whether the key was consumed. */
+  const handleImageZoomKey = useCallback(
+    (inputChar: string) => {
+      if (!imageViewActive) return false;
+      if (inputChar === "+" || inputChar === "=") {
+        zoomImage(1);
+        return true;
+      }
+      if (inputChar === "-" || inputChar === "_") {
+        zoomImage(-1);
+        return true;
+      }
+      if (inputChar === "0") {
+        resetImageView();
+        return true;
+      }
+      return false;
+    },
+    [imageViewActive, resetImageView, zoomImage]
   );
 
   useInput((inputChar, key) => {
@@ -385,7 +449,7 @@ export const WorkspaceFileMode = () => {
     if (quickOpen) return;
     if (handleGlobalKey(inputChar, key)) return;
     if (paneFocus === "tree") handleTreeKey(key);
-    else handlePreviewKey(key);
+    else if (!handleImageZoomKey(inputChar)) handlePreviewKey(key);
   });
 
   return (

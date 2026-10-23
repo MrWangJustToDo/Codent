@@ -1,21 +1,3 @@
-<!-- OPENSPEC:START -->
-# OpenSpec Instructions
-
-These instructions are for AI assistants working in this project.
-
-Always open `@/openspec/AGENTS.md` when the request:
-- Mentions planning or proposals (words like proposal, spec, change, plan)
-- Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
-- Sounds ambiguous and you need the authoritative spec before coding
-
-Use `@/openspec/AGENTS.md` to learn:
-- How to create and apply change proposals
-- Spec format and conventions
-- Project structure and guidelines
-
-Keep this managed block so 'openspec update' can refresh the instructions.
-
-<!-- OPENSPEC:END -->
 
 # AGENTS.md - AI Agent Guidelines
 
@@ -97,7 +79,10 @@ interface CoreEnv {
   // Optional, feature-gated (absent = the feature degrades, never throws):
   //   execFile (argv-shaped, no shell), startCommand, getShellInfo, commandExists,
   //   readFileRange, appendFile / rename / appendFileSync / mkdirSync / existsSync,
-  //   getMimeType, resizeImage, locateTreeSitterGrammar,
+  //   getMimeType, resizeImage, imageToText (image → terminal text rows, optionally a
+  //   source-pixel window for zoom/pan, for the workspace preview pane; absent = the panel keeps
+  //   its "binary file" placeholder),
+  //   locateTreeSitterGrammar,
   //   createMCPStdioTransport, getMCPTransportProcess, createLspConnection,
   //   createIsolateDriver (code-mode TS sandbox backend)
 }
@@ -861,7 +846,6 @@ partial exploration into a report streamed through the same `AgentStreamHub`, so
 shows a readable outcome instead of a bare cutoff. Subagent LLM retries (429/gateway backoff, capability
 strip) are surfaced in the task UI via `AgentRetryState` on the session `state` channel, mirroring the
 main-chat footer.
-
 
 ```typescript
 {

@@ -205,6 +205,54 @@ export interface CoreEnvExecResult {
 }
 
 /**
+ * Options for {@link CoreEnv.imageToText}.
+ *
+ * Dimensions are in terminal CELLS, not pixels: the caller owns the layout it has to fit into
+ * (the workspace preview pane passes its measured width/height).
+ */
+export interface CoreEnvImageToTextOptions {
+  /** Maximum width in terminal cells. */
+  maxCols: number;
+  /** Maximum height in terminal rows (each row is one terminal line). */
+  maxRows: number;
+  /**
+   * Emit 24-bit color. Defaults to true; `false` is the colorless path (`NO_COLOR`, screen
+   * reader), which must not emit any SGR at all. The DECISION belongs to the client, not the
+   * env: over a remote env the terminal being drawn on is the client's, not the server's.
+   */
+  color?: boolean;
+  /**
+   * Source-pixel window to render, for zoom/pan. Omitted means "the whole image, fitted".
+   *
+   * The window lives here rather than in the client for two reasons: only the host can decode,
+   * and a zoomed-in client cannot afford the full-resolution grid (8× a 96×32 pane is ~400k cells
+   * of ANSI, which must not cross HTTP). Payload stays one screenful at any zoom; only the
+   * window's side length changes. Coordinates are in the image AFTER EXIF orientation correction,
+   * and are clamped to its bounds rather than rejected.
+   */
+  region?: CoreEnvImageRegion;
+}
+
+/** A source-pixel rectangle of an image. */
+export interface CoreEnvImageRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** What {@link CoreEnv.imageToText} returns. */
+export interface CoreEnvImageTextResult {
+  /** Rendered lines: text plus SGR color, nothing else. */
+  rows: string[];
+  /** Source size after EXIF orientation — the basis a caller computes a zoom window against. */
+  imageWidth: number;
+  imageHeight: number;
+  /** The window actually rendered (clamped into the image), so the caller need not re-clamp. */
+  region: CoreEnvImageRegion;
+}
+
+/**
  * Options for {@link CoreEnv.execFile}.
  *
  * Deliberately does not include a shell: the point of `execFile` is that no shell is
@@ -401,6 +449,28 @@ export interface CoreEnv {
    * or `null` when the input cannot be decoded / the host cannot process it.
    */
   resizeImage?(buffer: Uint8Array, options: { maxWidth?: number; quality?: number }): Promise<Uint8Array | null>;
+
+  /**
+   * Render an image as terminal text rows, for the workspace preview pane (optional).
+   *
+   * Implemented by hosts that have an image decoder (`@codent/node` uses the same optional
+   * `sharp` that backs {@link resizeImage}); omitted by hosts without one (browser,
+   * WebContainer), and the UI then keeps its "binary file" placeholder instead of a preview.
+   *
+   * Returns at most `maxRows` lines whose VISIBLE width is at most `maxCols` cells, where the
+   * only escape sequences are SGR colors (`ESC[…]m`) — never cursor movement, erasure, or OSC,
+   * because those would fight the renderer that owns the screen. `null` means "cannot render":
+   * an undecodable buffer, or a host whose decoder is missing at call time. Callers treat `null`
+   * and an absent member identically, so a remote env needs no separate capability broadcast.
+   *
+   * The result also reports the source size and the window actually rendered, because the client
+   * cannot derive either one locally: zoom/pan needs the size to compute a window, and the host's
+   * clamping of `options.region` is authoritative (one clamp, not two that can disagree).
+   *
+   * Pixel-to-text conversion is `renderRgbaAsTerminalText` (core utils): the host only decodes and
+   * downsamples, so every host renders the same image the same way.
+   */
+  imageToText?(buffer: Uint8Array, options: CoreEnvImageToTextOptions): Promise<CoreEnvImageTextResult | null>;
 
   /**
    * Extract the child process handle from an MCP stdio transport (optional).

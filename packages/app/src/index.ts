@@ -17,7 +17,12 @@ export { App } from "./app/App.js";
 export { Agent } from "./app/Agent.js";
 
 // Components
-export { ExtensionRenderSurface, sanitizeAnsi } from "./components/ExtensionRenderSurface.js";
+export { ExtensionRenderSurface } from "./components/ExtensionRenderSurface.js";
+// The workspace image preview owns zoom/pan + decode state, so a host (and the smoke harness) can
+// mount it directly instead of going through the whole panel.
+export { WorkspaceImagePreview } from "./components/WorkspaceImagePreview.js";
+// The ANSI sandbox lives in `utils` because the workspace image preview needs the same rule.
+export { sanitizeAnsi } from "./utils/ansi.js";
 export { StreamingOutputView } from "./messages/StreamingOutputView.js";
 export {
   ConfigEditor,
@@ -46,6 +51,20 @@ export type { Command, CommandContext, CommandOption } from "./commands";
 
 // Utils
 export { formatToolInput, formatToolOutput, formatToolArgs, formatDuration } from "./utils/format.js";
+// Workspace image previews: the cache is public so the panel's loading rules can be pinned by tests.
+export {
+  clearImagePreviewCache,
+  imagePreviewCacheKey,
+  loadImagePreview,
+  type ImagePreviewRequest,
+} from "./utils/image-preview-cache.js";
+// Zoom/pan geometry: pure functions, so the window a zoom level asks for can be pinned by tests.
+export {
+  IMAGE_PAN_VIEWPORT_FRACTION,
+  imagePanStep,
+  imagePreviewBudget,
+  imageViewRegion,
+} from "./utils/image-viewport.js";
 export {
   getToolCallColor,
   getInlineSummary,

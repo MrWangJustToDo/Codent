@@ -44,7 +44,9 @@ import { ExitSummary } from "./dist/components/ExitSummary.mjs";
 import { MessageList, selectVisibleRows, MAX_STATIC_LINES } from "./dist/components/MessageList.mjs";
 import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
 import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
+import { WorkspaceImagePreview } from "./dist/components/WorkspaceImagePreview.mjs";
 import { WorkspaceModeHeader } from "./dist/components/WorkspaceModeHeader.mjs";
+import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
 import { StaticContext } from "./dist/context/static-context.mjs";
 import { isAnyPanelOpen } from "./dist/hooks/keybindings/context.mjs";
 import { useAgentStatus } from "./dist/hooks/use-agent-status.mjs";
@@ -60,6 +62,7 @@ import { useSubagentPanel } from "./dist/hooks/use-subagent-panel.mjs";
 import { useTheme } from "./dist/hooks/use-theme.mjs";
 import { useTranscriptDisplay } from "./dist/hooks/use-transcript-display.mjs";
 import { useWorkspaceInfo } from "./dist/hooks/use-workspace-info.mjs";
+import { useWorkspacePanel } from "./dist/hooks/use-workspace-panel.mjs";
 import { Content } from "./dist/layout/Content.mjs";
 import { Header } from "./dist/layout/Header.mjs";
 import { WelcomePanel, LOADING_STATUS_TEXT } from "./dist/layout/WelcomePanel.mjs";
@@ -1847,6 +1850,131 @@ console.error = realConsoleError;
     frame: frameLines(splashStdout),
   });
   splashInstance.unmount();
+}
+
+// ── the image preview zooms by asking the host for a smaller window ─────────
+// Half-block characters give one cell 1×2 pixels, so a whole screenshot in a panel is a thumbnail.
+// The fix is NOT a bigger raster (8× the cells would be megabytes of ANSI): the component asks the
+// host to decode a smaller SOURCE window and draw it into the same cells. That is what these checks
+// pin — the request shape, and that the picture stays inside the pane at every zoom.
+{
+  const calls = [];
+  const paneWidth = 60;
+  const paneHeight = 20;
+  let slowFile = false;
+  const env = {
+    rootPath: "/fake",
+    fs: {
+      stat: async () => ({ isFile: true, isDirectory: false, size: 1024, mtime: new Date(0) }),
+      readFile: async () => new Uint8Array([1, 2, 3]),
+    },
+    imageToText: async (bytes, options) => {
+      calls.push(options);
+      // The second file answers slowly so the switch itself can be observed: with an instant decoder
+      // there is no window in which "the previous picture" could be visible.
+      if (calls.length > 0 && slowFile) await new Promise((resolve) => setTimeout(resolve, 400));
+      const cols = options.maxCols;
+      const rows = Array.from({ length: Math.min(options.maxRows, 8) }, () =>
+        "\u001b[38;2;255;0;0m\u001b[48;2;0;0;255m\u2580".repeat(cols)
+      );
+      return {
+        rows,
+        imageWidth: 800,
+        imageHeight: 600,
+        region: options.region ?? { x: 0, y: 0, width: 800, height: 600 },
+      };
+    },
+  };
+
+  const previewStdout = new FakeStdout();
+  previewStdout.columns = paneWidth + 10;
+  const instance = render(
+    createElement(
+      CoreEnvProvider,
+      { value: env },
+      createElement(WorkspaceImagePreview, {
+        filePath: "/fake/workspace-file.png",
+        width: paneWidth,
+        height: paneHeight,
+        color: true,
+      })
+    ),
+    { stdout: previewStdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false, maxFps: 30 }
+  );
+  await settle(300);
+
+  const fitFrame = frameLines(previewStdout);
+  record(
+    "the image preview paints the decoded rows",
+    fitFrame.some((line) => line.includes("\u2580")),
+    {
+      frame: fitFrame.slice(0, 3),
+    }
+  );
+  record("the image preview names the file", fitFrame.join("\n").includes("workspace-file.png"), {
+    frame: fitFrame[0] ?? null,
+  });
+  record("the fitted preview asks for the WHOLE image", calls.length > 0 && calls[0].region === undefined, {
+    firstCall: calls[0] ?? null,
+  });
+  record(
+    "every rendered row fits the pane",
+    fitFrame.filter((line) => line.trim().length > 0).every((line) => line.length <= paneWidth + 10),
+    { widths: fitFrame.map((line) => line.length) }
+  );
+  record(
+    "the picture fills its row budget without spilling a line out of the pane",
+    fitFrame.filter((line) => line.trim().length > 0).length <= paneHeight,
+    { painted: fitFrame.filter((line) => line.trim().length > 0).length, paneHeight }
+  );
+
+  // Zoom in twice (1 → 1.5 → 2) through the same store the panel's keys write to.
+  calls.length = 0;
+  useWorkspacePanel.getActions().zoomImage(1);
+  useWorkspacePanel.getActions().zoomImage(1);
+  await settle(300);
+
+  const zoomFrame = frameLines(previewStdout);
+  const zoomCall = calls.at(-1);
+  record("zooming in shows the zoom factor", zoomFrame.join("\n").includes("2×"), { frame: zoomFrame[0] ?? null });
+  record("zooming in asks the host for a source window", Boolean(zoomCall?.region), { call: zoomCall ?? null });
+  record(
+    "the zoom window is a fraction of the image, not the whole one",
+    Boolean(zoomCall?.region) && zoomCall.region.width < 800 && zoomCall.region.height < 600,
+    { region: zoomCall?.region ?? null }
+  );
+  record(
+    "the zoom window matches the pane's cell aspect",
+    Boolean(zoomCall?.region) && Math.abs(zoomCall.region.width / zoomCall.region.height - paneWidth / (20 * 2)) < 0.05,
+    { region: zoomCall?.region ?? null, paneAspect: paneWidth / 40 }
+  );
+
+  // A file switch must not paint the previous picture under the new name, and must not compute a zoom
+  // window from the OLD image's size (which is what a shared `ready` state used to do).
+  calls.length = 0;
+  slowFile = true;
+  useWorkspacePanel.getActions().zoomImage(1);
+  instance.rerender(
+    createElement(
+      CoreEnvProvider,
+      { value: env },
+      createElement(WorkspaceImagePreview, {
+        filePath: "/fake/other.png",
+        width: paneWidth,
+        height: paneHeight,
+        color: true,
+      })
+    )
+  );
+  await settle(80);
+  const switchedEarly = frameLines(previewStdout).join("\n");
+  record("a file switch does not paint the previous picture", !switchedEarly.includes("\u2580"), {
+    frame: frameLines(previewStdout).slice(0, 2),
+  });
+  await settle(300);
+
+  useWorkspacePanel.getActions().resetImageView();
+  instance.unmount();
 }
 
 const pass = results.every((r) => r.pass);
