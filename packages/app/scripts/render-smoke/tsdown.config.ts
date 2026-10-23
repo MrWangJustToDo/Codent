@@ -45,10 +45,13 @@ export default defineConfig({
     // The zoom state lives in the panel store because the keys and the drawing are in different
     // components; the smoke drives the same store the keys write to.
     `${src}/hooks/use-workspace-panel.ts`,
-    // The central keybindings' panel gate, so the smoke can assert that an open overlay really
-    // does own the keyboard (`isAnyPanelOpen()`), which is what stops arrows/characters from
-    // reaching the chat handlers underneath. It reads config state, hence the store entry too.
-    `${src}/hooks/keybindings/context.ts`,
+    // The keybinding context type the chat's handlers are built from.
+    // The surface input hooks and their scope: the smoke mounts probes through the real primitive
+    // to assert that a screen's keystroke reaches only that screen's handlers.
+    // Mounted to pin that the first-run wizard's keys only work inside a scope.
+    `${src}/components/ConfigEditor.tsx`,
+    `${src}/hooks/input/index.ts`,
+    `${src}/context/input-scope-context.ts`,
     `${src}/hooks/use-config.ts`,
     `${src}/hooks/use-subagent-panel.ts`,
     // The smoke wraps the compact-summary fixture in this provider, so the view it mounts is

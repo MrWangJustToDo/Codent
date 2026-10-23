@@ -1,6 +1,7 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useEffect, useMemo, useState } from "react";
 
+import { useTaskPanelInput } from "../hooks/input";
 import { useSubagentPanel } from "../hooks/use-subagent-panel.js";
 import { COLORS } from "../theme/colors.js";
 import { listNavHint, pressEscToReturnHint } from "../utils/keyboard-labels.js";
@@ -66,6 +67,7 @@ export const SubagentListPanel = ({
 }) => {
   const storedIndex = useSubagentPanel((s) => s.selectedIndex);
   const setStoredIndex = useSubagentPanel.getActions().setSelectedIndex;
+  const view = useSubagentPanel((s) => s.view);
 
   // Clamped on read, not on write: rows can disappear while the cursor sits in the detail view,
   // and only the list knows the count. Deriving it here (rather than storing a corrected value)
@@ -74,23 +76,34 @@ export const SubagentListPanel = ({
   // cursor lands near where the user left it instead of snapping to the top.
   const selectedIndex = Math.min(storedIndex, Math.max(0, tasks.length - 1));
 
-  useInput((_input, key) => {
-    if (key.upArrow) {
-      setStoredIndex(Math.max(0, selectedIndex - 1));
-      return;
-    }
-    if (key.downArrow) {
-      setStoredIndex(Math.min(tasks.length - 1, selectedIndex + 1));
-      return;
-    }
-    if (key.return && tasks[selectedIndex]) {
-      onSelect(tasks[selectedIndex]!.id);
-      return;
-    }
-    if (key.escape) {
-      onClose();
-    }
-  });
+  useTaskPanelInput(
+    (input, key) => {
+      if (key.upArrow) {
+        setStoredIndex(Math.max(0, selectedIndex - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setStoredIndex(Math.min(tasks.length - 1, selectedIndex + 1));
+        return;
+      }
+      if (key.return && tasks[selectedIndex]) {
+        onSelect(tasks[selectedIndex]!.id);
+        return;
+      }
+      if (key.escape) {
+        onClose();
+        return;
+      }
+      if (key.ctrl && input === "t") {
+        // Ctrl+T opened this panel; while it is up, the same chord closes it.
+        onClose();
+      }
+    },
+    // `SubagentPanel` renders the list unless it is showing the detail view, so the gate has to be
+    // the same predicate — `view === "list"` would leave the list on screen with dead keys in the
+    // transient `detail` state that has no selected id.
+    { when: view !== "detail" }
+  );
 
   if (tasks.length === 0) {
     return (

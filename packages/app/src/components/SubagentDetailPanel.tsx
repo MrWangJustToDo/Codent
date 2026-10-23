@@ -1,7 +1,9 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useEffect, useMemo, useState } from "react";
 
+import { useTaskPanelInput } from "../hooks/input";
 import { useRetryTicker } from "../hooks/use-retry-ticker.js";
+import { useSubagentPanel } from "../hooks/use-subagent-panel.js";
 import { SubagentPreviewView } from "../messages/SubagentPreviewView.js";
 import { formatTaskTurns } from "../messages/task-turns.js";
 import { COLORS } from "../theme/colors.js";
@@ -36,12 +38,19 @@ export const SubagentDetailPanel = ({
   const snap = childSession?.getSnapshot();
   const status = snap?.status ?? "idle";
 
-  useInput((input, key) => {
-    if (key.escape) onBack();
-    else if (input.toLowerCase() === "x" && isSubagentActiveStatus(status)) {
-      void childSession?.dispatch({ type: "stop" }).catch(() => {});
-    }
-  });
+  const view = useSubagentPanel((s) => s.view);
+
+  useTaskPanelInput(
+    (input, key) => {
+      if (key.escape) onBack();
+      else if (key.ctrl && input === "t") onBack();
+      else if (input.toLowerCase() === "x" && isSubagentActiveStatus(status)) {
+        void childSession?.dispatch({ type: "stop" }).catch(() => {});
+      }
+    },
+    // The detail view is the task panel's other sub-surface; the list is never live at the same time.
+    { when: view === "detail" }
+  );
 
   useEffect(() => {
     if (!childSession) return;

@@ -18,8 +18,6 @@ export type WorkspaceView = "closed" | "workspace";
 // State
 // ============================================================================
 
-export const CLOSE_DEBOUNCE_MS = 300;
-
 /** Active quick-open (fuzzy file finder) session, or null when closed. */
 export interface WorkspaceQuickOpenState {
   query: string;
@@ -58,7 +56,6 @@ export const useWorkspacePanel = createState(
     paneFocus: "tree" as WorkspacePaneFocus,
     selectedPath: null as string | null,
     treeScrollTop: 0,
-    lastClosedAt: 0,
     quickOpen: null as WorkspaceQuickOpenState | null,
     /**
      * Image preview viewport: zoom level plus the window's position, both axes in [0, 1].
@@ -90,7 +87,6 @@ export const useWorkspacePanel = createState(
         state.view = "closed";
         state.selectedPath = null;
         state.quickOpen = null;
-        state.lastClosedAt = Date.now();
         state.imageZoom = 1;
         state.imagePanX = 0.5;
         state.imagePanY = 0.5;

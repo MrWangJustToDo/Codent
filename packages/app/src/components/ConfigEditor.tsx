@@ -1,6 +1,7 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useState } from "react";
 
+import { useMainInput } from "../hooks/input";
 import { useSize } from "../hooks/use-size.js";
 import { WelcomePanel, welcomeTierForWidth } from "../layout/WelcomePanel.js";
 import { BG, COLORS } from "../theme/colors.js";
@@ -185,61 +186,65 @@ export const ConfigEditor = ({
     }
   }
 
-  useInput((input, key) => {
-    if (saving) return;
+  // The wizard's own keys stop on the text steps: there the focused <TextInput> owns the keyboard
+  // (including Esc, which it forwards to `onCancel`), so at most one handler sees a keystroke.
+  const isTextStep = step === "baseURL" || step === "apiKey" || step === "models";
 
-    if (key.escape) {
-      onCancel();
-      return;
-    }
+  useMainInput(
+    (input, key) => {
+      // Not a sub-surface gate: saving is a transient state where no key should do anything, but the
+      // handler stays subscribed so raw mode stays on until the wizard swaps screens.
+      if (saving) return;
 
-    if (step === "style") {
-      if (key.upArrow) {
-        setStyleIndex((i) => Math.max(0, i - 1));
-        setError("");
+      if (key.escape) {
+        onCancel();
         return;
       }
-      if (key.downArrow) {
-        setStyleIndex((i) => Math.min(STYLE_OPTIONS.length - 1, i + 1));
-        setError("");
+
+      if (step === "style") {
+        if (key.upArrow) {
+          setStyleIndex((i) => Math.max(0, i - 1));
+          setError("");
+          return;
+        }
+        if (key.downArrow) {
+          setStyleIndex((i) => Math.min(STYLE_OPTIONS.length - 1, i + 1));
+          setError("");
+          return;
+        }
+        if (key.return) {
+          setDraft((d) => ({ ...d, style: STYLE_OPTIONS[styleIndex] }));
+          setStep("baseURL");
+          setText(draft.baseURL);
+          setError("");
+        }
         return;
       }
-      if (key.return) {
-        setDraft((d) => ({ ...d, style: STYLE_OPTIONS[styleIndex] }));
-        setStep("baseURL");
-        setText(draft.baseURL);
-        setError("");
-      }
-      return;
-    }
 
-    if (step === "confirm") {
-      if (key.return) {
-        void (async () => {
-          const config = parseDraft(draft, parseModelsConfig);
-          if (!config) return;
-          setSaving(true);
-          try {
-            await saveModelsConfig(config);
-            onDone(config);
-          } catch (err) {
-            setSaving(false);
-            setError(err instanceof Error ? err.message : String(err));
-          }
-        })();
-      } else if (input === "e" || input === "E") {
-        setStep("baseURL");
-        setText(draft.baseURL);
-        setError("");
+      if (step === "confirm") {
+        if (key.return) {
+          void (async () => {
+            const config = parseDraft(draft, parseModelsConfig);
+            if (!config) return;
+            setSaving(true);
+            try {
+              await saveModelsConfig(config);
+              onDone(config);
+            } catch (err) {
+              setSaving(false);
+              setError(err instanceof Error ? err.message : String(err));
+            }
+          })();
+        } else if (input === "e" || input === "E") {
+          setStep("baseURL");
+          setText(draft.baseURL);
+          setError("");
+        }
+        return;
       }
-      return;
-    }
-
-    // Text input steps (baseURL / apiKey / models) are owned by <TextInput>,
-    // which handles cursor navigation + editing. Return here so we don't double
-    // handle return/backspace/typing with the focused TextInput.
-    return;
-  });
+    },
+    { when: !isTextStep }
+  );
 
   // ============================================================================
   // Step chrome (title, progress, hint)
@@ -345,19 +350,41 @@ export const ConfigEditor = ({
 
         {step === "baseURL" && (
           <Box marginTop={1}>
-            <TextInput value={text} onChange={setText} onSubmit={commitText} placeholder="https://..." />
+            <TextInput
+              value={text}
+              onChange={setText}
+              onSubmit={commitText}
+              onEscape={onCancel}
+              disabled={saving}
+              placeholder="https://..."
+            />
           </Box>
         )}
 
         {step === "apiKey" && (
           <Box marginTop={1}>
-            <TextInput value={text} onChange={setText} onSubmit={commitText} placeholder="(none)" mask />
+            <TextInput
+              value={text}
+              onChange={setText}
+              onSubmit={commitText}
+              onEscape={onCancel}
+              disabled={saving}
+              placeholder="(none)"
+              mask
+            />
           </Box>
         )}
 
         {step === "models" && (
           <Box marginTop={1}>
-            <TextInput value={text} onChange={setText} onSubmit={commitText} placeholder="gpt-4o" />
+            <TextInput
+              value={text}
+              onChange={setText}
+              onSubmit={commitText}
+              onEscape={onCancel}
+              disabled={saving}
+              placeholder="gpt-4o"
+            />
           </Box>
         )}
 

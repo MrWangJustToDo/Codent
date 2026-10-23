@@ -1,6 +1,7 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useMemo, useState } from "react";
 
+import { useMainInput } from "../hooks/input";
 import { useSize } from "../hooks/use-size.js";
 import { COLORS } from "../theme/colors.js";
 import { listNavHint } from "../utils/keyboard-labels.js";
@@ -31,7 +32,8 @@ export const SessionPicker = ({ sessions, onSelect, onCancel }: SessionPickerPro
   const [selectedIndex, setSelectedIndex] = useState(0);
   const screenWidth = useSize((s) => s.state.screenWidth);
 
-  useInput((input, key) => {
+  // The picker replaces the chat screen while it is up, so it is the main screen's keyboard.
+  useMainInput((input, key) => {
     if (key.upArrow) {
       setSelectedIndex((i) => Math.max(0, i - 1));
     } else if (key.downArrow) {

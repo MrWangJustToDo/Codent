@@ -1,3 +1,4 @@
+import { ChatKeybindings } from "../components/ChatKeybindings.js";
 import { ConfigEditorOverlay } from "../components/ConfigEditorOverlay.js";
 import { ExitSummary } from "../components/ExitSummary.js";
 import { ExtensionPanel } from "../components/ExtensionPanel.js";
@@ -8,11 +9,13 @@ import { SessionResumePicker } from "../components/SessionResumePicker.js";
 import { SubagentPanel } from "../components/SubagentPanel.js";
 import { WorkspacePanel } from "../components/WorkspacePanel.js";
 import { useAdapter } from "../context/adapter-context.js";
+import { InputScopeProvider } from "../context/input-scope-context.js";
 import { useAgentChat } from "../hooks/use-agent-chat.js";
 import { useAgentInputControls } from "../hooks/use-agent-input-controls.js";
 import { useAgent } from "../hooks/use-agent.js";
 import { useConfigEditor } from "../hooks/use-config-editor.js";
 import { useConfig } from "../hooks/use-config.js";
+import { useExitKeybinding } from "../hooks/use-exit-keybinding.js";
 import { useExtensionPanel } from "../hooks/use-extension-panel.js";
 import { useExtensionUIBridge } from "../hooks/use-extension-ui.js";
 import { useFlattenCacheCleanup } from "../hooks/use-flatten-cache-cleanup.js";
@@ -83,10 +86,14 @@ export const Agent = () => {
 
   useExtensionUIBridge();
 
+  // Ctrl+C belongs to no screen: quitting must work from the panels, the config wizard and the
+  // resume picker too. Everything else is registered by the screen that owns it.
+  useExitKeybinding(adapter);
+
   const activeSession = useAgent((s) => s.session);
   const showResumePicker = config.resumeSession === "__picker__";
 
-  useAgentInputControls({
+  const keybindings = useAgentInputControls({
     adapter,
     initialPrompt: config.initialPrompt,
     isReady,
@@ -124,27 +131,43 @@ export const Agent = () => {
   }
 
   if (showResumePicker && activeSession) {
-    return <SessionResumePicker session={activeSession} />;
+    // The picker replaces the chat screen, so it is the main screen while it is up.
+    return (
+      <InputScopeProvider value="main">
+        <SessionResumePicker session={activeSession} />
+      </InputScopeProvider>
+    );
   }
 
   // `/settings config` — the model-config wizard, over the running app. It is a
-  // full-screen swap like the panels below, and `isAnyPanelOpen()` keeps every
-  // central keybinding off the keyboard while it is up (the editor owns input).
+  // full-screen swap too, which is why it takes the `main` scope: the chat is not
+  // mounted, so the wizard and the chat's mode handlers cannot both answer a key.
   if (configEditorOpen) {
-    return <ConfigEditorOverlay />;
+    return (
+      <InputScopeProvider value="main">
+        <ConfigEditorOverlay />
+      </InputScopeProvider>
+    );
   }
 
   return (
     <FullBox flexDirection="column">
       <Header />
       {workspaceOpen ? (
-        <WorkspacePanel />
+        <InputScopeProvider value="workspace">
+          <WorkspacePanel />
+        </InputScopeProvider>
       ) : subagentPanelOpen ? (
-        <SubagentPanel />
+        <InputScopeProvider value="task">
+          <SubagentPanel />
+        </InputScopeProvider>
       ) : extensionPanelOpen ? (
-        <ExtensionPanel />
+        <InputScopeProvider value="extension">
+          <ExtensionPanel />
+        </InputScopeProvider>
       ) : (
-        <>
+        <InputScopeProvider value="main">
+          <ChatKeybindings options={keybindings} />
           <Content />
           {headerReady && <MessageViewWithCompact messages={messages} />}
           {headerReady && <PlanReadyBanner />}
@@ -152,7 +175,7 @@ export const Agent = () => {
           {/* Last region of the normal screen, below the footer: the session's outcome, shown
             during the ~200ms between the quit and `process.exit`. */}
           <ExitSummary />
-        </>
+        </InputScopeProvider>
       )}
     </FullBox>
   );

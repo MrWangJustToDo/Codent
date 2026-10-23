@@ -11,6 +11,7 @@ export {
 // Context
 export { AdapterProvider, useAdapter } from "./context/adapter-context.js";
 export { CoreEnvProvider, useCoreEnv } from "./context/core-env-context.js";
+export { InputScopeProvider, type InputSurface } from "./context/input-scope-context.js";
 
 // App
 export { App } from "./app/App.js";

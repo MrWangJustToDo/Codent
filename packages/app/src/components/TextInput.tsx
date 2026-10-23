@@ -1,6 +1,8 @@
 import chalk from "chalk";
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+
+import { useMainInput } from "../hooks/input";
 
 // ============================================================================
 // TextInput — shared text input with full cursor editing (multi-line capable)
@@ -122,140 +124,143 @@ export const TextInput = ({
 
   const display = mask ? "•".repeat(value.length) : value;
 
-  useInput((input, key) => {
-    if (disabled) return;
+  // A form field, so it never owns the keyboard on its own: its owner (`ConfigEditor`) deactivates
+  // its own keys on the text steps, and the `main` scope keeps this inert on any other screen.
+  useMainInput(
+    (input, key) => {
+      if (key.escape) {
+        onEscape?.();
+        return;
+      }
+      if (key.return) {
+        // Enter sends \r (name "return") — submit.
+        onSubmit?.(value);
+        return;
+      }
 
-    if (key.escape) {
-      onEscape?.();
-      return;
-    }
-    if (key.return) {
-      // Enter sends \r (name "return") — submit.
-      onSubmit?.(value);
-      return;
-    }
+      // Ctrl+J (and some terminals' Ctrl+Enter) delivers the raw \n character
+      // (name "enter", key.ctrl NOT set) — the reliable newline chord in every
+      // terminal. Shift+Enter sends \x1b\r which many terminals do not
+      // recognize, so it must not be relied on.
+      if (input === "\n") {
+        const c = cursorRef.current;
+        onChange(value.slice(0, c) + "\n" + value.slice(c));
+        setCursor(c + 1);
+        return;
+      }
+      if (key.upArrow) {
+        const c = cursorRef.current;
+        const start = lineStartOf(value, c);
+        if (start > 0) {
+          const prevEnd = start - 1; // position of the newline char
+          const prevStart = lineStartOf(value, prevEnd);
+          const col = Math.min(c - start, prevEnd - prevStart);
+          setCursor(prevStart + col);
+        } else {
+          setCursor(0);
+        }
+        return;
+      }
+      if (key.downArrow) {
+        const c = cursorRef.current;
+        const end = lineEndOf(value, c);
+        if (end < value.length) {
+          const nextStart = end + 1;
+          const nextEnd = lineEndOf(value, nextStart);
+          const col = c - lineStartOf(value, c);
+          setCursor(Math.min(nextStart + col, nextEnd));
+        } else {
+          setCursor(value.length);
+        }
+        return;
+      }
+      if (key.leftArrow) {
+        setCursor((c) => Math.max(0, c - 1));
+        return;
+      }
+      if (key.rightArrow) {
+        setCursor((c) => Math.min(value.length, c + 1));
+        return;
+      }
+      if (key.home) {
+        setCursor(lineStartOf(value, cursorRef.current));
+        return;
+      }
+      if (key.end) {
+        setCursor(lineEndOf(value, cursorRef.current));
+        return;
+      }
+      if (key.backspace) {
+        const c = cursorRef.current;
+        if (c > 0) {
+          onChange(value.slice(0, c - 1) + value.slice(c));
+          setCursor(c - 1);
+        }
+        return;
+      }
+      if (key.delete) {
+        const c = cursorRef.current;
+        if (c < value.length) {
+          onChange(value.slice(0, c) + value.slice(c + 1));
+        }
+        return;
+      }
 
-    // Ctrl+J (and some terminals' Ctrl+Enter) delivers the raw \n character
-    // (name "enter", key.ctrl NOT set) — the reliable newline chord in every
-    // terminal. Shift+Enter sends \x1b\r which many terminals do not
-    // recognize, so it must not be relied on.
-    if (input === "\n") {
-      const c = cursorRef.current;
-      onChange(value.slice(0, c) + "\n" + value.slice(c));
-      setCursor(c + 1);
-      return;
-    }
-    if (key.upArrow) {
-      const c = cursorRef.current;
-      const start = lineStartOf(value, c);
-      if (start > 0) {
-        const prevEnd = start - 1; // position of the newline char
-        const prevStart = lineStartOf(value, prevEnd);
-        const col = Math.min(c - start, prevEnd - prevStart);
-        setCursor(prevStart + col);
-      } else {
-        setCursor(0);
+      // Ctrl shortcuts — word/line deletion and fast navigation (readline-style).
+      // NOTE: react-terminal passes the letter itself (e.g. "a") for Ctrl+letter
+      // combinations (with key.ctrl = true), NOT the control char (\x01). Match
+      // the keybindings in hooks/keybindings/*.ts which compare input.toLowerCase().
+      if (key.ctrl && input) {
+        const ch = input.toLowerCase();
+        const c = cursorRef.current;
+        if (ch === "a") {
+          setCursor(lineStartOf(value, c)); // Ctrl+A — line start
+          return;
+        }
+        if (ch === "e") {
+          setCursor(lineEndOf(value, c)); // Ctrl+E — line end
+          return;
+        }
+        if (ch === "b") {
+          setCursor((cur) => Math.max(0, cur - 1)); // Ctrl+B — back
+          return;
+        }
+        if (ch === "f") {
+          setCursor((cur) => Math.min(value.length, cur + 1)); // Ctrl+F — forward
+          return;
+        }
+        if (ch === "d") {
+          if (c < value.length) onChange(value.slice(0, c) + value.slice(c + 1)); // Ctrl+D — delete char
+          return;
+        }
+        if (ch === "u") {
+          const start = lineStartOf(value, c); // Ctrl+U — delete to line start
+          onChange(value.slice(0, start) + value.slice(c));
+          setCursor(start);
+          return;
+        }
+        if (ch === "k") {
+          const end = lineEndOf(value, c); // Ctrl+K — delete to line end
+          onChange(value.slice(0, c) + value.slice(end));
+          return;
+        }
+        if (ch === "w") {
+          const [next, nc] = deleteWordBefore(value, c); // Ctrl+W — delete word before
+          onChange(next);
+          setCursor(nc);
+          return;
+        }
       }
-      return;
-    }
-    if (key.downArrow) {
-      const c = cursorRef.current;
-      const end = lineEndOf(value, c);
-      if (end < value.length) {
-        const nextStart = end + 1;
-        const nextEnd = lineEndOf(value, nextStart);
-        const col = c - lineStartOf(value, c);
-        setCursor(Math.min(nextStart + col, nextEnd));
-      } else {
-        setCursor(value.length);
-      }
-      return;
-    }
-    if (key.leftArrow) {
-      setCursor((c) => Math.max(0, c - 1));
-      return;
-    }
-    if (key.rightArrow) {
-      setCursor((c) => Math.min(value.length, c + 1));
-      return;
-    }
-    if (key.home) {
-      setCursor(lineStartOf(value, cursorRef.current));
-      return;
-    }
-    if (key.end) {
-      setCursor(lineEndOf(value, cursorRef.current));
-      return;
-    }
-    if (key.backspace) {
-      const c = cursorRef.current;
-      if (c > 0) {
-        onChange(value.slice(0, c - 1) + value.slice(c));
-        setCursor(c - 1);
-      }
-      return;
-    }
-    if (key.delete) {
-      const c = cursorRef.current;
-      if (c < value.length) {
-        onChange(value.slice(0, c) + value.slice(c + 1));
-      }
-      return;
-    }
 
-    // Ctrl shortcuts — word/line deletion and fast navigation (readline-style).
-    // NOTE: react-terminal passes the letter itself (e.g. "a") for Ctrl+letter
-    // combinations (with key.ctrl = true), NOT the control char (\x01). Match
-    // the keybindings in hooks/keybindings/*.ts which compare input.toLowerCase().
-    if (key.ctrl && input) {
-      const ch = input.toLowerCase();
-      const c = cursorRef.current;
-      if (ch === "a") {
-        setCursor(lineStartOf(value, c)); // Ctrl+A — line start
-        return;
-      }
-      if (ch === "e") {
-        setCursor(lineEndOf(value, c)); // Ctrl+E — line end
-        return;
-      }
-      if (ch === "b") {
-        setCursor((cur) => Math.max(0, cur - 1)); // Ctrl+B — back
-        return;
-      }
-      if (ch === "f") {
-        setCursor((cur) => Math.min(value.length, cur + 1)); // Ctrl+F — forward
-        return;
-      }
-      if (ch === "d") {
-        if (c < value.length) onChange(value.slice(0, c) + value.slice(c + 1)); // Ctrl+D — delete char
-        return;
-      }
-      if (ch === "u") {
-        const start = lineStartOf(value, c); // Ctrl+U — delete to line start
-        onChange(value.slice(0, start) + value.slice(c));
-        setCursor(start);
-        return;
-      }
-      if (ch === "k") {
-        const end = lineEndOf(value, c); // Ctrl+K — delete to line end
-        onChange(value.slice(0, c) + value.slice(end));
-        return;
-      }
-      if (ch === "w") {
-        const [next, nc] = deleteWordBefore(value, c); // Ctrl+W — delete word before
+      if (input && !key.ctrl && !key.meta) {
+        const c = cursorRef.current;
+        const next = value.slice(0, c) + input + value.slice(c);
         onChange(next);
-        setCursor(nc);
-        return;
+        setCursor(c + input.length);
       }
-    }
-
-    if (input) {
-      const c = cursorRef.current;
-      const next = value.slice(0, c) + input + value.slice(c);
-      onChange(next);
-      setCursor(c + input.length);
-    }
-  });
+    },
+    { when: !disabled }
+  );
 
   if (!value) {
     return <Text wrap="truncate-end">{renderWithCursor(value, cursor, placeholder)}</Text>;

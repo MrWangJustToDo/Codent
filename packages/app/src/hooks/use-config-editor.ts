@@ -11,26 +11,15 @@ import { createState } from "reactivity-store";
 // pipeline so the new provider goes live without a restart.
 //
 // It is a full-screen swap (like the workspace / task / extension panels), not
-// a stacked overlay, so the panel must be part of `isAnyPanelOpen()` — the
-// editor owns the keyboard while it is up.
+// a stacked overlay, so it occupies the `main` input scope while it is up — the
+// editor owns the keyboard because the chat screen is not mounted.
 // ============================================================================
 
 export type ConfigEditorView = "closed" | "open";
 
-/**
- * How long after closing the panel still counts as "this keystroke closed it".
- *
- * The editor answers Esc itself, and Ink broadcasts the same keystroke to every `useInput`
- * handler, so the central Esc branch can run *after* this panel already closed. Without the
- * window it reads "no panel open" and aborts the in-flight run — see `panelJustClosed`.
- */
-export const CLOSE_DEBOUNCE_MS = 300;
-
 export const useConfigEditor = createState(
   () => ({
     view: "closed" as ConfigEditorView,
-    /** Set on every close; the debounce window `panelJustClosed` reads. */
-    lastClosedAt: 0,
   }),
   {
     withActions: (state) => ({
@@ -39,12 +28,10 @@ export const useConfigEditor = createState(
       },
       close: () => {
         state.view = "closed";
-        state.lastClosedAt = Date.now();
       },
       toggle: () => {
         // Inlined rather than delegating to `close()`: the actions are not part of `state`.
         state.view = state.view === "open" ? "closed" : "open";
-        if (state.view === "closed") state.lastClosedAt = Date.now();
       },
     }),
     withNamespace: "useConfigEditor",

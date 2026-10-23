@@ -1,7 +1,8 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import { toRaw } from "reactivity-store";
 
+import { useExtensionPanelInput } from "../hooks/input";
 import { useAgent } from "../hooks/use-agent.js";
 import { useExtensionPanel } from "../hooks/use-extension-panel.js";
 import { COLORS } from "../theme/colors.js";
@@ -22,7 +23,7 @@ const ExtensionPanelList = ({
 }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  useInput((input, key) => {
+  useExtensionPanelInput((input, key) => {
     if (key.upArrow) {
       setSelectedIndex((i) => Math.max(0, i - 1));
       return;
@@ -36,6 +37,11 @@ const ExtensionPanelList = ({
       return;
     }
     if (key.escape) {
+      onClose();
+      return;
+    }
+    if (key.ctrl && input === "y") {
+      // Ctrl+Y opened this panel; while it is up, the same chord closes it.
       onClose();
     }
   });

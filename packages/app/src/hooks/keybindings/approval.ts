@@ -1,11 +1,8 @@
 /** Approval mode: y/n quick responses, `/` command entry, autocomplete. */
 
-import { useInput } from "ink";
-
 import { dispatchCommand } from "../../commands";
+import { useMainInput } from "../input";
 import { useUserInput } from "../use-user-input.js";
-
-import { isAnyPanelOpen } from "./context.js";
 
 import type { KeybindingContext } from "./context.js";
 
@@ -24,14 +21,14 @@ export function useApprovalModeKeybindings(ctx: KeybindingContext): void {
     commandCtx,
   } = ctx;
 
-  useInput(
+  useMainInput(
     (inputChar, inputKey) => {
-      // Panel open: the panel's own useInput owns the keyboard — never let
-      // panel navigation approve/deny a pending tool.
-      if (isAnyPanelOpen()) return;
       const currentValue = useUserInput.getReadonlyState().value;
 
-      if (!currentValue) {
+      // Ctrl/⌘+letter arrives as `inputChar === "y"` with `ctrl` set (the renderer maps the control
+      // byte to its letter), so an unguarded `y` made Ctrl+Y both open the extension panel and
+      // approve the pending tool. `normal` already guards its printable branch the same way.
+      if (!currentValue && !inputKey.ctrl && !inputKey.meta) {
         const char = inputChar?.toLowerCase();
         if (char === "y") {
           if (!pendingApproval) return;
@@ -111,6 +108,6 @@ export function useApprovalModeKeybindings(ctx: KeybindingContext): void {
         }
       }
     },
-    { isActive: ctx.mode === "approval" }
+    { when: ctx.mode === "approval" }
   );
 }

@@ -10,8 +10,6 @@ export type SubagentPanelView = "closed" | "list" | "detail";
 // State
 // ============================================================================
 
-export const CLOSE_DEBOUNCE_MS = 300;
-
 export const useSubagentPanel = createState(
   () => ({
     view: "closed" as SubagentPanelView,
@@ -25,7 +23,6 @@ export const useSubagentPanel = createState(
      * the panel is left or freshly opened.
      */
     selectedIndex: 0,
-    lastClosedAt: 0,
   }),
   {
     withActions: (state) => ({
@@ -41,7 +38,6 @@ export const useSubagentPanel = createState(
         state.view = "closed";
         state.selectedSubagentId = null;
         state.selectedIndex = 0;
-        state.lastClosedAt = Date.now();
       },
       openDetail: (subagentId: string) => {
         state.view = "detail";

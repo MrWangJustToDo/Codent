@@ -1,13 +1,10 @@
 /** Normal (chat) mode: typing, history, autocomplete, submit / queue. */
 
-import { useInput } from "ink";
-
 import { isModifiedEnter } from "../../utils/keyboard-labels.js";
 import { cycleAgentMode } from "../../utils/plan-mode-toggle.js";
+import { useMainInput } from "../input";
 import { usePlanPreview } from "../use-plan-preview.js";
 import { useUserInput } from "../use-user-input.js";
-
-import { isAnyPanelOpen } from "./context.js";
 
 import type { KeybindingContext } from "./context.js";
 
@@ -24,11 +21,8 @@ export function useNormalModeKeybindings(ctx: KeybindingContext): void {
     handleRecallQueued,
   } = ctx;
 
-  useInput(
+  useMainInput(
     (inputChar, inputKey) => {
-      // Panel open: the panel's own useInput owns the keyboard.
-      if (isAnyPanelOpen()) return;
-
       if (inputKey.tab && inputKey.shift) {
         // Shift+Tab cycles agent mode: normal → auto → plan → normal → …
         // Still block during loading — toggling mode mid-run is not useful.
@@ -166,6 +160,6 @@ export function useNormalModeKeybindings(ctx: KeybindingContext): void {
         autocompleteActions.update(useUserInput.getReadonlyState().value);
       }
     },
-    { isActive: ctx.mode === "normal" }
+    { when: ctx.mode === "normal" }
   );
 }

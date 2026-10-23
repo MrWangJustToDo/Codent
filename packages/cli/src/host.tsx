@@ -24,6 +24,7 @@ import {
   App,
   ConfigEditor,
   CoreEnvProvider,
+  InputScopeProvider,
   initConfig,
   initHighlighter,
   configureEnv,
@@ -296,13 +297,18 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     }, [ready]);
 
     if (!ready) {
+      // The wizard replaces the chat screen, so it takes the `main` input scope. Without a scope its
+      // handlers stay inert by design (`useSurfaceInput` never subscribes outside one) and the
+      // first-run setup would not accept a single keystroke.
       return (
-        <ConfigEditor
-          onDone={() => setReady(true)}
-          onCancel={() => process.exit(0)}
-          parseModelsConfig={parseModelsConfig}
-          saveModelsConfig={saveModelsConfig}
-        />
+        <InputScopeProvider value="main">
+          <ConfigEditor
+            onDone={() => setReady(true)}
+            onCancel={() => process.exit(0)}
+            parseModelsConfig={parseModelsConfig}
+            saveModelsConfig={saveModelsConfig}
+          />
+        </InputScopeProvider>
       );
     }
     return <App />;

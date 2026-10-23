@@ -20,6 +20,16 @@ export { useDynamic } from "./use-dynamic.js";
 export { useFlattenCacheCleanup } from "./use-flatten-cache-cleanup.js";
 export { useForceUpdate } from "./use-force-update.js";
 export { useInputMode, type InputMode, type FreeformContext } from "./use-input-mode.js";
+// Keyboard registration: one named hook per screen class (see `input/use-surface-input.ts`).
+export {
+  isSurfaceActive,
+  useExitInput,
+  useExtensionPanelInput,
+  useMainInput,
+  useTaskPanelInput,
+  useWorkspacePanelInput,
+} from "./input";
+export type { InputHandler } from "./input";
 export { usePreviewEdit } from "./use-preview-edit.js";
 export { useRetryTicker } from "./use-retry-ticker.js";
 export { useSelect } from "./use-select.js";

@@ -1,20 +1,16 @@
 /** Select mode: ask_user option list navigation / toggle / submit. */
 
 import { BUILTIN_TOOL_NAMES } from "@codent/core";
-import { useInput } from "ink";
 
-import { isAnyPanelOpen } from "./context.js";
+import { useMainInput } from "../input";
 
 import type { KeybindingContext } from "./context.js";
 
 export function useSelectModeKeybindings(ctx: KeybindingContext): void {
   const { inputActions, selectActions, modeActions, pendingAskUser, submitAskUserAnswer } = ctx;
 
-  useInput(
+  useMainInput(
     (inputChar, inputKey) => {
-      // Panel open: the panel's own useInput owns the keyboard — never let
-      // panel navigation toggle options / submit an ask_user answer.
-      if (isAnyPanelOpen()) return;
       if (inputKey.upArrow) {
         selectActions.selectPrev();
         return;
@@ -63,6 +59,6 @@ export function useSelectModeKeybindings(ctx: KeybindingContext): void {
         selectActions.close();
       }
     },
-    { isActive: ctx.mode === "select" }
+    { when: ctx.mode === "select" }
   );
 }

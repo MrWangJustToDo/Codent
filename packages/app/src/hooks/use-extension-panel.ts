@@ -10,13 +10,10 @@ export type ExtensionPanelView = "closed" | "open";
 // State
 // ============================================================================
 
-export const CLOSE_DEBOUNCE_MS = 300;
-
 export const useExtensionPanel = createState(
   () => ({
     view: "closed" as ExtensionPanelView,
     revision: 0,
-    lastClosedAt: 0,
   }),
   {
     withActions: (state) => ({
@@ -26,11 +23,9 @@ export const useExtensionPanel = createState(
       },
       close: () => {
         state.view = "closed";
-        state.lastClosedAt = Date.now();
       },
       toggle: () => {
         if (state.view === "open") {
-          state.lastClosedAt = Date.now();
           state.view = "closed";
         } else {
           state.view = "open";

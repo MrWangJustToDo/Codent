@@ -58,7 +58,8 @@
     "validate:render-smoke": "tsdown --config ./scripts/render-smoke/tsdown.config.ts && node ./scripts/render-smoke/run.mjs",
     "validate:workspace-refresh": "node ./scripts/validate-workspace-refresh-check.mjs",
     "validate:command-catalog": "node scripts/validate-command-catalog.mjs",
-    "validate:host-tool-names": "pnpm run build && node scripts/validate-host-tool-names.mjs"
+    "validate:host-tool-names": "pnpm run build && node scripts/validate-host-tool-names.mjs",
+    "validate:input-routing": "node scripts/validate-input-routing.mjs"
   },
   "//": "Two build configurations. `build` (default) keeps third-party dependencies external so",
   "//bundling": "in-repo hosts resolve each one once and in the form they need; `build:release`",

@@ -1,42 +1,27 @@
-/** Always-on global shortcuts: exit, panel toggles, clipboard, Esc cascade. */
-
-import { useInput } from "ink";
+/**
+ * The chat screen's shortcuts: panel toggles, clipboard, Esc cascade.
+ *
+ * Ctrl+C is deliberately absent — it is registered on every screen by `useExitKeybinding`.
+ * The panel toggles here only *open* (this screen means every panel is closed); each panel answers
+ * its own chord to close, which is what keeps a keystroke inside one surface.
+ */
 
 import { clipboardImageFilename } from "../../utils/attachment-hash.js";
-import { exitWithSummary } from "../../utils/exit-with-summary.js";
-import { getActiveHost } from "../../utils/session-resolve.js";
+import { useMainInput } from "../input";
 import { useAutocomplete } from "../use-autocomplete.js";
 import { useCommandOutput } from "../use-command-output.js";
-import { useConfig } from "../use-config.js";
 import { useExtensionPanel } from "../use-extension-panel.js";
 import { usePlanPreview } from "../use-plan-preview.js";
 import { useSubagentPanel } from "../use-subagent-panel.js";
 import { useWorkspacePanel } from "../use-workspace-panel.js";
-
-import { isAnyPanelOpen, panelJustClosed } from "./context.js";
 
 import type { KeybindingContext } from "./context.js";
 
 export function useGlobalKeybindings(ctx: KeybindingContext): void {
   const { adapter, inputActions, autocompleteActions, commandOutputActions } = ctx;
 
-  useInput((inputChar, inputKey) => {
+  useMainInput((inputChar, inputKey) => {
     inputActions.addEvent(inputChar, inputKey);
-
-    // Panel open: let the panel's own handlers process plain keys
-    // (Esc/Enter/↑↓); keep global Ctrl/meta shortcuts (exit, toggles) working.
-    if (isAnyPanelOpen() && !inputKey.ctrl && !inputKey.meta) {
-      return;
-    }
-
-    if (inputKey.ctrl && inputChar === "c") {
-      exitWithSummary({
-        adapter,
-        session: ctx.getSession(),
-        destroySession: (sessionId) => void getActiveHost()?.destroy(sessionId),
-      });
-      return;
-    }
 
     if (inputKey.ctrl && inputChar === "u") {
       inputActions.setValue("");
@@ -80,38 +65,14 @@ export function useGlobalKeybindings(ctx: KeybindingContext): void {
     }
 
     if (inputKey.ctrl && inputChar === "e") {
-      const ws = useWorkspacePanel.getReadonlyState();
-      if (ws.view === "workspace") {
-        useWorkspacePanel.getActions().close();
-      } else {
-        useWorkspacePanel.getActions().open();
-      }
+      // The main screen is the one on screen, so the panel is closed by definition.
+      useWorkspacePanel.getActions().open();
       return;
     }
 
     if (inputKey.escape && ctx.mode !== "freeform" && ctx.mode !== "select") {
-      // Workspace panel open: let WorkspacePanel handle Esc
-      if (useWorkspacePanel.getReadonlyState().view === "workspace") return;
-      // Resume picker open: let it handle Esc (it cancels). Without this the picker owns the
-      // keyboard (`isAnyPanelOpen`) but no handler would answer Esc, so it would read as dead.
-      if (useConfig.getReadonlyState().config.resumeSession === "__picker__") return;
-      const panel = useSubagentPanel.getReadonlyState();
-      if (panel.view !== "closed") {
-        return;
-      }
-      const extPanel = useExtensionPanel.getReadonlyState();
-      if (extPanel.view !== "closed") {
-        return;
-      }
       if (usePlanPreview.getReadonlyState().open) {
         usePlanPreview.getActions().hide();
-        return;
-      }
-      // A panel Esc may have just closed: this keystroke is the one that closed it (the panel's
-      // own handler runs first and Ink broadcasts to everyone), and aborting here would be the
-      // leak this branch used to have. `panelJustClosed` owns the list of debounced panels, so a
-      // new panel cannot be forgotten the way the config editor was.
-      if (panelJustClosed()) {
         return;
       }
       if (useAutocomplete.getReadonlyState().visible) {

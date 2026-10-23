@@ -1,7 +1,8 @@
-import { Box, Text, useInput, useIsScreenReaderEnabled } from "ink";
+import { Box, Text, useIsScreenReaderEnabled } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
+import { useWorkspacePanelInput } from "../hooks/input";
 import { useSize } from "../hooks/use-size.js";
 import { useWorkspaceGit } from "../hooks/use-workspace-git.js";
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
@@ -301,6 +302,12 @@ export const WorkspaceFileMode = () => {
         openQuickOpen();
         return true;
       }
+      if (key.ctrl && inputChar === "e") {
+        // The same chord that opened the panel closes it: the chat screen only ever opens, so the
+        // close half lives here, with the screen it belongs to.
+        close();
+        return true;
+      }
       if (inputChar === "]" || inputChar === "[") {
         jumpToChanged(inputChar === "]" ? 1 : -1);
         return true;
@@ -444,13 +451,15 @@ export const WorkspaceFileMode = () => {
     [imageViewActive, resetImageView, zoomImage]
   );
 
-  useInput((inputChar, key) => {
-    // The quick-open overlay owns the keyboard while it is up.
-    if (quickOpen) return;
-    if (handleGlobalKey(inputChar, key)) return;
-    if (paneFocus === "tree") handleTreeKey(key);
-    else if (!handleImageZoomKey(inputChar)) handlePreviewKey(key);
-  });
+  useWorkspacePanelInput(
+    (inputChar, key) => {
+      if (handleGlobalKey(inputChar, key)) return;
+      if (paneFocus === "tree") handleTreeKey(key);
+      else if (!handleImageZoomKey(inputChar)) handlePreviewKey(key);
+    },
+    // The quick-open overlay is the other workspace sub-surface: while it is up it owns the keys.
+    { when: !quickOpen }
+  );
 
   return (
     <Box flexDirection="column" flexGrow={1} width={screenWidth} height={bodyHeight + HEADER_LINES + FOOTER_LINES}>

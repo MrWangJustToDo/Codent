@@ -1,21 +1,15 @@
 /** Freeform mode: deny reasons and ask_user answer editing. */
 
-import { useInput } from "ink";
-
+import { useMainInput } from "../input";
 import { useSelect } from "../use-select.js";
-
-import { isAnyPanelOpen } from "./context.js";
 
 import type { KeybindingContext } from "./context.js";
 
 export function useFreeformModeKeybindings(ctx: KeybindingContext): void {
   const { inputActions, modeActions, selectActions, denyingRef, pendingAskUser, submitAskUserAnswer } = ctx;
 
-  useInput(
+  useMainInput(
     (inputChar, inputKey) => {
-      // Panel open: the panel's own useInput owns the keyboard — never leak
-      // typed characters into the hidden deny/ask_user draft.
-      if (isAnyPanelOpen()) return;
       if (inputKey.escape) {
         inputActions.clear();
         modeActions.setDenyMode(false);
@@ -100,6 +94,6 @@ export function useFreeformModeKeybindings(ctx: KeybindingContext): void {
         }
       }
     },
-    { isActive: ctx.mode === "freeform" }
+    { when: ctx.mode === "freeform" }
   );
 }

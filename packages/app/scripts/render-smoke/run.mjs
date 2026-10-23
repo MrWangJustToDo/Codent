@@ -32,7 +32,7 @@
 
 import "./neutralize-ci-env.mjs";
 
-import { createElement } from "@my-react/react";
+import { createElement, useState } from "@my-react/react";
 import { render } from "@my-react/react-terminal";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
@@ -40,6 +40,7 @@ import { Readable } from "node:stream";
 
 import { awaitStableMarker } from "./await-stable-marker.mjs";
 import { checks as budgetChecks } from "./budget-fixtures.mjs";
+import { ConfigEditor } from "./dist/components/ConfigEditor.mjs";
 import { ExitSummary } from "./dist/components/ExitSummary.mjs";
 import { MessageList, selectVisibleRows, MAX_STATIC_LINES } from "./dist/components/MessageList.mjs";
 import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
@@ -47,11 +48,11 @@ import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
 import { WorkspaceImagePreview } from "./dist/components/WorkspaceImagePreview.mjs";
 import { WorkspaceModeHeader } from "./dist/components/WorkspaceModeHeader.mjs";
 import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
+import { InputScopeProvider } from "./dist/context/input-scope-context.mjs";
 import { StaticContext } from "./dist/context/static-context.mjs";
-import { isAnyPanelOpen } from "./dist/hooks/keybindings/context.mjs";
+import { useExitInput, useMainInput, useWorkspacePanelInput } from "./dist/hooks/input/index.mjs";
 import { useAgentStatus } from "./dist/hooks/use-agent-status.mjs";
 import { useAgent } from "./dist/hooks/use-agent.mjs";
-import { useConfig } from "./dist/hooks/use-config.mjs";
 import { useDiffRenderer } from "./dist/hooks/use-diff-renderer.mjs";
 import { useDynamic } from "./dist/hooks/use-dynamic.mjs";
 import { useFlattenCacheCleanup } from "./dist/hooks/use-flatten-cache-cleanup.mjs";
@@ -1526,7 +1527,9 @@ console.error = realConsoleError;
 
   const listStdout = new FakeStdout();
   const listStdin = fakeStdin();
-  const listInstance = render(createElement(SubagentPanel, {}), {
+  // Wrapped in the `task` scope: a surface hook outside any scope is inert by design, which is
+  // what stops a stray panel from answering the chat's keys.
+  const listInstance = render(createElement(InputScopeProvider, { value: "task" }, createElement(SubagentPanel, {})), {
     stdout: listStdout,
     stdin: listStdin,
     exitOnCtrlC: false,
@@ -1593,16 +1596,16 @@ console.error = realConsoleError;
   useAgent.getActions().setSession(null);
 }
 
-// ── resume picker: the cursor must stay on screen, and it must own the keyboard ──
-// Two independent defects lived in this one component, and neither is visible in a static
-// render:
+// ── resume picker: the cursor must stay on screen ──────────────────────────
+// One defect lived in this component and it is not visible in a static render:
 //
-//   1. it rendered `sessions.slice(0, 10)` unconditionally, so past row 10 the `❯` cursor kept
-//      moving through a set that was no longer drawn — arrows appeared dead because a repaint
-//      with identical rows paints nothing.
-//   2. it did not register in `isAnyPanelOpen()`, so the chat keybindings underneath stayed
-//      live: ↓ both moved the cursor AND walked prompt history, and typed characters accumulated
-//      into the hidden prompt. The config editor hit exactly this and is why the gate exists.
+//   it rendered `sessions.slice(0, 10)` unconditionally, so past row 10 the `❯` cursor kept
+//   moving through a set that was no longer drawn — arrows appeared dead because a repaint
+//   with identical rows paints nothing.
+//
+// (The picker used to share this section with the `isAnyPanelOpen()` gate — arrows reaching the
+// chat's prompt history behind the picker. Input ownership is structural now: see the
+// `input routing` section, which asserts the same property through `InputScope`.)
 {
   const sessions = Array.from({ length: 12 }, (_, i) => ({
     id: `ses-${i}`,
@@ -1613,13 +1616,21 @@ console.error = realConsoleError;
 
   const pickerStdout = new FakeStdout();
   const pickerStdin = fakeStdin();
-  const pickerInstance = render(createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} }), {
-    stdout: pickerStdout,
-    stdin: pickerStdin,
-    exitOnCtrlC: false,
-    patchConsole: false,
-    maxFps: 30,
-  });
+  // The picker replaces the chat screen, so it takes the `main` scope.
+  const pickerInstance = render(
+    createElement(
+      InputScopeProvider,
+      { value: "main" },
+      createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} })
+    ),
+    {
+      stdout: pickerStdout,
+      stdin: pickerStdin,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      maxFps: 30,
+    }
+  );
   await settle(200);
 
   const press = async (seq, wait = 80) => {
@@ -1662,13 +1673,6 @@ console.error = realConsoleError;
   });
 
   pickerInstance.unmount();
-
-  // The gate: while the picker is up, the central keybindings must early-return.
-  record("the resume picker is not a panel by default", !isAnyPanelOpen(), { open: isAnyPanelOpen() });
-  useConfig.getActions().setConfig("resumeSession", "__picker__");
-  record("an open resume picker owns the keyboard", isAnyPanelOpen(), { open: isAnyPanelOpen() });
-  useConfig.getActions().setConfig("resumeSession", "");
-  record("closing the resume picker releases the keyboard", !isAnyPanelOpen(), { open: isAnyPanelOpen() });
 }
 
 // ── resume picker: a long title must not wrap the row ────────────────────────
@@ -1685,7 +1689,11 @@ console.error = realConsoleError;
   ];
   const Screen = () => {
     useSize.getActions().useInitTerminalSize();
-    return createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} });
+    return createElement(
+      InputScopeProvider,
+      { value: "main" },
+      createElement(SessionPicker, { sessions, onSelect: () => {}, onCancel: () => {} })
+    );
   };
 
   const titleStdout = new FakeStdout();
@@ -1974,6 +1982,188 @@ console.error = realConsoleError;
   await settle(300);
 
   useWorkspacePanel.getActions().resetImageView();
+  instance.unmount();
+}
+
+// ── input routing: one screen owns a keystroke ───────────────────────────────
+// The renderer broadcasts every keystroke to every subscribed handler, so "which screen owns the
+// keyboard" can only be expressed by WHICH handlers are subscribed. These mounts assert that
+// through the real hooks against the real renderer:
+//
+//   1. a `main` handler rendered inside the workspace screen is inert — the shape that used to
+//      leak (the chat's handlers stayed subscribed under every panel and each one had to remember
+//      `if (isAnyPanelOpen()) return`),
+//   2. a handler mounted by another handler's state change never sees the keystroke that mounted
+//      it — which is why the 300ms close debounce (`panelJustClosed`) could be deleted.
+{
+  const routingStdout = new FakeStdout();
+  const routingStdin = fakeStdin();
+  const seen = [];
+  const onKey = (id) => () => seen.push(id);
+
+  const MainProbe = ({ id, when }) => {
+    useMainInput(onKey(id), { when });
+    return null;
+  };
+  const WorkspaceProbe = ({ id, when }) => {
+    useWorkspacePanelInput(onKey(id), { when });
+    return null;
+  };
+
+  const Screen = () =>
+    createElement(
+      InputScopeProvider,
+      { value: "workspace" },
+      createElement(MainProbe, { id: "main", when: true }),
+      createElement(WorkspaceProbe, { id: "workspace", when: true }),
+      createElement(WorkspaceProbe, { id: "workspace-off", when: false })
+    );
+
+  const routingInstance = render(createElement(Screen), {
+    stdout: routingStdout,
+    stdin: routingStdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(120);
+
+  routingStdin.push("x");
+  await settle(80);
+  record("a keystroke reaches only the mounted surface's handlers", seen.join(",") === "workspace", {
+    seen: [...seen],
+  });
+
+  routingInstance.unmount();
+
+  // Same property, expressed as the close-on-the-same-keystroke race the debounce used to cover.
+  seen.length = 0;
+  const raceStdin = fakeStdin();
+  const Second = ({ id }) => {
+    useMainInput(onKey(id));
+    return null;
+  };
+  const Racer = () => {
+    const [armed, setArmed] = useState(false);
+    useMainInput(() => {
+      seen.push("first");
+      setArmed(true);
+    });
+    return armed ? createElement(Second, { id: "second" }) : null;
+  };
+  const raceInstance = render(createElement(InputScopeProvider, { value: "main" }, createElement(Racer)), {
+    stdout: new FakeStdout(),
+    stdin: raceStdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(120);
+
+  raceStdin.push("a");
+  await settle(80);
+  record("a handler mounted by this keystroke does not receive it", seen.join(",") === "first", { seen: [...seen] });
+
+  raceStdin.push("b");
+  await settle(80);
+  // Listener ORDER is not part of the contract: an inline handler re-subscribes on every render, so
+  // which of the two runs first is an implementation detail. What matters is that both run — the
+  // newly mounted one and the one that mounted it.
+  record("the next keystroke reaches both handlers", seen.slice(1).sort().join(",") === "first,second", {
+    seen: [...seen],
+  });
+
+  raceInstance.unmount();
+}
+
+// ── input routing: the two chords that are not a screen's own ─────────────────
+// Moving the handlers onto their screens deleted two things that used to come for free from an
+// always-subscribed global handler, and both were silent:
+//
+//   1. Ctrl+C stopped working everywhere except the chat (the renderer exits only on its own
+//      `exitOnCtrlC`, which the CLI sets to false) — so the exit chord is registered on every
+//      screen through `useExitInput`,
+//   2. the first-run config wizard is mounted by the HOST, outside `Agent`, so it had no scope and
+//      its handlers were inert — a fresh install could not be configured at all.
+{
+  const exitStdout = new FakeStdout();
+  const exitStdin = fakeStdin();
+  const seen = [];
+
+  const ExitProbe = () => {
+    useExitInput((input, key) => {
+      if (key.ctrl && input === "c") seen.push("exit");
+    });
+    return null;
+  };
+  const MainProbe = () => {
+    useMainInput((input) => seen.push(`main:${input}`));
+    return null;
+  };
+  const WorkspaceProbe = () => {
+    useWorkspacePanelInput((input) => seen.push(`workspace:${input}`));
+    return null;
+  };
+
+  const instance = render(
+    createElement(
+      InputScopeProvider,
+      { value: "workspace" },
+      createElement(ExitProbe),
+      createElement(MainProbe),
+      createElement(WorkspaceProbe)
+    ),
+    { stdout: exitStdout, stdin: exitStdin, exitOnCtrlC: false, patchConsole: false, maxFps: 30 }
+  );
+  await settle(120);
+
+  exitStdin.push("\u0003"); // Ctrl+C
+  await settle(80);
+  record("Ctrl+C is handled while a panel owns the screen", seen.includes("exit"), { seen: [...seen] });
+  record("and it does not reach the chat's handlers", !seen.some((s) => s.startsWith("main:")), { seen: [...seen] });
+
+  instance.unmount();
+}
+
+// ── the config wizard's keys live inside a scope ──
+// The first-run wizard is mounted directly by the CLI host, so nothing in `Agent` wraps it. It was
+// keyboard-dead until the host provided the `main` scope; this mount pins the component itself.
+{
+  const wizardStdout = new FakeStdout();
+  const wizardStdin = fakeStdin();
+  const chosenStyle = () =>
+    frameLines(wizardStdout)
+      .map((l) => l.match(/^\s*\S?\s*(openai|anthropic)$/)?.[1])
+      .find((v) => v);
+  const cursorStyle = () =>
+    frameLines(wizardStdout)
+      .map((l) => l.match(/❯\s*(openai|anthropic)/)?.[1])
+      .find((v) => v);
+
+  const instance = render(
+    createElement(
+      InputScopeProvider,
+      { value: "main" },
+      createElement(ConfigEditor, {
+        onDone: () => {},
+        onCancel: () => {},
+        parseModelsConfig: (raw) => JSON.parse(raw),
+        saveModelsConfig: async () => {},
+      })
+    ),
+    { stdout: wizardStdout, stdin: wizardStdin, exitOnCtrlC: false, patchConsole: false, maxFps: 30 }
+  );
+  await settle(200);
+
+  record("the config wizard opens on the style step", Boolean(chosenStyle()), { styles: [chosenStyle()] });
+  const first = cursorStyle();
+  wizardStdin.push("\u001B[B"); // ↓
+  await settle(120);
+  record("a scoped keypress reaches the config wizard", Boolean(first) && cursorStyle() !== first, {
+    before: first,
+    after: cursorStyle(),
+  });
+
   instance.unmount();
 }
 

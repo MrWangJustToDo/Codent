@@ -1,10 +1,11 @@
 /**
  * Central keybinding orchestrator — builds the shared {@link KeybindingContext}
- * and registers one `useInput` handler per input mode.
+ * and registers one handler per input mode.
  *
- * Mode handlers live in `hooks/keybindings/*`; each must early-return while an
- * overlay panel or the extension confirm dialog owns the keyboard (Ink
- * broadcasts every keystroke to all handlers — see keybindings/context.ts).
+ * Mode handlers live in `hooks/keybindings/*` and register through `useMainInput`, so they are
+ * subscribed only while the chat screen is on screen; the mode itself is the `when` predicate.
+ * `ChatKeybindings` is the only caller, and it renders inside the `main` `InputScope` — a panel
+ * therefore cannot receive these keys, and a handler no longer needs an open-panel early return.
  */
 
 import { getActiveSession } from "../utils/session-resolve.js";

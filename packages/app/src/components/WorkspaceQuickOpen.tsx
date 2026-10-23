@@ -1,7 +1,8 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
+import { useWorkspacePanelInput } from "../hooks/input";
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { BG, COLORS } from "../theme/colors.js";
 import { formatIconGlyph, getFileIconStyle } from "../utils/file-icons.js";
@@ -102,7 +103,8 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
     selectFile(joinWorkspacePath(env, rootPath, result.path));
   };
 
-  useInput((inputChar, key) => {
+  // Only mounted while `quickOpen` is set, which is the workspace sub-surface that owns the keys.
+  useWorkspacePanelInput((inputChar, key) => {
     if (key.escape) {
       closeQuickOpen();
       return;
@@ -127,7 +129,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
       setQuickOpenQuery("");
       return;
     }
-    if (inputChar) {
+    if (inputChar && !key.ctrl && !key.meta) {
       setQuickOpenQuery(query + inputChar);
     }
   });

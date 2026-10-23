@@ -6,7 +6,6 @@ import { exitWithSummary } from "../utils/exit-with-summary.js";
 import { queuedTailIsText } from "../utils/queue-preview.js";
 import { getActiveHost, getActiveSession } from "../utils/session-resolve.js";
 
-import { useAgentKeybindings } from "./use-agent-keybindings.js";
 import { useAutocomplete } from "./use-autocomplete.js";
 import { useCommandOutput } from "./use-command-output.js";
 import { useInputMode } from "./use-input-mode.js";
@@ -17,6 +16,7 @@ import type { AgentAdapter } from "../adapter/types.js";
 import type { CommandContext } from "../commands";
 import type { DenyingToolInfo } from "./keybindings/context.js";
 import type { UseAgentChatReturn } from "./use-agent-chat.js";
+import type { UseAgentKeybindingsOptions } from "./use-agent-keybindings.js";
 import type { UIMessage } from "@tanstack/ai";
 
 interface UseAgentInputControlsOptions {
@@ -41,6 +41,17 @@ interface UseAgentInputControlsOptions {
   saveSessionFromChat: UseAgentChatReturn["saveSessionFromChat"];
 }
 
+/**
+ * The chat screen's state and handlers: everything the main screen needs that is *not* a keyboard
+ * registration.
+ *
+ * Registration lives in `ChatKeybindings`, which the chat screen mounts, so the handlers are
+ * subscribed only while that screen is on screen. What stays here runs regardless of which screen
+ * is up — an approval or `ask_user` arriving while a panel is open still switches the input mode
+ * and fills the select store, so closing the panel leaves `y` / `n` usable immediately.
+ *
+ * @returns The keybinding context for `useAgentKeybindings` (called from inside the `main` scope).
+ */
 export function useAgentInputControls({
   adapter,
   initialPrompt,
@@ -61,7 +72,7 @@ export function useAgentInputControls({
   allPendingApproval,
   allPendingAskUser,
   saveSessionFromChat,
-}: UseAgentInputControlsOptions): void {
+}: UseAgentInputControlsOptions): UseAgentKeybindingsOptions {
   const hasInitRef = useRef(false);
   const denyingRef = useRef<DenyingToolInfo | null>(null);
   const askUserStartTimeRef = useRef<number>(0);
@@ -261,7 +272,7 @@ export function useAgentInputControls({
     await sendMessage(content);
   };
 
-  useAgentKeybindings({
+  return {
     adapter,
     mode,
     isLoading,
@@ -282,5 +293,5 @@ export function useAgentInputControls({
     handleRecallQueued,
     submitAskUserAnswer,
     addToolApprovalResponse,
-  });
+  };
 }
