@@ -682,16 +682,52 @@ function scoreModelEntry(data: ModelsDevModel): number {
  *
  * Not a weight, either: `scoreModelEntry` must keep ranking metadata richness on its own, or a bare
  * entry that merely advertises levels would outrank a fully-described paid listing.
+ *
+ * Third tier — {@link makerRank}: equal score + equal level evidence still leaves up to two dozen
+ * vendor entries, and they disagree about PRICE (not about the model). The maker's own listing wins;
+ * everything else stays in payload order.
  */
 function compareModelEntries(
-  a: { modelData: ModelsDevModel; score: number },
-  b: { modelData: ModelsDevModel; score: number }
+  a: { provId: string; modelData: ModelsDevModel; score: number },
+  b: { provId: string; modelData: ModelsDevModel; score: number }
 ): number {
   if (a.score !== b.score) return b.score - a.score;
   const aHasLevels = namedEffortValues(a.modelData).length > 0;
   const bHasLevels = namedEffortValues(b.modelData).length > 0;
-  if (aHasLevels === bHasLevels) return 0;
-  return bHasLevels ? 1 : -1;
+  if (aHasLevels !== bHasLevels) return bHasLevels ? 1 : -1;
+  // Ties beyond this point stay in payload order on purpose: re-ordering them would also move which
+  // entry's DEPTH LIST wins, and a working menu must not change just because vendors are compared
+  // differently (the corpus check in `validate:models-dev-lookup` pins that).
+  return makerRank(a.provId, a.modelData) - makerRank(b.provId, b.modelData);
+}
+
+/**
+ * Rank a provider entry by whether its vendor IS the model's maker (`0`) or a reseller (`1`).
+ *
+ * The same model id is listed by the maker and by up to two dozen resellers, and PRICE is the one
+ * field where they legitimately disagree: `deepseek-v4.1-flash` is listed at cache-read `$0.0027`
+ * by one gateway and `$0.15` by another — a 55× spread on identical tokens, measured against this
+ * repo's own usage ledger, which had already priced one session at 13 different vendors' rates.
+ * Richness cannot separate them (they carry the same fields, so 22 of 25 tied at one score), so
+ * before this tier the winner was whatever the payload listed first and a session's displayed cost
+ * moved by ~10× across restarts.
+ *
+ * models.dev publishes model LINES in `family` (`deepseek-flash`, `claude-sonnet`, `glm-flash`), not
+ * vendors, so the brand is the leading token: `deepseek-flash` → `deepseek`. When it names a vendor,
+ * that vendor publishes the model itself and its price is the author's price. When nothing matches
+ * (e.g. `claude-sonnet` vs vendor `anthropic`) every candidate ranks `1` — no opinion — because this
+ * is a tie-break, not a filter, and "an unknown maker means no price at all" is a pricing-source
+ * decision, not a ranking one.
+ *
+ * The bare-id prefix is deliberately NOT repeated here: strategy 1 already resolves `vendor/model`
+ * against that vendor before this comparator runs, so a prefix preference here could never fire.
+ */
+function makerRank(provId: string, modelData: ModelsDevModel): number {
+  const family = modelData.family?.trim().toLowerCase();
+  if (!family) return 1;
+  const brand = family.split(/[-_:]/)[0];
+  const vendor = provId.toLowerCase();
+  return vendor === family || vendor === brand ? 0 : 1;
 }
 
 /**

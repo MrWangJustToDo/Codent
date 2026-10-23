@@ -153,6 +153,96 @@ const FIXTURE_VENDORS = {
       },
     },
   },
+  // Vendor identity (third tier). Identical metadata, identical level evidence, different PRICE —
+  // which is the one field real resellers disagree about. `reseller-first` is listed BEFORE the
+  // maker, so payload order alone would pick it.
+  "reseller-first": {
+    models: {
+      "maker-model": {
+        id: "maker-model",
+        family: "makerline-pro",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+        cost: { input: 9, output: 27, cache_read: 0.9 },
+        limit: { context: 200000, output: 64000 },
+        tool_call: true,
+        attachment: true,
+        structured_output: true,
+        modalities: { input: ["text"], output: ["text"] },
+        knowledge: "2025-01",
+        release_date: "2025-01-01",
+      },
+    },
+  },
+  makerline: {
+    models: {
+      "maker-model": {
+        id: "maker-model",
+        family: "makerline-pro",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+        cost: { input: 1, output: 3, cache_read: 0.1 },
+        limit: { context: 200000, output: 64000 },
+        tool_call: true,
+        attachment: true,
+        structured_output: true,
+        modalities: { input: ["text"], output: ["text"] },
+        knowledge: "2025-01",
+        release_date: "2025-01-01",
+      },
+    },
+  },
+  // Same shape, but NO vendor matches the family — the tier must stay a tie-break (payload order
+  // decides), never a filter that drops the price or the entry.
+  "unknown-alpha": {
+    models: {
+      "anon-model": {
+        id: "anon-model",
+        family: "anonline-pro",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low"] }],
+        cost: { input: 8, output: 16 },
+      },
+    },
+  },
+  "unknown-beta": {
+    models: {
+      "anon-model": {
+        id: "anon-model",
+        family: "anonline-pro",
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["low"] }],
+        cost: { input: 7, output: 14 },
+      },
+    },
+  },
+  // Richness must still outrank vendor identity: a poorer maker listing loses to a richer reseller.
+  "makerline-bare": {
+    models: {
+      "rich-reseller-model": {
+        id: "rich-reseller-model",
+        family: "makerline-pro",
+        reasoning: true,
+        cost: { input: 2, output: 4 },
+      },
+    },
+  },
+  "rich-reseller": {
+    models: {
+      "rich-reseller-model": {
+        id: "rich-reseller-model",
+        reasoning: true,
+        cost: { input: 5, output: 15 },
+        limit: { context: 200000, output: 64000 },
+        tool_call: true,
+        attachment: true,
+        structured_output: true,
+        modalities: { input: ["text"], output: ["text"] },
+        knowledge: "2025-01",
+        release_date: "2025-01-01",
+      },
+    },
+  },
 };
 
 const cachePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.agents/cache/models-dev.json");
@@ -305,6 +395,39 @@ if (!hasCache) {
     assert.ok(withMenu > 200, `expected many models to have a depth menu, saw ${withMenu}`);
   });
 }
+
+// ============================================================================
+// 5. Third tier: the model's own vendor beats a reseller, but never beats richness
+// ============================================================================
+
+await check("the maker's own listing wins a full tie, even when listed second", async () => {
+  const winner = await lookupModelFromModelsDev("maker-model");
+  assert.ok(winner, "the model must resolve");
+  // Both entries carry the same fields (score), the same level list, and differ only in price —
+  // which is exactly how real resellers differ. `reseller-first` is earlier in the payload, so a
+  // pass here can only come from the vendor tier.
+  assert.equal(winner.pricing?.inputPerM, 1, "pricing must come from the vendor that publishes the model");
+  assert.equal(
+    winner.pricing?.cacheReadPerM,
+    0.1,
+    "the cache tier included — it is the field resellers differ on most"
+  );
+});
+
+await check("with no vendor matching the family, the tie stays a tie (payload order)", async () => {
+  // The tier must not become a filter: an unknown maker cannot mean "drop the price" or "drop the
+  // entry". Both candidates rank `1`, so the first-listed one still decides.
+  const winner = await lookupModelFromModelsDev("anon-model");
+  assert.ok(winner, "the model must still resolve");
+  assert.equal(winner.pricing?.inputPerM, 8, "no vendor matched the family, so the existing order decides");
+});
+
+await check("a richer reseller still beats a poorer maker listing", async () => {
+  const winner = await lookupModelFromModelsDev("rich-reseller-model");
+  assert.ok(winner, "the model must resolve");
+  assert.equal(winner.contextWindow, 200000, "metadata richness outranks vendor identity, as the tier order says");
+  assert.equal(winner.pricing?.inputPerM, 5, "and the price comes with the winner, not from the maker");
+});
 
 // ============================================================================
 
