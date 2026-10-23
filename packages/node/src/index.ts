@@ -67,6 +67,22 @@ function describeProcessFailure(
     return { stdout: out, stderr: errText || err.message, code: null, missing: true };
   }
 
+  // `execFile` kills a child that exceeds maxBuffer. The partial stdout is still a
+  // valid (truncated) capture — unlike a timeout/abort, where returning it as complete
+  // would be a false answer.
+  if (
+    spawnErrorCode === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
+    /maxbuffer|max buffer/i.test(`${err.message} ${errText}`)
+  ) {
+    return {
+      stdout: out,
+      stderr: errText || err.message,
+      code: null,
+      killed: true,
+      truncated: true,
+    };
+  }
+
   return {
     stdout: out,
     stderr: errText || err.message,

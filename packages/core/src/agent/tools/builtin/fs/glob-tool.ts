@@ -8,13 +8,13 @@ import { globOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 import { canExecArgs, execArgsCapture } from "../shell/exec-args.js";
 
+import { expandBraceGlobs, filterGlobOutput, findPathPattern } from "./search/glob-pattern.js";
 import {
-  DEFAULT_EXCLUDE_DIRS,
+  activeExcludeDirs,
   SEARCH_COMMAND_TIMEOUT,
   isCommandNotFound,
   quoteForShell,
   resolveSearchPath,
-  truncateLines,
 } from "./search/search-command.js";
 
 import type { CoreEnv } from "../../../../env";
@@ -48,9 +48,25 @@ function buildFdArgs(
     args.push("--type", "file");
   }
 
-  args.push("--glob", pattern);
+  // `fd --glob` matches a basename unless `--full-path` is present. A pattern with a
+  // directory segment (`packages/*/package.json`, `.agents/**`) would otherwise silently
+  // match nothing. Prefix a path pattern with `**/` so it can start at any depth; the
+  // JS result filter applies the exact segment semantics afterwards.
+  const normalized = pattern.replace(/^\.\//, "");
+  const hasPathSegment = normalized.includes("/");
+  const fdPattern = hasPathSegment && !normalized.startsWith("**/") ? `**/${normalized}` : normalized;
+  args.push("--glob", fdPattern);
+  // With `--full-path`, `*.json` is matched against `./package.json`, where `*` cannot
+  // cross the leading slash and therefore finds nothing. Only switch on full-path mode
+  // for path patterns; basename patterns keep fd's native basename matching.
+  if (hasPathSegment) {
+    args.push("--full-path");
+  }
+  // `glob` is a filesystem query, not a git query: `.agents/**` and other intentionally
+  // ignored/hidden trees are valid targets. Keep the common build/cache exclusions below.
+  args.push("--hidden", "--no-ignore");
 
-  for (const dir of DEFAULT_EXCLUDE_DIRS) {
+  for (const dir of activeExcludeDirs(searchPath)) {
     args.push("--exclude", dir);
   }
 
@@ -64,22 +80,6 @@ function buildFdArgs(
 
 /** Both `fd` spellings: `fd` upstream, `fdfind` on Debian/Ubuntu. */
 const FD_BINARIES = ["fd", "fdfind"];
-
-/**
- * Convert a glob into a `find -path` pattern.
- *
- * `find -path` treats `*` as matching `/` too, so a double-star slash segment can be
- * collapsed to a single `*` instead of the old star-slash rewrite. That rewrite required
- * one directory between every double-star segment and the target, so a nested code-mode
- * glob missed `packages/core/src/agent/code-mode/extension.ts` and returned an empty list.
- */
-function findPathPattern(pattern: string): string {
-  return pattern
-    .replace(/\/\*\*\//g, "/*")
-    .replace(/^\*\*\//, "*")
-    .replace(/\/\*\*$/g, "/*")
-    .replace(/\*\*/g, "*");
-}
 
 /**
  * `find` arguments, as an argv vector.
@@ -96,13 +96,33 @@ function buildFindArgs(
   const args: string[] = [searchPath];
   if (typeFlag) args.push("-type", typeFlag);
   if (hasPathSeparator) {
-    args.push("-path", findPathPattern(pattern));
+    // `find` prints paths relative to cwd, including the leading `./` when searching `.`.
+    // A path pattern without that prefix therefore never matches a relative literal path
+    // (`packages/core/src/index.ts`) or `.agents/**`.
+    const prefix = searchPath === "." ? "./" : `${searchPath.replace(/\/+$/, "")}/`;
+    args.push("-path", `${prefix}${findPathPattern(pattern.replace(/^\.\//, ""))}`);
   } else {
     args.push("-name", namePattern);
   }
 
-  for (const dir of [...DEFAULT_EXCLUDE_DIRS, ...(options.exclude ? [options.exclude] : [])]) {
+  for (const dir of activeExcludeDirs(searchPath)) {
     args.push("-not", "-path", `*/${dir}/*`, "-not", "-path", `*/${dir}`);
+  }
+  if (options.exclude) {
+    // `fd --exclude` accepts a file glob (e.g. `*.log`) as well as a directory name.
+    // Mirror both cases here: path pruning handles descendants of an excluded directory,
+    // `-name` handles file names and the directory entry itself.
+    args.push(
+      "-not",
+      "-path",
+      `*/${options.exclude}/*`,
+      "-not",
+      "-path",
+      `*/${options.exclude}`,
+      "-not",
+      "-name",
+      options.exclude
+    );
   }
 
   return args;
@@ -135,13 +155,13 @@ async function runGlobSearch(
         cwd: env.rootPath,
         signal: options.signal,
       });
-      if (stdout !== undefined) return truncateLines(stdout, options.fetchCount);
+      if (stdout !== undefined) return filterGlobOutput(stdout, pattern, searchPath, options.fetchCount, env);
     }
     const findStdout = await execArgsCapture(env, "find", buildFindArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (findStdout !== undefined) return truncateLines(findStdout, options.fetchCount);
+    if (findStdout !== undefined) return filterGlobOutput(findStdout, pattern, searchPath, options.fetchCount, env);
     // Both binaries are absent — an empty result is the honest answer. Falling through to
     // the shell path would only re-attempt the same missing binaries.
     return "";
@@ -156,7 +176,8 @@ async function runGlobSearch(
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (!isCommandNotFound(result.exitCode)) return truncateLines(result.stdout, options.fetchCount);
+    if (!isCommandNotFound(result.exitCode))
+      return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env);
   }
   const findArgv = buildFindArgs(pattern, searchPath, options).map(quoteForShell);
   const findResult = await env.runCommand(`find ${findArgv.join(" ")}`, {
@@ -164,7 +185,7 @@ async function runGlobSearch(
     cwd: env.rootPath,
     signal: options.signal,
   });
-  return truncateLines(findResult.stdout, options.fetchCount);
+  return filterGlobOutput(findResult.stdout, pattern, searchPath, options.fetchCount, env);
 }
 
 export const createGlobTool = () => {
@@ -173,7 +194,7 @@ export const createGlobTool = () => {
     present: { category: "searches" },
     description:
       "Finds paths matching a glob pattern (e.g. '**/*.ts', 'src/**/*.json'). Prefer over tree/list_file when you know a filename pattern; use grep to search file contents. " +
-      "Uses `fd` when available (respects .gitignore), falls back to `find`. " +
+      "Uses `fd` when available (includes hidden/ignored paths, excluding common build dirs), falls back to `find`. " +
       "Supports pagination, type filtering (file/directory), and automatic exclusion of common non-source directories.",
     inputSchema: z.object({
       pattern: z
@@ -208,7 +229,12 @@ export const createGlobTool = () => {
         const searchPath = resolveSearchPath(coreEnv, path);
         const skip = offset ?? 0;
         const take = limit ?? DEFAULT_LIMIT;
-        const fileType = type ?? "file";
+        // A trailing slash is the conventional directory spelling (`src/`, `src/**/`).
+        // Strip it before matching and treat it as a directory query; otherwise the
+        // command-side pattern literally required a path ending in `/`, which no result has.
+        const directoryPattern = pattern.length > 1 && pattern.endsWith("/");
+        const effectivePattern = directoryPattern ? pattern.replace(/\/+$/, "") : pattern;
+        const fileType = directoryPattern ? "directory" : (type ?? "file");
         const fetchCount = skip + take + 1;
 
         const searchOptions = {
@@ -224,7 +250,11 @@ export const createGlobTool = () => {
         // there. `resolveSearchPath` reads the path only, so the search is the only stoppable step.
         let rawOutput: string;
         try {
-          rawOutput = await runGlobSearch(coreEnv, pattern, searchPath, searchOptions);
+          const patterns = expandBraceGlobs(effectivePattern);
+          const parts = await Promise.all(
+            patterns.map((candidate) => runGlobSearch(coreEnv, candidate, searchPath, searchOptions))
+          );
+          rawOutput = [...new Set(parts.flatMap((part) => part.split("\n").filter(Boolean)))].join("\n");
         } catch (err) {
           if (!isAbortError(err, abortSignal)) throw err;
           return {
@@ -238,7 +268,7 @@ export const createGlobTool = () => {
 
         const allFiles = rawOutput
           .split("\n")
-          .map((line) => line.trim())
+          .map((line) => line.replace(/\r$/, ""))
           .filter((line) => line.length > 0);
 
         if (allFiles.length === 0) {
@@ -290,7 +320,7 @@ export const createGlobTool = () => {
         {
           type: "text" as const,
           content:
-            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}` +
+            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}\n` +
             (output.content || output.files?.join("\n")),
         },
       ];

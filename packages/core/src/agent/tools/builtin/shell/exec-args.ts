@@ -44,6 +44,8 @@ export interface ExecArgsResult {
   missing: boolean;
   /** True when the process was killed (timeout or abort) and so has no exit status. */
   killed: boolean;
+  /** True when the host stopped capturing at its buffer ceiling and stdout is partial. */
+  truncated: boolean;
 }
 
 /**
@@ -93,7 +95,7 @@ export async function execArgs(
   // caller decides what fallback to use; reporting `missing` here keeps that decision with
   // the caller instead of silently producing wrong output.
   if (!env.execFile) {
-    return { stdout: "", stderr: "", code: null, missing: true, killed: false };
+    return { stdout: "", stderr: "", code: null, missing: true, killed: false, truncated: false };
   }
 
   // Never spawn for a run that is already over: the child would be killed immediately anyway, and
@@ -106,7 +108,7 @@ export async function execArgs(
     signal: options.signal,
   });
   if (!result) {
-    return { stdout: "", stderr: "", code: null, missing: true, killed: false };
+    return { stdout: "", stderr: "", code: null, missing: true, killed: false, truncated: false };
   }
 
   // Prefer the host's own classification when it provides one (the Node adapter does), and fall
@@ -120,6 +122,7 @@ export async function execArgs(
   const code = result.code ?? null;
   const missing = result.missing === true || (code !== 0 && looksLikeMissingBinary(code, result.stderr));
   const killed = result.killed === true;
+  const truncated = result.truncated === true;
 
   return {
     stdout: result.stdout ?? "",
@@ -129,6 +132,7 @@ export async function execArgs(
     // distinction decides whether a killed search reads as "no matches" or as a failure.
     missing,
     killed,
+    truncated,
   };
 }
 
@@ -158,7 +162,9 @@ export async function execArgsCapture(
   options: ExecArgsOptions = {}
 ): Promise<string | undefined> {
   const result = await execArgs(env, file, args, options);
-  if (result.missing || result.killed) return undefined;
+  // A buffer-ceiling kill still carries usable partial output. A plain kill (timeout or
+  // abort) does not: returning its partial output as a complete answer would be a lie.
+  if (result.missing || (result.killed && !result.truncated)) return undefined;
   return truncateToUtf8Bytes(result.stdout, SEARCH_OUTPUT_BYTE_LIMIT).text;
 }
 

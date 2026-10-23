@@ -17,7 +17,14 @@
 
 import { readFileSync } from "node:fs";
 
-import { createGlobTool, createGrepTool, clearCoreEnv, execArgsCapture, registerCoreEnv } from "../dist/dev.mjs";
+import {
+  createGlobTool,
+  createGrepTool,
+  clearCoreEnv,
+  execArgsCapture,
+  getEnv,
+  registerCoreEnv,
+} from "../dist/dev.mjs";
 
 let failures = 0;
 function check(label, condition, detail = "") {
@@ -55,7 +62,7 @@ function envWithoutRipgrep() {
       stat: async () => ({ isDirectory: false, isFile: true, size: 1, mtime: new Date() }),
     },
     runCommand: async (command) => ({
-      stdout: command.startsWith("find") ? "/repo/src/a.ts\n/repo/src/b.ts\n" : "src/a.ts:12:const x = 1;\n",
+      stdout: command.startsWith("find") ? "./src/a.ts\n./src/b.ts\n" : "src/a.ts:12:const x = 1;\n",
       stderr: "",
       exitCode: 0,
       durationMs: 1,
@@ -72,7 +79,7 @@ function envWithoutRipgrep() {
         return { stdout: "", stderr: err.message, code };
       }
       return {
-        stdout: file === "find" ? "/repo/src/a.ts\n/repo/src/b.ts\n" : "src/a.ts:12:const x = 1;\n",
+        stdout: file === "find" ? "./src/a.ts\n./src/b.ts\n" : "src/a.ts:12:const x = 1;\n",
         stderr: "",
         code: 0,
       };
@@ -93,6 +100,17 @@ check(
   globResult.files.length > 0,
   `files=${JSON.stringify(globResult.files)}`
 );
+check(
+  "glob normalizes workspace-relative paths without ./ or an absolute root",
+  globResult.files.every((file) => !file.startsWith("./") && !file.startsWith("/repo/")),
+  `files=${JSON.stringify(globResult.files)}`
+);
+
+const braceGlob = await createGlobTool().execute(
+  { pattern: "**/*.{ts,tsx}", path: "." },
+  { toolCallId: "t-glob-brace" }
+);
+check("glob expands brace alternatives", braceGlob.files.length > 0, JSON.stringify(braceGlob.files));
 
 // `find -path` treats `*` as matching `/`, so the old `**/` -> `*/` rewrite added one
 // mandatory directory between every double-star segment and the target. A nested glob
@@ -105,7 +123,16 @@ check(
     execFile: async (file, args) => {
       if (file === "fd" || file === "fdfind") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
       findArgs = args;
-      return { stdout: "/repo/packages/core/src/agent/code-mode/extension.ts\n", stderr: "", code: 0 };
+      const pathArg = args[args.indexOf("-path") + 1] ?? "";
+      return {
+        stdout: pathArg.includes(".agents")
+          ? "./.agents/sessions/test.jsonl\n"
+          : pathArg.includes("index.ts")
+            ? "./packages/core/src/index.ts\n"
+            : "./packages/core/src/agent/code-mode/extension.ts\n",
+        stderr: "",
+        code: 0,
+      };
     },
   });
   const nested = await createGlobTool().execute(
@@ -114,11 +141,27 @@ check(
   );
   const pathIdx = findArgs?.indexOf("-path") ?? -1;
   check(
-    "nested double-star glob uses a gap-tolerant find predicate",
-    pathIdx >= 0 && findArgs[pathIdx + 1] === "*code-mode/*.ts",
+    "nested double-star glob uses a gap-tolerant find predicate with the cwd prefix",
+    pathIdx >= 0 && findArgs[pathIdx + 1] === "./*code-mode/*.ts",
     `find args=${JSON.stringify(findArgs)}`
   );
   check("nested double-star glob returns the matching file", nested.files.length === 1, JSON.stringify(nested.files));
+
+  // Literal path prefixes and hidden directories must not depend on the fallback's
+  // `find .` output shape. These were the false-empty cases reported by the session.
+  for (const [pattern, expected] of [
+    [".agents/**/*.jsonl", "./.agents/*.jsonl"],
+    ["packages/core/src/index.ts", "./packages/core/src/index.ts"],
+  ]) {
+    const out = await createGlobTool().execute({ pattern, path: "." }, { toolCallId: `t-${expected}` });
+    const idx = findArgs?.indexOf("-path") ?? -1;
+    check(
+      `literal/glob path predicate includes cwd prefix for ${pattern}`,
+      idx >= 0 && findArgs[idx + 1] === expected,
+      `find args=${JSON.stringify(findArgs)}`
+    );
+    check(`literal/glob path returns a result for ${pattern}`, out.files.length === 1, JSON.stringify(out.files));
+  }
 }
 
 clearCoreEnv();
@@ -202,6 +245,171 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// grep argv / parsing regressions found by the real-filesystem audit
+// ---------------------------------------------------------------------------
+
+{
+  let countArgs;
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file, args) => {
+      if (file === "rg") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      if (file === "grep") {
+        countArgs = args;
+        return { stdout: "src/a.ts:1997\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  const count = await createGrepTool().execute(
+    { pattern: "state", path: "src", outputMode: "count", limit: 5 },
+    { toolCallId: "t-count-limit" }
+  );
+  check("count mode does not pass -m (GNU grep caps the count with it)", !countArgs?.includes("-m"));
+  check(
+    "count mode keeps the full per-file count",
+    count.matches[0]?.content === "Count: 1997",
+    JSON.stringify(count.matches)
+  );
+}
+
+{
+  let contentArgs;
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file, args) => {
+      if (file === "rg") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      contentArgs = args;
+      // NUL after the path is what `grep -Z` / `rg --null` emit.
+      return { stdout: "src/a.ts\u00001:-beta flag\n", stderr: "", code: 0 };
+    },
+  });
+  const dash = await createGrepTool().execute({ pattern: "-beta", path: "src" }, { toolCallId: "t-dash" });
+  check(
+    "a pattern beginning with - is passed through -e",
+    contentArgs?.includes("-e") && contentArgs?.includes("-beta")
+  );
+  check("grep requests unambiguous NUL file boundaries", contentArgs?.includes("-Z"));
+  check(
+    "a leading-dash pattern still matches",
+    dash.matches[0]?.content === "-beta flag",
+    JSON.stringify(dash.matches)
+  );
+}
+
+{
+  let includeArgs;
+  clearCoreEnv();
+  const includeBase = envWithoutRipgrep();
+  registerCoreEnv({
+    ...includeBase,
+    fs: {
+      ...includeBase.fs,
+      stat: async () => ({ isDirectory: true, isFile: false, size: 1, mtime: new Date() }),
+    },
+    execFile: async (file, args) => {
+      if (file === "rg") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      includeArgs = args;
+      return {
+        stdout: "src/root.ts\u00001:export root\nsrc/nested/a.ts\u00001:export nested\n",
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  const nested = await createGrepTool().execute(
+    { pattern: "export", path: "src", include: "nested/*.ts", limit: 5 },
+    { toolCallId: "t-include-path" }
+  );
+  check("path include uses a basename pre-filter for grep", includeArgs?.includes("*.ts"));
+  check(
+    "path include is applied in JS before pagination",
+    nested.matches.length === 1 && nested.matches[0]?.file === "src/nested/a.ts",
+    JSON.stringify(nested.matches)
+  );
+}
+
+{
+  let rgArgs;
+  clearCoreEnv();
+  const rgBase = envWithoutRipgrep();
+  registerCoreEnv({
+    ...rgBase,
+    fs: {
+      ...rgBase.fs,
+      stat: async () => ({ isDirectory: true, isFile: false, size: 1, mtime: new Date() }),
+    },
+    execFile: async (file, args) => {
+      if (file === "rg") {
+        rgArgs = args;
+        return { stdout: "src/nested/a.ts\u00001:export nested\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    },
+  });
+  const nested = await createGrepTool().execute(
+    { pattern: "export", path: "src", include: "nested/*.ts", limit: 5 },
+    { toolCallId: "t-rg-include-path" }
+  );
+  check("rg path include is made depth-tolerant", rgArgs?.includes("**/nested/*.ts"));
+  check(
+    "rg path include keeps the exact relative match",
+    nested.matches.length === 1 && nested.matches[0]?.file === "src/nested/a.ts",
+    JSON.stringify(nested.matches)
+  );
+}
+
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async (file) => {
+      if (file === "rg") return { stdout: "", stderr: "spawn ENOENT", code: 127 };
+      return {
+        // A real match whose text starts with the context marker, followed by its context.
+        stdout: "src/a.ts\u00001:[context] needle here\nsrc/a.ts\u00002-other\n",
+        stderr: "",
+        code: 0,
+      };
+    },
+  });
+  const sentinel = await createGrepTool().execute(
+    { pattern: "needle", path: "src", context: 1 },
+    { toolCallId: "t-context-sentinel" }
+  );
+  check(
+    "a real match beginning with [context] is not dropped",
+    sentinel.matches.some((match) => match.lineNumber === 1 && match.content === "[context] needle here"),
+    JSON.stringify(sentinel.matches)
+  );
+
+  const one = await createGrepTool().execute(
+    { pattern: "needle", path: "src", context: 1 },
+    { toolCallId: "t-context-one" }
+  );
+  check("one-match context keeps the surrounding rows", one.matches.length === 2, JSON.stringify(one.matches));
+}
+
+// A buffer-ceiling kill carries partial output; a timeout/abort does not.
+{
+  clearCoreEnv();
+  registerCoreEnv({
+    ...envWithoutRipgrep(),
+    execFile: async () => ({
+      stdout: "partial",
+      stderr: "maxBuffer exceeded",
+      code: null,
+      killed: true,
+      truncated: true,
+    }),
+  });
+  const partial = await execArgsCapture(getEnv(), "grep", ["x"]);
+  check("truncated capture keeps usable partial output", partial === "partial", JSON.stringify(partial));
+}
+
+// ---------------------------------------------------------------------------
 // the invariant: a genuinely empty search must still read as empty, not as a failure
 // ---------------------------------------------------------------------------
 
@@ -282,7 +490,7 @@ registerCoreEnv(
         { stdout: "", stderr: "", code: null, killed: true }
   )
 );
-const killed = await execArgsCapture("find", [".", "-name", "x"]);
+const killed = await execArgsCapture(getEnv(), "find", [".", "-name", "x"]);
 check(
   "a killed search is signalled as unavailable, not as an empty result",
   killed === undefined,

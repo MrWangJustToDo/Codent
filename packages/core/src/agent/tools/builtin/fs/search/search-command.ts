@@ -12,6 +12,17 @@ export const SEARCH_COMMAND_TIMEOUT = 30_000;
 export const DEFAULT_EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage", ".cache", ".next", ".output"];
 
 /**
+ * Default exclusions that still apply when the search root is explicit.
+ *
+ * `path: "dist"` means the caller asked for files inside `dist`; excluding every
+ * `dist` directory would make that explicit request return nothing.
+ */
+export function activeExcludeDirs(searchPath: string): string[] {
+  const basename = searchPath.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop();
+  return basename ? DEFAULT_EXCLUDE_DIRS.filter((dir) => dir !== basename) : DEFAULT_EXCLUDE_DIRS;
+}
+
+/**
  * Byte ceiling for captured search output.
  *
  * Truncation to the requested entry count happens after capture, so without a ceiling a
@@ -84,7 +95,7 @@ export function truncateLines(output: string, count: number): string {
  * stays in JS on every path so the shell is never responsible for correctness.
  */
 export function quoteForShell(arg: string): string {
-  if (/^[A-Za-z0-9_\-./=*?[\]]+$/.test(arg)) return arg;
+  if (/^[A-Za-z0-9_\-./=]+$/.test(arg)) return arg;
   return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -111,7 +122,9 @@ export function quoteForShell(arg: string): string {
  */
 export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefined): string {
   const path = coreEnv.path ?? defaultPath;
-  const raw = inputPath ?? ".";
+  // Keep a legitimate path whose name starts/ends with a space; only fall back to the
+  // workspace root when the value is missing or contains no non-whitespace characters.
+  const raw = inputPath && inputPath.trim().length > 0 ? inputPath : ".";
   const resolved = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(coreEnv.rootPath, raw);
   // A Windows host compares paths case-insensitively, so a case-only difference from the root is
   // the same place rather than an escape. The separator is the one synchronous platform signal a
@@ -123,7 +136,14 @@ export function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | undefine
   const resolvedKey = foldCase(toPosixPathKey(resolved));
 
   if (resolvedKey === rootKey || resolvedKey.startsWith(`${rootKey}/`)) {
-    return raw;
+    // Normalize only for the spawn/filter path (`packages/core//src` → `packages/core/src`).
+    // Path.normalize preserves leading/trailing spaces in individual segments, and keeps
+    // a trailing separator — which makes grep emit `dir//file` and defeats the result
+    // filter; strip it except when the value is a filesystem root.
+    const normalized = path.normalize(raw);
+    if (/^[A-Za-z]:[\\/]$/.test(normalized)) return normalized;
+    const trailing = path.getSep() === "\\" ? /\\+$/ : /\/+$/;
+    return normalized.length > 1 ? normalized.replace(trailing, "") : normalized;
   }
 
   throw new FileError("permission_denied", `Path traversal blocked: "${raw}" resolves outside workspace root`, raw);

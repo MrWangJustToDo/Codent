@@ -8,8 +8,9 @@ import { grepOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 import { canExecArgs, execArgsCapture } from "../shell/exec-args.js";
 
+import { expandBraceGlobs, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
 import {
-  DEFAULT_EXCLUDE_DIRS,
+  activeExcludeDirs,
   isCommandNotFound,
   quoteForShell,
   resolveSearchPath,
@@ -44,36 +45,6 @@ function truncateMatchLine(content: string, maxLength: number): string {
 }
 
 /**
- * Expand brace groups in a glob include pattern into individual globs.
- *
- * grep `--include` and rg `--glob` do not perform brace expansion, so a pattern
- * like `*.{ts,tsx}` is treated literally and matches nothing. Expand it into one
- * glob per alternative (e.g. `*.ts`, `*.tsx`) so callers can pass each as a
- * separate `--include` / `--glob` flag. Patterns without braces are returned as-is.
- */
-function expandBraceGlobs(include: string): string[] {
-  const groupRe = /\{([^{}]+)\}/;
-  let current: string[] = [include];
-  let match: RegExpExecArray | null;
-  while ((match = groupRe.exec(current[0] ?? ""))) {
-    const full = match[0];
-    const alternatives = match[1].split(",");
-    const next: string[] = [];
-    for (const prefix of current) {
-      const idx = prefix.indexOf(full);
-      for (const alt of alternatives) {
-        next.push(prefix.slice(0, idx) + alt + prefix.slice(idx + full.length));
-      }
-    }
-    current = next;
-    if (current.length === 0) {
-      break;
-    }
-  }
-  return current;
-}
-
-/**
  * Strip a single pair of matching outer quotes from a pattern.
  *
  * Agents sometimes wrap a regex in quotes (e.g. `"extensions"` or `'extensions'`)
@@ -92,10 +63,23 @@ function stripOuterQuotes(pattern: string): { pattern: string; hadQuotes: boolea
     const first = pattern[0];
     const last = pattern[pattern.length - 1];
     if ((first === '"' || first === "'") && first === last) {
-      return { pattern: pattern.slice(1, -1), hadQuotes };
+      const stripped = pattern.slice(1, -1);
+      // `""` is an empty regex, which matches every line. Keep it literal rather than
+      // turning an empty quoted search into an accidental whole-file dump.
+      if (stripped.length > 0) return { pattern: stripped, hadQuotes };
     }
   }
   return { pattern, hadQuotes };
+}
+
+/** The basename part of a path-shaped include glob, for GNU grep's basename-only flag. */
+function includeBasename(glob: string): string {
+  return glob.replace(/\\/g, "/").split("/").pop() ?? glob;
+}
+
+/** Whether an include glob carries path semantics that GNU grep's --include cannot express. */
+function includeNeedsJsFilter(include: string | undefined): boolean {
+  return include !== undefined && (include.includes("/") || include.includes("\\") || include.includes("**"));
 }
 
 function buildRgArgs(
@@ -111,6 +95,9 @@ function buildRgArgs(
   }
 ): string[] {
   const args: string[] = ["--color=never"];
+  // Match glob's search policy: an explicit filesystem search may target `.agents`
+  // and other hidden/ignored paths. Common build directories remain excluded below.
+  args.push("--hidden", "--no-ignore");
 
   if (options.ignoreCase) {
     args.push("-i");
@@ -121,7 +108,10 @@ function buildRgArgs(
   } else if (options.outputMode === "count") {
     args.push("--count");
   } else {
-    args.push("--line-number", "--no-heading");
+    // `--null` makes the file boundary unambiguous. Context output is `path-line-content`,
+    // and both path and content can contain `-digits-`; without a separator, a date
+    // directory like `2024-01-02/a.ts` was parsed as file `2024`, line `1`.
+    args.push("--line-number", "--no-heading", "--null");
     if (options.context > 0) {
       args.push("-C", String(options.context));
     }
@@ -133,12 +123,17 @@ function buildRgArgs(
   // since rg does not brace-expand its own --glob values.
   if (options.include && !options.searchPathIsFile) {
     for (const glob of expandBraceGlobs(options.include)) {
-      args.push("--glob", glob);
+      // ripgrep, like fd, matches a path glob from the search root/cwd; a caller's
+      // `nested/*.ts` would match nothing unless it can start at any depth. The JS
+      // include filter applies the exact relative semantics afterwards.
+      const normalized = glob.replace(/^\.\//, "");
+      const rgGlob = normalized.includes("/") && !normalized.startsWith("**/") ? `**/${normalized}` : normalized;
+      args.push("--glob", rgGlob);
     }
   }
 
   if (!options.searchPathIsFile) {
-    for (const dir of DEFAULT_EXCLUDE_DIRS) {
+    for (const dir of activeExcludeDirs(searchPath)) {
       args.push("--glob", `!**/${dir}/**`);
     }
   }
@@ -149,7 +144,9 @@ function buildRgArgs(
   // `--max-count` bounds the work at the source. Truncation to `fetchCount` happens in JS
   // either way (there is no `| head` any more), but without a source-side cap a search in a
   // large repository streams every match before all but the first few are discarded.
-  args.push("--max-count", String(options.fetchCount));
+  if (options.outputMode !== "count") {
+    args.push("--max-count", String(options.fetchCount));
+  }
   args.push("--", pattern, searchPath);
   return args;
 }
@@ -186,31 +183,42 @@ function buildGrepArgs(
     args.push("-n");
   }
 
-  if (options.outputMode === "content" && options.context > 0) {
-    args.push("-C", String(options.context));
+  if (options.outputMode === "content") {
+    // Match rg's `--null`: GNU grep's context separator (`path-line-content`) is
+    // ambiguous when either the path or the matched text contains `-digits-`.
+    args.push("-Z");
+    if (options.context > 0) {
+      args.push("-C", String(options.context));
+    }
   }
 
   // --include and --exclude-dir are only meaningful for directory searches; skip them when
   // searching a single file to avoid conflicts. Brace groups are expanded to one --include
   // per alternative since grep does not brace-expand its own --include values.
+  const needsJsIncludeFilter = includeNeedsJsFilter(options.include);
   if (options.include && !options.searchPathIsFile) {
+    // GNU grep's --include is basename-only. For a path glob, still give it the basename
+    // as a cheap pre-filter (e.g. `nested/*.ts` → `*.ts`); the exact path semantics are
+    // applied in JS after the command returns.
     for (const glob of expandBraceGlobs(options.include)) {
-      args.push("--include", glob);
+      args.push("--include", needsJsIncludeFilter ? includeBasename(glob) : glob);
     }
   }
 
   if (!options.searchPathIsFile) {
-    for (const dir of DEFAULT_EXCLUDE_DIRS) {
+    for (const dir of activeExcludeDirs(searchPath)) {
       args.push("--exclude-dir", dir);
     }
   }
 
-  args.push("-E", pattern, searchPath);
-  // `-m` restores the source-side cap the previous `| head -n` pipeline provided (task 2.7 lists
-  // pagination parity as a requirement). Without it the fallback reads the entire tree and the
-  // JS-side truncation discards almost all of it — on GNU grep this is a bigger deal than with
-  // ripgrep because there is no default match limit.
-  args.push("-m", String(options.fetchCount));
+  // `-e` keeps a pattern beginning with `-` from being parsed as an option; `--` keeps
+  // the search path option-safe. Count mode must not use `-m`: GNU grep applies `-m` to
+  // the count per file, which returned `Count: 101` for a 1997-match file at limit=100.
+  args.push("-E", "-e", pattern);
+  if (options.outputMode !== "count") {
+    args.push("-m", String(options.fetchCount));
+  }
+  args.push("--", searchPath);
   return args;
 }
 
@@ -238,17 +246,27 @@ async function runGrepSearch(
     signal?: AbortSignal;
   }
 ): Promise<string> {
+  // Context lines occupy raw lines but are not matches. Give the parser enough rows to
+  // reach the requested match page; count mode must never be capped by a match limit.
+  // A path-shaped include is filtered in JS *after* the command, so the source-side cap
+  // must not discard candidates from not-yet-seen files either.
+  const lineCap =
+    options.outputMode === "count" || includeNeedsJsFilter(options.include)
+      ? Number.MAX_SAFE_INTEGER
+      : options.context > 0
+        ? options.fetchCount * (2 * options.context + 3) + 10
+        : options.fetchCount;
   if (canExecArgs(env)) {
     const rgStdout = await execArgsCapture(env, "rg", buildRgArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (rgStdout !== undefined) return truncateLines(rgStdout, options.fetchCount);
+    if (rgStdout !== undefined) return truncateLines(rgStdout, lineCap);
     const grepStdout = await execArgsCapture(env, "grep", buildGrepArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
     });
-    if (grepStdout !== undefined) return truncateLines(grepStdout, options.fetchCount);
+    if (grepStdout !== undefined) return truncateLines(grepStdout, lineCap);
     // Neither binary is available — an empty result is the honest answer.
     return "";
   }
@@ -262,14 +280,14 @@ async function runGrepSearch(
     cwd: env.rootPath,
     signal: options.signal,
   });
-  if (!isCommandNotFound(rgResult.exitCode)) return truncateLines(rgResult.stdout, options.fetchCount);
+  if (!isCommandNotFound(rgResult.exitCode)) return truncateLines(rgResult.stdout, lineCap);
   const grepArgv = buildGrepArgs(pattern, searchPath, options).map(quoteForShell);
   const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, {
     timeout,
     cwd: env.rootPath,
     signal: options.signal,
   });
-  return truncateLines(grepResult.stdout, options.fetchCount);
+  return truncateLines(grepResult.stdout, lineCap);
 }
 
 function parseLineNumber(value: string): number | null {
@@ -290,9 +308,44 @@ function parseLineNumber(value: string): number | null {
 function parseGrepLine(
   line: string,
   defaultFile?: string
-): { file: string; lineNumber: number; content: string } | null {
+): { file: string; lineNumber: number; content: string; context?: boolean } | null {
   if (line === "--") {
     return null;
+  }
+
+  // `rg --null` / `grep -Z` place a NUL after the file path. The remainder is
+  // `line:content` for a match or `line-content` for context, so neither a path nor
+  // matched text can be mistaken for a delimiter.
+  const nul = line.indexOf("\0");
+  if (nul >= 0) {
+    const file = line.slice(0, nul);
+    const rest = line.slice(nul + 1);
+    const match = rest.match(/^(\d+):(.*)$/s);
+    if (match) {
+      const lineNumber = parseLineNumber(match[1]!);
+      if (lineNumber !== null) return { file, lineNumber, content: match[2] };
+    }
+    const context = rest.match(/^(\d+)-(.*)$/s);
+    if (context) {
+      const lineNumber = parseLineNumber(context[1]!);
+      if (lineNumber !== null) {
+        return { file, lineNumber, content: `[context] ${context[2]}`, context: true };
+      }
+    }
+    return null;
+  }
+
+  // Single-file context lines are `line-content`; this must be recognized before the
+  // generic `path:line:content` matcher, which would otherwise turn `12-config:30` into
+  // a fictional file named `12-config`.
+  if (defaultFile) {
+    const singleContext = line.match(/^(\d+)-(.*)$/s);
+    if (singleContext) {
+      const lineNumber = parseLineNumber(singleContext[1]!);
+      if (lineNumber !== null) {
+        return { file: defaultFile, lineNumber, content: `[context] ${singleContext[2]}`, context: true };
+      }
+    }
   }
 
   // Match `path:line:content` format (from recursive directory search)
@@ -335,6 +388,7 @@ function parseGrepLine(
       file: contextLine[1],
       lineNumber,
       content: `[context] ${contextLine[3]}`,
+      context: true,
     };
   }
 
@@ -373,6 +427,7 @@ export const createGrepTool = () => {
       "Uses ripgrep (rg) when available, falls back to grep. " +
       'Use outputMode="files_with_matches" for broad searches (just file paths). ' +
       'Use outputMode="count" to get match counts per file. ' +
+      "Searches hidden/ignored paths too, while excluding common build directories. " +
       "Supports pagination with offset/limit, context lines, and case-insensitive search.",
     inputSchema: z.object({
       pattern: z.string().describe("The regex pattern to search for in file contents."),
@@ -477,9 +532,11 @@ export const createGrepTool = () => {
           };
         }
 
+        // Preserve leading/trailing source whitespace — it is part of a matched line.
+        // Only a trailing CR is transport noise (Windows output).
         const lines = rawOutput
           .split("\n")
-          .map((line) => line.trim())
+          .map((line) => line.replace(/\r$/, ""))
           .filter((line) => line.length > 0);
 
         if (lines.length === 0) {
@@ -499,14 +556,31 @@ export const createGrepTool = () => {
         let allMatches: { file: string; lineNumber: number; content: string }[] = [];
         let totalContentLength = 0;
 
+        // `include` is omitted from the grep fallback when it contains a path glob
+        // (GNU grep's --include is basename-only). Apply the same segment-aware filter
+        // here for both backends; brace alternatives include `*.{ts,tsx}`.
+        // A single-file path already names the file; include flags are ignored by the
+        // backend in that case, so do not filter the one result away here either.
+        const includePatterns = include && !searchPathIsFile ? expandBraceGlobs(include) : [];
+        const includeMatch = (file: string): boolean =>
+          includePatterns.length === 0 ||
+          includePatterns.some((pattern) => matchesGlobPath(file, searchPath, pattern, coreEnv.rootPath));
+
+        // Context is a structural fact, not a rendered prefix: a real match can begin with
+        // the literal text `[context] `. Mark the parsed object itself so pagination never
+        // has to inspect its display string.
+        const contextMatches = new WeakSet<object>();
+
         if (mode === "files_with_matches") {
           allMatches = lines.map((file) => ({
-            file,
+            file: normalizeSearchPath(file, coreEnv),
             lineNumber: 0,
             content: "",
           }));
         } else if (mode === "count") {
-          allMatches = lines.map((line) => parseCountLine(line, searchPathIsFile ? searchPath : undefined));
+          allMatches = lines
+            .map((line) => parseCountLine(line, searchPathIsFile ? searchPath : undefined))
+            .map((match) => ({ ...match, file: normalizeSearchPath(match.file, coreEnv) }));
         } else {
           for (const line of lines) {
             // When searching a single file, grep outputs `line:content` (no path).
@@ -514,24 +588,78 @@ export const createGrepTool = () => {
             const parsed = parseGrepLine(line, searchPathIsFile ? searchPath : undefined);
             if (!parsed) continue;
 
+            const { context: isContextLine, ...fields } = parsed;
+            const entry = {
+              ...fields,
+              file: normalizeSearchPath(parsed.file, coreEnv),
+            };
+            if (!includeMatch(entry.file)) continue;
+
             if (parsed.content.length > MAX_MATCH_LINE_CHARS) {
-              parsed.content = truncateMatchLine(parsed.content, MAX_MATCH_LINE_CHARS);
+              entry.content = truncateMatchLine(parsed.content, MAX_MATCH_LINE_CHARS);
             }
 
-            totalContentLength += parsed.content.length;
+            totalContentLength += entry.content.length;
             if (totalContentLength > MAX_TOTAL_CONTENT) {
-              parsed.content = "[content omitted - total size limit reached]";
+              entry.content = "[content omitted - total size limit reached]";
             }
 
-            allMatches.push(parsed);
+            if (isContextLine) contextMatches.add(entry);
+            allMatches.push(entry);
           }
         }
 
-        // Drop any match with an invalid line number (NaN serializes to null in JSON).
-        const validMatches = allMatches.filter((m) => Number.isFinite(m.lineNumber));
-        const paginatedMatches = validMatches.slice(skip, skip + take);
+        const filteredMatches =
+          mode === "content"
+            ? allMatches
+            : includePatterns.length === 0
+              ? allMatches
+              : allMatches.filter((match) => includeMatch(match.file));
 
-        const fullMatchText = paginatedMatches.map((m) => `${m.file}:${m.lineNumber}:${m.content}`).join("\n");
+        const withoutZeroCounts =
+          mode === "count" ? filteredMatches.filter((match) => match.content !== "Count: 0") : filteredMatches;
+
+        // Drop any match with an invalid line number (NaN serializes to null in JSON).
+        const validMatches = withoutZeroCounts.filter((m) => Number.isFinite(m.lineNumber));
+        const actualMatches = validMatches.filter((match) => !contextMatches.has(match));
+        const selectedMatches = actualMatches.slice(skip, skip + take);
+        let paginatedMatches = selectedMatches;
+        if (mode === "content" && contextLines > 0 && selectedMatches.length > 0) {
+          // Include the context rows immediately before the first selected match and after
+          // the last one too. Slicing from `first` to `last` alone lost both boundaries
+          // (and returned no context at all when only one match was selected).
+          const indexes = new Set<number>();
+          for (const selected of selectedMatches) {
+            const index = validMatches.indexOf(selected);
+            if (index < 0) continue;
+            indexes.add(index);
+            let before = 0;
+            for (let i = index - 1; i >= 0 && before < contextLines; i--) {
+              const candidate = validMatches[i]!;
+              if (!contextMatches.has(candidate)) break;
+              indexes.add(i);
+              before++;
+            }
+            let after = 0;
+            for (let i = index + 1; i < validMatches.length && after < contextLines; i++) {
+              const candidate = validMatches[i]!;
+              if (!contextMatches.has(candidate)) break;
+              indexes.add(i);
+              after++;
+            }
+          }
+          paginatedMatches = [...indexes]
+            .sort((a, b) => a - b)
+            .map((index) => validMatches[index]!)
+            .filter((match): match is (typeof validMatches)[number] => match !== undefined);
+        }
+
+        const fullMatchText =
+          mode === "files_with_matches"
+            ? paginatedMatches.map((m) => m.file).join("\n")
+            : mode === "count"
+              ? paginatedMatches.map((m) => `${m.file}: ${m.content.slice("Count: ".length)}`).join("\n")
+              : paginatedMatches.map((m) => `${m.file}:${m.lineNumber}:${m.content}`).join("\n");
         const cached = await maybeCacheOutput(coreEnv, fullMatchText, `${toolCallId}-grep`);
         const { cachedOutputPath } = cached;
 
@@ -567,12 +695,19 @@ export const createGrepTool = () => {
           },
         ];
       }
+      const matches = output.matches ?? [];
+      const isFilesMode = matches.length > 0 && matches.every((m) => m.lineNumber === 0 && m.content === "");
+      const body = output.content
+        ? output.content
+        : isFilesMode
+          ? `${matches.length} files:\n${matches.map((m) => m.file).join("\n")}`
+          : `${matches.length} matches:\n${lines?.join("\n")}`;
       return [
         {
           type: "text" as const,
           content:
-            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}` +
-            (output.content || `${output.matches?.length} matches:\n${lines?.join("\n")}`),
+            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}\n` +
+            body,
         },
       ];
     },

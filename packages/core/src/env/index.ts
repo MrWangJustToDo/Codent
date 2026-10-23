@@ -188,6 +188,12 @@ export interface CoreEnvExecResult {
   missing?: boolean;
   /** True when the child was terminated by a signal (timeout, abort, crash). */
   killed?: boolean;
+  /**
+   * True when the host stopped capturing output at its buffer ceiling but the child's
+   * partial stdout is usable. Distinguishes a truncated capture from an aborted/killed
+   * process, whose empty/partial output must not be read as a complete answer.
+   */
+  truncated?: boolean;
 }
 
 /**
