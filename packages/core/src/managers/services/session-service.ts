@@ -68,6 +68,17 @@ export class SessionService {
    */
   private persistQueue: Promise<void> = Promise.resolve();
   /**
+   * Newest UI snapshot admitted behind the in-flight write (coalesced path).
+   *
+   * One model call can inject several synthetic messages (ctx sections, a todo nag, a repeat
+   * nudge, background work), and each used to enqueue its own full-snapshot write. Only the
+   * newest one is written now: the channel is append-only within a session, so the newest
+   * snapshot is a superset of the ones it replaces.
+   */
+  private pendingUiPersist: (() => SessionPersistInput) | null = null;
+  /** Drain promise for the coalesced UI path; every caller of the burst joins it. */
+  private uiPersistDrain: Promise<boolean> | null = null;
+  /**
    * Set by {@link close} (session deletion / teardown). Once closed, no new write may reach the
    * store: a queued `pump-complete` save or an async title resolution would otherwise recreate a
    * session file that `deleteSession` just removed.
@@ -247,15 +258,73 @@ export class SessionService {
    * @returns whether everything the caller asked for reached disk. Callers that
    * mark the content persisted (see {@link saveToStore}) must gate on this.
    */
-  async persistSession(input: SessionPersistInput | (() => SessionPersistInput)): Promise<boolean> {
+  async persistSession(
+    input: SessionPersistInput | (() => SessionPersistInput),
+    options: { coalesceUiMessages?: boolean } = {}
+  ): Promise<boolean> {
     if (this.closed) return false;
-    const run = this.persistQueue.then(() => this.persistSessionInner(typeof input === "function" ? input() : input));
-    // Keep the stored chain non-rejecting so one failure cannot stall later saves.
-    this.persistQueue = run.then(
+    const resolveInput = typeof input === "function" ? input : () => input;
+
+    // State-only writes keep their own turn: they carry no transcript, so folding them into a
+    // later UI snapshot would silently drop the write they were asked for.
+    if (!options.coalesceUiMessages) {
+      const run = this.persistQueue.then(() => this.persistSessionInner(resolveInput()));
+      // Keep the stored chain non-rejecting so one failure cannot stall later saves.
+      this.persistQueue = run.then(
+        () => undefined,
+        () => undefined
+      );
+      return run;
+    }
+
+    // Coalesced path: the newest admitted snapshot wins, and the whole burst awaits one drain.
+    this.pendingUiPersist = resolveInput;
+    const existing = this.uiPersistDrain;
+    if (existing) return existing;
+    const drain = this.persistQueue.then(() => this.drainUiPersists());
+    this.uiPersistDrain = drain;
+    this.persistQueue = drain.then(
       () => undefined,
       () => undefined
     );
-    return run;
+    return drain;
+  }
+
+  /**
+   * Write the newest queued UI snapshot, repeating while another arrived meanwhile.
+   *
+   * The loop takes the pending snapshot *before* awaiting, so anything admitted during the
+   * write becomes the next iteration's payload. A burst of injections therefore costs one
+   * write (or two when the later ones land while the first is already dehydrating) instead of
+   * one per injection.
+   *
+   * A failed write does not abort the burst: a newer snapshot may still converge, and when it
+   * does the burst reports success (its content is the superset that reached disk). Only a
+   * failure of the LAST attempt is rethrown, so the caller still reports `session:save-error`
+   * when nothing landed.
+   */
+  private async drainUiPersists(): Promise<boolean> {
+    let ok = false;
+    let failure: unknown;
+    try {
+      while (this.pendingUiPersist) {
+        const next = this.pendingUiPersist;
+        this.pendingUiPersist = null;
+        try {
+          ok = await this.persistSessionInner(next());
+          failure = undefined;
+        } catch (error) {
+          ok = false;
+          failure = error;
+        }
+      }
+    } finally {
+      // Synchronous with the loop exit (no await between the check and here), so a caller
+      // arriving afterwards starts a new drain instead of joining a finished one.
+      this.uiPersistDrain = null;
+    }
+    if (failure !== undefined) throw failure;
+    return ok;
   }
 
   /**

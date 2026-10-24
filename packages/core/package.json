@@ -263,6 +263,7 @@
     "validate:mid-run-tool-display": "pnpm run build && node scripts/validate-mid-run-tool-display.mjs",
     "validate:instruction-imports": "pnpm run build && node scripts/validate-instruction-imports.mjs",
     "validate:session-retrieval": "pnpm run build && node scripts/validate-session-retrieval.mjs",
+    "validate:session-persist-coalescing": "pnpm run build && node scripts/validate-session-persist-coalescing.mjs",
     "validate:tool-output-cache": "pnpm run build && node scripts/validate-tool-output-cache.mjs",
     "validate:repeat-reminder": "pnpm run build && node scripts/validate-repeat-reminder.mjs",
     "validate:repeat-reminder-persistence": "pnpm run build && node scripts/validate-repeat-reminder-persistence.mjs",

@@ -107,10 +107,15 @@ export async function saveSessionUIMessages(
   // and by the time it runs the ambient state may have moved on (a mode switch
   // during the same turn). Re-reading it here keeps the newest state on the last
   // write; the message snapshot stays exactly the caller's.
-  const persisted = await host.session.persistSession(() => ({
-    ...getSessionPersistInput(host, uiMessages),
-    ...(sessionId ? { sessionId } : {}),
-  }));
+  // Coalesced: several synthetic injections in one model call write the newest transcript
+  // once instead of once per injection (the channel is append-only, so it is a superset).
+  const persisted = await host.session.persistSession(
+    () => ({
+      ...getSessionPersistInput(host, uiMessages),
+      ...(sessionId ? { sessionId } : {}),
+    }),
+    { coalesceUiMessages: true }
+  );
   if (persisted) tracker.markPersisted(uiMessages);
 }
 

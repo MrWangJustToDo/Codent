@@ -905,7 +905,10 @@ state (nag rounds, repeat counts) travels in machine-readable `<ctx kind=... att
 attributes so it is recovered from the message chain as well
 (`turn-context/reminder/todo-reminder.ts`, `turn-context/reminder/repeat-reminder.ts`).
 `findCutPointByBudget` counts synthetic `<ctx kind=...>` messages in the token budget but never
-selects one as the cut boundary (`isValidCutBoundary` rejects them). `TurnContextController` owns
+selects one as the cut boundary (`isValidCutBoundary` rejects them). The synthetic appends of one
+model call share one drain: `SessionService.persistSession(..., { coalesceUiMessages: true })`
+writes only the newest admitted snapshot (append-only channel, so it is a superset), while
+state-only writes keep their own turn. `TurnContextController` owns
 only what cannot be derived from the window — the frozen prompt, the instruction digest baseline
 and pending per-extension sections — and `ManagedAgent.reset()` funnels through the controller's
 single `resetTurnState()`; the nag policy lives on `TodoManager.getNagPolicy()`.
