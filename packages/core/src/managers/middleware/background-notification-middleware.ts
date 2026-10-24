@@ -1,5 +1,5 @@
 import { truncateString } from "../../agent/tools/shared/output-limits.js";
-import { formatContextSectionUserContent } from "../../agent/turn-context";
+import { formatContextSectionUserContent, TURN_CONTEXT_KINDS } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -21,7 +21,7 @@ export interface BackgroundNotificationMiddlewareDeps {
   getCommandService: () => AgentCommandService;
 }
 
-const BACKGROUND_NOTIFICATION_KIND = "background_notification";
+const BACKGROUND_NOTIFICATION_KIND = TURN_CONTEXT_KINDS.backgroundNotification;
 
 /**
  * Lightweight completion notification for background jobs.

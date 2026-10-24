@@ -16,16 +16,18 @@
 import assert from "node:assert/strict";
 
 import {
-  buildRepeatReminderContent,
+  buildRepeatReminderBody,
   canonicalizeRepeatArguments,
+  formatContextSectionUserContent,
   contextAttributesFromText,
   createRepeatReminderMiddleware,
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
-  readLatestRepeatReminder,
+  readRepeatReminderWindowState,
   readTrailingRepeatChain,
   REPEAT_REMINDER_KIND,
+  resolveRepeatReminder,
 } from "../dist/dev.mjs";
 
 // ---------------------------------------------------------------------------
@@ -113,26 +115,59 @@ assert.equal(
 // 2. Reminder content — escalation, shell format, attrs, preview cap
 // ---------------------------------------------------------------------------
 const [t3, t5] = DEFAULT_REPEAT_THRESHOLDS;
-const build = (count, canonical = '{"pattern":"foo"}', chain = "abc12345") =>
-  buildRepeatReminderContent({
-    toolName: "grep",
-    count,
-    canonicalArguments: canonical,
-    firstThreshold: t3,
-    previewChars: 500,
-    chain,
-  });
+const repeated = (count, args = { pattern: "foo" }, idPrefix = "p") => {
+  const wire = [userMessage("go")];
+  for (let i = 0; i < count; i++) wire.push(...toolTurn("grep", args, `${idPrefix}${i}`));
+  return wire;
+};
+const resolveAt = (count) => resolveRepeatReminder(repeated(count));
 
-const gentle = build(t3);
-assert.ok(gentle.startsWith(`<ctx kind=${REPEAT_REMINDER_KIND} chain="abc12345" count="3">`), "opens the ctx shell");
+// Below the first threshold there is no section at all.
+assert.equal(resolveAt(t3 - 1), undefined, "below the first threshold nothing is due");
+
+const gentleResolution = resolveAt(t3);
+assert.ok(gentleResolution, "the first threshold resolves a reminder");
+const gentle = formatContextSectionUserContent(gentleResolution.section);
+assert.ok(gentle.startsWith(`<ctx kind=${REPEAT_REMINDER_KIND} chain="`), "opens the ctx shell with the chain scope");
 assert.ok(gentle.endsWith("</ctx>"), "closes the ctx shell");
 assert.ok(/repeating the exact same tool call/.test(gentle), "first threshold is the gentle reminder");
-assert.deepEqual(contextAttributesFromText(gentle), { chain: "abc12345", count: "3" }, "recovery attrs on the shell");
+assert.deepEqual(
+  contextAttributesFromText(gentle),
+  { chain: gentleResolution.chain.chain, count: "3", episode: "1" },
+  "recovery attrs on the shell (scope + counter + episode)"
+);
 
-const detailed = build(t5);
+// A nag already in the window suppresses the same chain at the same count.
+{
+  const wire = repeated(t3);
+  wire.push(userMessage(gentle));
+  assert.equal(resolveRepeatReminder(wire), undefined, "an admitted reminder suppresses a repeat");
+  assert.equal(readRepeatReminderWindowState(wire, gentleResolution.chain.chain).episodes, 1);
+  assert.equal(readRepeatReminderWindowState(wire, gentleResolution.chain.chain).lastCount, 3);
+}
+
+// The detailed body at a later threshold.
+const detailed = buildRepeatReminderBody({
+  toolName: "grep",
+  count: t5,
+  canonicalArguments: '{"pattern":"foo"}',
+  firstThreshold: t3,
+  previewChars: 500,
+});
 assert.ok(/Repeated tool call detected/.test(detailed), "later threshold is the detailed reminder");
 assert.ok(/- tool: grep/.test(detailed) && /- consecutive_calls: 5/.test(detailed), "names tool + count");
 assert.ok(/- arguments: \{"pattern":"foo"\}/.test(detailed), "quotes the arguments");
+assert.equal(
+  buildRepeatReminderBody({
+    toolName: "grep",
+    count: t3,
+    canonicalArguments: "{}",
+    firstThreshold: t3,
+    previewChars: 500,
+  }),
+  gentleResolution.section.content.trim(),
+  "the pipeline builds the same body the resolution carries"
+);
 
 const longArgs = "x".repeat(600);
 const previewed = previewRepeatArguments(longArgs, 500);
@@ -291,8 +326,12 @@ assert.equal(
   assert.equal(h.channel.messages.length, 2, "the first loop injects a reminder");
 
   h.state.wire.push(userMessage("try again"));
-  // The reminder from the previous turn no longer speaks for the new chain.
-  assert.equal(readLatestRepeatReminder(h.state.wire), undefined);
+  // The reminder from the previous turn no longer speaks for the new chain: recovery is
+  // turn-scoped, so it must not report an admitted reminder for the chain that follows.
+  assert.equal(
+    readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire)?.chain ?? "none").episodes,
+    0
+  );
   h.push("grep", { pattern: "foo" }, "b1");
   h.push("grep", { pattern: "foo" }, "b2");
   h.push("grep", { pattern: "foo" }, "b3");
@@ -312,7 +351,11 @@ assert.equal(
   assert.equal(h.reminders().length, 1);
 
   h.state.wire = h.state.wire.filter((message) => !String(message.content ?? "").includes(REPEAT_REMINDER_KIND));
-  assert.equal(readLatestRepeatReminder(h.state.wire), undefined, "the reminder is gone from the cut wire");
+  assert.equal(
+    readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire).chain).episodes,
+    0,
+    "the reminder is gone from the cut wire"
+  );
   await h.run();
   assert.equal(h.reminders().length, 1, "the reminder is re-admitted after the cut");
   assert.equal(h.channel.messages.length, 3, "and lands as a new channel row (episode nonce)");

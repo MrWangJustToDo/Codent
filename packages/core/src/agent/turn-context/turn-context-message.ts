@@ -55,6 +55,17 @@ export const TURN_CONTEXT_KINDS = {
   sessionRetrieval: "session_retrieval",
   backgroundJobs: "background_jobs",
   projectInstructions: "project_instructions",
+  /**
+   * Condition + counter reminder: the model is repeating one identical tool call.
+   * Counter-shaped state travels in shell attrs (`chain`, `count`, `episode`).
+   */
+  repeatReminder: "repeat_tool_reminder",
+  /**
+   * Background-result push: a completed background command job's notification.
+   * Appended once per completion (not hash-admitted); background *tasks* use the
+   * same class when they land.
+   */
+  backgroundNotification: "background_notification",
 } as const;
 
 export type TurnContextKind = (typeof TURN_CONTEXT_KINDS)[keyof typeof TURN_CONTEXT_KINDS];

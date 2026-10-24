@@ -32,8 +32,33 @@ export {
 export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "./instruction-context.js";
 
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./background-jobs.js";
-export { buildTodoReminderContent, readTodoReminderWindowState, resolveTodoReminder } from "./todo-reminder.js";
-export type { TodoReminderWindowState } from "./todo-reminder.js";
+export {
+  buildCounterReminderSection,
+  readCounterReminderState,
+  buildTodoReminderContent,
+  readTodoReminderWindowState,
+  resolveTodoReminder,
+  buildRepeatReminderBody,
+  canonicalizeRepeatArguments,
+  DEFAULT_ARGUMENTS_PREVIEW_CHARS,
+  DEFAULT_REPEAT_EXCLUDED_TOOLS,
+  DEFAULT_REPEAT_THRESHOLDS,
+  isGenuineUserMessage,
+  previewRepeatArguments,
+  readRepeatReminderWindowState,
+  readTrailingRepeatChain,
+  REPEAT_REMINDER_KIND,
+  resolveRepeatReminder,
+} from "./reminder";
+export type {
+  CounterReminderSectionInput,
+  CounterReminderSpec,
+  CounterReminderState,
+  TodoReminderWindowState,
+  RepeatChain,
+  RepeatReminderDecision,
+  RepeatReminderWindowState,
+} from "./reminder";
 export type { BackgroundJobContextRow, WireMessage, WireToolCall } from "./background-jobs.js";
 
 export {

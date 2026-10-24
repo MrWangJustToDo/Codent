@@ -254,8 +254,21 @@ export {
   findLatestTurnContextSectionHashesFromWire,
 } from "../agent/turn-context";
 export {
+  buildCounterReminderSection,
+  buildRepeatReminderBody,
   buildTodoReminderContent,
+  canonicalizeRepeatArguments,
+  DEFAULT_ARGUMENTS_PREVIEW_CHARS,
+  DEFAULT_REPEAT_EXCLUDED_TOOLS,
+  DEFAULT_REPEAT_THRESHOLDS,
+  isGenuineUserMessage,
+  previewRepeatArguments,
+  readCounterReminderState,
+  readRepeatReminderWindowState,
   readTodoReminderWindowState,
+  readTrailingRepeatChain,
+  REPEAT_REMINDER_KIND,
+  resolveRepeatReminder,
   resolveTodoReminder,
 } from "../agent/turn-context";
 export {

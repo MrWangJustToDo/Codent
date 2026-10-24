@@ -22,8 +22,8 @@ import {
   readInstructionContextState,
   type InstructionContextState,
 } from "../../agent/turn-context/instruction-context.js";
+import { resolveTodoReminder } from "../../agent/turn-context/reminder";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../../agent/turn-context/session-retrieval.js";
-import { resolveTodoReminder } from "../../agent/turn-context/todo-reminder.js";
 import { errorMessage } from "../../utils/errors.js";
 import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
 

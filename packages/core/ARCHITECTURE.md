@@ -904,6 +904,16 @@ boundary. `TurnContextController` owns only what cannot be derived from the wind
 prompt, the instruction digest baseline, the todo-nag policy and pending per-extension sections —
 and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
 
+**Three injection shapes, one kind catalog (`TURN_CONTEXT_KINDS`)**: (1) hash-admitted sections
+(the middleware above); (2) condition + counter reminders — `agent/turn-context/reminder/` holds the
+shared mechanism (`counter-reminder.ts`: scope-filtered recovery from the window + the attr-carrying
+builder) and the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); the middleware for the
+repeat nudge only delivers what the policy resolves; (3) background-result pushes
+(`background_notification`, later background tasks), appended once per result. Recovery for (2) is
+the "cleanup": only blocks whose scope (`cycle` / `chain`) matches the current one count, and the
+turn-scoped counter stops at a genuine user prompt. `validate:turn-context-kinds` enforces that no
+kind or `<ctx kind=...>` tag is spelled outside the catalog.
+
 **Subagent isolation:** subagents run the same middleware but only `SUBAGENT_ALLOWED_KINDS`
 (`current_date`, `git_status`, `project_instructions`) pass; memory / todo / plan / mode /
 extension / instruction kinds are filtered. `project_instructions` for a subagent resolves
