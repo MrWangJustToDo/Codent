@@ -271,6 +271,30 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
     `compact summary snapshot readable via HTTP (got ${JSON.stringify(compSnap)})`
   );
 
+  // A reconnect/resync while an SSE subscription is already mounted must re-publish
+  // the re-seeded summary cache; otherwise useSummaryStream keeps the text it read
+  // at subscription time and never sees the server's newer snapshot.
+  const beforeResyncReplay = live.length;
+  await client.refresh();
+  await waitFor(
+    "resync replay reaches the live summary subscriber",
+    () =>
+      live
+        .slice(beforeResyncReplay)
+        .some(
+          (event) => event.channel === "summary" && event.payload.type === "reset" && event.payload.key === compactKey
+        ) &&
+      live
+        .slice(beforeResyncReplay)
+        .some(
+          (event) =>
+            event.channel === "summary" &&
+            event.payload.type === "append" &&
+            event.payload.key === compactKey &&
+            String(event.payload.chunk ?? "").includes("compact text")
+        )
+  );
+
   clientUnsub();
 }
 

@@ -382,6 +382,8 @@ export class RemoteSessionClient implements AgentSession {
   /** Shared in-flight resync so concurrent callers fetch the transcript once. */
   private resyncInFlight: Promise<void> | null = null;
   private readonly summaryCache = new Map<string, AgentStreamSnapshot>();
+  /** Summary stream subscribers currently expecting cache refreshes (reconnect replay). */
+  private readonly summarySubscribers = new Set<AgentSessionSubscriber>();
   private readonly toolBufferCache: ToolBufferMap = new Map();
   /** This session's tool descriptors; never a process-global hydration layer. */
   private readonly toolPresentations = new Map<string, ToolPresentation>();
@@ -541,9 +543,46 @@ export class RemoteSessionClient implements AgentSession {
     } catch {
       // Optional route — ignore failures.
     }
+    this.replaySummaryCache();
+  }
+
+  /**
+   * Re-publish the re-seeded summary cache to already-mounted subscribers.
+   *
+   * A reconnect calls `doResync()` while the old SSE subscription is still alive. Replacing
+   * `summaryCache` without an event leaves a mounted `useSummaryStream` rendering the pre-drop
+   * text forever. Replay each snapshot as reset + append (+ end); subscribers filter by key.
+   */
+  private replaySummaryCache(): void {
+    if (this.summarySubscribers.size === 0 || this.summaryCache.size === 0) return;
+    const ts = Date.now();
+    for (const snapshot of this.summaryCache.values()) {
+      const base = {
+        key: snapshot.key,
+        source: snapshot.source,
+        channel: snapshot.channel,
+        ...(snapshot.toolCallId ? { toolCallId: snapshot.toolCallId } : {}),
+        ...(snapshot.compactId ? { compactId: snapshot.compactId } : {}),
+        ...(snapshot.label ? { label: snapshot.label } : {}),
+        ...(snapshot.epoch ? { epoch: snapshot.epoch } : {}),
+        seq: snapshot.seq,
+      };
+      this.emitSummary({ type: "reset", ...base, ts });
+      const chunk = [...snapshot.lines, ...(snapshot.pendingLine ? [snapshot.pendingLine] : [])].join("\n");
+      if (chunk) this.emitSummary({ type: "append", ...base, chunk, ts });
+      if (snapshot.status === "ended") this.emitSummary({ type: "end", ...base, ts });
+    }
+  }
+
+  private emitSummary(payload: AgentStreamEvent & { ts?: number }): void {
+    const { ts = Date.now(), ...event } = payload;
+    const message: AgentSessionEvent = { channel: "summary", payload: event as AgentStreamEvent, ts };
+    for (const handler of this.summarySubscribers) handler(message);
   }
 
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void {
+    const wantsSummary = !options?.channels || options.channels.includes("summary");
+    if (wantsSummary) this.summarySubscribers.add(handler);
     const stopController = new AbortController();
     let attempt = 0;
     let stopped = false;
@@ -652,6 +691,7 @@ export class RemoteSessionClient implements AgentSession {
     return () => {
       stopped = true;
       stopController.abort();
+      if (wantsSummary) this.summarySubscribers.delete(handler);
     };
   }
 

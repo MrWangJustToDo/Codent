@@ -136,10 +136,34 @@ const check = checker.check;
   const beforeRemoval = scenario.emitted.length;
   scenario.subagents([]);
   check(
-    "a removed child is forgotten without inventing an idle update",
-    scenario.emitted.length === beforeRemoval && JSON.stringify(scenario.attached.at(-1)?.ids) === "[]",
-    JSON.stringify({ emitted: scenario.emitted.length, attached: scenario.attached.at(-1) })
+    "a removed already-idle child produces no redundant terminal update",
+    scenario.emitted.length === beforeRemoval,
+    JSON.stringify({ emitted: scenario.emitted.length })
   );
+  check(
+    "…and the child attach callback drops it",
+    JSON.stringify(scenario.attached.at(-1)?.ids) === "[]",
+    JSON.stringify(scenario.attached.at(-1))
+  );
+  scenario.stop();
+
+  // ACP has no delete-child frame. A row that disappears while its last state is
+  // running must be closed explicitly or the client keeps spinning forever.
+  const removedWhileRunning = projectorScenario();
+  removedWhileRunning.subagents([row()]);
+  const beforeRunningRemoval = removedWhileRunning.emitted.length;
+  removedWhileRunning.subagents([]);
+  const runningRemoval = removedWhileRunning.emitted.at(-1);
+  check(
+    "a removed running child is closed as idle/cancelled",
+    removedWhileRunning.emitted.length === beforeRunningRemoval + 1 &&
+      runningRemoval?.sessionUpdate === "subagent_update" &&
+      runningRemoval?.sessionId === "child-1" &&
+      runningRemoval?.state?.state === "idle" &&
+      runningRemoval?.state?.stopReason === "cancelled",
+    JSON.stringify({ emitted: removedWhileRunning.emitted.length, runningRemoval })
+  );
+  removedWhileRunning.stop();
   scenario.stop();
 }
 

@@ -38,7 +38,7 @@ import {
 import { textBlock } from "./content.js";
 import { imagesOfParts, imagesOfResult } from "./media.js";
 import { toWirePath } from "./paths.js";
-import { announcementOf, diffSubagents, patchOf } from "./subagent-projection.js";
+import { announcementOf, diffSubagents, patchOf, terminalUpdateOf } from "./subagent-projection.js";
 import { toolCallInfo, toolDiffsFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
 import type {
@@ -1111,13 +1111,14 @@ export class AcpProjector {
    * Project a `subagents` snapshot: announce first sighting, patch changed rows, forget removed ones.
    *
    * The row list includes internal workers (compaction / memory summarizers); `diffSubagents`
-   * filters with `isUserVisibleTaskRow`, so those never reach the client. Removed rows are dropped
-   * from the announced map without inventing a state — a destroyed child is not "idle".
+   * filters with `isUserVisibleTaskRow`, so those never reach the client. Removed rows are closed
+   * as `idle/cancelled` before being dropped: ACP has no delete-child frame, and leaving the last
+   * running state in place would strand the client's spinner forever.
    */
   private onSubagents(rows: AgentSessionSubagentSummary[]): void {
     if (!this.options.client.subagents) return;
 
-    const { announce, patch, current } = diffSubagents(this.announcedSubagents, rows, (toolCallId) =>
+    const { announce, patch, removed, current } = diffSubagents(this.announcedSubagents, rows, (toolCallId) =>
       this.taskPromptOf(toolCallId)
     );
     this.announcedSubagents.clear();
@@ -1127,6 +1128,12 @@ export class AcpProjector {
     for (const item of patch) {
       const update = patchOf(item.previous, item.next);
       if (update) this.publish(update);
+    }
+    // No deletion frame exists, so close a disappeared running row explicitly. Rows that
+    // were already idle need no terminal update.
+    for (const previous of removed) {
+      if (previous.state.state === "idle") continue;
+      this.publish(terminalUpdateOf(previous));
     }
 
     // ALWAYS hand the snapshot to the host, not only when the row SET changed: the host is the one

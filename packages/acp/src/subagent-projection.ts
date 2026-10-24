@@ -119,6 +119,23 @@ export function patchOf(previous: SubagentProjection, next: SubagentProjection):
   return changed ? update : undefined;
 }
 
+/**
+ * A terminal update for a row the next snapshot no longer contains.
+ *
+ * ACP has no "delete child" notification. Clearing `state` with `null` explicitly means
+ * "unconfirmed", not idle, so a client would keep the last running spinner. Removed rows are
+ * therefore closed as `idle/cancelled`: the child is no longer owned by this parent, and any
+ * work it was doing has been stopped by the same lifecycle that removed it.
+ */
+export function terminalUpdateOf(previous: SubagentProjection): SubagentUpdateMessage {
+  return {
+    sessionUpdate: "subagent_update",
+    sessionId: previous.sessionId,
+    state: { state: "idle", stopReason: "cancelled" },
+    ...(previous.taskPhase ? { _meta: { taskPhase: null } } : {}),
+  };
+}
+
 /** Announce/patch diff over one snapshot. The returned map is the next "already announced" state. */
 export function diffSubagents(
   previous: ReadonlyMap<string, SubagentProjection>,
@@ -127,6 +144,7 @@ export function diffSubagents(
 ): {
   announce: SubagentProjection[];
   patch: Array<{ previous: SubagentProjection; next: SubagentProjection }>;
+  removed: SubagentProjection[];
   current: Map<string, SubagentProjection>;
 } {
   const current = new Map<string, SubagentProjection>();
@@ -144,5 +162,6 @@ export function diffSubagents(
     }
   }
 
-  return { announce, patch, current };
+  const removed = [...previous.values()].filter((projection) => !current.has(projection.sessionId));
+  return { announce, patch, removed, current };
 }
