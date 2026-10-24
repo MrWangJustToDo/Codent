@@ -240,8 +240,12 @@ export { buildAutoModePrompt } from "../agent/approval/auto-mode-prompt.js";
 export {
   CONTEXT_OPEN_PREFIX,
   CONTEXT_CLOSE,
+  REMINDER_TAGS,
+  contextSectionIdentity,
+  formatSectionTag,
   hashTurnContextPayload,
   formatContextSectionUserContent,
+  sectionTagOf,
   isContextText,
   contextAttributesFromText,
   contextKindFromText,
@@ -256,7 +260,7 @@ export {
 export {
   buildCounterReminderSection,
   buildRepeatReminderBody,
-  buildTodoReminderContent,
+  buildTodoReminderBody,
   canonicalizeRepeatArguments,
   DEFAULT_ARGUMENTS_PREVIEW_CHARS,
   DEFAULT_REPEAT_EXCLUDED_TOOLS,

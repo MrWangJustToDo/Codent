@@ -15,6 +15,8 @@
 import { truncateText } from "../../utils/text-truncation.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
+import { TURN_CONTEXT_KINDS, formatSectionTag } from "./turn-context-message.js";
+
 export interface BackgroundJobContextRow {
   jobId: string;
   /** The `run_command` tool call that started it, so the caller can filter to the model's wire. */
@@ -85,11 +87,9 @@ export function formatBackgroundJobsSection(jobs: readonly BackgroundJobContextR
   // No generation/epoch attribute: the section is admitted by content like every other kind,
   // against the post-compaction wire, so a cut that removed it re-admits it and a surviving copy
   // suppresses it. An in-memory counter would make the content differ after every restart.
-  return [
-    "<background_jobs>",
+  return formatSectionTag(TURN_CONTEXT_KINDS.backgroundJobs, [
     "Background command jobs in this session. This list is re-injected after compaction. " +
       "Read output with get_command_output(jobId) or read_file(logPath); output is not repeated here.",
     ...lines,
-    "</background_jobs>",
-  ].join("\n");
+  ]);
 }

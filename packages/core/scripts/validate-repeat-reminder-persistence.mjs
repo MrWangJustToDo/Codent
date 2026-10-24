@@ -39,6 +39,8 @@ import {
   clearCoreEnv,
   createRepeatReminderMiddleware,
   formatContextSectionUserContent,
+  formatSectionTag,
+  REMINDER_TAGS,
   readTrailingRepeatChain,
   TURN_CONTEXT_KINDS,
   registerCoreEnv,
@@ -299,10 +301,12 @@ setupEnv();
     kind: TURN_CONTEXT_KINDS.reminder,
     content: formatContextSectionUserContent({
       key: TURN_CONTEXT_KINDS.reminder,
-      content:
+      content: formatSectionTag(
+        REMINDER_TAGS.repeat,
         "You are repeating the exact same tool call with identical arguments. " +
-        "Carefully analyze the previous result before calling again: if the task is not " +
-        "complete, try a different approach or different arguments instead of repeating the call.",
+          "Carefully analyze the previous result before calling again: if the task is not " +
+          "complete, try a different approach or different arguments instead of repeating the call."
+      ),
       attrs: {
         chain: readTrailingRepeatChain(wire).chain,
         count: String(DEFAULT_REPEAT_THRESHOLDS[0]),

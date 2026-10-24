@@ -119,7 +119,7 @@ assert.ok(
 
 // Todo nag: the round/episode state is recovered from the window, so the same wire yields
 // the same decision and an updated todo list starts a fresh cycle.
-const { TodoManager, buildTodoReminderContent, resolveTodoReminder, readTodoReminderWindowState } =
+const { TodoManager, buildTodoReminderBody, resolveTodoReminder, readTodoReminderWindowState } =
   await import("../dist/dev.mjs");
 const tm = new TodoManager({
   log: {
@@ -214,8 +214,8 @@ assert.equal(
 );
 
 // The nag body carries the round/episode text (so every nag hashes uniquely).
-assert.match(buildTodoReminderContent(7, 2), /unchanged for 7 rounds/);
-assert.notEqual(buildTodoReminderContent(3, 1), buildTodoReminderContent(3, 2), "episode changes the content");
+assert.match(buildTodoReminderBody(7, 2), /unchanged for 7 rounds/);
+assert.notEqual(buildTodoReminderBody(3, 1), buildTodoReminderBody(3, 2), "episode changes the content");
 
 // Subagent-only project_instructions section builder.
 const projectSection = buildProjectInstructionsSection("Follow conventions.");
@@ -442,7 +442,7 @@ assert.ok(!SUBAGENT_ALLOWED_KINDS.has("extension_system_append"), "no extension 
 // not stop at the first dash, or a state cycle back to identical content is deduped.
 assert.equal(syntheticKindFromId("ctx-codent-memory-deadbeef"), "codent-memory");
 assert.equal(syntheticKindFromId("ctx-codent-memory-deadbeef-2"), "codent-memory");
-assert.equal(syntheticKindFromId("ctx-current_date-1"), "current_date");
+assert.equal(syntheticKindFromId("ctx-current_date-1"), undefined, "a legacy nonce-only id carries no kind");
 assert.equal(syntheticKindFromId("not-a-ctx-id"), undefined);
 
 // Shell prefix constant is the single detection anchor.
@@ -536,10 +536,10 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.ok(injectedIds[2] !== injectedIds[0], "re-entry id differs from first entry");
 
   // Repeated nags with identical rounds value: the episode keeps ids/content unique.
-  const { buildTodoReminderContent } = await import("../dist/dev.mjs");
+  const { buildTodoReminderBody } = await import("../dist/dev.mjs");
   assert.notEqual(
-    buildTodoReminderContent(3, 1),
-    buildTodoReminderContent(3, 2),
+    buildTodoReminderBody(3, 1),
+    buildTodoReminderBody(3, 2),
     "same rounds at a later episode hashes differently (no dedupe swallow)"
   );
 }

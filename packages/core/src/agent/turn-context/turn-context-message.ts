@@ -109,6 +109,57 @@ export interface TurnContextSection {
   attrs?: Record<string, string>;
 }
 
+/**
+ * Inner tag names for the shared `reminder` kind.
+ *
+ * The `<ctx kind=...>` envelope identifies the admission class; the inner tag names the
+ * section itself. The two condition+counter reminders share one kind, so this tag is what
+ * tells them apart — both for admission and for counter recovery.
+ */
+export const REMINDER_TAGS = {
+  todo: "todo-reminder",
+  repeat: "repeat-reminder",
+} as const;
+
+/**
+ * Render a section body inside its own semantic tag (`<current_date>…</current_date>`).
+ *
+ * One renderer for every section: the inner tag is the section's identity, so a hand-written
+ * `<foo>` in a builder is a bug (it would not match what recovery reads back).
+ */
+export function formatSectionTag(
+  tag: string,
+  body: string | readonly string[],
+  attrs?: Record<string, string>
+): string {
+  const lines = typeof body === "string" ? [body] : body;
+  return [`<${tag}${renderContextAttributes(attrs)}>`, ...lines, `</${tag}>`].join("\n");
+}
+
+/** The first semantic tag of a rendered section body (`<todo-reminder …>` → `todo-reminder`). */
+export function sectionTagOf(content: string): string | undefined {
+  const match = /^<([A-Za-z][\w-]*)(?:\s[^>]*)?>/.exec(content.trimStart());
+  return match?.[1];
+}
+
+/**
+ * A section's semantic identity inside its kind.
+ *
+ * Hash-admitted sections are identified by their kind: the inner tag may encode state
+ * (`<auto_mode>` vs `<mode_state>`) or belong to an extension, while the kind is the stable
+ * slot their admission is computed against. A section carrying recovery attrs is a
+ * condition+counter reminder, and there the inner tag is the discriminator — that is how
+ * the todo nag and the repeat nudge share one kind without ever comparing against each other.
+ */
+export function contextSectionIdentity(section: {
+  key: string;
+  content: string;
+  attrs?: Record<string, string>;
+}): string {
+  if (!section.attrs) return section.key;
+  return sectionTagOf(section.content) ?? section.key;
+}
+
 function supersedeNotice(kind: string): string {
   return `If earlier <ctx kind=${kind}> blocks appear above in this conversation, ignore them and treat this block as authoritative.`;
 }
@@ -141,15 +192,14 @@ export function formatContextSectionUserContent(section: TurnContextSection, opt
  * Recover the synthetic kind from a stable id.
  *
  * Kind names are arbitrary strings (extension ids can contain `-`), so a
- * `^ctx-([^-]+)-` split is not sufficient. Modern ids are
- * `ctx-<kind>-<8hex>[-<nonce>]`; older persisted ids used a bare numeric nonce.
+ * `^ctx-([^-]+)-` split is not sufficient. Ids are `ctx-<kind>-<8hex>[-<nonce>]`
+ * (`syntheticMessageId`), and nothing else is recognized: an id this does not match was not
+ * written by the current shell and carries no kind.
  */
 export function syntheticKindFromId(id: string | undefined): string | undefined {
   if (!id) return undefined;
-  const modern = /^ctx-(.+)-([0-9a-f]{8})(?:-\d+)?$/.exec(id);
-  if (modern) return modern[1];
-  const legacy = /^ctx-(.+)-\d+$/.exec(id);
-  return legacy?.[1];
+  const match = /^ctx-(.+)-([0-9a-f]{8})(?:-\d+)?$/.exec(id);
+  return match?.[1];
 }
 
 export function isContextText(text: string | undefined | null): boolean {
@@ -247,12 +297,16 @@ export function hashTurnContextSection(section: TurnContextSection): string {
  * need no reset plumbing: a cut that dropped a block leaves no entry (it re-injects), and a
  * block that survived keeps suppressing it.
  *
- * Walks newest-first. `keys`, when given, stops the scan as soon as every wanted kind has been
- * found (the common case: the injected blocks sit near the tail).
+ * Keyed by {@link contextSectionIdentity}, not by kind alone: the two condition+counter
+ * reminders share the `reminder` kind, and comparing them against each other would let one
+ * mask the other.
+ *
+ * Walks newest-first. `identities`, when given, stops the scan as soon as every wanted one has
+ * been found (the common case: the injected blocks sit near the tail).
  */
 export function findLatestContextSectionsFromWire(
   messages: readonly ModelMessage[],
-  keys?: ReadonlySet<string>
+  identities?: ReadonlySet<string>
 ): Map<string, TurnContextSection> {
   const latest = new Map<string, TurnContextSection>();
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -260,23 +314,24 @@ export function findLatestContextSectionsFromWire(
     if (!message || !isContextModelMessage(message)) continue;
     const section = extractContextSection(extractTextFromContent(message.content));
     if (!section) continue;
-    if (keys && !keys.has(section.key)) continue;
-    if (!latest.has(section.key)) {
-      latest.set(section.key, section);
-      if (keys && latest.size === keys.size) break;
+    const identity = contextSectionIdentity(section);
+    if (identities && !identities.has(identity)) continue;
+    if (!latest.has(identity)) {
+      latest.set(identity, section);
+      if (identities && latest.size === identities.size) break;
     }
   }
   return latest;
 }
 
-/** Latest admitted section hash per kind from the model-visible wire. */
+/** Latest admitted section hash per identity from the model-visible wire. */
 export function findLatestTurnContextSectionHashesFromWire(
   messages: readonly ModelMessage[],
-  keys?: ReadonlySet<string>
+  identities?: ReadonlySet<string>
 ): Map<string, string> {
   const hashes = new Map<string, string>();
-  for (const [key, section] of findLatestContextSectionsFromWire(messages, keys)) {
-    hashes.set(key, hashTurnContextSection(section));
+  for (const [identity, section] of findLatestContextSectionsFromWire(messages, identities)) {
+    hashes.set(identity, hashTurnContextSection(section));
   }
   return hashes;
 }

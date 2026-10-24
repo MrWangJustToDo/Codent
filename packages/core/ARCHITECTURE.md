@@ -906,7 +906,8 @@ and `ManagedAgent.reset()` funnels through the controller's single `resetTurnSta
 
 **Three injection shapes, one kind catalog (`TURN_CONTEXT_KINDS`)**: (1) hash-admitted sections
 (the middleware above); (2) condition + counter reminders — the todo nag and the repeat-call nudge share the one
-`reminder` kind and are told apart by their scope attrs (`cycle` / `chain`), so
+`reminder` kind and are told apart by their inner tag (`<todo-reminder>` / `<repeat-reminder>`)
+plus their scope attrs (`cycle` / `chain`), so
 `agent/turn-context/reminder/` holds the shared mechanism (`counter-reminder.ts`: scope-filtered
 recovery from the window + the attr-carrying builder, `episode` being the only non-scope attr) and
 the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); the middleware for the repeat nudge
@@ -914,7 +915,9 @@ only delivers what the policy resolves; (3) background-result pushes (`backgroun
 later background tasks), appended once per result. Recovery for (2) is the "cleanup": only blocks
 whose scope matches the current one count, and the turn-scoped counter stops at a genuine user
 prompt. `validate:turn-context-kinds` enforces that no kind or `<ctx kind=...>` tag is spelled
-outside the catalog and that the two reminders keep their scope attrs.
+outside the catalog, that section bodies are rendered through `formatSectionTag` (a literal
+builder tag drifts from what admission/recovery reads back), and that the two reminders keep
+their own inner tag + scope attrs.
 
 **Subagent isolation:** subagents run the same middleware but only `SUBAGENT_ALLOWED_KINDS`
 (`current_date`, `git_status`, `project_instructions`) pass; memory / todo / plan / mode /

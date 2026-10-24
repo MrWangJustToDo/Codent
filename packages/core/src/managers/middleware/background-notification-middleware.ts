@@ -1,5 +1,5 @@
 import { truncateString } from "../../agent/tools/shared/output-limits.js";
-import { formatContextSectionUserContent, TURN_CONTEXT_KINDS } from "../../agent/turn-context";
+import { TURN_CONTEXT_KINDS, formatContextSectionUserContent, formatSectionTag } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -100,5 +100,8 @@ function formatNotifications(jobs: CompletedCommandJob[], maxOutputChars: number
     return body.join("\n");
   });
 
-  return formatContextSectionUserContent({ key: BACKGROUND_NOTIFICATION_KIND, content: sections.join("\n\n") });
+  return formatContextSectionUserContent({
+    key: BACKGROUND_NOTIFICATION_KIND,
+    content: formatSectionTag(BACKGROUND_NOTIFICATION_KIND, sections.join("\n\n")),
+  });
 }

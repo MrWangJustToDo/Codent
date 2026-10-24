@@ -15,11 +15,7 @@
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { SESSION_DIR, SESSION_LOG_SUFFIX } from "../persistence/types.js";
 
-import { TURN_CONTEXT_KINDS, type TurnContextKind } from "./turn-context-message.js";
-
-/** Semantic tag for the retrieval section. */
-export const SESSION_RETRIEVAL_OPEN = "<session_retrieval>";
-export const SESSION_RETRIEVAL_CLOSE = "</session_retrieval>";
+import { TURN_CONTEXT_KINDS, formatSectionTag, type TurnContextKind } from "./turn-context-message.js";
 
 /**
  * Section kind for the retrieval section.
@@ -89,5 +85,5 @@ export function renderStaticRetrievalBody(): string {
 export function formatSessionRetrievalSection(options: { hasHistory: boolean }): SessionRetrievalSection | undefined {
   if (!options.hasHistory) return undefined;
 
-  return [SESSION_RETRIEVAL_OPEN, renderStaticRetrievalBody(), SESSION_RETRIEVAL_CLOSE].join("\n");
+  return formatSectionTag(SESSION_RETRIEVAL_KIND, renderStaticRetrievalBody());
 }

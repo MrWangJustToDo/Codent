@@ -10,7 +10,7 @@
 export { buildCounterReminderSection, readCounterReminderState } from "./counter-reminder.js";
 export type { CounterReminderSectionInput, CounterReminderSpec, CounterReminderState } from "./counter-reminder.js";
 
-export { buildTodoReminderContent, readTodoReminderWindowState, resolveTodoReminder } from "./todo-reminder.js";
+export { buildTodoReminderBody, readTodoReminderWindowState, resolveTodoReminder } from "./todo-reminder.js";
 export type { TodoReminderWindowState } from "./todo-reminder.js";
 
 export {

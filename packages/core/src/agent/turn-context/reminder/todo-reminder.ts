@@ -14,14 +14,14 @@
  *   is gone (compaction dropped it), the nag is skipped — the model can no longer see the
  *   list it would be asked to update, so a nag is noise.
  * - **Admitted state**: {@link readCounterReminderState} (same rule as the repeat nudge)
- *   counts the `reminder` blocks carrying this cycle's id and the highest `rounds` they
- *   recorded.
+ *   counts the `<todo-reminder>` blocks carrying this cycle's id and the highest `rounds`
+ *   they recorded.
  *
  * `TodoManager` keeps only the policy (threshold / cooldown / growth).
  */
 
 import { BUILTIN_TOOL_NAMES } from "../../tools/catalog/tool-names.js";
-import { TURN_CONTEXT_KINDS } from "../turn-context-message.js";
+import { REMINDER_TAGS, TURN_CONTEXT_KINDS } from "../turn-context-message.js";
 
 import { buildCounterReminderSection, readCounterReminderState } from "./counter-reminder.js";
 
@@ -36,6 +36,7 @@ interface WireToolCall {
 }
 
 const REMINDER_KIND = TURN_CONTEXT_KINDS.reminder;
+const REMINDER_TAG = REMINDER_TAGS.todo;
 const SCOPE_ATTR = "cycle";
 const VALUE_ATTR = "rounds";
 
@@ -70,6 +71,7 @@ export function readTodoReminderWindowState(messages: readonly ModelMessage[]): 
 
   const admitted = readCounterReminderState(messages, {
     kind: REMINDER_KIND,
+    tag: REMINDER_TAG,
     scopeAttr: SCOPE_ATTR,
     scope: cycle,
     valueAttr: VALUE_ATTR,
@@ -79,12 +81,10 @@ export function readTodoReminderWindowState(messages: readonly ModelMessage[]): 
 }
 
 /** Render the nag body (the round/episode text is also what makes each nag hash-unique). */
-export function buildTodoReminderContent(rounds: number, episode: number): string {
+export function buildTodoReminderBody(rounds: number, episode: number): string {
   return [
-    "<reminder>",
     "Update your todos - mark completed tasks and update progress.",
     `(nag #${episode}, unchanged for ${rounds} rounds)`,
-    "</reminder>",
   ].join("\n");
 }
 
@@ -114,11 +114,12 @@ export function resolveTodoReminder(
   const episode = state.episodes + 1;
   return buildCounterReminderSection({
     kind: REMINDER_KIND,
+    tag: REMINDER_TAG,
     scopeAttr: SCOPE_ATTR,
     scope: state.cycle,
     valueAttr: VALUE_ATTR,
     value: state.rounds,
     episode,
-    content: buildTodoReminderContent(state.rounds, episode),
+    content: buildTodoReminderBody(state.rounds, episode),
   });
 }

@@ -19,6 +19,8 @@ import {
   buildRepeatReminderBody,
   canonicalizeRepeatArguments,
   formatContextSectionUserContent,
+  formatSectionTag,
+  REMINDER_TAGS,
   contextAttributesFromText,
   createRepeatReminderMiddleware,
   DEFAULT_REPEAT_THRESHOLDS,
@@ -162,15 +164,22 @@ assert.ok(/Repeated tool call detected/.test(detailed), "later threshold is the 
 assert.ok(/- tool: grep/.test(detailed) && /- consecutive_calls: 5/.test(detailed), "names tool + count");
 assert.ok(/- arguments: \{"pattern":"foo"\}/.test(detailed), "quotes the arguments");
 assert.equal(
-  buildRepeatReminderBody({
-    toolName: "grep",
-    count: t3,
-    canonicalArguments: "{}",
-    firstThreshold: t3,
-    previewChars: 500,
-  }),
-  gentleResolution.section.content.trim(),
-  "the pipeline builds the same body the resolution carries"
+  gentleResolution.section.content,
+  formatSectionTag(
+    REMINDER_TAGS.repeat,
+    buildRepeatReminderBody({
+      toolName: "grep",
+      count: t3,
+      canonicalArguments: '{"pattern":"foo"}',
+      firstThreshold: t3,
+      previewChars: 500,
+    })
+  ),
+  "the section is the shared builder's inner tag around the body"
+);
+assert.ok(
+  gentleResolution.section.content.startsWith(`<${REMINDER_TAGS.repeat}>`),
+  "the repeat nudge declares its own tag inside the shared reminder kind"
 );
 
 const longArgs = "x".repeat(600);

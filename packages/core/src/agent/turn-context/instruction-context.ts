@@ -29,7 +29,7 @@ import {
   type ResolvedInstructionFile,
 } from "../prompt/instruction-files.js";
 
-import { hashTurnContextPayload } from "./turn-context-message.js";
+import { TURN_CONTEXT_KINDS, formatSectionTag, hashTurnContextPayload } from "./turn-context-message.js";
 
 // ============================================================================
 // Types
@@ -70,10 +70,6 @@ export interface LoadedInstructionContent {
  * cannot drift apart.
  */
 export { INSTRUCTION_FILENAMES, INSTRUCTION_MAX_BYTES };
-
-/** Marker describing the instruction context section. */
-const INSTRUCTION_CONTEXT_OPEN = "<instruction_context>";
-const INSTRUCTION_CONTEXT_CLOSE = "</instruction_context>";
 
 // ============================================================================
 // Discovery & hashing
@@ -207,7 +203,7 @@ export function formatInstructionContextSection(loaded: LoadedInstructionContent
     parts.push(loaded.override.content);
   }
 
-  return [INSTRUCTION_CONTEXT_OPEN, ...parts, INSTRUCTION_CONTEXT_CLOSE].join("\n");
+  return formatSectionTag(TURN_CONTEXT_KINDS.instructionContext, parts);
 }
 
 /** Render `@` import diagnostics so a broken reference is visible, not silent. */

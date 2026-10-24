@@ -27,6 +27,7 @@ import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { splitDisplayLines } from "../../utils/display-lines.js";
 import { errorMessage } from "../../utils/errors.js";
+import { TURN_CONTEXT_KINDS, formatSectionTag } from "../turn-context/turn-context-message.js";
 
 import {
   DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
@@ -489,12 +490,10 @@ export function formatRelevantMemories(memories: RelevantMemory[]): string {
       `<memory name="${m.name.replace(/"/g, "&quot;")}" type="${m.type}">\n${m.description}\n\n${m.content}\n</memory>`
   );
 
-  return [
-    "<relevant_memories>",
+  return formatSectionTag(TURN_CONTEXT_KINDS.relevantMemories, [
     "The following memories were selected as relevant to the current conversation.",
     "Apply any user preferences, project facts, or conventions described below.",
     "",
     parts.join("\n\n"),
-    "</relevant_memories>",
-  ].join("\n");
+  ]);
 }

@@ -38,6 +38,8 @@ import {
   contextAttributesFromText,
   DEFAULT_REPEAT_THRESHOLDS,
   formatContextSectionUserContent,
+  formatSectionTag,
+  REMINDER_TAGS,
   readCounterReminderState,
   readRepeatReminderWindowState,
   resolveRepeatReminder,
@@ -170,52 +172,65 @@ assert.ok(!("cycle" in repeat.section.attrs) && !("chain" in nag.attrs), "the sc
 // ---------------------------------------------------------------------------
 // 3. Recovery is scoped: other cycles/chains never count, prompts end turn scopes.
 // ---------------------------------------------------------------------------
-const reminderMessage = (attrs) => ({
+const todoSpec = {
+  kind: TURN_CONTEXT_KINDS.reminder,
+  tag: REMINDER_TAGS.todo,
+  scopeAttr: "cycle",
+  scope: "call_old",
+  valueAttr: "rounds",
+};
+const reminderMessage = (tag, attrs) => ({
   role: "user",
   content: formatContextSectionUserContent({
     key: TURN_CONTEXT_KINDS.reminder,
-    content: "<reminder>body</reminder>",
+    content: formatSectionTag(tag, "body"),
     attrs,
   }),
 });
-const withOtherCycle = [reminderMessage({ cycle: "call_old", rounds: "18", episode: "3" })];
+const withOtherCycle = [reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "18", episode: "3" })];
 assert.deepEqual(
-  readCounterReminderState(withOtherCycle, {
-    kind: TURN_CONTEXT_KINDS.reminder,
-    scopeAttr: "cycle",
-    scope: "call_new",
-    valueAttr: "rounds",
-  }),
+  readCounterReminderState(withOtherCycle, { ...todoSpec, scope: "call_new" }),
   { episodes: 0, lastValue: 0 },
   "a block from another cycle is cleanup, not state"
 );
 assert.deepEqual(
-  readCounterReminderState(withOtherCycle, {
-    kind: TURN_CONTEXT_KINDS.reminder,
-    scopeAttr: "cycle",
-    scope: "call_old",
-    valueAttr: "rounds",
-  }),
+  readCounterReminderState(withOtherCycle, todoSpec),
   { episodes: 1, lastValue: 18 },
   "the owning cycle recovers it"
 );
 
+// The subtype, not just the attrs, decides: a repeat-tagged block that carries a cycle attr
+// (or a todo-tagged one carrying a chain) must never count for the other reminder.
+assert.deepEqual(
+  readCounterReminderState(
+    [reminderMessage(REMINDER_TAGS.repeat, { cycle: "call_old", rounds: "18", episode: "3" })],
+    todoSpec
+  ),
+  { episodes: 0, lastValue: 0 },
+  "the todo counter ignores a repeat-tagged block even with a matching cycle attr"
+);
+assert.deepEqual(
+  readCounterReminderState([reminderMessage(REMINDER_TAGS.todo, { chain: "abc12345", count: "3", episode: "1" })], {
+    kind: TURN_CONTEXT_KINDS.reminder,
+    tag: REMINDER_TAGS.repeat,
+    scopeAttr: "chain",
+    scope: "abc12345",
+    valueAttr: "count",
+  }),
+  { episodes: 0, lastValue: 0 },
+  "the repeat counter ignores a todo-tagged block even with a matching chain attr"
+);
+
 const repeatScope = {
-  kind: TURN_CONTEXT_KINDS.repeatReminder,
+  kind: TURN_CONTEXT_KINDS.reminder,
+  tag: REMINDER_TAGS.repeat,
   scopeAttr: "chain",
   scope: "abc12345",
   valueAttr: "count",
   withinTurnOnly: true,
 };
 const previousTurn = [
-  {
-    role: "user",
-    content: formatContextSectionUserContent({
-      key: TURN_CONTEXT_KINDS.repeatReminder,
-      content: "body",
-      attrs: { chain: "abc12345", count: "3", episode: "1" },
-    }),
-  },
+  reminderMessage(REMINDER_TAGS.repeat, { chain: "abc12345", count: "3", episode: "1" }),
   { role: "user", content: "a new instruction" },
 ];
 assert.deepEqual(
@@ -263,5 +278,43 @@ assert.equal(
   assert.equal(secondInjected.length, 1, "a later round injects a fresh nag");
   assert.ok(String(secondInjected[0].content).includes("authoritative"), "the same cycle's earlier nag is superseded");
 }
+
+// ---------------------------------------------------------------------------
+// 5. Section builders render through `formatSectionTag` — no isolated tag literals.
+// ---------------------------------------------------------------------------
+// A hand-written `<foo>` string element in a builder is invisible to the reader but breaks
+// identity: admission and reminder recovery compare the tag that was actually rendered, so a
+// literal that drifts from the catalog silently splits one section into two. Prose mentions
+// inside a longer sentence (``the `<session_id>` block``) are fine — only a whole-string tag
+// literal is a second renderer.
+const SECTION_BUILDERS = [
+  "managers/managed-agent-prompt.ts",
+  "agent/turn-context/instruction-context.ts",
+  "agent/turn-context/session-retrieval.ts",
+  "agent/turn-context/background-jobs.ts",
+  "agent/memory/memory-retrieval.ts",
+  "agent/turn-context/reminder/todo-reminder.ts",
+  "agent/turn-context/reminder/repeat-reminder.ts",
+  "managers/middleware/background-notification-middleware.ts",
+];
+// Only a whole-string literal (`"<tag>"`) is a second renderer. Backtick-delimited mentions
+// inside prose (``the `<session_id>` block``) are documentation, not construction.
+const QUOTE = "[\"']";
+const sectionTags = [...Object.values(TURN_CONTEXT_KINDS), ...Object.values(REMINDER_TAGS)];
+/** Doc comments name tags for the reader; only executable literals can construct one. */
+const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+const bareTags = [];
+for (const relativePath of SECTION_BUILDERS) {
+  const text = stripComments(readFileSync(join(SRC_DIR, relativePath), "utf8"));
+  for (const tag of sectionTags) {
+    if (new RegExp(`${QUOTE}<${tag}>${QUOTE}`).test(text)) bareTags.push(`${relativePath} → "<${tag}>"`);
+  }
+}
+assert.deepEqual(
+  bareTags,
+  [],
+  `a section builder must render its tag through formatSectionTag(); a literal tag drifts from the ` +
+    `catalog and from what recovery reads back. Offenders:\n  ${bareTags.join("\n  ")}`
+);
 
 console.log("turn-context kinds validation passed");

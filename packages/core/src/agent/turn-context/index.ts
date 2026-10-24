@@ -1,7 +1,11 @@
 export {
   CONTEXT_CLOSE,
   CONTEXT_OPEN_PREFIX,
+  REMINDER_TAGS,
+  contextSectionIdentity,
+  formatSectionTag,
   hashTurnContextPayload,
+  sectionTagOf,
   TURN_CONTEXT_KINDS,
   formatContextSectionUserContent,
   isContextText,
@@ -35,7 +39,7 @@ export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./bac
 export {
   buildCounterReminderSection,
   readCounterReminderState,
-  buildTodoReminderContent,
+  buildTodoReminderBody,
   readTodoReminderWindowState,
   resolveTodoReminder,
   buildRepeatReminderBody,
@@ -61,9 +65,7 @@ export type {
 export type { BackgroundJobContextRow, WireMessage, WireToolCall } from "./background-jobs.js";
 
 export {
-  SESSION_RETRIEVAL_CLOSE,
   SESSION_RETRIEVAL_KIND,
-  SESSION_RETRIEVAL_OPEN,
   formatSessionRetrievalSection,
   renderStaticRetrievalBody,
   hasSessionHistory,

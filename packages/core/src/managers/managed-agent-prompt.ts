@@ -1,4 +1,4 @@
-import { TURN_CONTEXT_KINDS } from "../agent/turn-context/turn-context-message.js";
+import { TURN_CONTEXT_KINDS, formatSectionTag } from "../agent/turn-context/turn-context-message.js";
 import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "../models/cache/prompt-cache.js";
 
 import type { AgentConfig } from "./agent-types.js";
@@ -21,14 +21,12 @@ export function buildFrozenSystemPrompt(input: SystemPromptInput): string | unde
 
   if (input.agentDocContent) {
     parts.push(
-      [
-        "<project_instructions>",
+      formatSectionTag(TURN_CONTEXT_KINDS.projectInstructions, [
         "Below are the project-specific instructions loaded from the repository.",
         "Follow these conventions, rules, and guidelines when working in this codebase.",
         "",
         input.agentDocContent,
-        "</project_instructions>",
-      ].join("\n")
+      ])
     );
   }
 
@@ -85,7 +83,7 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
   if (input.currentDate) {
     sections.push({
       key: TURN_CONTEXT_KINDS.currentDate,
-      content: ["<current_date>", input.currentDate, "</current_date>"].join("\n"),
+      content: formatSectionTag(TURN_CONTEXT_KINDS.currentDate, input.currentDate),
     });
   }
 
@@ -99,7 +97,7 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
     }
     sections.push({
       key: TURN_CONTEXT_KINDS.gitStatus,
-      content: ["<git_status>", ...gitParts, "</git_status>"].join("\n"),
+      content: formatSectionTag(TURN_CONTEXT_KINDS.gitStatus, gitParts),
     });
   }
 
@@ -122,7 +120,7 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
   if (input.sessionId) {
     sections.push({
       key: TURN_CONTEXT_KINDS.sessionId,
-      content: ["<session_id>", input.sessionId, "</session_id>"].join("\n"),
+      content: formatSectionTag(TURN_CONTEXT_KINDS.sessionId, input.sessionId),
     });
   }
 
@@ -148,14 +146,12 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
 export function buildProjectInstructionsSection(content: string): TurnContextSection {
   return {
     key: TURN_CONTEXT_KINDS.projectInstructions,
-    content: [
-      "<project_instructions>",
+    content: formatSectionTag(TURN_CONTEXT_KINDS.projectInstructions, [
       "Below are the project-specific instructions loaded from the repository.",
       "Follow these conventions, rules, and guidelines when working in this codebase.",
       "",
       content,
-      "</project_instructions>",
-    ].join("\n"),
+    ]),
   };
 }
 

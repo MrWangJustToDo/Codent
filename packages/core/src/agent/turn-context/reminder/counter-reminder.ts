@@ -15,12 +15,11 @@
  *    so a new cycle starts at episode 1 without any explicit reset. `withinTurnOnly` adds
  *    the second cleanup rule the repeat nudge needs: a genuine user prompt ends the window
  *    slice, so a loop in a later turn is not suppressed by an earlier turn's block.
- * 2. **Shape** — {@link buildCounterReminderSection} writes the counter state into the
- *    `<ctx ...>` shell attrs, which is what makes step 1 possible. Both reminders use the
- *    one `reminder` kind: the scope attrs (`cycle` / `chain`) are what identify a block,
- *    and `episode` is the only non-scope attr (the admission counter), which is also the
- *    rule the turn-context middleware uses when it decides whether a block supersedes an
- *    earlier one.
+ * 2. **Shape** — {@link buildCounterReminderSection} writes the reminder's own tag
+ *    (`<todo-reminder>` / `<repeat-reminder>`) inside the shared `reminder` envelope, and the
+ *    counter state into shell attrs. Identity is `(kind, inner tag)`: the tag says WHICH
+ *    reminder this is, the scope attr (`cycle` / `chain`) says which cycle/chain it counts,
+ *    and `episode` counts admissions within that scope.
  *
  * What is NOT shared: *when* the counter is due. The todo nag grows its cooldown
  * (threshold + per-episode growth), the repeat nudge fires at discrete thresholds. Each
@@ -28,15 +27,27 @@
  */
 
 import { extractTextFromContent } from "../../compaction/message-utils.js";
-import { extractContextSection, isContextModelMessage } from "../turn-context-message.js";
+import {
+  extractContextSection,
+  formatSectionTag,
+  isContextModelMessage,
+  sectionTagOf,
+} from "../turn-context-message.js";
 
 import type { TurnContextSection } from "../turn-context-message.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 /** Identity of one counter's scope, plus the attrs it travels under. */
 export interface CounterReminderSpec {
-  /** Section kind (`TURN_CONTEXT_KINDS.*`) — also the `<ctx kind=...>` tag. */
+  /** Section kind (`TURN_CONTEXT_KINDS.*`) — the `<ctx kind=...>` tag. */
   kind: string;
+  /**
+   * Inner section tag naming THIS reminder (`REMINDER_TAGS.todo` / `.repeat`).
+   *
+   * The two reminders share one kind, so the tag is the discriminator: recovery reads it back
+   * and a block of the other tag never counts, no matter what attrs it carries.
+   */
+  tag: string;
   /** Shell attr naming the scope the counter belongs to (`cycle` / `chain`). */
   scopeAttr: string;
   /** Current scope value (todo tool-call id, repeat chain hash). */
@@ -79,6 +90,7 @@ export function readCounterReminderState(
     if (!isContextModelMessage(message)) continue;
     const section = extractContextSection(extractTextFromContent(message.content));
     if (!section || section.key !== spec.kind) continue;
+    if (sectionTagOf(section.content) !== spec.tag) continue;
     if (section.attrs?.[spec.scopeAttr] !== spec.scope) continue;
     episodes += 1;
     const recorded = Number(section.attrs[spec.valueAttr]);
@@ -93,7 +105,7 @@ export interface CounterReminderSectionInput extends CounterReminderSpec {
   value: number;
   /** Admission episode within the scope (1-based). */
   episode: number;
-  /** Rendered body (without the `<ctx>` shell). */
+  /** Reminder body (without its inner tag; this layer adds the tag). */
   content: string;
 }
 
@@ -107,7 +119,7 @@ export interface CounterReminderSectionInput extends CounterReminderSpec {
 export function buildCounterReminderSection(input: CounterReminderSectionInput): TurnContextSection {
   return {
     key: input.kind,
-    content: input.content.trim(),
+    content: formatSectionTag(input.tag, input.content.trim()),
     attrs: {
       [input.scopeAttr]: input.scope,
       [input.valueAttr]: String(input.value),

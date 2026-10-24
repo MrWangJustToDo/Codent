@@ -25,7 +25,12 @@
  */
 
 import { BUILTIN_TOOL_NAMES } from "../../tools/catalog/tool-names.js";
-import { TURN_CONTEXT_KINDS, hashTurnContextPayload, isContextModelMessage } from "../turn-context-message.js";
+import {
+  REMINDER_TAGS,
+  TURN_CONTEXT_KINDS,
+  hashTurnContextPayload,
+  isContextModelMessage,
+} from "../turn-context-message.js";
 
 import { buildCounterReminderSection, readCounterReminderState } from "./counter-reminder.js";
 
@@ -49,6 +54,7 @@ export const DEFAULT_ARGUMENTS_PREVIEW_CHARS = 500;
 export const DEFAULT_REPEAT_EXCLUDED_TOOLS = [BUILTIN_TOOL_NAMES.getCommandOutput] as const;
 
 const REMINDER_KIND = TURN_CONTEXT_KINDS.reminder;
+const REMINDER_TAG = REMINDER_TAGS.repeat;
 const SCOPE_ATTR = "chain";
 const VALUE_ATTR = "count";
 
@@ -174,6 +180,7 @@ export function readRepeatReminderWindowState(
 ): RepeatReminderWindowState {
   const admitted = readCounterReminderState(messages, {
     kind: REMINDER_KIND,
+    tag: REMINDER_TAG,
     scopeAttr: SCOPE_ATTR,
     scope: chain,
     valueAttr: VALUE_ATTR,
@@ -235,6 +242,7 @@ export function resolveRepeatReminder(
     chain,
     section: buildCounterReminderSection({
       kind: REMINDER_KIND,
+      tag: REMINDER_TAG,
       scopeAttr: SCOPE_ATTR,
       scope: chain.chain,
       valueAttr: VALUE_ATTR,
