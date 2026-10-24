@@ -300,9 +300,11 @@ export type AgentEventPayloadMap = {
      * duplicate `TOOL_CALL_END` for an already-registered call during one stream, which
      * means the tool calls are being re-strand with fresh ids; `run-finish`/`run-abort`/
      * `run-error` are the attempt ending (a discarded run whose tool call is still going to
-     * execute means the tool phase will spawn a *second* subagent for the same call id).
+     * execute means the tool phase will spawn a *second* subagent for the same call id);
+     * `tool-rejected` is the call itself being refused (an extension interceptor's
+     * `event.skip`, a mode policy, a tool cache), so no run boundary is involved at all.
      */
-    cause?: "run-start" | "run-finish" | "run-abort" | "run-error";
+    cause?: "run-start" | "run-finish" | "run-abort" | "run-error" | "tool-rejected";
     /** Subagents already spawned for the call, whose work was aborted (orphaned). */
     subagentIds?: string[];
   };

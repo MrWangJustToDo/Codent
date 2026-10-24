@@ -37,6 +37,8 @@ import { runSubagent, subagentResultToTaskOutput } from "../../agent/subagent/ru
 import {
   discardRegisteredPrefork,
   getTaskPreforkCoordinator,
+  peekTaskPreforkCoordinator,
+  type PreforkDiscard,
   type PreforkDiscardCause,
   type TaskPreforkCoordinator,
 } from "../../agent/subagent/task-prefork.js";
@@ -115,17 +117,21 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
     return coordinator;
   };
 
-  const discardRegistered = (managed: ManagedAgent, cause: PreforkDiscardCause) => {
+  const reportDiscard = (discard: PreforkDiscard) => {
     // Report what the discard actually threw away. The record carries the subagents already
     // spawned for the call — which are the ones this turns into orphans. Dropping that list
     // is what used to make the orphan indistinguishable from an unrelated subagent in the log.
-    discardRegisteredPrefork(managed, cause, (discard) => {
-      deps.emitEvent?.("subagent:prefork-discarded", {
-        toolCallId: discard.toolCallId,
-        cause: discard.cause,
-        subagentIds: discard.subagentIds,
-      });
+    deps.emitEvent?.("subagent:prefork-discarded", {
+      toolCallId: discard.toolCallId,
+      cause: discard.cause,
+      subagentIds: discard.subagentIds,
     });
+  };
+
+  const discardRegistered = (managed: ManagedAgent, cause: PreforkDiscardCause) => {
+    // Boundary discards reuse the same report: a run thrown away here is just as orphaned as one
+    // dropped for a refused call, and the log has to name it either way.
+    discardRegisteredPrefork(managed, cause, reportDiscard);
   };
 
   return defineMiddleware("tools", {
@@ -202,6 +208,25 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
         deps.getUIChannel?.()?.getMessages();
       if (!messages || hasPendingRunContinuation(messages)) return;
       discardRegistered(managed, "run-finish");
+    },
+    // A `task` call can be REFUSED after its pre-fork started: an extension's `tool:before:…`
+    // interceptor (`event.skip`), a mode policy, or a tool cache settles the call without ever
+    // running `execute`, so nothing joins the eager run. The boundaries above only collect it once
+    // the whole attempt ends — by which point the subagent has paid for its exploration and held a
+    // concurrency slot for something the caller already refused.
+    //
+    // The tool phase is the one place that sees every refusal without knowing which middleware made
+    // it, and the test is unambiguous: a healthy call removes its own entry by joining it (`join`
+    // deletes before awaiting), so an entry still registered here means `execute` did not join it.
+    // `info.ok` cannot stand in for that — a skip settles through @tanstack/ai's
+    // `pushResultAndRunAfterHook` with `ok: true` and `duration: 0`, i.e. indistinguishable from a
+    // successful call by its result.
+    onAfterToolCall: async (_ctx, info) => {
+      if (info.toolName !== BUILTIN_TOOL_NAMES.task) return;
+      const managed = deps.getManagedAgent();
+      if (!managed) return;
+      const discard = peekTaskPreforkCoordinator(managed)?.discard(info.toolCallId, "tool-rejected");
+      if (discard) reportDiscard(discard);
     },
     // Abandonment boundaries discard UNCONDITIONALLY: an abort or an error means the pump that would
     // have joined these pre-forks is not coming, whatever the message state happens to say.

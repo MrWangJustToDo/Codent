@@ -58,7 +58,7 @@ function cancelledStubResult(): SubagentResult {
   };
 }
 
-export type PreforkDiscardCause = "run-start" | "run-finish" | "run-abort" | "run-error";
+export type PreforkDiscardCause = "run-start" | "run-finish" | "run-abort" | "run-error" | "tool-rejected";
 
 /** One tool call whose eagerly started run was thrown away. */
 export interface PreforkDiscard {
@@ -162,6 +162,41 @@ export class TaskPreforkCoordinator {
     const entry = this.entries.get(toolCallId);
     if (!entry) return;
     entry.spawned.push(subagentId);
+  }
+
+  /**
+   * Throw away ONE registered run and report it.
+   *
+   * The per-call half of {@link abortAll}: a `task` call can be refused after its pre-fork started
+   * (an extension interceptor's `event.skip`, a mode policy, a cache), and its siblings in the same
+   * turn are healthy. Discarding the whole set there would kill runs that are about to be joined.
+   *
+   * A run that never took a slot is removed from `waiting` and its gate opened, so `drive` settles
+   * it with the stale stub instead of a slot-holding run starting later — the same queue semantics
+   * `abortAll` relies on.
+   *
+   * @returns the discard record, or `null` when nothing was registered for `toolCallId` (already
+   * joined, or never pre-forked).
+   */
+  discard(toolCallId: string, cause: PreforkDiscardCause): PreforkDiscard | null {
+    const entry = this.entries.get(toolCallId);
+    if (!entry) return null;
+    const discard: PreforkDiscard = { toolCallId, cause, subagentIds: [...entry.spawned] };
+    this.entries.delete(toolCallId);
+    if (!entry.aborted) {
+      entry.aborted = true;
+      if (!entry.occupying) {
+        this.waiting.delete(entry);
+        entry.openGate();
+      }
+    }
+    try {
+      entry.abortHandle();
+    } catch {
+      // Cleanup must never mask the caller's own failure.
+    }
+    this.notify();
+    return discard;
   }
 
   /**
