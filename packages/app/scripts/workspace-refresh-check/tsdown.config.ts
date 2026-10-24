@@ -27,6 +27,8 @@ export default defineConfig({
   entry: [
     `${src}/components/WorkspaceFileMode.tsx`,
     `${src}/context/core-env-context.ts`,
+    // The panel owns the `workspace` surface; mounting it without a scope leaves every key inert.
+    `${src}/context/input-scope-context.ts`,
     `${src}/hooks/use-workspace-panel.ts`,
     `${src}/hooks/use-workspace-git.ts`,
     `${src}/hooks/use-size.ts`,

@@ -32,6 +32,7 @@ import { configureEnv } from "reactivity-store";
 
 import { WorkspaceFileMode } from "./dist/components/WorkspaceFileMode.mjs";
 import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
+import { InputScopeProvider } from "./dist/context/input-scope-context.mjs";
 import { useSize } from "./dist/hooks/use-size.mjs";
 import { useWorkspaceGit } from "./dist/hooks/use-workspace-git.mjs";
 import { useWorkspacePanel } from "./dist/hooks/use-workspace-panel.mjs";
@@ -173,13 +174,22 @@ useSize.getReactiveState().state.screenWidth = 120;
 useSize.getReactiveState().state.screenHeight = 32;
 
 const stdin = fakeStdin();
-const instance = render(createElement(CoreEnvProvider, { value: env }, createElement(WorkspaceFileMode, null)), {
-  stdout: new FakeStdout(),
-  stdin,
-  exitOnCtrlC: false,
-  patchConsole: false,
-  maxFps: 30,
-});
+// `WorkspaceFileMode` answers keys through `useWorkspacePanelInput`, which subscribes only inside a
+// `workspace` scope — without the provider the panel renders but ignores every keystroke.
+const instance = render(
+  createElement(
+    CoreEnvProvider,
+    { value: env },
+    createElement(InputScopeProvider, { value: "workspace" }, createElement(WorkspaceFileMode, null))
+  ),
+  {
+    stdout: new FakeStdout(),
+    stdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  }
+);
 
 const press = async (seq, wait = 250) => {
   stdin.push(seq);
