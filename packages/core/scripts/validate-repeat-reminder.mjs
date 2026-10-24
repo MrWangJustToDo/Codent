@@ -24,9 +24,9 @@ import {
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
+  TURN_CONTEXT_KINDS,
   readRepeatReminderWindowState,
   readTrailingRepeatChain,
-  REPEAT_REMINDER_KIND,
   resolveRepeatReminder,
 } from "../dist/dev.mjs";
 
@@ -87,7 +87,8 @@ function harness(middlewareOptions = {}) {
     },
     reminders: () =>
       state.wire.filter(
-        (message) => typeof message.content === "string" && message.content.includes(REPEAT_REMINDER_KIND)
+        (message) =>
+          typeof message.content === "string" && message.content.includes(`<ctx kind=${TURN_CONTEXT_KINDS.reminder}`)
       ),
   };
 }
@@ -128,7 +129,10 @@ assert.equal(resolveAt(t3 - 1), undefined, "below the first threshold nothing is
 const gentleResolution = resolveAt(t3);
 assert.ok(gentleResolution, "the first threshold resolves a reminder");
 const gentle = formatContextSectionUserContent(gentleResolution.section);
-assert.ok(gentle.startsWith(`<ctx kind=${REPEAT_REMINDER_KIND} chain="`), "opens the ctx shell with the chain scope");
+assert.ok(
+  gentle.startsWith(`<ctx kind=${TURN_CONTEXT_KINDS.reminder} chain="`),
+  "opens the ctx shell with the shared reminder kind and the chain scope"
+);
 assert.ok(gentle.endsWith("</ctx>"), "closes the ctx shell");
 assert.ok(/repeating the exact same tool call/.test(gentle), "first threshold is the gentle reminder");
 assert.deepEqual(
@@ -312,7 +316,10 @@ assert.equal(
   for (let i = 0; i < 3; i++) wire.push(...toolTurn("grep", { pattern: "foo" }, `n${i}`));
   const out = await middleware.onConfig({}, { messages: wire });
   assert.equal(out.messages.length, wire.length + 1, "no channel → append to the wire");
-  assert.ok(out.messages[out.messages.length - 1].content.includes(REPEAT_REMINDER_KIND), "carries the ctx shell");
+  assert.ok(
+    out.messages[out.messages.length - 1].content.includes(`<ctx kind=${TURN_CONTEXT_KINDS.reminder}`),
+    "carries the ctx shell"
+  );
   assert.equal(wire.length, 7, "input wire must not be mutated");
 }
 
@@ -350,7 +357,9 @@ assert.equal(
   await h.run();
   assert.equal(h.reminders().length, 1);
 
-  h.state.wire = h.state.wire.filter((message) => !String(message.content ?? "").includes(REPEAT_REMINDER_KIND));
+  h.state.wire = h.state.wire.filter(
+    (message) => !String(message.content ?? "").includes(`<ctx kind=${TURN_CONTEXT_KINDS.reminder}`)
+  );
   assert.equal(
     readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire).chain).episodes,
     0,

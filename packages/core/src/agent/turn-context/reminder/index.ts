@@ -23,7 +23,6 @@ export {
   previewRepeatArguments,
   readRepeatReminderWindowState,
   readTrailingRepeatChain,
-  REPEAT_REMINDER_KIND,
   resolveRepeatReminder,
 } from "./repeat-reminder.js";
 export type { RepeatChain, RepeatReminderDecision, RepeatReminderWindowState } from "./repeat-reminder.js";

@@ -16,6 +16,10 @@
  * - **The reminder domains share the mechanism**, not just the prose: both build through
  *   `buildCounterReminderSection`, so both carry the same recovery attrs (scope + counter +
  *   episode) and both are recoverable with `readCounterReminderState`.
+ * - **One kind, scope-identified blocks.** The todo nag and the repeat nudge both use
+ *   `reminder`; the scope attrs (`cycle` / `chain`) are what keep them apart. A block of
+ *   the other scope must not suppress this one, and must not make it look like a
+ *   supersede (a nag may not tell the model to ignore a loop warning).
  * - **Recovery is scoped.** A block from another cycle/chain never counts, and a
  *   turn-scoped counter stops at a genuine user prompt.
  *
@@ -28,13 +32,14 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AgentUIChannel,
   buildCounterReminderSection,
+  createTurnContextMiddleware,
   contextAttributesFromText,
   DEFAULT_REPEAT_THRESHOLDS,
   formatContextSectionUserContent,
   readCounterReminderState,
   readRepeatReminderWindowState,
-  REPEAT_REMINDER_KIND,
   resolveRepeatReminder,
   resolveTodoReminder,
   TURN_CONTEXT_KINDS,
@@ -45,15 +50,22 @@ const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 const CATALOG_FILE = join(SRC_DIR, "agent/turn-context/turn-context-message.ts");
 
 // ---------------------------------------------------------------------------
-// 1. The catalog owns every tag — including the two derived ones.
+// 1. The catalog owns every tag.
 // ---------------------------------------------------------------------------
-assert.equal(TURN_CONTEXT_KINDS.repeatReminder, "repeat_tool_reminder", "repeat kind is in the catalog");
 assert.equal(
   TURN_CONTEXT_KINDS.backgroundNotification,
   "background_notification",
   "notification kind is in the catalog"
 );
-assert.equal(REPEAT_REMINDER_KIND, TURN_CONTEXT_KINDS.repeatReminder, "the reminder exports the catalog value");
+assert.equal(
+  Object.values(TURN_CONTEXT_KINDS).filter((kind) => kind === "reminder").length,
+  1,
+  "both counter reminders share one catalog entry"
+);
+assert.ok(
+  !("repeatReminder" in TURN_CONTEXT_KINDS),
+  "the repeat nudge does not need its own kind — the scope attr identifies the block"
+);
 
 const kinds = Object.values(TURN_CONTEXT_KINDS);
 assert.equal(new Set(kinds).size, kinds.length, "catalog values are unique");
@@ -130,6 +142,7 @@ const todoWire = [
 const nag = resolveTodoReminder(todoManager, todoWire);
 assert.ok(nag, "the todo nag resolves at its threshold");
 assert.deepEqual(Object.keys(nag.attrs).sort(), ["cycle", "episode", "rounds"]);
+assert.equal(nag.key, TURN_CONTEXT_KINDS.reminder);
 
 const repeatWire = [
   { role: "user", content: "go" },
@@ -151,6 +164,8 @@ const repeatWire = [
 const repeat = resolveRepeatReminder(repeatWire);
 assert.ok(repeat, "the repeat reminder resolves at its threshold");
 assert.deepEqual(Object.keys(repeat.section.attrs).sort(), ["chain", "count", "episode"]);
+assert.equal(repeat.section.key, nag.key, "both reminders use the same kind");
+assert.ok(!("cycle" in repeat.section.attrs) && !("chain" in nag.attrs), "the scope attr is what differs");
 
 // ---------------------------------------------------------------------------
 // 3. Recovery is scoped: other cycles/chains never count, prompts end turn scopes.
@@ -213,5 +228,40 @@ assert.equal(
   0,
   "the repeat domain applies that rule"
 );
+
+// ---------------------------------------------------------------------------
+// 4. A sibling block of the same kind (other scope) neither suppresses nor supersedes.
+// ---------------------------------------------------------------------------
+{
+  const channel = new AgentUIChannel();
+  channel.setMessages([{ id: "u1", role: "user", parts: [{ type: "text", content: "work" }] }]);
+  // The repeat nudge already in the window, same kind, different scope.
+  const repeatBlock = formatContextSectionUserContent(repeat.section);
+  const wire = [{ role: "user", content: "work" }, ...todoWire.slice(1), { role: "user", content: repeatBlock }];
+  let currentSection = nag;
+  const middleware = createTurnContextMiddleware({
+    getFrozenSystemPrompt: () => undefined,
+    getSections: async () => [currentSection],
+    getUIChannel: () => channel,
+    persistMessages: () => {},
+    getManagedAgent: () => null,
+  });
+  const result = await middleware.onConfig({}, { messages: wire });
+  const injected = (result.messages ?? wire).slice(wire.length);
+  assert.equal(injected.length, 1, "a repeat block does not satisfy the todo nag's scope");
+  assert.ok(String(injected[0].content).includes("unchanged for"), "the todo nag is injected");
+  assert.ok(
+    !String(injected[0].content).includes("authoritative"),
+    "a different scope is not a supersede: the nag must not tell the model to ignore the loop warning"
+  );
+
+  // Same scope DOES supersede: a later round of the same cycle carries the notice.
+  const sameScopeWire = [...wire, { role: "user", content: injected[0].content }];
+  currentSection = { ...nag, content: nag.content.replace("unchanged for 3 rounds", "unchanged for 9 rounds") };
+  const second = await middleware.onConfig({}, { messages: sameScopeWire });
+  const secondInjected = (second.messages ?? sameScopeWire).slice(sameScopeWire.length);
+  assert.equal(secondInjected.length, 1, "a later round injects a fresh nag");
+  assert.ok(String(secondInjected[0].content).includes("authoritative"), "the same cycle's earlier nag is superseded");
+}
 
 console.log("turn-context kinds validation passed");

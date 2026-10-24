@@ -47,7 +47,6 @@ export {
   previewRepeatArguments,
   readRepeatReminderWindowState,
   readTrailingRepeatChain,
-  REPEAT_REMINDER_KIND,
   resolveRepeatReminder,
 } from "./reminder";
 export type {

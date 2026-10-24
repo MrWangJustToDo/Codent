@@ -14,7 +14,7 @@
  * The gap was real and observable. Across 45 recorded sessions and ~11.7k tool-call
  * parts, no session ever reached the first threshold (3) — the longest consecutive
  * identical run on record is 2 (`tmp/repeat-call-scan.mjs`) — and no session log
- * contains a `ctx-repeat_tool_reminder-` id. So "it works in production" had zero
+ * contains a repeat-reminder id. So "it works in production" had zero
  * evidence, and no automated check stood in for that evidence.
  *
  * This script drives the REAL middleware through the REAL `SessionService` +
@@ -33,7 +33,6 @@ import assert from "node:assert/strict";
 import {
   AgentUIChannel,
   DEFAULT_REPEAT_THRESHOLDS,
-  REPEAT_REMINDER_KIND,
   SessionService,
   SessionStore,
   UsageTracker,
@@ -41,6 +40,7 @@ import {
   createRepeatReminderMiddleware,
   formatContextSectionUserContent,
   readTrailingRepeatChain,
+  TURN_CONTEXT_KINDS,
   registerCoreEnv,
   syntheticMessageId,
 } from "../dist/dev.mjs";
@@ -231,7 +231,8 @@ function repeat(wire, count, toolName, args, idPrefix) {
   for (let i = 0; i < count; i++) pushCall(wire, toolName, args, `${idPrefix}-${i}`);
 }
 
-const REMINDER_PREFIX = `ctx-${REPEAT_REMINDER_KIND}-`;
+// Both counter reminders share `reminder`; this session only ever writes the repeat nudge.
+const REMINDER_PREFIX = `ctx-${TURN_CONTEXT_KINDS.reminder}-`;
 const reminderIds = (messages) => messages.filter((m) => m.id?.startsWith(REMINDER_PREFIX)).map((m) => m.id);
 
 // ============================================================================
@@ -274,7 +275,10 @@ setupEnv();
       `which is how it is known not to be vacuous. Log:\n${String(raw).slice(0, 400)}`
   );
   assert.ok(raw.includes("repeating the exact same tool call"), "the reminder BODY must be on disk, not only its id");
-  assert.ok(raw.includes("ctx kind=repeat_tool_reminder"), "the durable form carries the ctx shell");
+  assert.ok(
+    raw.includes(`ctx kind=${TURN_CONTEXT_KINDS.reminder} chain=`),
+    "the durable form carries the shared reminder kind plus this domain's scope attr"
+  );
 
   const persistedIds = reminderIds(loaded.uiMessages);
   assert.equal(
@@ -292,9 +296,9 @@ setupEnv();
   // derivation `turn-context` and `background_notification` use, which is what makes
   // the injection idempotent across a restore.
   const expected = syntheticMessageId({
-    kind: REPEAT_REMINDER_KIND,
+    kind: TURN_CONTEXT_KINDS.reminder,
     content: formatContextSectionUserContent({
-      key: REPEAT_REMINDER_KIND,
+      key: TURN_CONTEXT_KINDS.reminder,
       content:
         "You are repeating the exact same tool call with identical arguments. " +
         "Carefully analyze the previous result before calling again: if the task is not " +
@@ -360,7 +364,7 @@ setupEnv();
   assert.equal(new Set(persistedIds).size, 2, "the two reminders must have distinct ids");
   // The log is append-only, so a message is re-serialized into every later snapshot:
   // count DISTINCT ids on disk, not occurrences.
-  const distinctOnDisk = new Set(String(raw).match(/ctx-repeat_tool_reminder-[A-Za-z0-9_-]+/g) ?? []);
+  const distinctOnDisk = new Set(String(raw).match(new RegExp(`${REMINDER_PREFIX}[A-Za-z0-9_-]+`, "g")) ?? []);
   assert.equal(
     distinctOnDisk.size,
     2,
@@ -404,7 +408,7 @@ setupEnv();
     "the in-memory channel still receives the reminder"
   );
   assert.ok(
-    JSON.stringify(out.messages).includes(REPEAT_REMINDER_KIND),
+    JSON.stringify(out.messages).includes(TURN_CONTEXT_KINDS.reminder),
     "the wire still receives the reminder — the model is nudged either way"
   );
 

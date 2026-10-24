@@ -7,9 +7,13 @@
  * it through the shared synthetic-injection path (channel + wire in sync, persisted).
  */
 
-import { REPEAT_REMINDER_KIND, resolveRepeatReminder } from "../../agent/turn-context/reminder";
+import { resolveRepeatReminder } from "../../agent/turn-context/reminder";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
-import { formatContextSectionUserContent, syntheticKindFromId } from "../../agent/turn-context/turn-context-message.js";
+import {
+  TURN_CONTEXT_KINDS,
+  formatContextSectionUserContent,
+  syntheticKindFromId,
+} from "../../agent/turn-context/turn-context-message.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -58,17 +62,18 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
       // Per-kind admission episode: count the existing channel ids for the kind so a loop
       // that recurs in a later turn gets a fresh id. The attrs already make the content
       // distinct per chain/count, but an identical chain at the same count in a later turn
-      // must still land as a new message.
+      // must still land as a new message. (The kind is shared with the todo nag, so the
+      // counter spans both — it only has to make the id unique.)
+      const kind = TURN_CONTEXT_KINDS.reminder;
       let kindCount = 0;
       for (const message of ui.getMessages()) {
-        if (syntheticKindFromId(message.id) === REPEAT_REMINDER_KIND) kindCount++;
+        if (syntheticKindFromId(message.id) === kind) kindCount++;
       }
 
-      const { messages: next } = injectSyntheticMessages(
-        messages,
-        [{ kind: REPEAT_REMINDER_KIND, content, nonce: kindCount + 1 }],
-        { ui, persist: deps.persistMessages }
-      );
+      const { messages: next } = injectSyntheticMessages(messages, [{ kind, content, nonce: kindCount + 1 }], {
+        ui,
+        persist: deps.persistMessages,
+      });
       return { messages: next };
     },
   });

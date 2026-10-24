@@ -1,5 +1,8 @@
 /**
- * The `repeat_tool_reminder` section — a condition + counter reminder.
+ * The repeat-call nudge — a condition + counter reminder sharing the `reminder` kind with
+ * the todo nag. A block is identified by `(kind, scope)`: this domain writes
+ * `chain`/`count`, the todo nag writes `cycle`/`rounds`, and each recovery filters by its
+ * own scope attr, so one kind cannot mask the other.
  *
  * Advisory loop hygiene: when the model calls the same tool with identical arguments
  * repeatedly, the result will not change and the task stops progressing. At the configured
@@ -45,9 +48,7 @@ export const DEFAULT_ARGUMENTS_PREVIEW_CHARS = 500;
  */
 export const DEFAULT_REPEAT_EXCLUDED_TOOLS = [BUILTIN_TOOL_NAMES.getCommandOutput] as const;
 
-/** Synthetic-message kind (also the `<ctx kind=...>` tag). */
-export const REPEAT_REMINDER_KIND = TURN_CONTEXT_KINDS.repeatReminder;
-
+const REMINDER_KIND = TURN_CONTEXT_KINDS.reminder;
 const SCOPE_ATTR = "chain";
 const VALUE_ATTR = "count";
 
@@ -172,7 +173,7 @@ export function readRepeatReminderWindowState(
   chain: string
 ): RepeatReminderWindowState {
   const admitted = readCounterReminderState(messages, {
-    kind: REPEAT_REMINDER_KIND,
+    kind: REMINDER_KIND,
     scopeAttr: SCOPE_ATTR,
     scope: chain,
     valueAttr: VALUE_ATTR,
@@ -233,7 +234,7 @@ export function resolveRepeatReminder(
   return {
     chain,
     section: buildCounterReminderSection({
-      kind: REPEAT_REMINDER_KIND,
+      kind: REMINDER_KIND,
       scopeAttr: SCOPE_ATTR,
       scope: chain.chain,
       valueAttr: VALUE_ATTR,

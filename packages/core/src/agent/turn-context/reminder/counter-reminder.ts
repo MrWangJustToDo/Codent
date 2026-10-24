@@ -16,7 +16,11 @@
  *    the second cleanup rule the repeat nudge needs: a genuine user prompt ends the window
  *    slice, so a loop in a later turn is not suppressed by an earlier turn's block.
  * 2. **Shape** — {@link buildCounterReminderSection} writes the counter state into the
- *    `<ctx ...>` shell attrs, which is what makes step 1 possible.
+ *    `<ctx ...>` shell attrs, which is what makes step 1 possible. Both reminders use the
+ *    one `reminder` kind: the scope attrs (`cycle` / `chain`) are what identify a block,
+ *    and `episode` is the only non-scope attr (the admission counter), which is also the
+ *    rule the turn-context middleware uses when it decides whether a block supersedes an
+ *    earlier one.
  *
  * What is NOT shared: *when* the counter is due. The todo nag grows its cooldown
  * (threshold + per-episode growth), the repeat nudge fires at discrete thresholds. Each

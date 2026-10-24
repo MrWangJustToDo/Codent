@@ -49,17 +49,20 @@ export const TURN_CONTEXT_KINDS = {
   gitStatus: "git_status",
   sessionId: "session_id",
   relevantMemories: "relevant_memories",
+  /**
+   * Condition + counter reminder (todo nag, repeat-call nudge).
+   *
+   * Both use this ONE kind: the counter state and its scope live in shell attrs, so a
+   * block is identified by `(kind, scope)` rather than by a distinct tag. The todo nag
+   * writes `cycle`/`rounds`, the repeat nudge writes `chain`/`count`; `episode` counts
+   * admissions within the scope.
+   */
   reminder: "reminder",
   mode: "mode",
   instructionContext: "instruction_context",
   sessionRetrieval: "session_retrieval",
   backgroundJobs: "background_jobs",
   projectInstructions: "project_instructions",
-  /**
-   * Condition + counter reminder: the model is repeating one identical tool call.
-   * Counter-shaped state travels in shell attrs (`chain`, `count`, `episode`).
-   */
-  repeatReminder: "repeat_tool_reminder",
   /**
    * Background-result push: a completed background command job's notification.
    * Appended once per completion (not hash-admitted); background *tasks* use the
@@ -97,6 +100,11 @@ export interface TurnContextSection {
    * recoverable from the message itself: the admission comparison hashes
    * {@link content} only, while the attrs carry the state a later `onConfig`
    * reads back to decide whether to re-inject.
+   *
+   * Convention: the scope attrs (`cycle`, `chain`, …) identify which counter the block
+   * belongs to, and `episode` counts admissions within that scope. Two different
+   * reminders therefore share a kind without colliding — each recovery filters by its own
+   * scope attr, and a supersede notice is only added when the prior block matches.
    */
   attrs?: Record<string, string>;
 }

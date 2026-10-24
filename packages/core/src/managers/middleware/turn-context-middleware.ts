@@ -28,6 +28,19 @@ export const SUBAGENT_ALLOWED_KINDS: ReadonlySet<string> = new Set<string>([
   TURN_CONTEXT_KINDS.projectInstructions,
 ]);
 
+/**
+ * Whether `prior` is the same counter scope as `section`.
+ *
+ * Both condition+counter reminders use the one `reminder` kind, so "an earlier block of
+ * this kind exists" is not enough to justify a supersede notice — the todo nag must not
+ * tell the model to ignore a repeat-call nudge. Scope = every attr except `episode`, which
+ * is the admission counter (see `TurnContextSection.attrs`).
+ */
+function sharesReminderScope(prior: TurnContextSection, section: TurnContextSection): boolean {
+  if (!prior.attrs || !section.attrs) return false;
+  return Object.entries(section.attrs).some(([key, value]) => key !== "episode" && prior.attrs?.[key] === value);
+}
+
 export interface TurnContextMiddlewareDeps {
   /** Frozen system prompt (ends with SYSTEM_PROMPT_DYNAMIC_BOUNDARY when present). */
   getFrozenSystemPrompt: () => string | undefined;
@@ -105,7 +118,8 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       for (const section of admitted) {
         const prior = injected.get(section.key);
         if (prior && hashTurnContextSection(prior) === hashTurnContextSection(section)) continue;
-        changed.push({ section, isUpdate: prior !== undefined });
+        const isUpdate = prior !== undefined && (!section.attrs || sharesReminderScope(prior, section));
+        changed.push({ section, isUpdate });
       }
       if (changed.length === 0) return result;
 

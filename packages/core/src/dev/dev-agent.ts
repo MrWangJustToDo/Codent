@@ -267,7 +267,6 @@ export {
   readRepeatReminderWindowState,
   readTodoReminderWindowState,
   readTrailingRepeatChain,
-  REPEAT_REMINDER_KIND,
   resolveRepeatReminder,
   resolveTodoReminder,
 } from "../agent/turn-context";
