@@ -307,7 +307,7 @@ setFile("CLAUDE.override.md", "# personal override\n");
 
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => managed.getFrozenSystemPrompt(),
-    getSections: (messages) => managed.getDynamicTurnContextSections(messages),
+    getSections: () => managed.getDynamicTurnContextSections(),
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => managed,

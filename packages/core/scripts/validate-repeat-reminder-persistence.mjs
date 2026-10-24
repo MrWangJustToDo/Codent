@@ -432,7 +432,7 @@ setupEnv();
 // 4. With no channel the reminder is wire-only by contract (never persisted)
 // ============================================================================
 //
-// A subagent has no session store, so `getUIChannel()` returns undefined. The middleware
+// A caller without a channel (no session store behind it) gets `getUIChannel() === undefined`. The middleware
 // documents a transient wire-only injection for that case. Assert it stays transient —
 // otherwise a subagent's nudge could surface in the parent's transcript.
 

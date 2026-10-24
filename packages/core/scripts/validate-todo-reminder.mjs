@@ -73,7 +73,7 @@ assert.match(first.content, /^<todo-reminder>/, "the nag declares its own tag in
 assert.equal(first.attrs.cycle, "call-1", "the cycle is the todo call");
 assert.equal(first.attrs.rounds, "3");
 assert.equal(first.attrs.episode, "1", "the first nag of a cycle is episode 1");
-assert.ok(!first.admitAsUpdate, "the first nag of a cycle supersedes nothing");
+assert.ok(!("supersedes" in first), "the first nag of a cycle supersedes nothing");
 assert.deepEqual(resolveTodoReminder(tm, cycle("call-1", 3)), first, "the same window decides the same way");
 
 // The scan reports the same state the resolver used.
@@ -109,7 +109,7 @@ assert.deepEqual(readTodoReminderWindowState(cycle("call-1", 3)), { cycle: "call
   assert.ok(second, "second nag fires after the initial cooldown");
   assert.equal(second.attrs.episode, "2", "the episode increments");
   assert.equal(second.attrs.rounds, "8", "the nag reports the current round");
-  assert.ok(second.admitAsUpdate, "a later nag supersedes the earlier one");
+  assert.equal(second.supersedes, "todo-reminder", "a later nag supersedes earlier todo nudges by tag");
 
   // The next gap grows to 10 (5 + 1 × 5): 8 + 9 is early, 8 + 10 is due.
   const secondBlock = reminderBlock(second);
@@ -143,17 +143,48 @@ assert.deepEqual(readTodoReminderWindowState(cycle("call-1", 3)), { cycle: "call
   assert.ok(fresh, "the new cycle nags at its own threshold");
   assert.equal(fresh.attrs.cycle, "call-2");
   assert.equal(fresh.attrs.episode, "1", "the new cycle starts at episode 1");
-  assert.ok(!fresh.admitAsUpdate, "an older cycle's reminder is not a supersede");
+  assert.ok(!("supersedes" in fresh), "an older cycle's reminder is not a supersede");
 }
 
 // ---------------------------------------------------------------------------
-// 5. No visible cycle → no nag (the list itself was compacted away)
+// 5. No visible `todo` call (plan-seeded list, or the call was compacted away) → the current
+//    turn is the cycle, so a list the agent was handed still gets nudged.
 // ---------------------------------------------------------------------------
-assert.equal(
-  resolveTodoReminder(tm, [{ role: "user", content: "hi" }, ...Array.from({ length: 9 }, () => turn("x"))]),
-  undefined,
-  "no todo call in the window -> no nag"
-);
+{
+  const seeded = [{ role: "user", content: "execute the plan" }, ...Array.from({ length: 3 }, () => turn("x"))];
+  const nag = resolveTodoReminder(tm, seeded);
+  assert.ok(nag, "a seeded list still nags without a todo call");
+  assert.equal(nag.attrs.cycle, "window", "the turn is the scope");
+  assert.equal(nag.attrs.rounds, "3");
+  assert.equal(nag.attrs.episode, "1");
+  assert.ok(!("supersedes" in nag), "the first nag of a turn supersedes nothing");
+
+  // A new prompt restarts the per-turn countdown (the slice starts at the anchor).
+  assert.equal(
+    resolveTodoReminder(tm, [...seeded, { role: "user", content: "still working" }, turn("y")]),
+    undefined,
+    "a new prompt restarts the fallback countdown"
+  );
+
+  // Below the threshold, still nothing.
+  assert.equal(
+    resolveTodoReminder(tm, [{ role: "user", content: "go" }, turn("x"), turn("y")]),
+    undefined,
+    "the fallback obeys the threshold"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 5b. A prompt does not restart the cycle — only a todo update does.
+// ---------------------------------------------------------------------------
+{
+  const wire = [...cycle("call-1", 2), { role: "user", content: "keep going" }, turn("a"), turn("b"), turn("c")];
+  const nag = resolveTodoReminder(tm, wire);
+  assert.ok(nag, "the countdown continues across a prompt");
+  assert.equal(nag.attrs.cycle, "call-1", "the cycle is still the todo call");
+  assert.equal(nag.attrs.rounds, "5", "rounds are counted from the call, not the prompt");
+  assert.equal(nag.attrs.episode, "1");
+}
 
 // ---------------------------------------------------------------------------
 // 6. The body carries the round/episode text (every nag hashes uniquely)

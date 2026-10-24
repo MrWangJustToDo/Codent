@@ -2,7 +2,8 @@
  * Validates the repeat-tool-call reminder middleware:
  * - canonical argument matching (property-order independent)
  * - threshold escalation (gentle at the first threshold, detailed later) + arg preview cap
- * - `<ctx kind=repeat_tool_reminder chain="…" count="…">` shell format
+ * - `<ctx kind=reminder chain="…" count="…" episode="…">` shell format around a
+ *   `<repeat-reminder>` body
  * - genuine-user-message detection (synthetic `<ctx ...>` is not a prompt)
  * - wire-derived loop detection: identical trailing calls count up, a different call ends the
  *   chain, excluded tools are transparent, a new user prompt separates chains, and the reminder
@@ -148,11 +149,7 @@ assert.deepEqual(
   const wire = repeated(t3);
   wire.push(userMessage(gentle));
   assert.equal(resolveRepeatReminder(wire), undefined, "an admitted reminder suppresses a repeat");
-  assert.deepEqual(readRepeatReminderWindowState(wire, gentleResolution.chain), {
-    chain: gentleResolution.chain.chain,
-    episode: 1,
-    lastCount: 3,
-  });
+  assert.deepEqual(readRepeatReminderWindowState(wire, gentleResolution.chain), { episode: 1, lastCount: 3 });
 }
 
 // The detailed body at a later threshold.
@@ -160,7 +157,7 @@ const detailed = buildRepeatReminderBody({
   toolName: "grep",
   count: t5,
   canonicalArguments: '{"pattern":"foo"}',
-  firstThreshold: t3,
+  episode: 2,
   previewChars: 500,
 });
 assert.ok(/Repeated tool call detected/.test(detailed), "later threshold is the detailed reminder");
@@ -174,7 +171,7 @@ assert.equal(
       toolName: "grep",
       count: t3,
       canonicalArguments: '{"pattern":"foo"}',
-      firstThreshold: t3,
+      episode: 1,
       previewChars: 500,
     })
   ),
@@ -288,6 +285,51 @@ assert.equal(
   assert.equal(h.channel.messages.length, 3, "detailed reminder at the fifth repeat");
   assert.ok(h.reminders()[1].content.includes("Repeated tool call detected"));
   assert.deepEqual(contextAttributesFromText(h.reminders()[1].content).count, "5");
+}
+
+// A parallel batch can jump OVER a threshold (2 → 4): the nudge still fires exactly once, and
+// it is the gentle body because it is the chain's first admission.
+{
+  const wire = [
+    userMessage("go"),
+    ...Array.from({ length: 2 }, (_, index) => [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: `pre_${index}`,
+            type: "function",
+            function: { name: "grep", arguments: JSON.stringify({ pattern: "foo" }) },
+          },
+        ],
+      },
+      { role: "tool", content: "ok", toolCallId: `pre_${index}` },
+    ]).flat(),
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "par_a",
+          type: "function",
+          function: { name: "grep", arguments: JSON.stringify({ pattern: "foo" }) },
+        },
+        {
+          id: "par_b",
+          type: "function",
+          function: { name: "grep", arguments: JSON.stringify({ pattern: "foo" }) },
+        },
+      ],
+    },
+    { role: "tool", content: "ok", toolCallId: "par_a" },
+    { role: "tool", content: "ok", toolCallId: "par_b" },
+  ];
+  const crossed = resolveRepeatReminder(wire);
+  assert.ok(crossed, "crossing a threshold in one jump still nudges");
+  assert.equal(crossed.section.attrs.count, "4", "the nudge reports the current count");
+  assert.equal(crossed.section.attrs.episode, "1", "it is still the first admission of the chain");
+  assert.ok(/repeating the exact same tool call/.test(crossed.section.content), "…so it uses the gentle body");
 }
 
 // A different tracked call ends the chain: the count restarts.

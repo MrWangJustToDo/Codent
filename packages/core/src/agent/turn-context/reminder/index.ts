@@ -19,7 +19,6 @@ export {
   DEFAULT_ARGUMENTS_PREVIEW_CHARS,
   DEFAULT_REPEAT_EXCLUDED_TOOLS,
   DEFAULT_REPEAT_THRESHOLDS,
-  isGenuineUserMessage,
   previewRepeatArguments,
   readRepeatReminderWindowState,
   readTrailingRepeatChain,

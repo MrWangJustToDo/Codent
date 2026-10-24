@@ -31,11 +31,12 @@ import {
   REMINDER_TAGS,
   TURN_CONTEXT_KINDS,
   hashTurnContextPayload,
-  isContextModelMessage,
+  isGenuineUserMessage,
 } from "../turn-context-message.js";
 
 import { buildCounterReminderSection, findCounterReminder } from "./counter-reminder.js";
 
+import type { WireToolCall } from "../background-jobs.js";
 import type { TurnContextSection } from "../turn-context-message.js";
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -94,11 +95,6 @@ export function previewRepeatArguments(canonical: string, cap: number): string {
   return `${canonical.slice(0, cap)}… (+${canonical.length - cap} more chars)`;
 }
 
-/** Whether a wire message is a real user prompt (not a synthetic `<ctx ...>` injection). */
-export function isGenuineUserMessage(message: ModelMessage): boolean {
-  return message.role === "user" && !isContextModelMessage(message);
-}
-
 /** One run of trailing identical tool calls, read from the wire. */
 export interface RepeatChain {
   /** Scope identity of the repeated call (tool name + canonical arguments), hashed. */
@@ -110,11 +106,6 @@ export interface RepeatChain {
   count: number;
   /** Index of the earliest message in this run — the slice a prior reminder must sit in. */
   start: number;
-}
-
-interface WireToolCall {
-  id: string;
-  function: { name: string; arguments?: string };
 }
 
 /** Identity of one call, tolerant of an unparseable argument stream. */
@@ -146,7 +137,7 @@ export function readTrailingRepeatChain(
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user") {
-      if (isContextModelMessage(message)) continue;
+      if (!isGenuineUserMessage(message)) continue;
       break;
     }
     if (message.role !== "assistant") continue;
@@ -170,8 +161,6 @@ export function readTrailingRepeatChain(
 
 /** The reminder already admitted inside `chain`'s run, if any. */
 export interface RepeatReminderWindowState {
-  /** The chain that run belongs to. */
-  chain: string;
   /** Injection round of that reminder (`0` when the run has none). */
   episode: number;
   /** `count` recorded on it (`0` when the run has none). */
@@ -190,18 +179,24 @@ export function readRepeatReminderWindowState(
     scope: chain.chain,
     valueAttr: VALUE_ATTR,
   });
-  return { chain: chain.chain, episode: admitted?.episode ?? 0, lastCount: admitted?.value ?? 0 };
+  return { episode: admitted?.episode ?? 0, lastCount: admitted?.value ?? 0 };
 }
 
-/** Render the reminder body for a repeat at `count`. */
+/**
+ * Render the reminder body for a repeat at `count`.
+ *
+ * The gentle text is the FIRST nudge of a chain (episode 1), not "the first threshold value":
+ * a parallel batch can jump over a threshold, and the first nudge the model sees must still be
+ * the soft one.
+ */
 export function buildRepeatReminderBody(input: {
   toolName: string;
   count: number;
   canonicalArguments: string;
-  firstThreshold: number;
+  episode: number;
   previewChars: number;
 }): string {
-  if (input.count === input.firstThreshold) return GENTLE_REMINDER;
+  if (input.episode <= 1) return GENTLE_REMINDER;
   return (
     "Repeated tool call detected:\n" +
     `- tool: ${input.toolName}\n` +
@@ -223,42 +218,49 @@ export interface RepeatReminderDecision {
 /**
  * The reminder for this turn's trailing chain, or `undefined` when it is not due.
  *
- * Due when the count is one of `thresholds` AND this chain has not already been nudged at
- * or past that count. A dropped reminder (compaction cut) simply makes it due again; a
- * retry that re-runs `onConfig` on the same wire changes nothing.
+ * Due when the count has **crossed** a threshold since the last admission (not when it equals
+ * one: a parallel batch can jump 2 → 4 and would otherwise skip 3 forever) and the chain has
+ * not already been nudged at or past that count. A dropped reminder (compaction cut) simply
+ * makes it due again; a retry that re-runs `onConfig` on the same wire changes nothing.
  */
 export function resolveRepeatReminder(
   messages: readonly ModelMessage[],
   options: { thresholds?: readonly number[]; excludeTools?: readonly string[]; previewChars?: number } = {}
 ): RepeatReminderDecision | undefined {
   const thresholds = [...(options.thresholds ?? DEFAULT_REPEAT_THRESHOLDS)].sort((a, b) => a - b);
-  const firstThreshold = thresholds[0] ?? DEFAULT_REPEAT_THRESHOLDS[0];
   const previewChars = options.previewChars ?? DEFAULT_ARGUMENTS_PREVIEW_CHARS;
 
   const chain = readTrailingRepeatChain(messages, { excludeTools: options.excludeTools });
-  if (!chain || !thresholds.includes(chain.count)) return undefined;
+  if (!chain) return undefined;
 
   const state = readRepeatReminderWindowState(messages, chain);
   if (state.episode > 0 && state.lastCount >= chain.count) return undefined;
 
+  const crossed = thresholds.some((threshold) => threshold > state.lastCount && chain.count >= threshold);
+  if (!crossed) return undefined;
+
   const episode = state.episode + 1;
   return {
     chain,
-    section: buildCounterReminderSection({
-      kind: REMINDER_KIND,
-      tag: REMINDER_TAG,
-      scopeAttr: SCOPE_ATTR,
-      scope: chain.chain,
-      valueAttr: VALUE_ATTR,
-      value: chain.count,
-      episode,
-      content: buildRepeatReminderBody({
-        toolName: chain.toolName,
-        count: chain.count,
-        canonicalArguments: chain.canonicalArguments,
-        firstThreshold,
-        previewChars,
+    section: {
+      ...buildCounterReminderSection({
+        kind: REMINDER_KIND,
+        tag: REMINDER_TAG,
+        scopeAttr: SCOPE_ATTR,
+        scope: chain.chain,
+        valueAttr: VALUE_ATTR,
+        value: chain.count,
+        episode,
+        content: buildRepeatReminderBody({
+          toolName: chain.toolName,
+          count: chain.count,
+          canonicalArguments: chain.canonicalArguments,
+          episode,
+          previewChars,
+        }),
       }),
-    }),
+      // Name our own tag, never the shared kind: a nudge supersedes only earlier nudges.
+      ...(state.episode > 0 ? { supersedes: REMINDER_TAG } : {}),
+    },
   };
 }

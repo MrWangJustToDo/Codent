@@ -50,6 +50,7 @@
 
 import { parseStringifiedMultimodalContent } from "../../agent/media/repair-stringified-multimodal.js";
 import { isBinaryMediaPartType, isMediaRefValue } from "../../agent/media/types.js";
+import { TURN_CONTEXT_KINDS, formatContextSectionUserContent, formatSectionTag } from "../../agent/turn-context";
 import {
   multimodalPartPlaceholder,
   stripMultimodalContentParts,
@@ -195,7 +196,19 @@ export function createWireRecoveryMiddleware(deps: WireRecoveryMiddlewareDeps): 
       }
 
       if (armed) {
-        messages = [...messages, { role: "user" as const, content: CONTINUATION_PROMPT }];
+        // Wrapped as a synthetic context message: it is a repair instruction, not a user turn.
+        // A bare `user` message here is a turn boundary for every window scan (the repeat chain
+        // ends at it and never resumes while the continuation stays armed on later calls).
+        messages = [
+          ...messages,
+          {
+            role: "user" as const,
+            content: formatContextSectionUserContent({
+              key: TURN_CONTEXT_KINDS.continuationPrompt,
+              content: formatSectionTag(TURN_CONTEXT_KINDS.continuationPrompt, CONTINUATION_PROMPT),
+            }),
+          },
+        ];
       }
 
       return { messages };

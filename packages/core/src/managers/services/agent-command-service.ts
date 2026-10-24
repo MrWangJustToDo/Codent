@@ -1,6 +1,6 @@
 /**
  * Agent command service: the per-agent command-job registry, durable restore, background start /
- * poll / kill, and the `<background_jobs>` turn-context pointer.
+ * poll / kill, and the `<background_jobs>` pointer.
  *
  * This used to be three responsibilities spread across `ManagedAgent` (lazy registry + change
  * listener + section builder), the registry itself, and the turn-context middleware. The service is

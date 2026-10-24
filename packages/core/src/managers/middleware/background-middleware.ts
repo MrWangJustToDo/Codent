@@ -16,15 +16,12 @@
  */
 
 import { truncateString } from "../../agent/tools/shared/output-limits.js";
+import { TURN_CONTEXT_KINDS, formatContextSectionUserContent, formatSectionTag } from "../../agent/turn-context";
 import {
-  TURN_CONTEXT_KINDS,
-  contextSectionIdentity,
-  findLatestContextSectionsFromWire,
-  formatContextSectionUserContent,
-  formatSectionTag,
-  hashTurnContextSection,
-} from "../../agent/turn-context";
-import { injectSyntheticMessages, nextSyntheticNonce } from "../../agent/turn-context/synthetic-injection.js";
+  injectSyntheticMessages,
+  nextSyntheticNonce,
+  selectChangedSections,
+} from "../../agent/turn-context/synthetic-injection.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -62,25 +59,23 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
       if (!deps.getParentId()) {
         const section = await buildJobsSection(deps, messages);
         const ui = deps.getUIChannel();
-        if (section && ui) {
-          const identity = contextSectionIdentity(section);
-          const prior = findLatestContextSectionsFromWire(messages, new Set([identity])).get(identity);
-          if (!prior || hashTurnContextSection(prior) !== hashTurnContextSection(section)) {
-            const content = formatContextSectionUserContent(section, { isUpdate: prior !== undefined });
-            const injected = injectSyntheticMessages(
-              messages,
-              [{ kind: JOBS_KIND, content, nonce: nextSyntheticNonce(ui.getMessages(), JOBS_KIND) }],
-              { ui, persist: deps.persistMessages }
-            );
-            messages = injected.messages;
-          }
+        const admission = section ? selectChangedSections(messages, [section])[0] : undefined;
+        if (admission && ui) {
+          const content = formatContextSectionUserContent(admission.section, { isUpdate: admission.isUpdate });
+          const injected = injectSyntheticMessages(
+            messages,
+            [{ kind: JOBS_KIND, content, nonce: nextSyntheticNonce(ui.getMessages(), JOBS_KIND) }],
+            { ui, persist: deps.persistMessages }
+          );
+          messages = injected.messages;
         }
       }
 
       // --- 2. Completions (one-shot push) ---
       const commandService = deps.getCommandService();
-      // Do not mark yet: the notification must be persisted first, or a crash between collect
-      // and inject loses the completion while the record says it was delivered.
+      // Do not mark yet: the channel row must exist first. The session write behind it is
+      // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
+      // queued", not "on disk" — a crash in between is recovered by the pointer section.
       const completed = await commandService.collectCompleted();
       if (completed.length === 0) return messages === config.messages ? {} : { messages };
 

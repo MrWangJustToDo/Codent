@@ -241,7 +241,6 @@ export {
   CONTEXT_OPEN_PREFIX,
   CONTEXT_CLOSE,
   REMINDER_TAGS,
-  contextSectionIdentity,
   formatSectionTag,
   hashTurnContextPayload,
   formatContextSectionUserContent,
@@ -251,6 +250,7 @@ export {
   contextKindFromText,
   isContextModelMessage,
   isContextUIMessage,
+  isGenuineUserMessage,
   syntheticKindFromId,
   extractContextSection,
   hashTurnContextSection,
@@ -266,7 +266,6 @@ export {
   DEFAULT_ARGUMENTS_PREVIEW_CHARS,
   DEFAULT_REPEAT_EXCLUDED_TOOLS,
   DEFAULT_REPEAT_THRESHOLDS,
-  isGenuineUserMessage,
   previewRepeatArguments,
 
   readRepeatReminderWindowState,

@@ -131,7 +131,11 @@ assert.ok(first.endsWith("</current_date>\n</ctx>"));
 assert.ok(!first.includes("authoritative"), "no supersede on first admit");
 
 const update = formatContextSectionUserContent(section, { isUpdate: true });
-assert.match(update, /If earlier <ctx kind=current_date> blocks appear above/);
+assert.match(
+  update,
+  /If earlier <current_date> blocks appear above/,
+  "the notice names the section's own slot, not the ctx envelope"
+);
 
 const parsed = extractContextSection(update);
 assert.deepEqual(parsed, section, "extract round-trips (notice stripped)");

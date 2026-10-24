@@ -4,9 +4,9 @@
  *
  * A completion notification is one-shot: after a later compaction puts it in the compressed
  * prefix, the model can no longer see the job id or log path, even though the job record/log
- * are durable. This section is re-admitted by the turn-context middleware like any other kind
- * (content-hash admission against the post-compaction wire), so the model can rediscover the id
- * and read the output — but ONLY for jobs whose `run_command` tool call is still in the
+ * are durable. This section is re-admitted by the background middleware like any other
+ * hash-admitted kind (content comparison against the post-compaction wire), so the model can
+ * rediscover the id and read the output — but ONLY for jobs whose `run_command` tool call is still in the
  * model-visible wire. Once the call is compacted away, re-listing the job is noise. It stays
  * metadata-only — no stdout/stderr — so it is cheap and changes only when a job starts or
  * reaches a terminal state.

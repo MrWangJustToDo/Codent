@@ -902,26 +902,30 @@ a process restart need no remembered hash table and no reset hook — a block th
 window is absent (and re-admitted), one that survived keeps suppressing itself. Counter-shaped
 state (nag rounds, repeat counts) travels in machine-readable `<ctx kind=... attr="…">` shell
 attributes so it is recovered from the message chain as well
-(`turn-context/todo-reminder.ts`, `repeat-reminder-middleware.ts`).
-`findCutPointByBudget` skips synthetic `<ctx kind=...>` messages when walking the token-budget
-boundary. `TurnContextController` owns only what cannot be derived from the window — the frozen
-prompt, the instruction digest baseline, the todo-nag policy and pending per-extension sections —
-and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
+(`turn-context/reminder/todo-reminder.ts`, `turn-context/reminder/repeat-reminder.ts`).
+`findCutPointByBudget` counts synthetic `<ctx kind=...>` messages in the token budget but never
+selects one as the cut boundary (`isValidCutBoundary` rejects them). `TurnContextController` owns
+only what cannot be derived from the window — the frozen prompt, the instruction digest baseline
+and pending per-extension sections — and `ManagedAgent.reset()` funnels through the controller's
+single `resetTurnState()`; the nag policy lives on `TodoManager.getNagPolicy()`.
 
 **Three injection shapes, one kind catalog (`TURN_CONTEXT_KINDS`)**: (1) hash-admitted sections
-(the middleware above); (2) condition + counter reminders — the todo nag and the repeat-call nudge are their own
-middlewares (`todo-reminder` / `repeat-reminder`) sharing the one `reminder` kind and told apart by
-their inner tag (`<todo-reminder>` / `<repeat-reminder>`) plus their scope attrs (`cycle` / `chain`), so
-`agent/turn-context/reminder/` holds the shared mechanism (`counter-reminder.ts`: scope-filtered
-recovery from the window + the attr-carrying builder, `episode` being the only non-scope attr) and
-the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); the middleware for the repeat nudge
-only delivers what the policy resolves; (3) background pushes (`background-middleware`: the `<background_jobs>` pointer, hash-admitted, and
-the `background_notification` completion push, appended once per result; background tasks land here). Recovery for (2) is the "cleanup": only blocks
-whose scope matches the current one count, and the turn-scoped counter stops at a genuine user
-prompt. `validate:turn-context-kinds` enforces that no kind or `<ctx kind=...>` tag is spelled
-outside the catalog, that section bodies are rendered through `formatSectionTag` (a literal
-builder tag drifts from what admission/recovery reads back), and that the two reminders keep
-their own inner tag + scope attrs.
+(the middleware above) and the `<background_jobs>` pointer, which uses the same rule
+(`selectChangedSections`) from `background-middleware`; (2) condition + counter reminders — the todo
+nag and the repeat-call nudge are their own middlewares (`todo-reminder` / `repeat-reminder`) sharing
+the one `reminder` kind and told apart by their inner tag (`<todo-reminder>` / `<repeat-reminder>`)
+plus their scope attrs (`cycle` / `chain`). `agent/turn-context/reminder/` holds the shared mechanism
+(`counter-reminder.ts`: nearest-block recovery inside the slice the scan produced + the attr-carrying
+builder) and the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); each middleware only
+delivers what its policy resolves. (3) background pushes (`background-middleware`: the pointer plus
+the `background_notification` completion push, appended once per result; background tasks land here).
+Recovery for (2) is the "cleanup": only blocks whose tag **and** scope match the current one count.
+The todo counter spans prompts (only a `todo` update resets it) and falls back to the current turn
+when no `todo` call is in the window (a plan-seeded or compacted-away list still nags); the repeat
+counter is bounded by its call run and stops at a genuine user prompt. A supersede notice names the
+reminder's own tag, so one family never points at the other. `validate:turn-context-kinds` enforces
+that no kind or `<ctx kind=...>` tag is spelled outside the catalog, that section bodies are rendered
+through `formatSectionTag`, and that the two reminders keep their own inner tag + scope attrs.
 
 **Subagent isolation:** subagents run the same middleware but only `SUBAGENT_ALLOWED_KINDS`
 (`current_date`, `git_status`, `project_instructions`) pass; memory / todo / plan / mode /

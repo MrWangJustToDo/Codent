@@ -30,7 +30,7 @@ export const generateTodoManagerId = (): string => generateId("todo");
  * - Maximum 20 todos allowed (configurable)
  * - Only ONE task can be in_progress at a time (enforces sequential focus)
  * - Owns the nag reminder *policy*; the state it is applied to is recovered from the
- *   message window (`agent/turn-context/todo-reminder.ts`), not tracked here
+ *   message window (`agent/turn-context/reminder/todo-reminder.ts`), not tracked here
  * - Event subscription for UI updates
  *
  * @example

@@ -12,8 +12,14 @@
 
 import { appendChannelMessages } from "../ui/channel-write.js";
 
-import { hashTurnContextPayload, syntheticKindFromId } from "./turn-context-message.js";
+import {
+  findLatestContextSectionsFromWire,
+  hashTurnContextSection,
+  hashTurnContextPayload,
+  syntheticKindFromId,
+} from "./turn-context-message.js";
 
+import type { TurnContextSection } from "./turn-context-message.js";
 import type { AgentUIChannel } from "../ui/ui-channel.js";
 import type { ModelMessage, UIMessage } from "@tanstack/ai";
 
@@ -48,18 +54,56 @@ export function syntheticMessageId(entry: SyntheticMessageEntry): string {
 }
 
 /**
- * Next admission episode for a synthetic kind.
+ * Next admission episode per synthetic kind, in one pass over the channel.
  *
  * Counting the ids already on the channel makes every admission's id unique even when its
  * content repeats (a reminder re-admitted after a compaction cut, a state cycle back to the
  * same text), so the content-hash dedupe cannot swallow a legitimate re-injection.
  */
-export function nextSyntheticNonce(messages: readonly UIMessage[], kind: string): number {
-  let count = 0;
+export function nextSyntheticNonces(messages: readonly UIMessage[], kinds: Iterable<string>): Map<string, number> {
+  const wanted = new Set(kinds);
+  const counts = new Map<string, number>();
   for (const message of messages) {
-    if (syntheticKindFromId(message.id) === kind) count += 1;
+    const kind = syntheticKindFromId(message.id);
+    if (kind !== undefined && wanted.has(kind)) counts.set(kind, (counts.get(kind) ?? 0) + 1);
   }
-  return count + 1;
+  for (const kind of wanted) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return counts;
+}
+
+/** Next admission episode for a single kind. */
+export function nextSyntheticNonce(messages: readonly UIMessage[], kind: string): number {
+  return nextSyntheticNonces(messages, [kind]).get(kind)!;
+}
+
+/** A section the wire does not already carry, with the notice it needs. */
+export interface AdmittedSection {
+  section: TurnContextSection;
+  /** Render with the supersede notice (an earlier block of the same kind exists). */
+  isUpdate: boolean;
+}
+
+/**
+ * The hash-admission rule, in one place: a section is due when the wire has no block of its
+ * kind, or the newest one differs.
+ *
+ * Both the turn-context middleware (a batch of sections) and the background middleware (its
+ * `<background_jobs>` pointer) call this — the rule must not be written twice, or a change to
+ * the notice/identity comparison lands on one side only.
+ */
+export function selectChangedSections(
+  messages: readonly ModelMessage[],
+  sections: readonly TurnContextSection[]
+): AdmittedSection[] {
+  if (sections.length === 0) return [];
+  const latest = findLatestContextSectionsFromWire(messages, new Set(sections.map((section) => section.key)));
+  const changed: AdmittedSection[] = [];
+  for (const section of sections) {
+    const prior = latest.get(section.key);
+    if (prior && hashTurnContextSection(prior) === hashTurnContextSection(section)) continue;
+    changed.push({ section, isUpdate: prior !== undefined });
+  }
+  return changed;
 }
 
 /**

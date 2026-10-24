@@ -1,12 +1,12 @@
-import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
+import {
+  injectSyntheticMessages,
+  nextSyntheticNonces,
+  selectChangedSections,
+} from "../../agent/turn-context/synthetic-injection.js";
 import {
   TURN_CONTEXT_KINDS,
-  contextSectionIdentity,
-  findLatestContextSectionsFromWire,
   formatContextSectionUserContent,
-  hashTurnContextSection,
   isContextUIMessage,
-  syntheticKindFromId,
 } from "../../agent/turn-context/turn-context-message.js";
 import { buildSystemPromptWithTurnContext, buildProjectInstructionsSection } from "../managed-agent-prompt.js";
 
@@ -96,34 +96,22 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
         return result;
       }
 
-      // Identity, not kind: the two condition+counter reminders share `reminder` and are told
-      // apart by their inner tag, so each is compared (and superseded) only against its own
-      // earlier block.
-      const injected = findLatestContextSectionsFromWire(
-        wire,
-        new Set(admitted.map((section) => contextSectionIdentity(section)))
-      );
-
-      const changed: { section: TurnContextSection; isUpdate: boolean }[] = [];
-      for (const section of admitted) {
-        const prior = injected.get(contextSectionIdentity(section));
-        if (prior && hashTurnContextSection(prior) === hashTurnContextSection(section)) continue;
-        changed.push({ section, isUpdate: prior !== undefined });
-      }
+      // One admission rule (shared with the background middleware): a kind is due when the
+      // wire has no block of it, or its newest block differs.
+      const changed = selectChangedSections(wire, admitted);
       if (changed.length === 0) return result;
 
-      // Per-kind admission episode: count existing channel ids for the kind so
-      // each admission gets a unique id even when content repeats (state cycles).
-      const kindCounts = new Map<string, number>();
-      for (const message of uiMessages) {
-        const kind = syntheticKindFromId(message.id);
-        if (kind) kindCounts.set(kind, (kindCounts.get(kind) ?? 0) + 1);
-      }
+      // Per-kind admission episode: a unique id even when content repeats (state cycles), so
+      // the id dedupe cannot swallow a legitimate re-injection.
+      const nonces = nextSyntheticNonces(
+        uiMessages,
+        changed.map(({ section }) => section.key)
+      );
 
       const entries = changed.map(({ section, isUpdate }) => ({
         kind: section.key,
         content: formatContextSectionUserContent(section, { isUpdate }),
-        nonce: (kindCounts.get(section.key) ?? 0) + 1,
+        nonce: nonces.get(section.key)!,
       }));
       const { messages: wireMessages } = injectSyntheticMessages(wire, entries, {
         ui,

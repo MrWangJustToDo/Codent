@@ -98,8 +98,9 @@ export interface CounterReminderSectionInput extends CounterReminderSpec {
  * Build the reminder section with its recovery state on the shell.
  *
  * The body is what the model reads (and what the hash/id is derived from); the attrs are
- * what the next scan reads back. The episode is embedded in the body by the domain as well,
- * so a later round never hashes identically to an earlier one.
+ * what the next scan reads back. A later admission never hashes identically to an earlier one
+ * because either the counter in the body advanced (todo nag: rounds/episode) or the shell
+ * attrs did (repeat nudge: count/episode) — and both are part of the rendered message.
  */
 export function buildCounterReminderSection(input: CounterReminderSectionInput): TurnContextSection {
   return {

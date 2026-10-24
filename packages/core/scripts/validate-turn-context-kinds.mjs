@@ -33,7 +33,6 @@ import {
   buildTurnContextSections,
   CANONICAL_MIDDLEWARE_ORDER,
   contextAttributesFromText,
-  contextSectionIdentity,
   DEFAULT_REPEAT_THRESHOLDS,
   findCounterReminder,
   formatContextSectionUserContent,
@@ -209,25 +208,61 @@ const repeatState = readRepeatReminderWindowState(
   [{ ...reminderMessage(REMINDER_TAGS.repeat, { chain: "abc12345", count: "3", episode: "1" }) }],
   { chain: "abc12345", start: 1 }
 );
-assert.deepEqual(repeatState, { chain: "abc12345", episode: 0, lastCount: 0 }, "outside the run → no admitted block");
+assert.deepEqual(repeatState, { episode: 0, lastCount: 0 }, "outside the run → no admitted block");
 
 // ---------------------------------------------------------------------------
-// 4. The families are separate: identity, admitted set, and pipeline entries.
+// 4. The families are separate: notice scope, admitted set, and pipeline entries.
 // ---------------------------------------------------------------------------
-assert.equal(
-  contextSectionIdentity({ key: "current_date", content: "<current_date>x</current_date>" }),
-  "current_date"
-);
-assert.equal(
-  contextSectionIdentity(nag),
-  REMINDER_TAGS.todo,
-  "a counter reminder is identified by its inner tag, not by the shared kind"
-);
-assert.equal(contextSectionIdentity(repeat.section), REMINDER_TAGS.repeat);
-assert.notEqual(
-  contextSectionIdentity(nag),
-  contextSectionIdentity(repeat.section),
-  "the two reminders can never mask each other in an identity-keyed lookup"
+// A later nag/nudge names its OWN tag in the supersede notice. Naming the shared kind would
+// tell the model to ignore the other reminder family — the invariant the shared kind exists
+// to avoid.
+const todoWithPrior = resolveTodoReminder(todoManager, [
+  ...todoWire,
+  { role: "user", content: formatContextSectionUserContent(nag) },
+  { role: "assistant", content: "one more turn" },
+  { role: "assistant", content: "and another" },
+  { role: "assistant", content: "and a third" },
+  { role: "assistant", content: "and a fourth" },
+  { role: "assistant", content: "and a fifth" },
+]);
+assert.ok(todoWithPrior?.supersedes, "a later nag supersedes an earlier one");
+assert.equal(todoWithPrior.supersedes, REMINDER_TAGS.todo);
+const todoNotice = formatContextSectionUserContent(todoWithPrior);
+assert.match(todoNotice, new RegExp(`If earlier <${REMINDER_TAGS.todo}> blocks`), "the nag names its own tag");
+assert.ok(!todoNotice.includes(`<${REMINDER_TAGS.repeat}> blocks`), "a nag never points at the repeat nudge's blocks");
+
+const repeatWithPrior = resolveRepeatReminder([
+  ...repeatWire,
+  { role: "user", content: formatContextSectionUserContent(repeat.section) },
+  ...Array.from({ length: DEFAULT_REPEAT_THRESHOLDS[1] - DEFAULT_REPEAT_THRESHOLDS[0] }, (_, index) => [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: `after_${index}`,
+          type: "function",
+          function: { name: "grep", arguments: JSON.stringify({ pattern: "foo" }) },
+        },
+      ],
+    },
+    { role: "tool", content: "ok", toolCallId: `after_${index}` },
+  ]).flat(),
+]);
+assert.ok(repeatWithPrior?.section.supersedes, "a later nudge supersedes an earlier one");
+assert.equal(repeatWithPrior.section.supersedes, REMINDER_TAGS.repeat);
+const repeatNotice = formatContextSectionUserContent(repeatWithPrior.section);
+assert.match(repeatNotice, new RegExp(`If earlier <${REMINDER_TAGS.repeat}> blocks`), "the nudge names its own tag");
+assert.ok(!repeatNotice.includes(`<${REMINDER_TAGS.todo}> blocks`), "a nudge never points at the todo nag's blocks");
+
+// A hash-admitted section names its kind (there is no inner-tag identity any more).
+assert.match(
+  formatContextSectionUserContent(
+    { key: "current_date", content: "<current_date>x</current_date>" },
+    { isUpdate: true }
+  ),
+  /If earlier <current_date> blocks/,
+  "hash-admitted sections name their kind"
 );
 
 // Turn context is hash-admitted sections only: its builder has no reminder input at all.
