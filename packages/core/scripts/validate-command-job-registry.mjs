@@ -20,7 +20,10 @@ import {
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
   collectRunCommandToolCallIds,
+  contextAttributesFromText,
   createBackgroundMiddleware,
+  formatContextSectionUserContent,
+  formatSectionTag,
   createGetCommandOutputTool,
   createKillCommandTool,
   formatBackgroundJobsSection,
@@ -627,9 +630,11 @@ console.log("teardown log deletion OK");
       toolCallMessage,
     ];
     const commandService = {
-      sectionFor: async (wireMessages) => {
+      sectionFor: async (wireMessages, options = {}) => {
         const ids = collectRunCommandToolCallIds(wireMessages);
-        const visible = ctxRows.filter((row) => !row.toolCallId || ids.has(row.toolCallId));
+        const visible = ctxRows.filter(
+          (row) => (!row.toolCallId || ids.has(row.toolCallId)) && !options.excludeJobIds?.has(row.jobId)
+        );
         const content = formatBackgroundJobsSection(visible);
         return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
       },
@@ -656,7 +661,22 @@ console.log("teardown log deletion OK");
     await middleware.onConfig({}, { messages: messages.map((m) => ({ role: m.role, content: m.parts[0].content })) });
     assert.equal(ctxCount(), 1, "an unchanged, still-visible section is not re-injected");
 
-    // A compaction that dropped the section re-admits it (no reset, no generation).
+    // A job the wire already announces (its completion notification is visible) is NOT listed:
+    // the pointer is the safety net for an announcement a cut removed, not a second copy.
+    const notification = formatContextSectionUserContent({
+      key: TURN_CONTEXT_KINDS.backgroundNotification,
+      content: formatSectionTag(
+        TURN_CONTEXT_KINDS.backgroundNotification,
+        "Job job_ctx finished with status completed."
+      ),
+      attrs: { jobs: "job_ctx" },
+    });
+    const announcedWire = [...projectWire(), { role: "user", content: notification }];
+    const announced = await middleware.onConfig({}, { messages: announcedWire });
+    assert.equal(announced.messages, undefined, "an announced job needs no pointer");
+
+    // A compaction that dropped both the notification and the section re-admits the pointer:
+    // that is the repair path.
     const second = await middleware.onConfig({}, { messages: projectWire(true) });
     assert.equal(ctxCount(), 2, "a cut that dropped the section re-admits it");
     assert.ok(
@@ -665,6 +685,70 @@ console.log("teardown log deletion OK");
       ),
       "…with the current job list"
     );
+  }
+
+  // One pass, real completion: the notification is the core delivery and lands first; the pointer
+  // then omits the job it just announced (no duplicate result in the same prompt).
+  {
+    let channelRows = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
+    const ui = { getMessages: () => channelRows, setMessages: (next) => (channelRows = next) };
+    const notified = [];
+    const completedJob = {
+      id: "job_done",
+      command: "npm test",
+      status: "exited",
+      exitCode: 0,
+      stdout: "all good\n",
+      stderr: "",
+      logPath: ".agents/cache/command-jobs/job_done.log",
+      toolCallId: "call_ctx",
+    };
+    const service = {
+      sectionFor: async (wireMessages, options = {}) => {
+        const ids = collectRunCommandToolCallIds(wireMessages);
+        const rows = [completedJob].filter((row) => ids.has(row.toolCallId) && !options.excludeJobIds?.has(row.id));
+        const content = formatBackgroundJobsSection(rows);
+        return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
+      },
+      collectCompleted: async () => [completedJob],
+      markNotified: async (ids) => notified.push(...ids),
+    };
+    const middleware = createBackgroundMiddleware({
+      getUIChannel: () => ui,
+      persistMessages: () => {},
+      getCommandService: () => service,
+      getParentId: () => undefined,
+    });
+    const wire = [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{ id: "call_ctx", function: { name: "run_command", arguments: "{}" } }],
+      },
+    ];
+    const out = await middleware.onConfig({}, { messages: wire });
+    const injectedRows = (out.messages ?? wire).slice(wire.length).map((message) => String(message.content));
+    assert.equal(injectedRows.length, 1, "only the notification is injected");
+    assert.ok(injectedRows[0].includes("Job job_done finished"), "the notification comes first");
+    assert.ok(!injectedRows[0].includes("<background_jobs>"), "the pointer is not duplicated in the same pass");
+    assert.equal(
+      contextAttributesFromText(injectedRows[0]).jobs,
+      "job_done",
+      "the notification carries the machine-readable job ids the pointer uses to skip it"
+    );
+    assert.deepEqual(notified, ["job_done"], "the completion is marked delivered");
+
+    // Next pass (notification still in the window): still no pointer — the result is visible.
+    const nextWire = [...wire, { role: "user", content: injectedRows[0] }];
+    const next = await middleware.onConfig({}, { messages: nextWire });
+    assert.equal(next.messages, undefined, "an announced job stays out of the pointer");
+
+    // The cut removed the notification: the pointer reappears as the safety net.
+    const cutWire = [...wire];
+    const repaired = await middleware.onConfig({}, { messages: cutWire });
+    const repairedRows = (repaired.messages ?? cutWire).slice(cutWire.length).map((m) => String(m.content));
+    assert.equal(repairedRows.length, 1, "the pointer is re-admitted after the announcement was cut");
+    assert.ok(repairedRows[0].includes("<background_jobs>") && repairedRows[0].includes("job_done"));
   }
 
   // Multiple background completions batch into ONE notification; the persisted text is what session

@@ -1,30 +1,38 @@
 /**
  * Background middleware — everything the background-job class injects.
  *
- * Two shapes live here because both are about background work, and neither is a per-turn
- * context section:
+ * Two layers, in this order:
  *
- * 1. **`<background_jobs>` pointer** — hash-admitted like a turn-context section (inject when
- *    the list differs from the newest block in the wire, or when a compaction cut dropped it),
- *    listing only jobs whose `run_command` call is still model-visible. Built from the wire it
- *    is handed, never from remembered state.
- * 2. **Completion notification** — a one-shot push per finished job. A push is not admitted by
- *    content: each completion is delivered exactly once (the registry marks it), and the
- *    synthetic message is persisted so it survives across turns.
+ * 1. **Completion notification (core)** — a one-shot push per finished job, carrying the status
+ *    and the output tail. Delivered exactly once (the registry marks it) and persisted, so it
+ *    survives across turns.
+ * 2. **`<background_jobs>` pointer (safety net)** — compaction summarizes a prefix away, so a
+ *    delivery is usually still the model's only record of a job *until* a later cut drops it.
+ *    The pointer lists the jobs this wire does **not** already announce (running jobs included:
+ *    they have no notification yet), so after such a cut the model can rediscover the id and
+ *    read the log — and it never duplicates a result it can already see. Only jobs whose
+ *    `run_command` call is still in the wire are listed; once the call is gone, re-listing is
+ *    noise. Admission is the shared hash rule (`selectChangedSections`), not remembered state.
+ *
+ * The model can also poll any job through `get_command_output`, so the pointer is deliberately
+ * cheap and metadata-only.
  *
  * Background *tasks* land in the same class when they exist.
  */
 
 import { truncateString } from "../../agent/tools/shared/output-limits.js";
 import { TURN_CONTEXT_KINDS, formatContextSectionUserContent, formatSectionTag } from "../../agent/turn-context";
+import { collectAnnouncedJobIds } from "../../agent/turn-context/background-jobs.js";
 import {
   injectSyntheticMessages,
   nextSyntheticNonce,
   selectChangedSections,
 } from "../../agent/turn-context/synthetic-injection.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
+import type { AgentLog } from "../../agent/agent-log";
 import type { CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { TurnContextSection } from "../../agent/turn-context";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
@@ -42,6 +50,8 @@ export interface BackgroundMiddlewareDeps {
   getCommandService: () => AgentCommandService;
   /** Parent id of the owning agent — subagents get neither the pointer nor jobs. */
   getParentId: () => string | undefined;
+  /** Agent log, so a failed pointer build is visible instead of silently absent. */
+  getLog?: () => AgentLog | null;
 }
 
 const NOTIFICATION_KIND = TURN_CONTEXT_KINDS.backgroundNotification;
@@ -54,10 +64,36 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
     name: "background",
     onConfig: async (_ctx, config) => {
       let messages = config.messages as ModelMessage[];
+      const commandService = deps.getCommandService();
 
-      // --- 1. The pointer section (hash-admitted, root agents only) ---
+      // --- 1. Completions (core): one-shot push per finished job ---
+      // Do not mark yet: the channel row must exist first. The session write behind it is
+      // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
+      // queued", not "on disk" — a crash in between is recovered by the pointer below.
+      const completed = await commandService.collectCompleted();
+      if (completed.length > 0) {
+        const ui = deps.getUIChannel();
+        if (!ui) {
+          // No channel: transient wire-only injection, with no durable copy behind it (and no
+          // pointer either). Marking here is the deliberate best-effort for a channel-less
+          // caller; callers that can lose a turn should provide a channel.
+          await commandService.markNotified(completed.map((job) => job.id));
+          messages = [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }];
+        } else {
+          const injected = injectSyntheticMessages(
+            messages,
+            [{ kind: NOTIFICATION_KIND, content: formatNotifications(completed, maxOutputChars) }],
+            { ui, persist: deps.persistMessages }
+          );
+          messages = injected.messages;
+          await commandService.markNotified(completed.map((job) => job.id));
+        }
+      }
+
+      // --- 2. Pointer (safety net): visible jobs this wire does not announce yet ---
       if (!deps.getParentId()) {
-        const section = await buildJobsSection(deps, messages);
+        const announced = collectAnnouncedJobIds(messages);
+        const section = await buildJobsSection(deps, messages, announced);
         const ui = deps.getUIChannel();
         const admission = section ? selectChangedSections(messages, [section])[0] : undefined;
         if (admission && ui) {
@@ -71,36 +107,7 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
         }
       }
 
-      // --- 2. Completions (one-shot push) ---
-      const commandService = deps.getCommandService();
-      // Do not mark yet: the channel row must exist first. The session write behind it is
-      // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
-      // queued", not "on disk" — a crash in between is recovered by the pointer section.
-      const completed = await commandService.collectCompleted();
-      if (completed.length === 0) return messages === config.messages ? {} : { messages };
-
-      const ui = deps.getUIChannel();
-      if (!ui) {
-        // No channel: transient wire-only injection, with no durable copy behind it (and no
-        // `<background_jobs>` section either). Marking here is the deliberate best-effort for a
-        // channel-less caller; callers that can lose a turn should provide a channel.
-        await commandService.markNotified(completed.map((job) => job.id));
-        return {
-          messages: [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }],
-        };
-      }
-
-      // Shared injection path: content-hash dedupe + channel persistence + wire positioning.
-      // The channel write is the delivery point; the content-hash id dedupes a re-delivery if
-      // the row landed, and the pointer section re-admits the job id/log path if it did not.
-      const injected = injectSyntheticMessages(
-        messages,
-        [{ kind: NOTIFICATION_KIND, content: formatNotifications(completed, maxOutputChars) }],
-        { ui, persist: deps.persistMessages }
-      );
-      await commandService.markNotified(completed.map((job) => job.id));
-
-      return { messages: injected.messages };
+      return messages === config.messages ? {} : { messages };
     },
   });
 }
@@ -109,15 +116,19 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
  * Build the pointer for the current wire, or `undefined` when there is nothing to point at.
  *
  * A host without a job store (tests / standalone) and a subagent have none; the section is
- * optional, so a failure degrades to "no pointer" instead of failing the run.
+ * optional, so a failure degrades to "no pointer" instead of failing the run — but it is
+ * logged, because a silent failure here loses the model's only route back to a job whose
+ * notification a compaction dropped.
  */
 async function buildJobsSection(
   deps: BackgroundMiddlewareDeps,
-  messages: readonly ModelMessage[]
+  messages: readonly ModelMessage[],
+  excludeJobIds: ReadonlySet<string>
 ): Promise<TurnContextSection | undefined> {
   try {
-    return await deps.getCommandService().sectionFor(messages);
-  } catch {
+    return await deps.getCommandService().sectionFor(messages, { excludeJobIds });
+  } catch (error) {
+    deps.getLog?.()?.warn("tool", "background_jobs pointer unavailable", { error: errorMessage(error) });
     return undefined;
   }
 }
@@ -139,5 +150,8 @@ function formatNotifications(jobs: CompletedCommandJob[], maxOutputChars: number
   return formatContextSectionUserContent({
     key: NOTIFICATION_KIND,
     content: formatSectionTag(NOTIFICATION_KIND, sections.join("\n\n")),
+    // Machine-readable job ids: the pointer uses them to tell "already announced" from
+    // "announcement compacted away" without parsing the prose above.
+    attrs: { jobs: jobs.map((job) => job.id).join(",") },
   });
 }

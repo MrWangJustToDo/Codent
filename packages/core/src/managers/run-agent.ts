@@ -265,6 +265,7 @@ export function buildAgentRunner(
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
+      getLog: () => deps.getLog(),
     }),
     createPromptCacheMiddleware({
       getModelStyle: () => config.modelStyle,

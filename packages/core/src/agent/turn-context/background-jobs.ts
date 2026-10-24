@@ -4,18 +4,24 @@
  *
  * A completion notification is one-shot: after a later compaction puts it in the compressed
  * prefix, the model can no longer see the job id or log path, even though the job record/log
- * are durable. This section is re-admitted by the background middleware like any other
- * hash-admitted kind (content comparison against the post-compaction wire), so the model can
- * rediscover the id and read the output — but ONLY for jobs whose `run_command` tool call is still in the
- * model-visible wire. Once the call is compacted away, re-listing the job is noise. It stays
- * metadata-only — no stdout/stderr — so it is cheap and changes only when a job starts or
- * reaches a terminal state.
+ * are durable. This section is the **safety net** for exactly that: it lists the jobs the wire
+ * does not already announce, so the model can rediscover the id and read the output. It stays
+ * metadata-only — no stdout/stderr — and only covers jobs whose `run_command` tool call is still
+ * in the model-visible wire (once the call is gone, re-listing the job is noise).
  */
 
 import { truncateText } from "../../utils/text-truncation.js";
+import { extractTextFromContent } from "../compaction/message-utils.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
-import { TURN_CONTEXT_KINDS, formatSectionTag } from "./turn-context-message.js";
+import {
+  TURN_CONTEXT_KINDS,
+  extractContextSection,
+  formatSectionTag,
+  isContextModelMessage,
+} from "./turn-context-message.js";
+
+import type { ModelMessage } from "@tanstack/ai";
 
 export interface BackgroundJobContextRow {
   jobId: string;
@@ -55,6 +61,27 @@ export function collectRunCommandToolCallIds(messages: readonly WireMessage[]): 
     }
   }
   return ids;
+}
+
+/**
+ * Job ids this wire already announces through a `background_notification` block.
+ *
+ * This is what makes the pointer a safety net instead of a duplicate: a job whose result is
+ * still visible (the notification carries the output tail) does not need to be listed, and a
+ * job whose notification was summarized away is listed again. The ids ride in a shell attr
+ * (`jobs="a,b"`), not in prose, so recovery never parses the notification text.
+ */
+export function collectAnnouncedJobIds(messages: readonly ModelMessage[]): Set<string> {
+  const announced = new Set<string>();
+  for (const message of messages) {
+    if (!message || !isContextModelMessage(message)) continue;
+    const section = extractContextSection(extractTextFromContent(message.content));
+    if (!section || section.key !== TURN_CONTEXT_KINDS.backgroundNotification) continue;
+    for (const id of (section.attrs?.jobs ?? "").split(/[,\s]+/)) {
+      if (id) announced.add(id);
+    }
+  }
+  return announced;
 }
 
 const MAX_JOBS = 5;

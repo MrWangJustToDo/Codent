@@ -389,9 +389,10 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 14. repeat-reminder-middleware
                              CONDITION + COUNTER: nudge when the trailing tool calls repeat. Scans the
                              run for a reminder inside it and re-admits only past a threshold
-15. background-middleware    the background class: the <background_jobs> pointer (hash-admitted like
-                             a turn-context section) and one-shot completion pushes
-                             (<ctx kind=background_notification>, persisted + id-deduped)
+15. background-middleware    the background class, in order: one-shot completion pushes
+                             (<ctx kind=background_notification>, persisted + id-deduped, `jobs` attr)
+                             and then the <background_jobs> pointer (hash-admitted, only jobs the
+                             wire does not already announce and whose call is still visible)
 16. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
                              (must stay last so cache breakpoints see the final payload)
 ```
@@ -917,8 +918,10 @@ the one `reminder` kind and told apart by their inner tag (`<todo-reminder>` / `
 plus their scope attrs (`cycle` / `chain`). `agent/turn-context/reminder/` holds the shared mechanism
 (`counter-reminder.ts`: nearest-block recovery inside the slice the scan produced + the attr-carrying
 builder) and the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); each middleware only
-delivers what its policy resolves. (3) background pushes (`background-middleware`: the pointer plus
-the `background_notification` completion push, appended once per result; background tasks land here).
+delivers what its policy resolves. (3) background pushes (`background-middleware`): the `background_notification` completion push is the
+core delivery and runs first; the `<background_jobs>` pointer is the safety net that re-lists only
+jobs the wire no longer announces (so a compacted-away result is recoverable, and the same pass
+never mentions a job twice). Background tasks land here.
 Recovery for (2) is the "cleanup": only blocks whose tag **and** scope match the current one count.
 The todo counter spans prompts (only a `todo` update resets it) and falls back to the current turn
 when no `todo` call is in the window (a plan-seeded or compacted-away list still nags); the repeat
