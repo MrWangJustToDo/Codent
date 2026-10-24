@@ -1,12 +1,12 @@
 /**
- * Turn-context ownership: the frozen system-prompt prefix, per-turn dynamic sections, admission
- * state, instruction-context change detection, and the `<background_jobs>` pointer.
+ * Turn-context ownership: the frozen system-prompt prefix, per-turn dynamic sections,
+ * instruction-context change detection, and the `<background_jobs>` pointer.
  *
- * These used to live as eleven fields on `ManagedAgent`. They have one invariant — the prompt
- * prefix and per-turn payloads must stay byte-stable until a hash/generation says they changed —
- * and one consumer shape: a section list for `AgentRunDeps` / the turn-context middleware. Keeping
- * them together makes `resetTurnState()` the single reset path (the old inline reset cleared only
- * some of the fields).
+ * Admission itself is **not** owned here: the middleware compares each section against the
+ * latest block of that kind in the post-compaction wire, so there is no remembered hash table,
+ * counter or generation to reset when the window is rebuilt (compaction / restore / switch).
+ * What remains stateful is only what genuinely cannot be derived from the window — the frozen
+ * prompt, the instruction digest baseline, and the one-shot session-history gate.
  *
  * The controller never reaches into `ManagedAgent`; everything it needs arrives as a getter so the
  * runner's cache (which reads turn context through `AgentRunDeps`) never captures a stale value.
@@ -23,6 +23,7 @@ import {
   type InstructionContextState,
 } from "../../agent/turn-context/instruction-context.js";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../../agent/turn-context/session-retrieval.js";
+import { resolveTodoReminder } from "../../agent/turn-context/todo-reminder.js";
 import { errorMessage } from "../../utils/errors.js";
 import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
 
@@ -48,10 +49,7 @@ export interface TurnContextControllerOptions {
   getExtensionRunner: () => ExtensionRunner | null;
   getParentId: () => string | undefined;
   /** Current model-visible wire → `<background_jobs>` section (owned by AgentCommandService). */
-  getBackgroundJobsSection?: (
-    messages: readonly ModelMessage[],
-    generation: number
-  ) => Promise<TurnContextSection | undefined>;
+  getBackgroundJobsSection?: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
   onPromptBefore: (input: { prompt: string; hasTurnContext: boolean }) => void;
   /** Prompt changed → the cached AgentRunner key is stale. */
   invalidateRunner: () => void;
@@ -65,12 +63,6 @@ export class TurnContextController {
   private systemPromptFrozen = false;
   /** Pending per-extension turn-context sections collected in prepareForRun (before injection). */
   private pendingExtensionTurnContextSections: ExtensionTurnContextSection[] | undefined;
-  /** Latest admitted hash per section kind (restore-seeded; only changed kinds re-admit). */
-  private lastAdmittedTurnContextHashes: Map<string, string> | undefined;
-  /** Message count at the last context admit (for periodic refresh; state owned by turn-context middleware). */
-  private turnContextAdmitMessageCount = 0;
-  /** Bumped by {@link resetAdmittedTurnContext}; forces the background-jobs section to re-admit. */
-  private turnContextGeneration = 0;
   /** Last-seen instruction file digest snapshot (for instruction change detection). */
   private instructionContextState: InstructionContextState | undefined;
   /** Once an instruction change is detected, keep re-injecting (stable payload). */
@@ -124,22 +116,6 @@ export class TurnContextController {
     return this.getSystemPrompt();
   }
 
-  getAdmittedContextHashes(): Map<string, string> | undefined {
-    return this.lastAdmittedTurnContextHashes;
-  }
-
-  setAdmittedContextHashes(hashes: Map<string, string> | undefined): void {
-    this.lastAdmittedTurnContextHashes = hashes;
-  }
-
-  getTurnContextAdmitMessageCount(): number {
-    return this.turnContextAdmitMessageCount;
-  }
-
-  setTurnContextAdmitMessageCount(count: number): void {
-    this.turnContextAdmitMessageCount = count;
-  }
-
   /**
    * Collect `before_agent_start` interceptors + turn-context providers for this user turn.
    * Runs in prepareForRun; the turn-context middleware consumes the results at onConfig.
@@ -159,31 +135,12 @@ export class TurnContextController {
     });
   }
 
-  /**
-   * After compaction / clear — force the next turn to re-admit full dynamic context.
-   *
-   * `preserveInstructionContext` is used by compaction: the instruction digest is the baseline
-   * for detecting edits, so clearing it would make the next evaluation treat the current file as a
-   * fresh baseline and silently drop an edit that had not been admitted before the cut. A full
-   * clear/reset still re-baselines.
-   */
-  resetAdmittedTurnContext(preserveInstructionContext = false): void {
-    this.lastAdmittedTurnContextHashes = undefined;
-    this.turnContextGeneration += 1;
-    this.turnContextAdmitMessageCount = 0;
-    if (!preserveInstructionContext) {
-      this.instructionContextState = undefined;
-      this.instructionContextActive = false;
-    }
-  }
-
   clearTurnContext(): void {
     this.pendingExtensionTurnContextSections = undefined;
     // NOTE: instructionContextState / instructionContextActive intentionally NOT
-    // reset here — like lastAdmittedTurnContextHashes they must survive across user
-    // turns (clearTurnContext runs at every turn finalize). Otherwise every turn
-    // re-baselines and cross-turn instruction changes are never detected. Reset
-    // only on compact / full context reset (resetAdmittedTurnContext).
+    // reset here — they must survive across user turns (clearTurnContext runs at every
+    // turn finalize). Otherwise every turn re-baselines and cross-turn instruction
+    // changes are never detected. Reset only on an explicit full reset.
   }
 
   resetSystemPrompt(): void {
@@ -192,22 +149,27 @@ export class TurnContextController {
     this.options.invalidateRunner();
   }
 
-  /** Full context reset (`ManagedAgent.reset`): admission + prompt + pending per-turn state. */
+  /** Full context reset (`ManagedAgent.reset`): prompt + pending per-turn state + instruction baseline. */
   resetTurnState(): void {
-    this.resetAdmittedTurnContext();
     this.clearTurnContext();
+    this.instructionContextState = undefined;
+    this.instructionContextActive = false;
     this.resetSystemPrompt();
   }
 
-  /** Build the ordered dynamic turn-context sections for the current user turn. */
-  async getDynamicTurnContextSections(): Promise<TurnContextSection[]> {
+  /**
+   * Build the ordered dynamic turn-context sections for the current user turn.
+   *
+   * `messages` is the post-compaction model wire: the only input used for the
+   * window-relative decisions (the todo nag reads its own round/episode state back
+   * from the newest reminder still in the window).
+   */
+  async getDynamicTurnContextSections(messages: readonly ModelMessage[] = []): Promise<TurnContextSection[]> {
     const todoManager = this.options.getTodoManager();
-    let todoNagReminder: string | undefined;
-    if (todoManager?.shouldNag()) {
-      const rounds = todoManager.getRoundsSinceUpdate();
-      todoNagReminder = todoManager.getNagReminder(rounds);
+    const todoNagReminder = resolveTodoReminder(todoManager, messages);
+    if (todoNagReminder) {
       this.options.log?.debug("todo", "Capturing nag reminder in turn context snapshot", {
-        roundsSinceUpdate: rounds,
+        attrs: todoNagReminder.attrs,
       });
     }
 
@@ -259,14 +221,14 @@ export class TurnContextController {
    * Only jobs whose `run_command` tool call is still in `messages` are listed: after compaction has
    * dropped the call, re-listing the job is noise (the completion notification is a separate,
    * self-contained surface and stays searchable). Built by the turn-context middleware, which has
-   * the post-compaction wire; the generation changes on every compaction reset so a reset
-   * re-admits the section even when the restore seeding finds the old row in the channel.
+   * the post-compaction wire — the section is content-hashed like every other kind, so a cut that
+   * dropped it re-admits it and a surviving copy keeps it.
    */
   async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
     if (this.options.getParentId()) return undefined;
     if (!this.options.getBackgroundJobsSection) return undefined;
     try {
-      return await this.options.getBackgroundJobsSection(messages, this.turnContextGeneration);
+      return await this.options.getBackgroundJobsSection(messages);
     } catch {
       // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
       return undefined;

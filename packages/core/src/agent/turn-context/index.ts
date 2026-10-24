@@ -6,12 +6,13 @@ export {
   formatContextSectionUserContent,
   isContextText,
   syntheticKindFromId,
+  contextAttributesFromText,
   contextKindFromText,
   isContextModelMessage,
   isContextUIMessage,
   extractContextSection,
   hashTurnContextSection,
-  findLatestTurnContextSectionHashes,
+  findLatestContextSectionsFromWire,
   findLatestTurnContextSectionHashesFromWire,
 } from "./turn-context-message.js";
 export type { TurnContextKind, TurnContextSection } from "./turn-context-message.js";
@@ -31,6 +32,8 @@ export {
 export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "./instruction-context.js";
 
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./background-jobs.js";
+export { buildTodoReminderContent, readTodoReminderWindowState, resolveTodoReminder } from "./todo-reminder.js";
+export type { TodoReminderWindowState } from "./todo-reminder.js";
 export type { BackgroundJobContextRow, WireMessage, WireToolCall } from "./background-jobs.js";
 
 export {

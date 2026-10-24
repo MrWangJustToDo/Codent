@@ -40,6 +40,7 @@ import {
   clearCoreEnv,
   createRepeatReminderMiddleware,
   formatContextSectionUserContent,
+  readTrailingRepeatChain,
   registerCoreEnv,
   syntheticMessageId,
 } from "../dist/dev.mjs";
@@ -196,13 +197,23 @@ async function readBack(store, service) {
   return { raw, loaded, sessionId, logPath };
 }
 
-/** The TanStack hook contract: `{ toolName, args, toolCallId }` (see compose.js `hookCtx`). */
-function call(mw, toolName, args, toolCallId) {
-  return mw.onBeforeToolCall({}, { toolName, args, toolCallId });
-}
-
 function config(mw, messages) {
   return mw.onConfig({}, { messages });
+}
+
+/**
+ * Append one completed tool call (assistant call + result) to the wire — the shape the
+ * middleware reads its repeat count from.
+ */
+function pushCall(wire, toolName, args, toolCallId) {
+  wire.push(
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: toolCallId, type: "function", function: { name: toolName, arguments: JSON.stringify(args) } }],
+    },
+    { role: "tool", content: "ok", toolCallId }
+  );
 }
 
 const userMessage = (content) => ({ role: "user", content });
@@ -215,9 +226,9 @@ function makeChannel(prompt) {
   return channel;
 }
 
-/** Drive `count` identical tracked calls. */
-function repeat(mw, count, toolName, args, idPrefix) {
-  return Promise.all(Array.from({ length: count }, (_, i) => call(mw, toolName, args, `${idPrefix}-${i}`)));
+/** Append `count` identical tracked calls to the wire. */
+function repeat(wire, count, toolName, args, idPrefix) {
+  for (let i = 0; i < count; i++) pushCall(wire, toolName, args, `${idPrefix}-${i}`);
 }
 
 const REMINDER_PREFIX = `ctx-${REPEAT_REMINDER_KIND}-`;
@@ -239,11 +250,8 @@ setupEnv();
     persistMessages,
   });
 
-  // Turn start: establishes the genuine-user-message baseline.
-  await config(mw, wire);
-
   // Below the threshold: nothing is written.
-  await repeat(mw, DEFAULT_REPEAT_THRESHOLDS[0] - 1, "grep", { pattern: "foo", path: "src" }, "probe-a");
+  repeat(wire, DEFAULT_REPEAT_THRESHOLDS[0] - 1, "grep", { pattern: "foo", path: "src" }, "probe-a");
   await config(mw, wire);
   await Promise.all(pendingWrites);
   pendingWrites = [];
@@ -254,7 +262,7 @@ setupEnv();
   );
 
   // The threshold repeat: the gentle reminder is injected AND persisted.
-  await repeat(mw, 1, "grep", { pattern: "foo", path: "src" }, "probe-b");
+  repeat(wire, 1, "grep", { pattern: "foo", path: "src" }, "probe-b");
   await config(mw, wire);
 
   const { raw, loaded } = await readBack(store, service);
@@ -291,6 +299,7 @@ setupEnv();
         "You are repeating the exact same tool call with identical arguments. " +
         "Carefully analyze the previous result before calling again: if the task is not " +
         "complete, try a different approach or different arguments instead of repeating the call.",
+      attrs: { chain: readTrailingRepeatChain(wire).chain, count: String(DEFAULT_REPEAT_THRESHOLDS[0]) },
     }),
     nonce: 1,
   });
@@ -326,14 +335,12 @@ setupEnv();
 
   const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages });
 
-  await config(mw, wire1);
-  await repeat(mw, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "loop1");
+  repeat(wire1, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "loop1");
   await config(mw, wire1);
 
   // A genuine new prompt resets the chain: repetition across a fresh instruction is not a loop.
   const wire2 = [userMessage(prompt), assistantMessage("done"), userMessage("now search again")];
-  await config(mw, wire2);
-  await repeat(mw, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "loop2");
+  repeat(wire2, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "loop2");
   await config(mw, wire2);
 
   const { raw, loaded } = await readBack(store, service);
@@ -383,8 +390,7 @@ setupEnv();
   // Deliberately the pre-fix wiring: channel append, no persist.
   const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: noop });
 
-  await config(mw, wire);
-  await repeat(mw, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "noseam");
+  repeat(wire, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "noseam");
   const out = await config(mw, wire);
 
   // The nudging still happened in memory...
@@ -424,12 +430,12 @@ setupEnv();
   const mw = createRepeatReminderMiddleware({ getUIChannel: () => undefined, persistMessages });
 
   const input = [userMessage("go")];
-  await config(mw, input);
-  await repeat(mw, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "nochannel");
+  repeat(input, DEFAULT_REPEAT_THRESHOLDS[0], "grep", { pattern: "foo" }, "nochannel");
+  const before = input.length;
   const out = await config(mw, input);
 
-  assert.equal(out.messages.length, input.length + 1, "no channel → append to the wire");
-  assert.equal(input.length, 1, "the input wire must not be mutated");
+  assert.equal(out.messages.length, before + 1, "no channel → append to the wire");
+  assert.equal(input.length, before, "the input wire must not be mutated");
   assert.equal(
     [...files.values()].some((bytes) => String(bytes).includes(REMINDER_PREFIX)),
     false,

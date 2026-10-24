@@ -604,7 +604,7 @@ export class ManagedAgent {
       getRelevantMemoryContent: () => this.memory.getRelevantContent(),
       getExtensionRunner: () => this.extensions.getExtensionRunner(),
       getParentId: () => this.parentId,
-      getBackgroundJobsSection: (messages, generation) => this.getCommandService().sectionFor(messages, generation),
+      getBackgroundJobsSection: (messages) => this.getCommandService().sectionFor(messages),
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
       invalidateRunner: () => this.invalidateRunner(),
       log: this.log,
@@ -1551,32 +1551,9 @@ export class ManagedAgent {
     return this.turnContext.getFrozenSystemPrompt();
   }
 
-  // --- Turn-context admission state (owned by TurnContextController, mutated by middleware). ---
-
-  getAdmittedContextHashes(): Map<string, string> | undefined {
-    return this.turnContext.getAdmittedContextHashes();
-  }
-
-  setAdmittedContextHashes(hashes: Map<string, string> | undefined): void {
-    this.turnContext.setAdmittedContextHashes(hashes);
-  }
-
-  getTurnContextAdmitMessageCount(): number {
-    return this.turnContext.getTurnContextAdmitMessageCount();
-  }
-
-  setTurnContextAdmitMessageCount(count: number): void {
-    this.turnContext.setTurnContextAdmitMessageCount(count);
-  }
-
   /** Collect `before_agent_start` interceptors + turn-context providers for this user turn. */
   async collectExtensionPromptHooks(prompt: string): Promise<void> {
     await this.turnContext.collectExtensionPromptHooks(prompt);
-  }
-
-  /** After compaction / clear — force the next turn to re-admit full dynamic context. */
-  resetAdmittedTurnContext(preserveInstructionContext = false): void {
-    this.turnContext.resetAdmittedTurnContext(preserveInstructionContext);
   }
 
   clearTurnContext(): void {
@@ -1588,9 +1565,14 @@ export class ManagedAgent {
     this.turnContext.resetSystemPrompt();
   }
 
-  /** Build the ordered dynamic turn-context sections for the current user turn. */
-  async getDynamicTurnContextSections(): Promise<TurnContextSection[]> {
-    return this.turnContext.getDynamicTurnContextSections();
+  /**
+   * Build the ordered dynamic turn-context sections for the current user turn.
+   *
+   * `messages` is the post-compaction model wire — the only admission input, so the
+   * sections that depend on window state (the todo nag) resolve from it.
+   */
+  async getDynamicTurnContextSections(messages: readonly ModelMessage[] = []): Promise<TurnContextSection[]> {
+    return this.turnContext.getDynamicTurnContextSections(messages);
   }
 
   /** `<background_jobs>` section for the current model-visible wire. */
@@ -2153,14 +2135,7 @@ export class ManagedAgent {
   }
 }
 
-/**
- * Build the {@link ManualCompactHost} adapter for one agent.
- *
- * Extracted so the `resetAdmittedTurnContext` forwarding rule is testable: a zero-argument
- * adapter is structurally assignable to the optional-parameter host type, and that is exactly
- * how the manual `/compact` path silently re-baselined the instruction digest while auto and
- * reactive compaction preserved it.
- */
+/** Build the {@link ManualCompactHost} adapter for one agent. */
 export function createManualCompactHost(
   managed: ManagedAgent,
   abortSignal?: AbortSignal,
@@ -2177,8 +2152,6 @@ export function createManualCompactHost(
     compactionConfig: managed.getCompaction().getConfig(),
     getContextWindow: () => managed.getContextWindow(),
     getCoreEnv: () => managed.getCoreEnv(),
-    resetAdmittedTurnContext: (preserveInstructionContext) =>
-      managed.resetAdmittedTurnContext(preserveInstructionContext),
     resetSystemPrompt: () => managed.resetSystemPrompt(),
     persistSession: () => managed.persistSession(),
     maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),

@@ -210,7 +210,7 @@ export function buildAgentRunner(
     }),
     createTurnContextMiddleware({
       getFrozenSystemPrompt: deps.getFrozenSystemPrompt,
-      getSections: deps.getDynamicTurnContextSections,
+      getSections: (messages) => deps.getDynamicTurnContextSections(messages),
       getBackgroundJobsSection: deps.getBackgroundJobsSection,
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
@@ -220,15 +220,10 @@ export function buildAgentRunner(
         if (!parentId) return undefined;
         return deps.manager.getAgent(parentId)?.getAgentDocContent() || undefined;
       },
-      getAdmittedHashes: deps.getAdmittedContextHashes,
-      setAdmittedHashes: deps.setAdmittedContextHashes,
-      getAdmitMessageCount: deps.getTurnContextAdmitMessageCount,
-      setAdmitMessageCount: deps.setTurnContextAdmitMessageCount,
     }),
     createExtensionsMiddleware({
       getExtensionRunner: deps.getExtensionRunner,
       getSessionId: () => session.getSessionData()?.id ?? deps.agentId,
-      getTodoManager: deps.getTodoManager,
       emitEvent,
       getAbortSignal: () => run.currentAbortController?.signal,
       // A pre-forked `task` emits its own start on admission; skip the eager one so a

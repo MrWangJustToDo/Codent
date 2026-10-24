@@ -243,14 +243,20 @@ export {
   hashTurnContextPayload,
   formatContextSectionUserContent,
   isContextText,
+  contextAttributesFromText,
   contextKindFromText,
   isContextModelMessage,
   isContextUIMessage,
   syntheticKindFromId,
   extractContextSection,
   hashTurnContextSection,
-  findLatestTurnContextSectionHashes,
+  findLatestContextSectionsFromWire,
   findLatestTurnContextSectionHashesFromWire,
+} from "../agent/turn-context";
+export {
+  buildTodoReminderContent,
+  readTodoReminderWindowState,
+  resolveTodoReminder,
 } from "../agent/turn-context";
 export {
   INSTRUCTION_FILENAMES,
@@ -302,10 +308,7 @@ export {
   searchHistory,
   sessionExists,
 } from "../agent/tools/builtin/session/reader.js";
-export {
-  DEFAULT_REFRESH_MESSAGE_THRESHOLD,
-  SUBAGENT_ALLOWED_KINDS,
-} from "../managers/middleware/turn-context-middleware.js";
+export { SUBAGENT_ALLOWED_KINDS } from "../managers/middleware/turn-context-middleware.js";
 export { injectSyntheticMessages, syntheticMessageId } from "../agent/turn-context/synthetic-injection.js";
 export { AgentRunner } from "../agent/runner/agent-runner.js";
 export { assertAsyncIterable, formatAgentStreamError } from "../agent/stream/assert-async-iterable.js";

@@ -147,13 +147,13 @@ export class AgentCommandService implements AgentCommandPort {
    * The `<background_jobs>` section for the model-visible wire. Only jobs whose `run_command` call
    * is still in `messages` are listed; after compaction drops the call, re-listing it is noise.
    */
-  async sectionFor(messages: readonly ModelMessage[], generation: number): Promise<TurnContextSection | undefined> {
+  async sectionFor(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
     await this.ready();
     const inContext = collectRunCommandToolCallIds(messages);
     const rows = this.registry()
       .listForTurnContext()
       .filter((job) => job.toolCallId !== undefined && inContext.has(job.toolCallId));
-    const content = formatBackgroundJobsSection(rows, { generation });
+    const content = formatBackgroundJobsSection(rows);
     return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
   }
 

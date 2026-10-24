@@ -1,7 +1,7 @@
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
 import {
   TURN_CONTEXT_KINDS,
-  findLatestTurnContextSectionHashesFromWire,
+  findLatestContextSectionsFromWire,
   formatContextSectionUserContent,
   hashTurnContextSection,
   isContextUIMessage,
@@ -28,24 +28,11 @@ export const SUBAGENT_ALLOWED_KINDS: ReadonlySet<string> = new Set<string>([
   TURN_CONTEXT_KINDS.projectInstructions,
 ]);
 
-/**
- * Kinds that do NOT need the periodic same-content refresh.
- *
- * The refresh exists to keep dynamic context near the tail as the conversation grows. The background
- * job pointer is different: it is re-admitted by compaction (the generation changes) and its old row
- * remains in the wire until then, so re-injecting an unchanged list every ~100 messages only
- * duplicates it. `aboveThreshold` still refreshes every other kind.
- */
-const REFRESH_EXEMPT_KINDS: ReadonlySet<string> = new Set<string>([TURN_CONTEXT_KINDS.backgroundJobs]);
-
-/** Re-admit all sections when the conversation grows this much since last admit. */
-export const DEFAULT_REFRESH_MESSAGE_THRESHOLD = 100;
-
 export interface TurnContextMiddlewareDeps {
   /** Frozen system prompt (ends with SYSTEM_PROMPT_DYNAMIC_BOUNDARY when present). */
   getFrozenSystemPrompt: () => string | undefined;
   /** Current dynamic sections for this agent (computed per call, hash-deduped below). */
-  getSections: () => Promise<TurnContextSection[]>;
+  getSections: (messages: readonly ModelMessage[]) => Promise<TurnContextSection[]>;
   /**
    * Build the `<background_jobs>` section for the model-visible wire (after compaction). Only jobs
    * whose `run_command` tool call is still in `messages` belong there.
@@ -57,12 +44,6 @@ export interface TurnContextMiddlewareDeps {
   getManagedAgent: () => { parentId?: string } | undefined;
   /** Agent-doc content for subagents (their own agentDocContent is empty). */
   getProjectInstructions?: () => string | undefined;
-  // Per-kind admission state (lives on ManagedAgent so compaction resets apply).
-  getAdmittedHashes: () => Map<string, string> | undefined;
-  setAdmittedHashes: (hashes: Map<string, string> | undefined) => void;
-  getAdmitMessageCount: () => number;
-  setAdmitMessageCount: (count: number) => void;
-  refreshMessageThreshold?: number;
 }
 
 /**
@@ -70,11 +51,17 @@ export interface TurnContextMiddlewareDeps {
  * compaction middleware has produced the real wire payload — so admission is
  * judged against what the model actually receives.
  *
+ * Admission is one rule, evaluated fresh on every call:
+ * 1. read the latest admitted block per kind from the (post-compaction) wire,
+ * 2. compare its hash with the block this turn would build, and inject only the
+ *    kinds whose content differs (or that are absent entirely).
+ *
+ * Nothing is remembered across calls, so a compaction cut, a session restore, or a
+ * session switch need no reset plumbing: a block that fell out of the window is
+ * simply absent (and re-injected), and one that survived keeps suppressing itself.
+ *
  * - Subagents: kinds are filtered to {@link SUBAGENT_ALLOWED_KINDS} and the
  *   parent's `<project_instructions>` is added (their frozen prompt lacks it).
- * - Main agents: full section set; each kind is hash-compared and only changed
- *   kinds are injected (prompt-cache friendly). Hashes are seeded from persisted
- *   messages on first call (restore support).
  */
 export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   return defineMiddleware("context-transform", {
@@ -85,10 +72,13 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
 
       const managed = deps.getManagedAgent();
       const isSubagent = Boolean(managed?.parentId);
+      // The wire the model is about to receive, after compaction. This is the only
+      // admission input — never the durable channel, which keeps pre-cut rows.
+      const wire = config.messages as ModelMessage[];
 
-      const sections = [...(await deps.getSections())];
+      const sections = [...(await deps.getSections(wire))];
       if (!isSubagent && deps.getBackgroundJobsSection) {
-        const backgroundJobs = await deps.getBackgroundJobsSection(config.messages as ModelMessage[]);
+        const backgroundJobs = await deps.getBackgroundJobsSection(wire);
         if (backgroundJobs) sections.push(backgroundJobs);
       }
       const admitted: TurnContextSection[] = isSubagent
@@ -109,23 +99,13 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
         return result;
       }
 
-      // Seed per-kind hashes from persisted messages on first admit (restore).
-      let hashes = deps.getAdmittedHashes();
-      if (!hashes) {
-        hashes = findLatestTurnContextSectionHashesFromWire(config.messages as ModelMessage[]);
-        deps.setAdmittedHashes(hashes);
-      }
-
-      const threshold = deps.refreshMessageThreshold ?? DEFAULT_REFRESH_MESSAGE_THRESHOLD;
-      const aboveThreshold = uiMessages.length - deps.getAdmitMessageCount() >= threshold;
+      const injected = findLatestContextSectionsFromWire(wire, new Set(admitted.map((section) => section.key)));
 
       const changed: { section: TurnContextSection; isUpdate: boolean }[] = [];
       for (const section of admitted) {
-        const hash = hashTurnContextSection(section);
-        const prior = hashes.get(section.key);
-        if (prior === hash && (!aboveThreshold || REFRESH_EXEMPT_KINDS.has(section.key))) continue;
+        const prior = injected.get(section.key);
+        if (prior && hashTurnContextSection(prior) === hashTurnContextSection(section)) continue;
         changed.push({ section, isUpdate: prior !== undefined });
-        hashes.set(section.key, hash);
       }
       if (changed.length === 0) return result;
 
@@ -142,25 +122,18 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
         content: formatContextSectionUserContent(section, { isUpdate }),
         nonce: (kindCounts.get(section.key) ?? 0) + 1,
       }));
-      const { messages: wireMessages } = injectSyntheticMessages(
-        config.messages as ModelMessage[],
-        entries,
-        {
-          ui,
-          persist: deps.persistMessages,
-        }
-        // Synthetic ctx always APPENDS (see injectSyntheticMessages): keeps injected
-        // ctx in time order and never rewrites already-streamed content. Inserting
-        // after the last real user message would put new ctx ahead of previously
-        // injected ctx on mid-loop re-admission (mode changes), inverting per-turn
-        // order AND invalidating the prompt-cache prefix for every message after the
-        // user turn. At the start of a fresh user turn append is equivalent (the user
-        // message is the last entry), so only the mid-loop case differs — where
-        // append is the cache-safe choice.
-      );
-      // Refresh the admit baseline so the periodic refresh fires again ~threshold
-      // messages later instead of staying permanently above threshold.
-      deps.setAdmitMessageCount(ui.getMessages().length);
+      const { messages: wireMessages } = injectSyntheticMessages(wire, entries, {
+        ui,
+        persist: deps.persistMessages,
+      });
+      // Synthetic ctx always APPENDS (see injectSyntheticMessages): keeps injected
+      // ctx in time order and never rewrites already-streamed content. Inserting
+      // after the last real user message would put new ctx ahead of previously
+      // injected ctx on mid-loop re-admission (mode changes), inverting per-turn
+      // order AND invalidating the prompt-cache prefix for every message after the
+      // user turn. At the start of a fresh user turn append is equivalent (the user
+      // message is the last entry), so only the mid-loop case differs — where
+      // append is the cache-safe choice.
 
       return { ...result, messages: wireMessages };
     },

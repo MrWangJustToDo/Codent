@@ -16,7 +16,6 @@ import { join } from "node:path";
 
 import {
   buildTurnContextSections,
-  createManualCompactHost,
   diffInstructionStates,
   formatInstructionContextSection,
   instructionStateChanged,
@@ -261,19 +260,13 @@ setFile("CLAUDE.override.md", "# personal override\n");
   assert.ok(turn4.includes("<instruction_context>"), "clearTurnContext keeps sticky active");
   assert.ok(turn4.includes("rule NEW"), "still injecting latest content after clear");
 
-  // Compaction preserves the instruction digest so an edit made before the cut is not mistaken
-  // for a fresh baseline.
-  managed.resetAdmittedTurnContext(true);
+  // Compaction no longer touches the instruction digest at all: admission is derived from the
+  // window, so the sticky section simply keeps injecting (no reset call to preserve it).
   const turnPreserved = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
   assert.ok(turnPreserved.includes("<instruction_context>"), "compaction preserves changed instruction context");
 
-  // A full reset still re-baselines → next turn has no section.
-  managed.resetAdmittedTurnContext();
-  const turn5 = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
-  assert.ok(!turn5.includes("<instruction_context>"), "resetAdmittedTurnContext re-baselines");
-
-  // The full `/new` reset owns the same turn-context transaction: it must clear the instruction
-  // snapshot too, not just the prompt/admission fields (the old inline reset missed these).
+  // The full `/new` reset owns the turn-context transaction: it clears the instruction snapshot
+  // (re-baselines) together with the prompt and per-turn state.
   setFile("AGENTS.md", "# AGENTS\n- rule baseline\n- rule RESET\n");
   const turnBeforeReset = (await managed.getDynamicTurnContextSections())
     .map((section) => section.content)
@@ -282,40 +275,6 @@ setFile("CLAUDE.override.md", "# personal override\n");
   managed.reset();
   const turnAfterReset = (await managed.getDynamicTurnContextSections()).map((section) => section.content).join("\n\n");
   assert.ok(!turnAfterReset.includes("<instruction_context>"), "ManagedAgent.reset re-baselines instruction state");
-}
-
-// ---------------------------------------------------------------------------
-// 8b. The manual-compact host adapter forwards `preserveInstructionContext`.
-//
-// This is the regression that the direct `resetAdmittedTurnContext(true)` test
-// above cannot catch: a zero-argument adapter is structurally assignable to the
-// optional-parameter host type, so the manual `/compact` path silently
-// re-baselined the instruction digest while auto/reactive compaction preserved it.
-// ---------------------------------------------------------------------------
-{
-  const seen = [];
-  const fakeManaged = {
-    id: "manual-compact-adapter",
-    getStatus: () => "idle",
-    setStatus: () => {},
-    getUI: () => undefined,
-    usage: {},
-    getTodoManager: () => null,
-    statusController: {},
-    getCompaction: () => ({ getConfig: () => null }),
-    getContextWindow: () => undefined,
-    getCoreEnv: () => ({ rootPath: ws }),
-    resetAdmittedTurnContext: (preserveInstructionContext) => seen.push(preserveInstructionContext),
-    resetSystemPrompt: () => {},
-    persistSession: () => {},
-    maybeSaveSessionUIMessages: () => {},
-    log: null,
-    getAbortSignal: () => undefined,
-  };
-
-  const host = createManualCompactHost(fakeManaged);
-  host.resetAdmittedTurnContext(true);
-  assert.deepEqual(seen, [true], "manual compact must ask the agent to preserve the instruction digest");
 }
 
 // ---------------------------------------------------------------------------
@@ -350,19 +309,22 @@ setFile("CLAUDE.override.md", "# personal override\n");
 
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => managed.getFrozenSystemPrompt(),
-    getSections: () => managed.getDynamicTurnContextSections(),
+    getSections: (messages) => managed.getDynamicTurnContextSections(messages),
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => managed,
-    getAdmittedHashes: () => managed.getAdmittedContextHashes(),
-    setAdmittedHashes: (hashes) => managed.setAdmittedContextHashes(hashes),
-    getAdmitMessageCount: () => managed.getTurnContextAdmitMessageCount(),
-    setAdmitMessageCount: (count) => managed.setTurnContextAdmitMessageCount(count),
   });
+  // Admission is stateless: it reads the *wire* it is handed, which the real pipeline
+  // re-projects from the channel on every model call. Mirror that here.
+  const projectWire = () =>
+    channel.getMessages().map((message) => ({
+      role: message.role,
+      content: message.parts.find((part) => part.type === "text")?.content ?? "",
+    }));
   const runOnConfig = async () => {
-    const wire = [];
-    const result = await middleware.onConfig({}, { messages: wire });
-    return result.messages ?? wire;
+    const before = projectWire();
+    const result = await middleware.onConfig({}, { messages: before });
+    return { before, after: result.messages ?? before };
   };
 
   // A real user message must exist before injection (keeps synthetic ctx after
@@ -370,18 +332,18 @@ setFile("CLAUDE.override.md", "# personal override\n");
   channel.setMessages([{ id: "u1", role: "user", parts: [{ type: "text", content: "hello" }] }]);
 
   // Baseline turn — inject (no instruction section yet).
-  const baselineWire = await runOnConfig();
-  assert.ok(baselineWire.length >= 1, "baseline injected at least current_date");
-  const baselineContent = baselineWire[baselineWire.length - 1];
-  assert.ok(baselineContent.content.startsWith("<ctx kind="), "wire message is synthetic ctx");
-  assert.ok(!baselineContent.content.includes("<instruction_context>"), "baseline has no instruction section");
-  assert.equal(channel.getMessages().length, baselineWire.length + 1, "channel: user + injected ctx messages");
+  const baseline = await runOnConfig();
+  assert.ok(baseline.after.length > baseline.before.length, "baseline injected at least current_date");
+  assert.ok(
+    !baseline.after.some((message) => message.content.includes("<instruction_context>")),
+    "baseline has no instruction section"
+  );
+  assert.equal(channel.getMessages().length, baseline.after.length, "channel mirrors the injected wire");
 
-  // Same content, next call — no new inject (hash stable, cache friendly).
-  const wireCount = baselineWire.length;
-  const againWire = await runOnConfig();
-  assert.equal(againWire.length, 0, "no change → no re-inject");
-  assert.equal(channel.getMessages().length, wireCount + 1, "channel unchanged (cache stable)");
+  // Same content, next call — no new inject (the wire already carries every kind).
+  const again = await runOnConfig();
+  assert.equal(again.after.length, again.before.length, "no change → no re-inject");
+  assert.equal(channel.getMessages().length, baseline.after.length, "channel unchanged (cache stable)");
 
   // Edit AGENTS.md → next call detects change → inject with section. A new user
   // message arrives first (real next-turn traffic): injection inserts the fresh
@@ -391,9 +353,9 @@ setFile("CLAUDE.override.md", "# personal override\n");
     ...channel.getMessages(),
     { id: "u2", role: "user", parts: [{ type: "text", content: "next" }] },
   ]);
-  const changedWire = await runOnConfig();
-  assert.equal(changedWire.length, 1, "change → one ctx message injected (instruction_context)");
-  const lastContent = changedWire[changedWire.length - 1].content;
+  const changed = await runOnConfig();
+  assert.equal(changed.after.length, changed.before.length + 1, "change → one ctx message injected");
+  const lastContent = changed.after[changed.after.length - 1].content;
   assert.equal(
     lastContent.startsWith("<ctx kind=instruction_context>"),
     true,

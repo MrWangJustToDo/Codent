@@ -4,11 +4,12 @@
  *
  * A completion notification is one-shot: after a later compaction puts it in the compressed
  * prefix, the model can no longer see the job id or log path, even though the job record/log
- * are durable. This section is re-admitted by the turn-context middleware after every
- * compaction (it has its own content hash), so the model can rediscover the id and read the
- * output — but ONLY for jobs whose `run_command` tool call is still in the model-visible wire.
- * Once the call is compacted away, re-listing the job is noise. It stays metadata-only — no
- * stdout/stderr — so it is cheap and changes only when a job starts or reaches a terminal state.
+ * are durable. This section is re-admitted by the turn-context middleware like any other kind
+ * (content-hash admission against the post-compaction wire), so the model can rediscover the id
+ * and read the output — but ONLY for jobs whose `run_command` tool call is still in the
+ * model-visible wire. Once the call is compacted away, re-listing the job is noise. It stays
+ * metadata-only — no stdout/stderr — so it is cheap and changes only when a job starts or
+ * reaches a terminal state.
  */
 
 import { truncateText } from "../../utils/text-truncation.js";
@@ -63,10 +64,7 @@ function oneLine(command: string): string {
 }
 
 /** Render the section, or `undefined` when the session has no jobs. */
-export function formatBackgroundJobsSection(
-  jobs: readonly BackgroundJobContextRow[],
-  options: { generation?: number } = {}
-): string | undefined {
+export function formatBackgroundJobsSection(jobs: readonly BackgroundJobContextRow[]): string | undefined {
   if (jobs.length === 0) return undefined;
   const ordered = [...jobs].sort((a, b) => {
     const aRunning = a.status === "running" ? 0 : 1;
@@ -84,13 +82,11 @@ export function formatBackgroundJobsSection(
   if (ordered.length > shown.length) {
     lines.push(`- … ${ordered.length - shown.length} more job(s); see .agents/cache/command-jobs/`);
   }
-  // `generation` bumps on every compaction. The content otherwise changes only when a job starts
-  // or ends, which is not enough to re-admit after a cut that removed the previous section: the
-  // compaction path resets admission, but the restore-seeding would find the old row in the
-  // channel and skip. A changed generation makes the hash differ, so the section is re-injected.
-  const generation = options.generation ?? 0;
+  // No generation/epoch attribute: the section is admitted by content like every other kind,
+  // against the post-compaction wire, so a cut that removed it re-admits it and a surviving copy
+  // suppresses it. An in-memory counter would make the content differ after every restart.
   return [
-    `<background_jobs generation="${generation}">`,
+    "<background_jobs>",
     "Background command jobs in this session. This list is re-injected after compaction. " +
       "Read output with get_command_output(jobId) or read_file(logPath); output is not repeated here.",
     ...lines,

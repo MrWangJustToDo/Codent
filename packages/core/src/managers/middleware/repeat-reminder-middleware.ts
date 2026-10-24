@@ -10,21 +10,30 @@
  * It is advisory, never a veto: it counts attempts and injects a message onto the
  * next wire; it never blocks, delays, or rewrites a call.
  *
- * Detection is exact-match only: a call is "the same" when the tool name and the
- * canonically stringified arguments (object keys deep-sorted) match the previous
- * tracked call. A different tracked call resets the count. Untracked calls
- * (`excludeTools`) are transparent — they neither count nor reset. The chain
- * resets when a new user prompt arrives, so repetition across a fresh instruction
- * is not treated as a loop.
+ * **The count is derived from the wire, not remembered.** The repeat chain is the run
+ * of trailing identical tool calls in the model-visible messages, so the same two
+ * steps every injecting section uses apply: read the newest reminder of this kind from
+ * the window (its `chain` / `count` attrs), compare it with the chain this turn would
+ * report, and inject only when the chain has moved past it. A compaction cut, a
+ * restore, a restart or an aborted run therefore cannot lose, double, or replay the
+ * counter — there is nothing to lose.
  *
- * State is per-agent (the runner, and hence this middleware instance, is cached on
- * the agent) and in-memory only: a resumed session starts with a fresh chain, which
- * is the accepted cost of a heuristic nudge.
+ * Detection is exact-match only: a call is "the same" when the tool name and the
+ * canonically stringified arguments (object keys deep-sorted) match. A different
+ * tracked call ends the chain; a genuine user prompt does too. Untracked calls
+ * (`excludeTools`) are transparent — they neither count nor break the chain.
  */
 
+import { extractTextFromContent } from "../../agent/compaction/message-utils.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
-import { formatContextSectionUserContent, isContextModelMessage, syntheticKindFromId } from "../../agent/turn-context";
 import { injectSyntheticMessages } from "../../agent/turn-context/synthetic-injection.js";
+import {
+  contextAttributesFromText,
+  formatContextSectionUserContent,
+  hashTurnContextPayload,
+  isContextModelMessage,
+  syntheticKindFromId,
+} from "../../agent/turn-context/turn-context-message.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -84,34 +93,6 @@ export function previewRepeatArguments(canonical: string, cap: number): string {
   return `${canonical.slice(0, cap)}… (+${canonical.length - cap} more chars)`;
 }
 
-function detailedReminder(toolName: string, count: number, canonicalArguments: string): string {
-  return (
-    "Repeated tool call detected:\n" +
-    `- tool: ${toolName}\n` +
-    `- consecutive_calls: ${count}\n` +
-    `- arguments: ${canonicalArguments}\n` +
-    "The repeated calls are not making progress. Do not call this tool with " +
-    "these exact arguments again. Inspect the latest result and choose a " +
-    "different action, different arguments, or finish the task if enough " +
-    "evidence has been gathered."
-  );
-}
-
-/** Render the synthetic reminder body for a repeat at `count`. */
-export function buildRepeatReminderContent(
-  toolName: string,
-  count: number,
-  canonicalArguments: string,
-  firstThreshold: number,
-  previewChars: number
-): string {
-  const body =
-    count === firstThreshold
-      ? GENTLE_REMINDER
-      : detailedReminder(toolName, count, previewRepeatArguments(canonicalArguments, previewChars));
-  return formatContextSectionUserContent({ key: REPEAT_REMINDER_KIND, content: body });
-}
-
 /**
  * Whether a wire message is a real user prompt (not a synthetic `<ctx ...>`
  * injection). Reuses the shared context classifier so the `<ctx kind=` envelope
@@ -121,16 +102,127 @@ export function isGenuineUserMessage(message: ModelMessage): boolean {
   return message.role === "user" && !isContextModelMessage(message);
 }
 
+/** One run of trailing identical tool calls, read from the wire. */
+export interface RepeatChain {
+  /** Stable identity of the repeated call (tool name + canonical arguments), hashed for the attr. */
+  chain: string;
+  toolName: string;
+  /** Canonical (key-sorted) arguments of the repeated call. */
+  canonicalArguments: string;
+  /** How many times the call repeats consecutively at the tail. */
+  count: number;
+}
+
+interface WireToolCall {
+  id: string;
+  function: { name: string; arguments?: string };
+}
+
+/** Identity of one call, tolerant of an unparseable argument stream. */
+function repeatChainKey(name: string, rawArguments: string | undefined): { chain: string; canonical: string } {
+  const raw = rawArguments ?? "";
+  try {
+    const canonical = canonicalizeRepeatArguments(JSON.parse(raw));
+    return { chain: hashTurnContextPayload(`${name}\n${canonical}`), canonical };
+  } catch {
+    return { chain: hashTurnContextPayload(`${name}\n${raw}`), canonical: raw };
+  }
+}
+
+/**
+ * The trailing repeat chain of the wire, or `undefined` when the last tool call is unique.
+ *
+ * Walks newest-first across assistant messages, skipping tool results and synthetic
+ * `<ctx>` user messages. A genuine user message or an assistant message without tool
+ * calls ends the chain; so does the first tracked call whose identity differs. Excluded
+ * tools are transparent.
+ */
+export function readTrailingRepeatChain(
+  messages: readonly ModelMessage[],
+  options: { excludeTools?: Iterable<string> } = {}
+): RepeatChain | undefined {
+  const excluded = new Set(options.excludeTools ?? DEFAULT_REPEAT_EXCLUDED_TOOLS);
+  let head: { chain: string; toolName: string; canonicalArguments: string; count: number } | undefined;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    if (message.role === "user") {
+      if (isContextModelMessage(message)) continue;
+      break;
+    }
+    if (message.role !== "assistant") continue;
+    const calls = (message as { toolCalls?: readonly WireToolCall[] }).toolCalls;
+    if (!calls || calls.length === 0) break;
+
+    for (let index = calls.length - 1; index >= 0; index--) {
+      const call = calls[index]!;
+      const name = call.function?.name;
+      if (!name || excluded.has(name)) continue;
+      const key = repeatChainKey(name, call.function?.arguments);
+      if (head && key.chain !== head.chain) return head;
+      if (!head) head = { chain: key.chain, toolName: name, canonicalArguments: key.canonical, count: 0 };
+      head.count += 1;
+    }
+  }
+
+  return head;
+}
+
+/** The newest repeat reminder still in the window, with the chain it belongs to. */
+export function readLatestRepeatReminder(
+  messages: readonly ModelMessage[]
+): { chain: string; count: number } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    // Reminders from an earlier turn cannot speak for the current chain.
+    if (isGenuineUserMessage(message)) return undefined;
+    if (!isContextModelMessage(message)) continue;
+    const text = extractTextFromContent(message.content);
+    if (!text.includes(REPEAT_REMINDER_KIND)) continue;
+    const attrs = contextAttributesFromText(text);
+    const count = Number(attrs.count);
+    if (!attrs.chain || !Number.isFinite(count)) continue;
+    return { chain: attrs.chain, count };
+  }
+  return undefined;
+}
+
+/** Render the reminder body for a repeat at `count`. */
+export function buildRepeatReminderContent(input: {
+  toolName: string;
+  count: number;
+  canonicalArguments: string;
+  firstThreshold: number;
+  previewChars: number;
+  chain: string;
+}): string {
+  const body =
+    input.count === input.firstThreshold
+      ? GENTLE_REMINDER
+      : "Repeated tool call detected:\n" +
+        `- tool: ${input.toolName}\n` +
+        `- consecutive_calls: ${input.count}\n` +
+        `- arguments: ${previewRepeatArguments(input.canonicalArguments, input.previewChars)}\n` +
+        "The repeated calls are not making progress. Do not call this tool with " +
+        "these exact arguments again. Inspect the latest result and choose a " +
+        "different action, different arguments, or finish the task if enough " +
+        "evidence has been gathered.";
+  return formatContextSectionUserContent({
+    key: REPEAT_REMINDER_KIND,
+    content: body,
+    attrs: { chain: input.chain, count: String(input.count) },
+  });
+}
+
 // ============================================================================
 // Middleware
 // ============================================================================
 
 export interface RepeatReminderMiddlewareDeps {
-  /** Consecutive-repeat counts that trigger a reminder (default [3, 5, 8]). */
   thresholds?: number[];
-  /** Tool names never tracked (default ["get_command_output"]). */
   excludeTools?: string[];
-  /** Max characters of arguments shown in the detailed reminder (default 500). */
   argumentsPreviewChars?: number;
   /** Live access to the UI channel (to persist the synthetic reminder). */
   getUIChannel: () => AgentUIChannel | undefined;
@@ -138,73 +230,37 @@ export interface RepeatReminderMiddlewareDeps {
   persistMessages: (next: UIMessage[]) => void;
 }
 
-interface Chain {
-  key: string;
-  count: number;
-}
-
 /**
  * Add-run loop hygiene: nudge the model out of identical tool-call loops.
  *
- * Counting happens in `onBeforeToolCall` (every attempted call) and the pending
- * reminder is injected in `onConfig` — the next model call — so it lands after the
- * repeated call's result, matching the shared synthetic-injection path used by
- * turn-context and background notifications.
+ * Runs on every model call and reads the loop straight off the wire, so a retry,
+ * an aborted run, a compaction cut or a restore all produce the same answer.
  */
 export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDeps): ChatMiddleware {
   const thresholds = [...(deps.thresholds ?? DEFAULT_REPEAT_THRESHOLDS)].sort((a, b) => a - b);
   const firstThreshold = thresholds[0] ?? DEFAULT_REPEAT_THRESHOLDS[0];
   const thresholdSet = new Set(thresholds);
-  const excluded = new Set(deps.excludeTools ?? DEFAULT_REPEAT_EXCLUDED_TOOLS);
+  const excludeTools = deps.excludeTools ?? [...DEFAULT_REPEAT_EXCLUDED_TOOLS];
   const previewChars = deps.argumentsPreviewChars ?? DEFAULT_ARGUMENTS_PREVIEW_CHARS;
-
-  let chain: Chain | undefined;
-  let pending: string | undefined;
-  let seenUserMessages = 0;
-  let seenUserSignature = "";
 
   return defineMiddleware("tools", {
     name: "repeat-reminder",
-    onBeforeToolCall: (_ctx, hookCtx) => {
-      const toolName = hookCtx.toolName;
-      if (excluded.has(toolName)) return;
-
-      const canonical = canonicalizeRepeatArguments(hookCtx.args);
-      const key = JSON.stringify([toolName, canonical]);
-      const sameChain = chain !== undefined && chain.key === key;
-      if (!sameChain) {
-        // The pending nudge belongs to the old chain. A different tracked call has
-        // already broken the loop, so injecting it next turn would misattribute it.
-        pending = undefined;
-      }
-      const count = sameChain ? chain!.count + 1 : 1;
-      chain = { key, count };
-
-      if (thresholdSet.has(count)) {
-        pending = buildRepeatReminderContent(toolName, count, canonical, firstThreshold, previewChars);
-      }
-      return;
-    },
     onConfig: async (_ctx, config) => {
       const messages = config.messages as ModelMessage[];
+      const chain = readTrailingRepeatChain(messages, { excludeTools });
+      if (!chain || !thresholdSet.has(chain.count)) return {};
 
-      // A new user prompt changes the context; repetition across it is not a loop.
-      // The count alone is not enough after compaction (old prompts are dropped), so
-      // also compare the latest prompt's content. Drop any un-delivered reminder too:
-      // it belongs to the chain being abandoned.
-      const genuineUserMessages = messages.filter(isGenuineUserMessage);
-      const signature = genuineUserMessages.at(-1)?.content;
-      const userSignature = signature === undefined ? "" : JSON.stringify(signature);
-      if (genuineUserMessages.length !== seenUserMessages || userSignature !== seenUserSignature) {
-        chain = undefined;
-        pending = undefined;
-      }
-      seenUserMessages = genuineUserMessages.length;
-      seenUserSignature = userSignature;
+      const prior = readLatestRepeatReminder(messages);
+      if (prior && prior.chain === chain.chain && prior.count >= chain.count) return {};
 
-      if (pending === undefined) return {};
-      const content = pending;
-      pending = undefined;
+      const content = buildRepeatReminderContent({
+        toolName: chain.toolName,
+        count: chain.count,
+        canonicalArguments: chain.canonicalArguments,
+        firstThreshold,
+        previewChars,
+        chain: chain.chain,
+      });
 
       const ui = deps.getUIChannel();
       if (!ui) {
@@ -212,11 +268,10 @@ export function createRepeatReminderMiddleware(deps: RepeatReminderMiddlewareDep
         return { messages: [...messages, { role: "user", content }] };
       }
 
-      // Per-kind admission episode (same rule as turn-context): count the existing
-      // `ctx-<kind>-` ids so a repeat loop that recurs later in the session gets a
-      // fresh id. Without it the content-hash id collides with the earlier reminder
-      // (the gentle body is constant, the detailed one is stable per tool/args) and
-      // `injectSyntheticMessages` dedupes it away — so the second loop got no nudge.
+      // Per-kind admission episode: count the existing channel ids for the kind so a
+      // loop that recurs in a later turn gets a fresh id. The attrs already make the
+      // content distinct per chain/count, but an identical chain at the same count in
+      // a later turn must still land as a new message.
       let kindCount = 0;
       for (const message of ui.getMessages()) {
         if (syntheticKindFromId(message.id) === REPEAT_REMINDER_KIND) kindCount++;

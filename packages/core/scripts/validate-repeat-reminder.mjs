@@ -2,11 +2,13 @@
  * Validates the repeat-tool-call reminder middleware:
  * - canonical argument matching (property-order independent)
  * - threshold escalation (gentle at the first threshold, detailed later) + arg preview cap
- * - `<ctx kind=repeat_tool_reminder>` shell format
+ * - `<ctx kind=repeat_tool_reminder chain="…" count="…">` shell format
  * - genuine-user-message detection (synthetic `<ctx ...>` is not a prompt)
- * - end-to-end loop detection: identical calls count up, a different call resets,
- *   excluded tools never count, a new user prompt resets, and the reminder is
- *   injected (channel + wire) on the next onConfig, or transiently without a channel.
+ * - wire-derived loop detection: identical trailing calls count up, a different call ends the
+ *   chain, excluded tools are transparent, a new user prompt separates chains, and the reminder
+ *   is injected (channel + wire) on the next onConfig, or transiently without a channel
+ * - stateless recovery: re-running the same wire is a no-op, a dropped reminder re-admits, and a
+ *   *different* chain at the same count is not suppressed
  *
  * Run: pnpm --filter @codent/core run validate:repeat-reminder
  */
@@ -16,10 +18,13 @@ import assert from "node:assert/strict";
 import {
   buildRepeatReminderContent,
   canonicalizeRepeatArguments,
+  contextAttributesFromText,
   createRepeatReminderMiddleware,
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
+  readLatestRepeatReminder,
+  readTrailingRepeatChain,
   REPEAT_REMINDER_KIND,
 } from "../dist/dev.mjs";
 
@@ -38,16 +43,51 @@ function makeChannel(initial = []) {
   };
 }
 
-function call(mw, toolName, args, toolCallId = "call") {
-  return mw.onBeforeToolCall({}, { toolName, args, toolCallId });
-}
-
-function config(mw, messages) {
-  return mw.onConfig({}, { messages });
-}
-
 function userMessage(content) {
   return { role: "user", content };
+}
+
+/** One assistant tool call + its result, the shape a completed call leaves on the wire. */
+function toolTurn(name, args, id) {
+  return [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }],
+    },
+    { role: "tool", content: "ok", toolCallId: id },
+  ];
+}
+
+/**
+ * Drives the middleware exactly like the pipeline does: onConfig gets the current wire and
+ * whatever it returns becomes the next wire (the real projection re-reads the channel).
+ */
+function harness(middlewareOptions = {}) {
+  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "please search" }] }]);
+  const state = { wire: [userMessage("please search")], persisted: 0 };
+  const middleware = createRepeatReminderMiddleware({
+    getUIChannel: () => channel,
+    persistMessages: () => state.persisted++,
+    ...middlewareOptions,
+  });
+  return {
+    channel,
+    state,
+    push: (name, args, id) => state.wire.push(...toolTurn(name, args, id)),
+    run: async () => {
+      const result = await middleware.onConfig({}, { messages: state.wire.slice() });
+      if (result.messages) {
+        state.wire.length = 0;
+        state.wire.push(...result.messages);
+      }
+      return result;
+    },
+    reminders: () =>
+      state.wire.filter(
+        (message) => typeof message.content === "string" && message.content.includes(REPEAT_REMINDER_KIND)
+      ),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -70,15 +110,26 @@ assert.equal(
 );
 
 // ---------------------------------------------------------------------------
-// 2. Reminder content — escalation, shell format, preview cap
+// 2. Reminder content — escalation, shell format, attrs, preview cap
 // ---------------------------------------------------------------------------
 const [t3, t5] = DEFAULT_REPEAT_THRESHOLDS;
-const gentle = buildRepeatReminderContent("grep", t3, '{"pattern":"foo"}', t3, 500);
-assert.ok(gentle.startsWith(`<ctx kind=${REPEAT_REMINDER_KIND}>`), "opens the ctx shell");
+const build = (count, canonical = '{"pattern":"foo"}', chain = "abc12345") =>
+  buildRepeatReminderContent({
+    toolName: "grep",
+    count,
+    canonicalArguments: canonical,
+    firstThreshold: t3,
+    previewChars: 500,
+    chain,
+  });
+
+const gentle = build(t3);
+assert.ok(gentle.startsWith(`<ctx kind=${REPEAT_REMINDER_KIND} chain="abc12345" count="3">`), "opens the ctx shell");
 assert.ok(gentle.endsWith("</ctx>"), "closes the ctx shell");
 assert.ok(/repeating the exact same tool call/.test(gentle), "first threshold is the gentle reminder");
+assert.deepEqual(contextAttributesFromText(gentle), { chain: "abc12345", count: "3" }, "recovery attrs on the shell");
 
-const detailed = buildRepeatReminderContent("grep", t5, '{"pattern":"foo"}', t3, 500);
+const detailed = build(t5);
 assert.ok(/Repeated tool call detected/.test(detailed), "later threshold is the detailed reminder");
 assert.ok(/- tool: grep/.test(detailed) && /- consecutive_calls: 5/.test(detailed), "names tool + count");
 assert.ok(/- arguments: \{"pattern":"foo"\}/.test(detailed), "quotes the arguments");
@@ -86,7 +137,7 @@ assert.ok(/- arguments: \{"pattern":"foo"\}/.test(detailed), "quotes the argumen
 const longArgs = "x".repeat(600);
 const previewed = previewRepeatArguments(longArgs, 500);
 assert.ok(previewed.endsWith("(+100 more chars)"), "preview marks the omitted tail");
-assert.equal(previewRepeatArguments("short", 500), "short", "short args pass through");
+assert.equal(previewRepeatArguments("short", 500), "short");
 
 // ---------------------------------------------------------------------------
 // 3. Genuine user message detection — synthetic <ctx ...> is NOT a prompt
@@ -109,167 +160,189 @@ assert.equal(
 );
 
 // ---------------------------------------------------------------------------
-// 4. End-to-end loop detection
+// 4. The chain is derived from the wire tail
 // ---------------------------------------------------------------------------
 {
-  const wire = [userMessage("please search")];
-  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "please search" }] }]);
-  let persisted = 0;
-  const mw = createRepeatReminderMiddleware({
-    getUIChannel: () => channel,
-    persistMessages: () => persisted++,
-  });
+  const wire = [userMessage("go")];
+  wire.push(...toolTurn("grep", { pattern: "foo" }, "a1"));
+  wire.push(...toolTurn("grep", { pattern: "foo" }, "a2"));
+  assert.equal(readTrailingRepeatChain(wire).count, 2, "trailing identical calls count");
+  assert.equal(readTrailingRepeatChain(wire).toolName, "grep");
 
-  // Turn start: onConfig runs before the model's first tool call, establishing
-  // the genuine-user-message baseline.
-  await config(mw, wire);
+  // Different key order is the same call.
+  wire.push(...toolTurn("grep", { pattern: "foo" }, "a3"));
+  assert.equal(readTrailingRepeatChain(wire).count, 3, "argument order does not break the chain");
 
-  // Two repeats: below threshold, nothing injected.
-  call(mw, "grep", { pattern: "foo", path: "src" });
-  call(mw, "grep", { path: "src", pattern: "foo" }); // same call, different key order
-  let out = await config(mw, wire);
-  assert.deepEqual(out, {}, "nothing injected below the first threshold");
-  assert.equal(channel.messages.length, 1);
+  // A different tracked call ends the chain at the differing call.
+  wire.push(...toolTurn("glob", { pattern: "*.ts" }, "a4"));
+  assert.equal(readTrailingRepeatChain(wire).count, 1, "a different call starts a new chain");
+  assert.equal(readTrailingRepeatChain(wire).toolName, "glob");
+
+  // A genuine user message separates chains.
+  const afterPrompt = [...wire, userMessage("next task")];
+  assert.equal(readTrailingRepeatChain(afterPrompt), undefined, "a genuine prompt ends the chain");
+
+  // Excluded tools are transparent: they neither count nor break the run.
+  const withPolling = [
+    userMessage("go"),
+    ...toolTurn("grep", { pattern: "foo" }, "b1"),
+    ...toolTurn("get_command_output", { jobId: "job-1" }, "b2"),
+    ...toolTurn("grep", { pattern: "foo" }, "b3"),
+  ];
+  assert.equal(readTrailingRepeatChain(withPolling).count, 2, "an excluded call is transparent");
+
+  // Synthetic ctx between calls does not break the chain either.
+  const withCtx = [
+    userMessage("go"),
+    ...toolTurn("grep", { pattern: "foo" }, "c1"),
+    { role: "user", content: "<ctx kind=current_date>\n<current_date>today</current_date>\n</ctx>" },
+    ...toolTurn("grep", { pattern: "foo" }, "c2"),
+  ];
+  assert.equal(readTrailingRepeatChain(withCtx).count, 2, "a ctx injection does not break the chain");
+}
+
+// ---------------------------------------------------------------------------
+// 5. End-to-end: escalation, recovery and idempotence
+// ---------------------------------------------------------------------------
+{
+  const h = harness();
+
+  h.push("grep", { pattern: "foo", path: "src" }, "a1");
+  h.push("grep", { path: "src", pattern: "foo" }, "a2");
+  assert.deepEqual(await h.run(), {}, "nothing injected below the first threshold");
+  assert.equal(h.channel.messages.length, 1);
 
   // Third repeat (key order changed again): gentle reminder injected + persisted.
-  call(mw, "grep", { pattern: "foo", path: "src" });
-  out = await config(mw, wire);
-  assert.equal(channel.messages.length, 2, "reminder appended to the channel");
-  assert.equal(persisted, 1, "reminder persisted once");
+  h.push("grep", { pattern: "foo", path: "src" }, "a3");
+  const third = await h.run();
+  assert.ok(third.messages, "the injected wire is returned");
+  assert.equal(h.channel.messages.length, 2, "reminder appended to the channel");
+  assert.equal(h.state.persisted, 1, "reminder persisted once");
+  assert.equal(h.reminders().length, 1, "reminder appended to the wire");
   assert.ok(
-    channel.messages[1].parts[0].content.includes("repeating the exact same tool call"),
+    h.reminders()[0].content.includes("repeating the exact same tool call"),
     "gentle reminder at the first threshold"
   );
-  assert.equal(out.messages.length, wire.length + 1, "wire grew by the reminder");
-  assert.equal(wire.length, 1, "input wire must not be mutated");
+  assert.deepEqual(contextAttributesFromText(h.reminders()[0].content).count, "3");
+
+  // Re-running the exact same wire (retry / duplicate onConfig) is a no-op.
+  assert.deepEqual(await h.run(), {}, "an unchanged wire injects nothing (idempotent)");
+  assert.equal(h.channel.messages.length, 2);
 
   // Fourth (no threshold) then fifth (detailed).
-  call(mw, "grep", { pattern: "foo", path: "src" });
-  assert.deepEqual(await config(mw, wire), {}, "no reminder at a non-threshold repeat");
-  call(mw, "grep", { pattern: "foo", path: "src" });
-  await config(mw, wire);
-  assert.equal(channel.messages.length, 3, "detailed reminder at the fifth repeat");
-  assert.ok(channel.messages[2].parts[0].content.includes("Repeated tool call detected"));
+  h.push("grep", { pattern: "foo", path: "src" }, "a4");
+  assert.deepEqual(await h.run(), {}, "no reminder at a non-threshold repeat");
+  h.push("grep", { path: "src", pattern: "foo" }, "a5");
+  await h.run();
+  assert.equal(h.channel.messages.length, 3, "detailed reminder at the fifth repeat");
+  assert.ok(h.reminders()[1].content.includes("Repeated tool call detected"));
+  assert.deepEqual(contextAttributesFromText(h.reminders()[1].content).count, "5");
 }
 
-// A different tracked call resets the chain.
+// A different tracked call ends the chain: the count restarts.
 {
-  const channel = makeChannel();
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
-  const wire = [userMessage("go")];
-  await config(mw, wire); // turn start
-  call(mw, "grep", { pattern: "foo" });
-  call(mw, "grep", { pattern: "foo" }); // count 2
-  call(mw, "glob", { pattern: "*.ts" }); // resets
-  call(mw, "grep", { pattern: "foo" }); // count 1 again
-  const out = await config(mw, wire);
-  assert.deepEqual(out, {}, "an interleaved different call resets the repeat count");
-  assert.equal(channel.messages.length, 0);
+  const h = harness();
+  h.push("grep", { pattern: "foo" }, "a1");
+  h.push("grep", { pattern: "foo" }, "a2");
+  h.push("glob", { pattern: "*.ts" }, "a3");
+  h.push("grep", { pattern: "foo" }, "a4");
+  assert.deepEqual(await h.run(), {}, "an interleaved different call restarts the count");
+  assert.equal(h.channel.messages.length, 1);
 }
 
-// Excluded tools never count (default excludes get_command_output — polling is legitimate).
+// Excluded tools never draw a reminder (polling a background job is legitimate).
 {
-  const channel = makeChannel();
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
-  const wire = [userMessage("go")];
-  await config(mw, wire); // turn start
-  for (let i = 0; i < 5; i++) call(mw, "get_command_output", { jobId: "job-1" });
-  assert.deepEqual(await config(mw, wire), {}, "excluded tool draws no reminder");
-  assert.equal(channel.messages.length, 0);
+  const h = harness();
+  for (let i = 0; i < 5; i++) h.push("get_command_output", { jobId: "job-1" }, `p${i}`);
+  assert.deepEqual(await h.run(), {}, "excluded tool draws no reminder");
+  assert.equal(h.channel.messages.length, 1);
 }
 
-// A new user prompt resets the chain.
+// A new user prompt starts a fresh chain.
 {
-  const channel = makeChannel();
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
-  const wire1 = [userMessage("first")];
-  await config(mw, wire1); // turn start: seen user count = 1
-  call(mw, "grep", { pattern: "foo" });
-  call(mw, "grep", { pattern: "foo" }); // count 2
-  await config(mw, wire1); // no new prompt → count preserved
-  const wire2 = [userMessage("first"), { role: "assistant", content: "ok" }, userMessage("second")];
-  await config(mw, wire2); // new genuine prompt → reset
-  call(mw, "grep", { pattern: "foo" }); // count 1, NOT 3
-  assert.deepEqual(await config(mw, wire2), {}, "a new user prompt resets the repeat count");
-  assert.equal(channel.messages.length, 0);
+  const h = harness();
+  h.push("grep", { pattern: "foo" }, "a1");
+  h.push("grep", { pattern: "foo" }, "a2");
+  await h.run();
+  h.state.wire.push(userMessage("second"));
+  h.push("grep", { pattern: "foo" }, "b1");
+  assert.deepEqual(await h.run(), {}, "a new user prompt resets the repeat count");
+  assert.equal(h.channel.messages.length, 1);
 }
 
 // With no channel: transient wire-only injection, still returns a new array.
 {
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => undefined, persistMessages: () => {} });
-  const input = [userMessage("go")];
-  await config(mw, input); // turn start
-  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" });
-  const out = await config(mw, input);
-  assert.equal(out.messages.length, 2, "no channel → append to the wire");
-  assert.ok(out.messages[1].content.includes(REPEAT_REMINDER_KIND), "transient reminder carries the ctx shell");
-  assert.equal(input.length, 1, "input wire must not be mutated");
-}
-
-// A second identical loop later in the same session still gets a reminder.
-// (Without a per-kind nonce the content-hash id collides with the first reminder and
-// `injectSyntheticMessages` dedupes it away — leaving the second loop un-nudged.)
-{
-  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "please search" }] }]);
-  let persisted = 0;
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => persisted++ });
-
-  const wire1 = [userMessage("please search")];
-  await config(mw, wire1);
-  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`);
-  await config(mw, wire1);
-  assert.equal(channel.messages.length, 2, "the first loop injects a reminder");
-
-  const wire2 = [userMessage("please search"), userMessage("try again")];
-  await config(mw, wire2); // new genuine prompt resets the chain
-  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `b${i}`);
-  await config(mw, wire2);
-  assert.equal(channel.messages.length, 3, "a second identical loop still injects a reminder (per-kind nonce)");
-  assert.equal(persisted, 2, "the second reminder is persisted too");
-}
-
-// A reminder left pending when the run is aborted must not leak into the next unrelated turn.
-{
-  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "first" }] }]);
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
-  await config(mw, [userMessage("first")]); // seen = 1
-  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`); // pending set
-  // …aborted here: no onConfig consumes `pending`.
-  const out = await config(mw, [userMessage("first"), userMessage("an unrelated task")]);
-  assert.deepEqual(out, {}, "a pending reminder is dropped when a new user prompt resets the chain");
-  assert.equal(channel.messages.length, 1, "no stale reminder is injected into the unrelated turn");
-}
-
-// A pending reminder belongs to its chain: a different tracked call must cancel it,
-// not inject a nudge about a loop the model already left.
-{
-  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "go" }] }]);
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
+  const middleware = createRepeatReminderMiddleware({ getUIChannel: () => undefined, persistMessages: () => {} });
   const wire = [userMessage("go")];
-  await config(mw, wire);
-  for (let i = 0; i < 3; i++) call(mw, "grep", { pattern: "foo" }, `a${i}`); // pending
-  call(mw, "glob", { pattern: "*.ts" }); // different call breaks the chain
-  const out = await config(mw, wire);
-  assert.deepEqual(out, {}, "a different call cancels the pending reminder");
-  assert.equal(channel.messages.length, 1, "no stale repeat reminder is injected");
+  for (let i = 0; i < 3; i++) wire.push(...toolTurn("grep", { pattern: "foo" }, `n${i}`));
+  const out = await middleware.onConfig({}, { messages: wire });
+  assert.equal(out.messages.length, wire.length + 1, "no channel → append to the wire");
+  assert.ok(out.messages[out.messages.length - 1].content.includes(REPEAT_REMINDER_KIND), "carries the ctx shell");
+  assert.equal(wire.length, 7, "input wire must not be mutated");
 }
 
-// Compaction can lower the genuine-user-message count without adding a prompt.
-// That wire change is still a chain boundary; keeping the old count would make the
-// next loop inherit the pre-compaction repetition count.
+// A second identical loop later in the session still gets a reminder (per-kind nonce).
 {
-  const channel = makeChannel([{ id: "u1", role: "user", parts: [{ type: "text", content: "first" }] }]);
-  const mw = createRepeatReminderMiddleware({ getUIChannel: () => channel, persistMessages: () => {} });
-  const wireBefore = [userMessage("first"), { role: "assistant", content: "ok" }, userMessage("second")];
-  await config(mw, wireBefore); // seen = 2
-  call(mw, "grep", { pattern: "foo" });
-  call(mw, "grep", { pattern: "foo" }); // count 2
-  const wireAfter = [{ role: "assistant", content: "summary" }, userMessage("second")];
-  await config(mw, wireAfter); // count drops to 1 -> reset
-  call(mw, "grep", { pattern: "foo" }); // count 1, NOT 3
-  const out = await config(mw, wireAfter);
-  assert.deepEqual(out, {}, "a compaction-shaped wire resets the repeat chain");
-  assert.equal(channel.messages.length, 1, "no reminder from the pre-compaction chain");
+  const h = harness();
+  h.push("grep", { pattern: "foo" }, "a1");
+  h.push("grep", { pattern: "foo" }, "a2");
+  h.push("grep", { pattern: "foo" }, "a3");
+  await h.run();
+  assert.equal(h.channel.messages.length, 2, "the first loop injects a reminder");
+
+  h.state.wire.push(userMessage("try again"));
+  // The reminder from the previous turn no longer speaks for the new chain.
+  assert.equal(readLatestRepeatReminder(h.state.wire), undefined);
+  h.push("grep", { pattern: "foo" }, "b1");
+  h.push("grep", { pattern: "foo" }, "b2");
+  h.push("grep", { pattern: "foo" }, "b3");
+  await h.run();
+  assert.equal(h.channel.messages.length, 3, "a second identical loop still injects a reminder");
+  assert.equal(h.state.persisted, 2, "the second reminder is persisted too");
+}
+
+// Stateless recovery: a compaction cut that drops the reminder re-admits it, because the
+// repeated calls are still in the window and nothing remembers the earlier admission.
+{
+  const h = harness();
+  h.push("grep", { pattern: "foo" }, "a1");
+  h.push("grep", { pattern: "foo" }, "a2");
+  h.push("grep", { pattern: "foo" }, "a3");
+  await h.run();
+  assert.equal(h.reminders().length, 1);
+
+  h.state.wire = h.state.wire.filter((message) => !String(message.content ?? "").includes(REPEAT_REMINDER_KIND));
+  assert.equal(readLatestRepeatReminder(h.state.wire), undefined, "the reminder is gone from the cut wire");
+  await h.run();
+  assert.equal(h.reminders().length, 1, "the reminder is re-admitted after the cut");
+  assert.equal(h.channel.messages.length, 3, "and lands as a new channel row (episode nonce)");
+}
+
+// A reminder for a *different* chain never suppresses the current one, even at the same count.
+{
+  const h = harness();
+  h.push("glob", { pattern: "*.ts" }, "a1");
+  h.push("glob", { pattern: "*.ts" }, "a2");
+  h.push("glob", { pattern: "*.ts" }, "a3");
+  await h.run();
+  assert.equal(h.channel.messages.length, 2, "glob chain nags at 3");
+  const previousChain = contextAttributesFromText(h.reminders()[0].content).chain;
+
+  // Keep the old reminder in the window (no cut): it belongs to the glob chain and must not
+  // speak for a grep chain that also reaches 3.
+  h.state.wire.push(userMessage("another task"));
+  h.push("grep", { pattern: "bar" }, "b1");
+  h.push("grep", { pattern: "bar" }, "b2");
+  h.push("grep", { pattern: "bar" }, "b3");
+  await h.run();
+  assert.equal(h.channel.messages.length, 3, "a different chain at the same count still nags");
+  const currentChain = readTrailingRepeatChain(h.state.wire).chain;
+  assert.equal(
+    contextAttributesFromText(h.reminders()[1].content).chain,
+    currentChain,
+    "the new reminder owns the new chain"
+  );
+  assert.notEqual(previousChain, currentChain, "the two loops are distinct chains");
 }
 
 console.log("repeat-reminder validation passed");

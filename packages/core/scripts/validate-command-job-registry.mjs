@@ -582,17 +582,12 @@ console.log("teardown log deletion OK");
       startedAt: 1,
     },
   ];
-  const section = formatBackgroundJobsSection(rows, { generation: 0 });
-  assert.ok(section.includes("<background_jobs"), "section has its tag");
+  const section = formatBackgroundJobsSection(rows);
+  assert.ok(section.includes("<background_jobs>"), "section has its tag");
   assert.ok(section.indexOf("job_running") < section.indexOf("job_done"), "running jobs come first");
   assert.ok(section.includes("running") && section.includes("exited (exit 0)"));
   assert.ok(section.includes("job_done.log"), "the durable log pointer is included");
   assert.ok(!section.includes("npm test output"), "output is not duplicated in the pointer");
-
-  // Compaction bumps the generation so the otherwise-identical section re-admits (the restore
-  // seeding would find the old row in the channel and skip a same-hash section).
-  const afterCompact = formatBackgroundJobsSection(rows, { generation: 1 });
-  assert.notEqual(section, afterCompact, "a compaction generation changes the section hash");
 
   assert.equal(formatBackgroundJobsSection([]), undefined, "no jobs → no section");
 
@@ -611,76 +606,60 @@ console.log("teardown log deletion OK");
   const capped = formatBackgroundJobsSection(many);
   assert.ok(capped.includes("more job(s)"), "the list is capped with a pointer to the rest");
 
-  // The real middleware: a compaction resets the admitted hashes; the generation-bumped section
-  // must be re-admitted even though the previous row is still in the channel (restore seeding would
-  // otherwise find its hash and skip). Only jobs whose tool call is still in the wire are listed.
+  // The real middleware: admission is content-only and read back from the wire it is handed, so a
+  // section that survives a compaction keeps suppressing itself and a section the cut dropped is
+  // re-admitted — with no generation counter and no remembered hash table. Only jobs whose tool
+  // call is still in the wire are listed.
   {
     const ctxRows = [
       { ...rows[1], jobId: "job_ctx", toolCallId: "call_ctx", command: "npm test", status: "exited", exitCode: 0 },
       { ...rows[1], jobId: "job_hidden", toolCallId: "call_hidden", command: "npm run dev", status: "running" },
     ];
-    let generation = 0;
-    let hashes;
-    let admitCount = 0;
     let messages = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
     const ui = { getMessages: () => messages, setMessages: (next) => (messages = next) };
-    const config = {
-      messages: [
-        {
-          role: "assistant",
-          content: "",
-          toolCalls: [{ id: "call_ctx", function: { name: "run_command", arguments: "{}" } }],
-        },
-      ],
-      systemPrompts: [],
+    const toolCallMessage = {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_ctx", function: { name: "run_command", arguments: "{}" } }],
     };
+    // The pipeline re-projects the wire from the channel on every model call.
+    const projectWire = (summary = false) => [
+      ...(summary ? [{ role: "user", content: "<CONVERSATION SUMMARY>…</CONVERSATION SUMMARY>" }] : []),
+      toolCallMessage,
+    ];
     const middleware = createTurnContextMiddleware({
       getFrozenSystemPrompt: () => undefined,
       getSections: async () => [],
-      refreshMessageThreshold: 1,
       getBackgroundJobsSection: async (wireMessages) => {
         const ids = collectRunCommandToolCallIds(wireMessages);
         const visible = ctxRows.filter((row) => !row.toolCallId || ids.has(row.toolCallId));
-        const content = formatBackgroundJobsSection(visible, { generation });
+        const content = formatBackgroundJobsSection(visible);
         return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
       },
       getUIChannel: () => ui,
       persistMessages: () => {},
       getManagedAgent: () => ({}),
-      getAdmittedHashes: () => hashes,
-      setAdmittedHashes: (next) => (hashes = next),
-      getAdmitMessageCount: () => admitCount,
-      setAdmitMessageCount: (next) => (admitCount = next),
     });
-    const first = await middleware.onConfig({}, config);
+
+    const first = await middleware.onConfig({}, { messages: projectWire() });
     const ctxCount = () => messages.filter((message) => message.id.startsWith("ctx-background_jobs-")).length;
     assert.equal(ctxCount(), 1, "the section is admitted once");
     const firstText = (first.messages ?? []).map((message) => String(message.content)).join("\n");
     assert.ok(firstText.includes("job_ctx"), "the in-context job is listed");
     assert.ok(!firstText.includes("job_hidden"), "a job whose tool call left the wire is not listed");
 
-    // Compaction: ManagedAgent bumps the generation and clears the hashes. Seeding finds the old
-    // row, but the new content hash differs, so the section is re-admitted.
-    hashes = undefined;
-    generation += 1;
-    const second = await middleware.onConfig({}, config);
-    assert.equal(ctxCount(), 2, "a compaction generation re-admits the section");
+    // Same window (the injected row is projected back): no re-admission.
+    await middleware.onConfig({}, { messages: messages.map((m) => ({ role: m.role, content: m.parts[0].content })) });
+    assert.equal(ctxCount(), 1, "an unchanged, still-visible section is not re-injected");
+
+    // A compaction that dropped the section re-admits it (no reset, no generation).
+    const second = await middleware.onConfig({}, { messages: projectWire(true) });
+    assert.equal(ctxCount(), 2, "a cut that dropped the section re-admits it");
     assert.ok(
       (second.messages ?? []).some(
-        (message) => String(message.content).includes('generation="1"') && String(message.content).includes("job_ctx")
+        (message) => String(message.content).includes("job_ctx") && !String(message.content).includes("job_hidden")
       ),
       "…with the current job list"
-    );
-
-    // No compaction / no change: a third call is silent, even when the shared periodic-refresh
-    // threshold is crossed (1 message): a stable pointer does not need the same-content refresh.
-    messages = [...messages, { id: "u2", role: "user", parts: [{ type: "text", content: "next" }] }];
-    const before = ctxCount();
-    await middleware.onConfig({}, config);
-    assert.equal(
-      ctxCount(),
-      before,
-      "an unchanged section is not re-injected by the periodic refresh (only other kinds refresh)"
     );
   }
 

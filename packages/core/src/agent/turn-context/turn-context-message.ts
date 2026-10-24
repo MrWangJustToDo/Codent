@@ -2,8 +2,8 @@
  * Synthetic context user messages (epoch-style dynamic context).
  *
  * Persisted in UIMessage history for stability; hidden in the transcript UI.
- * Skipped by the compaction cut-point walk (budget boundaries) so synthetic
- * context never counts toward the kept window.
+ * Never chosen as a compaction cut boundary (it is counted in the token budget, but
+ * `findCutPointByBudget` will not start the kept window on a synthetic block).
  *
  * Shell format (one line, then the section payload):
  *   <ctx kind=current_date>
@@ -14,6 +14,10 @@
  *
  * Each category (kind) is admitted as its own synthetic message so only the
  * kinds that actually changed get re-injected (per-kind hash admission).
+ *
+ * Admission is **stateless**: the latest block of each kind is read back from the
+ * model-visible wire (see {@link findLatestContextSectionsFromWire}) on every check, so
+ * compaction, restore and session switches need no remembered hash table or reset path.
  */
 
 import { extractTextFromContent } from "../compaction/message-utils.js";
@@ -75,10 +79,30 @@ export interface TurnContextSection {
   key: string;
   /** Fully-rendered section content, including its own open/close tags. */
   content: string;
+  /**
+   * Optional machine-readable state rendered on the `<ctx ...>` shell.
+   *
+   * This is how a counter-based section (nag rounds, repeat counts) stays
+   * recoverable from the message itself: the admission comparison hashes
+   * {@link content} only, while the attrs carry the state a later `onConfig`
+   * reads back to decide whether to re-inject.
+   */
+  attrs?: Record<string, string>;
 }
 
 function supersedeNotice(kind: string): string {
   return `If earlier <ctx kind=${kind}> blocks appear above in this conversation, ignore them and treat this block as authoritative.`;
+}
+
+/** Render `attrs` as `name="value"` on the `<ctx ...>` open tag. */
+function renderContextAttributes(attrs: Record<string, string> | undefined): string {
+  if (!attrs) return "";
+  const rendered: string[] = [];
+  for (const [name, value] of Object.entries(attrs)) {
+    if (!name || value === undefined || value === null || value === "") continue;
+    rendered.push(`${name}="${String(value).replace(/"/g, "&quot;")}"`);
+  }
+  return rendered.length > 0 ? ` ${rendered.join(" ")}` : "";
 }
 
 /**
@@ -91,7 +115,7 @@ export function formatContextSectionUserContent(section: TurnContextSection, opt
   const body = options?.isUpdate
     ? `${supersedeNotice(section.key)}\n\n${section.content.trim()}`
     : section.content.trim();
-  return `${CONTEXT_OPEN_PREFIX}${section.key}>\n${body}\n${CONTEXT_CLOSE}`;
+  return `${CONTEXT_OPEN_PREFIX}${section.key}${renderContextAttributes(section.attrs)}>\n${body}\n${CONTEXT_CLOSE}`;
 }
 
 /**
@@ -121,7 +145,31 @@ export function contextKindFromText(text: string | undefined | null): string | u
   if (!trimmed.startsWith(CONTEXT_OPEN_PREFIX)) return undefined;
   const openEnd = trimmed.indexOf(">");
   if (openEnd < 0) return undefined;
-  return trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd).trim() || undefined;
+  // The open tag is `<ctx kind=<kind>[ attr="value" ...]>`: the kind is the first
+  // whitespace-delimited token, so shell attrs never leak into the identity.
+  const rest = trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd).trim();
+  return rest.split(/\s+/)[0] || undefined;
+}
+
+/**
+ * Read the machine-readable attrs from a synthetic context message's `<ctx ...>` shell.
+ *
+ * {@link TurnContextSection.attrs} is state a counter-based section writes for its own
+ * later recovery (nag rounds, repeat count). A malformed / attr-less shell yields `{}`.
+ */
+export function contextAttributesFromText(text: string | undefined | null): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  if (!text) return attrs;
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith(CONTEXT_OPEN_PREFIX)) return attrs;
+  const openEnd = trimmed.indexOf(">");
+  if (openEnd < 0) return attrs;
+  const rest = trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd);
+  const attributePattern = /([A-Za-z_][\w-]*)="([^"]*)"/g;
+  for (const match of rest.matchAll(attributePattern)) {
+    attrs[match[1]!] = match[2]!.replace(/&quot;/g, '"');
+  }
+  return attrs;
 }
 
 export function isContextModelMessage(message: ModelMessage): boolean {
@@ -136,7 +184,13 @@ export function isContextUIMessage(message: UIMessage): boolean {
   return isContextText(textPart.content);
 }
 
-/** Recover a {@link TurnContextSection} (kind + payload) from a rendered message text. */
+/**
+ * Recover a {@link TurnContextSection} (kind + payload + shell attrs) from rendered text.
+ *
+ * The body is trimmed and the optional supersede notice is stripped, so a section read back
+ * from a message compares byte-identically with the section that would be built now — that
+ * round-trip is what makes admission stateless (no remembered hash map).
+ */
 export function extractContextSection(text: string): TurnContextSection | undefined {
   const kind = contextKindFromText(text);
   if (!kind) return undefined;
@@ -149,51 +203,61 @@ export function extractContextSection(text: string): TurnContextSection | undefi
   if (inner.startsWith(notice)) {
     inner = inner.slice(notice.length).trim();
   }
-  return inner ? { key: kind, content: inner } : undefined;
-}
-
-/** Per-kind hash of a rendered section (stable across identical content). */
-export function hashTurnContextSection(section: TurnContextSection): string {
-  return hashTurnContextPayload(section.content);
+  if (!inner) return undefined;
+  const attrs = contextAttributesFromText(trimmed);
+  return Object.keys(attrs).length > 0 ? { key: kind, content: inner, attrs } : { key: kind, content: inner };
 }
 
 /**
- * Scan messages for the latest admitted hash per section kind (restore seeding).
- * Walks newest-first so the most recent occurrence of each kind wins.
- */
-export function findLatestTurnContextSectionHashes(messages: UIMessage[]): Map<string, string> {
-  const latest = new Map<string, string>();
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!isContextUIMessage(message)) continue;
-    const textPart = message.parts.find((part) => part.type === "text");
-    if (!textPart || textPart.type !== "text") continue;
-    const section = extractContextSection(textPart.content);
-    if (!section) continue;
-    if (!latest.has(section.key)) {
-      latest.set(section.key, hashTurnContextSection(section));
-    }
-  }
-  return latest;
-}
-
-/**
- * Seed the admitted hashes from the **model-visible wire**, not the durable UI channel.
+ * Per-kind hash of a rendered section (stable across identical content).
  *
- * Compaction appends a SUMMARY and leaves the pre-cut channel rows intact, so seeding from the
- * channel after `resetAdmittedTurnContext()` would find the old `<ctx>` rows and suppress the
- * re-injection the reset was meant to force. The wire is the only view where a cut is real.
+ * Hashes the canonical (trimmed) body — the same normalization
+ * {@link extractContextSection} applies — so a section compared against its own
+ * re-extracted copy from the wire always agrees.
  */
-export function findLatestTurnContextSectionHashesFromWire(messages: readonly ModelMessage[]): Map<string, string> {
-  const latest = new Map<string, string>();
+export function hashTurnContextSection(section: TurnContextSection): string {
+  return hashTurnContextPayload(section.content.trim());
+}
+
+/**
+ * Latest admitted section per kind from the **model-visible wire** — the one admission input.
+ *
+ * Every injecting middleware runs the same two steps: read the newest block of each kind from
+ * the post-compaction window, compare it with what it would inject now, inject only the
+ * difference. Nothing is remembered between calls, so compaction / restore / session switch
+ * need no reset plumbing: a cut that dropped a block leaves no entry (it re-injects), and a
+ * block that survived keeps suppressing it.
+ *
+ * Walks newest-first. `keys`, when given, stops the scan as soon as every wanted kind has been
+ * found (the common case: the injected blocks sit near the tail).
+ */
+export function findLatestContextSectionsFromWire(
+  messages: readonly ModelMessage[],
+  keys?: ReadonlySet<string>
+): Map<string, TurnContextSection> {
+  const latest = new Map<string, TurnContextSection>();
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (!isContextModelMessage(message)) continue;
+    if (!message || !isContextModelMessage(message)) continue;
     const section = extractContextSection(extractTextFromContent(message.content));
     if (!section) continue;
+    if (keys && !keys.has(section.key)) continue;
     if (!latest.has(section.key)) {
-      latest.set(section.key, hashTurnContextSection(section));
+      latest.set(section.key, section);
+      if (keys && latest.size === keys.size) break;
     }
   }
   return latest;
+}
+
+/** Latest admitted section hash per kind from the model-visible wire. */
+export function findLatestTurnContextSectionHashesFromWire(
+  messages: readonly ModelMessage[],
+  keys?: ReadonlySet<string>
+): Map<string, string> {
+  const hashes = new Map<string, string>();
+  for (const [key, section] of findLatestContextSectionsFromWire(messages, keys)) {
+    hashes.set(key, hashTurnContextSection(section));
+  }
+  return hashes;
 }

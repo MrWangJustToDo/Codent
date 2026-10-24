@@ -27,12 +27,14 @@ export {
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
+  readLatestRepeatReminder,
+  readTrailingRepeatChain,
   REPEAT_REMINDER_KIND,
+  type RepeatChain,
   type RepeatReminderMiddlewareDeps,
 } from "./repeat-reminder-middleware.js";
 export {
   createTurnContextMiddleware,
-  DEFAULT_REFRESH_MESSAGE_THRESHOLD,
   SUBAGENT_ALLOWED_KINDS,
   type TurnContextMiddlewareDeps,
 } from "./turn-context-middleware.js";

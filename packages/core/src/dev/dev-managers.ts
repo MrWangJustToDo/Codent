@@ -123,6 +123,8 @@ export {
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
+  readLatestRepeatReminder,
+  readTrailingRepeatChain,
   REPEAT_REMINDER_KIND,
   createMessageTransformMiddleware,
   createWireRecoveryMiddleware,

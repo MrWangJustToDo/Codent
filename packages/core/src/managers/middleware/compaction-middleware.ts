@@ -52,9 +52,6 @@ export interface CompactionMiddlewareDeps {
 export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   return defineMiddleware("context-transform", {
     name: "compaction",
-    onIteration: () => {
-      deps.getTodoManager()?.incrementRound();
-    },
     onConfig: async (_ctx, config) => {
       const wireCache = deps.getWireProjectionCache();
       const engineMessages = config.messages as ModelMessage[];
@@ -117,7 +114,6 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
               },
             })
           ) {
-            managed?.resetAdmittedTurnContext(true);
             wireCache.invalidate();
             llmMessages = projectWireFromChannel(channel, compactionConfig, contextWindow, wireCache);
           }

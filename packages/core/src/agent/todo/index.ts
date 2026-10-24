@@ -27,11 +27,8 @@
  * console.log(todoManager.render());
  * console.log(todoManager.getStats()); // { total: 3, completed: 1, inProgress: 1, pending: 1 }
  *
- * // Track rounds for nag reminder
- * todoManager.incrementRound();
- * if (todoManager.shouldNag()) {
- *   // Inject reminder message
- * }
+ * // Nag policy (the round/episode state is recovered from the message window)
+ * console.log(todoManager.getNagPolicy());
  * ```
  */
 

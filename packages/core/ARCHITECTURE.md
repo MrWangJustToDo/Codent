@@ -885,21 +885,24 @@ emit memory:prefetch { status: injected | empty | skip-* | error }
 
 ```
 onConfig → build dynamic sections (current_date, git_status, memory, plan mode, etc.)
-         → per-kind hash diff vs last admitted (seeded from persisted messages on restore)
-         → changed kinds injected as synthetic <ctx kind=...> user messages
-           (after latest real user; persisted; UI-filtered; wire + channel in sync)
+         → read the newest block of each kind back from the post-compaction wire
+         → per-kind hash diff: inject only the kinds that are absent or changed
+           (appended at the tail; persisted; UI-filtered; wire + channel in sync)
 systemPrompts = frozen only (no dynamic tail)
 ```
 
 Dynamic context lives in chronological user messages so OpenAI/DeepSeek prefix cache keeps
-the frozen system + prior history stable across turns. Only changed sections are re-injected
-mid-run; a periodic refresh re-admits everything once the conversation grows past
-`DEFAULT_REFRESH_MESSAGE_THRESHOLD` since the last admit. `findCutPointByBudget`
-skips synthetic `<ctx kind=...>` messages when walking the token-budget boundary.
-After compaction / clear, `resetAdmittedTurnContext()` forces a fresh admission.
-`TurnContextController` owns the frozen prompt, per-kind admission state, the instruction digest
-snapshot and pending per-extension sections; the middleware reads them through `ManagedAgent`
-delegates, and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
+the frozen system + prior history stable across turns. **Admission is stateless**: the wire the
+middleware is handed *is* the state, so a compaction cut, a `session/resume`, a session switch or
+a process restart need no remembered hash table and no reset hook — a block that fell out of the
+window is absent (and re-admitted), one that survived keeps suppressing itself. Counter-shaped
+state (nag rounds, repeat counts) travels in machine-readable `<ctx kind=... attr="…">` shell
+attributes so it is recovered from the message chain as well
+(`turn-context/todo-reminder.ts`, `repeat-reminder-middleware.ts`).
+`findCutPointByBudget` skips synthetic `<ctx kind=...>` messages when walking the token-budget
+boundary. `TurnContextController` owns only what cannot be derived from the window — the frozen
+prompt, the instruction digest baseline, the todo-nag policy and pending per-extension sections —
+and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
 
 **Subagent isolation:** subagents run the same middleware but only `SUBAGENT_ALLOWED_KINDS`
 (`current_date`, `git_status`, `project_instructions`) pass; memory / todo / plan / mode /

@@ -36,7 +36,6 @@ export interface ReactiveCompactHost {
   getCanonicalFromUI: () => ModelMessage[];
   getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
   emitEvent: EmitAgentTelemetryFn;
-  resetAdmittedTurnContext?: (preserveInstructionContext?: boolean) => void;
   compactionConfig?: { keepRecentTokens?: number } | null;
   /** Model input context window in tokens, if known (drives the reactive tail budget). */
   getContextWindow: () => number | undefined;
@@ -100,7 +99,6 @@ export async function handleManagedReactiveCompact(
         });
       },
     });
-    host.resetAdmittedTurnContext?.(true);
 
     if (!current()) return false;
 
@@ -146,7 +144,6 @@ export interface ManualCompactHost {
   getContextWindow: () => number | undefined;
   /** Resolved workspace env (owning runtime or ambient). */
   getCoreEnv: () => ResolvedCoreEnv;
-  resetAdmittedTurnContext: (preserveInstructionContext?: boolean) => void;
   resetSystemPrompt: () => void;
   persistSession: () => void;
   maybeSaveSessionUIMessages: (messages: TanStackUIMessage[], reason: "force") => void;
@@ -243,7 +240,6 @@ export async function runManualCompact(
     // compaction's checkpoint or state write.
     if (host.isCurrent?.() === false || abortSignal?.aborted) return { ok: false, error: "Compaction aborted" };
 
-    host.resetAdmittedTurnContext(true);
     host.resetSystemPrompt();
     host.persistSession();
     host.maybeSaveSessionUIMessages(channel.getMessages(), "force");

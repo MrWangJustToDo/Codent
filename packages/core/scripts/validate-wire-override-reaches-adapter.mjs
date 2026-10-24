@@ -288,10 +288,6 @@ function makeRunnerWithContext(
       getUIChannel: () => channel,
       persistMessages: noop,
       getManagedAgent: () => undefined,
-      getAdmittedHashes: () => undefined,
-      setAdmittedHashes: noop,
-      getAdmitMessageCount: () => 0,
-      setAdmitMessageCount: noop,
     }),
   ]);
   const runner = new AgentRunner({

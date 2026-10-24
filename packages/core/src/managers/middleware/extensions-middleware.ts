@@ -7,14 +7,12 @@ import { defineMiddleware } from "./phase.js";
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
 import type { ToolAfterEvent, ToolBeforeEvent } from "../../agent/extension/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { TodoManager } from "../../agent/todo";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware } from "@tanstack/ai";
 
 export interface ExtensionsMiddlewareDeps {
   getExtensionRunner: () => ExtensionRunner | null;
   getSessionId: () => string;
-  getTodoManager?: () => TodoManager | null;
   emitEvent?: EmitAgentTelemetryFn;
   /**
    * The in-flight run's abort signal, so a tool throw can be classified as the user's abort
@@ -91,9 +89,6 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       // Only run_command owns command stream snapshots. Calling this for every tool would grow the
       // hub's closed-id tombstone set with read_file/grep/task ids that can never have a stream.
       if (info.toolName === BUILTIN_TOOL_NAMES.runCommand) deps.onToolSettled?.(info.toolCallId);
-      if (info.ok && info.toolName === BUILTIN_TOOL_NAMES.todo) {
-        deps.getTodoManager?.()?.resetRoundCounter();
-      }
 
       // Lifecycle bus always fires; ExtensionEventBus interception is optional.
       if (info.ok) {

@@ -21,10 +21,11 @@ import {
   buildProjectInstructionsSection,
   buildSystemPromptWithTurnContext,
   buildTurnContextSections,
+  contextAttributesFromText,
   contextKindFromText,
   extractContextSection,
   findCutPointByBudget,
-  findLatestTurnContextSectionHashes,
+  findLatestContextSectionsFromWire,
   findLatestTurnContextSectionHashesFromWire,
   formatContextSectionUserContent,
   hashTurnContextPayload,
@@ -116,9 +117,10 @@ assert.ok(
   "no session id → no section"
 );
 
-// Nag reminder content carries the stale-round count so each nag produces a
-// new hash / stable id (constant content would be deduped and never re-fire).
-const { TodoManager } = await import("../dist/dev.mjs");
+// Todo nag: the round/episode state is recovered from the window, so the same wire yields
+// the same decision and an updated todo list starts a fresh cycle.
+const { TodoManager, buildTodoReminderContent, resolveTodoReminder, readTodoReminderWindowState } =
+  await import("../dist/dev.mjs");
 const tm = new TodoManager({
   log: {
     debug: () => {},
@@ -130,48 +132,90 @@ const tm = new TodoManager({
     clear: () => {},
   },
 });
-assert.notEqual(tm.getNagReminder(3), tm.getNagReminder(5), "nag content varies per episode");
-assert.match(tm.getNagReminder(7), /unchanged for 7 rounds/);
+tm.update([{ content: "A", status: "in_progress", priority: "high" }], "Plan");
 
-// Nag backoff: the first gap is `nagCooldownRounds`, then each reminder adds
-// `nagCooldownGrowth` to the next gap; an update resets the cycle.
-const tm2 = new TodoManager({
-  log: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    agent: () => {},
-    todo: () => {},
-    clear: () => {},
-  },
+// A window of `rounds` assistant turns after a `todo` call.
+const todoCallMessage = (id) => ({
+  role: "assistant",
+  content: "",
+  toolCalls: [{ id, type: "function", function: { name: "todo", arguments: "{}" } }],
 });
-tm2.update([{ content: "A", status: "in_progress", priority: "high" }], "Plan");
-assert.equal(tm2.shouldNag(), false, "below threshold -> no nag");
-tm2.incrementRound(); // 1
-tm2.incrementRound(); // 2
-tm2.incrementRound(); // 3 == threshold
-assert.equal(tm2.shouldNag(), true, "threshold crossed -> nag fires");
-tm2.getNagReminder(tm2.getRoundsSinceUpdate()); // record nag
-assert.equal(tm2.shouldNag(), false, "cooldown active -> no immediate re-nag");
-tm2.incrementRound(); // 4
-tm2.incrementRound(); // 5
-tm2.incrementRound(); // 6
-tm2.incrementRound(); // 7
-tm2.incrementRound(); // 8 == 3 + initial cooldown(5)
-assert.equal(tm2.shouldNag(), true, "second nag fires after the initial cooldown");
-tm2.getNagReminder(tm2.getRoundsSinceUpdate());
-for (let round = 9; round <= 17; round++) tm2.incrementRound();
-assert.equal(tm2.shouldNag(), false, "the next gap grew to 10 rounds");
-tm2.incrementRound(); // 18 == 8 + cooldown(10)
-assert.equal(tm2.shouldNag(), true, "third nag fires after the grown cooldown");
-tm2.getNagReminder(tm2.getRoundsSinceUpdate());
-for (let round = 19; round <= 32; round++) tm2.incrementRound();
-assert.equal(tm2.shouldNag(), false, "the third gap is larger again");
-tm2.incrementRound(); // 33 == 18 + cooldown(15)
-assert.equal(tm2.shouldNag(), true, "fourth nag fires after the larger gap");
-tm2.update([{ content: "B", status: "in_progress", priority: "high" }], "Plan"); // reset
-assert.equal(tm2.shouldNag(), false, "update resets throttle -> below threshold");
+const assistantTurn = (text) => ({ role: "assistant", content: text });
+const turnsAfter = (rounds, cycle = "call-todo-1") => [
+  { role: "user", content: "work on it" },
+  todoCallMessage(cycle),
+  { role: "tool", content: "ok", toolCallId: cycle },
+  ...Array.from({ length: rounds }, (_, index) => assistantTurn(`step ${index}`)),
+];
+// The reminder block a nag would have produced, as it appears in the wire.
+const reminderBlock = (section) => formatContextSectionUserContent(section);
+
+assert.equal(resolveTodoReminder(tm, turnsAfter(2)), undefined, "below threshold -> no nag");
+const firstNag = resolveTodoReminder(tm, turnsAfter(3));
+assert.ok(firstNag, "threshold crossed -> nag fires");
+assert.match(firstNag.content, /unchanged for 3 rounds/);
+assert.equal(firstNag.attrs.cycle, "call-todo-1");
+assert.equal(firstNag.attrs.episode, "1");
+assert.deepEqual(
+  resolveTodoReminder(tm, turnsAfter(3)),
+  firstNag,
+  "same window -> same decision (no remembered state)"
+);
+
+// A nag already in the window suppresses the same round; the schedule is read back from it.
+const withFirstNag = [...turnsAfter(3), { role: "user", content: reminderBlock(firstNag) }];
+assert.equal(resolveTodoReminder(tm, withFirstNag), undefined, "the admitted nag suppresses a repeat");
+assert.equal(readTodoReminderWindowState(withFirstNag).episodes, 1);
+assert.equal(readTodoReminderWindowState(withFirstNag).lastRound, 3);
+
+// Backoff: the first gap is `cooldown`, then each reminder grows it by `growth`.
+const second = resolveTodoReminder(tm, [...turnsAfter(7), { role: "user", content: reminderBlock(firstNag) }]);
+assert.equal(second, undefined, "the initial cooldown still holds (3 + 5)");
+const secondNag = resolveTodoReminder(tm, [...turnsAfter(8), { role: "user", content: reminderBlock(firstNag) }]);
+assert.ok(secondNag, "second nag fires after the initial cooldown");
+assert.equal(secondNag.attrs.episode, "2");
+const thirdBlock = formatContextSectionUserContent(secondNag);
+assert.equal(
+  resolveTodoReminder(tm, [
+    ...turnsAfter(17),
+    { role: "user", content: reminderBlock(firstNag) },
+    { role: "user", content: thirdBlock },
+  ]),
+  undefined,
+  "the next gap grew to 10 rounds"
+);
+const thirdNag = resolveTodoReminder(tm, [
+  ...turnsAfter(18),
+  { role: "user", content: reminderBlock(firstNag) },
+  { role: "user", content: thirdBlock },
+]);
+assert.ok(thirdNag, "third nag fires after the grown cooldown");
+assert.equal(thirdNag.attrs.episode, "3");
+
+// The todo update restarts the cycle: rounds count from the new call and no old nag applies.
+const freshCycle = [
+  { role: "user", content: "work on it" },
+  todoCallMessage("call-todo-1"),
+  ...Array.from({ length: 6 }, (_, index) => assistantTurn(`old ${index}`)),
+  { role: "user", content: reminderBlock(firstNag) },
+  todoCallMessage("call-todo-2"),
+  assistantTurn("updated"),
+  assistantTurn("more"),
+];
+assert.equal(resolveTodoReminder(tm, freshCycle), undefined, "an update resets the throttle");
+assert.equal(readTodoReminderWindowState(freshCycle).cycle, "call-todo-2");
+assert.equal(readTodoReminderWindowState(freshCycle).episodes, 0, "old-cycle reminders do not count");
+
+// No todo call in the window (compacted away) → no nag: the model cannot see the list.
+assert.equal(
+  resolveTodoReminder(tm, [{ role: "user", content: "hi" }, ...Array.from({ length: 9 }, () => assistantTurn("x"))]),
+  undefined,
+  "no visible todo cycle -> no nag"
+);
+
+// The nag body carries the round/episode text (so every nag hashes uniquely).
+assert.match(buildTodoReminderContent(7, 2), /unchanged for 7 rounds/);
+assert.notEqual(buildTodoReminderContent(3, 1), buildTodoReminderContent(3, 2), "episode changes the content");
 
 // Subagent-only project_instructions section builder.
 const projectSection = buildProjectInstructionsSection("Follow conventions.");
@@ -197,6 +241,22 @@ assert.deepEqual(parsed, section, "extract round-trips (notice stripped)");
 const parsedFirst = extractContextSection(first);
 assert.deepEqual(parsedFirst, section);
 assert.equal(contextKindFromText(first), "current_date");
+
+// Machine-readable shell attrs round-trip without leaking into the kind, and are not hashed.
+const withAttrs = formatContextSectionUserContent({
+  key: "reminder",
+  content: "<reminder>body</reminder>",
+  attrs: { cycle: "call-1", count: "3" },
+});
+assert.ok(withAttrs.startsWith('<ctx kind=reminder cycle="call-1" count="3">'), "attrs render on the ctx shell");
+assert.equal(contextKindFromText(withAttrs), "reminder", "attrs do not leak into the kind");
+assert.deepEqual(contextAttributesFromText(withAttrs), { cycle: "call-1", count: "3" });
+assert.deepEqual(extractContextSection(withAttrs).attrs, { cycle: "call-1", count: "3" });
+assert.equal(
+  hashTurnContextSection(extractContextSection(withAttrs)),
+  hashTurnContextSection({ key: "reminder", content: "<reminder>body</reminder>" }),
+  "shell attrs are recovery state, not admission content"
+);
 assert.equal(contextKindFromText("hello world"), undefined);
 assert.ok(isContextUIMessage({ id: "x", role: "user", parts: [{ type: "text", content: first }] }));
 assert.ok(!isContextUIMessage({ id: "x", role: "user", parts: [{ type: "text", content: "hello" }] }));
@@ -214,24 +274,25 @@ const hashes = new Map();
 hashes.set("current_date", hash);
 assert.equal(hashes.get("current_date"), hash);
 
-// Restore seeding: latest occurrence of each kind wins, newest-first walk.
+// Recovery: latest occurrence of each kind in the wire wins, newest-first walk.
 const gitSection = { key: "git_status", content: "<git_status>\nBranch: dev\n</git_status>" };
 const gitV2 = { key: "git_status", content: "<git_status>\nBranch: main\n</git_status>" };
-const persisted = [
-  { id: "u1", role: "user", parts: [{ type: "text", content: "hello" }] },
-  { id: "s1", role: "user", parts: [{ type: "text", content: formatContextSectionUserContent(section) }] },
-  { id: "s2", role: "user", parts: [{ type: "text", content: formatContextSectionUserContent(gitSection) }] },
-  {
-    id: "s3",
-    role: "user",
-    parts: [{ type: "text", content: formatContextSectionUserContent(gitV2, { isUpdate: true }) }],
-  },
-  { id: "a1", role: "assistant", parts: [{ type: "text", content: "hi" }] },
+const wireHistory = [
+  { role: "user", content: "hello" },
+  { role: "user", content: formatContextSectionUserContent(section) },
+  { role: "user", content: formatContextSectionUserContent(gitSection) },
+  { role: "user", content: formatContextSectionUserContent(gitV2, { isUpdate: true }) },
+  { role: "assistant", content: "hi" },
 ];
-const seeded = findLatestTurnContextSectionHashes(persisted);
+const seeded = findLatestTurnContextSectionHashesFromWire(wireHistory);
 assert.equal(seeded.size, 2);
 assert.equal(seeded.get("current_date"), hashTurnContextSection(section));
 assert.equal(seeded.get("git_status"), hashTurnContextSection(gitV2), "newest git_status wins");
+assert.equal(
+  findLatestContextSectionsFromWire(wireHistory, new Set(["git_status"])).size,
+  1,
+  "a key filter limits what is recovered"
+);
 
 // ---------------------------------------------------------------------------
 // 5. Shared injection helper: dedupe by stable id + channel persistence.
@@ -388,63 +449,46 @@ assert.equal(syntheticKindFromId("not-a-ctx-id"), undefined);
 assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
 
 // ---------------------------------------------------------------------------
-// 8. Middleware refresh threshold: admit baseline counter must advance after
-//    each injection, otherwise aboveThreshold latches permanently.
+// 8. Admission is stateless: the middleware reads the block back from the wire it is
+//    handed, so a dropped block re-admits and a surviving one suppresses itself —
+//    with no remembered hash map, message counter or reset call.
 // ---------------------------------------------------------------------------
 {
-  const { AgentUIChannel, createTurnContextMiddleware, DEFAULT_REFRESH_MESSAGE_THRESHOLD } =
-    await import("../dist/dev.mjs");
+  const { AgentUIChannel, createTurnContextMiddleware } = await import("../dist/dev.mjs");
   const channel = new AgentUIChannel();
-  let hashStore = new Map();
-  let admitCount = 0;
+  channel.setMessages([{ id: "u1", role: "user", parts: [{ type: "text", content: "hello" }] }]);
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => undefined,
     getSections: async () => [{ key: "current_date", content: "<current_date>now</current_date>" }],
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => null,
-    getAdmittedHashes: () => hashStore,
-    setAdmittedHashes: (next) => {
-      hashStore = next;
-    },
-    getAdmitMessageCount: () => admitCount,
-    setAdmitMessageCount: (count) => {
-      admitCount = count;
-    },
-    refreshMessageThreshold: 3,
   });
-  const seed = [];
-  for (let i = 0; i < 2; i++) seed.push({ id: `u${i}`, role: "user", parts: [{ type: "text", content: `msg ${i}` }] });
-  channel.setMessages(seed);
-
+  // The real pipeline re-projects the wire from the channel on every model call.
+  const projectWire = () =>
+    channel.getMessages().map((message) => ({ role: message.role, content: message.parts[0].content }));
   const run = async () => {
-    const wire = seed.map((m) => ({ role: "user", content: m.parts[0].content }));
-    const result = await middleware.onConfig({}, { messages: wire });
-    return result.messages ?? wire;
+    const before = projectWire();
+    const result = await middleware.onConfig({}, { messages: before });
+    return { before, after: result.messages ?? before };
   };
 
-  let wire = await run();
-  assert.equal(wire.length, 3, "first admit injects");
-  assert.equal(admitCount, channel.getMessages().length, "admit baseline advances after first injection");
+  const first = await run();
+  assert.equal(first.after.length, 2, "first admit injects");
+  const again = await run();
+  assert.equal(again.after.length, again.before.length, "already in the window → no re-inject");
 
-  // Same content, below threshold → no injection.
-  wire = await run();
-  assert.equal(wire.length, 2, "unchanged + below threshold → no injection");
+  // A compaction cut drops the block from the projected wire: it re-admits with no reset.
+  const cutWire = [{ role: "user", content: "<CONVERSATION SUMMARY>…</CONVERSATION SUMMARY>" }];
+  const afterCut = await middleware.onConfig({}, { messages: cutWire });
+  assert.equal((afterCut.messages ?? cutWire).length, 2, "a cut that dropped the block re-admits it");
 
-  // Push past the threshold → refresh fires even though the hash is unchanged.
-  for (let i = 2; i < 5; i++)
-    channel.setMessages([
-      ...channel.getMessages(),
-      { id: `u${i}`, role: "user", parts: [{ type: "text", content: `msg ${i}` }] },
-    ]);
-  wire = await run();
-  assert.equal(wire.length, 3, "above threshold → supersede refresh injected");
-  assert.equal(admitCount, channel.getMessages().length, "baseline advances after refresh");
-
-  // After the refresh, another unchanged call below threshold must not inject again.
-  wire = await run();
-  assert.equal(wire.length, 2, "refresh does not latch: back to no-injection");
-  assert.equal(DEFAULT_REFRESH_MESSAGE_THRESHOLD > 0, true);
+  // A long conversation with the block still in the window does NOT re-inject just because
+  // it grew: admission is content-decided, there is no message-count refresh pass.
+  const longWire = projectWire();
+  for (let i = 0; i < 200; i++) longWire.push({ role: "user", content: `filler ${i}` });
+  const grown = await middleware.onConfig({}, { messages: longWire });
+  assert.equal(grown.messages, undefined, "an unchanged block in a grown window is not refreshed");
 }
 
 // ---------------------------------------------------------------------------
@@ -454,29 +498,22 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
 {
   const { AgentUIChannel, createTurnContextMiddleware } = await import("../dist/dev.mjs");
   const channel = new AgentUIChannel();
-  let hashStore;
-  let admitCount = 0;
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => undefined,
     getSections: async () => currentSections,
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => null,
-    getAdmittedHashes: () => hashStore,
-    setAdmittedHashes: (next) => {
-      hashStore = next;
-    },
-    getAdmitMessageCount: () => admitCount,
-    setAdmitMessageCount: (count) => {
-      admitCount = count;
-    },
   });
   channel.setMessages([{ id: "u0", role: "user", parts: [{ type: "text", content: "hello" }] }]);
   const AUTO = buildAutoModePrompt();
   const INACTIVE = buildModeInactivePrompt();
   let currentSections = [{ key: "mode", content: AUTO }];
   const run = async () => {
-    const wire = [{ role: "user", content: "hi" }];
+    const wire = channel.getMessages().map((message) => ({
+      role: message.role,
+      content: message.parts[0].content,
+    }));
     const r = await middleware.onConfig({}, { messages: wire });
     return r.messages ?? wire;
   };
@@ -498,23 +535,13 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(new Set(injectedIds).size, 3, "each admission gets a unique id (episode nonce)");
   assert.ok(injectedIds[2] !== injectedIds[0], "re-entry id differs from first entry");
 
-  // Repeated nags with identical rounds value: episode counter keeps ids unique.
-  const { TodoManager } = await import("../dist/dev.mjs");
-  const tm = new TodoManager({
-    log: {
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      agent: () => {},
-      todo: () => {},
-      clear: () => {},
-    },
-  });
-  const first = tm.getNagReminder(3);
-  const second = tm.getNagReminder(3);
-  assert.notEqual(first, second, "same rounds → different episode → different content");
-  assert.ok(second.includes(`#2`), "episode counter is monotonic");
+  // Repeated nags with identical rounds value: the episode keeps ids/content unique.
+  const { buildTodoReminderContent } = await import("../dist/dev.mjs");
+  assert.notEqual(
+    buildTodoReminderContent(3, 1),
+    buildTodoReminderContent(3, 2),
+    "same rounds at a later episode hashes differently (no dedupe swallow)"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +553,8 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   let invalidations = 0;
   let promptBefore;
   let parentId;
-  const generations = [];
+  let todoManager = null;
+  const jobCalls = [];
   const runner = {
     lastPrompt: undefined,
     lastAgentId: undefined,
@@ -541,7 +569,7 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getConfig: () => config,
     getCoreEnv: () => ({}),
     getSessionId: () => "ses_turn_context",
-    getTodoManager: () => null,
+    getTodoManager: () => todoManager,
     getPlanState: () => ({
       phase: "off",
       planMarkdown: null,
@@ -555,8 +583,8 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getRelevantMemoryContent: () => "",
     getExtensionRunner: () => runner,
     getParentId: () => parentId,
-    getBackgroundJobsSection: async (_messages, generation) => {
-      generations.push(generation);
+    getBackgroundJobsSection: async (messages) => {
+      jobCalls.push(messages);
       return undefined;
     },
     onPromptBefore: (input) => {
@@ -578,37 +606,49 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(invalidations, 1, "resetSystemPrompt invalidates the cached runner");
   assert.ok(controller.getSystemPrompt().includes("doc-v2"), "the rebuilt prompt sees the new doc");
 
-  controller.setAdmittedContextHashes(new Map([["current_date", "hash"]]));
-  controller.setTurnContextAdmitMessageCount(9);
-  await controller.getBackgroundJobsSection([]);
-  assert.deepEqual(generations, [0], "the first jobs section uses generation 0");
-  controller.resetAdmittedTurnContext();
-  assert.equal(controller.getAdmittedContextHashes(), undefined);
-  assert.equal(controller.getTurnContextAdmitMessageCount(), 0);
-  await controller.getBackgroundJobsSection([]);
-  assert.deepEqual(generations, [0, 1], "a context reset bumps the jobs generation");
+  const jobsWire = [{ role: "user", content: "hi" }];
+  await controller.getBackgroundJobsSection(jobsWire);
+  assert.deepEqual(jobCalls, [jobsWire], "the jobs section is built from the given wire");
   parentId = "parent-agent";
-  await controller.getBackgroundJobsSection([]);
-  assert.deepEqual(generations, [0, 1], "subagents never receive the jobs pointer");
+  await controller.getBackgroundJobsSection(jobsWire);
+  assert.equal(jobCalls.length, 1, "subagents never receive the jobs pointer");
+  parentId = undefined;
 
   await controller.collectExtensionPromptHooks("hello");
   assert.deepEqual(promptBefore, { prompt: "hello", hasTurnContext: true });
   assert.equal(runner.lastPrompt, "hello");
   assert.equal(runner.lastAgentId, "agent_turn_context");
 
-  controller.setAdmittedContextHashes(new Map([["mode", "hash"]]));
-  controller.setTurnContextAdmitMessageCount(12);
   controller.resetTurnState();
-  assert.equal(controller.getAdmittedContextHashes(), undefined);
-  assert.equal(controller.getTurnContextAdmitMessageCount(), 0);
   assert.equal(invalidations, 2, "resetTurnState also unfreezes the prompt");
   assert.ok(controller.getSystemPrompt().includes("doc-v2"), "resetTurnState rebuilds from current state");
+
+  // The todo nag is resolved against the window the middleware hands in — same two-step rule
+  // as every other section (read the newest block of that kind, inject only what changed).
+  const nagTodoManager = new (await import("../dist/dev.mjs")).TodoManager();
+  nagTodoManager.update([{ content: "step", status: "in_progress", priority: "high" }], "Plan");
+  todoManager = nagTodoManager;
+  const nagWindow = [
+    { role: "user", content: "work" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_todo", type: "function", function: { name: "todo", arguments: "{}" } }],
+    },
+    { role: "tool", content: "ok", toolCallId: "call_todo" },
+    ...Array.from({ length: 3 }, (_, index) => ({ role: "assistant", content: `step ${index}` })),
+  ];
+  const nagSections = await controller.getDynamicTurnContextSections(nagWindow);
+  const reminder = nagSections.find((section) => section.key === TURN_CONTEXT_KINDS.reminder);
+  assert.ok(reminder, "the nag rides along with the per-turn sections");
+  assert.equal(reminder.attrs.cycle, "call_todo", "the nag records its todo cycle");
+  assert.equal(reminder.attrs.rounds, "3");
+  todoManager = null;
 }
 
 // ---------------------------------------------------------------------------
-// 11. Admission seeds from the model-visible wire, not the durable channel.
-//     After compaction the pre-cut <ctx> rows remain in the channel; seeding
-//     from them would suppress the re-injection resetAdmittedTurnContext asked for.
+// 11. Recovery reads the model-visible wire, not the durable channel: a cut is
+//     only real on the wire, so a dropped block must not be recovered from the log.
 // ---------------------------------------------------------------------------
 {
   const wire = [
@@ -625,7 +665,7 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(
     findLatestTurnContextSectionHashesFromWire([{ role: "user", content: "summary only" }]).size,
     0,
-    "a compacted wire without the old ctx row has no seeded hash"
+    "a compacted wire without the old ctx row has no recoverable hash"
   );
 }
 
@@ -645,20 +685,12 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
       parts: [{ type: "text", content: formatContextSectionUserContent(currentDate) }],
     },
   ]);
-  let hashes;
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => undefined,
     getSections: async () => [currentDate],
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => null,
-    getAdmittedHashes: () => hashes,
-    setAdmittedHashes: (next) => {
-      hashes = next;
-    },
-    getAdmitMessageCount: () => 0,
-    setAdmitMessageCount: () => {},
-    refreshMessageThreshold: 100,
   });
   const result = await middleware.onConfig({}, { messages: [{ role: "user", content: "hi" }] });
   assert.equal(
@@ -673,8 +705,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
 {
   const { AgentUIChannel, createTurnContextMiddleware } = await import("../dist/dev.mjs");
   const channel = new AgentUIChannel();
-  let hashes;
-  let admitCount = 0;
   let current = { key: "codent-memory", content: "<memory_index>a</memory_index>" };
   const middleware = createTurnContextMiddleware({
     getFrozenSystemPrompt: () => undefined,
@@ -682,18 +712,13 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getUIChannel: () => channel,
     persistMessages: () => {},
     getManagedAgent: () => null,
-    getAdmittedHashes: () => hashes,
-    setAdmittedHashes: (next) => {
-      hashes = next;
-    },
-    getAdmitMessageCount: () => admitCount,
-    setAdmitMessageCount: (count) => {
-      admitCount = count;
-    },
   });
   channel.setMessages([{ id: "u0", role: "user", parts: [{ type: "text", content: "hello" }] }]);
   const run = async () => {
-    const wire = [{ role: "user", content: "hi" }];
+    const wire = channel.getMessages().map((message) => ({
+      role: message.role,
+      content: message.parts[0].content,
+    }));
     const result = await middleware.onConfig({}, { messages: wire });
     return result.messages ?? wire;
   };

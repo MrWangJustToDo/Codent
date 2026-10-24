@@ -57,7 +57,6 @@ export interface SessionHost {
    * The persisted record is kept in sync by {@link SessionService.setModelConfig}.
    */
   applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => void;
-  resetAdmittedTurnContext?: () => void;
   /**
    * Record how many `media://` refs the restore could not hydrate (`0` clears it).
    * The wire seam uses this to substitute text placeholders for refs no provider can fetch;
@@ -186,7 +185,6 @@ export async function restoreManagedSession(
     ui?.setMessages(session.uiMessages);
   }
   applyRestoredSessionChatState(host, session.uiMessages);
-  host.resetAdmittedTurnContext?.();
   tracker.reset(session.uiMessages);
   // Resumed sessions may carry a different display name than the previously
   // viewed one — mirror it (and broadcast) so the header/snapshot stay in sync.

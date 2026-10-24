@@ -102,12 +102,8 @@ export interface AgentRunDeps {
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
-  getDynamicTurnContextSections: () => Promise<TurnContextSection[]>;
+  getDynamicTurnContextSections: (messages: readonly ModelMessage[]) => Promise<TurnContextSection[]>;
   getBackgroundJobsSection: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
-  getAdmittedContextHashes: () => Map<string, string> | undefined;
-  setAdmittedContextHashes: (hashes: Map<string, string> | undefined) => void;
-  getTurnContextAdmitMessageCount: () => number;
-  setTurnContextAdmitMessageCount: (count: number) => void;
   commitSurfacedMemories: () => void;
 }
 
@@ -158,12 +154,8 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),
-    getDynamicTurnContextSections: () => managed.getDynamicTurnContextSections(),
+    getDynamicTurnContextSections: (messages) => managed.getDynamicTurnContextSections(messages),
     getBackgroundJobsSection: (messages) => managed.getBackgroundJobsSection(messages),
-    getAdmittedContextHashes: () => managed.getAdmittedContextHashes(),
-    setAdmittedContextHashes: (hashes) => managed.setAdmittedContextHashes(hashes),
-    getTurnContextAdmitMessageCount: () => managed.getTurnContextAdmitMessageCount(),
-    setTurnContextAdmitMessageCount: (count) => managed.setTurnContextAdmitMessageCount(count),
     commitSurfacedMemories: () => managed.memory.commitSurfacedMemories(),
   };
 }
