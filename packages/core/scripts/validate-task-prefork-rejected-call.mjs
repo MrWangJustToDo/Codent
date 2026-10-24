@@ -148,4 +148,37 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   console.log("ok  a refused task call discards its pre-fork at the tool phase");
 }
 
+// --- the serial fallback shares the cap, not just registered pre-forks ---
+//
+// `runWithSlot` is the path a task tool takes when `join()` found no pre-fork (parse failure,
+// discarded attempt, or an older host). It must queue behind the same active counter.
+{
+  const coordinator = new TaskPreforkCoordinator(() => 1);
+  let release;
+  let running = 0;
+  let maxRunning = 0;
+  const first = coordinator.runWithSlot(async () => {
+    running += 1;
+    maxRunning = Math.max(maxRunning, running);
+    await new Promise((resolve) => {
+      release = resolve;
+    });
+    running -= 1;
+    return "first";
+  });
+  const second = coordinator.runWithSlot(async () => {
+    running += 1;
+    maxRunning = Math.max(maxRunning, running);
+    running -= 1;
+    return "second";
+  });
+  await sleep(5);
+  assert.equal(running, 1, "the serial fallback waits for a slot");
+  release();
+  assert.equal(await first, "first");
+  assert.equal(await second, "second");
+  assert.equal(maxRunning, 1, "the serial fallback never exceeds the cap");
+  assert.equal(coordinator.activeCount, 0, "both slots are released");
+}
+
 console.log("task-prefork rejected-call validation passed");

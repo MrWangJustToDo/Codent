@@ -93,6 +93,8 @@ interface PreforkEntry {
 export class TaskPreforkCoordinator {
   private readonly entries = new Map<string, PreforkEntry>();
   private readonly waiting = new Set<PreforkEntry>();
+  /** Serial `task` calls waiting for the same cap (they are not registered pre-forks). */
+  private readonly serialWaiters: Array<() => void> = [];
   private active = 0;
 
   /** Set by {@link setOnChange}: announced on every queue/occupancy mutation. */
@@ -237,6 +239,47 @@ export class TaskPreforkCoordinator {
   }
 
   /**
+   * Run one non-preforked task under the same concurrency cap.
+   *
+   * The serial fallback used to call `runSubagent` directly when `join()` found no registered
+   * entry (parse failure, a discarded call, or a host without the pre-fork middleware). That
+   * bypassed the throttle entirely: N fallback tasks all opened provider streams at once. This
+   * method shares the same active-slot counter and FIFO waiters as prefork admission, so the cap
+   * applies to every task path. The run is not registered in `entries`, so it cannot be joined or
+   * accidentally reported as a discarded pre-fork.
+   */
+  async runWithSlot<T>(factory: () => Promise<T>): Promise<T> {
+    await this.acquireSlot();
+    try {
+      return await factory();
+    } finally {
+      this.releaseSlot();
+      this.notify();
+    }
+  }
+
+  private acquireSlot(): Promise<void> {
+    if (this.active < this.getMaxActive()) {
+      this.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.serialWaiters.push(resolve);
+    });
+  }
+
+  private releaseSlot(): void {
+    const waiter = this.serialWaiters.shift();
+    if (waiter) {
+      // The slot is transferred directly; active stays unchanged.
+      waiter();
+      return;
+    }
+    this.active = Math.max(0, this.active - 1);
+    this.promote();
+  }
+
+  /**
    * Register a background run. Beyond the concurrency cap runs queue FIFO and roll forward as slots
    * free.
    *
@@ -356,6 +399,13 @@ export class TaskPreforkCoordinator {
         this.admit(candidate);
         admitted = true;
         break;
+      }
+      if (!admitted) {
+        const waiter = this.serialWaiters.shift();
+        if (!waiter) break;
+        // The slot is already free; hand it to the serial waiter without changing `active`.
+        waiter();
+        admitted = true;
       }
       if (!admitted) break;
     }

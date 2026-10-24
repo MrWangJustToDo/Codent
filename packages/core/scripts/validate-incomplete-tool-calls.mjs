@@ -7,9 +7,11 @@
 import assert from "node:assert/strict";
 
 import {
+  INTERRUPTED_RUN_MESSAGE,
   TOOL_CANCELLED_MESSAGE,
   cancelIncompleteToolCalls,
   cancelInFlightToolCalls,
+  settleInterruptedToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
   hasValidToolArguments,
@@ -153,5 +155,45 @@ assert.equal(cancelledInFlight[0].parts[1].type, "tool-result");
 const inFlightResult = JSON.parse(cancelledInFlight[0].parts[1].content);
 assert.equal(inFlightResult.cancelled, true);
 assert.equal(inFlightResult.error, TOOL_CANCELLED_MESSAGE);
+
+// Restore must settle both shapes, while leaving a pending approval as a legitimate
+// resume/interaction state instead of marking it as an interrupted run.
+const restoredMessages = settleInterruptedToolCalls([
+  messages[0],
+  inFlightMessages[0],
+  {
+    id: "a3",
+    role: "assistant",
+    parts: [
+      {
+        ...inFlight,
+        id: "call_approval",
+        state: "approval-requested",
+        approval: { id: "approval-1", needsApproval: true },
+      },
+    ],
+  },
+  {
+    id: "a4",
+    role: "assistant",
+    parts: [
+      {
+        ...inFlight,
+        id: "call_ask",
+        name: "ask_user",
+        arguments: '{"question":"which file?"}',
+      },
+    ],
+  },
+]);
+assert.equal(hasCancellableIncompleteToolCalls(restoredMessages), false);
+assert.equal(hasInFlightToolCalls(restoredMessages), true, "only the pending ask_user remains in-flight after restore");
+assert.equal(restoredMessages[0].parts[0].output.error, INTERRUPTED_RUN_MESSAGE);
+assert.equal(restoredMessages[1].parts[0].output.error, INTERRUPTED_RUN_MESSAGE);
+assert.equal(restoredMessages[2].parts[0].state, "approval-requested");
+assert.equal(restoredMessages[2].parts[0].output, undefined);
+assert.equal(restoredMessages[3].parts[0].state, "input-complete");
+assert.equal(restoredMessages[3].parts[0].output, undefined, "pending ask_user survives restore");
+assert.equal(settleInterruptedToolCalls(restoredMessages), restoredMessages, "a second settle pass is a no-op");
 
 console.log("incomplete-tool-calls validation passed");

@@ -327,8 +327,10 @@ export {
 } from "../agent/stream/empty-model-stream.js";
 export {
   TOOL_CANCELLED_MESSAGE,
+  INTERRUPTED_RUN_MESSAGE,
   cancelIncompleteToolCalls,
   cancelInFlightToolCalls,
+  settleInterruptedToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
   hasValidToolArguments,

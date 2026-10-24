@@ -5,6 +5,7 @@
 import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table.js";
 import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
+import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
 
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
@@ -134,6 +135,12 @@ export async function restoreManagedSession(
       mediaMissing += 1;
     },
   });
+
+  // A process crash can leave a valid `input-complete` tool part on disk with no output
+  // (or a truncated arg stream). No run exists to settle it, so the UI would render an
+  // executing spinner forever and `isToolInFlight` would keep resurfacing it. Settle both
+  // in-flight and incomplete calls before the channel and approvals are restored.
+  session.uiMessages = settleInterruptedToolCalls(session.uiMessages);
 
   const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
   if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {

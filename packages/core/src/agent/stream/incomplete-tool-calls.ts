@@ -12,6 +12,8 @@
  * - valid `input-complete` tools waiting for a normal tool-phase pump
  */
 
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+
 import { isToolCallPart } from "./message-parts.js";
 
 import type { ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
@@ -148,6 +150,28 @@ export function cancelIncompleteToolCalls(messages: UIMessage[], reason: string 
   return applyToolCallCancellation(messages, isCancellableIncompleteToolCall, reason, DEFAULT_CANCEL_OPTIONS);
 }
 
+/** Reason written for a tool call recovered after a crash/interruption. */
+export const INTERRUPTED_RUN_MESSAGE = "Session restored after an interrupted run.";
+
+/**
+ * Settle every tool call that cannot still be running after a session restore.
+ *
+ * This is deliberately not the user-cancel path: no operator pressed Esc, so the synthetic
+ * result must not say "Cancelled by user". Truncated/incomplete calls and valid in-flight calls
+ * are both covered; pending approvals and unfinished `ask_user` interactions are left alone
+ * because they are legitimate resume states.
+ */
+export function settleInterruptedToolCalls(
+  messages: UIMessage[],
+  reason: string = INTERRUPTED_RUN_MESSAGE
+): UIMessage[] {
+  return cancelInFlightToolCalls(
+    cancelIncompleteToolCalls(messages, reason),
+    reason,
+    (part) => isInFlightToolCall(part) && !(part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part))
+  );
+}
+
 /**
  * Tool call that is currently executing (or queued to execute) when the run is
  * aborted — valid args, no tool-result yet, but not a live approval prompt.
@@ -186,8 +210,12 @@ export function hasInFlightToolCalls(messages: UIMessage[]): boolean {
  * user-cancel result on abort. This is the framework fallback that also covers
  * extension/MCP tools whose execute never resolved before the run was torn down.
  */
-export function cancelInFlightToolCalls(messages: UIMessage[], reason: string = TOOL_CANCELLED_MESSAGE): UIMessage[] {
-  return applyToolCallCancellation(messages, isInFlightToolCall, reason, {
+export function cancelInFlightToolCalls(
+  messages: UIMessage[],
+  reason: string = TOOL_CANCELLED_MESSAGE,
+  shouldCancel: (part: ToolCallPart) => boolean = isInFlightToolCall
+): UIMessage[] {
+  return applyToolCallCancellation(messages, shouldCancel, reason, {
     state: "complete",
     cancelled: true,
   });

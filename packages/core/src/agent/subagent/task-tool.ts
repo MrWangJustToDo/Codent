@@ -196,9 +196,8 @@ Example use cases:
         // fires (the idle interval between spawnSubagent and runManagedSpan), and
         // cascadeAbortToChildren deliberately only aborts active-status children. Preforked runs
         // already have their own controller tied to the parent signal in task-prefork-middleware.
-        const result =
-          preforked ??
-          (await runSubagent(
+        const executeTask = () =>
+          runSubagent(
             {
               subagentId: generateId("subagent", {
                 exists: (id) => manager.getAgent(id) != null,
@@ -212,7 +211,15 @@ Example use cases:
               ...(abortSignal ? { abortSignal } : {}),
             },
             { manager }
-          ));
+          );
+        // Serial fallback still uses the coordinator's concurrency slot: `join()` returns null
+        // for a call that was never pre-forked (e.g. args parse failure), not only for a
+        // discarded one, and N of those must not open N provider streams at once.
+        const result =
+          preforked ??
+          (parentManaged
+            ? await getTaskPreforkCoordinator(parentManaged).runWithSlot(executeTask)
+            : await executeTask());
         runDurationMs = result.durationMs;
 
         let summary = result.output;
