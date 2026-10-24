@@ -153,6 +153,38 @@ export function cancelIncompleteToolCalls(messages: UIMessage[], reason: string 
 /** Reason written for a tool call recovered after a crash/interruption. */
 export const INTERRUPTED_RUN_MESSAGE = "Session restored after an interrupted run.";
 
+/** Options for the shared lifecycle settlement path. */
+export interface SettleToolCallsOptions {
+  /** Result text written into the synthetic tool output. */
+  reason?: string;
+  /** Include valid `input-complete` / approved calls that were executing (default true). */
+  includeInFlight?: boolean;
+  /** Keep a fully-asked `ask_user` interaction answerable (restore only). */
+  preservePendingAskUser?: boolean;
+}
+
+/**
+ * Settle incomplete and (optionally) in-flight tool calls in one ordered pass.
+ *
+ * Shared by the abort/chat-controller path and session restore; callers differ in the reason,
+ * whether in-flight calls are included, and whether a pending client question is preserved.
+ */
+export function settleToolCalls(messages: UIMessage[], options: SettleToolCallsOptions = {}): UIMessage[] {
+  const reason = options.reason ?? TOOL_CANCELLED_MESSAGE;
+  let next = cancelIncompleteToolCalls(messages, reason);
+  if (options.includeInFlight !== false) {
+    next = cancelInFlightToolCalls(
+      next,
+      reason,
+      options.preservePendingAskUser
+        ? (part) =>
+            isInFlightToolCall(part) && !(part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part))
+        : undefined
+    );
+  }
+  return next;
+}
+
 /**
  * Settle every tool call that cannot still be running after a session restore.
  *
@@ -165,11 +197,7 @@ export function settleInterruptedToolCalls(
   messages: UIMessage[],
   reason: string = INTERRUPTED_RUN_MESSAGE
 ): UIMessage[] {
-  return cancelInFlightToolCalls(
-    cancelIncompleteToolCalls(messages, reason),
-    reason,
-    (part) => isInFlightToolCall(part) && !(part.name === BUILTIN_TOOL_NAMES.askUser && hasValidToolArguments(part))
-  );
+  return settleToolCalls(messages, { reason, includeInFlight: true, preservePendingAskUser: true });
 }
 
 /**

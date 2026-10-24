@@ -330,6 +330,7 @@ export {
   INTERRUPTED_RUN_MESSAGE,
   cancelIncompleteToolCalls,
   cancelInFlightToolCalls,
+  settleToolCalls,
   settleInterruptedToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,

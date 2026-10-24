@@ -7,8 +7,7 @@ import { stripEmptyAssistantShells } from "../../agent/stream/empty-assistant-sh
 import { extractAssistantText } from "../../agent/stream/extract-assistant-text.js";
 import {
   TOOL_CANCELLED_MESSAGE,
-  cancelIncompleteToolCalls,
-  cancelInFlightToolCalls,
+  settleToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
@@ -598,8 +597,10 @@ export class AgentChatController {
     const hasCancellable =
       hasCancellableIncompleteToolCalls(current) || (includeInFlight && hasInFlightToolCalls(current));
     if (!hasCancellable) return;
-    let cancelled = cancelIncompleteToolCalls(current, TOOL_CANCELLED_MESSAGE);
-    if (includeInFlight) cancelled = cancelInFlightToolCalls(cancelled, TOOL_CANCELLED_MESSAGE);
+    const cancelled = settleToolCalls(current, {
+      reason: TOOL_CANCELLED_MESSAGE,
+      includeInFlight,
+    });
     const cleaned = stripEmptyAssistantShells(cancelled);
     this.channel.setMessages(cleaned);
   }
