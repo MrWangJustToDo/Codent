@@ -376,19 +376,23 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
                              continuation prompt. MUST run after tool-compact (it materializes
                              tool media) and message-transform (a strip must not hide media
                              from an extension transformer)
-8. turn-context-middleware   inject changed <ctx kind=...> sections post-compaction (per-kind
-                             hash diff; subagents filtered by SUBAGENT_ALLOWED_KINDS whitelist;
-                             systemPrompts = frozen only)
+8. turn-context-middleware   HASH-ADMITTED sections only: inject changed <ctx kind=...> blocks
+                             post-compaction (identity + hash diff against the wire; subagents
+                             filtered by SUBAGENT_ALLOWED_KINDS; systemPrompts = frozen only)
 9. extensions-middleware     ExtensionEventBus intercept + agent:tool-* lifecycle events
 10. early-tool-result-ui      apply each tool output to StreamProcessor as soon as it finishes
 11. task-prefork-middleware  subagent task prefork / phase state
 12. plan-mode-middleware     block forbidden tools while plan mode restricts tooling
-13. repeat-reminder-middleware
-                             inject a reminder when repeated tool-call patterns are detected
-14. background-notification-middleware
-                             completed background-command notifications as <ctx kind=background_notification>
-                             synthetic messages (append; persisted + id-deduped)
-15. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
+13. todo-reminder-middleware CONDITION + COUNTER: nag when the todo list has gone stale for too
+                             many rounds. Scans the window for the todo call / the previous nag and
+                             re-admits only at a strictly later round (round/episode in shell attrs)
+14. repeat-reminder-middleware
+                             CONDITION + COUNTER: nudge when the trailing tool calls repeat. Scans the
+                             run for a reminder inside it and re-admits only past a threshold
+15. background-middleware    the background class: the <background_jobs> pointer (hash-admitted like
+                             a turn-context section) and one-shot completion pushes
+                             (<ctx kind=background_notification>, persisted + id-deduped)
+16. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
                              (must stay last so cache breakpoints see the final payload)
 ```
 
@@ -905,14 +909,14 @@ prompt, the instruction digest baseline, the todo-nag policy and pending per-ext
 and `ManagedAgent.reset()` funnels through the controller's single `resetTurnState()`.
 
 **Three injection shapes, one kind catalog (`TURN_CONTEXT_KINDS`)**: (1) hash-admitted sections
-(the middleware above); (2) condition + counter reminders — the todo nag and the repeat-call nudge share the one
-`reminder` kind and are told apart by their inner tag (`<todo-reminder>` / `<repeat-reminder>`)
-plus their scope attrs (`cycle` / `chain`), so
+(the middleware above); (2) condition + counter reminders — the todo nag and the repeat-call nudge are their own
+middlewares (`todo-reminder` / `repeat-reminder`) sharing the one `reminder` kind and told apart by
+their inner tag (`<todo-reminder>` / `<repeat-reminder>`) plus their scope attrs (`cycle` / `chain`), so
 `agent/turn-context/reminder/` holds the shared mechanism (`counter-reminder.ts`: scope-filtered
 recovery from the window + the attr-carrying builder, `episode` being the only non-scope attr) and
 the two policies (`todo-reminder.ts`, `repeat-reminder.ts`); the middleware for the repeat nudge
-only delivers what the policy resolves; (3) background-result pushes (`background_notification`,
-later background tasks), appended once per result. Recovery for (2) is the "cleanup": only blocks
+only delivers what the policy resolves; (3) background pushes (`background-middleware`: the `<background_jobs>` pointer, hash-admitted, and
+the `background_notification` completion push, appended once per result; background tasks land here). Recovery for (2) is the "cleanup": only blocks
 whose scope matches the current one count, and the turn-scoped counter stops at a genuine user
 prompt. `validate:turn-context-kinds` enforces that no kind or `<ctx kind=...>` tag is spelled
 outside the catalog, that section bodies are rendered through `formatSectionTag` (a literal

@@ -22,7 +22,6 @@ import {
   readInstructionContextState,
   type InstructionContextState,
 } from "../../agent/turn-context/instruction-context.js";
-import { resolveTodoReminder } from "../../agent/turn-context/reminder";
 import { formatSessionRetrievalSection, hasSessionHistory } from "../../agent/turn-context/session-retrieval.js";
 import { errorMessage } from "../../utils/errors.js";
 import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
@@ -30,11 +29,9 @@ import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-ag
 import type { AgentLog } from "../../agent/agent-log";
 import type { ExtensionRunner, ExtensionTurnContextSection } from "../../agent/extension";
 import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
-import type { TodoManager } from "../../agent/todo";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { AgentConfig } from "../agent-types.js";
-import type { ModelMessage } from "@tanstack/ai";
 
 export interface TurnContextControllerOptions {
   /** Agent id passed to extension `before_agent_start` hooks. */
@@ -42,14 +39,11 @@ export interface TurnContextControllerOptions {
   getConfig: () => AgentConfig;
   getCoreEnv: () => ResolvedCoreEnv;
   getSessionId: () => string | undefined;
-  getTodoManager: () => TodoManager | null;
   getPlanState: () => PlanModeState;
   isAutoModeEnabled: () => boolean;
   getRelevantMemoryContent: () => string;
   getExtensionRunner: () => ExtensionRunner | null;
   getParentId: () => string | undefined;
-  /** Current model-visible wire → `<background_jobs>` section (owned by AgentCommandService). */
-  getBackgroundJobsSection?: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
   onPromptBefore: (input: { prompt: string; hasTurnContext: boolean }) => void;
   /** Prompt changed → the cached AgentRunner key is stale. */
   invalidateRunner: () => void;
@@ -160,19 +154,10 @@ export class TurnContextController {
   /**
    * Build the ordered dynamic turn-context sections for the current user turn.
    *
-   * `messages` is the post-compaction model wire: the only input used for the
-   * window-relative decisions (the todo nag reads its own round/episode state back
-   * from the newest reminder still in the window).
+   * Hash-admitted sections only: condition + counter reminders (todo nag, repeat nudge) and
+   * background pushes are their own middlewares, so nothing here depends on the window.
    */
-  async getDynamicTurnContextSections(messages: readonly ModelMessage[] = []): Promise<TurnContextSection[]> {
-    const todoManager = this.options.getTodoManager();
-    const todoNagReminder = resolveTodoReminder(todoManager, messages);
-    if (todoNagReminder) {
-      this.options.log?.debug("todo", "Capturing nag reminder in turn context snapshot", {
-        attrs: todoNagReminder.attrs,
-      });
-    }
-
+  async getDynamicTurnContextSections(): Promise<TurnContextSection[]> {
     const currentDate = getCurrentDate();
     const { branch: gitBranch, status: gitStatus } = await getGitInfo(this.options.getCoreEnv());
 
@@ -203,7 +188,6 @@ export class TurnContextController {
 
     return buildTurnContextSections({
       relevantMemoryContent: this.options.getRelevantMemoryContent(),
-      todoNagReminder,
       currentDate,
       gitBranch,
       gitStatus,
@@ -213,26 +197,6 @@ export class TurnContextController {
       extensionTurnContextSections: this.pendingExtensionTurnContextSections,
       instructionContext,
     });
-  }
-
-  /**
-   * `<background_jobs>` section for the CURRENT model-visible wire.
-   *
-   * Only jobs whose `run_command` tool call is still in `messages` are listed: after compaction has
-   * dropped the call, re-listing the job is noise (the completion notification is a separate,
-   * self-contained surface and stays searchable). Built by the turn-context middleware, which has
-   * the post-compaction wire — the section is content-hashed like every other kind, so a cut that
-   * dropped it re-admits it and a surviving copy keeps it.
-   */
-  async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
-    if (this.options.getParentId()) return undefined;
-    if (!this.options.getBackgroundJobsSection) return undefined;
-    try {
-      return await this.options.getBackgroundJobsSection(messages);
-    } catch {
-      // A host without a CoreEnv (tests/standalone) has no job store; the section is optional.
-      return undefined;
-    }
   }
 
   /**

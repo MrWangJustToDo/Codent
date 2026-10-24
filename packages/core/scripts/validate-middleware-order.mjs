@@ -19,7 +19,7 @@ import {
   CANONICAL_MIDDLEWARE_ORDER,
   buildAgentRunner,
   createApprovalResumeMiddleware,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createCompactionMiddleware,
   createEarlyToolResultUiMiddleware,
   createExtensionsMiddleware,
@@ -30,6 +30,7 @@ import {
   createRepeatReminderMiddleware,
   createStatusMiddleware,
   createTaskPreforkMiddleware,
+  createTodoReminderMiddleware,
   createToolCompactMiddleware,
   createTurnContextMiddleware,
   createWireRecoveryMiddleware,
@@ -82,8 +83,9 @@ const FACTORIES = [
   createEarlyToolResultUiMiddleware,
   createTaskPreforkMiddleware,
   createPlanModeMiddleware,
+  createTodoReminderMiddleware,
   createRepeatReminderMiddleware,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createPromptCacheMiddleware,
 ];
 

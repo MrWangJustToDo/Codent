@@ -14,10 +14,8 @@ export {
 export { createTaskPreforkMiddleware, type TaskPreforkMiddlewareDeps } from "./task-prefork-middleware.js";
 export { createStatusMiddleware, type StatusMiddlewareDeps } from "./status-middleware.js";
 export { createApprovalResumeMiddleware, type ApprovalResumeMiddlewareDeps } from "./approval-resume-middleware.js";
-export {
-  createBackgroundNotificationMiddleware,
-  type BackgroundNotificationMiddlewareDeps,
-} from "./background-notification-middleware.js";
+export { createBackgroundMiddleware, type BackgroundMiddlewareDeps } from "./background-middleware.js";
+export { createTodoReminderMiddleware, type TodoReminderMiddlewareDeps } from "./todo-reminder-middleware.js";
 export { createRepeatReminderMiddleware, type RepeatReminderMiddlewareDeps } from "./repeat-reminder-middleware.js";
 export {
   createTurnContextMiddleware,

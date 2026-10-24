@@ -165,7 +165,6 @@ setFile("CLAUDE.override.md", "# personal override\n");
 
   const payload = buildTurnContextSections({
     relevantMemoryContent: "<relevant_memories>memory A</relevant_memories>",
-    todoNagReminder: "<reminder>Update todos</reminder>",
     currentDate: "August 17, 2026",
     gitBranch: "main",
     gitStatus: "M file.ts",
@@ -181,7 +180,6 @@ setFile("CLAUDE.override.md", "# personal override\n");
   assert.ok(payload.includes("<current_date>"), "current_date tag kept");
   assert.ok(payload.includes("<git_status>"), "git_status tag kept");
   assert.ok(payload.includes("<relevant_memories>"), "memory tag kept");
-  assert.ok(payload.includes("<reminder>"), "todo nag tag kept");
   assert.ok(payload.includes("<plan_mode"), "plan mode tag kept");
   assert.ok(payload.includes("ext activity"), "extension turn-context section body present");
 }

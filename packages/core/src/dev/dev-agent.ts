@@ -259,6 +259,7 @@ export {
 } from "../agent/turn-context";
 export {
   buildCounterReminderSection,
+  findCounterReminder,
   buildRepeatReminderBody,
   buildTodoReminderBody,
   canonicalizeRepeatArguments,
@@ -267,7 +268,7 @@ export {
   DEFAULT_REPEAT_THRESHOLDS,
   isGenuineUserMessage,
   previewRepeatArguments,
-  readCounterReminderState,
+
   readRepeatReminderWindowState,
   readTodoReminderWindowState,
   readTrailingRepeatChain,

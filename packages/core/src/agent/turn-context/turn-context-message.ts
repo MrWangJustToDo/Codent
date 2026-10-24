@@ -107,6 +107,12 @@ export interface TurnContextSection {
    * scope attr, and a supersede notice is only added when the prior block matches.
    */
   attrs?: Record<string, string>;
+  /**
+   * The domain knows an earlier block of this identity exists, so the rendered message should
+   * carry the per-kind supersede notice. Set by sections whose own scan found a prior block
+   * (a nag at an earlier round); hash-admitted sections let the middleware decide instead.
+   */
+  admitAsUpdate?: boolean;
 }
 
 /**
@@ -182,9 +188,8 @@ function renderContextAttributes(attrs: Record<string, string> | undefined): str
  *   block of the same kind exists above).
  */
 export function formatContextSectionUserContent(section: TurnContextSection, options?: { isUpdate?: boolean }): string {
-  const body = options?.isUpdate
-    ? `${supersedeNotice(section.key)}\n\n${section.content.trim()}`
-    : section.content.trim();
+  const isUpdate = options?.isUpdate ?? section.admitAsUpdate ?? false;
+  const body = isUpdate ? `${supersedeNotice(section.key)}\n\n${section.content.trim()}` : section.content.trim();
   return `${CONTEXT_OPEN_PREFIX}${section.key}${renderContextAttributes(section.attrs)}>\n${body}\n${CONTEXT_CLOSE}`;
 }
 

@@ -170,6 +170,7 @@
     "validate:agent-stream-epoch": "pnpm run build && node scripts/validate-agent-stream-epoch.mjs",
     "validate:turn-context": "pnpm run build && node scripts/validate-turn-context.mjs",
     "validate:turn-context-kinds": "pnpm run build && node scripts/validate-turn-context-kinds.mjs",
+    "validate:todo-reminder": "pnpm run build && node scripts/validate-todo-reminder.mjs",
     "validate:prompt-cache": "pnpm run build && node scripts/validate-prompt-cache.mjs",
     "validate:extension-prompt-hooks": "pnpm run build && node scripts/validate-extension-prompt-hooks.mjs",
     "validate:extension-pi-like": "pnpm run build && node scripts/validate-extension-pi-like.mjs",

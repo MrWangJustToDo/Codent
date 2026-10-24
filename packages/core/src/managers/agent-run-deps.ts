@@ -102,8 +102,7 @@ export interface AgentRunDeps {
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
-  getDynamicTurnContextSections: (messages: readonly ModelMessage[]) => Promise<TurnContextSection[]>;
-  getBackgroundJobsSection: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
+  getDynamicTurnContextSections: () => Promise<TurnContextSection[]>;
   commitSurfacedMemories: () => void;
 }
 
@@ -154,8 +153,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),
-    getDynamicTurnContextSections: (messages) => managed.getDynamicTurnContextSections(messages),
-    getBackgroundJobsSection: (messages) => managed.getBackgroundJobsSection(messages),
+    getDynamicTurnContextSections: () => managed.getDynamicTurnContextSections(),
     commitSurfacedMemories: () => managed.memory.commitSurfacedMemories(),
   };
 }

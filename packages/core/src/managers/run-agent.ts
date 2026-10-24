@@ -16,7 +16,7 @@ import { buildManagedAgentDeps } from "./agent-run-deps.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import {
   createApprovalResumeMiddleware,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createCompactionMiddleware,
   createEarlyToolResultUiMiddleware,
   createExtensionsMiddleware,
@@ -27,6 +27,7 @@ import {
   createRepeatReminderMiddleware,
   createStatusMiddleware,
   createTaskPreforkMiddleware,
+  createTodoReminderMiddleware,
   createToolCompactMiddleware,
   createTurnContextMiddleware,
   createWireRecoveryMiddleware,
@@ -210,8 +211,7 @@ export function buildAgentRunner(
     }),
     createTurnContextMiddleware({
       getFrozenSystemPrompt: deps.getFrozenSystemPrompt,
-      getSections: (messages) => deps.getDynamicTurnContextSections(messages),
-      getBackgroundJobsSection: deps.getBackgroundJobsSection,
+      getSections: () => deps.getDynamicTurnContextSections(),
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getManagedAgent: () => managed,
@@ -246,20 +246,25 @@ export function buildAgentRunner(
       getPlanMode: () => planMode,
       resolveToolPresentation: deps.resolveToolPresentation,
     }),
-    // Advisory loop hygiene: nudge the model out of identical tool-call loops. Counts
-    // attempts and injects a synthetic reminder before the next LLM call (after the
-    // repeated call's result), persisted like the background notification.
+    // Condition + counter reminder: the todo list has gone stale for too many rounds. Reads
+    // its round/episode state back from the window (no in-memory schedule).
+    createTodoReminderMiddleware({
+      getTodoManager: deps.getTodoManager,
+      getUIChannel: () => deps.getUIChannel() ?? undefined,
+      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+    }),
+    // Condition + counter reminder: identical tool-call loops. Same scan model as the todo nag.
     createRepeatReminderMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
     }),
-    // Surface finished background jobs as a lightweight notification before each LLM call.
-    // Both injects the notification into the current run's messages AND persists it as an
-    // independent synthetic UIMessage so it survives across turns (prompt-cache friendly).
-    createBackgroundNotificationMiddleware({
+    // Background class: the `<background_jobs>` pointer (hash-admitted against the wire) and
+    // one-shot completion pushes, both persisted so they survive across turns.
+    createBackgroundMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getCommandService: () => deps.getCommandService(),
+      getParentId: () => parentId,
     }),
     createPromptCacheMiddleware({
       getModelStyle: () => config.modelStyle,

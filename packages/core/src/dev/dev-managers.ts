@@ -115,9 +115,10 @@ export { MODEL_CAPABILITY_FLAGS } from "../agent/extension/types.js";
 export {
   assertCanonicalMiddlewareOrder,
   CANONICAL_MIDDLEWARE_ORDER,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createCompactionMiddleware,
   createRepeatReminderMiddleware,
+  createTodoReminderMiddleware,
   createMessageTransformMiddleware,
   createWireRecoveryMiddleware,
   createPlanModeMiddleware,

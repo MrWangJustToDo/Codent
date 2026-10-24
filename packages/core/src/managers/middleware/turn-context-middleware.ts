@@ -33,12 +33,7 @@ export interface TurnContextMiddlewareDeps {
   /** Frozen system prompt (ends with SYSTEM_PROMPT_DYNAMIC_BOUNDARY when present). */
   getFrozenSystemPrompt: () => string | undefined;
   /** Current dynamic sections for this agent (computed per call, hash-deduped below). */
-  getSections: (messages: readonly ModelMessage[]) => Promise<TurnContextSection[]>;
-  /**
-   * Build the `<background_jobs>` section for the model-visible wire (after compaction). Only jobs
-   * whose `run_command` tool call is still in `messages` belong there.
-   */
-  getBackgroundJobsSection?: (messages: readonly ModelMessage[]) => Promise<TurnContextSection | undefined>;
+  getSections: () => Promise<TurnContextSection[]>;
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (no-op for subagents without a session store). */
   persistMessages: (next: UIMessage[]) => void;
@@ -63,6 +58,11 @@ export interface TurnContextMiddlewareDeps {
  *
  * - Subagents: kinds are filtered to {@link SUBAGENT_ALLOWED_KINDS} and the
  *   parent's `<project_instructions>` is added (their frozen prompt lacks it).
+ *
+ * This middleware is deliberately **only** the hash-admitted family. Condition + counter
+ * reminders (todo nag, repeat nudge) and the background pushes own their own middlewares: they
+ * decide from a counter or a completion, not from a content hash, and mixing the two here is
+ * what made the admission rules hard to follow.
  */
 export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   return defineMiddleware("context-transform", {
@@ -77,11 +77,7 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       // admission input — never the durable channel, which keeps pre-cut rows.
       const wire = config.messages as ModelMessage[];
 
-      const sections = [...(await deps.getSections(wire))];
-      if (!isSubagent && deps.getBackgroundJobsSection) {
-        const backgroundJobs = await deps.getBackgroundJobsSection(wire);
-        if (backgroundJobs) sections.push(backgroundJobs);
-      }
+      const sections = [...(await deps.getSections())];
       const admitted: TurnContextSection[] = isSubagent
         ? [...sections.filter((section) => SUBAGENT_ALLOWED_KINDS.has(section.key))]
         : [...sections];

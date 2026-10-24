@@ -1,27 +1,24 @@
 /**
- * Validates the turn-context **kind catalog** and the shared reminder mechanism.
+ * Validates the turn-context **kind catalog**, the shared reminder mechanism, and the split
+ * between the three injection shapes.
  *
- * Three injection shapes share one catalog. This guard keeps them honest:
+ * 1. **Hash-admitted sections** — turn-context middleware: inject when the content differs
+ *    from the newest block of the same identity in the wire.
+ * 2. **Condition + counter reminders** — todo nag and repeat nudge: their own middlewares,
+ *    sharing `agent/turn-context/reminder/counter-reminder.ts` (nearest-block recovery +
+ *    attr-carrying builder) and each owning its scan and due rule.
+ * 3. **Background pushes** — completion notifications, plus the `<background_jobs>` pointer
+ *    which is hash-admitted but owned by the background middleware.
  *
- * 1. hash-admitted sections (turn-context middleware) — inject when content differs;
- * 2. condition + counter reminders (todo nag, repeat nudge) — shared recovery/builder in
- *    `agent/turn-context/reminder/counter-reminder.ts`, per-domain due rules;
- * 3. background-result pushes (job completion, later background tasks) — appended per result.
+ * It asserts what a refactor can silently break:
  *
- * It asserts three things a refactor can silently break:
- *
- * - **Every tag comes from the catalog.** No source file outside `turn-context-message.ts`
- *   may spell a catalog kind as a quoted literal — that is how `repeat_tool_reminder` and
- *   `background_notification` drifted out of the catalog in the first place.
- * - **The reminder domains share the mechanism**, not just the prose: both build through
- *   `buildCounterReminderSection`, so both carry the same recovery attrs (scope + counter +
- *   episode) and both are recoverable with `readCounterReminderState`.
- * - **One kind, scope-identified blocks.** The todo nag and the repeat nudge both use
- *   `reminder`; the scope attrs (`cycle` / `chain`) are what keep them apart. A block of
- *   the other scope must not suppress this one, and must not make it look like a
- *   supersede (a nag may not tell the model to ignore a loop warning).
- * - **Recovery is scoped.** A block from another cycle/chain never counts, and a
- *   turn-scoped counter stops at a genuine user prompt.
+ * - **Every tag comes from the catalog** and every section body is rendered by
+ *   `formatSectionTag` — a literal tag drifts from what admission/recovery reads back.
+ * - **One kind, tag-identified blocks**: both reminders use `reminder`; the inner tag
+ *   (`todo-reminder` / `repeat-reminder`) is the discriminator, so a block of the other
+ *   reminder can never be counted for this one.
+ * - **The families stay separate**: turn context no longer contributes a reminder section, and
+ *   the reminder middlewares are their own entries in the pipeline.
  *
  * Run: pnpm --filter @codent/core run validate:turn-context-kinds
  */
@@ -32,16 +29,17 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  AgentUIChannel,
   buildCounterReminderSection,
-  createTurnContextMiddleware,
+  buildTurnContextSections,
+  CANONICAL_MIDDLEWARE_ORDER,
   contextAttributesFromText,
+  contextSectionIdentity,
   DEFAULT_REPEAT_THRESHOLDS,
+  findCounterReminder,
   formatContextSectionUserContent,
   formatSectionTag,
-  REMINDER_TAGS,
-  readCounterReminderState,
   readRepeatReminderWindowState,
+  REMINDER_TAGS,
   resolveRepeatReminder,
   resolveTodoReminder,
   TURN_CONTEXT_KINDS,
@@ -66,61 +64,26 @@ assert.equal(
 );
 assert.ok(
   !("repeatReminder" in TURN_CONTEXT_KINDS),
-  "the repeat nudge does not need its own kind — the scope attr identifies the block"
+  "the repeat nudge does not need its own kind — its inner tag identifies the block"
 );
-
 const kinds = Object.values(TURN_CONTEXT_KINDS);
 assert.equal(new Set(kinds).size, kinds.length, "catalog values are unique");
 
-/** Every `.ts` under `src`, excluding the catalog itself. */
-function sourceFiles(dir = SRC_DIR, out = []) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      sourceFiles(path, out);
-    } else if (entry.isFile() && entry.name.endsWith(".ts") && path !== CATALOG_FILE) {
-      out.push(path);
-    }
-  }
-  return out;
-}
-
-const offenders = [];
-for (const file of sourceFiles()) {
-  const text = readFileSync(file, "utf8");
-  for (const kind of kinds) {
-    // A hand-written TAG is the real offence (`<ctx kind=mode>`); a plain `"mode"` is a
-    // legitimate word elsewhere (the command catalog, status strings) and is not a tag.
-    const tagLiteral = new RegExp(`<ctx kind=${kind}[\\s>]`);
-    if (tagLiteral.test(text)) {
-      offenders.push(`${relative(SRC_DIR, file)} → <ctx kind=${kind}>`);
-    }
-    // Compound values are unambiguous: they must never be spelled outside the catalog
-    // (that is exactly how `repeat_tool_reminder` / `background_notification` drifted).
-    if (kind.includes("_") && (text.includes(`"${kind}"`) || text.includes(`'${kind}'`))) {
-      offenders.push(`${relative(SRC_DIR, file)} → "${kind}"`);
-    }
-  }
-}
-assert.deepEqual(
-  offenders,
-  [],
-  `a turn-context kind must be written once, in the catalog (TURN_CONTEXT_KINDS). Offenders:\n  ${offenders.join("\n  ")}`
-);
-
 // ---------------------------------------------------------------------------
-// 2. Both reminder domains build through the same section shape.
+// 2. Both reminders build the same shape from one mechanism.
 // ---------------------------------------------------------------------------
 const section = buildCounterReminderSection({
   kind: TURN_CONTEXT_KINDS.reminder,
+  tag: REMINDER_TAGS.todo,
   scopeAttr: "cycle",
   scope: "call_1",
   valueAttr: "rounds",
   value: 7,
   episode: 2,
-  content: "<reminder>body</reminder>",
+  content: "body",
 });
 assert.deepEqual(section.attrs, { cycle: "call_1", rounds: "7", episode: "2" }, "scope + counter + episode");
+assert.equal(section.content, formatSectionTag(REMINDER_TAGS.todo, "body"), "the body carries the reminder tag");
 const rendered = formatContextSectionUserContent(section);
 assert.deepEqual(
   contextAttributesFromText(rendered),
@@ -128,7 +91,6 @@ assert.deepEqual(
   "the shell attrs round-trip through the rendered message"
 );
 
-// The todo nag and the repeat nudge produce the same attr shape.
 const todoManager = new TodoManager();
 todoManager.update([{ content: "step", status: "in_progress", priority: "high" }], "Plan");
 const todoWire = [
@@ -145,6 +107,7 @@ const nag = resolveTodoReminder(todoManager, todoWire);
 assert.ok(nag, "the todo nag resolves at its threshold");
 assert.deepEqual(Object.keys(nag.attrs).sort(), ["cycle", "episode", "rounds"]);
 assert.equal(nag.key, TURN_CONTEXT_KINDS.reminder);
+assert.match(nag.content, /^<todo-reminder>/, "the nag declares its own tag");
 
 const repeatWire = [
   { role: "user", content: "go" },
@@ -167,10 +130,11 @@ const repeat = resolveRepeatReminder(repeatWire);
 assert.ok(repeat, "the repeat reminder resolves at its threshold");
 assert.deepEqual(Object.keys(repeat.section.attrs).sort(), ["chain", "count", "episode"]);
 assert.equal(repeat.section.key, nag.key, "both reminders use the same kind");
+assert.match(repeat.section.content, /^<repeat-reminder>/, "the nudge declares its own tag");
 assert.ok(!("cycle" in repeat.section.attrs) && !("chain" in nag.attrs), "the scope attr is what differs");
 
 // ---------------------------------------------------------------------------
-// 3. Recovery is scoped: other cycles/chains never count, prompts end turn scopes.
+// 3. Recovery: the tag identifies the reminder, the scope attr identifies the cycle/chain.
 // ---------------------------------------------------------------------------
 const todoSpec = {
   kind: TURN_CONTEXT_KINDS.reminder,
@@ -187,96 +151,101 @@ const reminderMessage = (tag, attrs) => ({
     attrs,
   }),
 });
-const withOtherCycle = [reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "18", episode: "3" })];
+
+assert.equal(findCounterReminder([], todoSpec), undefined, "an empty window has no admitted block");
 assert.deepEqual(
-  readCounterReminderState(withOtherCycle, { ...todoSpec, scope: "call_new" }),
-  { episodes: 0, lastValue: 0 },
+  findCounterReminder(
+    [reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "18", episode: "3" })],
+    todoSpec
+  ),
+  { episode: 3, value: 18 },
+  "the owning cycle recovers its block"
+);
+assert.equal(
+  findCounterReminder([reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "18", episode: "3" })], {
+    ...todoSpec,
+    scope: "call_new",
+  }),
+  undefined,
   "a block from another cycle is cleanup, not state"
 );
-assert.deepEqual(
-  readCounterReminderState(withOtherCycle, todoSpec),
-  { episodes: 1, lastValue: 18 },
-  "the owning cycle recovers it"
-);
-
-// The subtype, not just the attrs, decides: a repeat-tagged block that carries a cycle attr
-// (or a todo-tagged one carrying a chain) must never count for the other reminder.
-assert.deepEqual(
-  readCounterReminderState(
+// The subtype, not just the attrs, decides: a repeat-tagged block carrying a cycle attr (or a
+// todo-tagged one carrying a chain) never counts for the other reminder.
+assert.equal(
+  findCounterReminder(
     [reminderMessage(REMINDER_TAGS.repeat, { cycle: "call_old", rounds: "18", episode: "3" })],
     todoSpec
   ),
-  { episodes: 0, lastValue: 0 },
+  undefined,
   "the todo counter ignores a repeat-tagged block even with a matching cycle attr"
 );
-assert.deepEqual(
-  readCounterReminderState([reminderMessage(REMINDER_TAGS.todo, { chain: "abc12345", count: "3", episode: "1" })], {
+assert.equal(
+  findCounterReminder([reminderMessage(REMINDER_TAGS.todo, { chain: "abc12345", count: "3", episode: "1" })], {
     kind: TURN_CONTEXT_KINDS.reminder,
     tag: REMINDER_TAGS.repeat,
     scopeAttr: "chain",
     scope: "abc12345",
     valueAttr: "count",
   }),
-  { episodes: 0, lastValue: 0 },
+  undefined,
   "the repeat counter ignores a todo-tagged block even with a matching chain attr"
 );
 
-const repeatScope = {
-  kind: TURN_CONTEXT_KINDS.reminder,
-  tag: REMINDER_TAGS.repeat,
-  scopeAttr: "chain",
-  scope: "abc12345",
-  valueAttr: "count",
-  withinTurnOnly: true,
-};
-const previousTurn = [
-  reminderMessage(REMINDER_TAGS.repeat, { chain: "abc12345", count: "3", episode: "1" }),
-  { role: "user", content: "a new instruction" },
-];
+// The nearest block wins (two admissions of the same cycle).
 assert.deepEqual(
-  readCounterReminderState(previousTurn, repeatScope),
-  { episodes: 0, lastValue: 0 },
-  "a turn-scoped counter stops at the newest genuine prompt"
+  findCounterReminder(
+    [
+      reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "3", episode: "1" }),
+      reminderMessage(REMINDER_TAGS.todo, { cycle: "call_old", rounds: "8", episode: "2" }),
+    ],
+    todoSpec
+  ),
+  { episode: 2, value: 8 },
+  "the newest admission of the scope is the state"
+);
+
+// The repeat scan is bounded by the run: a reminder before the run does not speak for it.
+const repeatState = readRepeatReminderWindowState(
+  [{ ...reminderMessage(REMINDER_TAGS.repeat, { chain: "abc12345", count: "3", episode: "1" }) }],
+  { chain: "abc12345", start: 1 }
+);
+assert.deepEqual(repeatState, { chain: "abc12345", episode: 0, lastCount: 0 }, "outside the run → no admitted block");
+
+// ---------------------------------------------------------------------------
+// 4. The families are separate: identity, admitted set, and pipeline entries.
+// ---------------------------------------------------------------------------
+assert.equal(
+  contextSectionIdentity({ key: "current_date", content: "<current_date>x</current_date>" }),
+  "current_date"
 );
 assert.equal(
-  readRepeatReminderWindowState(previousTurn, "abc12345").episodes,
-  0,
-  "the repeat domain applies that rule"
+  contextSectionIdentity(nag),
+  REMINDER_TAGS.todo,
+  "a counter reminder is identified by its inner tag, not by the shared kind"
+);
+assert.equal(contextSectionIdentity(repeat.section), REMINDER_TAGS.repeat);
+assert.notEqual(
+  contextSectionIdentity(nag),
+  contextSectionIdentity(repeat.section),
+  "the two reminders can never mask each other in an identity-keyed lookup"
 );
 
-// ---------------------------------------------------------------------------
-// 4. A sibling block of the same kind (other scope) neither suppresses nor supersedes.
-// ---------------------------------------------------------------------------
-{
-  const channel = new AgentUIChannel();
-  channel.setMessages([{ id: "u1", role: "user", parts: [{ type: "text", content: "work" }] }]);
-  // The repeat nudge already in the window, same kind, different scope.
-  const repeatBlock = formatContextSectionUserContent(repeat.section);
-  const wire = [{ role: "user", content: "work" }, ...todoWire.slice(1), { role: "user", content: repeatBlock }];
-  let currentSection = nag;
-  const middleware = createTurnContextMiddleware({
-    getFrozenSystemPrompt: () => undefined,
-    getSections: async () => [currentSection],
-    getUIChannel: () => channel,
-    persistMessages: () => {},
-    getManagedAgent: () => null,
-  });
-  const result = await middleware.onConfig({}, { messages: wire });
-  const injected = (result.messages ?? wire).slice(wire.length);
-  assert.equal(injected.length, 1, "a repeat block does not satisfy the todo nag's scope");
-  assert.ok(String(injected[0].content).includes("unchanged for"), "the todo nag is injected");
-  assert.ok(
-    !String(injected[0].content).includes("authoritative"),
-    "a different scope is not a supersede: the nag must not tell the model to ignore the loop warning"
-  );
+// Turn context is hash-admitted sections only: its builder has no reminder input at all.
+const turnContextSections = buildTurnContextSections({
+  relevantMemoryContent: "",
+  currentDate: "October 25, 2026",
+  gitBranch: "main",
+  modeContent: "<mode_state>off</mode_state>",
+});
+assert.deepEqual(
+  turnContextSections.map((built) => built.key),
+  [TURN_CONTEXT_KINDS.currentDate, TURN_CONTEXT_KINDS.gitStatus, TURN_CONTEXT_KINDS.mode],
+  "turn context contributes no reminder section"
+);
 
-  // Same scope DOES supersede: a later round of the same cycle carries the notice.
-  const sameScopeWire = [...wire, { role: "user", content: injected[0].content }];
-  currentSection = { ...nag, content: nag.content.replace("unchanged for 3 rounds", "unchanged for 9 rounds") };
-  const second = await middleware.onConfig({}, { messages: sameScopeWire });
-  const secondInjected = (second.messages ?? sameScopeWire).slice(sameScopeWire.length);
-  assert.equal(secondInjected.length, 1, "a later round injects a fresh nag");
-  assert.ok(String(secondInjected[0].content).includes("authoritative"), "the same cycle's earlier nag is superseded");
+// Each family owns a pipeline slot.
+for (const name of ["turn-context", "todo-reminder", "repeat-reminder", "background"]) {
+  assert.ok(CANONICAL_MIDDLEWARE_ORDER.includes(name), `${name} is a pipeline entry`);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,12 +262,9 @@ const SECTION_BUILDERS = [
   "agent/turn-context/session-retrieval.ts",
   "agent/turn-context/background-jobs.ts",
   "agent/memory/memory-retrieval.ts",
-  "agent/turn-context/reminder/todo-reminder.ts",
-  "agent/turn-context/reminder/repeat-reminder.ts",
-  "managers/middleware/background-notification-middleware.ts",
+  "agent/turn-context/reminder/counter-reminder.ts",
+  "managers/middleware/background-middleware.ts",
 ];
-// Only a whole-string literal (`"<tag>"`) is a second renderer. Backtick-delimited mentions
-// inside prose (``the `<session_id>` block``) are documentation, not construction.
 const QUOTE = "[\"']";
 const sectionTags = [...Object.values(TURN_CONTEXT_KINDS), ...Object.values(REMINDER_TAGS)];
 /** Doc comments name tags for the reader; only executable literals can construct one. */
@@ -315,6 +281,35 @@ assert.deepEqual(
   [],
   `a section builder must render its tag through formatSectionTag(); a literal tag drifts from the ` +
     `catalog and from what recovery reads back. Offenders:\n  ${bareTags.join("\n  ")}`
+);
+
+// No source file outside the catalog spells a catalog kind as a quoted literal (compound
+// values) or writes a literal `<ctx kind=...>` tag — that is how `background_notification` and
+// `repeat_tool_reminder` had drifted out of it.
+function sourceFiles(dir = SRC_DIR, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(path, out);
+    else if (entry.isFile() && entry.name.endsWith(".ts") && path !== CATALOG_FILE) out.push(path);
+  }
+  return out;
+}
+const offenders = [];
+for (const file of sourceFiles()) {
+  const text = readFileSync(file, "utf8");
+  for (const kind of kinds) {
+    if (new RegExp(`<ctx kind=${kind}[\\s>]`).test(text)) {
+      offenders.push(`${relative(SRC_DIR, file)} → <ctx kind=${kind}>`);
+    }
+    if (kind.includes("_") && (text.includes(`"${kind}"`) || text.includes(`'${kind}'`))) {
+      offenders.push(`${relative(SRC_DIR, file)} → "${kind}"`);
+    }
+  }
+}
+assert.deepEqual(
+  offenders,
+  [],
+  `a turn-context kind must be written once, in the catalog (TURN_CONTEXT_KINDS). Offenders:\n  ${offenders.join("\n  ")}`
 );
 
 console.log("turn-context kinds validation passed");

@@ -35,8 +35,9 @@ import {
   createEarlyToolResultUiMiddleware,
   createTaskPreforkMiddleware,
   createPlanModeMiddleware,
+  createTodoReminderMiddleware,
   createRepeatReminderMiddleware,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createPromptCacheMiddleware,
   CANONICAL_MIDDLEWARE_ORDER,
   sortMiddlewaresByPhase,
@@ -491,7 +492,7 @@ await runCase("invoked on every iteration, not just the first call", async () =>
 // The seam must be a pure function of its input: it replaces the array it returns and
 // touches nothing else. That is what keeps transformer output out of the UI channel
 // and the persisted session — the middleware writes only to `config.messages`, and the
-// channel is written by `turn-context` / `background-notification` and by the run
+// channel is written by `turn-context` / `background` and by the run
 // itself, never from a middleware return value.
 
 console.log("wire-only contract");
@@ -726,8 +727,9 @@ await runCase("pipeline assembles with the new middleware in canonical order", a
     createEarlyToolResultUiMiddleware(stub),
     createTaskPreforkMiddleware(stub),
     createPlanModeMiddleware(stub),
+    createTodoReminderMiddleware(stub),
     createRepeatReminderMiddleware(stub),
-    createBackgroundNotificationMiddleware(stub),
+    createBackgroundMiddleware(stub),
     createPromptCacheMiddleware(stub),
   ];
   const sorted = sortMiddlewaresByPhase(assembled, () => {});

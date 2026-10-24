@@ -38,7 +38,7 @@ export type { InstructionContextState, InstructionFile, LoadedInstructionContent
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./background-jobs.js";
 export {
   buildCounterReminderSection,
-  readCounterReminderState,
+  findCounterReminder,
   buildTodoReminderBody,
   readTodoReminderWindowState,
   resolveTodoReminder,
@@ -54,9 +54,9 @@ export {
   resolveRepeatReminder,
 } from "./reminder";
 export type {
+  CounterReminderRecord,
   CounterReminderSectionInput,
   CounterReminderSpec,
-  CounterReminderState,
   TodoReminderWindowState,
   RepeatChain,
   RepeatReminderDecision,

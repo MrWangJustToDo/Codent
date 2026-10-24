@@ -20,9 +20,8 @@ import {
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
   collectRunCommandToolCallIds,
-  createBackgroundNotificationMiddleware,
+  createBackgroundMiddleware,
   createGetCommandOutputTool,
-  createTurnContextMiddleware,
   createKillCommandTool,
   formatBackgroundJobsSection,
   registerCoreEnv,
@@ -627,18 +626,23 @@ console.log("teardown log deletion OK");
       ...(summary ? [{ role: "user", content: "<CONVERSATION SUMMARY>…</CONVERSATION SUMMARY>" }] : []),
       toolCallMessage,
     ];
-    const middleware = createTurnContextMiddleware({
-      getFrozenSystemPrompt: () => undefined,
-      getSections: async () => [],
-      getBackgroundJobsSection: async (wireMessages) => {
+    const commandService = {
+      sectionFor: async (wireMessages) => {
         const ids = collectRunCommandToolCallIds(wireMessages);
         const visible = ctxRows.filter((row) => !row.toolCallId || ids.has(row.toolCallId));
         const content = formatBackgroundJobsSection(visible);
         return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
       },
+      collectCompleted: async () => [],
+      markNotified: async () => {},
+    };
+    // The pointer belongs to the background middleware now — turn-context is hash-admitted
+    // sections only.
+    const middleware = createBackgroundMiddleware({
       getUIChannel: () => ui,
       persistMessages: () => {},
-      getManagedAgent: () => ({}),
+      getCommandService: () => commandService,
+      getParentId: () => undefined,
     });
 
     const first = await middleware.onConfig({}, { messages: projectWire() });
@@ -685,10 +689,11 @@ console.log("teardown log deletion OK");
       collectCompleted: () => batch.collectCompleted(),
       markNotified: (ids) => batch.markNotified(ids),
     };
-    const middleware = createBackgroundNotificationMiddleware({
+    const middleware = createBackgroundMiddleware({
       getUIChannel: () => ui,
       persistMessages: (next) => (notificationMessages = next),
-      getCommandService: () => commandService,
+      getCommandService: () => ({ ...commandService, sectionFor: async () => undefined }),
+      getParentId: () => undefined,
     });
     await middleware.onConfig({}, { messages: [], systemPrompts: [] });
     const notificationRows = notificationMessages.filter((message) =>

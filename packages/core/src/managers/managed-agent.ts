@@ -598,13 +598,11 @@ export class ManagedAgent {
       getConfig: () => this.config,
       getCoreEnv: () => this.getCoreEnv(),
       getSessionId: () => this.getSessionData()?.id,
-      getTodoManager: () => this.getTodoManager(),
       getPlanState: () => this.planMode.getState(),
       isAutoModeEnabled: () => this.autoMode.isEnabled(),
       getRelevantMemoryContent: () => this.memory.getRelevantContent(),
       getExtensionRunner: () => this.extensions.getExtensionRunner(),
       getParentId: () => this.parentId,
-      getBackgroundJobsSection: (messages) => this.getCommandService().sectionFor(messages),
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
       invalidateRunner: () => this.invalidateRunner(),
       log: this.log,
@@ -1565,19 +1563,9 @@ export class ManagedAgent {
     this.turnContext.resetSystemPrompt();
   }
 
-  /**
-   * Build the ordered dynamic turn-context sections for the current user turn.
-   *
-   * `messages` is the post-compaction model wire — the only admission input, so the
-   * sections that depend on window state (the todo nag) resolve from it.
-   */
-  async getDynamicTurnContextSections(messages: readonly ModelMessage[] = []): Promise<TurnContextSection[]> {
-    return this.turnContext.getDynamicTurnContextSections(messages);
-  }
-
-  /** `<background_jobs>` section for the current model-visible wire. */
-  async getBackgroundJobsSection(messages: readonly ModelMessage[]): Promise<TurnContextSection | undefined> {
-    return this.turnContext.getBackgroundJobsSection(messages);
+  /** Build the ordered dynamic turn-context sections for the current user turn. */
+  async getDynamicTurnContextSections(): Promise<TurnContextSection[]> {
+    return this.turnContext.getDynamicTurnContextSections();
   }
 
   /** Live command/task/compact stream hub for hosts and child-run projections. */

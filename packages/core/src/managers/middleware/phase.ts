@@ -48,8 +48,11 @@ export const CANONICAL_MIDDLEWARE_ORDER = [
   "early-tool-result-ui",
   "task-prefork",
   "plan-mode",
+  // Condition + counter reminders: each owns its scan and appends at the tail, so they run
+  // after every hash-admitted section and before the one-shot background push.
+  "todo-reminder",
   "repeat-reminder",
-  "background-notification",
+  "background",
   "prompt-cache",
 ] as const;
 

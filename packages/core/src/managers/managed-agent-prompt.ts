@@ -43,12 +43,6 @@ export function buildFrozenSystemPrompt(input: SystemPromptInput): string | unde
 
 export interface DynamicTurnContextInput {
   relevantMemoryContent: string;
-  /**
-   * Todo nag. A ready {@link TurnContextSection} carries the recovered round/episode
-   * attrs for its `<ctx ...>` shell; a bare string is accepted for callers that only
-   * have the body (validators, extension-shaped sections).
-   */
-  todoNagReminder?: TurnContextSection | string;
   currentDate?: string;
   gitBranch?: string;
   gitStatus?: string;
@@ -103,13 +97,6 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
 
   if (input.relevantMemoryContent)
     sections.push({ key: TURN_CONTEXT_KINDS.relevantMemories, content: input.relevantMemoryContent.trim() });
-  if (input.todoNagReminder) {
-    const reminder =
-      typeof input.todoNagReminder === "string"
-        ? { key: TURN_CONTEXT_KINDS.reminder, content: input.todoNagReminder.trim() }
-        : { ...input.todoNagReminder, content: input.todoNagReminder.content.trim() };
-    if (reminder.content) sections.push(reminder);
-  }
 
   if (input.modeContent) sections.push({ key: TURN_CONTEXT_KINDS.mode, content: input.modeContent.trim() });
 

@@ -65,7 +65,6 @@ const sections = buildTurnContextSections({
   gitBranch: "main",
   gitStatus: "M file.ts",
   relevantMemoryContent: "<relevant_memories>m</relevant_memories>",
-  todoNagReminder: "<reminder>nag</reminder>",
   modeContent: '<plan_mode phase="planning">plan</plan_mode>',
   extensionTurnContextSections: [{ id: "codent-memory", content: "<memory_index>m</memory_index>" }],
 });
@@ -76,7 +75,6 @@ assert.deepEqual(
     TURN_CONTEXT_KINDS.currentDate,
     TURN_CONTEXT_KINDS.gitStatus,
     TURN_CONTEXT_KINDS.relevantMemories,
-    TURN_CONTEXT_KINDS.reminder,
     TURN_CONTEXT_KINDS.mode,
     "codent-memory",
   ]
@@ -116,106 +114,6 @@ assert.ok(
   !buildTurnContextSections({}).some((s) => s.key === TURN_CONTEXT_KINDS.sessionId),
   "no session id → no section"
 );
-
-// Todo nag: the round/episode state is recovered from the window, so the same wire yields
-// the same decision and an updated todo list starts a fresh cycle.
-const { TodoManager, buildTodoReminderBody, resolveTodoReminder, readTodoReminderWindowState } =
-  await import("../dist/dev.mjs");
-const tm = new TodoManager({
-  log: {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    agent: () => {},
-    todo: () => {},
-    clear: () => {},
-  },
-});
-tm.update([{ content: "A", status: "in_progress", priority: "high" }], "Plan");
-
-// A window of `rounds` assistant turns after a `todo` call.
-const todoCallMessage = (id) => ({
-  role: "assistant",
-  content: "",
-  toolCalls: [{ id, type: "function", function: { name: "todo", arguments: "{}" } }],
-});
-const assistantTurn = (text) => ({ role: "assistant", content: text });
-const turnsAfter = (rounds, cycle = "call-todo-1") => [
-  { role: "user", content: "work on it" },
-  todoCallMessage(cycle),
-  { role: "tool", content: "ok", toolCallId: cycle },
-  ...Array.from({ length: rounds }, (_, index) => assistantTurn(`step ${index}`)),
-];
-// The reminder block a nag would have produced, as it appears in the wire.
-const reminderBlock = (section) => formatContextSectionUserContent(section);
-
-assert.equal(resolveTodoReminder(tm, turnsAfter(2)), undefined, "below threshold -> no nag");
-const firstNag = resolveTodoReminder(tm, turnsAfter(3));
-assert.ok(firstNag, "threshold crossed -> nag fires");
-assert.match(firstNag.content, /unchanged for 3 rounds/);
-assert.equal(firstNag.attrs.cycle, "call-todo-1");
-assert.equal(firstNag.attrs.episode, "1");
-assert.deepEqual(
-  resolveTodoReminder(tm, turnsAfter(3)),
-  firstNag,
-  "same window -> same decision (no remembered state)"
-);
-
-// A nag already in the window suppresses the same round; the schedule is read back from it.
-const withFirstNag = [...turnsAfter(3), { role: "user", content: reminderBlock(firstNag) }];
-assert.equal(resolveTodoReminder(tm, withFirstNag), undefined, "the admitted nag suppresses a repeat");
-assert.equal(readTodoReminderWindowState(withFirstNag).episodes, 1);
-assert.equal(readTodoReminderWindowState(withFirstNag).lastRound, 3);
-
-// Backoff: the first gap is `cooldown`, then each reminder grows it by `growth`.
-const second = resolveTodoReminder(tm, [...turnsAfter(7), { role: "user", content: reminderBlock(firstNag) }]);
-assert.equal(second, undefined, "the initial cooldown still holds (3 + 5)");
-const secondNag = resolveTodoReminder(tm, [...turnsAfter(8), { role: "user", content: reminderBlock(firstNag) }]);
-assert.ok(secondNag, "second nag fires after the initial cooldown");
-assert.equal(secondNag.attrs.episode, "2");
-const thirdBlock = formatContextSectionUserContent(secondNag);
-assert.equal(
-  resolveTodoReminder(tm, [
-    ...turnsAfter(17),
-    { role: "user", content: reminderBlock(firstNag) },
-    { role: "user", content: thirdBlock },
-  ]),
-  undefined,
-  "the next gap grew to 10 rounds"
-);
-const thirdNag = resolveTodoReminder(tm, [
-  ...turnsAfter(18),
-  { role: "user", content: reminderBlock(firstNag) },
-  { role: "user", content: thirdBlock },
-]);
-assert.ok(thirdNag, "third nag fires after the grown cooldown");
-assert.equal(thirdNag.attrs.episode, "3");
-
-// The todo update restarts the cycle: rounds count from the new call and no old nag applies.
-const freshCycle = [
-  { role: "user", content: "work on it" },
-  todoCallMessage("call-todo-1"),
-  ...Array.from({ length: 6 }, (_, index) => assistantTurn(`old ${index}`)),
-  { role: "user", content: reminderBlock(firstNag) },
-  todoCallMessage("call-todo-2"),
-  assistantTurn("updated"),
-  assistantTurn("more"),
-];
-assert.equal(resolveTodoReminder(tm, freshCycle), undefined, "an update resets the throttle");
-assert.equal(readTodoReminderWindowState(freshCycle).cycle, "call-todo-2");
-assert.equal(readTodoReminderWindowState(freshCycle).episodes, 0, "old-cycle reminders do not count");
-
-// No todo call in the window (compacted away) → no nag: the model cannot see the list.
-assert.equal(
-  resolveTodoReminder(tm, [{ role: "user", content: "hi" }, ...Array.from({ length: 9 }, () => assistantTurn("x"))]),
-  undefined,
-  "no visible todo cycle -> no nag"
-);
-
-// The nag body carries the round/episode text (so every nag hashes uniquely).
-assert.match(buildTodoReminderBody(7, 2), /unchanged for 7 rounds/);
-assert.notEqual(buildTodoReminderBody(3, 1), buildTodoReminderBody(3, 2), "episode changes the content");
 
 // Subagent-only project_instructions section builder.
 const projectSection = buildProjectInstructionsSection("Follow conventions.");
@@ -553,8 +451,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   let invalidations = 0;
   let promptBefore;
   let parentId;
-  let todoManager = null;
-  const jobCalls = [];
   const runner = {
     lastPrompt: undefined,
     lastAgentId: undefined,
@@ -569,7 +465,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getConfig: () => config,
     getCoreEnv: () => ({}),
     getSessionId: () => "ses_turn_context",
-    getTodoManager: () => todoManager,
     getPlanState: () => ({
       phase: "off",
       planMarkdown: null,
@@ -583,10 +478,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getRelevantMemoryContent: () => "",
     getExtensionRunner: () => runner,
     getParentId: () => parentId,
-    getBackgroundJobsSection: async (messages) => {
-      jobCalls.push(messages);
-      return undefined;
-    },
     onPromptBefore: (input) => {
       promptBefore = input;
     },
@@ -606,14 +497,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.equal(invalidations, 1, "resetSystemPrompt invalidates the cached runner");
   assert.ok(controller.getSystemPrompt().includes("doc-v2"), "the rebuilt prompt sees the new doc");
 
-  const jobsWire = [{ role: "user", content: "hi" }];
-  await controller.getBackgroundJobsSection(jobsWire);
-  assert.deepEqual(jobCalls, [jobsWire], "the jobs section is built from the given wire");
-  parentId = "parent-agent";
-  await controller.getBackgroundJobsSection(jobsWire);
-  assert.equal(jobCalls.length, 1, "subagents never receive the jobs pointer");
-  parentId = undefined;
-
   await controller.collectExtensionPromptHooks("hello");
   assert.deepEqual(promptBefore, { prompt: "hello", hasTurnContext: true });
   assert.equal(runner.lastPrompt, "hello");
@@ -622,28 +505,6 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   controller.resetTurnState();
   assert.equal(invalidations, 2, "resetTurnState also unfreezes the prompt");
   assert.ok(controller.getSystemPrompt().includes("doc-v2"), "resetTurnState rebuilds from current state");
-
-  // The todo nag is resolved against the window the middleware hands in — same two-step rule
-  // as every other section (read the newest block of that kind, inject only what changed).
-  const nagTodoManager = new (await import("../dist/dev.mjs")).TodoManager();
-  nagTodoManager.update([{ content: "step", status: "in_progress", priority: "high" }], "Plan");
-  todoManager = nagTodoManager;
-  const nagWindow = [
-    { role: "user", content: "work" },
-    {
-      role: "assistant",
-      content: "",
-      toolCalls: [{ id: "call_todo", type: "function", function: { name: "todo", arguments: "{}" } }],
-    },
-    { role: "tool", content: "ok", toolCallId: "call_todo" },
-    ...Array.from({ length: 3 }, (_, index) => ({ role: "assistant", content: `step ${index}` })),
-  ];
-  const nagSections = await controller.getDynamicTurnContextSections(nagWindow);
-  const reminder = nagSections.find((section) => section.key === TURN_CONTEXT_KINDS.reminder);
-  assert.ok(reminder, "the nag rides along with the per-turn sections");
-  assert.equal(reminder.attrs.cycle, "call_todo", "the nag records its todo cycle");
-  assert.equal(reminder.attrs.rounds, "3");
-  todoManager = null;
 }
 
 // ---------------------------------------------------------------------------

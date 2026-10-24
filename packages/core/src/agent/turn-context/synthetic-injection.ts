@@ -1,6 +1,6 @@
 /**
  * Shared synthetic-message injection used by context middleware (turn-context)
- * and background-notification. One code path for: channel persistence (dedup by
+ * and background. One code path for: channel persistence (dedup by
  * stable content-hash id) + wire-message injection (appended to the tail so the
  * wire payload stays byte-identical to the next channel projection — prefix-cache
  * stability).
@@ -12,7 +12,7 @@
 
 import { appendChannelMessages } from "../ui/channel-write.js";
 
-import { hashTurnContextPayload } from "./turn-context-message.js";
+import { hashTurnContextPayload, syntheticKindFromId } from "./turn-context-message.js";
 
 import type { AgentUIChannel } from "../ui/ui-channel.js";
 import type { ModelMessage, UIMessage } from "@tanstack/ai";
@@ -45,6 +45,21 @@ export interface SyntheticInjectionResult {
 export function syntheticMessageId(entry: SyntheticMessageEntry): string {
   const hash = hashTurnContextPayload(entry.content);
   return entry.nonce === undefined ? `ctx-${entry.kind}-${hash}` : `ctx-${entry.kind}-${hash}-${entry.nonce}`;
+}
+
+/**
+ * Next admission episode for a synthetic kind.
+ *
+ * Counting the ids already on the channel makes every admission's id unique even when its
+ * content repeats (a reminder re-admitted after a compaction cut, a state cycle back to the
+ * same text), so the content-hash dedupe cannot swallow a legitimate re-injection.
+ */
+export function nextSyntheticNonce(messages: readonly UIMessage[], kind: string): number {
+  let count = 0;
+  for (const message of messages) {
+    if (syntheticKindFromId(message.id) === kind) count += 1;
+  }
+  return count + 1;
 }
 
 /**

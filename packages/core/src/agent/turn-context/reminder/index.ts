@@ -2,13 +2,13 @@
  * Reminder sections (condition + counter injections) and the mechanism they share.
  *
  * `counter-reminder.ts` is the mechanism; `todo-reminder.ts` and `repeat-reminder.ts` are
- * the two policies. A third reminder should follow the same shape: derive a counter and a
- * scope from the wire, call `readCounterReminderState`, decide with its own policy, and
- * build through `buildCounterReminderSection`.
+ * the two policies. A third reminder should follow the same shape: decide its own scan slice
+ * and counter from the wire, look for its previous block with `findCounterReminder`, apply its
+ * own due rule, and build through `buildCounterReminderSection`.
  */
 
-export { buildCounterReminderSection, readCounterReminderState } from "./counter-reminder.js";
-export type { CounterReminderSectionInput, CounterReminderSpec, CounterReminderState } from "./counter-reminder.js";
+export { buildCounterReminderSection, findCounterReminder } from "./counter-reminder.js";
+export type { CounterReminderRecord, CounterReminderSectionInput, CounterReminderSpec } from "./counter-reminder.js";
 
 export { buildTodoReminderBody, readTodoReminderWindowState, resolveTodoReminder } from "./todo-reminder.js";
 export type { TodoReminderWindowState } from "./todo-reminder.js";

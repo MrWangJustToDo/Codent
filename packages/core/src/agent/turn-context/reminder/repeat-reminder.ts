@@ -10,14 +10,16 @@
  * change approach or finish. It is advisory, never a veto — it counts and injects, it never
  * blocks, delays, or rewrites a call.
  *
- * Same two halves as the todo nag:
+ * Scan (newest → oldest over the model-visible window):
  *
- * - **Counter + scope**: the repeat chain is the run of trailing identical tool calls in the
- *   window, and its hash is the scope. A different tracked call ends the chain; a genuine
- *   user prompt ends the window slice (`withinTurnOnly`), so repetition across a fresh
- *   instruction is not a loop and an earlier turn's nudge cannot suppress a later one.
- * - **Admitted state**: {@link readCounterReminderState} reads the newest reminder blocks of
- *   this kind that carry the same chain, and their highest `count`.
+ * 1. If the nearest tracked tool call has no repetition, there is no loop — skip.
+ * 2. Otherwise keep walking left while the calls are identical; that run is the counter and
+ *    its hash is the scope.
+ * 3. Look for the nearest `<repeat-reminder>` block **inside that run**: its `count` is the
+ *    last admitted round. Inject only when the current count crosses a threshold and is
+ *    strictly greater than that; the next injection is `episode + 1`.
+ * 4. The first call that does not belong to the run ends the slice — a reminder before it
+ *    belongs to an earlier loop and must not suppress this one.
  *
  * Detection is exact-match only: the tool name plus the canonically stringified arguments
  * (object keys deep-sorted). Untracked calls (`excludeTools`) are transparent — they
@@ -32,7 +34,7 @@ import {
   isContextModelMessage,
 } from "../turn-context-message.js";
 
-import { buildCounterReminderSection, readCounterReminderState } from "./counter-reminder.js";
+import { buildCounterReminderSection, findCounterReminder } from "./counter-reminder.js";
 
 import type { TurnContextSection } from "../turn-context-message.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -106,6 +108,8 @@ export interface RepeatChain {
   canonicalArguments: string;
   /** How many times the call repeats consecutively at the tail. */
   count: number;
+  /** Index of the earliest message in this run — the slice a prior reminder must sit in. */
+  start: number;
 }
 
 interface WireToolCall {
@@ -136,7 +140,7 @@ export function readTrailingRepeatChain(
   options: { excludeTools?: Iterable<string> } = {}
 ): RepeatChain | undefined {
   const excluded = new Set(options.excludeTools ?? DEFAULT_REPEAT_EXCLUDED_TOOLS);
-  let head: { chain: string; toolName: string; canonicalArguments: string; count: number } | undefined;
+  let head: { chain: string; toolName: string; canonicalArguments: string; count: number; start: number } | undefined;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -155,38 +159,38 @@ export function readTrailingRepeatChain(
       if (!name || excluded.has(name)) continue;
       const key = repeatChainKey(name, call.function?.arguments);
       if (head && key.chain !== head.chain) return head;
-      if (!head) head = { chain: key.chain, toolName: name, canonicalArguments: key.canonical, count: 0 };
+      if (!head) head = { chain: key.chain, toolName: name, canonicalArguments: key.canonical, count: 0, start: i };
       head.count += 1;
+      head.start = i;
     }
   }
 
   return head;
 }
 
-/** Admitted reminders of the repeat kind for one chain (turn-scoped). */
+/** The reminder already admitted inside `chain`'s run, if any. */
 export interface RepeatReminderWindowState {
-  /** The chain those reminders belong to. */
+  /** The chain that run belongs to. */
   chain: string;
-  /** Reminders already admitted for this chain in the current turn. */
-  episodes: number;
-  /** Highest `count` recorded on those reminders (`0` when none). */
+  /** Injection round of that reminder (`0` when the run has none). */
+  episode: number;
+  /** `count` recorded on it (`0` when the run has none). */
   lastCount: number;
 }
 
-/** Recover the admitted repeat reminders that can still speak for `chain`. */
+/** Recover the reminder admitted inside the run (only blocks inside it can speak for it). */
 export function readRepeatReminderWindowState(
   messages: readonly ModelMessage[],
-  chain: string
+  chain: Pick<RepeatChain, "chain" | "start">
 ): RepeatReminderWindowState {
-  const admitted = readCounterReminderState(messages, {
+  const admitted = findCounterReminder(messages.slice(chain.start), {
     kind: REMINDER_KIND,
     tag: REMINDER_TAG,
     scopeAttr: SCOPE_ATTR,
-    scope: chain,
+    scope: chain.chain,
     valueAttr: VALUE_ATTR,
-    withinTurnOnly: true,
   });
-  return { chain, episodes: admitted.episodes, lastCount: admitted.lastValue };
+  return { chain: chain.chain, episode: admitted?.episode ?? 0, lastCount: admitted?.value ?? 0 };
 }
 
 /** Render the reminder body for a repeat at `count`. */
@@ -234,10 +238,10 @@ export function resolveRepeatReminder(
   const chain = readTrailingRepeatChain(messages, { excludeTools: options.excludeTools });
   if (!chain || !thresholds.includes(chain.count)) return undefined;
 
-  const state = readRepeatReminderWindowState(messages, chain.chain);
-  if (state.episodes > 0 && state.lastCount >= chain.count) return undefined;
+  const state = readRepeatReminderWindowState(messages, chain);
+  if (state.episode > 0 && state.lastCount >= chain.count) return undefined;
 
-  const episode = state.episodes + 1;
+  const episode = state.episode + 1;
   return {
     chain,
     section: buildCounterReminderSection({

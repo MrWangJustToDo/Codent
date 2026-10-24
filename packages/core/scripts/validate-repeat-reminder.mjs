@@ -148,8 +148,11 @@ assert.deepEqual(
   const wire = repeated(t3);
   wire.push(userMessage(gentle));
   assert.equal(resolveRepeatReminder(wire), undefined, "an admitted reminder suppresses a repeat");
-  assert.equal(readRepeatReminderWindowState(wire, gentleResolution.chain.chain).episodes, 1);
-  assert.equal(readRepeatReminderWindowState(wire, gentleResolution.chain.chain).lastCount, 3);
+  assert.deepEqual(readRepeatReminderWindowState(wire, gentleResolution.chain), {
+    chain: gentleResolution.chain.chain,
+    episode: 1,
+    lastCount: 3,
+  });
 }
 
 // The detailed body at a later threshold.
@@ -344,9 +347,12 @@ assert.equal(
   h.state.wire.push(userMessage("try again"));
   // The reminder from the previous turn no longer speaks for the new chain: recovery is
   // turn-scoped, so it must not report an admitted reminder for the chain that follows.
+  const nextChain = readTrailingRepeatChain(h.state.wire);
+  assert.equal(nextChain, undefined, "the new prompt ends the chain");
   assert.equal(
-    readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire)?.chain ?? "none").episodes,
-    0
+    readRepeatReminderWindowState(h.state.wire, { chain: "previous", start: 0 }).episode,
+    0,
+    "a previous turn's reminder cannot speak for the new chain"
   );
   h.push("grep", { pattern: "foo" }, "b1");
   h.push("grep", { pattern: "foo" }, "b2");
@@ -370,7 +376,7 @@ assert.equal(
     (message) => !String(message.content ?? "").includes(`<ctx kind=${TURN_CONTEXT_KINDS.reminder}`)
   );
   assert.equal(
-    readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire).chain).episodes,
+    readRepeatReminderWindowState(h.state.wire, readTrailingRepeatChain(h.state.wire)).episode,
     0,
     "the reminder is gone from the cut wire"
   );
