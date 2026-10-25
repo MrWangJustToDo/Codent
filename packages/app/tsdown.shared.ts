@@ -107,6 +107,7 @@ export const ENTRIES = [
   "src/utils/lite-diff-highlight.ts",
   "src/utils/input-feedback-queue.ts",
   "src/utils/workspace-scroll.ts",
+  "src/utils/runtime-suspend.ts",
   "src/utils/workspace-path.ts",
   "src/utils/workspace-git-diff.ts",
   "src/utils/workspace-git-info.ts",

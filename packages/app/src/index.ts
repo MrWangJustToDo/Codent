@@ -25,6 +25,16 @@ export { WorkspaceImagePreview } from "./components/WorkspaceImagePreview.js";
 // The ANSI sandbox lives in `utils` because the workspace image preview needs the same rule.
 export { sanitizeAnsi } from "./utils/ansi.js";
 export { isAlternateScreenActive } from "./utils/alternate-screen.js";
+// Host-initiated suspend: the one seam that lets a host unmount the UI without ending the session.
+export {
+  beginRuntimeSuspend,
+  consumeRuntimeSuspend,
+  isRuntimeSuspended,
+  resolveMountAction,
+  resolveUnmountAction,
+  type RuntimeMountAction,
+  type RuntimeUnmountAction,
+} from "./utils/runtime-suspend.js";
 export { StreamingOutputView } from "./messages/StreamingOutputView.js";
 export {
   ConfigEditor,

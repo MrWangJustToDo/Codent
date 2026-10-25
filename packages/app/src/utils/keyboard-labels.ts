@@ -187,9 +187,15 @@ export function formatKeyboardShortcutsHelp(): string {
   return lines.join("\n").trimEnd();
 }
 
-/** Workspace panel footer hint. */
-export function workspacePanelHint(): string {
-  return `${KeyLabel.tab} preview/diff · ${KeyLabel.leftRight} focus · ${KeyLabel.upDown} scroll · ${KeyLabel.enter} open · [ ] files · ${KeyLabel.r} refresh · ${KeyLabel.ctrlP} find · ${KeyLabel.ctrlE}/${KeyLabel.esc} close`;
+/**
+ * Workspace panel footer hint.
+ *
+ * `edit` is passed by the panel when the host supports handing the terminal to an editor; the key is
+ * not advertised otherwise, since a host without the capability never binds it.
+ */
+export function workspacePanelHint(options?: { edit?: boolean }): string {
+  const edit = options?.edit ? "e edit · " : "";
+  return `${KeyLabel.tab} preview/diff · ${KeyLabel.leftRight} focus · ${edit}${KeyLabel.upDown} scroll · ${KeyLabel.enter} open · [ ] files · ${KeyLabel.r} refresh · ${KeyLabel.ctrlP} find · ${KeyLabel.ctrlE}/${KeyLabel.esc} close`;
 }
 
 /**

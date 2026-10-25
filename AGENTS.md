@@ -157,6 +157,8 @@ interface AgentAdapter {
 }
 ```
 
+`AgentAdapter` also carries the optional **editor handoff**: `openInEditor?(target)` (implemented by the CLI, absent on browser hosts, where the panel hides the key). A host that implements it must unmount the UI without ending the session, which is what `beginRuntimeSuspend()` / `consumeRuntimeSuspend()` (`@codent/app/utils/runtime-suspend.ts`) exist for: `useAgentChat`'s unmount path skips `bindAgentSession(null, null)` + `adapter.destroy()` while a suspend is in flight, and the mount that resumes re-binds the same session instead of calling `adapter.destroy()` + `adapter.initialize()` again. Without that seam an editor handoff would dispose the runtime and drop the conversation. Validate: `pnpm --filter @codent/app test` (`test/runtime-suspend.test.mjs`).
+
 Shared initialization logic is in `createAgentSessionFromConfig()` (`@codent/app/adapter/session-bootstrap.ts`). Both `LocalAgentAdapter` (CLI) and `ExtensionAgentAdapter` delegate to this helper. `initConfig` must keep host fields such as `toolConfig` (websearch keys / preferred provider) and `remoteSession` so they reach `Host.create`. The adapter is constructed with the host-owned `env` (and provider) and builds the runtime via `CodentAgent.create`; the host wraps the tree in `<CoreEnvProvider value={env}>` so app components read the workspace env from context (`useCoreEnv`), never the ambient `getEnv()`. The CLI `LocalAgentAdapter` owns the runtime's host and, on `destroy`, disposes the runtime (which iterates `host.list()`) so it leaks nothing on exit.
 
 ### Bootstrap Sequences
@@ -1211,6 +1213,8 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
 | `/...` | - | Slash commands | Slash commands |
 
 Note: In the TUI, modifier chords use **Ctrl** (not Cmd/⌘). On macOS, prefer `Option+Enter` or `Ctrl+Enter` for force-submit / newline — plain `Shift+Enter` often cannot be distinguished from Enter. Shortcut labels are centralized in `packages/app/src/utils/keyboard-labels.ts`.
+
+**Workspace browser (`Ctrl+E`) keys:** `↑/↓` move the tree cursor (and scroll the list), `Tab` switches preview/diff, `←/→` move focus between tree and preview, `Enter` opens, `e` opens the selected file in `$VISUAL`/`$EDITOR` (TUI suspends; the session keeps running), `[`/`]` jump between changed files, `Ctrl+P` fuzzy-find, `r` refresh, `Esc`/`Ctrl+E` close. The browser is the one screen that owns the terminal's alternate buffer (with xterm alternate-scroll, mode 1007, so the wheel drives the focused pane).
 
 ## File Structure
 

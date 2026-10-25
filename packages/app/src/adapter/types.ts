@@ -112,6 +112,18 @@ export interface ClipboardImageResult {
 }
 
 // ============================================================================
+// External editor
+// ============================================================================
+
+/** What a host editor is asked to open. */
+export interface EditorTarget {
+  /** Absolute path of the file to edit. */
+  path: string;
+  /** 1-based line to position the cursor on, when the caller knows one. */
+  line?: number;
+}
+
+// ============================================================================
 // Agent Adapter Interface
 // ============================================================================
 
@@ -127,4 +139,19 @@ export interface AgentAdapter {
    */
   exit(report?: readonly string[]): void;
   readClipboardImage?(): Promise<ClipboardImageResult | null>;
+  /**
+   * Open a workspace file in the terminal editor this host owns, suspending the UI until the
+   * editor exits.
+   *
+   * Like `readClipboardImage`, this is a property of the *terminal*, not of the workspace: it is
+   * optional because a host without a local process (browser extension, WebContainer playground)
+   * has nothing to hand the terminal to. The workspace panel hides the action when it is absent.
+   *
+   * A host that implements it is responsible for the whole handoff — releasing the terminal,
+   * starting the editor, and bringing the UI back — and for reporting failures through
+   * `useEditorHandoff().setNotice(...)` rather than by writing to the terminal. Implementations
+   * reject (with a user-readable reason) when the target cannot be opened here, e.g. a remote
+   * workspace whose files are not on this machine.
+   */
+  openInEditor?(target: EditorTarget): Promise<void>;
 }

@@ -1,8 +1,10 @@
-import { Box, Text, useIsScreenReaderEnabled } from "ink";
+import { Box, Text, useApp, useIsScreenReaderEnabled } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAdapter } from "../context/adapter-context.js";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useWorkspacePanelInput } from "../hooks/input";
+import { useEditorHandoff } from "../hooks/use-editor-handoff.js";
 import { useSize } from "../hooks/use-size.js";
 import { useWorkspaceGit } from "../hooks/use-workspace-git.js";
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
@@ -26,6 +28,7 @@ import { PANE_TITLE_LINES, WorkspacePane } from "./WorkspacePane.js";
 import { WorkspacePreviewPane } from "./WorkspacePreviewPane.js";
 import { WorkspaceQuickOpen } from "./WorkspaceQuickOpen.js";
 
+import type { EditorTarget } from "../adapter/types.js";
 import type { CodeViewRef, DiffViewRef } from "@git-diff-view/cli";
 import type { Key } from "ink";
 
@@ -45,6 +48,11 @@ const PREVIEW_SCROLL_STEP = 3;
 
 export const WorkspaceFileMode = () => {
   const env = useCoreEnv();
+  const adapter = useAdapter();
+  const { setOptions } = useApp();
+  const editorNotice = useEditorHandoff((s) => s.notice);
+  /** Whether this host can hand the terminal to an editor; browser hosts cannot, and hide the key. */
+  const canEdit = typeof adapter.openInEditor === "function";
   const paneFocus = useWorkspacePanel((s) => s.paneFocus);
   const mode = useWorkspacePanel((s) => s.mode);
   const selectedPath = useWorkspacePanel((s) => s.selectedPath);
@@ -175,6 +183,15 @@ export const WorkspaceFileMode = () => {
     return () => clearTimeout(timer);
   }, [jumpNotice]);
 
+  // A handoff failure is a message the user has to read after the editor is gone, so it outlives the
+  // 2s used for "no other changed files" and clears itself from the store (it is not this screen's
+  // state — the screen it was meant for no longer exists when it arrives).
+  useEffect(() => {
+    if (!editorNotice) return;
+    const timer = setTimeout(() => useEditorHandoff.getActions().setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [editorNotice]);
+
   useEffect(() => {
     setRootPath(env.rootPath);
   }, [env]);
@@ -260,6 +277,35 @@ export const WorkspaceFileMode = () => {
     if (pendingReveal === selectedPath) consumePendingReveal(selectedPath!);
   }, [selectedPath, items, isDiffMode, pendingReveal, consumePendingReveal, paneBodyLines, setTreeScrollTop]);
 
+  /**
+   * Hand the selected file to the host's editor.
+   *
+   * The round-trip marker has to be written *before* the handoff: the host unmounts this screen while
+   * the editor runs, so the code after the `await` may find a different React tree (or none). The
+   * marker is what the resumed panel reads to refresh the caches the edit invalidated.
+   */
+  const openSelectedInEditor = useCallback(
+    async (target: EditorTarget) => {
+      if (!adapter.openInEditor) return;
+      useEditorHandoff.getActions().beginRoundTrip(target.path);
+      // Give the screen back before the handoff: the editor draws on the primary buffer, and the
+      // panel's own alternate buffer is what the host is about to tear down. Doing it here (rather
+      // than in the unmount cleanup) keeps the renderer alive and consistent for the switch, and
+      // keeps the chat behind it untouched.
+      setOptions({ isAlternateBufferEnabled: false });
+      try {
+        await adapter.openInEditor(target);
+      } catch (error) {
+        // The handoff never started (remote workspace, no local editor): drop the marker so a later
+        // mount does not refresh for nothing, take the panel's screen back, and say why in the footer.
+        useEditorHandoff.getActions().consumeRoundTrip();
+        useEditorHandoff.getActions().setNotice(error instanceof Error ? error.message : String(error));
+        setOptions({ isAlternateBufferEnabled: true });
+      }
+    },
+    [adapter, setOptions]
+  );
+
   // Full manual refresh: drop every cache, reload the tree, reset pane scroll,
   // collapse state in BOTH trees, and re-fetch git state.
   const refreshAll = useCallback(() => {
@@ -282,6 +328,16 @@ export const WorkspaceFileMode = () => {
     setRefreshToken((t) => t + 1);
     void refreshGit(rootPath);
   }, [reload, scrollActivePane, refreshGit, rootPath, resetDiffCollapsed]);
+
+  // An editor handoff is the one refresh that happens without a keypress: the panel spent the edit
+  // unmounted, so every cache still describes the pre-edit workspace. `rootPath` gates it because the
+  // first render still has the empty string and `refreshAll` needs the real root.
+  useEffect(() => {
+    if (!rootPath) return;
+    if (!useEditorHandoff.getReadonlyState().roundTrip) return;
+    useEditorHandoff.getActions().consumeRoundTrip();
+    refreshAll();
+  }, [rootPath, refreshAll]);
 
   /** Keybindings that work regardless of which pane has focus. Returns true when handled. */
   const handleGlobalKey = useCallback(
@@ -308,13 +364,37 @@ export const WorkspaceFileMode = () => {
         close();
         return true;
       }
+      if (inputChar === "e" && !key.ctrl && !key.meta && canEdit) {
+        // The cursor row is what "selected" means to every other key in this pane (`enter` opens it);
+        // a directory has nothing to edit, and the key is consumed rather than falling through.
+        const row = items[cursorIndex];
+        if (row?.type === "file") {
+          // Carry the first visible source line so the editor opens where the user was reading. Only
+          // the preview knows a *source* line: the diff view's scroll state counts display rows
+          // (hunks, headers, collapsed regions), which would land somewhere else in the file.
+          const line = mode === "preview" ? previewRef.current?.getScrollState().startLine : undefined;
+          void openSelectedInEditor({ path: row.path, ...(line ? { line } : {}) });
+        }
+        return true;
+      }
       if (inputChar === "]" || inputChar === "[") {
         jumpToChanged(inputChar === "]" ? 1 : -1);
         return true;
       }
       return false;
     },
-    [toggleMode, close, refreshAll, openQuickOpen, jumpToChanged]
+    [
+      toggleMode,
+      close,
+      refreshAll,
+      openQuickOpen,
+      jumpToChanged,
+      canEdit,
+      items,
+      cursorIndex,
+      mode,
+      openSelectedInEditor,
+    ]
   );
 
   /** Tree-pane navigation (arrows expand/select, enter toggles). */
@@ -503,7 +583,7 @@ export const WorkspaceFileMode = () => {
 
       <Box flexShrink={0} height={FOOTER_LINES} paddingX={1}>
         <Text color={COLORS.muted} dimColor>
-          {jumpNotice ?? workspacePanelHint()}
+          {jumpNotice ?? editorNotice ?? workspacePanelHint({ edit: canEdit })}
         </Text>
       </Box>
     </Box>

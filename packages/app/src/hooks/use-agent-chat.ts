@@ -9,8 +9,14 @@ import { syncExtensionCommands } from "../commands/utils/sync-extension-commands
 import { useAdapter } from "../context/adapter-context.js";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { relinkSessionModel } from "../utils/apply-model-selection.js";
+import {
+  consumeRuntimeSuspend,
+  isRuntimeSuspended,
+  resolveMountAction,
+  resolveUnmountAction,
+} from "../utils/runtime-suspend.js";
 import { clearSessionScopedCaches } from "../utils/session-caches.js";
-import { getActiveHost, resolveAgentSession } from "../utils/session-resolve.js";
+import { getActiveHost, getActiveSession, resolveAgentSession } from "../utils/session-resolve.js";
 import { resolveStopDecision } from "../utils/stop-decision.js";
 import { handleToolLifecycleEvent } from "../utils/tool-timing-store.js";
 
@@ -186,6 +192,23 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     const { setLoading: setInitLoading, setError: setInitError } = useInit.getActions();
 
     const init = async () => {
+      // A host suspend (the workspace browser's editor handoff) unmounted the UI without releasing
+      // the runtime, so this mount is a RESUME: the session is still bound and may still be running.
+      // Initializing here would destroy it and build a second one — exactly what the handoff exists
+      // to avoid. Consuming the bit is what stops it leaking into a later, unrelated mount.
+      const mountAction = resolveMountAction({
+        suspended: isRuntimeSuspended(),
+        hasSession: getActiveSession() !== null,
+      });
+      consumeRuntimeSuspend();
+      if (mountAction === "resume") {
+        // Nothing to build: the session-switch effect below repopulates from the live snapshot, so
+        // the transcript/status/interactions are current without a splash or a second runtime.
+        setInitError(null);
+        setInitLoading(false);
+        return;
+      }
+
       setInitLoading(true);
       setInitError(null);
 
@@ -222,6 +245,10 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     void init();
 
     return () => {
+      // A suspend outlives this mount: keep the bound session and the runtime so the resumed UI
+      // re-binds them instead of rebuilding. Every other unmount (process exit, config rebuild)
+      // releases them exactly as before.
+      if (resolveUnmountAction({ suspended: isRuntimeSuspended() }) === "preserve") return;
       bindAgentSession(null, null);
       void adapter.destroy();
     };

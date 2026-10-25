@@ -32,6 +32,8 @@ import {
   useSize,
   useWorkspaceInfo,
   isAlternateScreenActive,
+  beginRuntimeSuspend,
+  useEditorHandoff,
 } from "@codent/app";
 import {
   createDirectModelProvider,
@@ -51,9 +53,11 @@ import { useEffect, useState } from "react";
 import { isAcpRequested, runAcpCommand } from "./acp-command.js";
 import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs } from "./args.js";
 import { readClipboardImage } from "./clipboard.js";
+import { launchEditor } from "./editor.js";
 import { LocalAgentAdapter } from "./local-adapter.js";
 import { TerminalTitle } from "./terminal-title.js";
 
+import type { EditorTarget } from "@codent/app";
 import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
 import type { Instance } from "ink";
 
@@ -273,6 +277,57 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     await useWorkspaceInfo.getActions().init(coreEnv);
   }
 
+  /**
+   * Render (or re-render) the TUI.
+   *
+   * A function rather than the single call it used to be: the editor handoff unmounts the app and
+   * mounts it again, and both mounts must build the same tree.
+   */
+  function renderApp(): Instance {
+    return render(
+      <CoreEnvProvider value={coreEnv}>
+        <AdapterProvider value={adapter}>
+          <TerminalTitle />
+          <Bootstrap />
+        </AdapterProvider>
+      </CoreEnvProvider>,
+      {
+        maxFps: 30,
+        exitOnCtrlC: false,
+        renderProcess: true,
+        onRender: hideNativeCursor,
+        standardReactLayoutTiming: true,
+      }
+    );
+  }
+
+  /**
+   * Hand the terminal to the user's editor, then take it back.
+   *
+   * `beginRuntimeSuspend()` is what makes this not a shutdown: the app's unmount path would otherwise
+   * dispose the runtime and its session, killing whatever run is in flight. With the flag set the
+   * session survives the unmount, and the mount below re-binds it instead of building another one.
+   */
+  async function openInEditor(target: EditorTarget): Promise<void> {
+    beginRuntimeSuspend();
+    try {
+      inkInstance?.unmount();
+    } catch {
+      // already unmounted — nothing to release
+    }
+    // Nothing may paint while the editor owns the terminal. Unmounting also leaves the alternate
+    // screen and releases raw mode, which is exactly the handover the editor needs; the renderer is
+    // re-created afterwards rather than asked to diff against a screen it no longer owns.
+    try {
+      const notice = await launchEditor(target);
+      if (notice) useEditorHandoff.getActions().setNotice(notice);
+    } finally {
+      // A failed handoff must still leave a UI behind: the terminal was handed over, so a throw here
+      // would strand the user on a blank screen with no way back.
+      inkInstance = renderApp();
+    }
+  }
+
   const adapter = new LocalAgentAdapter({
     exit: (report) => {
       // The terminal has to be restored either way: a bare `process.exit` strands it in the
@@ -301,10 +356,14 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       }, 200);
     },
     readClipboardImage,
+    openInEditor,
     env: coreEnv,
     provider: modelProvider,
     // Only the locally-built Node env is ours to destroy; a remote env is borrowed.
     ownsEnv: !remoteEnv && !remoteSession,
+    // A remote workspace has no local file to edit. The capability stays wired so the panel can
+    // explain the refusal in its footer instead of hiding the key without a reason.
+    remoteWorkspace: Boolean(remoteEnv || remoteSession),
     ...(options.server?.createRemoteAgentSessionHost
       ? { createRemoteAgentSessionHost: options.server.createRemoteAgentSessionHost }
       : {}),
@@ -359,21 +418,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   initHighlighter()
     .then(() => {
-      inkInstance = render(
-        <CoreEnvProvider value={coreEnv}>
-          <AdapterProvider value={adapter}>
-            <TerminalTitle />
-            <Bootstrap />
-          </AdapterProvider>
-        </CoreEnvProvider>,
-        {
-          maxFps: 30,
-          exitOnCtrlC: false,
-          renderProcess: true,
-          onRender: hideNativeCursor,
-          standardReactLayoutTiming: true,
-        }
-      );
+      inkInstance = renderApp();
     })
     .catch((err) => {
       console.error(

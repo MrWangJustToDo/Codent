@@ -1,7 +1,7 @@
 import { useConfig } from "@codent/app";
 import { CodentAgent } from "@codent/core";
 
-import type { AgentAdapter, AppConfig, ClipboardImageResult, InitResult } from "@codent/app";
+import type { AgentAdapter, AppConfig, ClipboardImageResult, EditorTarget, InitResult } from "@codent/app";
 import type { AgentSessionHost, CoreEnv, LoadedModelsState, ModelProvider } from "@codent/core";
 
 /**
@@ -18,26 +18,41 @@ export class LocalAgentAdapter implements AgentAdapter {
   private agent: CodentAgent | null = null;
   private _exit: (report?: readonly string[]) => void;
   private _readClipboardImage: (() => Promise<ClipboardImageResult | null>) | null;
+  private _openInEditor: ((target: EditorTarget) => Promise<void>) | null;
   private _env: CoreEnv;
   private _provider: ModelProvider | undefined;
   private _ownsEnv: boolean;
+  private _remoteWorkspace: boolean;
   private _createRemoteSessionHost: ((opts: { baseUrl: string }) => AgentSessionHost) | undefined;
 
   constructor(options: {
     exit: (report?: readonly string[]) => void;
     readClipboardImage?: () => Promise<ClipboardImageResult | null>;
+    /**
+     * Host-owned editor handoff (suspend the UI, run the editor, resume). Supplied by a host that
+     * has a terminal to hand over; omitted by hosts with no local process.
+     */
+    openInEditor?: (target: EditorTarget) => Promise<void>;
     env: CoreEnv;
     provider?: ModelProvider;
     /** True only for a locally-built env; a borrowed remote env must not be destroyed on exit. */
     ownsEnv?: boolean;
+    /**
+     * The workspace lives on another machine (`--remote-env` / `--remote-session`). The editor
+     * capability still exists (so the panel can explain the refusal) but never starts a process
+     * against a path that only exists remotely.
+     */
+    remoteWorkspace?: boolean;
     /** Injected remote AgentSession host factory (`@codent/server/client` in the dev host). */
     createRemoteAgentSessionHost?: (opts: { baseUrl: string }) => AgentSessionHost;
   }) {
     this._exit = options.exit;
     this._readClipboardImage = options.readClipboardImage ?? null;
+    this._openInEditor = options.openInEditor ?? null;
     this._env = options.env;
     this._provider = options.provider;
     this._ownsEnv = options.ownsEnv ?? false;
+    this._remoteWorkspace = options.remoteWorkspace ?? false;
     this._createRemoteSessionHost = options.createRemoteAgentSessionHost;
   }
 
@@ -93,5 +108,22 @@ export class LocalAgentAdapter implements AgentAdapter {
       return this._readClipboardImage();
     }
     return null;
+  }
+
+  /**
+   * Hand the terminal to the host's editor.
+   *
+   * Refusals are thrown, not silent: the workspace panel surfaces the message in its footer, which is
+   * the only place the user can read it once the UI is back (a host that owns the handoff reports its
+   * own failures through `useEditorHandoff`).
+   */
+  async openInEditor(target: EditorTarget): Promise<void> {
+    if (this._remoteWorkspace) {
+      throw new Error("The workspace is remote — its files are not on this machine, so there is no editor to open.");
+    }
+    if (!this._openInEditor) {
+      throw new Error("This host cannot open an external editor.");
+    }
+    await this._openInEditor(target);
   }
 }

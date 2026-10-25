@@ -3,6 +3,7 @@ import { useEffect } from "react";
 
 import { useWorkspacePanel } from "../hooks/use-workspace-panel.js";
 import { enableWheelAsArrows, setAlternateScreenActive } from "../utils/alternate-screen.js";
+import { isRuntimeSuspended } from "../utils/runtime-suspend.js";
 
 import { PanelOverlay } from "./PanelOverlay.js";
 import { WorkspaceFileMode } from "./WorkspaceFileMode.js";
@@ -28,6 +29,11 @@ export const WorkspacePanel = () => {
     enableWheelAsArrows();
     return () => {
       setAlternateScreenActive(false);
+      // A handoff unmounts the app on purpose: the renderer is torn down and rebuilt, and asking the
+      // dying renderer to switch buffers throws EPIPE out of its render worker. The screen was
+      // already released when the handoff started (see the editor action), and the renderer the
+      // resume creates starts on the primary screen, so there is nothing left to switch here.
+      if (isRuntimeSuspended()) return;
       setOptions({ isAlternateBufferEnabled: false });
     };
   }, [setOptions]);
