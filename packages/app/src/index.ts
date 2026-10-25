@@ -24,6 +24,7 @@ export { ExtensionRenderSurface } from "./components/ExtensionRenderSurface.js";
 export { WorkspaceImagePreview } from "./components/WorkspaceImagePreview.js";
 // The ANSI sandbox lives in `utils` because the workspace image preview needs the same rule.
 export { sanitizeAnsi } from "./utils/ansi.js";
+export { isAlternateScreenActive } from "./utils/alternate-screen.js";
 export { StreamingOutputView } from "./messages/StreamingOutputView.js";
 export {
   ConfigEditor,

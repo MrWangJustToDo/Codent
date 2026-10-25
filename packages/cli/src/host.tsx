@@ -31,6 +31,7 @@ import {
   useConfig,
   useSize,
   useWorkspaceInfo,
+  isAlternateScreenActive,
 } from "@codent/app";
 import {
   createDirectModelProvider,
@@ -124,7 +125,6 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   }
 
   const appConfig = parseCliArgs(argv);
-  const alternateScreen = appConfig.alternateScreen === true;
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */
   let inkInstance: Instance | undefined;
 
@@ -278,9 +278,10 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       // The terminal has to be restored either way: a bare `process.exit` strands it in the
       // alternate buffer, where the shell prompt is then drawn over a screen the user cannot
       // scroll. `unmount()` is what writes the leave-alt-screen sequence.
-      if (alternateScreen) {
-        // The alt buffer is discarded on the way out, so the report must not be painted there.
-        // Leave the screen first, then print it where the user can actually read and scroll it.
+      // A panel that owns the alternate screen (the workspace browser) discards it on the way
+      // out, so a report painted there would vanish. Leave the screen first, then print it
+      // where the user can read and scroll it. The normal-screen path keeps the painted row.
+      if (isAlternateScreenActive()) {
         try {
           inkInstance?.unmount();
         } catch {
@@ -342,25 +343,17 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   useSize.getActions().init();
 
-  if (alternateScreen) {
-    // Alternate-screen terminals translate the wheel into Up/Down keys (xterm "alternate
-    // scroll", mode 1007). The app has no wheel handling yet, so those arrows would reach
-    // whatever list is focused (the `/` command menu) instead of the transcript — the wheel
-    // looks like it scrolls the wrong thing. Turn the translation off until wheel scrolling is
-    // wired; the guard below restores the terminal default on the way out.
-    if (process.stdout.isTTY) process.stdout.write("\x1b[?1007l");
-    // Last-resort restore for a path that exits without unmounting (fatal bootstrap error,
-    // a signal, an external `process.exit`). Ink's own unmount already writes these; the
-    // sequences are idempotent, so the guard is cheap insurance.
-    process.once("exit", () => {
-      if (!process.stdout.isTTY) return;
-      try {
-        process.stdout.write("\x1b[?1007h\x1b[?1049l\x1b[?25h");
-      } catch {
-        // stdout already closed
-      }
-    });
-  }
+  // Last-resort restore for a path that exits without unmounting (fatal bootstrap error, a
+  // signal, an external `process.exit`). Ink's own unmount already writes these; the sequences
+  // are idempotent, and they matter when a panel owns the alternate screen at exit.
+  process.once("exit", () => {
+    if (!process.stdout.isTTY) return;
+    try {
+      process.stdout.write("\x1b[?1007h\x1b[?1049l\x1b[?25h");
+    } catch {
+      // stdout already closed
+    }
+  });
 
   initHighlighter()
     .then(() => {
@@ -375,9 +368,6 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
           maxFps: 30,
           exitOnCtrlC: false,
           renderProcess: true,
-          // Full-screen mode: the app owns the viewport (static output is clipped, not
-          // scrollable). Off by default so the normal screen keeps native scrollback.
-          alternateBuffer: alternateScreen,
           onRender: hideNativeCursor,
           standardReactLayoutTiming: true,
         }
