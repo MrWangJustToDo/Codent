@@ -1,7 +1,7 @@
 import { Box, Text, useApp, useIsScreenReaderEnabled } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAdapter } from "../context/adapter-context.js";
+import { useOptionalAdapter } from "../context/adapter-context.js";
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useWorkspacePanelInput } from "../hooks/input";
 import { useEditorHandoff } from "../hooks/use-editor-handoff.js";
@@ -48,11 +48,11 @@ const PREVIEW_SCROLL_STEP = 3;
 
 export const WorkspaceFileMode = () => {
   const env = useCoreEnv();
-  const adapter = useAdapter();
+  const adapter = useOptionalAdapter();
   const { setOptions } = useApp();
   const editorNotice = useEditorHandoff((s) => s.notice);
   /** Whether this host can hand the terminal to an editor; browser hosts cannot, and hide the key. */
-  const canEdit = typeof adapter.openInEditor === "function";
+  const canEdit = typeof adapter?.openInEditor === "function";
   const paneFocus = useWorkspacePanel((s) => s.paneFocus);
   const mode = useWorkspacePanel((s) => s.mode);
   const selectedPath = useWorkspacePanel((s) => s.selectedPath);
@@ -286,7 +286,7 @@ export const WorkspaceFileMode = () => {
    */
   const openSelectedInEditor = useCallback(
     async (target: EditorTarget) => {
-      if (!adapter.openInEditor) return;
+      if (!adapter?.openInEditor) return;
       useEditorHandoff.getActions().beginRoundTrip(target.path);
       // Give the screen back before the handoff: the editor draws on the primary buffer, and the
       // panel's own alternate buffer is what the host is about to tear down. Doing it here (rather

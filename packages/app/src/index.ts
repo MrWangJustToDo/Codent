@@ -9,7 +9,7 @@ export {
 } from "./adapter/session-bootstrap.js";
 
 // Context
-export { AdapterProvider, useAdapter } from "./context/adapter-context.js";
+export { AdapterProvider, useAdapter, useOptionalAdapter } from "./context/adapter-context.js";
 export { CoreEnvProvider, useCoreEnv } from "./context/core-env-context.js";
 export { InputScopeProvider, type InputSurface } from "./context/input-scope-context.js";
 
