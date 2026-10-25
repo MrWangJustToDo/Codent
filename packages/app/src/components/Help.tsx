@@ -127,6 +127,12 @@ export const Help = () => {
           )}
           <Box>
             <Box width={24}>
+              <Text color={COLORS.success}>--alt-screen</Text>
+            </Box>
+            <Text>Full-screen alternate buffer (experimental: no in-app scroll yet)</Text>
+          </Box>
+          <Box>
+            <Box width={24}>
               <Text color={COLORS.success}>-d, --debug</Text>
             </Box>
             <Text>Enable debug logging</Text>

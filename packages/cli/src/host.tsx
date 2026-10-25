@@ -54,6 +54,7 @@ import { LocalAgentAdapter } from "./local-adapter.js";
 import { TerminalTitle } from "./terminal-title.js";
 
 import type { AgentSessionHost, CoreEnv, ModelProvider } from "@codent/core";
+import type { Instance } from "ink";
 
 /**
  * Remote-plane factories the host CAN reach. Injected by hosts that bundle
@@ -123,6 +124,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   }
 
   const appConfig = parseCliArgs(argv);
+  const alternateScreen = appConfig.alternateScreen === true;
+  /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */
+  let inkInstance: Instance | undefined;
 
   // Cosmetic host identity — purely display: help screen + OSC-0 terminal title.
   appConfig.productName = options.productName;
@@ -271,7 +275,17 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   const adapter = new LocalAgentAdapter({
     exit: () => {
-      setTimeout(() => process.exit(0), 200);
+      setTimeout(() => {
+        // Leave the alternate screen (and re-show the cursor) before the process goes away.
+        // A bare `process.exit` strands the terminal in the alt buffer, where the shell prompt
+        // would then be drawn over a screen the user cannot scroll.
+        try {
+          inkInstance?.unmount();
+        } catch {
+          // already unmounted (double exit chord) — nothing to restore
+        }
+        process.exit(0);
+      }, 200);
     },
     readClipboardImage,
     env: coreEnv,
@@ -316,9 +330,23 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   useSize.getActions().init();
 
+  if (alternateScreen) {
+    // Last-resort restore for a path that exits without unmounting (fatal bootstrap error,
+    // a signal, an external `process.exit`). Ink's own unmount already writes these; the
+    // sequences are idempotent, so the guard is cheap insurance.
+    process.once("exit", () => {
+      if (!process.stdout.isTTY) return;
+      try {
+        process.stdout.write("\x1b[?1049l\x1b[?25h");
+      } catch {
+        // stdout already closed
+      }
+    });
+  }
+
   initHighlighter()
     .then(() => {
-      render(
+      inkInstance = render(
         <CoreEnvProvider value={coreEnv}>
           <AdapterProvider value={adapter}>
             <TerminalTitle />
@@ -329,6 +357,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
           maxFps: 30,
           exitOnCtrlC: false,
           renderProcess: true,
+          // Full-screen mode: the app owns the viewport (static output is clipped, not
+          // scrollable). Off by default so the normal screen keeps native scrollback.
+          alternateBuffer: alternateScreen,
           onRender: hideNativeCursor,
           standardReactLayoutTiming: true,
         }

@@ -99,6 +99,14 @@ export interface ParsedCliConfig extends Partial<AppConfig> {
   remoteProvider?: string;
   /** Remote Agent Session URL (`--remote-session` / REMOTE_SESSION). */
   remoteSession?: string;
+  /**
+   * Render in the terminal's alternate screen (`--alt-screen` / `ALT_SCREEN=1`).
+   *
+   * Off by default: the normal screen keeps the terminal's native scrollback and text
+   * selection. The alternate screen is the mode that can own the whole viewport (and,
+   * later, mouse coordinates); today it has no in-app scrolling yet.
+   */
+  alternateScreen?: boolean;
   /** Whether any model-related flag was passed explicitly on the CLI
    *  (`--model` / `--style` / `--base-url` / `--api-key`), as opposed to
    *  only `.env` defaults. Lets a `--remote-session` host defer model
@@ -170,6 +178,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
   const remoteProviderFlag = getFlag(parsed, "remote-provider");
   const remoteProvider = typeof remoteProviderFlag === "string" ? remoteProviderFlag : envRemoteProvider || undefined;
 
+  const envAlternateScreen = /^(1|true|yes|on)$/i.test(getEnv("ALT_SCREEN"));
   const envRemoteSession = getEnv("REMOTE_SESSION");
   const remoteSessionFlag = getFlag(parsed, "remote-session");
   const remoteSession = typeof remoteSessionFlag === "string" ? remoteSessionFlag : envRemoteSession || undefined;
@@ -204,6 +213,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     remoteEnv,
     remoteProvider,
     remoteSession,
+    alternateScreen: getFlagBoolean(parsed, "alt-screen", "alternate-screen") || envAlternateScreen,
     modelExplicit,
     ...(modelInfo ? { modelInfo } : {}),
     ...(toolConfig ? { toolConfig } : {}),
