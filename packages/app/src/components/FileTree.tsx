@@ -247,7 +247,12 @@ export function useFileTree(
     setPendingReveal(null);
     loadDir(rootPath).then(() => {
       if (cancelled) return;
-      setExpanded(new Set([rootPath]));
+      // The root is expanded by default, but this load's completion must not clobber an expansion
+      // that landed while it was in flight: a selection reveal (`revealPath`) expands the chain of
+      // the already-selected file, which is exactly what happens to a tree that mounts with a
+      // selection — after an editor handoff, or after a session switch. Resetting to the root here
+      // collapsed that chain a frame later, so the edited file silently disappeared from the tree.
+      setExpanded((prev) => (prev.size === 0 ? new Set([rootPath]) : prev));
       setLoading(false);
     });
     return () => {

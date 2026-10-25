@@ -329,15 +329,34 @@ export const WorkspaceFileMode = () => {
     void refreshGit(rootPath);
   }, [reload, scrollActivePane, refreshGit, rootPath, resetDiffCollapsed]);
 
+  /**
+   * Refresh what an edit can change, without touching the tree.
+   *
+   * The editor wrote one file, so the caches that describe file *content* and repository *status* are
+   * stale — but the tree's own state must survive: `refreshAll` also clears the expanded chain, and
+   * that is the one thing the resumed screen cannot rebuild on its own. The selection reveal below
+   * (raised by `selectedPath` on mount) is what expands the edited file's chain and puts the cursor
+   * back on it, exactly as a `[`/`]` jump or a quick-open pick does.
+   */
+  const refreshAfterEdit = useCallback(() => {
+    clearGitStatusCache();
+    clearWorkspaceDiffStatsCache();
+    clearWorkspaceFileListCache();
+    clearContentCache();
+    clearWorkspaceDiffCache();
+    setRefreshToken((t) => t + 1);
+    void refreshGit(rootPath);
+  }, [refreshGit, rootPath]);
+
   // An editor handoff is the one refresh that happens without a keypress: the panel spent the edit
   // unmounted, so every cache still describes the pre-edit workspace. `rootPath` gates it because the
-  // first render still has the empty string and `refreshAll` needs the real root.
+  // first render still has the empty string and the refresh needs the real root.
   useEffect(() => {
     if (!rootPath) return;
     if (!useEditorHandoff.getReadonlyState().roundTrip) return;
     useEditorHandoff.getActions().consumeRoundTrip();
-    refreshAll();
-  }, [rootPath, refreshAll]);
+    refreshAfterEdit();
+  }, [rootPath, refreshAfterEdit]);
 
   /** Keybindings that work regardless of which pane has focus. Returns true when handled. */
   const handleGlobalKey = useCallback(
