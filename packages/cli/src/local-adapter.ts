@@ -16,7 +16,7 @@ import type { AgentSessionHost, CoreEnv, LoadedModelsState, ModelProvider } from
  */
 export class LocalAgentAdapter implements AgentAdapter {
   private agent: CodentAgent | null = null;
-  private _exit: () => void;
+  private _exit: (report?: readonly string[]) => void;
   private _readClipboardImage: (() => Promise<ClipboardImageResult | null>) | null;
   private _env: CoreEnv;
   private _provider: ModelProvider | undefined;
@@ -24,7 +24,7 @@ export class LocalAgentAdapter implements AgentAdapter {
   private _createRemoteSessionHost: ((opts: { baseUrl: string }) => AgentSessionHost) | undefined;
 
   constructor(options: {
-    exit: () => void;
+    exit: (report?: readonly string[]) => void;
     readClipboardImage?: () => Promise<ClipboardImageResult | null>;
     env: CoreEnv;
     provider?: ModelProvider;
@@ -84,8 +84,8 @@ export class LocalAgentAdapter implements AgentAdapter {
     clearAgentStore();
   }
 
-  exit(): void {
-    this._exit();
+  exit(report?: readonly string[]): void {
+    this._exit(report);
   }
 
   async readClipboardImage(): Promise<ClipboardImageResult | null> {

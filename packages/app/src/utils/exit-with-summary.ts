@@ -26,10 +26,13 @@ export function exitWithSummary(options: {
 }): void {
   const { adapter, session, destroySession } = options;
 
-  useAgent.getActions().beginExit(session ? buildLinesFromSession(session) : null);
+  const lines = session ? buildLinesFromSession(session) : null;
+  useAgent.getActions().beginExit(lines);
 
   if (session) destroySession(session.id);
-  adapter.exit();
+  // The host decides how the report reaches the user: normal-screen hosts paint it through the
+  // store (the `ExitSummary` row), alternate-screen hosts print it after leaving the alt buffer.
+  adapter.exit(lines ?? undefined);
 }
 
 /** Snapshot → summary lines, or `null` when the session has nothing to report. */

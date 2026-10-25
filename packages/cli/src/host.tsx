@@ -274,15 +274,27 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   }
 
   const adapter = new LocalAgentAdapter({
-    exit: () => {
-      setTimeout(() => {
-        // Leave the alternate screen (and re-show the cursor) before the process goes away.
-        // A bare `process.exit` strands the terminal in the alt buffer, where the shell prompt
-        // would then be drawn over a screen the user cannot scroll.
+    exit: (report) => {
+      // The terminal has to be restored either way: a bare `process.exit` strands it in the
+      // alternate buffer, where the shell prompt is then drawn over a screen the user cannot
+      // scroll. `unmount()` is what writes the leave-alt-screen sequence.
+      if (alternateScreen) {
+        // The alt buffer is discarded on the way out, so the report must not be painted there.
+        // Leave the screen first, then print it where the user can actually read and scroll it.
         try {
           inkInstance?.unmount();
         } catch {
           // already unmounted (double exit chord) — nothing to restore
+        }
+        if (report && report.length > 0) process.stdout.write(`\n${report.join("\n")}\n`);
+        process.exit(0);
+        return;
+      }
+      setTimeout(() => {
+        try {
+          inkInstance?.unmount();
+        } catch {
+          // already unmounted — nothing to restore
         }
         process.exit(0);
       }, 200);
@@ -331,13 +343,19 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   useSize.getActions().init();
 
   if (alternateScreen) {
+    // Alternate-screen terminals translate the wheel into Up/Down keys (xterm "alternate
+    // scroll", mode 1007). The app has no wheel handling yet, so those arrows would reach
+    // whatever list is focused (the `/` command menu) instead of the transcript — the wheel
+    // looks like it scrolls the wrong thing. Turn the translation off until wheel scrolling is
+    // wired; the guard below restores the terminal default on the way out.
+    if (process.stdout.isTTY) process.stdout.write("\x1b[?1007l");
     // Last-resort restore for a path that exits without unmounting (fatal bootstrap error,
     // a signal, an external `process.exit`). Ink's own unmount already writes these; the
     // sequences are idempotent, so the guard is cheap insurance.
     process.once("exit", () => {
       if (!process.stdout.isTTY) return;
       try {
-        process.stdout.write("\x1b[?1049l\x1b[?25h");
+        process.stdout.write("\x1b[?1007h\x1b[?1049l\x1b[?25h");
       } catch {
         // stdout already closed
       }

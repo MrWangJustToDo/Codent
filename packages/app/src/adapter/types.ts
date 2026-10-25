@@ -118,6 +118,13 @@ export interface ClipboardImageResult {
 export interface AgentAdapter {
   initialize(config: AppConfig): Promise<InitResult>;
   destroy(): Promise<void>;
-  exit(): void;
+  /**
+   * Leave the app.
+   *
+   * `report` is the exit summary the app captured from the live session. A host that tears
+   * the UI down before exiting (the alternate-screen hosts) prints it itself; a host that
+   * paints it in the last frame (the normal-screen path) can ignore it.
+   */
+  exit(report?: readonly string[]): void;
   readClipboardImage?(): Promise<ClipboardImageResult | null>;
 }
