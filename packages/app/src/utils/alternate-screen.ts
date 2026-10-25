@@ -24,15 +24,23 @@ export function setAlternateScreenActive(value: boolean): void {
 }
 
 /**
- * xterm "alternate scroll" (mode 1007): while the alternate screen is active, the wheel is
- * translated into Up/Down keys.
+ * xterm "alternate scroll" (mode 1007): while the alternate screen is active, a wheel tick is
+ * delivered as an Up/Down key press.
  *
- * The browser scrolls with its own keys, so that translation would move the tree selection
- * behind the preview instead of scrolling anything. Turn it off while the panel owns the
- * screen and restore the terminal default on the way out. Writing this mode is content-neutral
- * — unlike a screen clear, it does not desync the renderer's row model.
+ * That is exactly what the browser wants. It has no pointer model — its two panes are driven by
+ * the arrow keys (the tree moves its cursor, the preview scrolls) — so this one mode makes the
+ * wheel work with no mouse parsing at all. It also leaves the mouse unclaimed, so click-drag text
+ * selection over a preview keeps working.
+ *
+ * Only the alternate screen translates the wheel, which is why this is safe to switch on here and
+ * nowhere else: the chat runs on the normal buffer, so a wheel tick there stays a terminal
+ * scrollback scroll and never reaches the app. (The `/` command menu only ever scrolled on the
+ * wheel back when the *whole* app wore the alternate screen.)
+ *
+ * Writing this mode is content-neutral — unlike a screen clear, it does not desync the renderer's
+ * row model.
  */
-export function setAlternateScrollTranslation(enabled: boolean): void {
+export function enableWheelAsArrows(): void {
   if (!process.stdout.isTTY) return;
-  process.stdout.write(enabled ? "\x1b[?1007h" : "\x1b[?1007l");
+  process.stdout.write("\x1b[?1007h");
 }

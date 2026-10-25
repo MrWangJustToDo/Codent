@@ -344,8 +344,10 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   useSize.getActions().init();
 
   // Last-resort restore for a path that exits without unmounting (fatal bootstrap error, a
-  // signal, an external `process.exit`). Ink's own unmount already writes these; the sequences
-  // are idempotent, and they matter when a panel owns the alternate screen at exit.
+  // signal, an external `process.exit`). Ink's own unmount already writes the leave-alt-screen
+  // sequence; the sequences are idempotent, and they matter when the workspace panel owns the
+  // alternate screen at exit. `1007h` re-arms the wheel→arrow translation the panel switched on
+  // (it is the terminal default, so this only matters for a terminal that starts with it off).
   process.once("exit", () => {
     if (!process.stdout.isTTY) return;
     try {
