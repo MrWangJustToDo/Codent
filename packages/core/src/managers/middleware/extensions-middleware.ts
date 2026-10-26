@@ -70,9 +70,17 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       await eventBus.emit(event);
 
       if (event.skip) {
+        // A marker, not `{ error }`: the row is rendered by `formatToolOutput`, which must be able
+        // to tell "an extension refused this" from "the tool failed" without reading a schema the
+        // refusal does not have. `cancelled: false` keeps it out of the cancel rendering.
         return {
           type: "skip",
-          result: { error: event.reason ?? "Tool denied by extension" },
+          result: {
+            success: false,
+            cancelled: false,
+            denied: true,
+            error: event.reason ?? "Tool denied by extension",
+          },
         };
       }
 

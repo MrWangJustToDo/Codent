@@ -71,3 +71,20 @@ test("formatToolOutput echoes single-select ask_user with Selected:", () => {
     "Answer: here is the detail"
   );
 });
+
+test("an extension deny renders as a denial, never as the tool's own output", () => {
+  const denied = { success: false, cancelled: false, denied: true, error: "policy: no writes" };
+  // Every tool must take the same path: the payload is not any tool's schema, so a per-tool
+  // formatter reading it would throw (`todo` did) or print `Exit code: undefined` (`run_command`).
+  for (const tool of ["todo", "run_command", "edit_file", "read_file", "grep"]) {
+    const text = formatToolOutput(denied, tool);
+    assert.ok(text.includes("policy: no writes"), `${tool}: the extension's reason is shown`);
+    assert.ok(!text.includes("undefined"), `${tool}: no schema fields are read`);
+    assert.ok(!text.includes("Exit code"), `${tool}: a denial is not a command failure`);
+  }
+  assert.equal(
+    formatToolOutput({ success: false, cancelled: false, denied: true }, "todo"),
+    "Denied by an extension.",
+    "a denial without a reason still renders one line"
+  );
+});

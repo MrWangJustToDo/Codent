@@ -1,5 +1,6 @@
 import { isSyntheticCancelOutput } from "../../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
+import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
@@ -305,6 +306,11 @@ export function formatToolOutput(
   // output with `cancelled: true` and whatever it had produced — that is a real result, and its
   // formatter renders it (minus the exit code the tool synthesizes).
   if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;
+
+  // An extension's refusal (`tool:before:*` → `event.skip`) is the same class of shape: a shared
+  // marker that is no tool's schema. Without this short-circuit every formatter read fields that
+  // cannot be there (`todo` threw on `stats.total`, `run_command` printed `Exit code: undefined`).
+  if (isExtensionDeniedOutput(output)) return formatExtensionDeniedOutput(output);
 
   if (toolName) {
     const uiRenderer = resolvePresentation(toolName)?.text;

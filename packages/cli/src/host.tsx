@@ -79,6 +79,9 @@ export interface CliHostOptions {
   server?: CliHostServerFactories;
 }
 
+/** Upper bound on teardown during exit; a hung hook must not keep the process alive. */
+const EXIT_TEARDOWN_TIMEOUT_MS = 2000;
+
 /** CSI hide — re-sent after every frame so the hardware cursor stays off. */
 const HIDE_NATIVE_CURSOR = "\x1b[?25l";
 
@@ -330,30 +333,40 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   const adapter = new LocalAgentAdapter({
     exit: (report) => {
-      // The terminal has to be restored either way: a bare `process.exit` strands it in the
-      // alternate buffer, where the shell prompt is then drawn over a screen the user cannot
-      // scroll. `unmount()` is what writes the leave-alt-screen sequence.
-      // A panel that owns the alternate screen (the workspace browser) discards it on the way
-      // out, so a report painted there would vanish. Leave the screen first, then print it
-      // where the user can read and scroll it. The normal-screen path keeps the painted row.
-      if (isAlternateScreenActive()) {
-        try {
-          inkInstance?.unmount();
-        } catch {
-          // already unmounted (double exit chord) — nothing to restore
+      // Teardown (`session:shutdown` → per-extension flush → deactivate → MCP/background kill) lives
+      // behind `adapter.destroy()`; the app's unmount only fires it as `void`. Await it (bounded, so a
+      // hung hook cannot keep the process alive) or the "guaranteed" exit flush is best-effort.
+      void (async () => {
+        await Promise.race([
+          adapter.destroy().catch(() => {}),
+          new Promise<void>((resolve) => setTimeout(resolve, EXIT_TEARDOWN_TIMEOUT_MS)),
+        ]);
+
+        // The terminal has to be restored either way: a bare `process.exit` strands it in the
+        // alternate buffer, where the shell prompt is then drawn over a screen the user cannot
+        // scroll. `unmount()` is what writes the leave-alt-screen sequence.
+        // A panel that owns the alternate screen (the workspace browser) discards it on the way
+        // out, so a report painted there would vanish. Leave the screen first, then print it
+        // where the user can read and scroll it. The normal-screen path keeps the painted row.
+        if (isAlternateScreenActive()) {
+          try {
+            inkInstance?.unmount();
+          } catch {
+            // already unmounted (double exit chord) — nothing to restore
+          }
+          if (report && report.length > 0) process.stdout.write(`\n${report.join("\n")}\n`);
+          process.exit(0);
+          return;
         }
-        if (report && report.length > 0) process.stdout.write(`\n${report.join("\n")}\n`);
-        process.exit(0);
-        return;
-      }
-      setTimeout(() => {
-        try {
-          inkInstance?.unmount();
-        } catch {
-          // already unmounted — nothing to restore
-        }
-        process.exit(0);
-      }, 200);
+        setTimeout(() => {
+          try {
+            inkInstance?.unmount();
+          } catch {
+            // already unmounted — nothing to restore
+          }
+          process.exit(0);
+        }, 200);
+      })();
     },
     readClipboardImage,
     openInEditor,

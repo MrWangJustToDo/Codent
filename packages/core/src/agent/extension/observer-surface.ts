@@ -32,8 +32,12 @@ import type { AgentEvent, AgentEventBus, AgentEventListener } from "../agent-eve
 export interface ObserverSurfaceDeps {
   /** The extension's scoped bus (events up-flow from subagent scopes). */
   bus: AgentEventBus;
-  /** Report a contained handler failure — logged and emitted as `agent:extension-error`. */
-  reportFailure: (err: unknown) => void;
+  /**
+   * Report a contained handler failure — logged and emitted as `agent:extension-error`.
+   * `eventType` is the event being dispatched: reporting a failure of an
+   * `agent:extension-error` observer must not re-emit that event.
+   */
+  reportFailure: (err: unknown, eventType?: string) => void;
   /**
    * The extension's live context, resolved per dispatch. Optional: a standalone observer surface
    * (no runner) calls handlers with the event alone.
@@ -65,12 +69,12 @@ export function createObserverSurface(
         // dispatch so a handler never sees the previous run's facts.
         const result = handler(event, deps.getContext?.());
         if (result && typeof (result as Promise<void>).then === "function") {
-          void (result as Promise<void>).catch((err: unknown) => deps.reportFailure(err));
+          void (result as Promise<void>).catch((err: unknown) => deps.reportFailure(err, event.type));
         }
       } catch (err) {
         // The bus contains a synchronous throw too; reporting it here keeps both failure
         // shapes on one observability path.
-        deps.reportFailure(err);
+        deps.reportFailure(err, event.type);
       }
     };
 

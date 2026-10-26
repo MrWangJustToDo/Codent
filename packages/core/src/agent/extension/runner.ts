@@ -37,6 +37,7 @@ import type {
   ExtensionContextProvider,
   ExtensionContextSectionProvider,
   ExtensionRegistrations,
+  TurnContextProvider,
   ExtensionInfo,
   ExtensionRenderPayload,
   ExtensionUiContext,
@@ -305,10 +306,30 @@ export class ExtensionRunner {
    * that extension (used to clear its slots when it is disabled). Every other
    * member (notify / subscribe / getContext) is shared.
    */
-  private wrapUi(ownerId: string): ExtensionUI {
+  private wrapUi(ownerId: string, registrations?: ExtensionRegistrations): ExtensionUI {
     return {
       notify: (message, level) => this.ui.notify(message, level),
-      subscribe: (type, handler) => this.ui.subscribe(type, handler),
+      subscribe: (type, handler) => {
+        // Containment first: `Emitter` swallows only synchronous throws, so an `async` handler's
+        // rejection would escape to `unhandledRejection` — and the CLI's process guards turn that
+        // into `exit(1)`. Tracking second: an untracked subscription keeps delivering to a disabled
+        // extension.
+        const contained = (payload: unknown): void => {
+          try {
+            const result = (handler as (data: unknown) => unknown)(payload);
+            if (result && typeof (result as Promise<unknown>).then === "function") {
+              void (result as Promise<unknown>).catch((err: unknown) =>
+                this.reportObserverFailure(ownerId, err, "extension:ui")
+              );
+            }
+          } catch (err) {
+            this.reportObserverFailure(ownerId, err, "extension:ui");
+          }
+        };
+        const unsub = this.ui.subscribe(type, contained);
+        registrations?.unsubObservers.push(unsub);
+        return unsub;
+      },
       render: (surface, key, payload) => this.ui.render(surface, key, payload, ownerId),
       getContext: () => this.ui.getContext(),
     };
@@ -323,7 +344,7 @@ export class ExtensionRunner {
     return createObserverSurface(
       {
         bus: this.rawBus,
-        reportFailure: (err) => this.reportObserverFailure(ownerId, err),
+        reportFailure: (err, eventType) => this.reportObserverFailure(ownerId, err, eventType),
         // Looked up per dispatch: the context is registered right after construction and reads live.
         getContext: () => this.contexts.get(ownerId),
       },
@@ -331,14 +352,26 @@ export class ExtensionRunner {
     );
   }
 
-  private reportObserverFailure(extensionId: string, err: unknown): void {
+  private reportingObserverFailure = false;
+
+  private reportObserverFailure(extensionId: string, err: unknown, eventType?: string): void {
     const message = errorMessage(err);
     this.writeExtensionLog("warn", extensionId, `event observer failed: ${message}`);
-    this.rawBus.emit("agent:extension-error", {
-      extensionId,
-      phase: "event-observer",
-      error: message,
-    });
+    // Reporting by emitting the event the failing handler observes is a recursion: an `observeAny`
+    // handler that always throws turned one failure into ~1.2k `agent:extension-error` emissions
+    // (verified), evicting every other buffered log entry and replacing the real error with a
+    // swallowed stack overflow. The log row above is enough for this case.
+    if (eventType === "agent:extension-error" || this.reportingObserverFailure) return;
+    this.reportingObserverFailure = true;
+    try {
+      this.rawBus.emit("agent:extension-error", {
+        extensionId,
+        phase: "event-observer",
+        error: message,
+      });
+    } finally {
+      this.reportingObserverFailure = false;
+    }
   }
 
   /**
@@ -803,6 +836,31 @@ export class ExtensionRunner {
     this.writeExtensionLog("warn", extensionId, message);
   }
 
+  /**
+   * Capture a disabled notice without letting a failing producer block the disable.
+   * The failure is reported (log + `agent:extension-error`) and the generic notice is used instead.
+   */
+  private async safeDisabledNotice(
+    extensionId: string,
+    source: string,
+    producer: TurnContextProvider | undefined,
+    ctx: ExtensionContext | undefined
+  ): Promise<string | undefined> {
+    if (!producer) return undefined;
+    try {
+      return (await producer(ctx)) ?? undefined;
+    } catch (err) {
+      const message = errorMessage(err);
+      this.writeExtensionLog("warn", extensionId, `${source} disabledContent failed: ${message}`);
+      this.rawBus.emit("agent:extension-error", {
+        extensionId,
+        phase: "disable-notice",
+        error: message,
+      });
+      return undefined;
+    }
+  }
+
   /** Drop every disabled notice belonging to one extension's named sections. */
   private clearSectionNotices(extensionId: string): void {
     for (const [key, entry] of this.disabledSectionNotices) {
@@ -974,6 +1032,10 @@ export class ExtensionRunner {
       registerExitFlush: (flush: () => void): (() => void) => {
         if (!registrations) return () => {};
         registrations.exitFlush = flush;
+        // Release the replaced registration first: it stays in the process-exit registry otherwise,
+        // so a re-registering extension runs its OLD flush at exit (through state it already freed)
+        // and every re-enable adds another.
+        registrations.exitFlushRef?.();
         // Also registered process-wide: an exit with a live session never runs agent teardown,
         // and that is exactly the case where the final batch matters most.
         registrations.exitFlushRef = registerExtensionExitFlush(flush);
@@ -1023,7 +1085,7 @@ export class ExtensionRunner {
           ),
         ...this.createObserverSurface(api.id, registrations),
       },
-      ui: this.wrapUi(api.id),
+      ui: this.wrapUi(api.id, registrations),
 
       logger: {
         info: (msg: string) => this.writeExtensionLog("info", api.id, msg),
