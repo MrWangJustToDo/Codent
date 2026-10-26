@@ -55,6 +55,13 @@ assistant text and its tool-call count, and SHALL fire for messages that end wit
 as text. (The wire form of a content part belongs to the UI channel; the event reports what an
 extension reasons about.)
 
+#### Scenario: Subagent events are attributable
+
+- **WHEN** a task subagent emits `turn:*` / `message:*` (its events up-flow to the parent scope)
+- **THEN** the event envelope carries the child's `agentId` (and the parent's `parentId`)
+- **AND** a consumer counting turns compares `event.agentId` with its own `ctx.agentId` instead of
+  assuming every event belongs to the session it observes
+
 #### Scenario: Events are notifications, not barriers
 
 - **WHEN** an extension starts a model call from a `message:start` handler

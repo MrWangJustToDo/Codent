@@ -116,6 +116,9 @@ function makeHost(overrides = {}) {
         throw new ExtensionLlmError("budget-exceeded", "budget exhausted (test)");
       }
     },
+    refundExtensionBudget() {
+      if (state.budgetUsed > 0) state.budgetUsed -= 1;
+    },
     ...overrides,
   };
   return { host, usage, state };
@@ -295,6 +298,74 @@ function makeHost(overrides = {}) {
     (error) => error instanceof ExtensionLlmError && error.code === "budget-exceeded",
     "the second call in the run exceeds the budget"
   );
+}
+
+// ── 10. an unbilled failure gives its budget slot back ─────────────────────
+{
+  const { host, state } = makeHost();
+  state.budgetLimit = 1;
+  const failing = {
+    ...adapter(textStream),
+    adapter: {
+      ...adapter(textStream).adapter,
+      // A provider error chunk before any output: no usage, nothing billed.
+      chatStream: () =>
+        (async function* () {
+          yield { type: "RUN_ERROR", message: "connection reset" };
+        })(),
+    },
+  };
+  host.resolveTextAdapter = async () => failing;
+  await assert.rejects(() => completeExtensionQuery(host, "ext-a", { prompt: "boom" }));
+  assert.equal(state.budgetUsed, 0, "a failed attempt that was not billed refunds its slot");
+  // The same host can still spend the slot: the refund is what makes a transient failure survivable.
+  host.resolveTextAdapter = async () => adapter(textStream);
+  const result = await completeExtensionQuery(host, "ext-a", { prompt: "retry" });
+  assert.equal(result.text, "hello", "the slot is usable again after a transient failure");
+}
+
+// ── 11. the host output-token cap is a ceiling ────────────────────────────
+{
+  let seenMaxTokens;
+  const capturing = adapter(() => textStream());
+  capturing.adapter.chatStream = (options) => {
+    // The port maps the cap to the provider's own key (`max_tokens` or `max_completion_tokens`) and
+    // applies its thinking-aware floor; the ceiling is asserted through whatever number it sends.
+    seenMaxTokens = Object.values(options?.modelOptions ?? {}).find((value) => typeof value === "number");
+    return textStream();
+  };
+  const { host } = makeHost({
+    resolveTextAdapter: async () => capturing,
+    getExtensionMaxOutputTokens: () => 100,
+  });
+  await completeExtensionQuery(host, "ext-a", { prompt: "hi", maxOutputTokens: 5000 });
+  assert.ok(
+    typeof seenMaxTokens === "number" && seenMaxTokens < 5000,
+    `a request larger than the host cap is clamped (saw ${String(seenMaxTokens)})`
+  );
+}
+
+// ── 12. repeated completions do not leak abort listeners ──────────────────
+{
+  const warnings = [];
+  const onWarning = (warning) => warnings.push(warning);
+  process.on("warning", onWarning);
+  try {
+    const controller = new AbortController();
+    const { host } = makeHost({ getExtensionSignal: () => controller.signal });
+    for (let i = 0; i < 15; i++) {
+      await completeExtensionQuery(host, "ext-a", { prompt: `call ${i}` });
+    }
+    // Warnings are emitted on a later tick.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(
+      warnings.filter((warning) => warning.name === "MaxListenersExceededWarning"),
+      [],
+      "each completed query detaches its abort mirror from the run signal"
+    );
+  } finally {
+    process.off("warning", onWarning);
+  }
 }
 
 console.log("extension model access validation passed");

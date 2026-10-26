@@ -268,32 +268,38 @@ async function runTextQuery(
   options: SideTextQueryOptions
 ): Promise<SideTextQueryResult> {
   const startTime = Date.now();
-  const stream = chat({
-    adapter: textAdapter.adapter,
-    messages: queryMessages(options),
-    systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
-    ...createQueryRequest(textAdapter, options),
-  });
+  const query = createQueryRequest(textAdapter, options);
+  try {
+    const stream = chat({
+      adapter: textAdapter.adapter,
+      messages: queryMessages(options),
+      systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
+      ...query.request,
+    });
 
-  let text = "";
-  let usage: TokenUsage | undefined;
+    let text = "";
+    let usage: TokenUsage | undefined;
 
-  for await (const chunk of stream) {
-    if (chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta) {
-      text += chunk.delta;
+    for await (const chunk of stream) {
+      if (chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta) {
+        text += chunk.delta;
+      }
+      if (chunk.type === "RUN_FINISHED" && chunk.usage) {
+        usage = extractTanStackUsage(chunk.usage);
+        recordUsage(textAdapter, usage);
+      }
+      if (chunk.type === "RUN_ERROR") {
+        throw new Error(
+          sideQueryError(extractRunErrorMessage(chunk), textAdapter, options.log, startTime, { mode: "text" })
+        );
+      }
     }
-    if (chunk.type === "RUN_FINISHED" && chunk.usage) {
-      usage = extractTanStackUsage(chunk.usage);
-      recordUsage(textAdapter, usage);
-    }
-    if (chunk.type === "RUN_ERROR") {
-      throw new Error(
-        sideQueryError(extractRunErrorMessage(chunk), textAdapter, options.log, startTime, { mode: "text" })
-      );
-    }
+
+    return { text: text.trim(), usage, durationMs: Date.now() - startTime };
+  } finally {
+    // Release the abort mirror: the run's signal outlives this query.
+    query.dispose();
   }
-
-  return { text: text.trim(), usage, durationMs: Date.now() - startTime };
 }
 
 // ============================================================================
@@ -351,14 +357,17 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
   // `chat({ outputSchema })` returns only the parsed object — it never surfaces
   // the adapter's token usage — and it is not iterable. Requesting the stream
   // keeps usage (from `RUN_FINISHED`) and keeps this function's shape familiar.
-  const stream = chat({
-    adapter: textAdapter.adapter,
-    messages: queryMessages(options),
-    systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
-    outputSchema: options.schema,
-    stream: true as const,
-    ...createQueryRequest(textAdapter, options),
-  });
+  const query = createQueryRequest(textAdapter, options);
+  const stream = queryStream(query, (request) =>
+    chat({
+      adapter: textAdapter.adapter,
+      messages: queryMessages(options),
+      systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
+      outputSchema: options.schema,
+      stream: true as const,
+      ...request,
+    })
+  );
 
   let text = "";
   let capture: { object: unknown; raw: string } | null = null;
@@ -510,12 +519,15 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
   const startTime = Date.now();
   const systemPrompt = options.systemPrompt ? `${options.systemPrompt}\n\n${contract}` : contract;
 
-  const stream = chat({
-    adapter: textAdapter.adapter,
-    messages: queryMessages(options),
-    systemPrompts: [systemPrompt],
-    ...createQueryRequest(textAdapter, options),
-  });
+  const query = createQueryRequest(textAdapter, options);
+  const stream = queryStream(query, (request) =>
+    chat({
+      adapter: textAdapter.adapter,
+      messages: queryMessages(options),
+      systemPrompts: [systemPrompt],
+      ...request,
+    })
+  );
 
   let text = "";
   let usage: TokenUsage | undefined;
@@ -590,43 +602,79 @@ function logModeDecision<TSchema extends SchemaInput>(
  * Extracted so the structured branch cannot drift from the text branch on abort
  * propagation or the thinking disable.
  */
+/** Request options shared by both branches, plus the teardown that detaches the abort mirror. */
+interface QueryRequestOptions {
+  request: {
+    abortController: AbortController;
+    debug: false;
+    promptCache: "none";
+    modelOptions: Record<string, unknown>;
+    reasoning?: "off";
+  };
+  /**
+   * Detach the abort mirror.
+   *
+   * `{ once: true }` only removes the listener when the abort fires — a normally completed query left
+   * one listener on a signal that lives for the whole run. At 20 completions per run that crosses
+   * Node's default 10-listener threshold, and the resulting `MaxListenersExceededWarning` on stderr
+   * corrupts a full-screen TUI. Callers release it in a `finally`.
+   */
+  dispose: () => void;
+}
+
 function createQueryRequest(
   textAdapter: TextAdapterConfig,
   options: Pick<SideTextQueryOptions, "abortSignal" | "maxOutputTokens" | "disableThinking">
-): {
-  abortController: AbortController;
-  debug: false;
-  promptCache: "none";
-  modelOptions: Record<string, unknown>;
-  reasoning?: "off";
-} {
+): QueryRequestOptions {
   const abortController = new AbortController();
+  let detach: (() => void) | undefined;
   if (options.abortSignal) {
-    if (options.abortSignal.aborted) {
-      abortController.abort(options.abortSignal.reason);
+    const source = options.abortSignal;
+    if (source.aborted) {
+      abortController.abort(source.reason);
     } else {
-      options.abortSignal.addEventListener("abort", () => abortController.abort(options.abortSignal!.reason), {
-        once: true,
-      });
+      const onAbort = () => abortController.abort(source.reason);
+      source.addEventListener("abort", onAbort, { once: true });
+      detach = () => source.removeEventListener("abort", onAbort);
     }
   }
 
   const disableThinking = options.disableThinking ?? true;
 
   return {
-    abortController,
-    debug: false,
-    // TanStack 0.69+ enables automatic prompt caching by default. Side queries are
-    // one-shot and our cache policy belongs to the main agent's middleware.
-    promptCache: "none" as const,
-    ...(disableThinking && textAdapter.reasoning ? { reasoning: "off" as const } : {}),
-    modelOptions: {
-      // The cap goes through the thinking-aware floor: `max_tokens` bounds thinking AND the
-      // answer, so a job-sized cap starves the answer on a reasoning model. See
-      // `side-query-budget.ts` for the measurements behind the number.
-      ...maxTokensOption(textAdapter.modelStyle, applySideQueryOutputFloor(options.maxOutputTokens)),
+    request: {
+      abortController,
+      debug: false,
+      // TanStack 0.69+ enables automatic prompt caching by default. Side queries are
+      // one-shot and our cache policy belongs to the main agent's middleware.
+      promptCache: "none" as const,
+      ...(disableThinking && textAdapter.reasoning ? { reasoning: "off" as const } : {}),
+      modelOptions: {
+        // The cap goes through the thinking-aware floor: `max_tokens` bounds thinking AND the
+        // answer, so a job-sized cap starves the answer on a reasoning model. See
+        // `side-query-budget.ts` for the measurements behind the number.
+        ...maxTokensOption(textAdapter.modelStyle, applySideQueryOutputFloor(options.maxOutputTokens)),
+      },
     },
+    dispose: () => detach?.(),
   };
+}
+
+/**
+ * Wrap a query's stream so the abort mirror is released however the stream ends.
+ *
+ * Prefer this over a bare `chat()`: the run's signal outlives the query, so an undetached listener is
+ * one leak per side query (see {@link createQueryRequest}).
+ */
+async function* queryStream<T>(
+  query: QueryRequestOptions,
+  create: (request: QueryRequestOptions["request"]) => AsyncIterable<T>
+): AsyncIterable<T> {
+  try {
+    yield* create(query.request);
+  } finally {
+    query.dispose();
+  }
 }
 
 /**

@@ -41,9 +41,15 @@ export interface ExtensionCompletionHost {
   getExtensionSignal(): AbortSignal | undefined;
   /** Count one call against the current run's budget; throws {@link ExtensionLlmError} when spent. */
   consumeExtensionBudget(extensionId: string): void;
+  /**
+   * Give one slot back after an attempt that was neither billed nor completed (a transport failure
+   * before the provider answered). Without it, transient 502s exhaust the run's budget and the real
+   * work never runs.
+   */
+  refundExtensionBudget?(): void;
   /** The effective model id the session is running. */
   getExtensionModel(): string | undefined;
-  /** Per-agent output-token cap, when the host configured one. */
+  /** Per-agent output-token cap (a ceiling, not a default), when the host configured one. */
   getExtensionMaxOutputTokens?(): number | undefined;
   /**
    * Build an adapter for a catalog model. Defaults to the shared factory; injectable so a host can
@@ -213,8 +219,9 @@ export async function completeExtensionQuery(
   const adapter = await resolveAdapter(host, request.model?.trim() || undefined);
   host.consumeExtensionBudget(extensionId);
 
-  const maxOutputTokens =
-    request.maxOutputTokens ?? host.getExtensionMaxOutputTokens?.() ?? DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS;
+  // A ceiling, not a default: a caller may ask for less, never for more than the host allows.
+  const cap = host.getExtensionMaxOutputTokens?.() ?? DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS;
+  const maxOutputTokens = Math.min(request.maxOutputTokens ?? cap, cap);
   const signal = request.signal ?? host.getExtensionSignal();
 
   // A signal that is already aborted must not start a request at all: the run may have been cancelled
@@ -250,7 +257,17 @@ export async function completeExtensionQuery(
     // The port attaches that usage to the thrown error so it can still be attributed; without this, a
     // failing extension call would be the one LLM call a session never pays for.
     const billed = (error as { usage?: Parameters<UsageTracker["addTotal"]>[0] }).usage;
-    if (billed) host.usage.addTotal(billed);
+    if (billed) {
+      host.usage.addTotal(billed, adapter.pricing ?? undefined);
+      host.log?.info("side-query", `extension completion failed after billing (${extensionId})`, {
+        model: request.model?.trim() || host.getExtensionModel(),
+        usage: billed,
+      });
+    } else {
+      // Nothing was billed, so the slot goes back: a burst of transient failures must not spend the
+      // run's allowance.
+      host.refundExtensionBudget?.();
+    }
     throw error;
   }
 }

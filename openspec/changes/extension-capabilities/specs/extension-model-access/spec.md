@@ -114,8 +114,10 @@ A signal that is already aborted SHALL reject before any request is issued.
 
 ### Requirement: Spend guardrails
 
-The runtime SHALL bound extension spend: a default `maxOutputTokens` cap when the caller omits one,
-and a per-run completion budget that fails closed with a typed error once exhausted. The budget is
+The runtime SHALL bound extension spend: an `maxOutputTokens` cap that applies as a **ceiling** (a
+caller may ask for less, never for more than the host configured), and a per-run completion budget
+that fails closed with a typed error once exhausted. An attempt that was neither billed nor
+completed SHALL return its slot — transient failures must not spend the run's allowance. The budget is
 keyed to the **user turn** (a tool phase does not reset it) and applies only while a run is in
 flight; an idle completion (a command, an observer) is bounded by the output-token cap alone. Every
 completion SHALL be recorded as a side query in the agent log with the calling extension id.
@@ -129,10 +131,16 @@ error so it is visible in the session log.
 - **THEN** further calls reject with a typed budget error
 - **AND** the refusal is reported once as an extension error with the extension id
 
-#### Scenario: Default token cap
+#### Scenario: Token cap is a ceiling
 
-- **WHEN** the caller omits `maxOutputTokens`
-- **THEN** the runtime's default cap applies to the request
+- **WHEN** the caller omits `maxOutputTokens`, or asks for more than the host cap
+- **THEN** the host cap applies to the request
+- **AND** the port's own floor may raise a degenerate cap further, never lower it
+
+#### Scenario: Unbilled failure returns the slot
+
+- **WHEN** a completion fails before the provider was billed (transport error, error chunk)
+- **THEN** the run's remaining budget is unchanged
 
 #### Scenario: Attribution in the log
 

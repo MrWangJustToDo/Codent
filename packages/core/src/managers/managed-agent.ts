@@ -1496,6 +1496,7 @@ export class ManagedAgent {
       getExtensionModel: () => this.config.model || this.getModelInfo()?.id,
       getExtensionMaxOutputTokens: () => this.config.extensionLlm?.maxOutputTokens,
       consumeExtensionBudget: (extensionId: string) => this.consumeExtensionLlmBudget(extensionId),
+      refundExtensionBudget: () => this.refundExtensionLlmBudget(),
     };
 
     this.extensionRuntime = {
@@ -1568,6 +1569,12 @@ export class ManagedAgent {
       );
     }
     this.extensionLlmBudget.count += 1;
+  }
+
+  /** Return one budget slot after an attempt that was not billed (see `refundExtensionBudget`). */
+  private refundExtensionLlmBudget(): void {
+    if (this.extensionLlmBudget.runId === null) return;
+    if (this.extensionLlmBudget.count > 0) this.extensionLlmBudget.count -= 1;
   }
 
   getExtensionLoader(): ExtensionLoader | null {
