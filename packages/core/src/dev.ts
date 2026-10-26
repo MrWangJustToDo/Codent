@@ -90,6 +90,7 @@ export { LANGUAGE_TO_GRAMMAR } from "./agent/tree-sitter/parser-manager.js";
 // `ExtensionRunner` / `createLifecycleMiddleware` / `createAgentEventBus` are already re-exported by
 // the dev modules above; only the extension-runtime additions live here.
 export { createObserverSurface } from "./agent/extension/observer-surface.js";
+export { BUILTIN_EXTENSION_ORDER } from "./agent/extension/dispatch-order.js";
 export { completeExtensionQuery } from "./managers/extension-completion.js";
 export { ExtensionLlmError } from "./agent/extension/extension-llm-error.js";
 export { copyModelMessages } from "./utils/model-messages.js";

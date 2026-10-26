@@ -24,7 +24,6 @@ const ALLOWLIST = new Map([
     "Composes the agent lifecycle, controllers and public facade; split is tracked separately.",
   ],
   ["agent/extension/runner.ts", "Extension registration/lifecycle orchestrator; owns the five registration channels."],
-  ["agent/extension/types.ts", "Declarative extension API; moving type groups would fragment one contract."],
 ]);
 
 async function collect(dir) {

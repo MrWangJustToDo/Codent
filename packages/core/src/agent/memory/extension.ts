@@ -21,6 +21,7 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
 import type { MemoryManager } from "./memory-manager.js";
@@ -60,6 +61,9 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
   const { memoryManager, config } = options;
   return {
     id: "codent-memory",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "Memory",
     version: "1.0.0",
     description:

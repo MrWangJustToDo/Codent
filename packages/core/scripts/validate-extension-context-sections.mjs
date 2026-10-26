@@ -63,16 +63,16 @@ const ids = first.turnContextSections.map((section) => section.id);
 const byId = (bundle, id) => bundle.turnContextSections.find((section) => section.id === id);
 
 // ── 1. base section + named sections, each under its own kind ───────────────
-assert.ok(ids.includes("sec"), "the extension's single-section content keeps its extension-id kind");
-assert.ok(ids.includes("sec:index"), "a named section gets its own kind");
-assert.ok(ids.includes("sec:selection"), "and so does a second one");
-assert.equal(byId(first, "sec:selection").content, "SELECTION-TURN-2", "a duplicate name keeps the last producer");
-assert.equal(ids.filter((id) => id === "sec:selection").length, 1, "one block per kind, never two");
+assert.ok(ids.includes("ext:sec"), "the base section is namespaced under the extension id (ext:<id>)");
+assert.ok(ids.includes("ext:sec:index"), "a named section gets its own kind");
+assert.ok(ids.includes("ext:sec:selection"), "and so does a second one");
+assert.equal(byId(first, "ext:sec:selection").content, "SELECTION-TURN-2", "a duplicate name keeps the last producer");
+assert.equal(ids.filter((id) => id === "ext:sec:selection").length, 1, "one block per kind, never two");
 
 // ── 2. a throwing producer is contained to its own section ─────────────────
-assert.equal(byId(first, "sec:boom"), undefined, "the failing section is skipped");
-assert.equal(byId(first, "sec:bad name"), undefined, "an invalid section name is skipped, not interpolated");
-assert.ok(byId(first, "sec:index"), "its siblings are still injected");
+assert.equal(byId(first, "ext:sec:boom"), undefined, "the failing section is skipped");
+assert.equal(byId(first, "ext:sec:bad name"), undefined, "an invalid section name is skipped, not interpolated");
+assert.ok(byId(first, "ext:sec:index"), "its siblings are still injected");
 assert.ok(
   failures.some((event) => String(event.error ?? "").includes('section "boom": section exploded')),
   "the failure is reported with the extension id and the section name"
@@ -90,9 +90,9 @@ assert.deepEqual(
 const disabled = await runner.setEnabled("sec", false);
 assert.equal(disabled.ok, true);
 const afterDisable = await runner.collectBeforeAgentStart("third", "ses");
-assert.equal(byId(afterDisable, "sec").content, "sections disabled", "the base section announces the disable");
-assert.equal(byId(afterDisable, "sec:selection").content, "SELECTION-OFF", "and so does the named section");
-assert.equal(byId(afterDisable, "sec:index"), undefined, "a section without a disabled notice is simply absent");
+assert.equal(byId(afterDisable, "ext:sec").content, "sections disabled", "the base section announces the disable");
+assert.equal(byId(afterDisable, "ext:sec:selection").content, "SELECTION-OFF", "and so does the named section");
+assert.equal(byId(afterDisable, "ext:sec:index"), undefined, "a section without a disabled notice is simply absent");
 
 // ── 4b. a duplicate reload does not resurrect a stale disabled notice ─────
 // `setEnabled(false)` stores the section notice; reloading the same id (a second file, a
@@ -111,9 +111,9 @@ await runner.loadExtension({
   },
 });
 const afterReload = await runner.collectBeforeAgentStart("reloaded", "ses");
-assert.equal(byId(afterReload, "sec:index").content, "INDEX-V2", "the reloaded extension is live");
+assert.equal(byId(afterReload, "ext:sec:index").content, "INDEX-V2", "the reloaded extension is live");
 assert.equal(
-  afterReload.turnContextSections.filter((section) => section.id === "sec:selection").length,
+  afterReload.turnContextSections.filter((section) => section.id === "ext:sec:selection").length,
   0,
   "a stale disabled notice for the old definition is gone"
 );
@@ -121,6 +121,6 @@ assert.equal(
 // ── 5. re-enabling restores the live content under the same kinds ─────────
 await runner.setEnabled("sec", true);
 const afterEnable = await runner.collectBeforeAgentStart("fourth", "ses");
-assert.equal(byId(afterEnable, "sec:index").content, "INDEX-V2", "re-enable uses the reloaded definition");
+assert.equal(byId(afterEnable, "ext:sec:index").content, "INDEX-V2", "re-enable uses the reloaded definition");
 
 console.log("extension context sections validation passed");

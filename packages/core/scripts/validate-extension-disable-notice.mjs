@@ -22,7 +22,8 @@ async function collect(runner, id) {
 
 async function disableText(runner, id) {
   const sections = await collect(runner, id);
-  const section = sections.find((s) => s.id === id);
+  // Extension kinds are namespaced: `ext:<id>`.
+  const section = sections.find((s) => s.id === `ext:${id}`);
   return section?.content ?? "";
 }
 
@@ -43,7 +44,7 @@ async function disableText(runner, id) {
   });
   // Enabled: content injected under its own kind.
   const enabled = await runner.collectBeforeAgentStart("x", "id");
-  assert.deepEqual(enabled.turnContextSections, [{ id: "custom", content: "widgets on" }]);
+  assert.deepEqual(enabled.turnContextSections, [{ id: "ext:custom", content: "widgets on" }]);
   // Disabled: same tag, disabled notice only.
   const text = await disableText(runner, "custom");
   assert.equal(text, "Custom ext is switched off — its widgets are gone.");
@@ -104,7 +105,7 @@ async function disableText(runner, id) {
   assert.match(off.turnContextSections?.[0]?.content ?? "", /toggle is off/);
   await runner.setEnabled("toggle", true);
   const on = await runner.collectBeforeAgentStart("x", "id");
-  assert.deepEqual(on.turnContextSections, [{ id: "toggle", content: "toggle active" }]);
+  assert.deepEqual(on.turnContextSections, [{ id: "ext:toggle", content: "toggle active" }]);
 }
 
 console.log("extension-disable-notice validation passed");

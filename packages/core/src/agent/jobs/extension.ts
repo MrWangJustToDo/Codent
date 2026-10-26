@@ -31,6 +31,7 @@
  *   `get_command_output` / the job's log file.
  */
 
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 import { formatDuration } from "../tools/presentation/format/format.js";
 
 import type { SessionJobSummary } from "../../runtime-types/session-payloads.js";
@@ -121,6 +122,9 @@ export function createJobsExtension(): ExtensionAPI {
 
   return {
     id: "codent-jobs",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "Jobs",
     version: "1.0.0",
     description: "Background command jobs: a one-line running summary in the footer surface",

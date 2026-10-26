@@ -17,6 +17,7 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
 import { defaultPath } from "../../env";
 import { truncateText } from "../../utils/text-truncation.js";
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { TreeSitterManager, type TreeSitterEnv } from "../tree-sitter/parser-manager.js";
 import { WorkspaceIndex } from "../tree-sitter/workspace-index.js";
@@ -157,6 +158,9 @@ export function createLspExtension(options?: LspExtensionConfig): ExtensionAPI {
   let shutdownTreeSitter: (() => void) | undefined;
   return {
     id: "codent-lsp",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "LSP Integration",
     version: "1.0.0",
     description:

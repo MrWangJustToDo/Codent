@@ -25,6 +25,7 @@
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
 import { errorMessage } from "../../utils/errors.js";
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
 import { projectCodeModeModelOutput } from "./model-output.js";
@@ -153,6 +154,9 @@ function toExtensionTool(tool: AnyServerTool): ExtensionToolDefinition {
 export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): ExtensionAPI {
   return {
     id: "codent-code-mode",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "Code Mode",
     version: "1.0.0",
     description: "Sandboxed TypeScript execution (TanStack ai-code-mode)",

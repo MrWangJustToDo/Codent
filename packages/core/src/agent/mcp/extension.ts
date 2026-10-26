@@ -1,3 +1,4 @@
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/define-tool.js";
 
 import { loadMcpConfig } from "./config.js";
@@ -42,6 +43,9 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
   const { mcpManager, configPath, servers } = options;
   return {
     id: "codent-mcp",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "MCP",
     version: "1.0.0",
     description:

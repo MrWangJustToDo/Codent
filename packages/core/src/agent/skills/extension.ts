@@ -19,6 +19,7 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
 import type { SkillRegistry } from "./skill-registry.js";
@@ -63,6 +64,9 @@ export function createSkillsExtension(options: CreateSkillsExtensionOptions): Ex
   const { skillRegistry, config } = options;
   return {
     id: "codent-skills",
+    // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
+    // same-name tool to a user extension. Loading last must not mean "runs last, wins".
+    order: BUILTIN_EXTENSION_ORDER,
     name: "Skills",
     version: "1.0.0",
     description:

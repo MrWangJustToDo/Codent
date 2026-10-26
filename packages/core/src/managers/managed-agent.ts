@@ -993,7 +993,13 @@ export class ManagedAgent {
     payload?: AgentEventPayloadMap[T],
     options?: { parentId?: string; agentId?: string }
   ): void {
-    emitAgentTelemetry(this, type, payload, options);
+    // Default the parent link to this agent's own parent: a child's events up-flow into the parent's
+    // scope, and without this the envelope dropped `parentId` for everything except the explicit
+    // `subagent:*` emits — so an extension could not tell a child's turn from its own by envelope alone.
+    emitAgentTelemetry(this, type, payload, {
+      ...(this.parentId ? { parentId: this.parentId } : {}),
+      ...options,
+    });
 
     // Any `subagent:*` transition can change a child row, which is what the retained `subagents`
     // summary carries. Refresh here, at the ONE place these events are dispatched, rather than at

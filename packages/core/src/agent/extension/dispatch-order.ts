@@ -22,6 +22,17 @@
 export const DEFAULT_EXTENSION_ORDER = 0;
 
 /**
+ * The order every built-in extension declares.
+ *
+ * Built-ins are the baseline, and they load *last* (bootstrap runs the disk/config extensions first,
+ * then the built-ins). Without a declared order that load position silently made them the opposite:
+ * they ran last in interceptor/transformer chains and **won** same-named tools, so a user extension
+ * that replaced `load_skill` was buried. A below-default order fixes both readings at once — chain
+ * surfaces see built-ins first (the user gets the last word), resolution surfaces see them last.
+ */
+export const BUILTIN_EXTENSION_ORDER = -100;
+
+/**
  * A resolved position: the declared `order` (normalized) plus the extension's recorded load
  * sequence as the tie-break. The sequence is assigned by the extension runner at load time and
  * is deliberately **not** derived from the loader's discovery order — dispatch position is a

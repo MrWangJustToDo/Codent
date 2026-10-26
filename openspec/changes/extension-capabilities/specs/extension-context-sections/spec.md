@@ -33,8 +33,9 @@ Every section SHALL declare a kind at registration, derived from the extension i
 name, and the runtime SHALL render the block's outer tag from that kind rather than from a
 literal written in extension code.
 
-Kinds MUST be unique within an extension, and two extensions MUST NOT collide: the namespace is
-the extension id. A section name SHALL be a slug (`[A-Za-z][A-Za-z0-9._-]*`), because it is
+Kinds MUST be unique within an extension, and two extensions MUST NOT collide: the kind is
+`ext:<extensionId>` for the base section and `ext:<extensionId>:<name>` for a named one. The `ext:`
+namespace keeps extension kinds out of the core catalog's names. A section name SHALL be a slug (`[A-Za-z][A-Za-z0-9._-]*`), because it is
 interpolated into the tag and the tag is recovered from message text — an invalid name is reported
 and skipped rather than emitted. A duplicate name SHALL keep the last registration and report one
 warning, not one per turn.
@@ -42,7 +43,7 @@ warning, not one per turn.
 #### Scenario: Rendered kind
 
 - **WHEN** an extension registers section `selection`
-- **THEN** the injected block carries a kind derived from the extension id and `selection`
+- **THEN** the injected block carries the kind `ext:<extensionId>:selection`
 - **AND** the extension never writes a literal context tag
 
 #### Scenario: Duplicate section name

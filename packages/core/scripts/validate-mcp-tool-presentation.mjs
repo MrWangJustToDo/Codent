@@ -229,7 +229,7 @@ console.log(`✓ ${toolDefs.length} MCP tools declare keepRow + detailed under a
 
 {
   const { turnContextSections } = await runner.collectBeforeAgentStart("probe", "sess-mcp");
-  const mcpSection = turnContextSections.find((section) => section.id === "codent-mcp");
+  const mcpSection = turnContextSections.find((section) => section.id === "ext:codent-mcp");
   assert.ok(mcpSection, "the MCP extension contributes a turn-context section");
   assert.match(
     mcpSection.content,

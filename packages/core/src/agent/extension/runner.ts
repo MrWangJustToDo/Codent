@@ -59,11 +59,22 @@ import type { ModelMessage } from "@tanstack/ai";
 const CONTEXT_THROTTLE_MS = 250;
 
 /**
- * Allowed section names: a slug. The name becomes part of the `<ctx kind="id:name">` shell, and the
- * kind is recovered from message text by splitting on whitespace, so anything outside this set (a
- * space, a quote, `>`) corrupts the envelope and breaks per-kind admission.
+ * Allowed identifiers — extension ids and section names alike.
+ *
+ * Both become part of the `<ctx kind="…">` shell, and the kind is recovered from message text by
+ * splitting on whitespace, so anything outside this set (a space, a quote, `>`) corrupts the
+ * envelope and breaks per-kind admission.
  */
 const SECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9._-]*$/;
+
+/**
+ * Extension ids additionally allow `/` — `author/name` is a common namespacing convention, and a
+ * slash is safe inside a `<ctx kind>` tag (recovery splits on whitespace, not punctuation).
+ */
+const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
+
+/** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
+const EXTENSION_KIND_PREFIX = "ext:";
 
 export interface ExtensionRunnerOptions {
   getEnvVar: (key: string) => string | undefined;
@@ -379,13 +390,15 @@ export class ExtensionRunner {
    * Distinct from the telemetry `session:start` emitted via the unified bus —
    * this one is interceptable by extensions.
    */
-  emitSessionStart(cwd: string, sessionId: string): void {
-    // Fire-and-forget interception: interceptor errors must not surface as
-    // unhandled rejections or break session bootstrap.
-    this.eventBus
+  async emitSessionStart(cwd: string, agentId: string): Promise<void> {
+    // Awaited, like `session:shutdown`: an async handler that warms an index or reads the transcript
+    // was still in flight when the first model call started. Errors stay contained (bootstrap must
+    // not fail because a hook threw) but the handler itself is awaited.
+    const sessionId = this.options.getRuntime?.()?.sessionId() ?? null;
+    await this.eventBus
       .emit({
         type: "session:start",
-        payload: { cwd, sessionId },
+        payload: { cwd, agentId, ...(sessionId ? { sessionId } : {}) },
         defaultReturn: undefined,
       })
       .catch(() => {});
@@ -400,11 +413,12 @@ export class ExtensionRunner {
    * async handler was still running. Rejections are swallowed here: a failing interceptor
    * must not break teardown.
    */
-  async emitSessionShutdown(sessionId: string): Promise<void> {
+  async emitSessionShutdown(agentId: string): Promise<void> {
+    const sessionId = this.options.getRuntime?.()?.sessionId() ?? null;
     await this.eventBus
       .emit({
         type: "session:shutdown",
-        payload: { sessionId },
+        payload: { agentId, ...(sessionId ? { sessionId } : {}) },
         defaultReturn: undefined,
       })
       .catch(() => {});
@@ -433,12 +447,13 @@ export class ExtensionRunner {
    * Emit `before_agent_start` to each interceptor (observable event), then run
    * registered context providers. Returns per-extension turn-context sections.
    */
-  async collectBeforeAgentStart(prompt: string, sessionId: string): Promise<ExtensionPromptAppends> {
+  async collectBeforeAgentStart(prompt: string, agentId: string): Promise<ExtensionPromptAppends> {
     // Dispatch through intercept (shared mutable event, ordered, awaited);
     // handlers that append turn context do so on the event without cancelling.
+    const liveSessionId = this.options.getRuntime?.()?.sessionId() ?? null;
     const event: BeforeAgentStartEvent = {
       type: "before_agent_start",
-      payload: { prompt, sessionId },
+      payload: { prompt, agentId, ...(liveSessionId ? { sessionId: liveSessionId } : {}) },
       defaultReturn: undefined,
     };
     await this.eventBus.emit(event);
@@ -451,7 +466,7 @@ export class ExtensionRunner {
       const ctx = this.contexts.get(id);
       try {
         const value = await provider.content?.(ctx);
-        if (value?.trim()) turnContextSections.push({ id, content: value.trim() });
+        if (value?.trim()) turnContextSections.push({ id: this.sectionKind(id), content: value.trim() });
       } catch (err) {
         const message = errorMessage(err);
         // Converge into the agent log via the existing `agent:extension-error`
@@ -505,8 +520,8 @@ export class ExtensionRunner {
     // their tools are gone (symmetric to the enable-side section). A disabled
     // extension's providers were already unsubscribed on destroy, so its id never
     // also appears above.
-    for (const [id, notice] of this.disabledExtensionNotices) {
-      if (notice?.trim()) turnContextSections.push({ id, content: notice.trim() });
+    for (const [extensionId, notice] of this.disabledExtensionNotices) {
+      if (notice?.trim()) turnContextSections.push({ id: this.sectionKind(extensionId), content: notice.trim() });
     }
     for (const [id, notice] of this.disabledSectionNotices) {
       if (notice.content.trim()) turnContextSections.push({ id, content: notice.content.trim() });
@@ -546,8 +561,22 @@ export class ExtensionRunner {
       this.ranks.set(api.id, { order: resolveExtensionOrder(api.order), seq: this.loadSequence++ });
     }
     const ctx = this.createContext(api, config, registrations);
-    this.contexts.set(api.id, ctx);
 
+    // The id is the extension's identity everywhere: the `<ctx kind="ext:<id>">` tag, the owner id
+    // used for tool/presentation scoping, and the disable/enable key. A non-slug id would corrupt
+    // the turn-context envelope, so it is refused — registered as an errored instance (so the
+    // catalog and the bootstrap report say why) but never activated and never given a context.
+    if (!EXTENSION_ID_RE.test(api.id)) {
+      const error = new Error(
+        `Invalid extension id "${api.id}": ids must match [A-Za-z][A-Za-z0-9._/-]* (it becomes a <ctx kind> tag).`
+      );
+      this.writeExtensionLog("error", api.id || "unknown", error.message);
+      const invalid: ExtensionInstance = { api, context: ctx, state: "error", error, registrations };
+      this.extensions.push(invalid);
+      return invalid;
+    }
+
+    this.contexts.set(api.id, ctx);
     const instance: ExtensionInstance = {
       api,
       context: ctx,
@@ -707,6 +736,10 @@ export class ExtensionRunner {
     if (enabled && already) return { ok: true, message: `Extension "${id}" already enabled` };
     if (!enabled && instance.state === "inactive") return { ok: true, message: `Extension "${id}" already disabled` };
 
+    if (enabled && !EXTENSION_ID_RE.test(instance.api.id)) {
+      return { ok: false, message: `Extension "${id}" has an invalid id and cannot be enabled` };
+    }
+
     if (enabled) {
       this.activating.add(instance.api.id);
       // `unregisterInstanceArtifacts` drops the context on disable; re-activation must put the same
@@ -751,7 +784,7 @@ export class ExtensionRunner {
         section.disabledContent === undefined
           ? undefined
           : ((await section.disabledContent(ctxForDisable)) ?? undefined);
-      if (body?.trim()) sectionNotices.push([`${instance.api.id}:${section.name}`, body.trim()]);
+      if (body?.trim()) sectionNotices.push([this.sectionKind(instance.api.id, section.name), body.trim()]);
     }
 
     await this.destroyExtension(instance);
@@ -868,9 +901,16 @@ export class ExtensionRunner {
     }
   }
 
-  /** The context kind of one named section: `<extensionId>:<sectionName>`. */
-  private sectionKind(extensionId: string, name: string): string {
-    return `${extensionId}:${name}`;
+  /**
+   * The context kind of one extension section: `ext:<extensionId>` for the base section,
+   * `ext:<extensionId>:<sectionName>` for a named one.
+   *
+   * The prefix keeps extension kinds out of the core catalog's namespace: an extension whose id
+   * happens to be `current_date` used to publish the *same* admission slot as the core date section,
+   * so the two replaced one another every turn and one producer silently never persisted.
+   */
+  private sectionKind(extensionId: string, name?: string): string {
+    return name ? `${EXTENSION_KIND_PREFIX}${extensionId}:${name}` : `${EXTENSION_KIND_PREFIX}${extensionId}`;
   }
 
   /** The live context of an active extension, for dispatch sites outside the runner. */

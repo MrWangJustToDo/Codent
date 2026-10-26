@@ -33,13 +33,13 @@ await runner.loadExtension({
 
 const collected = await runner.collectBeforeAgentStart("hello world", "agent-1");
 // Only non-empty content surfaces; each extension is its own section keyed by id.
-assert.deepEqual(collected.turnContextSections, [{ id: "ext-a", content: "provider-A" }]);
+assert.deepEqual(collected.turnContextSections, [{ id: "ext:ext-a", content: "provider-A" }]);
 
 // Disabling ext-a keeps its tag but swaps in the disabled notice.
 await runner.setEnabled("ext-a", false);
 const afterDisable = await runner.collectBeforeAgentStart("x", "id");
 assert.deepEqual(afterDisable.turnContextSections, [
-  { id: "ext-a", content: 'Extension "A" is disabled — its tools and commands are unavailable.' },
+  { id: "ext:ext-a", content: 'Extension "A" is disabled — its tools and commands are unavailable.' },
 ]);
 
 const emptyRunner = new ExtensionRunner({ getEnvVar: () => undefined });

@@ -863,7 +863,7 @@ Recovery / continuation always re-reads `managed.ui.getMessages()` (not a closed
 ```
 MemoryManager.initialize()     // .agents/memory/*.md + MEMORY.md
 createMemoryExtension → ctx.registerContextProvider({ content: () => <memory_index> })
-collectBeforeAgentStart (per user turn) → <ctx kind=codent-memory> section
+collectBeforeAgentStart (per user turn) → <ctx kind="ext:codent-memory"> section
 ```
 
 The memory index (`<memory_index>`) is **not** frozen into the system prompt — it is
@@ -1084,7 +1084,7 @@ An extension that buffers state needs two exits, and they are different mechanis
 | `ctx.registerFlush(fn)` (receives the live `ctx`) | `destroyExtension` / `destroyAll` / disable — **before** `deactivate()` | yes, per extension |
 | `ctx.registerExitFlush(fn)` | `process.on("exit")` and the fatal handlers | no (best-effort, contained) |
 
-Order per extension: `session:shutdown` (interceptors) → `flush` → `deactivate` → unregister registrations + clear UI slots. A throwing flush is reported as `agent:extension-error` with phase `flush` and does not skip the remaining phases. The runner releases both registrations in `unregisterInstanceArtifacts`, so a destroyed extension stops running on `exit`.
+Order: one `session:shutdown` for the agent (interceptors, awaited) → per extension `flush` → `deactivate` → unregister registrations + clear UI slots. A throwing flush is reported as `agent:extension-error` with phase `flush` and does not skip the remaining phases. The runner releases both registrations in `unregisterInstanceArtifacts`, so a destroyed extension stops running on `exit`.
 
 `LifecycleCoordinator` owns the recursive destroy cascade. `AgentManager.destroyAgent` keeps its synchronous signature: teardown is tracked as a promise and the log flush is chained onto its continuation, with `settleTeardowns()` for an ordered shutdown (which `LocalAgentSessionHost.destroy()` awaits). The log extension registers a sync exit flush over every sink it attached, so a hard exit with a live session still lands the pending batch.
 
@@ -1140,9 +1140,9 @@ Validate: `pnpm --filter @codent/core run validate:extension-event-observation`.
 
 **Per-turn prompt hooks:** On each root user prompt (not tool continuations / subagents), `prepareForRun` calls `ExtensionRunner.collectBeforeAgentStart`, which:
 
-1. Runs `before_agent_start` interceptors (observable event only — a fresh event per handler).
+1. Runs `before_agent_start` interceptors over one **shared** mutable event per turn (interceptor dispatch; there is no append channel on it).
 2. Runs each enabled extension's `registerContextProvider({ content, sections })` (only non-empty content emits). A provider may publish a base section (`content`) plus any number of **named** sections, each hashed and admitted independently.
-3. Emits each extension's turn-context text as its **own** `<ctx kind=<extension id>>` section in the dynamic turn snapshot (enable and disable share the same tag — an enabled extension carries its injected `content`, a disabled one carries only its `disabledContent` notice). Per-extension kinds keep the per-kind hash admission granular (only the changed extension re-injects, which is prompt-cache friendly).
+3. Emits each extension's turn-context text as its **own** `<ctx kind="ext:<extension id>">` section (a named section is `<ctx kind="ext:<extension id>:<name>">`) in the dynamic turn snapshot. Enable and disable share the same kind — an enabled extension carries its injected `content`, a disabled one only its `disabledContent` notice (a named section without one is absent). Per-kind hash admission means only the changed section re-injects, which is prompt-cache friendly.
 
 There is no system-prompt append channel (`extension_system_append` was removed): extensions inject exclusively through `registerContextProvider`, so the frozen system prompt stays byte-stable and cacheable.
 

@@ -60,12 +60,12 @@ registerCoreEnv({
       ctx.registerInterceptor("session:start", (event) => {
         sawStart = true;
         assert.equal(event.payload.cwd, "/workspace");
-        assert.equal(event.payload.sessionId, "sess-1");
+        assert.equal(event.payload.agentId, "sess-1");
         ctx.ui.render("footer", "smoke", "ready");
       });
       ctx.registerInterceptor("session:shutdown", (event) => {
         sawShutdown = true;
-        assert.equal(event.payload.sessionId, "sess-1");
+        assert.equal(event.payload.agentId, "sess-1");
       });
       ctx.registerTool({
         name: "json_tool",

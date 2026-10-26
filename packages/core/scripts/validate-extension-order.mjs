@@ -37,7 +37,14 @@
 
 import assert from "node:assert/strict";
 
-import { createAgentEventBus, ExtensionRunner, ManagedAgent } from "../dist/dev.mjs";
+import {
+  BUILTIN_EXTENSION_ORDER,
+  createAgentEventBus,
+  createJobsExtension,
+  createSkillsExtension,
+  ExtensionRunner,
+  ManagedAgent,
+} from "../dist/dev.mjs";
 
 // ============================================================================
 // Harness
@@ -311,8 +318,8 @@ async function fireProbe(runner) {
   const collected = await runner.collectBeforeAgentStart("hello", "s");
   assert.deepEqual(
     collected.turnContextSections.map((s) => s.id),
-    ["early-section", "late-section"],
-    "9: turn-context sections must follow declared order"
+    ["ext:early-section", "ext:late-section"],
+    "9: turn-context sections must follow declared order (extension kinds are namespaced)"
   );
   console.log("9. turn-context sections follow declared order — ok");
 }
@@ -468,5 +475,28 @@ async function fireProbe(runner) {
   const bus = createAgentEventBus();
   assert.ok(typeof bus.intercept === "function", "bus exposes interceptor dispatch");
 }
+
+// ============================================================================
+// 15. Built-ins are the baseline, not the winner
+// ============================================================================
+//
+// Bootstrap loads disk/config extensions first and the built-ins last. With no declared order that
+// load position made built-ins the opposite of a baseline: last in a chain and the winner of a
+// same-named tool, so a user extension replacing `load_skill` was silently buried. A below-default
+// order fixes both readings at once.
+assert.ok(BUILTIN_EXTENSION_ORDER < 0, "the built-in order sorts before an undeclared (0) extension");
+for (const [label, factory] of [
+  ["skills", () => createSkillsExtension({ skillRegistry: { list: () => [], get: () => null } })],
+  ["jobs", () => createJobsExtension()],
+]) {
+  let api;
+  try {
+    api = factory();
+  } catch {
+    continue; // a factory needing real collaborator wiring is covered by its own validator
+  }
+  assert.equal(api?.order, BUILTIN_EXTENSION_ORDER, `${label}: the built-in declares the baseline order`);
+}
+console.log("15. built-ins declare the baseline order — ok");
 
 console.log("\nextension-order validation passed");
