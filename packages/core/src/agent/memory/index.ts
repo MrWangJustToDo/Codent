@@ -25,5 +25,10 @@ export {
   type MemoryMetadata,
   type Memory,
   type MemoryManagerConfig,
+  type MemoryCompletion,
+  type MemoryCompletionRequest,
+  type MemoryLog,
+  type MemoryTelemetry,
+  type MemoryTelemetryEvent,
 } from "./types.js";
 export type { RelevantMemory, FindRelevantMemoriesOptions } from "./memory-retrieval.js";

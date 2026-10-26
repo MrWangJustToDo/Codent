@@ -103,7 +103,6 @@ export interface AgentRunDeps {
   shouldPersistUIMessage: (messages: TanStackUIMessage[], reason: "user-message") => void;
   setIterationProgress: (state: AgentIterationState) => void;
   getDynamicTurnContextSections: () => Promise<TurnContextSection[]>;
-  commitSurfacedMemories: () => void;
   /** Identity of the owning user turn (`null` outside a run), for per-turn facts like `firstOutput`. */
   getCurrentRunId: () => string | null;
 }
@@ -156,7 +155,6 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),
     getDynamicTurnContextSections: () => managed.getDynamicTurnContextSections(),
-    commitSurfacedMemories: () => managed.memory.commitSurfacedMemories(),
     getCurrentRunId: () => managed.getCurrentRunId(),
   };
 }

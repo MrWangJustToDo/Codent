@@ -241,9 +241,10 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   skills?: boolean | SkillsExtensionConfig;
   /**
-   * Enable the built-in Memory extension (default: true). Set to `false` to disable
-   * memory tools (memory_list, memory_read, memory_write) and the memory index in
-   * turn context. Pass an object to fine-tune behavior (see {@link MemoryExtensionConfig}).
+   * Enable the built-in Memory extension (default: true). Set to `false` to disable the whole
+   * memory capability: tools (memory_list, memory_read, memory_write), the index in turn context,
+   * per-turn relevance selection, and end-of-turn extraction. Pass an object to fine-tune behavior
+   * (see {@link MemoryExtensionConfig}).
    */
   memory?: boolean | MemoryExtensionConfig;
   /**
@@ -634,7 +635,6 @@ export class ManagedAgent {
       getSessionId: () => this.getSessionData()?.id,
       getPlanState: () => this.planMode.getState(),
       isAutoModeEnabled: () => this.autoMode.isEnabled(),
-      getRelevantMemoryContent: () => this.memory.getRelevantContent(),
       getExtensionRunner: () => this.extensions.getExtensionRunner(),
       getParentId: () => this.parentId,
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
@@ -1694,7 +1694,6 @@ export class ManagedAgent {
   }
 
   clearTurnContext(): void {
-    this.memory.clearTurnContext();
     this.turnContext.clearTurnContext();
   }
 

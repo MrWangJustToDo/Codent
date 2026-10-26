@@ -267,7 +267,6 @@ assert.match(
 
 // Turn context is hash-admitted sections only: its builder has no reminder input at all.
 const turnContextSections = buildTurnContextSections({
-  relevantMemoryContent: "",
   currentDate: "October 25, 2026",
   gitBranch: "main",
   modeContent: "<mode_state>off</mode_state>",

@@ -164,12 +164,14 @@ setFile("CLAUDE.override.md", "# personal override\n");
   const instructionContext = formatInstructionContextSection(loaded);
 
   const payload = buildTurnContextSections({
-    relevantMemoryContent: "<relevant_memories>memory A</relevant_memories>",
     currentDate: "August 17, 2026",
     gitBranch: "main",
     gitStatus: "M file.ts",
     modeContent: '<plan_mode phase="planning">…</plan_mode>',
-    extensionTurnContextSections: [{ id: "codent-lsp", content: "ext activity" }],
+    extensionTurnContextSections: [
+      { id: "ext:codent-lsp", content: "ext activity" },
+      { id: "ext:codent-memory:selection", content: "<relevant_memories>memory A</relevant_memories>" },
+    ],
     instructionContext,
   })
     .map((section) => section.content)
@@ -192,7 +194,9 @@ setFile("CLAUDE.override.md", "# personal override\n");
   const a = buildTurnContextSections({
     currentDate: "August 17, 2026",
     gitBranch: "main",
-    relevantMemoryContent: "<relevant_memories>m</relevant_memories>",
+    extensionTurnContextSections: [
+      { id: "ext:codent-memory:selection", content: "<relevant_memories>m</relevant_memories>" },
+    ],
     instructionContext: formatInstructionContextSection(loadedA),
   })
     .map((section) => section.content)
@@ -201,7 +205,9 @@ setFile("CLAUDE.override.md", "# personal override\n");
   const b = buildTurnContextSections({
     currentDate: "August 17, 2026",
     gitBranch: "main",
-    relevantMemoryContent: "<relevant_memories>m</relevant_memories>",
+    extensionTurnContextSections: [
+      { id: "ext:codent-memory:selection", content: "<relevant_memories>m</relevant_memories>" },
+    ],
     instructionContext: formatInstructionContextSection(loadedB),
   })
     .map((section) => section.content)

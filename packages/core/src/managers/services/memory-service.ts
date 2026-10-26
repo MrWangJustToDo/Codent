@@ -1,12 +1,12 @@
 /**
- * MemoryService — memory index state and per-turn memory operations.
- * Cross-subsystem data is passed in via input objects; no back-references to other services.
+ * MemoryService — the memory manager holder plus end-of-turn extraction.
+ *
+ * Selection and injection live in the built-in memory extension (it owns the per-turn query,
+ * the surfaced set and the context sections). This service keeps only what the run lifecycle
+ * still drives: the manager it was given and the post-turn extraction/consolidation pass.
  */
 
-import { extractTextFromContent } from "../../agent/compaction/message-utils.js";
 import { extractMemories, consolidateMemories } from "../../agent/memory/memory-extractor.js";
-import { findRelevantMemories, formatRelevantMemories } from "../../agent/memory/memory-retrieval.js";
-import { defaultByteLength } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
 
 import type { AgentLog } from "../../agent/agent-log";
@@ -15,16 +15,6 @@ import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js"
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
 import type { ModelMessage } from "@tanstack/ai";
-
-export interface MemoryPrefetchInput {
-  messages: ModelMessage[];
-  usage: UsageTracker;
-  log: AgentLog | null;
-  resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  emitEvent?: EmitAgentTelemetryFn;
-  /** Abort signal from the owning run — lets abort interrupt the selection LLM call. */
-  abortSignal?: AbortSignal;
-}
 
 export interface MemoryExtractionInput {
   getMessagesForLLM: () => ModelMessage[];
@@ -48,12 +38,9 @@ export interface MemoryExtractionInput {
 
 export class MemoryService {
   private manager: MemoryManager | null = null;
-  private relevantContent = "";
-  private alreadySurfaced = new Set<string>();
   private extractionInProgress = false;
   /** Latest extract request while one is running (coalesce; do not drop turns). */
   private pendingExtraction: MemoryExtractionInput | null = null;
-  private pendingSurfacedFilenames: string[] = [];
 
   setManager(manager: MemoryManager): void {
     this.manager = manager;
@@ -61,89 +48,6 @@ export class MemoryService {
 
   getManager(): MemoryManager | null {
     return this.manager;
-  }
-
-  getRelevantContent(): string {
-    return this.relevantContent;
-  }
-
-  clearTurnContext(): void {
-    this.relevantContent = "";
-  }
-
-  commitSurfacedMemories(): void {
-    if (this.pendingSurfacedFilenames.length > 0) {
-      for (const f of this.pendingSurfacedFilenames) {
-        this.alreadySurfaced.add(f);
-      }
-      this.pendingSurfacedFilenames = [];
-    }
-  }
-
-  async prefetchRelevantMemories(input: MemoryPrefetchInput): Promise<void> {
-    const { messages, usage, log, resolveTextAdapter, emitEvent, abortSignal } = input;
-    if (!this.manager) {
-      emitEvent?.("memory:prefetch", { status: "skip-no-manager" });
-      return;
-    }
-
-    let query = "";
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role === "user") {
-        query = extractTextFromContent(msg.content);
-        break;
-      }
-    }
-
-    if (!query.trim()) {
-      this.relevantContent = "";
-      emitEvent?.("memory:prefetch", { status: "skip-no-query" });
-      return;
-    }
-
-    if (abortSignal?.aborted) {
-      this.relevantContent = "";
-      this.pendingSurfacedFilenames = [];
-      emitEvent?.("memory:prefetch", { status: "aborted" });
-      return;
-    }
-
-    try {
-      const textAdapter = (await resolveTextAdapter?.()) ?? null;
-      const relevant = await findRelevantMemories(
-        query,
-        this.manager,
-        textAdapter,
-        this.alreadySurfaced,
-        {},
-        usage,
-        log ?? undefined,
-        abortSignal,
-        this.manager.getEnv()
-      );
-
-      if (relevant.length > 0) {
-        this.relevantContent = formatRelevantMemories(relevant);
-        this.pendingSurfacedFilenames = relevant.map((r) => r.filename);
-        // Buffer only — captured into turnContextSnapshot at prepareForRun for system prompt.
-        emitEvent?.("memory:prefetch", {
-          status: "selected",
-          count: relevant.length,
-          filenames: this.pendingSurfacedFilenames,
-          byteSize: defaultByteLength(this.relevantContent, "utf-8"),
-        });
-      } else {
-        this.relevantContent = "";
-        this.pendingSurfacedFilenames = [];
-        emitEvent?.("memory:prefetch", { status: "empty" });
-      }
-    } catch (err) {
-      const errorMsg = errorMessage(err);
-      this.relevantContent = "";
-      this.pendingSurfacedFilenames = [];
-      emitEvent?.("memory:prefetch", { status: "error", error: errorMsg });
-    }
   }
 
   runExtraction(input: MemoryExtractionInput): void {
@@ -216,10 +120,8 @@ export class MemoryService {
     })();
   }
 
+  /** Drop a queued extraction that has not started (session switch / new). */
   resetState(): void {
-    this.relevantContent = "";
-    this.pendingSurfacedFilenames = [];
-    this.alreadySurfaced.clear();
     this.pendingExtraction = null;
   }
 }

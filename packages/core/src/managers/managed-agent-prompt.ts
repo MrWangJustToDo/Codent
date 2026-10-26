@@ -42,7 +42,6 @@ export function buildFrozenSystemPrompt(input: SystemPromptInput): string | unde
 }
 
 export interface DynamicTurnContextInput {
-  relevantMemoryContent: string;
   currentDate?: string;
   gitBranch?: string;
   gitStatus?: string;
@@ -94,9 +93,6 @@ export function buildTurnContextSections(input: DynamicTurnContextInput): TurnCo
       content: formatSectionTag(TURN_CONTEXT_KINDS.gitStatus, gitParts),
     });
   }
-
-  if (input.relevantMemoryContent)
-    sections.push({ key: TURN_CONTEXT_KINDS.relevantMemories, content: input.relevantMemoryContent.trim() });
 
   if (input.modeContent) sections.push({ key: TURN_CONTEXT_KINDS.mode, content: input.modeContent.trim() });
 

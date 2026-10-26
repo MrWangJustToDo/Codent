@@ -1,5 +1,5 @@
 /**
- * Validates lifecycle middleware side-effects (usage, memory commit, thinking).
+ * Validates lifecycle middleware side-effects (usage, thinking, pass-through).
  * Turn-level finalizeRun is owned by the chat pump / detached runners — not this middleware.
  *
  * Run: pnpm --filter @codent/core run validate:lifecycle-middleware
@@ -11,7 +11,6 @@ import { createLifecycleMiddleware } from "../dist/dev.mjs";
 
 let usageUpdated = false;
 let thinkingEmitted = false;
-let memoryCommitted = false;
 let llmResponseEmitted = false;
 
 const middleware = createLifecycleMiddleware({
@@ -36,9 +35,6 @@ const middleware = createLifecycleMiddleware({
   onThinking: () => {
     thinkingEmitted = true;
   },
-  onFirstModelOutput: () => {
-    memoryCommitted = true;
-  },
   emitEvent: (type) => {
     if (type === "llm:response") llmResponseEmitted = true;
   },
@@ -49,8 +45,9 @@ await middleware.onChunk?.(undefined, { type: "REASONING_MESSAGE_START" });
 assert.equal(thinkingEmitted, true);
 
 middleware.onStart?.({ model: "m", messages: [], toolNames: [] });
-await middleware.onChunk?.(undefined, { type: "TEXT_MESSAGE_CONTENT", delta: "hi" });
-assert.equal(memoryCommitted, true);
+const textChunk = { type: "TEXT_MESSAGE_CONTENT", delta: "hi" };
+const returned = await middleware.onChunk?.(undefined, textChunk);
+assert.equal(returned, textChunk, "text chunks pass through unchanged");
 
 middleware.onStart?.({ model: "m", messages: [], toolNames: [] });
 await middleware.onUsage?.(undefined, { inputTokens: 1, outputTokens: 2, totalTokens: 3 });

@@ -41,7 +41,6 @@ export interface TurnContextControllerOptions {
   getSessionId: () => string | undefined;
   getPlanState: () => PlanModeState;
   isAutoModeEnabled: () => boolean;
-  getRelevantMemoryContent: () => string;
   getExtensionRunner: () => ExtensionRunner | null;
   getParentId: () => string | undefined;
   onPromptBefore: (input: { prompt: string; hasTurnContext: boolean }) => void;
@@ -187,7 +186,6 @@ export class TurnContextController {
     const sessionId = this.options.getSessionId();
 
     return buildTurnContextSections({
-      relevantMemoryContent: this.options.getRelevantMemoryContent(),
       currentDate,
       gitBranch,
       gitStatus,

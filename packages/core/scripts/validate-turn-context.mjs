@@ -64,9 +64,11 @@ const sections = buildTurnContextSections({
   currentDate: "September 2, 2026",
   gitBranch: "main",
   gitStatus: "M file.ts",
-  relevantMemoryContent: "<relevant_memories>m</relevant_memories>",
   modeContent: '<plan_mode phase="planning">plan</plan_mode>',
-  extensionTurnContextSections: [{ id: "codent-memory", content: "<memory_index>m</memory_index>" }],
+  extensionTurnContextSections: [
+    { id: "ext:codent-memory:index", content: "<memory_index>m</memory_index>" },
+    { id: "ext:codent-memory:selection", content: "<relevant_memories>m</relevant_memories>" },
+  ],
 });
 // Built-in kinds come from the catalog so a rename cannot silently pass here.
 assert.deepEqual(
@@ -74,13 +76,13 @@ assert.deepEqual(
   [
     TURN_CONTEXT_KINDS.currentDate,
     TURN_CONTEXT_KINDS.gitStatus,
-    TURN_CONTEXT_KINDS.relevantMemories,
     TURN_CONTEXT_KINDS.mode,
-    "codent-memory",
+    "ext:codent-memory:index",
+    "ext:codent-memory:selection",
   ]
 );
 // Each extension gets its own kind tag (enable/disable share the same tag).
-const memorySection = sections.find((s) => s.key === "codent-memory");
+const memorySection = sections.find((s) => s.key === "ext:codent-memory:index");
 assert.ok(memorySection?.content.includes("<memory_index>"), "extension content kept under its own kind");
 const modeSection = sections.find((s) => s.key === TURN_CONTEXT_KINDS.mode);
 assert.ok(modeSection?.content.startsWith("<plan_mode"));
@@ -334,7 +336,7 @@ for (const budget of [4, 20, 100]) {
 // 7. Subagent kind whitelist (context isolation).
 // ---------------------------------------------------------------------------
 assert.deepEqual([...SUBAGENT_ALLOWED_KINDS].sort(), ["current_date", "git_status", "project_instructions"]);
-assert.ok(!SUBAGENT_ALLOWED_KINDS.has("relevant_memories"), "no memory for subagents");
+assert.ok(!SUBAGENT_ALLOWED_KINDS.has("ext:codent-memory:selection"), "no memory for subagents");
 assert.ok(!SUBAGENT_ALLOWED_KINDS.has("mode"), "no plan/auto for subagents");
 assert.ok(!SUBAGENT_ALLOWED_KINDS.has("codent-memory"), "no extension context for subagents");
 assert.ok(!SUBAGENT_ALLOWED_KINDS.has("instruction_context"), "no instruction context for subagents");

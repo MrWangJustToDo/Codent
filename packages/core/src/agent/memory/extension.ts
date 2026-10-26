@@ -5,27 +5,40 @@
  * - `memory_list` tool: list memory files (name + description from the index)
  * - `memory_read` tool: read the full content of a specific memory
  * - `memory_write` tool: create / update a memory (user preference, project fact, ...)
- * - Turn-context injection of the MEMORY.md index into its own `<ctx kind=codent-memory>` section
- *   (progressive disclosure: names + descriptions are always visible; the full
- *   body is loaded on demand via `memory_read`).
+ * - Turn-context injection of the MEMORY.md index into its own
+ *   `<ctx kind="ext:codent-memory:index">` section (progressive disclosure: names + descriptions
+ *   are always visible; the full body is loaded on demand via `memory_read`), plus the per-turn
+ *   selection section `ext:codent-memory:selection`.
  *
- * The per-turn relevance query (top-N memories by current user message) and the
- * end-of-turn extraction/consolidation remain in the run lifecycle
- * (`MemoryService`), driven by the same injected `MemoryManager`. This extension
- * only owns the *presentation* layer: tools, index injection, and the `/memory`
- * command — matching how `codent-skills` wraps `SkillRegistry`.
+ * The per-turn relevance query (top-N memories by current user message) also lives here: the
+ * extension selects through its own `ctx.llm` port and publishes the result as its
+ * `ext:codent-memory:selection` section, so the run lifecycle no longer knows memory exists. The
+ * index is the sibling `ext:codent-memory:index` section (independent hash admission), and the
+ * surfaced set is committed when the turn's first assistant message starts
+ * (`message:start.firstOutput`).
  *
- * Runtime-agnostic: all I/O goes through the injected `MemoryManager`, which
- * uses the global CoreEnv (`getEnv()`).
+ * End-of-turn extraction/consolidation still belongs to the run lifecycle (`MemoryService`): it
+ * needs the finished turn's model-visible window and runs after finalize, which a context
+ * provider cannot express.
+ *
+ * Runtime-agnostic: all I/O goes through the injected `MemoryManager`, which uses the global
+ * CoreEnv (`getEnv()`), and all model access goes through `ctx.llm`.
  */
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { defaultByteLength } from "../../env";
+import { errorMessage } from "../../utils/errors.js";
+import { extractTextFromContent } from "../compaction/message-utils.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
+import { findRelevantMemories, formatRelevantMemories } from "./memory-retrieval.js";
+
 import type { MemoryManager } from "./memory-manager.js";
-import type { ExtensionAPI, ExtensionContext } from "../extension/types.js";
+import type { MemoryCompletion, MemoryLog, MemoryTelemetry } from "./types.js";
+import type { ExtensionAPI, ExtensionContext, ExtensionContextSectionProvider } from "../extension/types.js";
+import type { SchemaInput } from "@tanstack/ai";
 
 // ============================================================================
 // Config
@@ -34,8 +47,9 @@ import type { ExtensionAPI, ExtensionContext } from "../extension/types.js";
 /** Fine-grained configuration for the built-in memory extension. */
 export interface MemoryExtensionConfig {
   /**
-   * Disable the on-demand tools (memory_list/memory_read/memory_write) and only
-   * inject the index into turn context. Default: false (tools registered).
+   * Disable the on-demand tools (memory_list/memory_read/memory_write). Default: false (tools
+   * registered); the context sections stay enabled unless `indexDisabled`/`selectionDisabled`
+   * say otherwise.
    */
   toolsDisabled?: boolean;
   /**
@@ -43,6 +57,11 @@ export interface MemoryExtensionConfig {
    * (index injected when memories exist).
    */
   indexDisabled?: boolean;
+  /**
+   * Disable the per-turn relevance query (the `ext:codent-memory:selection` section).
+   * Default: false (one selection completion per user turn).
+   */
+  selectionDisabled?: boolean;
 }
 
 // ============================================================================
@@ -54,11 +73,17 @@ export interface CreateMemoryExtensionOptions {
   memoryManager: MemoryManager;
   /** Fine-grained config. */
   config?: MemoryExtensionConfig;
+  /**
+   * Host telemetry sink for `memory:prefetch` (and, once extraction moves here, the other two
+   * memory events). Injected by the core bootstrap because an extension cannot emit bus events;
+   * it is core-internal, not part of the public extension API.
+   */
+  emitEvent?: MemoryTelemetry;
 }
 
 /** Create the built-in Memory extension. */
 export function createMemoryExtension(options: CreateMemoryExtensionOptions): ExtensionAPI {
-  const { memoryManager, config } = options;
+  const { memoryManager, config, emitEvent } = options;
   return {
     id: "codent-memory",
     // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
@@ -69,7 +94,7 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
     description:
       "Persistent cross-session memories: memory_list/memory_read/memory_write tools + MEMORY.md index injected into turn context",
     async activate(ctx) {
-      await activateMemory(ctx, memoryManager, config);
+      await activateMemory(ctx, memoryManager, config, emitEvent);
     },
   };
 }
@@ -77,7 +102,8 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
 async function activateMemory(
   ctx: ExtensionContext,
   memoryManager: MemoryManager,
-  config?: MemoryExtensionConfig
+  config?: MemoryExtensionConfig,
+  emitEvent?: MemoryTelemetry
 ): Promise<void> {
   const z = ctx.z;
 
@@ -211,26 +237,138 @@ creating a duplicate (check memory_list first).`,
     });
   }
 
-  // Inject the memory index into per-turn context (progressive disclosure).
-  if (config?.indexDisabled !== true) {
-    ctx.registerContextProvider({
-      content: () => {
-        const index = memoryManager.getIndexContent();
-        if (!index.trim()) return undefined;
-        return [
-          "<memory_index>",
-          "These are memories from previous sessions. Respect user preferences from memory.",
-          "When the user says 'remember' or expresses a clear preference, it will be automatically extracted.",
-          `memory_list is a lazy tool — discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
-          "",
-          index.trim(),
-          "</memory_index>",
-        ].join("\n");
-      },
-      disabledContent: () =>
-        "Memory extension is disabled — memory_list/memory_read/memory_write tools and the MEMORY.md index injected into turn context are unavailable.",
+  // ==========================================================================
+  // Per-turn context: index + selection as independent named sections
+  // ==========================================================================
+
+  /** Filenames already injected this session, and the ones this turn injected (commit pending). */
+  const alreadySurfaced = new Set<string>();
+  let pendingFilenames: string[] = [];
+  let lastSessionId: string | null = null;
+
+  const log: MemoryLog = {
+    info: (message) => ctx.logger.log("info", "memory", message),
+    warn: (message) => ctx.logger.log("warn", "memory", message),
+  };
+
+  // The one-shot port: the host owns the connection/catalog/usage/budget, and defaults the
+  // abort signal to the live run (`ctx.signal`).
+  const complete: MemoryCompletion = async ({ system, prompt, maxOutputTokens, schema }) => {
+    const result = await ctx.llm.complete({
+      system,
+      prompt,
+      maxOutputTokens,
+      schema: schema as SchemaInput,
     });
+    return result.data;
+  };
+
+  /** The current user turn's text (the last user message on the model-visible wire). */
+  const latestUserText = (): string => {
+    const messages = ctx.getMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message?.role === "user") return extractTextFromContent(message.content);
+    }
+    return "";
+  };
+
+  const indexContent = (): string | undefined => {
+    const index = memoryManager.getIndexContent();
+    if (!index.trim()) return undefined;
+    return [
+      "<memory_index>",
+      "These are memories from previous sessions. Respect user preferences from memory.",
+      "When the user says 'remember' or expresses a clear preference, it will be automatically extracted.",
+      `memory_list is a lazy tool — discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
+      "",
+      index.trim(),
+      "</memory_index>",
+    ].join("\n");
+  };
+
+  const produceSelection = async (): Promise<string | undefined> => {
+    // A session switch means a new conversation: none of the surfaced memories are "already
+    // shown" to it. Comparing ids is robust for new/switch/restore, none of which this extension
+    // has to observe separately.
+    if (ctx.sessionId !== lastSessionId) {
+      alreadySurfaced.clear();
+      lastSessionId = ctx.sessionId;
+    }
+
+    if (ctx.signal?.aborted) {
+      pendingFilenames = [];
+      emitEvent?.("memory:prefetch", { status: "aborted" });
+      return undefined;
+    }
+
+    const query = latestUserText();
+    if (!query.trim()) {
+      pendingFilenames = [];
+      emitEvent?.("memory:prefetch", { status: "skip-no-query" });
+      return undefined;
+    }
+
+    try {
+      const relevant = await findRelevantMemories(
+        query,
+        memoryManager,
+        complete,
+        alreadySurfaced,
+        {},
+        memoryManager.getEnv(),
+        log
+      );
+      // An abort mid-call makes the helper fall back to keyword selection; that result belongs to
+      // a turn nobody is waiting for, so drop it instead of injecting it.
+      if (ctx.signal?.aborted) {
+        pendingFilenames = [];
+        emitEvent?.("memory:prefetch", { status: "aborted" });
+        return undefined;
+      }
+      if (relevant.length === 0) {
+        pendingFilenames = [];
+        emitEvent?.("memory:prefetch", { status: "empty" });
+        return undefined;
+      }
+      const content = formatRelevantMemories(relevant);
+      pendingFilenames = relevant.map((memory) => memory.filename);
+      emitEvent?.("memory:prefetch", {
+        status: "selected",
+        count: relevant.length,
+        filenames: pendingFilenames,
+        byteSize: defaultByteLength(content, "utf-8"),
+      });
+      return content;
+    } catch (err) {
+      pendingFilenames = [];
+      emitEvent?.("memory:prefetch", { status: "error", error: errorMessage(err) });
+      return undefined;
+    }
+  };
+
+  // One commit per turn: the first assistant message proves the turn is actually running. A turn
+  // aborted before any message never consumes the surfaced set.
+  ctx.events.observe("message:start", (event) => {
+    if (event.agentId !== ctx.agentId) return;
+    const payload = event.payload as { role?: string; firstOutput?: boolean };
+    if (payload.role !== "assistant" || payload.firstOutput !== true) return;
+    for (const filename of pendingFilenames) alreadySurfaced.add(filename);
+    pendingFilenames = [];
+  });
+
+  const sections: ExtensionContextSectionProvider[] = [];
+  if (config?.indexDisabled !== true) {
+    sections.push({ name: "index", content: indexContent });
   }
+  if (config?.selectionDisabled !== true) {
+    sections.push({ name: "selection", content: produceSelection });
+  }
+  ctx.registerContextProvider({
+    ...(sections.length > 0 ? { sections } : {}),
+    disabledContent: () =>
+      "Memory extension is disabled — memory_list/memory_read/memory_write tools, the MEMORY.md index, and per-turn memory selection are unavailable.",
+  });
 
   // `/memory` — list or read a memory. Listing needs no model turn; reading a
   // specific memory injects its full body into the session (drives the agent).

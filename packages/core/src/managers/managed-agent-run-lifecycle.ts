@@ -4,7 +4,6 @@
 
 import { type UIMessage as TanStackUIMessage, type ModelMessage } from "@tanstack/ai";
 
-import { getLatestUserMessage } from "../agent/compaction/message-utils.js";
 import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
@@ -107,17 +106,6 @@ export async function prepareManagedAgentForRun(
   }
 
   if (!isToolContinuation && !host.parentId) {
-    await host.memory.prefetchRelevantMemories({
-      messages:
-        getLatestUserMessage(options.prompt ? [{ role: "user", content: options.prompt }] : inputMessages) || [],
-      usage: host.usage,
-      log: host.log,
-      resolveTextAdapter: host.resolveTextAdapter,
-      emitEvent: (type, data) => host.emitEvent(type, data),
-      // Let abort interrupt the memory-selection LLM side-query during prerun.
-      abortSignal: host.run.currentAbortController?.signal,
-    });
-
     // Extension hooks once per user turn — consumed by the turn-context middleware
     // at onConfig (injection happens after compaction, against the real wire payload).
     await host.collectExtensionPromptHooks(typeof options.prompt === "string" ? options.prompt : "(structured)");

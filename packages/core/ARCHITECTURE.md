@@ -344,7 +344,7 @@ run-agent.ts: executeManagedAgentRun
 ```
 RunCoordinator.setupAbortController(abortSignal)  // current = run AbortController
 if !isToolContinuationPrepare(agent.status, messages):
-  memory.prefetchRelevantMemories()     // see §7
+  collectExtensionPromptHooks(prompt)   // memory selection lives here (§7)
   emitEvent("prompt:submit", { prompt })
 ```
 
@@ -365,7 +365,7 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 ```
 1. status-middleware         status transitions only (via AgentStatusController)
 2. approval-resume-middleware re-apply persisted approvals so resumed tools do not re-prompt
-3. lifecycle-middleware      usage tracking, thinking events, memory commit, llm:request/response
+3. lifecycle-middleware      usage tracking, thinking events, llm:request/response
 4. compaction-middleware     auto-compact + channel-anchored wire projection (cache by revision)
 5. message-transform-middleware  extension message transformers (registerMessageTransformer).
                              MUST run immediately after compaction, and ONLY consumes
@@ -522,7 +522,7 @@ schedule a pump of their own.
 | `steer`    | After tool execution finishes for the current batch, before the next LLM call |
 | `followUp` | Only when the agent would otherwise stop (no tool continuation)               |
 
-Default drain mode is `one-at-a-time`. `stop()` clears both queues; `clearTranscript()` also drops them when a session switch replaces the transcript. Mid-run injects call `markNextPrepareAsContinuation()` so prepare skips memory prefetch / `prompt:submit`.
+Default drain mode is `one-at-a-time`. `stop()` clears both queues; `clearTranscript()` also drops them when a session switch replaces the transcript. Mid-run injects call `markNextPrepareAsContinuation()` so prepare skips the per-turn extension hooks (memory selection included) and `prompt:submit`.
 
 ### 4.4 Client tools (`ask_user`)
 
@@ -862,8 +862,8 @@ Recovery / continuation always re-reads `managed.ui.getMessages()` (not a closed
 
 ```
 MemoryManager.initialize()     // .agents/memory/*.md + MEMORY.md
-createMemoryExtension → ctx.registerContextProvider({ content: () => <memory_index> })
-collectBeforeAgentStart (per user turn) → <ctx kind="ext:codent-memory"> section
+createMemoryExtension → ctx.registerContextProvider({ sections: [{ name: "index", … }, { name: "selection", … }] })
+collectBeforeAgentStart (per user turn) → <ctx kind="ext:codent-memory:index"> + <ctx kind="ext:codent-memory:selection">
 ```
 
 The memory index (`<memory_index>`) is **not** frozen into the system prompt — it is
@@ -872,24 +872,30 @@ freshly extracted memories surface without waiting for compaction. The index is 
 at snapshot time by re-evaluating the provider each user turn and hash-diffed like any
 other `<ctx kind=...>` section (only changed index re-injects).
 
-### 7.2 Per-turn prefetch (before each run)
+### 7.2 Per-turn selection (inside the extension)
 
-**`MemoryService.prefetchRelevantMemories`** — called from `prepareForRun`:
+The built-in extension's `selection` section producer runs during
+`collectExtensionPromptHooks` (the slot the old core prefetch occupied):
 
 ```
-Extract last user message text
-findRelevantMemories(query, manager, textAdapter, alreadySurfaced)
-  → LLM side-query or keyword fallback, max ~5 memories
-formatRelevantMemories → memory.relevantContent
-emit memory:prefetch { status: injected | empty | skip-* | error }
+Extract last user message text (ctx.getMessages)
+findRelevantMemories(query, manager, complete = ctx.llm, alreadySurfaced)
+  → one structured completion (or keyword fallback), max ~5 memories
+formatRelevantMemories → section content (inner <relevant_memories> block)
+emit memory:prefetch { status: selected | empty | aborted | skip-no-query | error }
 ```
+
+A session-id change resets `alreadySurfaced` (new/switch/restore all covered by the comparison).
+The section is admitted independently, so a changed selection re-injects without touching the
+index. `selectionDisabled` turns the query off; the host-injected `emitEvent` keeps the event (an
+extension cannot emit bus events).
 
 ### 7.3 Per-iteration injection
 
 **`turn-context-middleware`** (runs `onConfig`, after compaction):
 
 ```
-onConfig → build dynamic sections (current_date, git_status, memory, plan mode, etc.)
+onConfig → build dynamic sections (current_date, git_status, extension sections, plan mode, etc.)
          → read the newest block of each kind back from the post-compaction wire
          → per-kind hash diff: inject only the kinds that are absent or changed
            (appended at the tail; persisted; UI-filtered; wire + channel in sync)
@@ -977,9 +983,10 @@ from `SUBAGENT_ALLOWED_KINDS`. There is no separate transcript archive: the whol
 
 ### 7.4 Commit surfaced memories
 
-**`lifecycle-middleware.onFirstModelOutput`** → `memory.commitSurfacedMemories()`:
-
-- Adds prefetched filenames to `alreadySurfaced` so they are not re-injected next turn.
+The extension observes `message:start` and, on the turn's first assistant message
+(`firstOutput === true`, `event.agentId === ctx.agentId`), moves the pending filenames into
+`alreadySurfaced` so they are not re-injected in the same session. A turn aborted before any
+assistant message never consumes the set.
 
 ### 7.5 Post-run extraction & consolidation
 
@@ -1160,7 +1167,7 @@ agentManager.runAgentStream(agentId, { messages: UIMessage[], abortSignal })
 executeManagedAgentRun
   ├─ ensureAgentRunner (lazy build AgentRunner + middleware)
   ├─ prepareForRun
-  │    ├─ (user-turn only) memory.prefetchRelevantMemories
+  │    ├─ (user-turn only) extension prompt hooks (memory selection)
   │    └─ (user-turn only) emit prompt:submit
   └─ runStreamWithReactiveCompactRetry
        └─ runner.run → TanStack chat()

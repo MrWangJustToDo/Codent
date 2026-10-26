@@ -40,7 +40,6 @@ export interface LifecycleMiddlewareDeps {
   usage: UsageTracker;
   getPricing: () => ModelPricing | null | undefined;
   onThinking?: () => void;
-  onFirstModelOutput?: () => void;
   emitEvent?: EmitAgentTelemetryFn;
   /** Global usage-history hook: record each model iteration's tokens + cost. */
   recordUsage?: (input: { model?: string; usage: TokenUsage; costUsd: number }) => void;
@@ -57,7 +56,6 @@ export interface LifecycleMiddlewareDeps {
 }
 
 export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMiddleware<ToolRunContext> {
-  let memoryCommitted = false;
   let thinkingEmitted = false;
   let startTime = 0;
   // Per-round timer: reset on each RUN_STARTED so tok/s counts only pure model
@@ -115,7 +113,6 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
     },
     onStart: (ctx) => {
-      memoryCommitted = false;
       thinkingEmitted = false;
       startTime = Date.now();
       roundStart = startTime;
@@ -199,10 +196,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         }
       }
 
-      if (!memoryCommitted && chunk.type === "TEXT_MESSAGE_CONTENT") {
-        memoryCommitted = true;
-        if (!firstTokenAt) firstTokenAt = Date.now();
-        deps.onFirstModelOutput?.();
+      if (!firstTokenAt && chunk.type === "TEXT_MESSAGE_CONTENT") {
+        firstTokenAt = Date.now();
       }
 
       return chunk;

@@ -164,7 +164,6 @@ export function buildAgentRunner(
       // reported twice when the engine is re-entered.
       getRunToken: () => deps.getCurrentRunId?.() ?? null,
       onThinking: () => emitEvent("agent:thinking"),
-      onFirstModelOutput: deps.commitSurfacedMemories,
       emitEvent,
       recordUsage: (input) => usageHistory.record({ agentId: deps.agentId, ...input }),
       maxIterations: midIterationMax,

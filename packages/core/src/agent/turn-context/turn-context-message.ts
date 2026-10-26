@@ -48,7 +48,6 @@ export const TURN_CONTEXT_KINDS = {
   currentDate: "current_date",
   gitStatus: "git_status",
   sessionId: "session_id",
-  relevantMemories: "relevant_memories",
   /**
    * Condition + counter reminder (todo nag, repeat-call nudge).
    *

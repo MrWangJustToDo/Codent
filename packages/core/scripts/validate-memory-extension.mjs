@@ -83,25 +83,69 @@ const api = createMemoryExtension({ memoryManager: manager });
 assert.equal(api.id, "codent-memory", "extension id is codent-memory");
 assert.equal(typeof api.activate, "function", "extension has activate");
 
+/**
+ * Activation context. The extension is an ordinary extension: tools/commands/providers plus the
+ * observer and `ctx.llm` ports the selection flow needs. `selection` answers from the fake
+ * completion, so the test never touches a provider.
+ */
+function makeCtx(overrides = {}) {
+  const observers = new Map();
+  const llmCalls = [];
+  const ctx = {
+    id: "codent-memory",
+    agentId: "agent-1",
+    sessionId: "ses_1",
+    signal: undefined,
+    z: overrides.z,
+    getMessages: () => [{ role: "user", content: "How do I indent?" }],
+    events: {
+      observe: (type, handler) => {
+        observers.set(type, handler);
+        return () => observers.delete(type);
+      },
+    },
+    llm: {
+      complete: async (request) => {
+        llmCalls.push(request);
+        return { data: { selected_memories: overrides.selected ?? ["user-prefers-tabs"] } };
+      },
+    },
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      log: () => {},
+    },
+    registerTool: (def) => (overrides.tools ?? []).push(def),
+    registerCommand: (cmd) => (overrides.commands ?? []).push(cmd),
+    registerInterceptor: () => () => {},
+    registerContextProvider: (provider) => {
+      overrides.onProvider?.(provider);
+      return () => {};
+    },
+    ...overrides.extra,
+  };
+  return { ctx, observers, llmCalls };
+}
+
 // ---------------------------------------------------------------------------
 // 2. Activation registers tools + turn-context provider
 // ---------------------------------------------------------------------------
 const registeredTools = [];
 const registeredCommands = [];
 let contextProvider = null;
-
-const mockCtx = {
+const {
+  ctx: mockCtx,
+  observers,
+  llmCalls,
+} = makeCtx({
   z: (await import("zod")).z,
-  registerTool: (def) => registeredTools.push(def),
-  registerCommand: (cmd) => registeredCommands.push(cmd),
-  registerInterceptor: () => () => {},
-  registerContextProvider: (provider) => {
+  tools: registeredTools,
+  commands: registeredCommands,
+  onProvider: (provider) => {
     contextProvider = provider;
-    return () => {};
   },
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
-};
-
+});
 await api.activate(mockCtx);
 
 const toolNames = registeredTools.map((t) => t.name);
@@ -123,12 +167,43 @@ assert.notEqual(registeredTools.find((t) => t.name === "memory_read").lazy, true
 assert.notEqual(registeredTools.find((t) => t.name === "memory_write").lazy, true, "memory_write stays eager");
 
 assert.ok(contextProvider, "registers a context provider");
-const index = await contextProvider.content();
+const section = (name) => contextProvider.sections?.find((entry) => entry.name === name);
+const indexSection = section("index");
+const selectionSection = section("selection");
+assert.ok(indexSection, "index is its own named section (ext:codent-memory:index)");
+assert.ok(selectionSection, "selection is its own named section (ext:codent-memory:selection)");
+assert.equal(contextProvider.content, undefined, "no unnamed base section");
+
+const index = await indexSection.content();
 assert.ok(index.includes("<memory_index>"), "turn-context index wraps <memory_index>");
 assert.ok(index.includes("user-prefers-tabs"), "turn-context index lists the written memory");
 // A lazy tool only pays off if the model can still find it — the index is the one
 // surface that is always present, so it must advertise the discovery route.
 assert.ok(index.includes("__lazy__tool__discovery__"), "turn-context index names the discovery tool for memory_list");
+
+// Selection: one structured completion for the turn, injected as the selection section.
+const selection = await selectionSection.content();
+assert.ok(selection.includes("<relevant_memories>"), "selection carries the memory block");
+assert.ok(selection.includes("user-prefers-tabs"), "selection includes the selected memory");
+assert.equal(llmCalls.length, 1, "one selection completion per user turn");
+assert.equal(llmCalls[0].maxOutputTokens, 256, "selection caps its output");
+assert.ok(llmCalls[0].schema, "selection asks for the structured schema");
+
+// The surfaced set commits on the first assistant message of the turn.
+assert.ok(observers.has("message:start"), "observes message:start to commit the surfaced set");
+observers.get("message:start")({
+  type: "message:start",
+  agentId: "agent-1",
+  payload: { role: "assistant", firstOutput: true },
+});
+await selectionSection.content();
+assert.equal(llmCalls.length, 1, "a committed memory is not selected again in the same session");
+
+// A session switch clears the surfaced set (the new conversation has not seen them).
+mockCtx.sessionId = "ses_2";
+const afterSwitch = await selectionSection.content();
+assert.ok(afterSwitch.includes("user-prefers-tabs"), "a new session may surface the memory again");
+assert.equal(llmCalls.length, 2, "the selection query runs again after a session switch");
 
 // memory_list executes and returns summaries.
 const listTool = registeredTools.find((t) => t.name === "memory_list");
@@ -215,16 +290,16 @@ const toolsOnlyApi = createMemoryExtension({ memoryManager: manager, config: { i
 let toolsOnlyProvider = null;
 const toolsOnlyTools = [];
 const toolsOnlyCommands = [];
-await toolsOnlyApi.activate({
-  z: (await import("zod")).z,
-  registerTool: (def) => toolsOnlyTools.push(def),
-  registerCommand: (cmd) => toolsOnlyCommands.push(cmd),
-  registerInterceptor: () => () => {},
-  registerContextProvider: (provider) => {
-    toolsOnlyProvider = provider;
-  },
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
-});
+await toolsOnlyApi.activate(
+  makeCtx({
+    z: (await import("zod")).z,
+    tools: toolsOnlyTools,
+    commands: toolsOnlyCommands,
+    onProvider: (provider) => {
+      toolsOnlyProvider = provider;
+    },
+  }).ctx
+);
 assert.ok(
   toolsOnlyTools.some((t) => t.name === "memory_list"),
   "indexDisabled still registers tools"
@@ -233,24 +308,46 @@ assert.ok(
   toolsOnlyCommands.some((c) => c.name === "memory"),
   "indexDisabled still registers /memory command"
 );
-assert.equal(toolsOnlyProvider, null, "indexDisabled removes turn-context provider");
+assert.equal(
+  toolsOnlyProvider.sections.some((entry) => entry.name === "index"),
+  false,
+  "indexDisabled removes the index section"
+);
+assert.ok(
+  toolsOnlyProvider.sections.some((entry) => entry.name === "selection"),
+  "indexDisabled keeps per-turn selection"
+);
 
 const indexOnlyApi = createMemoryExtension({ memoryManager: manager, config: { toolsDisabled: true } });
 const indexOnlyTools = [];
 const indexOnlyCommands = [];
-await indexOnlyApi.activate({
-  z: (await import("zod")).z,
-  registerTool: (def) => indexOnlyTools.push(def),
-  registerCommand: (cmd) => indexOnlyCommands.push(cmd),
-  registerInterceptor: () => () => {},
-  registerContextProvider: () => () => {},
-  logger: { info: () => {}, warn: () => {}, error: () => {} },
-});
+await indexOnlyApi.activate(
+  makeCtx({
+    z: (await import("zod")).z,
+    tools: indexOnlyTools,
+    commands: indexOnlyCommands,
+  }).ctx
+);
 assert.equal(indexOnlyTools.length, 0, "toolsDisabled removes all three tools");
 assert.ok(
   indexOnlyCommands.some((c) => c.name === "memory"),
   "toolsDisabled still registers /memory command"
 );
+
+const noContextApi = createMemoryExtension({
+  memoryManager: manager,
+  config: { indexDisabled: true, selectionDisabled: true },
+});
+let noContextProvider = null;
+await noContextApi.activate(
+  makeCtx({
+    z: (await import("zod")).z,
+    onProvider: (provider) => {
+      noContextProvider = provider;
+    },
+  }).ctx
+);
+assert.equal((noContextProvider.sections ?? []).length, 0, "both disabled leaves the provider with only its notice");
 
 // Cleanup
 await rm(root, TEMP_RM_OPTIONS);

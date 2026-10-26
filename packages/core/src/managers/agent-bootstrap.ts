@@ -312,7 +312,13 @@ export class AgentBootstrap {
         if (memoryManager) {
           const memoryConfig = typeof config.memory === "object" && config.memory !== null ? config.memory : undefined;
           const instance = await extensionRunner.loadExtension(
-            createMemoryExtension({ memoryManager, config: memoryConfig })
+            createMemoryExtension({
+              memoryManager,
+              ...(memoryConfig ? { config: memoryConfig } : {}),
+              // Extensions cannot emit bus events; this core-internal sink keeps `memory:prefetch`
+              // (and the extraction events when that moves here) on the same telemetry surface.
+              emitEvent: (type, data) => managed.emitEvent(type, data),
+            })
           );
           if (!recordExtensionResult(report, "codent-memory", instance)) {
             log.warn(

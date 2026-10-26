@@ -23,11 +23,10 @@
 import { z } from "zod";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
-import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { splitDisplayLines } from "../../utils/display-lines.js";
 import { errorMessage } from "../../utils/errors.js";
-import { TURN_CONTEXT_KINDS, formatSectionTag } from "../turn-context/turn-context-message.js";
+import { formatSectionTag } from "../turn-context/turn-context-message.js";
 
 import {
   DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
@@ -37,10 +36,7 @@ import {
 } from "./types.js";
 
 import type { MemoryManager } from "./memory-manager.js";
-import type { Memory } from "./types.js";
-import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
-import type { UsageTracker } from "../../runtime-types/hosts.js";
-import type { AgentLog } from "../agent-log/agent-log.js";
+import type { Memory, MemoryCompletion, MemoryLog } from "./types.js";
 
 // ============================================================================
 // Types
@@ -179,7 +175,7 @@ function formatManifest(memories: Memory[]): string {
  * Filter out memories whose `expiresAt` is in the past or unparseable.
  * Memories without an expiry are always kept.
  */
-function filterExpired(memories: Memory[], logger?: AgentLog): Memory[] {
+function filterExpired(memories: Memory[], log?: MemoryLog): Memory[] {
   const now = Date.now();
   const live: Memory[] = [];
   let expired = 0;
@@ -194,7 +190,7 @@ function filterExpired(memories: Memory[], logger?: AgentLog): Memory[] {
     live.push(m);
   }
   if (expired > 0) {
-    logger?.info("memory", `Filtered ${expired} expired memories from retrieval`);
+    log?.info(`Filtered ${expired} expired memories from retrieval`);
   }
   return live;
 }
@@ -233,30 +229,17 @@ function truncateBody(
 /**
  * Use a lightweight LLM call to select relevant memories from the manifest.
  *
- * Uses {@link runSideTextQuery} for a lightweight one-shot LLM selection call.
+ * Uses the injected one-shot completion (`ctx.llm`) for the selection call.
  */
-async function selectWithLLM(
-  query: string,
-  manifest: string,
-  textAdapter: TextAdapterConfig,
-  usage?: UsageTracker | null,
-  logger?: AgentLog,
-  abortSignal?: AbortSignal
-): Promise<string[]> {
-  // A schema failure throws out of here; the caller turns it into the keyword
-  // fallback, the same path a transport failure takes.
-  const { data, usage: queryUsage } = await runSideTextQuery(textAdapter, {
-    systemPrompt: SELECT_MEMORIES_SYSTEM_PROMPT,
-    userPrompt: `Query: ${query}\n\nAvailable memories:\n${manifest}`,
+async function selectWithLLM(query: string, manifest: string, complete: MemoryCompletion): Promise<string[]> {
+  // A schema failure rejects out of here; the caller turns it into the keyword fallback, the same
+  // path a transport failure takes. `ctx.llm` owns usage attribution and the `side-query` log row.
+  const data = (await complete({
+    system: SELECT_MEMORIES_SYSTEM_PROMPT,
+    prompt: `Query: ${query}\n\nAvailable memories:\n${manifest}`,
     maxOutputTokens: 256,
-    abortSignal,
-    log: logger,
     schema: SELECTION_SCHEMA,
-  });
-
-  if (usage && queryUsage) {
-    usage.addTotal(queryUsage);
-  }
+  })) as { selected_memories: string[] };
 
   return data.selected_memories;
 }
@@ -336,28 +319,26 @@ export function resolveSelectedMemoryFilename(
  *
  * 1. Lists all memories from MemoryManager
  * 2. Filters out `alreadySurfaced` filenames
- * 3. Runs LLM side-query to select top N (with keyword fallback)
+ * 3. Runs a structured completion to select top N (with keyword fallback)
  * 4. Loads full body of selected memories (with per-file and session budget caps)
  *
  * @param query - The user's current query/message
  * @param memoryManager - MemoryManager instance for listing/reading
- * @param textAdapter - TanStack text adapter for the selection side-query (null = keyword only)
+ * @param complete - Structured one-shot completion (null = keyword only). The extension passes
+ *   its `ctx.llm` port, so usage, the prompt-cache/model connection and abort handling stay host-side.
  * @param alreadySurfaced - Set of filenames already shown this session
  * @param options - Budget and limit overrides
- * @param usage - Usage tracker for token usage aggregation
- * @param logger - AgentLog for debug logging
+ * @param env - Runtime env for byte accounting (defaults to the ambient registry)
  * @returns Array of relevant memories with truncated full content
  */
 export async function findRelevantMemories(
   query: string,
   memoryManager: MemoryManager,
-  textAdapter: TextAdapterConfig | null,
+  complete: MemoryCompletion | null,
   alreadySurfaced: ReadonlySet<string> = new Set(),
   options: FindRelevantMemoriesOptions = {},
-  usage?: UsageTracker | null,
-  logger?: AgentLog,
-  abortSignal?: AbortSignal,
-  env?: ResolvedCoreEnv
+  env?: ResolvedCoreEnv,
+  log?: MemoryLog
 ): Promise<RelevantMemory[]> {
   const resolvedEnv = env ?? getEnv();
   const {
@@ -370,7 +351,7 @@ export async function findRelevantMemories(
   const allMemories = await memoryManager.listMemories();
 
   // Drop expired memories (expiresAt in the past) before any selection work.
-  const live = filterExpired(allMemories, logger);
+  const live = filterExpired(allMemories, log);
 
   // Pre-filter already-surfaced before LLM call (don't waste slots on repeats)
   const candidates = live.filter((m) => !alreadySurfaced.has(m.filename));
@@ -383,9 +364,9 @@ export async function findRelevantMemories(
   // Select relevant filenames — LLM with keyword fallback on throw or empty result
   let selectedFilenames: string[];
   let selectionMethod: "llm" | "keyword" | "keyword-fallback" = "keyword";
-  if (textAdapter) {
+  if (complete) {
     try {
-      selectedFilenames = await selectWithLLM(query, manifest, textAdapter, usage, logger, abortSignal);
+      selectedFilenames = await selectWithLLM(query, manifest, complete);
       selectionMethod = "llm";
       if (selectedFilenames.length === 0) {
         selectedFilenames = selectWithKeywords(query, candidates, maxItems);
@@ -397,7 +378,7 @@ export async function findRelevantMemories(
       // The port has already recorded the reason under `side-query`; this entry
       // records only the decision made here, so one failure is not filed twice.
       const reason = errorMessage(err);
-      logger?.info("memory", `Fell back to keyword memory selection (${reason})`);
+      log?.info(`Fell back to keyword memory selection (${reason})`);
       selectedFilenames = selectWithKeywords(query, candidates, maxItems);
       selectionMethod = "keyword-fallback";
     }
@@ -415,7 +396,7 @@ export async function findRelevantMemories(
   for (const filename of selectedFilenames.slice(0, maxItems)) {
     const mem = resolveSelectedMemoryFilename(filename, candidateMap, candidates);
     if (!mem) {
-      logger?.warn("memory", `Selected filename "${filename}" not found in candidate map`);
+      log?.warn(`Selected filename "${filename}" not found in candidate map`);
       continue;
     }
     if (resolved.some((m) => m.filename === mem.filename)) continue;
@@ -457,13 +438,9 @@ export async function findRelevantMemories(
     });
   }
 
-  logger?.info(
-    "memory",
-    `Loaded ${results.length} relevant memories (${totalBytes} bytes, method: ${selectionMethod})`,
-    {
-      filenames: results.map((r) => r.filename),
-      totalBytes,
-    }
+  const names = results.map((r) => r.filename).join(", ");
+  log?.info(
+    `Loaded ${results.length} relevant memories (${totalBytes} bytes, method: ${selectionMethod})${names ? `: ${names}` : ""}`
   );
 
   return results;
@@ -473,12 +450,15 @@ export async function findRelevantMemories(
 // Formatting for Injection
 // ============================================================================
 
+/** Inner tag for the selected-memory block (the extension's section carries the `<ctx kind>`). */
+const MEMORY_SELECTION_TAG = "relevant_memories";
+
 /**
- * Format relevant memories into injectable text for the system prompt.
+ * Format relevant memories into injectable text.
  *
- * Uses XML tags (`<relevant_memories>`, `<memory>`) to provide unambiguous
- * boundaries so markdown content inside memories (headings, code fences,
- * `---` separators) doesn't bleed into the surrounding system prompt structure.
+ * Uses XML tags (`<relevant_memories>`, `<memory>`) to provide unambiguous boundaries so markdown
+ * content inside memories (headings, code fences, `---` separators) doesn't bleed into the
+ * surrounding context. The outer `<ctx kind=...>` tag belongs to the extension section, not here.
  *
  * Returns empty string if no memories are provided.
  */
@@ -490,7 +470,7 @@ export function formatRelevantMemories(memories: RelevantMemory[]): string {
       `<memory name="${m.name.replace(/"/g, "&quot;")}" type="${m.type}">\n${m.description}\n\n${m.content}\n</memory>`
   );
 
-  return formatSectionTag(TURN_CONTEXT_KINDS.relevantMemories, [
+  return formatSectionTag(MEMORY_SELECTION_TAG, [
     "The following memories were selected as relevant to the current conversation.",
     "Apply any user preferences, project facts, or conventions described below.",
     "",

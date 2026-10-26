@@ -112,7 +112,7 @@ function makeManagedStub() {
     getApprovals: () => ({ toArray: () => [], upsert: noop }),
     usageHistory: { record: noop },
     usage: {},
-    memory: { commitSurfacedMemories: noop },
+    memory: { runExtraction: noop },
     session: { getSessionData: () => ({ id: "validation-session" }) },
     log: {
       warn: noop,

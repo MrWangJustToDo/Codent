@@ -8,6 +8,7 @@
 import { z } from "zod";
 
 import type { ResolvedCoreEnv } from "../../env";
+import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 
 // ============================================================================
 // Constants
@@ -41,6 +42,38 @@ export const DEFAULT_MAX_MEMORY_BYTES_PER_FILE = 4096;
 
 /** Max total bytes of injected memory content per session */
 export const DEFAULT_MAX_SESSION_MEMORY_BYTES = 60 * 1024; // 60 KB
+
+// ============================================================================
+// Ports used by the memory queries (the extension's `ctx.llm`)
+// ============================================================================
+
+/**
+ * One structured one-shot completion. The host owns the connection, the catalog, usage
+ * attribution and the per-run budget — the memory code only supplies prompt + schema and reads
+ * the validated value back.
+ */
+export interface MemoryCompletionRequest {
+  system: string;
+  prompt: string;
+  maxOutputTokens: number;
+  /** Zod (or Standard Schema) schema for the structured reply. */
+  schema: unknown;
+}
+
+/** Resolve the completion to the schema-validated value; reject on transport/schema failure. */
+export type MemoryCompletion = (request: MemoryCompletionRequest) => Promise<unknown>;
+
+/** Minimal log port so the selection helpers stay independent of the extension logger. */
+export interface MemoryLog {
+  info(message: string): void;
+  warn(message: string): void;
+}
+
+/** The telemetry events the memory extension may publish (through the host-injected emitter). */
+export type MemoryTelemetryEvent = "memory:prefetch" | "memory:extract" | "memory:consolidate";
+
+/** Host telemetry sink, typed by the same payload map the bus validates. */
+export type MemoryTelemetry = <T extends MemoryTelemetryEvent>(type: T, data: AgentEventPayloadMap[T]) => void;
 
 // ============================================================================
 // Zod Schemas
