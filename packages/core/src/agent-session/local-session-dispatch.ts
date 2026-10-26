@@ -188,11 +188,14 @@ export async function dispatchLocalAgentSessionCommand(
           return { ok: false, code: "not_found", error: `Extension command "/${command.name}" not found` };
         }
         const args = command.args ?? [];
-        const message = await cmd.execute(args);
+        // Live context so a command can reach `ctx.llm` / the conversation, same as a tool or event
+        // handler. Resolved per dispatch: a command may run after a session switch.
+        const commandContext = managed.getExtensionContextForCommand(command.name);
+        const message = await cmd.execute(args, commandContext);
         // Commands may opt into injecting a user message into the session,
         // driving the agent to act on the command (e.g. /skill <name>).
         if (cmd.injectMessage) {
-          const inject = await cmd.injectMessage(args, message);
+          const inject = await cmd.injectMessage(args, message, commandContext);
           if (inject && inject.trim().length > 0) {
             if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
             await chat.sendMessage(inject);

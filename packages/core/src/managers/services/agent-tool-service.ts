@@ -14,6 +14,7 @@ import { withTimeoutAbort } from "../../agent/tools/shared/abort-timeout.js";
 
 import type { ExtensionToolDefinition } from "../../agent/extension";
 import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
+import type { ExtensionContext } from "../../agent/extension/types.js";
 import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 import type { ToolPresentationInfo } from "../../agent/tools/presentation/types.js";
 import type { ToModelOutputDecorator, ToModelOutputFn } from "../../agent/tools/runtime/contract.js";
@@ -28,6 +29,11 @@ export interface AgentToolRegistrationContext {
   onToolsChanged?: () => void;
   /** Fallback agent id for tools that register outside a run context. */
   agentId?: string;
+  /**
+   * The registering extension's live context, resolved per call. Extension tools receive it as their
+   * third `execute` argument so they can reach `ctx.llm`, the run signal and the conversation.
+   */
+  getExtensionContext?: () => ExtensionContext | undefined;
 }
 
 export class AgentToolService {
@@ -121,12 +127,16 @@ export class AgentToolService {
       needsApproval: def.needsApproval,
       execute: async (args, toolCtx) => {
         const run = (deadlineSignal: AbortSignal | undefined) =>
-          def.execute(args, {
-            toolCallId: toolCtx.toolCallId,
-            abortSignal: toolCtx.abortSignal,
-            deadlineSignal,
-            agentId: toolCtx.agentId ?? ctx.agentId,
-          });
+          def.execute(
+            args,
+            {
+              toolCallId: toolCtx.toolCallId,
+              abortSignal: toolCtx.abortSignal,
+              deadlineSignal,
+              agentId: toolCtx.agentId ?? ctx.agentId,
+            },
+            ctx.getExtensionContext?.()
+          );
         if (def.timeoutMs === undefined) return run(undefined);
         return withTimeoutAbort((signal) => run(signal), {
           timeoutMs: def.timeoutMs,

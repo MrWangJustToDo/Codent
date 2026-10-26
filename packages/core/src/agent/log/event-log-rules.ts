@@ -281,6 +281,14 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   },
 
   // ============================================================================
+  // Turn / message boundaries — observable, never default-logged (2-4 rows per turn would dominate
+  // the timeline; a consumer that wants them persists them under its own scope).
+  // ============================================================================
+  "turn:end": false,
+  "message:start": false,
+  "message:end": false,
+
+  // ============================================================================
   // Memory
   // ============================================================================
   "memory:prefetch": false,

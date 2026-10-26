@@ -24,9 +24,24 @@ export interface SideQueryLog {
   warn(category: string, message: string, data?: Record<string, unknown>): unknown;
 }
 
+/** One message in a side query's conversation. */
+export interface SideQueryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface SideTextQueryOptions {
   systemPrompt?: string;
-  userPrompt: string;
+  /** Single user turn. Ignored when {@link SideTextQueryOptions.messages} is provided. */
+  userPrompt?: string;
+  /**
+   * Full conversation for the query, in order. Takes precedence over `userPrompt`.
+   *
+   * Exists for callers that need more than one turn (an extension refining a classification, a
+   * summarizer given a transcript); the single-prompt form stays the common case. One of the two
+   * must be present.
+   */
+  messages?: readonly SideQueryMessage[];
   maxOutputTokens?: number;
   abortSignal?: AbortSignal;
   /**
@@ -183,6 +198,34 @@ function reasonOf(error: unknown): string {
   return errorMessage(error);
 }
 
+/**
+ * The conversation to send: the caller's messages when given, else the single user prompt.
+ *
+ * Both entry points are optional on the type, so this is where "one of them must exist" is enforced —
+ * a query with neither would otherwise send an empty conversation and get an empty answer.
+ */
+/**
+ * Attach already-billed usage to a failure.
+ *
+ * A structured call can be billed and still fail (no completion event, or a value the schema rejects);
+ * a caller that only sees the error would attribute nothing and a systematically failing caller would
+ * spend tokens invisibly. The property is additive and typed at the caller.
+ */
+function withUsage<T extends Error>(error: T, usage: TokenUsage | undefined): T {
+  if (usage) (error as T & { usage?: TokenUsage }).usage = usage;
+  return error;
+}
+
+function queryMessages(options: SideTextQueryOptions): Array<{ role: "user" | "assistant"; content: string }> {
+  if (options.messages && options.messages.length > 0) {
+    return options.messages.map((message) => ({ role: message.role, content: message.content }));
+  }
+  if (typeof options.userPrompt === "string" && options.userPrompt.length > 0) {
+    return [{ role: "user", content: options.userPrompt }];
+  }
+  throw new Error("runSideTextQuery requires `userPrompt` or a non-empty `messages` list");
+}
+
 // ============================================================================
 // Text branch
 // ============================================================================
@@ -194,7 +237,7 @@ async function runTextQuery(
   const startTime = Date.now();
   const stream = chat({
     adapter: textAdapter.adapter,
-    messages: [{ role: "user", content: options.userPrompt }],
+    messages: queryMessages(options),
     systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
     ...createQueryRequest(textAdapter, options),
   });
@@ -277,7 +320,7 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
   // keeps usage (from `RUN_FINISHED`) and keeps this function's shape familiar.
   const stream = chat({
     adapter: textAdapter.adapter,
-    messages: [{ role: "user", content: options.userPrompt }],
+    messages: queryMessages(options),
     systemPrompts: options.systemPrompt ? [options.systemPrompt] : undefined,
     outputSchema: options.schema,
     stream: true as const,
@@ -316,12 +359,15 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
 
   if (!capture) {
     const reason = "no structured-output completion event was emitted";
-    throw new Error(
-      sideQueryError(reason, textAdapter, options.log, startTime, {
-        mode: "structured",
-        raw: text,
-        ...failureContext,
-      })
+    throw withUsage(
+      new Error(
+        sideQueryError(reason, textAdapter, options.log, startTime, {
+          mode: "structured",
+          raw: text,
+          ...failureContext,
+        })
+      ),
+      usage
     );
   }
 
@@ -335,12 +381,15 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
   const validation = validateAgainstSchema(options.schema, result.object);
   if (!validation.ok) {
     const reason = `response failed schema validation: ${validation.issue}`;
-    throw new Error(
-      sideQueryError(reason, textAdapter, options.log, startTime, {
-        mode: "structured",
-        raw: result.raw,
-        ...failureContext,
-      })
+    throw withUsage(
+      new Error(
+        sideQueryError(reason, textAdapter, options.log, startTime, {
+          mode: "structured",
+          raw: result.raw,
+          ...failureContext,
+        })
+      ),
+      usage
     );
   }
 
@@ -430,7 +479,7 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
 
   const stream = chat({
     adapter: textAdapter.adapter,
-    messages: [{ role: "user", content: options.userPrompt }],
+    messages: queryMessages(options),
     systemPrompts: [systemPrompt],
     ...createQueryRequest(textAdapter, options),
   });
@@ -457,13 +506,19 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
   const extracted = extractJsonDocument(text);
   if (!extracted) {
     const reason = "no complete JSON document was found in the reply";
-    throw new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: text }));
+    throw withUsage(
+      new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: text })),
+      usage
+    );
   }
 
   const validation = validateAgainstSchema(options.schema, extracted.value);
   if (!validation.ok) {
     const reason = `response failed schema validation: ${validation.issue}`;
-    throw new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: extracted.raw }));
+    throw withUsage(
+      new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: extracted.raw })),
+      usage
+    );
   }
 
   return {

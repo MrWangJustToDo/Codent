@@ -85,6 +85,14 @@ export {
 // `LANGUAGE_TO_GRAMMAR` reaches the published package without a second edit.
 export { LANGUAGE_TO_GRAMMAR } from "./agent/tree-sitter/parser-manager.js";
 // ============================================================================
+// Extension runtime access (internal validation exports — not part of public API)
+// ============================================================================
+// `ExtensionRunner` / `createLifecycleMiddleware` / `createAgentEventBus` are already re-exported by
+// the dev modules above; only the extension-runtime additions live here.
+export { createObserverSurface } from "./agent/extension/observer-surface.js";
+export { completeExtensionQuery, copyModelMessages, ExtensionLlmError } from "./managers/extension-completion.js";
+
+// ============================================================================
 // Built-in Memory extension (internal validation exports — not part of public API)
 // ============================================================================
 // ============================================================================

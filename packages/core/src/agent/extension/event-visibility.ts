@@ -12,6 +12,7 @@
  * observable by accident nor be silently missing from `observeAny`.
  */
 
+import type { ExtensionContext } from "./types.js";
 import type { AgentEvent, AgentEventType, AgentEvents } from "../agent-event-bus/types.js";
 
 /**
@@ -44,6 +45,9 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "turn:summary": "observable",
   // Agent lifecycle / tools / approvals
   "agent:thinking": "observable",
+  "turn:end": "observable",
+  "message:start": "observable",
+  "message:end": "observable",
   "agent:tool-start": "observable",
   "agent:tool-approval-request": "observable",
   "agent:tool-approval-resolved": "observable",
@@ -159,7 +163,9 @@ export function observableExtensionEvents(): ObservableExtensionEvent[] {
  * mutates live state.
  */
 export type ExtensionEventObserver<T extends ObservableExtensionEvent = ObservableExtensionEvent> = (
-  event: AgentEvent<T>
+  event: AgentEvent<T>,
+  /** Live extension context for this dispatch; absent on a standalone observer surface. */
+  ctx?: ExtensionContext
 ) => void | Promise<void>;
 
 export interface ExtensionObserverOptions {

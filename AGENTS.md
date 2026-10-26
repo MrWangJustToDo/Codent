@@ -899,6 +899,25 @@ packages/core/src/agent/
 │   └── presentation/    # descriptors, row rules, display + format/ renderers
 ```
 
+## Extension Runtime Access (what an extension can reach)
+
+Beyond registration (`registerTool` / `registerCommand` / `registerInterceptor` / `registerContextProvider` / `registerMessageTransformer`), `ExtensionContext` exposes **live run facts** and **model access**. Every handler also receives the context as a trailing argument (`(event, ctx)`, `(input, options, ctx)`, `(args, ctx)`, section producers `(ctx)`), so a handler does not have to capture it; either way the values are read at call time, never snapshotted:
+
+| Surface | Contract |
+|---|---|
+| `ctx.sessionId` / `isIdle()` / `mode` / `model` | Live session facts; `mode` is `normal` / `auto` / a plan phase |
+| `ctx.signal` | The active run's `AbortSignal` (undefined when idle) — extension work cancels with the turn |
+| `ctx.getMessages()` | Defensive copy of the model-visible conversation (compaction + synthetic `<ctx>` blocks); mutation cannot reach the wire |
+| `ctx.getContextUsage()` | The footer's fill reading (`getContextFillTokens()` against the compaction budget), not a second estimate |
+| `ctx.getSystemPrompt()` | Effective system prompt for the run |
+| `ctx.llm.complete({ messages \| prompt, system?, schema?, model?, maxOutputTokens?, signal? })` | One-shot completion (text or schema-validated), outside the agent loop. Uses the **session's own connection**; `model` must be an entry that connection offers (unknown/cross-connection → typed `ExtensionLlmError`, no request). Usage is attributed to the session **automatically** (no caller-side tracker, no opt-out); a per-run call budget fails closed and is reported once as `agent:extension-error` |
+
+Context providers may publish **several named sections** (`sections: [{ name, content, disabledContent }]`), each injected as its own `<ctx kind="<extensionId>:<name>">` and admitted by its own content hash — a changing section never re-injects a stable one. A throwing producer is contained to its section; a duplicate name keeps the last and warns.
+
+Turn/message boundaries are observable: `agent:iteration` opens a turn, `turn:end` closes it (`index` / `finishReason` / `toolCalls`), and `message:start` / `message:end` bracket assistant messages (`firstOutput` on the run's first). None of the three is default-logged. Validate: `pnpm --filter @codent/core run validate:extension-handler-context`, `validate:extension-model-access`, `validate:extension-turn-events`, `validate:extension-context-sections`.
+
+Roadmap (not built yet): **write** capabilities (`ctx.abort`, `ctx.compact`, session writes, `ctx.executeTool`) → interactive UI requests / provider+MCP registration / reload / trust gate → streaming completions.
+
 ## Extension Point: Message Transformers
 
 `ExtensionContext` offers four registration channels today — `registerTool` / `registerCommand` / `registerInterceptor` / `registerContextProvider`. Its fifth, `registerMessageTransformer(fn)`, is the only one that edits **the message chain the model sees**. Use it for media-to-text (e.g. describe an image through an out-of-process multimodal endpoint before handing it to a text-only model), redaction, trimming to a budget, or wire-only context injection.

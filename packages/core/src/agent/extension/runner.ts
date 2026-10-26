@@ -16,6 +16,10 @@ import { createObserverSurface } from "./observer-surface.js";
 import type { DispatchRank } from "./dispatch-order.js";
 import type {
   ExtensionInstance,
+  ExtensionRuntimeAccess,
+  ExtensionLlm,
+  ExtensionLlmRequest,
+  ExtensionLlmResult,
   ExtensionAPI,
   ExtensionContext,
   ExtensionConfig,
@@ -30,6 +34,7 @@ import type {
   ExtensionPromptAppends,
   ExtensionTurnContextSection,
   ExtensionContextProvider,
+  ExtensionContextSectionProvider,
   ExtensionRegistrations,
   ExtensionInfo,
   ExtensionRenderPayload,
@@ -110,6 +115,15 @@ export interface ExtensionRunnerOptions {
    * to retained bus state and the runner's own `cwd`.
    */
   getUiContext?: () => Partial<ExtensionUiContext>;
+  /**
+   * Live access to the agent runtime backing this runner: session id, run signal, messages, context
+   * fill, system prompt and one-shot model completions.
+   *
+   * A function (not a value) because the facts are per run and per session. Omitted by standalone
+   * runners (validation scripts, hosts building a runner without an agent): the context then reports
+   * idle/empty facts and `ctx.llm` rejects with a typed error.
+   */
+  getRuntime?: () => ExtensionRuntimeAccess | undefined;
 }
 
 export class ExtensionRunner {
@@ -135,12 +149,20 @@ export class ExtensionRunner {
   private commandOwners = new Map<string, string>();
   /** Per-extension context injection (extension id → provider and its rank). */
   private contextProviders = new Map<string, { provider: ExtensionContextProvider; rank: DispatchRank }>();
+  /** Live context per active extension — the object handed to every handler of that extension. */
+  private contexts = new Map<string, ExtensionContext>();
+  /**
+   * Wrapped interceptor per (handler, extension). `ctx.events.off(handler)` must unregister the
+   * wrapper that was actually registered, not the caller's original function.
+   */
+  private interceptorWrappers = new WeakMap<object, Map<string, EventInterceptor<InterceptableEvent>>>();
   /**
    * Per-extension model-message transform. The registry owns the map, the chaining order
    * and the ownership copy; the runner only wires lifecycle into it.
    */
   private readonly messageTransformers = new MessageTransformerRegistry({
     reportTransformerFailure: (extensionId, err) => this.reportTransformerFailure(extensionId, err),
+    getContext: (extensionId) => this.contexts.get(extensionId),
   });
   /**
    * Persistent "this extension is disabled" notices keyed by extension id
@@ -148,6 +170,8 @@ export class ExtensionRunner {
    * unsubscribes the provider). Cleared when the extension is re-enabled.
    */
   private disabledExtensionNotices = new Map<string, string>();
+  /** Disabled notices for named sections, keyed by `"<extensionId>:<sectionName>"`. */
+  private disabledSectionNotices = new Map<string, string>();
   private eventBus: BusExtensionEventBus;
   /** Raw scoped bus (interception + telemetry) behind the extension-facing facade. */
   private readonly rawBus: AgentEventBus;
@@ -287,7 +311,12 @@ export class ExtensionRunner {
    */
   private createObserverSurface(ownerId: string, registrations?: ExtensionRegistrations): ExtensionObserverSurface {
     return createObserverSurface(
-      { bus: this.rawBus, reportFailure: (err) => this.reportObserverFailure(ownerId, err) },
+      {
+        bus: this.rawBus,
+        reportFailure: (err) => this.reportObserverFailure(ownerId, err),
+        // Looked up per dispatch: the context is registered right after construction and reads live.
+        getContext: () => this.contexts.get(ownerId),
+      },
       registrations
     );
   }
@@ -376,8 +405,9 @@ export class ExtensionRunner {
     const turnContextSections: ExtensionTurnContextSection[] = [];
     const orderedProviders = sortByDispatchRank(Array.from(this.contextProviders, ([id, entry]) => ({ id, ...entry })));
     for (const { id, provider } of orderedProviders) {
+      const ctx = this.contexts.get(id);
       try {
-        const value = await provider.content?.();
+        const value = await provider.content?.(ctx);
         if (value?.trim()) turnContextSections.push({ id, content: value.trim() });
       } catch (err) {
         const message = errorMessage(err);
@@ -394,12 +424,42 @@ export class ExtensionRunner {
           this.writeExtensionLog("error", id, `turn context provider failed: ${message}`);
         }
       }
+
+      // Named sections: each is its own `<ctx kind="<id>:<name>">` block, so a change in one never
+      // re-injects another. A failing producer is contained to its own section.
+      //
+      // Duplicate names keep the LAST registration (matching how a replaced provider behaves) and are
+      // reported once, rather than emitting two blocks under the same kind — admission is keyed by
+      // kind, so two producers would fight over one slot and re-inject each other every turn.
+      const byName = new Map<string, ExtensionContextSectionProvider>();
+      for (const section of provider.sections ?? []) {
+        if (byName.has(section.name)) {
+          this.writeExtensionLog("warn", id, `duplicate context section "${section.name}" — the last one wins`);
+        }
+        byName.set(section.name, section);
+      }
+      for (const [name, section] of byName) {
+        try {
+          const body = await section.content?.(ctx);
+          if (body?.trim()) turnContextSections.push({ id: `${id}:${name}`, content: body.trim() });
+        } catch (err) {
+          const message = errorMessage(err);
+          this.options.eventBus?.emit("agent:extension-error", {
+            extensionId: id,
+            phase: "turn-context",
+            error: `section "${name}": ${message}`,
+          });
+        }
+      }
     }
     // Surface runtime-disabled extensions under the same tag so the model knows
     // their tools are gone (symmetric to the enable-side section). A disabled
     // extension's providers were already unsubscribed on destroy, so its id never
     // also appears above.
     for (const [id, notice] of this.disabledExtensionNotices) {
+      if (notice?.trim()) turnContextSections.push({ id, content: notice.trim() });
+    }
+    for (const [id, notice] of this.disabledSectionNotices) {
       if (notice?.trim()) turnContextSections.push({ id, content: notice.trim() });
     }
 
@@ -436,6 +496,7 @@ export class ExtensionRunner {
       this.ranks.set(api.id, { order: resolveExtensionOrder(api.order), seq: this.loadSequence++ });
     }
     const ctx = this.createContext(api, config, registrations);
+    this.contexts.set(api.id, ctx);
 
     const instance: ExtensionInstance = {
       api,
@@ -497,7 +558,7 @@ export class ExtensionRunner {
     const flush = instance.registrations.flush;
     if (!flush) return;
     try {
-      await flush();
+      await flush(this.contexts.get(instance.api.id));
     } catch (err) {
       const error = toError(err);
       this.rawBus.emit("agent:extension-error", {
@@ -539,6 +600,7 @@ export class ExtensionRunner {
     this.contextProviders.clear();
     this.messageTransformers.clearAll();
     this.disabledExtensionNotices.clear();
+    this.disabledSectionNotices.clear();
     this.ui.clearAllSlots();
     if (this.contextTimer) {
       clearTimeout(this.contextTimer);
@@ -602,6 +664,9 @@ export class ExtensionRunner {
         instance.state = "active";
         instance.error = undefined;
         this.disabledExtensionNotices.delete(instance.api.id);
+        for (const key of [...this.disabledSectionNotices.keys()]) {
+          if (key.startsWith(`${instance.api.id}:`)) this.disabledSectionNotices.delete(key);
+        }
         this.options.onToolRegistrationBatchComplete?.();
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
@@ -623,8 +688,19 @@ export class ExtensionRunner {
     // it). Undefined/absent falls back to a generic notice so non-customizing
     // extensions stay informative; an empty string explicitly opts out.
     const provider = this.contextProviders.get(instance.api.id)?.provider;
+    const ctxForDisable = this.contexts.get(instance.api.id);
     const custom =
-      provider?.disabledContent === undefined ? undefined : ((await provider.disabledContent()) ?? undefined);
+      provider?.disabledContent === undefined
+        ? undefined
+        : ((await provider.disabledContent(ctxForDisable)) ?? undefined);
+    const sectionNotices: Array<[string, string]> = [];
+    for (const section of provider?.sections ?? []) {
+      const body =
+        section.disabledContent === undefined
+          ? undefined
+          : ((await section.disabledContent(ctxForDisable)) ?? undefined);
+      if (body?.trim()) sectionNotices.push([`${instance.api.id}:${section.name}`, body.trim()]);
+    }
 
     await this.destroyExtension(instance);
     const notice =
@@ -633,6 +709,7 @@ export class ExtensionRunner {
         : custom.trim();
     if (notice) this.disabledExtensionNotices.set(instance.api.id, notice);
     else this.disabledExtensionNotices.delete(instance.api.id);
+    for (const [key, body] of sectionNotices) this.disabledSectionNotices.set(key, body);
     return { ok: true, message: `Extension "${id}" disabled` };
   }
 
@@ -694,7 +771,49 @@ export class ExtensionRunner {
     instance.registrations.flush = null;
     instance.registrations.exitFlushRef?.();
     instance.registrations.exitFlushRef = null;
+    this.contexts.delete(instance.api.id);
     instance.registrations.exitFlush = null;
+  }
+
+  /** The live context of an active extension, for dispatch sites outside the runner. */
+  contextFor(extensionId: string): ExtensionContext | undefined {
+    return this.contexts.get(extensionId);
+  }
+
+  /** The live context that owns a registered command (commands are dispatched by the session). */
+  contextForCommand(name: string): ExtensionContext | undefined {
+    const owner = this.commandOwners.get(name);
+    return owner ? this.contexts.get(owner) : undefined;
+  }
+
+  /**
+   * Wrap an interceptor so it receives the extension's live context as its second argument.
+   * Memoized per handler+extension: `events.on` / `events.off` must agree on the identity.
+   */
+  private wrapInterceptor(
+    extensionId: string,
+    handler: EventInterceptor<InterceptableEvent>
+  ): EventInterceptor<InterceptableEvent> {
+    let byExtension = this.interceptorWrappers.get(handler);
+    if (!byExtension) {
+      byExtension = new Map();
+      this.interceptorWrappers.set(handler, byExtension);
+    }
+    const existing = byExtension.get(extensionId);
+    if (existing) return existing;
+    const wrapped: EventInterceptor<InterceptableEvent> = (event) => handler(event, this.contexts.get(extensionId));
+    byExtension.set(extensionId, wrapped);
+    return wrapped;
+  }
+
+  private async completeViaRuntime(extensionId: string, request: ExtensionLlmRequest): Promise<ExtensionLlmResult> {
+    const runtime = this.options.getRuntime?.();
+    if (!runtime) {
+      throw new Error(
+        `Extension "${extensionId}" cannot call a model: this extension host has no agent runtime attached.`
+      );
+    }
+    return runtime.complete(extensionId, request);
   }
 
   private createContext(
@@ -702,6 +821,8 @@ export class ExtensionRunner {
     config?: ExtensionConfig,
     registrations?: ExtensionRegistrations
   ): ExtensionContext {
+    const runtime = () => this.options.getRuntime?.();
+
     return {
       id: api.id,
       agentId: this.options.agentId ?? "standalone",
@@ -709,6 +830,30 @@ export class ExtensionRunner {
       z,
       cwd: this.options.cwd ?? "",
       coreEnv: this.resolveCoreEnv(),
+
+      // Live facts: read through the runtime on every access, never captured. A handler that runs
+      // after a session switch must see the new session, not the activation-time one.
+      get sessionId() {
+        return runtime()?.sessionId() ?? null;
+      },
+      isIdle: () => runtime()?.isIdle() ?? true,
+      get mode() {
+        return runtime()?.mode() ?? "normal";
+      },
+      get model() {
+        return runtime()?.model();
+      },
+      get signal() {
+        return runtime()?.signal();
+      },
+      getContextUsage: () => runtime()?.contextUsage(),
+      getSystemPrompt: () => runtime()?.systemPrompt() ?? "",
+      getMessages: () => runtime()?.messages() ?? [],
+      // Overloads cannot be expressed by an object literal, so the single runtime entry point is
+      // cast to the public shape; the implementation narrows on presence of `schema`.
+      llm: {
+        complete: (request: ExtensionLlmRequest) => this.completeViaRuntime(api.id, request),
+      } as ExtensionLlm,
       registerTool: (def: ExtensionToolDefinition) => {
         const rank = this.rankOf(api.id);
         const stack = this.toolStacks.get(def.name);
@@ -755,7 +900,13 @@ export class ExtensionRunner {
         eventType: string,
         handler: EventInterceptor<T>
       ): (() => void) => {
-        const unsub = this.eventBus.on(eventType, handler, this.rankOf(api.id));
+        // The context is looked up at dispatch time: it is registered on the runner right after
+        // construction, and activation (where handlers are declared) happens after that.
+        const unsub = this.eventBus.on(
+          eventType,
+          this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as EventInterceptor<T>,
+          this.rankOf(api.id)
+        );
         registrations?.unsubInterceptors.push(unsub);
         return unsub;
       },
@@ -769,7 +920,7 @@ export class ExtensionRunner {
         return unsub;
       },
 
-      registerFlush: (flush: () => Promise<void> | void): (() => void) => {
+      registerFlush: (flush: (ctx?: ExtensionContext) => Promise<void> | void): (() => void) => {
         if (!registrations) return () => {};
         registrations.flush = flush;
         // Identity-checked: a stale disposer from a replaced flush must not clear
@@ -813,8 +964,17 @@ export class ExtensionRunner {
         // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension
         // ordering itself with `order` would get its declared position through one entry point
         // and the default through the other.
-        on: (type, handler) => this.eventBus.on(type, handler, this.rankOf(api.id)),
-        off: (type, handler) => this.eventBus.off(type, handler),
+        on: (type, handler) =>
+          this.eventBus.on(
+            type,
+            this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as typeof handler,
+            this.rankOf(api.id)
+          ),
+        off: (type, handler) =>
+          this.eventBus.off(
+            type,
+            this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as typeof handler
+          ),
         ...this.createObserverSurface(api.id, registrations),
       },
       ui: this.wrapUi(api.id),

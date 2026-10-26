@@ -89,6 +89,27 @@ export type AgentEventPayloadMap = {
     hasTurnContext?: boolean;
   };
   "agent:thinking": EmptyAgentEventPayload;
+  /**
+   * One model turn finished (a model request plus the tool calls it issued).
+   *
+   * Completes the index that `agent:iteration` opened; a consumer pairs the two by `index`. An
+   * aborted turn is not reported as finished.
+   */
+  "turn:end": { index: number; finishReason: string | null; toolCalls: number };
+  /**
+   * An assistant message began streaming. `firstOutput` marks the run's first assistant output — the
+   * general fact behind "did the model actually answer?".
+   */
+  "message:start": { role: "assistant"; messageId: string; firstOutput: boolean };
+  /** An assistant message was finalized (assistant text and tool-call count, not the part tree). */
+  "message:end": {
+    role: "assistant";
+    messageId: string;
+    firstOutput: boolean;
+    text: string;
+    toolCalls: number;
+    finishReason: string | null;
+  };
   "agent:tool-start": {
     tool_name?: string;
     tool_call_id?: string;

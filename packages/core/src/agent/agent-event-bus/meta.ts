@@ -123,6 +123,11 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "session:tool-presentation": { mode: "emit", channel: "tool-presentation", retained: true },
   "session:interaction": { mode: "emit", channel: "interaction", retained: true },
   "agent:iteration": { mode: "emit", channel: "iteration", retained: true },
+  // Turn/message boundaries: observable facts about a run, not session channels. Two to four per
+  // turn, so they are deliberately not default-logged (see DEFAULT_EVENT_LOG_RULES).
+  "turn:end": { mode: "emit" },
+  "message:start": { mode: "emit" },
+  "message:end": { mode: "emit" },
   // Background command jobs. Retained so a late subscriber (the built-in jobs
   // extension at startup, or a reconnecting remote client) sees the current list
   // without waiting for the next transition. Deliberately NOT in

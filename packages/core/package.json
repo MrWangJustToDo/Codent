@@ -290,7 +290,11 @@
     "validate:format-read-file-result": "pnpm run build && node scripts/validate-format-read-file-result.mjs",
     "validate:mcp-session-servers": "pnpm run build && node scripts/validate-mcp-session-servers.mjs",
     "validate:subagent-task-projection": "pnpm run build && node scripts/validate-subagent-task-projection.mjs",
-    "validate:image-text": "pnpm run build && node scripts/validate-image-text.mjs"
+    "validate:image-text": "pnpm run build && node scripts/validate-image-text.mjs",
+    "validate:extension-handler-context": "pnpm run build && node scripts/validate-extension-handler-context.mjs",
+    "validate:extension-model-access": "pnpm run build && node scripts/validate-extension-model-access.mjs",
+    "validate:extension-turn-events": "pnpm run build && node scripts/validate-extension-turn-events.mjs",
+    "validate:extension-context-sections": "pnpm run build && node scripts/validate-extension-context-sections.mjs"
   },
   "dependencies": {
     "@tanstack/ai": "^0.70.0",

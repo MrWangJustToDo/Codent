@@ -65,6 +65,15 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   let lastRoundElapsedMs = 0;
   let lastReasoningTokens = 0;
   let lastCostUsd = 0;
+  // Turn/message boundary state (see `turn:end` / `message:*` in the event registry).
+  let turnIndex = 0;
+  let turnToolCalls = 0;
+  let runFirstOutput = false;
+  let messageStarted = false;
+  let messageId = "";
+  let messageFirstOutput = false;
+  let messageText = "";
+  let messageToolCalls = 0;
 
   return defineMiddleware("observe", {
     name: "lifecycle",
@@ -81,6 +90,18 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       firstTokenAt = 0;
       lastModel = ctx.model;
       lastIteration = ctx.iteration;
+
+      // One model turn begins. The turn index pairs with `agent:iteration` (both 1-based); the
+      // per-turn message state starts empty and `turn:end` closes it on RUN_FINISHED.
+      turnIndex = ctx.iteration + 1;
+      turnToolCalls = 0;
+      messageStarted = false;
+      messageId = "";
+      messageText = "";
+      messageToolCalls = 0;
+      // `firstOutput` is per RUN, so it resets only when the run itself starts over (iteration 0,
+      // including a restart-style retry).
+      if (ctx.iteration === 0) runFirstOutput = false;
 
       deps.emitEvent?.("llm:request", {
         model: ctx.model,
@@ -108,6 +129,47 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         thinkingEmitted = true;
         if (!firstTokenAt) firstTokenAt = Date.now();
         deps.onThinking?.();
+      }
+
+      // ---- assistant message boundaries ----
+      if (
+        chunk.type === "TEXT_MESSAGE_START" ||
+        chunk.type === "REASONING_MESSAGE_START" ||
+        chunk.type === "TOOL_CALL_START"
+      ) {
+        if (!messageStarted) {
+          messageStarted = true;
+          messageId = (chunk as { messageId?: string }).messageId ?? `turn-${turnIndex}`;
+          messageFirstOutput = !runFirstOutput;
+          runFirstOutput = true;
+          deps.emitEvent?.("message:start", {
+            role: "assistant",
+            messageId,
+            firstOutput: messageFirstOutput,
+          });
+        }
+      }
+      if (chunk.type === "TEXT_MESSAGE_CONTENT" && chunk.delta) {
+        messageText += chunk.delta;
+      }
+      if (chunk.type === "TOOL_CALL_START") {
+        turnToolCalls += 1;
+        messageToolCalls += 1;
+      }
+      if (chunk.type === "RUN_FINISHED") {
+        const finishReason = (chunk as { finishReason?: string }).finishReason ?? null;
+        deps.emitEvent?.("turn:end", { index: turnIndex, finishReason, toolCalls: turnToolCalls });
+        if (messageStarted) {
+          deps.emitEvent?.("message:end", {
+            role: "assistant",
+            messageId,
+            firstOutput: messageFirstOutput,
+            text: messageText,
+            toolCalls: messageToolCalls,
+            finishReason,
+          });
+          messageStarted = false;
+        }
       }
 
       if (!memoryCommitted && chunk.type === "TEXT_MESSAGE_CONTENT") {

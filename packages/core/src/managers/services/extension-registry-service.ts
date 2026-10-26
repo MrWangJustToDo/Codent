@@ -10,6 +10,7 @@ import { AgentToolService } from "./agent-tool-service.js";
 
 import type {
   ExtensionCommand,
+  ExtensionContext,
   ExtensionLoader,
   ExtensionRunner,
   ExtensionToolDefinition,
@@ -37,6 +38,8 @@ export interface ExtensionToolRegistrationContext {
    * declared `order` decides which definition wins rather than load order.
    */
   rank?: DispatchRank;
+  /** The registering extension's live context (extension tools receive it as `execute`'s 3rd arg). */
+  getExtensionContext?: () => ExtensionContext | undefined;
   /** Called after the tools record changes so cached runners re-resolve. */
   onToolsChanged: () => void;
   /** Owning agent id, used as a fallback when the run context supplies none. */
@@ -116,6 +119,7 @@ export class ExtensionRegistryService {
       warn: ctx.warn,
       onToolsChanged: ctx.onToolsChanged,
       ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+      ...(ctx.getExtensionContext ? { getExtensionContext: ctx.getExtensionContext } : {}),
     });
   }
 

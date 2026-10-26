@@ -198,6 +198,9 @@ export class AgentBootstrap {
       onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank, { publishCatalog: false }),
       onRegisterCommand: (cmd) => managed.registerCommand(cmd),
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
+      // Live run/session facts and one-shot model access for extensions (`ctx.signal`,
+      // `ctx.getMessages()`, `ctx.llm`). A function because every fact is per run.
+      getRuntime: () => managed.getExtensionRuntime(),
       onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
       onRegisterToolOutputDecorator: (name, decorator, ownerId) =>
         managed.registerToolOutputDecorator(name, decorator, ownerId),

@@ -25,6 +25,7 @@ import type {
   ExtensionObserverSurface,
   ExtensionRegistrations,
   ObservableExtensionEvent,
+  ExtensionContext,
 } from "./types.js";
 import type { AgentEvent, AgentEventBus, AgentEventListener } from "../agent-event-bus";
 
@@ -33,6 +34,11 @@ export interface ObserverSurfaceDeps {
   bus: AgentEventBus;
   /** Report a contained handler failure — logged and emitted as `agent:extension-error`. */
   reportFailure: (err: unknown) => void;
+  /**
+   * The extension's live context, resolved per dispatch. Optional: a standalone observer surface
+   * (no runner) calls handlers with the event alone.
+   */
+  getContext?: () => ExtensionContext | undefined;
 }
 
 /**
@@ -55,7 +61,9 @@ export function createObserverSurface(
     <T extends ObservableExtensionEvent>(handler: ExtensionEventObserver<T>) =>
     (event: AgentEvent<T>): void => {
       try {
-        const result = handler(event);
+        // Second argument: the extension's live context (session/run/model facts). Resolved per
+        // dispatch so a handler never sees the previous run's facts.
+        const result = handler(event, deps.getContext?.());
         if (result && typeof (result as Promise<void>).then === "function") {
           void (result as Promise<void>).catch((err: unknown) => deps.reportFailure(err));
         }

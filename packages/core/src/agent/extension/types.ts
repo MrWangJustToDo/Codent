@@ -1,3 +1,4 @@
+import type { ExtensionContextUsage, ExtensionLlm } from "./context-access.js";
 import type { DispatchRank } from "./dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
@@ -174,7 +175,9 @@ export interface MessageTransformContext extends ModelCapabilityFlags {
  * - An extension may hold at most one active transformer; registering again replaces it.
  */
 export type MessageTransformer = (
-  ctx: MessageTransformContext
+  ctx: MessageTransformContext,
+  /** The extension's live context for this call. */
+  extensionCtx?: ExtensionContext
 ) => ModelMessage[] | void | Promise<ModelMessage[] | void>;
 
 // ============================================================================
@@ -196,7 +199,7 @@ export interface ExtensionToolDefinition {
    */
   inputSchema: SchemaInput;
   outputSchema?: SchemaInput;
-  execute: (input: unknown, options: ToolExecutionOptions) => Promise<ToolCallResult>;
+  execute: (input: unknown, options: ToolExecutionOptions, ctx?: ExtensionContext) => Promise<ToolCallResult>;
   /**
    * How this tool is presented: fold category, keep-row / detailed / client-side
    * flags, header summary, input label, and the result-text renderer (`text`).
@@ -247,7 +250,7 @@ export interface ExtensionCommandOption {
 export interface ExtensionCommand {
   name: string;
   description: string;
-  execute: (args: string[]) => Promise<string | void>;
+  execute: (args: string[], ctx?: ExtensionContext) => Promise<string | void>;
   /**
    * Optional: provide secondary-menu options for this command (e.g. `/resume`
    * lists recent sessions). The app's autocomplete shows these as a browseable
@@ -262,7 +265,11 @@ export interface ExtensionCommand {
    * (e.g. `/skill <name>` expanding the skill body into the conversation).
    * Returning undefined (or an empty string) skips injection.
    */
-  injectMessage?: (args: string[], result: string | void) => string | undefined | Promise<string | undefined>;
+  injectMessage?: (
+    args: string[],
+    result: string | void,
+    ctx?: ExtensionContext
+  ) => string | undefined | Promise<string | undefined>;
 }
 
 // ============================================================================
@@ -277,7 +284,12 @@ export interface InterceptableEvent<TPayload = unknown, TReturn = unknown> {
 }
 
 export type EventInterceptor<TEvent extends InterceptableEvent> = (
-  event: TEvent
+  event: TEvent,
+  /**
+   * Live context for this dispatch (session/run/model facts). Optional so an existing handler that
+   * only reads the event keeps compiling; the runner always passes it.
+   */
+  ctx?: ExtensionContext
 ) => Promise<boolean | void> | boolean | void;
 
 // ============================================================================
@@ -346,7 +358,7 @@ export interface BeforeAgentStartEvent extends InterceptableEvent<BeforeAgentSta
   payload: BeforeAgentStartPayload;
 }
 
-export type TurnContextProvider = () => string | undefined | Promise<string | undefined>;
+export type TurnContextProvider = (ctx?: ExtensionContext) => string | undefined | Promise<string | undefined>;
 
 /**
  * Per-extension context injection (the single unified injection API).
@@ -361,6 +373,21 @@ export interface ExtensionContextProvider {
   /** Injected each user turn while the extension is enabled. */
   content?: TurnContextProvider;
   /** Injected (under the same `<ctx kind=<id>>` tag) when the extension is disabled. */
+  disabledContent?: TurnContextProvider;
+  /**
+   * Additional named sections, each rendered under its own `<ctx kind="<extensionId>:<name>">` tag
+   * and admitted by its own content hash. A change in one section never re-injects another.
+   */
+  sections?: readonly ExtensionContextSectionProvider[];
+}
+
+/** One named section of an extension's per-turn context. */
+export interface ExtensionContextSectionProvider {
+  /** Section name, unique within the extension. */
+  name: string;
+  /** Injected each user turn while the extension is enabled. */
+  content?: TurnContextProvider;
+  /** Injected under the same kind when the extension is disabled. */
   disabledContent?: TurnContextProvider;
 }
 
@@ -585,6 +612,16 @@ export interface ExtensionUI {
   getContext(): ExtensionUiContext;
 }
 
+// Re-exported so consumers keep one import site (`types.js`) for the whole extension surface.
+export type {
+  ExtensionContextUsage,
+  ExtensionLlm,
+  ExtensionLlmMessage,
+  ExtensionLlmRequest,
+  ExtensionLlmResult,
+  ExtensionRuntimeAccess,
+} from "./context-access.js";
+
 // ============================================================================
 // Extension context (provided by the runner to each extension)
 // ============================================================================
@@ -601,6 +638,35 @@ export interface ExtensionContext {
    * perform real I/O (read files, run commands, fetch) without importing host-specific APIs.
    */
   coreEnv: CoreEnv;
+
+  // --------------------------------------------------------------------------
+  // Run and session facts — read live at call time, never a snapshot
+  // --------------------------------------------------------------------------
+
+  /** Active disk session id, or null when none is bound. */
+  readonly sessionId: string | null;
+  /** Whether a run is in flight. */
+  isIdle(): boolean;
+  /** Session mode the runtime reports (`normal` / `auto` / plan phase). */
+  readonly mode: string;
+  /** Model the session is currently using, when known. */
+  readonly model: string | undefined;
+  /**
+   * Context-window fill, as the footer reports it — the same `getContextFillTokens()` reading, not a
+   * second estimate.
+   */
+  getContextUsage(): ExtensionContextUsage | undefined;
+  /** The effective system prompt for the current run. */
+  getSystemPrompt(): string;
+  /**
+   * A defensive copy of the model-visible conversation (compaction and synthetic `<ctx>` blocks
+   * included). Mutating it cannot reach the wire.
+   */
+  getMessages(): ModelMessage[];
+  /** The active run's abort signal, or undefined when idle. */
+  readonly signal: AbortSignal | undefined;
+  /** One-shot model completions; usage is attributed to this session automatically. */
+  llm: ExtensionLlm;
 
   /**
    * Host-provided Zod `z` API (same package version as core).
@@ -652,7 +718,7 @@ export interface ExtensionContext {
    * Registering again replaces the previous flush for this extension. Returns a disposer that only
    * clears the registration while it is still the active one.
    */
-  registerFlush(flush: () => Promise<void> | void): () => void;
+  registerFlush(flush: (ctx?: ExtensionContext) => Promise<void> | void): () => void;
 
   /**
    * Register a **synchronous** flush for the process-exit path (`process.on("exit")` and the fatal
@@ -750,7 +816,7 @@ export interface ExtensionRegistrations {
    * Awaited flush phase, run on teardown before core releases what the extension writes through.
    * One per extension (re-registration replaces it); cleared with the rest of the registrations.
    */
-  flush: (() => Promise<void> | void) | null;
+  flush: ((ctx?: ExtensionContext) => Promise<void> | void) | null;
   /** Synchronous exit-path flush, for hooks that cannot await. */
   exitFlush: (() => void) | null;
   /** Disposer for the process-wide exit registrations `exitFlush` was registered through. */

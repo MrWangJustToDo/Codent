@@ -77,6 +77,7 @@ import { getEnv, resolveCoreEnv } from "../env";
 import { selectModel } from "../models/config/model-selection.js";
 import { selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
+import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { generateId } from "../utils/generate-id.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
@@ -84,6 +85,12 @@ import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.j
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
+import {
+  completeExtensionQuery,
+  copyModelMessages,
+  DEFAULT_EXTENSION_CALLS_PER_RUN,
+  ExtensionLlmError,
+} from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
@@ -130,6 +137,12 @@ import type {
   ExtensionToolDefinition,
 } from "../agent/extension";
 import type { DispatchRank } from "../agent/extension/dispatch-order.js";
+import type {
+  ExtensionContext,
+  ExtensionLlmRequest,
+  ExtensionLlmResult,
+  ExtensionRuntimeAccess,
+} from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
 import type { McpExtensionConfig, McpServerConfig } from "../agent/mcp";
@@ -237,6 +250,19 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   memory?: boolean | MemoryExtensionConfig;
   /**
+   * Extension model access limits (`ctx.llm`).
+   *
+   * Completions are budgeted **per run**: the counter resets when the run's abort controller changes,
+   * so one runaway extension cannot spend a session's whole budget in a single turn. The refusal is
+   * reported once per run as `agent:extension-error`.
+   */
+  extensionLlm?: {
+    /** Completions allowed per run (default 20). */
+    callsPerRun?: number;
+    /** Output-token cap applied when a caller does not set one (default 4096). */
+    maxOutputTokens?: number;
+  };
+  /**
    * Enable the built-in MCP extension (default: true). Set to `false` to disable
    * MCP servers and their `mcp__<server>_<tool>` tools. Pass an object to fine-tune
    * behavior (see {@link McpExtensionConfig}).
@@ -333,6 +359,17 @@ export class ManagedAgent {
   /** Global (cross-session) LLM usage persistence — contribution-graph source. */
   readonly usageHistory: UsageHistoryService;
   readonly run: RunCoordinator;
+  /** Cached live accessors handed to extensions (`ctx.llm`, run/session facts). */
+  private extensionRuntime: ExtensionRuntimeAccess | null = null;
+  /**
+   * Extension completion budget for the CURRENT run. Keyed by the run's abort signal so the counter
+   * resets when a new run starts without touching the run lifecycle.
+   */
+  private extensionLlmBudget: { signal: AbortSignal | null; count: number; reported: boolean } = {
+    signal: null,
+    count: 0,
+    reported: false,
+  };
   readonly statusController: AgentStatusController;
   /** End-of-run sequence (outcome → persist → finalize → turn summary). */
   readonly runFinalizer: RunFinalizer;
@@ -1440,6 +1477,87 @@ export class ManagedAgent {
     return this.extensions.getExtensionRunner();
   }
 
+  /**
+   * Live accessors for the extension runtime (`ctx.signal`, `ctx.getMessages()`, `ctx.llm`, …).
+   *
+   * One cached object: every accessor resolves through `this` at call time, so the extension side can
+   * hold it across runs without ever observing a stale fact.
+   */
+  getExtensionRuntime(): ExtensionRuntimeAccess {
+    if (this.extensionRuntime) return this.extensionRuntime;
+
+    const host = {
+      usage: this.usage,
+      log: this.log,
+      resolveTextAdapter: async () => (await this.resolveTextAdapter?.()) ?? null,
+      getExtensionConnection: () => ({
+        ...(this.config.modelStyle ? { style: this.config.modelStyle } : {}),
+        ...(this.config.modelBaseURL ? { baseURL: this.config.modelBaseURL } : {}),
+        ...(this.config.modelApiKey ? { apiKey: this.config.modelApiKey } : {}),
+      }),
+      getExtensionCatalog: () => this.runtime?.models?.entries,
+      getExtensionSignal: () => this.run.currentAbortController?.signal,
+      getExtensionModel: () => this.config.model || this.getModelInfo()?.id,
+      getExtensionMaxOutputTokens: () => this.config.extensionLlm?.maxOutputTokens,
+      consumeExtensionBudget: (extensionId: string) => this.consumeExtensionLlmBudget(extensionId),
+    };
+
+    this.extensionRuntime = {
+      sessionId: () => this.getSessionData()?.id ?? null,
+      isIdle: () => !isActiveStatus(this.getStatus()),
+      mode: () => {
+        if (this.autoMode.isEnabled()) return "auto";
+        const phase = this.planMode.getState().phase;
+        return phase === "off" ? "normal" : phase;
+      },
+      model: () => this.config.model || this.getModelInfo()?.id,
+      signal: () => this.run.currentAbortController?.signal,
+      messages: () => copyModelMessages(this.getMessagesForLLM()),
+      contextUsage: () => ({
+        fillTokens: this.usage.getContextFillTokens(),
+        limitTokens: this.usage.getTokenLimit(),
+      }),
+      systemPrompt: () => this.getSystemPrompt() ?? "",
+      complete: (extensionId: string, request: ExtensionLlmRequest): Promise<ExtensionLlmResult> =>
+        completeExtensionQuery(host, extensionId, request),
+    };
+    return this.extensionRuntime;
+  }
+
+  /** The live context of the extension that owns a command (commands are dispatched by the session). */
+  getExtensionContextForCommand(name: string): ExtensionContext | undefined {
+    return this.extensions.getExtensionRunner()?.contextForCommand(name);
+  }
+
+  /**
+   * Count one `ctx.llm` call against the current run's budget.
+   *
+   * Keyed by the run's abort signal rather than reset by the run lifecycle: a fresh controller means a
+   * fresh run, and no lifecycle wiring is needed for a limit that is only ever read here.
+   */
+  private consumeExtensionLlmBudget(extensionId: string): void {
+    const signal = this.run.currentAbortController?.signal ?? null;
+    if (this.extensionLlmBudget.signal !== signal) {
+      this.extensionLlmBudget = { signal, count: 0, reported: false };
+    }
+    const limit = this.config.extensionLlm?.callsPerRun ?? DEFAULT_EXTENSION_CALLS_PER_RUN;
+    if (this.extensionLlmBudget.count >= limit) {
+      if (!this.extensionLlmBudget.reported) {
+        this.extensionLlmBudget.reported = true;
+        this.emitEvent("agent:extension-error", {
+          extensionId,
+          phase: "model-access",
+          error: `Extension model budget exhausted (${limit} completions per run).`,
+        });
+      }
+      throw new ExtensionLlmError(
+        "budget-exceeded",
+        `Extension model budget exhausted: ${limit} completions are allowed per run.`
+      );
+    }
+    this.extensionLlmBudget.count += 1;
+  }
+
   getExtensionLoader(): ExtensionLoader | null {
     return this.extensions.getExtensionLoader();
   }
@@ -1468,6 +1586,7 @@ export class ManagedAgent {
       },
       agentId: this.id,
       rank,
+      getExtensionContext: () => this.extensions.getExtensionRunner()?.contextFor(extensionId),
     });
   }
 

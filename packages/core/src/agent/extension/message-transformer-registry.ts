@@ -29,7 +29,7 @@
 import { compareDispatchRank } from "./dispatch-order.js";
 
 import type { DispatchRank } from "./dispatch-order.js";
-import type { MessageTransformContext, MessageTransformer } from "./types.js";
+import type { ExtensionContext, MessageTransformContext, MessageTransformer } from "./types.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 /**
@@ -56,6 +56,8 @@ function describeValue(value: unknown): string {
 export interface MessageTransformerRegistryHost {
   /** Write a warning and emit `agent:extension-error` — supplied by the runner. */
   reportTransformerFailure(extensionId: string, err: unknown): void;
+  /** The extension's live context, for the transformer's second argument. */
+  getContext?: (extensionId: string) => ExtensionContext | undefined;
 }
 
 export class MessageTransformerRegistry {
@@ -120,7 +122,10 @@ export class MessageTransformerRegistry {
 
     for (const { extensionId, transformer } of ordered) {
       try {
-        const result = await transformer({ ...ctx, extensionId, messages: current });
+        const result = await transformer(
+          { ...ctx, extensionId, messages: current },
+          this.host.getContext?.(extensionId)
+        );
         if (result === undefined) continue;
         if (!isModelMessageArray(result)) {
           this.host.reportTransformerFailure(
