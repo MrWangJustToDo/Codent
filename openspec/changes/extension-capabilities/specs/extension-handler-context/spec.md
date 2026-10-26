@@ -33,6 +33,8 @@ replaced session through it.
 `ExtensionContext` SHALL expose, at call time:
 
 - `sessionId` — the active disk session id, or `null` when none is bound;
+- `sessionName` — the session's display name, or `null` when none is bound (also reported by
+  `ctx.ui.getContext()`);
 - `isIdle()` — whether a run is in flight;
 - `mode` — the session mode as `AgentMode` (`normal` / `auto` / `plan`), the same value the
   `session:mode` channel and the UI report; a plan *phase* is not a mode;

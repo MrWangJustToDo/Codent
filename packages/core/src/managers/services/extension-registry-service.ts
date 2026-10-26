@@ -8,6 +8,7 @@
 
 import { AgentToolService } from "./agent-tool-service.js";
 
+import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
   ExtensionContext,
@@ -15,7 +16,6 @@ import type {
   ExtensionRunner,
   ExtensionToolDefinition,
 } from "../../agent/extension";
-import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
 import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 
 /** Callbacks the caller (ManagedAgent) supplies for tool registration. */
@@ -50,8 +50,6 @@ export class ExtensionRegistryService {
   // Extension runtime
   private runner: ExtensionRunner | null = null;
   private loader: ExtensionLoader | null = null;
-  /** Commands registered via ExtensionContext (merged with runner commands on read). */
-  private readonly commands = new Map<string, ExtensionCommand>();
   /** Tool ownership/resolution lives here; this service only carries extension lifecycle. */
   private readonly tools: AgentToolService;
 
@@ -86,24 +84,16 @@ export class ExtensionRegistryService {
   // Extension commands
   // ---------------------------------------------------------------------------
 
-  registerCommand(cmd: ExtensionCommand, warn: (message: string) => void): void {
-    if (this.commands.has(cmd.name)) {
-      warn(`Command "/${cmd.name}" already registered, overwriting`);
-    }
-    this.commands.set(cmd.name, cmd);
-  }
-
-  /** Unregister a command previously added by an extension (used when disabling). */
-  unregisterExtensionCommand(name: string): void {
-    this.commands.delete(name);
-  }
-
-  /** Runner-registered commands win; in-memory commands are the fallback. */
+  /**
+   * The commands dispatch would run, in registration order.
+   *
+   * The runner owns them: it holds the per-name stack, so it can hand a shadowed command back when
+   * its replacement is disabled. A second map here was write-only — nothing read it while a runner
+   * existed, which is every managed agent — so a disable deleted from the copy and left the live
+   * one untouched.
+   */
   getExtensionCommands(): ExtensionCommand[] {
-    if (this.runner) {
-      return this.runner.getCommands();
-    }
-    return Array.from(this.commands.values());
+    return this.runner?.getCommands() ?? [];
   }
 
   // ---------------------------------------------------------------------------

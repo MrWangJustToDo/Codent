@@ -1,12 +1,11 @@
 import { utf8ByteLength } from "../../utils/bytes.js";
 import { truncateText } from "../../utils/text-truncation.js";
 
-import { DEFAULT_EVENT_LOG_RULES, type EventLogRule } from "./event-log-rules.js";
+import { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG, type EventLogRule } from "./event-log-rules.js";
+import { SPECIALIZED_EVENT_LOG_HANDLERS } from "./event-log-specialized.js";
 
-import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent, AgentEventBus, AgentEventType } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
-import type { McpServerStatus } from "../mcp/manager.js";
 
 export type { EventLogRule } from "./event-log-rules.js";
 
@@ -101,7 +100,10 @@ function resolveRule(type: AgentEventType, policy?: EventLogPolicy): EventLogRul
   const override = policy?.events?.[type];
   if (override === false) return false;
   if (override) return override;
-  return DEFAULT_EVENT_LOG_RULES[type];
+  const rule = DEFAULT_EVENT_LOG_RULES[type];
+  // A specialized row is dispatched before this lookup; keeping the marker out of the return type
+  // means a future call site cannot mistake it for a formatter.
+  return rule === SPECIALIZED_EVENT_LOG ? undefined : rule;
 }
 
 function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message: string): void {
@@ -125,82 +127,6 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   log.eventEntry(rule.level, rule.category, event.type, message, data);
 }
 
-// ============================================================================
-// Custom handlers (events that need complex multi-entry logic)
-// ============================================================================
-
-function logSessionMcp(log: AgentLog, event: AgentEvent): void {
-  const configSourceKind = p(event).configSourceKind as McpConfigSourceKind | undefined;
-  const configLoadedFrom = p(event).configLoadedFrom as string | undefined;
-  // The source is the answer to "why did my mcp.json not apply?", so a session-options session
-  // says so explicitly — without it the absence of a config path reads as "no config found".
-  if (configSourceKind === "session-options") {
-    log.info("system", "MCP config: supplied by the session's create options (config file not consulted)");
-  } else if (configLoadedFrom) {
-    log.info("system", `MCP config: ${configLoadedFrom}`);
-  }
-  const servers = (p(event).servers as McpServerStatus[] | undefined) ?? [];
-  if (servers.length === 0) {
-    log.debug("system", "No MCP servers configured");
-    return;
-  }
-
-  for (const server of servers) {
-    if (server.status === "connected") {
-      log.info("system", `MCP server: ${server.name} (${server.toolCount ?? 0} tools)`);
-    } else {
-      log.warn("system", `MCP server failed: ${server.name} — ${server.error ?? "unknown"}`);
-    }
-  }
-}
-
-function logMemoryPrefetch(log: AgentLog, event: AgentEvent): void {
-  const status = p(event).status as string | undefined;
-  if (status === "error") {
-    log.warn("memory", `Memory prefetch failed: ${p(event).error ?? "unknown"}`);
-  }
-  // selected/empty/skip outcomes are silent — not actionable per-entry.
-}
-
-function logMemoryExtract(log: AgentLog, event: AgentEvent): void {
-  const status = p(event).status as string | undefined;
-  if (status === "error") {
-    log.warn("memory", `Memory extraction failed: ${p(event).error ?? "unknown"}`);
-  }
-  // start/complete/empty/queued/skip-short/skip-no-adapter are silent — not
-  // actionable per-entry. LLM failures are not reported here either: the
-  // side-query port logs them once, under its own category.
-}
-
-function logMemoryConsolidate(log: AgentLog, event: AgentEvent): void {
-  const status = p(event).status as string | undefined;
-  if (status === "error") {
-    log.warn("memory", `Memory consolidation failed: ${p(event).error ?? "unknown"}`);
-  }
-  // complete/start/skip are silent — not actionable per-entry.
-}
-
-function logCompactionAuto(log: AgentLog, event: AgentEvent): void {
-  switch (event.type) {
-    case "compaction:auto-start":
-      log.info("compaction", "Auto-compacting context...");
-      break;
-    case "compaction:auto-complete":
-      log.info("compaction", `Auto-compact: ${p(event).tokensBefore ?? "?"}→${p(event).tokensAfter ?? "?"} tokens`);
-      break;
-    case "compaction:auto-error": {
-      const phase = p(event).phase as string | undefined;
-      const error = (p(event).error as string | undefined) ?? "unknown";
-      if (phase === "cache-cleanup") {
-        log.warn("compaction", "Auto-compact cache cleanup failed", { error });
-        return;
-      }
-      log.error("compaction", `Auto-compact failed: ${error}`, new Error(error));
-      break;
-    }
-  }
-}
-
 /**
  * Bridge unified {@link AgentEventBus} events into per-agent {@link AgentLog}
  * entries. Centralizes lifecycle logging so emit sites do not duplicate log
@@ -218,9 +144,9 @@ export function bridgeTelemetryToAgentLog(
     const log = resolveLog(event);
     if (!log) return;
 
-    // Policy overrides must win before the custom handlers: those events have
-    // specialized formatting (MCP/memory/compaction), but an explicit `false` still
-    // means "never write this event" and an explicit rule still means "use this".
+    // Policy overrides must win before the specialized handlers: those events have their own
+    // multi-row formatting, but an explicit `false` still means "never write this event" and an
+    // explicit rule still means "use this".
     const override = policy?.events?.[event.type];
     if (override === false) return;
     if (override) {
@@ -228,24 +154,12 @@ export function bridgeTelemetryToAgentLog(
       return;
     }
 
-    switch (event.type) {
-      case "session:mcp":
-        logSessionMcp(log, event);
-        return;
-      case "memory:prefetch":
-        logMemoryPrefetch(log, event);
-        return;
-      case "memory:extract":
-        logMemoryExtract(log, event);
-        return;
-      case "memory:consolidate":
-        logMemoryConsolidate(log, event);
-        return;
-      case "compaction:auto-start":
-      case "compaction:auto-complete":
-      case "compaction:auto-error":
-        logCompactionAuto(log, event);
-        return;
+    const specialized = (
+      SPECIALIZED_EVENT_LOG_HANDLERS as Record<string, ((l: AgentLog, e: AgentEvent) => void) | undefined>
+    )[event.type];
+    if (specialized) {
+      specialized(log, event);
+      return;
     }
 
     const rule = resolveRule(event.type, policy);

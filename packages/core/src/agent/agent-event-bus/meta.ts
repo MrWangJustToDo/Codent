@@ -8,18 +8,6 @@
 
 import type { AgentEventMeta, AgentEventMetaTable, AgentEventType } from "./types.js";
 
-/** Interceptor event keys. `prefix:*` patterns match open-ended (tool) names. */
-export const INTERCEPTOR_EVENT_PATTERNS = [
-  "tool:before:*",
-  "tool:after:*",
-  "tool:error:*",
-  "before_agent_start",
-  "session:start",
-  "session:shutdown",
-] as const;
-
-export type InterceptorEventPattern = (typeof INTERCEPTOR_EVENT_PATTERNS)[number];
-
 export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   // ==========================================================================
   // Session lifecycle

@@ -5,7 +5,7 @@
  */
 
 export { DefaultAgentEventBus, createAgentEventBus } from "./agent-event-bus.js";
-export { AGENT_EVENT_META, INTERCEPTOR_EVENT_PATTERNS, type InterceptorEventPattern } from "./meta.js";
+export { AGENT_EVENT_META } from "./meta.js";
 export type {
   AgentEvent,
   AgentEventBus,

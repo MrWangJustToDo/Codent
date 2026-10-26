@@ -5,12 +5,12 @@
  * `AgentToolService` is the orchestration layer that registers and unregisters entries.
  */
 
-import { INCUMBENT_RANK, compareDispatchRank } from "../../extension/dispatch-order.js";
+import { INCUMBENT_RANK, compareDispatchRank } from "../../dispatch-order.js";
 
 import { getToolMetadata } from "./define-tool.js";
 
 import type { ToModelOutputFn } from "./contract.js";
-import type { DispatchRank } from "../../extension/dispatch-order.js";
+import type { DispatchRank } from "../../dispatch-order.js";
 import type { ToolsRecord } from "../catalog/tool-set.js";
 import type { ToolPresentation } from "../presentation/types.js";
 

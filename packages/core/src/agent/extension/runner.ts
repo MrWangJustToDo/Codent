@@ -5,16 +5,18 @@ import { getEnv, hasCoreEnv } from "../../env";
 import { errorMessage, toError } from "../../utils/errors.js";
 import { createAgentEventBus } from "../agent-event-bus";
 import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
+import { compareDispatchRank, pickTopByRank, resolveExtensionOrder, sortByDispatchRank } from "../dispatch-order.js";
 
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
-import { DefaultExtensionUI } from "./default-extension-ui.js";
-import { compareDispatchRank, resolveExtensionOrder, sortByDispatchRank } from "./dispatch-order.js";
 import { ExtensionLlmError } from "./extension-llm-error.js";
+import { createExtensionUiBridge } from "./extension-ui-bridge.js";
 import { z } from "./extension-zod.js";
 import { MessageTransformerRegistry } from "./message-transformer-registry.js";
 import { createObserverSurface } from "./observer-surface.js";
+import { scopeExtensionOwnerId } from "./owner-id.js";
 
-import type { DispatchRank } from "./dispatch-order.js";
+import type { DispatchRank } from "../dispatch-order.js";
+import type { ExtensionUiBridge } from "./extension-ui-bridge.js";
 import type {
   ExtensionInstance,
   ExtensionRuntimeAccess,
@@ -55,9 +57,6 @@ import type { ModelMessage } from "@tanstack/ai";
 // ExtensionRunner
 // ============================================================================
 
-/** Throttle window for coalescing pushed context snapshots (ms). */
-const CONTEXT_THROTTLE_MS = 250;
-
 /**
  * Allowed identifiers — extension ids and section names alike.
  *
@@ -77,13 +76,11 @@ const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 const EXTENSION_KIND_PREFIX = "ext:";
 
 export interface ExtensionRunnerOptions {
-  getEnvVar: (key: string) => string | undefined;
   /**
    * Register a tool on the host. `rank` carries the extension's resolved dispatch position so the
    * host's authoritative tool stack can pick the live entry when a name is shadowed.
    */
   onRegisterTool?: (def: ExtensionToolDefinition, ownerId: string, rank: DispatchRank) => void;
-  onRegisterCommand?: (cmd: ExtensionCommand) => void;
   /**
    * Drop one extension's registrations for a tool name.
    *
@@ -93,7 +90,13 @@ export interface ExtensionRunnerOptions {
    * that distinction wrong if it does not exist.
    */
   onUnregisterTool?: (name: string, ownerId: string) => void;
-  /** Unregister a previously registered command (used when disabling an extension). */
+  /**
+   * Observe the command that is now **live** for its name: called on a registration that wins, and
+   * again on a survivor when the extension that shadowed it is disabled. Nothing in core needs it
+   * (dispatch reads `getCommands()`); it exists for a host that mirrors commands into its own menu.
+   */
+  onRegisterCommand?: (cmd: ExtensionCommand) => void;
+  /** The last live owner of a command name was disabled, so the name is gone. */
   onUnregisterCommand?: (name: string) => void;
   /** Register an agent-scoped model-output decorator. */
   onRegisterToolOutputDecorator?: (
@@ -165,8 +168,12 @@ export class ExtensionRunner {
   private toolStacks = new Map<string, Array<{ ownerId: string; def: ExtensionToolDefinition; rank: DispatchRank }>>();
   /** Extension ids currently inside activate(); runtime registrations publish immediately. */
   private readonly activating = new Set<string>();
-  private commandRegistry = new Map<string, ExtensionCommand>();
-  private commandOwners = new Map<string, string>();
+  /**
+   * Per name, the commands registered with their owner and rank. Resolution is the same reading of
+   * dispatch order as tool stacks: the highest rank owns the name, so disabling the owner restores
+   * whatever the name meant before it (an earlier extension's command) instead of deleting it.
+   */
+  private commandStacks = new Map<string, Array<{ ownerId: string; cmd: ExtensionCommand; rank: DispatchRank }>>();
   /** Per-extension context injection (extension id → provider and its rank). */
   private contextProviders = new Map<string, { provider: ExtensionContextProvider; rank: DispatchRank }>();
   /** Live context per active extension — the object handed to every handler of that extension. */
@@ -197,23 +204,22 @@ export class ExtensionRunner {
   private eventBus: BusExtensionEventBus;
   /** Raw scoped bus (interception + telemetry) behind the extension-facing facade. */
   private readonly rawBus: AgentEventBus;
-  private ui: DefaultExtensionUI;
+  /** Per-extension view of the shared UI plus the context snapshot (see `extension-ui-bridge.ts`). */
+  private readonly uiBridge: ExtensionUiBridge;
   private options: ExtensionRunnerOptions;
-  /** Teardown callbacks for context-push subscriptions. */
-  private readonly contextUnsubs: Array<() => void> = [];
-  private contextTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ExtensionRunnerOptions) {
     this.options = options;
     const bus = options.eventBus ?? createAgentEventBus();
     this.rawBus = bus;
     this.eventBus = new BusExtensionEventBus(bus);
-    this.ui = new DefaultExtensionUI(bus, () => this.buildUiContext());
-    // Push a fresh context snapshot (throttled) whenever state extensions render
-    // from changes, so they never have to poll `getContext()`.
-    for (const type of ["agent:state", "session:usage", "session:mode"] as const) {
-      this.contextUnsubs.push(bus.on(type, () => this.scheduleContextPush(), { replay: false }));
-    }
+    this.uiBridge = createExtensionUiBridge({
+      bus,
+      ...(options.getUiContext ? { getUiContext: options.getUiContext } : {}),
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      getSessionName: () => options.getRuntime?.()?.sessionName() ?? null,
+      reportFailure: (extensionId, err, source) => this.reportObserverFailure(extensionId, err, source),
+    });
   }
 
   getEventBus(): ExtensionEventBus {
@@ -254,7 +260,7 @@ export class ExtensionRunner {
   }
 
   getUI(): ExtensionUI {
-    return this.ui;
+    return this.uiBridge.ui;
   }
 
   /**
@@ -262,54 +268,7 @@ export class ExtensionRunner {
    * replay slots that were rendered before a host subscribed.
    */
   getUISlots(): Readonly<Record<string, Record<string, ExtensionRenderPayload>>> {
-    return this.ui.getSlots();
-  }
-
-  /**
-   * Assemble the context snapshot from retained bus state, overlaid with any
-   * host-supplied overrides. Unknown values degrade to `null` / empty rather
-   * than throwing — a snapshot is always returned.
-   */
-  private buildUiContext(): ExtensionUiContext {
-    const override = this.options.getUiContext?.();
-    const state = this.rawBus.retainedValue("agent:state");
-    const usage = this.rawBus.retainedValue("session:usage");
-    const mode = this.rawBus.retainedValue("session:mode");
-
-    const modelId = override?.model?.id ?? state?.model ?? "";
-    const displayName = override?.model?.displayName ?? state?.modelInfo?.name ?? modelId;
-
-    return {
-      model: override?.model ?? (modelId ? { id: modelId, displayName } : null),
-      status: override?.status ?? state?.status ?? "unknown",
-      usage:
-        override?.usage ??
-        (usage
-          ? {
-              percent: usage.percent,
-              tokenLimit: usage.tokenLimit,
-              windowTokens: usage.contextFillTokens,
-              costUsd: usage.cost,
-            }
-          : null),
-      workspace: override?.workspace ?? { root: this.options.cwd ?? "", branch: null },
-      sessionName: override?.sessionName ?? null,
-      mode: override?.mode ?? mode?.mode ?? null,
-    };
-  }
-
-  /** Coalesced `context` push so subscribers see changes without polling. */
-  private scheduleContextPush(): void {
-    if (this.contextTimer) return;
-    this.contextTimer = setTimeout(() => {
-      this.contextTimer = null;
-      try {
-        this.ui.emitEvent({ type: "context", context: this.ui.getContext() });
-      } catch {
-        // Failure contained: context pushes are best-effort.
-      }
-    }, CONTEXT_THROTTLE_MS);
-    (this.contextTimer as { unref?: () => void }).unref?.();
+    return this.uiBridge.getSlots();
   }
 
   /**
@@ -318,32 +277,7 @@ export class ExtensionRunner {
    * member (notify / subscribe / getContext) is shared.
    */
   private wrapUi(ownerId: string, registrations?: ExtensionRegistrations): ExtensionUI {
-    return {
-      notify: (message, level) => this.ui.notify(message, level),
-      subscribe: (type, handler) => {
-        // Containment first: `Emitter` swallows only synchronous throws, so an `async` handler's
-        // rejection would escape to `unhandledRejection` — and the CLI's process guards turn that
-        // into `exit(1)`. Tracking second: an untracked subscription keeps delivering to a disabled
-        // extension.
-        const contained = (payload: unknown): void => {
-          try {
-            const result = (handler as (data: unknown) => unknown)(payload);
-            if (result && typeof (result as Promise<unknown>).then === "function") {
-              void (result as Promise<unknown>).catch((err: unknown) =>
-                this.reportObserverFailure(ownerId, err, "extension:ui")
-              );
-            }
-          } catch (err) {
-            this.reportObserverFailure(ownerId, err, "extension:ui");
-          }
-        };
-        const unsub = this.ui.subscribe(type, contained);
-        registrations?.unsubObservers.push(unsub);
-        return unsub;
-      },
-      render: (surface, key, payload) => this.ui.render(surface, key, payload, ownerId),
-      getContext: () => this.ui.getContext(),
-    };
+    return this.uiBridge.wrap(ownerId, registrations);
   }
 
   /**
@@ -427,20 +361,16 @@ export class ExtensionRunner {
   /** The extension tools this runner still holds, one per name — a mirror of what the host holds,
    * re-derived from each stack's highest rank (the resolution reading of dispatch order). */
   getTools(): ExtensionToolDefinition[] {
-    return Array.from(
-      this.toolStacks.values(),
-      (stack) => stack.reduce((top, entry) => (compareDispatchRank(entry.rank, top.rank) > 0 ? entry : top)).def
-    );
+    return Array.from(this.toolStacks.values(), (stack) => pickTopByRank(stack).def);
   }
 
   getCommands(): ExtensionCommand[] {
-    return Array.from(this.commandRegistry.values());
+    return Array.from(this.commandStacks.values(), (stack) => pickTopByRank(stack).cmd);
   }
 
   getTool(name: string): ExtensionToolDefinition | undefined {
     const stack = this.toolStacks.get(name);
-    if (!stack || stack.length === 0) return undefined;
-    return stack.reduce((top, entry) => (compareDispatchRank(entry.rank, top.rank) > 0 ? entry : top)).def;
+    return stack && stack.length > 0 ? pickTopByRank(stack).def : undefined;
   }
 
   /**
@@ -472,15 +402,12 @@ export class ExtensionRunner {
         // Converge into the agent log via the existing `agent:extension-error`
         // rule (error/system) rather than a bare console write; console stays
         // as a fallback for standalone runners without an injected bus.
-        if (this.options.eventBus) {
-          this.rawBus.emit("agent:extension-error", {
-            extensionId: id,
-            phase: "turn-context",
-            error: message,
-          });
-        } else {
-          this.writeExtensionLog("error", id, `turn context provider failed: ${message}`);
-        }
+        this.writeExtensionLog("error", id, `turn context provider failed: ${message}`);
+        this.rawBus.emit("agent:extension-error", {
+          extensionId: id,
+          phase: "turn-context",
+          error: message,
+        });
       }
 
       // Named sections: each is its own `<ctx kind="<id>:<name>">` block, so a change in one never
@@ -508,7 +435,8 @@ export class ExtensionRunner {
           if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
         } catch (err) {
           const message = errorMessage(err);
-          this.options.eventBus?.emit("agent:extension-error", {
+          this.writeExtensionLog("error", id, `context section "${name}" failed: ${message}`);
+          this.rawBus.emit("agent:extension-error", {
             extensionId: id,
             phase: "turn-context",
             error: `section "${name}": ${message}`,
@@ -625,7 +553,7 @@ export class ExtensionRunner {
     // Clear any surface slots this extension rendered so they do not linger
     // after the extension is disabled (e.g. a status line it published into the
     // footer surface).
-    this.ui.clearSlotsByOwner(instance.api.id);
+    this.uiBridge.clearOwner(instance.api.id);
     instance.state = "inactive";
   }
 
@@ -674,19 +602,13 @@ export class ExtensionRunner {
     }
     this.extensions = [];
     this.toolStacks.clear();
-    this.commandRegistry.clear();
-    this.commandOwners.clear();
+    this.commandStacks.clear();
     this.contextProviders.clear();
     this.messageTransformers.clearAll();
     this.disabledExtensionNotices.clear();
     this.disabledSectionNotices.clear();
-    this.ui.clearAllSlots();
-    if (this.contextTimer) {
-      clearTimeout(this.contextTimer);
-      this.contextTimer = null;
-    }
-    for (const unsub of this.contextUnsubs) unsub();
-    this.contextUnsubs.length = 0;
+    this.uiBridge.clearAll();
+    this.uiBridge.dispose();
   }
 
   /** Read-only snapshot of loaded extensions for management commands, in **dispatch order**. */
@@ -710,12 +632,23 @@ export class ExtensionRunner {
         tools: [...instance.registrations.tools],
         // Expose whether each command has a secondary menu (getOptions) so the app
         // can treat pure-display commands (e.g. /lsp, /mcp) without an options menu.
-        commands: instance.registrations.commands.map((name) => ({
-          name,
-          hasOptions: Boolean(this.commandRegistry.get(name)?.getOptions),
-          description: this.commandRegistry.get(name)?.description ?? "",
-        })),
+        // This extension's OWN definition (not the live one): the panel describes what each
+        // extension registers, and a shadowed command is still this extension's command.
+        commands: instance.registrations.commands.map((name) => {
+          const own = this.commandStacks.get(name)?.find((entry) => entry.ownerId === instance.api.id)?.cmd;
+          return {
+            name,
+            hasOptions: Boolean(own?.getOptions),
+            description: own?.description ?? "",
+          };
+        }),
       }));
+  }
+
+  /** The command dispatch would run for a name (the highest-ranked registration). */
+  private liveCommand(name: string): ExtensionCommand | undefined {
+    const stack = this.commandStacks.get(name);
+    return stack && stack.length > 0 ? pickTopByRank(stack).cmd : undefined;
   }
 
   /** The resolved dispatch position for an extension id, defaulting for an unloaded id. */
@@ -820,10 +753,19 @@ export class ExtensionRunner {
       this.options.onUnregisterTool?.(name, instance.api.id);
     }
     for (const name of instance.registrations.commands) {
-      if (this.commandOwners.get(name) !== instance.api.id) continue;
-      this.commandOwners.delete(name);
-      this.commandRegistry.delete(name);
-      this.options.onUnregisterCommand?.(name);
+      const stack = this.commandStacks.get(name);
+      if (!stack) continue;
+      const remaining = stack.filter((entry) => entry.ownerId !== instance.api.id);
+      if (remaining.length === 0) {
+        this.commandStacks.delete(name);
+        this.options.onUnregisterCommand?.(name);
+      } else {
+        this.commandStacks.set(name, remaining);
+        // A survivor becomes live: tell the observer the same way a fresh registration would, so
+        // "the command is now X" has one shape whether it came from load or from a disable.
+        const live = pickTopByRank(remaining);
+        if (live.ownerId !== instance.api.id) this.options.onRegisterCommand?.(live.cmd);
+      }
     }
     for (const unsub of instance.registrations.unsubInterceptors) {
       unsub();
@@ -920,8 +862,8 @@ export class ExtensionRunner {
 
   /** The live context that owns a registered command (commands are dispatched by the session). */
   contextForCommand(name: string): ExtensionContext | undefined {
-    const owner = this.commandOwners.get(name);
-    return owner ? this.contexts.get(owner) : undefined;
+    const stack = this.commandStacks.get(name);
+    return stack && stack.length > 0 ? this.contexts.get(pickTopByRank(stack).ownerId) : undefined;
   }
 
   /**
@@ -930,6 +872,7 @@ export class ExtensionRunner {
    */
   private wrapInterceptor(
     extensionId: string,
+    pattern: string,
     handler: EventInterceptor<InterceptableEvent>
   ): EventInterceptor<InterceptableEvent> {
     let byExtension = this.interceptorWrappers.get(handler);
@@ -939,9 +882,31 @@ export class ExtensionRunner {
     }
     const existing = byExtension.get(extensionId);
     if (existing) return existing;
-    const wrapped: EventInterceptor<InterceptableEvent> = (event) => handler(event, this.contexts.get(extensionId));
+    const wrapped: EventInterceptor<InterceptableEvent> = async (event) => {
+      try {
+        return await handler(event, this.contexts.get(extensionId));
+      } catch (err) {
+        // Contained here rather than only at the bus: the bus isolates the throw but cannot say
+        // *which* extension owns the handler, so the log row would name a pattern instead of the
+        // extension a user can disable. Returning `undefined` keeps the chain going (a throwing
+        // interceptor is not a veto).
+        this.reportInterceptorFailure(extensionId, pattern, event.type, err);
+        return undefined;
+      }
+    };
     byExtension.set(extensionId, wrapped);
     return wrapped;
+  }
+
+  /** Report a throwing interceptor against the extension that registered it. */
+  private reportInterceptorFailure(extensionId: string, pattern: string, eventType: string, err: unknown): void {
+    const message = errorMessage(err);
+    this.writeExtensionLog("warn", extensionId, `interceptor for "${pattern}" failed on ${eventType}: ${message}`);
+    this.rawBus.emit("agent:extension-error", {
+      extensionId,
+      phase: "interceptor",
+      error: `${pattern} (${eventType}): ${message}`,
+    });
   }
 
   private async completeViaRuntime(extensionId: string, request: ExtensionLlmRequest): Promise<ExtensionLlmResult> {
@@ -965,7 +930,7 @@ export class ExtensionRunner {
     return {
       id: api.id,
       agentId: this.options.agentId ?? "standalone",
-      env: this.resolveEnv(api.id, config?.config),
+      env: this.extensionEnv(config?.config),
       z,
       cwd: this.options.cwd ?? "",
       coreEnv: this.resolveCoreEnv(),
@@ -1012,7 +977,7 @@ export class ExtensionRunner {
       },
 
       registerToolOutputDecorator: (toolName, decorator) => {
-        const ownerId = `${this.options.agentId ?? "standalone"}:${api.id}`;
+        const ownerId = scopeExtensionOwnerId(this.options.agentId ?? "standalone", api.id);
         const disposeOwned =
           this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId) ??
           (() => this.options.onRemoveToolOutputDecoratorOwner?.(ownerId));
@@ -1029,10 +994,29 @@ export class ExtensionRunner {
       },
 
       registerCommand: (cmd: ExtensionCommand) => {
-        this.commandRegistry.set(cmd.name, cmd);
-        this.commandOwners.set(cmd.name, api.id);
+        const rank = this.rankOf(api.id);
+        const stack = this.commandStacks.get(cmd.name);
+        if (!stack) {
+          this.commandStacks.set(cmd.name, [{ ownerId: api.id, cmd, rank }]);
+        } else {
+          const live = pickTopByRank(stack);
+          if (live.ownerId !== api.id) {
+            this.writeExtensionLog(
+              "warn",
+              api.id,
+              `Command "/${cmd.name}" is already registered by "${live.ownerId}" — dispatch order decides which runs`
+            );
+          }
+          const own = stack.findIndex((entry) => entry.ownerId === api.id);
+          if (own === -1) stack.push({ ownerId: api.id, cmd, rank });
+          else stack[own] = { ownerId: api.id, cmd, rank };
+        }
         registrations?.commands.push(cmd.name);
-        this.options.onRegisterCommand?.(cmd);
+        // Notified only when this registration is the live one: a host observer maintaining a map
+        // of commands must end up with what dispatch would run, not with every claim ever made.
+        if (pickTopByRank(this.commandStacks.get(cmd.name)!).ownerId === api.id) {
+          this.options.onRegisterCommand?.(cmd);
+        }
       },
 
       registerInterceptor: <T extends InterceptableEvent>(
@@ -1043,7 +1027,11 @@ export class ExtensionRunner {
         // construction, and activation (where handlers are declared) happens after that.
         const unsub = this.eventBus.on(
           eventType,
-          this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as EventInterceptor<T>,
+          this.wrapInterceptor(
+            api.id,
+            eventType,
+            handler as EventInterceptor<InterceptableEvent>
+          ) as EventInterceptor<T>,
           this.rankOf(api.id)
         );
         registrations?.unsubInterceptors.push(unsub);
@@ -1110,7 +1098,7 @@ export class ExtensionRunner {
         on: (type, handler) => {
           const unsub = this.eventBus.on(
             type,
-            this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as typeof handler,
+            this.wrapInterceptor(api.id, type, handler as EventInterceptor<InterceptableEvent>) as typeof handler,
             this.rankOf(api.id)
           );
           // Same bookkeeping as `registerInterceptor`: without it, an interceptor registered through
@@ -1121,7 +1109,7 @@ export class ExtensionRunner {
         off: (type, handler) =>
           this.eventBus.off(
             type,
-            this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as typeof handler
+            this.wrapInterceptor(api.id, type, handler as EventInterceptor<InterceptableEvent>) as typeof handler
           ),
         ...this.createObserverSurface(api.id, registrations),
       },
@@ -1207,22 +1195,21 @@ export class ExtensionRunner {
     };
   }
 
-  private resolveEnv(apiId: string, extConfig?: Record<string, unknown>): Record<string, string> {
+  /**
+   * The extension-scoped configuration map exposed as `ctx.env`: string values from its
+   * `ExtensionConfig.config` (non-strings are dropped, since the field is a string map).
+   *
+   * Deliberately NOT a process-environment snapshot: extensions that need the workspace environment
+   * read `ctx.coreEnv.getEnv()` (async, runtime-agnostic), and handing every extension the host's
+   * whole environment would be a capability no extension declared.
+   */
+  private extensionEnv(extConfig?: Record<string, unknown>): Record<string, string> {
     const env: Record<string, string> = {};
-
     if (extConfig) {
       for (const [key, value] of Object.entries(extConfig)) {
-        if (typeof value === "string") {
-          env[key] = value;
-        }
+        if (typeof value === "string") env[key] = value;
       }
     }
-
-    const apiKey = this.options.getEnvVar(`${apiId.toUpperCase()}_API_KEY`);
-    if (apiKey) {
-      env["API_KEY"] = apiKey;
-    }
-
     return env;
   }
 }

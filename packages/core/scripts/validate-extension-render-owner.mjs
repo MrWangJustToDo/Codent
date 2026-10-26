@@ -34,9 +34,7 @@ function renderExtension(id, key, payload) {
 }
 
 const notifications = [];
-const runner = new ExtensionRunner({
-  getEnvVar: () => undefined,
-});
+const runner = new ExtensionRunner({});
 
 // Subscribe to the shared UI (as a host would).
 runner.getUI().subscribe("render", (data) => notifications.push(data));
@@ -102,7 +100,7 @@ assert.ok(notifications.filter((n) => n.payload === null).length >= 3, "destroyA
 // subscribers and forwarded to remote hosts outside this publish path, so it must
 // never reach the retained slots.
 {
-  const runner2 = new ExtensionRunner({ getEnvVar: () => undefined });
+  const runner2 = new ExtensionRunner({});
   const circular = { type: "column", children: [] };
   circular.children.push(circular);
 

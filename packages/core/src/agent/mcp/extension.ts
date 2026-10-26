@@ -1,4 +1,4 @@
-import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
+import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/define-tool.js";
 
 import { loadMcpConfig } from "./config.js";

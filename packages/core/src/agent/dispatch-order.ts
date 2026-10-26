@@ -60,6 +60,15 @@ export function compareDispatchRank(a: DispatchRank, b: DispatchRank): number {
   return a.order - b.order || a.seq - b.seq;
 }
 
+/**
+ * The live entry for one name: the highest rank. This is the resolution reading of dispatch order,
+ * used by every stack (tools, commands) so they cannot disagree on which entry wins.
+ */
+export function pickTopByRank<T extends { rank: DispatchRank }>(items: readonly T[]): T {
+  if (items.length === 0) throw new Error("pickTopByRank: empty stack");
+  return items.reduce((top, entry) => (compareDispatchRank(entry.rank, top.rank) > 0 ? entry : top));
+}
+
 /** Sort a copy of `items` by rank (never mutates the input). */
 export function sortByDispatchRank<T extends { rank: DispatchRank }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => compareDispatchRank(a.rank, b.rank));

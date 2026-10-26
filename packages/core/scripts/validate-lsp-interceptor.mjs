@@ -30,7 +30,6 @@ assert.equal(payload.modifiedResult._lspDiagnostics.includes("oops"), true);
 assert.equal(payload.result._lspDiagnostics, undefined, "original result unchanged");
 
 const runner = new ExtensionRunner({
-  getEnvVar: () => undefined,
   onRegisterTool: () => {},
   cwd: "/workspace",
   getCoreEnv: () => ({ rootPath: "/workspace" }),

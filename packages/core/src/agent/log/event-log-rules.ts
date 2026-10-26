@@ -33,6 +33,20 @@ export interface EventLogRule {
 }
 
 /**
+ * Marker for an event whose rows are written by a dedicated handler
+ * (`event-log-specialized.ts`) rather than by a `formatMessage` rule.
+ *
+ * Distinct from `false`: `false` means "this event is never logged", while this means "logged, but
+ * the generic one-row formatter does not apply". Those seven rows used to be `false`, which was
+ * never read — the bridge dispatched to its own `switch` first — so they documented the opposite of
+ * the behavior.
+ */
+export const SPECIALIZED_EVENT_LOG = "specialized" as const;
+
+/** A table cell: a generic rule, a dedicated-handler marker, or an explicit suppression. */
+export type EventLogRuleEntry = EventLogRule | typeof SPECIALIZED_EVENT_LOG | false;
+
+/**
  * Human wording for a stopped subagent, keyed by why it stopped.
  *
  * A cancel is not a failure (`subagent:error` is reused for it), and the three ways a
@@ -53,7 +67,7 @@ const SUBAGENT_STOP_WORDING: Record<SubagentStopReason, string> = {
  * event still requires an entry (compile-checked) while session-projection
  * events (e.g. `agent:state`) stay out of the log stream.
  */
-const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule | false> = {
+const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRuleEntry> = {
   // ============================================================================
   // Session lifecycle
   // ============================================================================
@@ -81,7 +95,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     category: "skill",
     formatMessage: (event) => `Loaded ${p(event).count ?? 0} skills`,
   },
-  "session:mcp": false,
+  "session:mcp": SPECIALIZED_EVENT_LOG,
   "session:memory": {
     level: "info",
     category: "memory",
@@ -292,16 +306,16 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   // ============================================================================
   // Memory
   // ============================================================================
-  "memory:prefetch": false,
-  "memory:extract": false,
-  "memory:consolidate": false,
+  "memory:prefetch": SPECIALIZED_EVENT_LOG,
+  "memory:extract": SPECIALIZED_EVENT_LOG,
+  "memory:consolidate": SPECIALIZED_EVENT_LOG,
 
   // ============================================================================
   // Compaction
   // ============================================================================
-  "compaction:auto-start": false,
-  "compaction:auto-complete": false,
-  "compaction:auto-error": false,
+  "compaction:auto-start": SPECIALIZED_EVENT_LOG,
+  "compaction:auto-complete": SPECIALIZED_EVENT_LOG,
+  "compaction:auto-error": SPECIALIZED_EVENT_LOG,
   "compaction:reactive-start": {
     level: "info",
     category: "compaction",
@@ -445,4 +459,4 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
 };
 
 /** Default event → log rule lookup (session-projection events are intentionally absent). */
-export const DEFAULT_EVENT_LOG_RULES: Partial<Record<AgentEventType, EventLogRule | false>> = TELEMETRY_EVENT_LOG_RULES;
+export const DEFAULT_EVENT_LOG_RULES: Partial<Record<AgentEventType, EventLogRuleEntry>> = TELEMETRY_EVENT_LOG_RULES;

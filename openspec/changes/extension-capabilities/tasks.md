@@ -37,7 +37,8 @@
 ## 4. Named context sections
 
 - [x] 4.1 Accept a list of sections on the context provider (`name`, `content`, `disabledContent`),
-      rendered as `<ctx kind="<extensionId>:<name>">`, each admitted independently
+      rendered as `<ctx kind="ext:<extensionId>:<name>">` (base section `ext:<extensionId>`), each
+      admitted independently
 - [x] 4.2 Keep the single-provider form under the extension-id kind; replace a duplicate section name
       and warn instead of failing activation
 - [x] 4.3 Contain a throwing section producer to that section (report + skip), leaving the other
@@ -59,3 +60,20 @@
 - [x] 5.5 Run `pnpm build`, `pnpm typecheck`, the app test suite, core validators, and eslint/prettier
 - [x] 5.6 Update `AGENTS.md` (extension section: per-handler context, model access, events, section
       list; and the phase roadmap) plus the `ExtensionContext` doc comments
+
+## 6. Review hardening
+
+- [x] 6.1 Batch 1 — a cancelled tool call's synthetic output is not formatted as a result; `ctx.ui`
+      subscriptions are contained + tracked; `disabledContent` cannot opt out of the disable notice;
+      observer-failure reporting cannot recurse; the extension exit flush is released on teardown;
+      the CLI exit path awaits teardown (bounded)
+- [x] 6.2 Batch 2 — hook payloads carry `agentId` (+ real `sessionId`), `session:start` is awaited,
+      child events carry `parentId`, built-ins declare `BUILTIN_EXTENSION_ORDER`, extension kinds are
+      namespaced `ext:…`, interception boundaries documented in the authoring skill
+- [x] 6.3 Batch 3 — ACP installs the process log guards; `ctx.env` is the extension's config map
+      (documented, dead `<ID>_API_KEY` lookup removed); the UI context reports the live session name;
+      hook event types are exported from `@codent/core`; commands keep a per-name stack so a shadowed
+      command is restored; a throwing interceptor is reported as `agent:extension-error` attributed to
+      its extension; `dispatch-order` moved to `agent/`; the write-only host command map removed; the
+      scoped owner id has one definition; the log table marks its seven specialized rows instead of
+      `false`; `runner.ts` sheds the UI/context bridge

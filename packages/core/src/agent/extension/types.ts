@@ -1,5 +1,5 @@
 import type { ExtensionContextUsage, ExtensionLlm } from "./context-access.js";
-import type { DispatchRank } from "./dispatch-order.js";
+import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
 import type { ExtensionUI } from "./ui-types.js";
@@ -527,9 +527,16 @@ export interface ExtensionContext {
   id: string;
   /** Owning ManagedAgent id; scopes per-agent extension resources such as output decorators. */
   agentId: string;
+  /**
+   * The extension's **own** configuration map: string values from its `ExtensionConfig.config`.
+   *
+   * Not a process-environment snapshot (handing every extension the host's whole environment would
+   * be a capability no extension declared) — read `coreEnv.getEnv()` for the workspace environment.
+   */
   env: Record<string, string>;
   /** Working directory (rootPath) of the agent session. */
-  cwd: string; /**
+  cwd: string;
+  /**
    * Runtime-agnostic environment: filesystem, shell, fetch, path utilities, env vars,
    * and rootPath — the single source of truth for host capabilities. Lets extensions
    * perform real I/O (read files, run commands, fetch) without importing host-specific APIs.

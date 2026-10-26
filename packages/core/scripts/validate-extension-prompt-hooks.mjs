@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { ExtensionRunner } from "../dist/dev.mjs";
 
-const runner = new ExtensionRunner({ getEnvVar: () => undefined });
+const runner = new ExtensionRunner({});
 
 await runner.loadExtension({
   id: "ext-a",
@@ -42,7 +42,7 @@ assert.deepEqual(afterDisable.turnContextSections, [
   { id: "ext:ext-a", content: 'Extension "A" is disabled — its tools and commands are unavailable.' },
 ]);
 
-const emptyRunner = new ExtensionRunner({ getEnvVar: () => undefined });
+const emptyRunner = new ExtensionRunner({});
 const empty = await emptyRunner.collectBeforeAgentStart("x", "id");
 assert.deepEqual(empty.turnContextSections, []);
 

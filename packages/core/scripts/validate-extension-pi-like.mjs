@@ -38,7 +38,6 @@ registerCoreEnv({
 // --- 1. Lifecycle + UI + JSON Schema tool via the runner --------------------
 {
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     cwd: "/workspace",
     onRegisterTool: () => {},
     getCoreEnv: () => ({ rootPath: "/workspace" }),
@@ -97,7 +96,7 @@ registerCoreEnv({
 
 // --- 2. modifiedResult applied to model-facing results -----------------------
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, onRegisterTool: () => {} });
+  const runner = new ExtensionRunner({ onRegisterTool: () => {} });
   await runner.loadExtension({
     id: "rewrite",
     name: "Rewrite",
@@ -137,7 +136,7 @@ registerCoreEnv({
 
 // --- 3. Observe-only tool:after stays unchanged (backward compat) ------------
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, onRegisterTool: () => {} });
+  const runner = new ExtensionRunner({ onRegisterTool: () => {} });
   let observed = null;
   await runner.loadExtension({
     id: "observe",
@@ -181,7 +180,6 @@ registerCoreEnv({
   const registered = [];
   const unregistered = [];
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     onRegisterTool: (d) => registered.push(d.name),
     onUnregisterTool: (name) => unregistered.push(`tool:${name}`),
     onUnregisterCommand: (name) => unregistered.push(`cmd:${name}`),
@@ -253,7 +251,6 @@ registerCoreEnv({
 {
   const unregistered = [];
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     onUnregisterTool: (name) => unregistered.push(`tool:${name}`),
     onUnregisterCommand: (name) => unregistered.push(`cmd:${name}`),
   });
@@ -322,11 +319,42 @@ registerCoreEnv({
   await runner.destroyAll();
 }
 
+// --- 5b. A shadowed command is restored when its replacement goes ----------------
+{
+  const runner = new ExtensionRunner({});
+  const make = (id, description) => ({
+    id,
+    name: id,
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerCommand({ name: "cmd", description, execute: async () => description });
+    },
+  });
+  await runner.loadExtension(make("low", "low cmd"));
+  await runner.loadExtension(make("high", "high cmd"));
+  assert.equal(runner.getCommands().find((c) => c.name === "cmd")?.description, "high cmd", "high rank is live");
+
+  await runner.setEnabled("high", false);
+  assert.equal(
+    runner.getCommands().find((c) => c.name === "cmd")?.description,
+    "low cmd",
+    "disabling the shadowing extension restores the earlier command (not deletes the name)"
+  );
+  assert.equal(runner.contextForCommand("cmd")?.id, "low", "context resolution follows the restored owner");
+
+  await runner.setEnabled("low", false);
+  assert.equal(
+    runner.getCommands().find((c) => c.name === "cmd"),
+    undefined,
+    "last owner gone removes the name"
+  );
+  await runner.destroyAll();
+}
+
 // --- 6. Partial activate failure rolls back; re-enable works cleanly ------------
 {
   const unregistered = [];
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     onUnregisterTool: (name) => unregistered.push(`tool:${name}`),
   });
 

@@ -23,7 +23,10 @@ const ALLOWLIST = new Map([
     "managers/managed-agent.ts",
     "Composes the agent lifecycle, controllers and public facade; split is tracked separately.",
   ],
-  ["agent/extension/runner.ts", "Extension registration/lifecycle orchestrator; owns the five registration channels."],
+  [
+    "agent/extension/runner.ts",
+    "Extension registration/lifecycle orchestrator. The UI/context bridge, default renderer, observer surface, message-transformer registry, dispatch order and owner-id rule are already separate modules; what remains is the registration lifecycle itself, which the rollback paths require to stay in one class.",
+  ],
 ]);
 
 async function collect(dir) {

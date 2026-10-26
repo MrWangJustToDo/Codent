@@ -74,7 +74,6 @@ function makeRunner(id = "agent_order") {
   const managed = makeAgent({}, id);
   const bus = createAgentEventBus();
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     eventBus: bus,
     onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank),
     onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),

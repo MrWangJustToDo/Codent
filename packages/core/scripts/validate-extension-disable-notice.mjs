@@ -29,7 +29,7 @@ async function disableText(runner, id) {
 
 // 1. Custom disabledContent via registerContextProvider({ disabledContent }).
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined });
+  const runner = new ExtensionRunner({});
   await runner.loadExtension({
     id: "custom",
     name: "Custom Ext",
@@ -52,7 +52,7 @@ async function disableText(runner, id) {
 
 // 2. No disabledContent -> generic default (still informative).
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined });
+  const runner = new ExtensionRunner({});
   await runner.loadExtension({
     id: "plain",
     name: "Plain Ext",
@@ -68,7 +68,7 @@ async function disableText(runner, id) {
 
 // 3. Empty string -> opt out (no notice at all).
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined });
+  const runner = new ExtensionRunner({});
   await runner.loadExtension({
     id: "muted",
     name: "Muted Ext",
@@ -87,7 +87,7 @@ async function disableText(runner, id) {
 
 // 4. Re-enabling clears the notice and restores the content under the same tag.
 {
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined });
+  const runner = new ExtensionRunner({});
   await runner.loadExtension({
     id: "toggle",
     name: "Toggle Ext",

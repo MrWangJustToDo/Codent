@@ -4,7 +4,7 @@
  * stdio. ACP clients spawn this as a child process.
  */
 
-import { parseModelStyle } from "@codent/core";
+import { installAgentLogProcessGuards, parseModelStyle } from "@codent/core";
 
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
 import { runAcpAgentStdio } from "./stdio.js";
@@ -42,6 +42,12 @@ function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
 }
 
 async function main(): Promise<void> {
+  // This is a long-lived child process an editor spawns: a crash or a hard exit must still land the
+  // buffered agent-log rows (and any extension `registerExitFlush` state) on disk. The CLI host does
+  // this in its own bootstrap; the standalone `codent-acp` entry had no equivalent, so exit flushes
+  // registered by extensions were written into a registry nothing ever drained.
+  installAgentLogProcessGuards();
+
   const argv = process.argv.slice(2);
   const options = await bootstrapAcpAgent({
     model: parseModelFlags(argv),

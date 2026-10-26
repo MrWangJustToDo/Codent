@@ -25,7 +25,7 @@
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
 import { errorMessage } from "../../utils/errors.js";
-import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
+import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
 import { projectCodeModeModelOutput } from "./model-output.js";

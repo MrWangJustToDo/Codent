@@ -70,7 +70,7 @@ const INTERNAL_EVENTS = ["tool:chunk", "tool:clear", "extension:ui"];
 /** Build a runner on a bus we own, so the test can emit exactly what it wants to observe. */
 async function withRunner(activate, run) {
   const bus = createAgentEventBus();
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   await runner.loadExtension({ id: "obs", name: "Obs", version: "1.0.0", activate });
   try {
     await run({ bus, runner });
@@ -129,7 +129,7 @@ console.log("2. observe delivers + disposer: ok");
   bus.retain("session:usage", () => ({ percent: 42 }));
   bus.emit("session:usage", { percent: 42 });
 
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const replayed = [];
   const noReplay = [];
   const broad = [];
@@ -287,7 +287,7 @@ console.log("4. observeAny scope: ok");
 // --- 6..9. throw isolation, failure reporting, teardown, payload identity ---
 {
   const bus = createAgentEventBus();
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const order = [];
   const failures = [];
   let payloadFromFirst;
@@ -357,7 +357,7 @@ console.log("4. observeAny scope: ok");
 // --- 7b. rejected observer promise is contained ------------------------------
 {
   const bus = createAgentEventBus();
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const failures = [];
   let unhandled = null;
   const onUnhandled = (reason) => {
@@ -388,6 +388,45 @@ console.log("4. observeAny scope: ok");
   );
   await runner.destroyAll();
   console.log("9. rejected observer promise is contained: ok");
+}
+
+// --- 10. a throwing interceptor is contained AND attributed ------------------
+{
+  const bus = createAgentEventBus();
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
+  const failures = [];
+  let laterRan = false;
+
+  await runner.loadExtension({
+    id: "gate",
+    name: "Gate",
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerInterceptor("tool:before:*", () => {
+        throw new Error("interceptor boom");
+      });
+      ctx.events.observe("agent:extension-error", (event) => failures.push(event.payload));
+    },
+  });
+  await runner.loadExtension({
+    id: "after-gate",
+    name: "After Gate",
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerInterceptor("tool:before:*", () => {
+        laterRan = true;
+      });
+    },
+  });
+
+  await bus.intercept({ type: "tool:before:read_file", payload: {} });
+  assert.equal(laterRan, true, "a throwing interceptor does not starve the rest of the chain");
+  const reported = failures.find((row) => row.phase === "interceptor");
+  assert.ok(reported, `interceptor failure reported, got ${JSON.stringify(failures)}`);
+  assert.equal(reported.extensionId, "gate", "the report names the extension that owns the handler");
+  assert.match(reported.error, /tool:before:\*/, "the report names the pattern");
+  await runner.destroyAll();
+  console.log("10. throwing interceptor is contained + attributed: ok");
 }
 
 console.log("extension-event-observation validation passed");

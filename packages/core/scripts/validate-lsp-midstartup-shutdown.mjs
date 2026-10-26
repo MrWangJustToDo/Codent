@@ -68,7 +68,6 @@ const { ExtensionRunner } = dev;
 
 const tools = [];
 const runner = new ExtensionRunner({
-  getEnvVar: () => undefined,
   onRegisterTool: (d) => tools.push(d),
   cwd: projectDir,
   getCoreEnv: () => env,

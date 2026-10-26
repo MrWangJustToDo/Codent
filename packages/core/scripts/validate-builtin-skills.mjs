@@ -376,6 +376,7 @@ const CONTEXT_MEMBERS = [
   "coreEnv",
   "z",
   "registerTool",
+  "registerToolOutputDecorator",
   "registerCommand",
   "registerInterceptor",
   "registerContextProvider",

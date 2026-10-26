@@ -112,7 +112,6 @@ const BUILTIN_PRESENTATION = { category: "reads", keepRow: undefined };
 /** The runner's production wiring, so `setEnabled` exercises the real ownership rules. */
 function runnerFor(managed) {
   return new ExtensionRunner({
-    getEnvVar: () => undefined,
     onRegisterTool: (def, ownerId) => managed.registerTool(def, ownerId),
     onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
   });
@@ -597,7 +596,6 @@ const ext = (id) => ({
 {
   const events = [];
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     onRegisterTool: () => {},
     onToolRegistrationBatchComplete: () => events.push("batch"),
     onToolRegistrationComplete: () => events.push("runtime"),

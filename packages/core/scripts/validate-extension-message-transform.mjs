@@ -52,7 +52,6 @@ import {
 
 function makeRunner(bus, log) {
   return new ExtensionRunner({
-    getEnvVar: () => undefined,
     cwd: "/workspace",
     eventBus: bus,
     log: log ?? null,

@@ -17,7 +17,7 @@ import { ExtensionRunner, createAgentEventBus, createLocalAgentSession } from ".
 
 // --- Minimal managed-agent stub: only what `subscribe` / `getEventBus` touch ---
 const bus = createAgentEventBus("agent-1");
-const runner = new ExtensionRunner({ getEnvVar: () => undefined, eventBus: bus, cwd: "/workspace" });
+const runner = new ExtensionRunner({ eventBus: bus, cwd: "/workspace" });
 
 const managed = {
   id: "agent-1",

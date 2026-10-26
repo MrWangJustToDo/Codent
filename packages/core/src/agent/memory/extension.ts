@@ -21,7 +21,7 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
-import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
+import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
 import type { MemoryManager } from "./memory-manager.js";

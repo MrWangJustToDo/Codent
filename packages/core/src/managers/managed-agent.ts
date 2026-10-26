@@ -56,6 +56,7 @@ import { getModelVisibleMessages } from "../agent/compaction/message-chain-proje
 import { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
 import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.js";
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
+import { scopeExtensionOwnerId } from "../agent/extension/owner-id.js";
 import { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
@@ -125,6 +126,7 @@ import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
 import type { CompactionConfig, CompactionConfigInput } from "../agent/compaction/types.js";
+import type { DispatchRank } from "../agent/dispatch-order.js";
 import type {
   ExtensionCommand,
   ExtensionFactory,
@@ -132,7 +134,6 @@ import type {
   ExtensionRunner,
   ExtensionToolDefinition,
 } from "../agent/extension";
-import type { DispatchRank } from "../agent/extension/dispatch-order.js";
 import type {
   ExtensionContext,
   ExtensionLlmRequest,
@@ -1507,6 +1508,7 @@ export class ManagedAgent {
 
     this.extensionRuntime = {
       sessionId: () => this.getSessionData()?.id ?? null,
+      sessionName: () => this.getSessionData()?.name || null,
       isIdle: () => !isActiveStatus(this.getStatus()),
       mode: () => this.getAgentMode(),
       model: () => this.config.model || this.getModelInfo()?.id,
@@ -1615,10 +1617,6 @@ export class ManagedAgent {
     });
   }
 
-  registerCommand(cmd: ExtensionCommand): void {
-    this.extensions.registerCommand(cmd, (message) => this.log?.warn("system", message));
-  }
-
   /**
    * Unregister a tool previously added by an extension (used when disabling).
    *
@@ -1651,7 +1649,7 @@ export class ManagedAgent {
    * too. Owner ids are matched by string equality only — nothing parses them back apart.
    */
   private scopedOwnerId(extensionId: string): string {
-    return `${this.id}:${extensionId}`;
+    return scopeExtensionOwnerId(this.id, extensionId);
   }
 
   /** Publish the current presentation catalog (tool set changed). */
@@ -1660,10 +1658,6 @@ export class ManagedAgent {
   }
 
   /** Unregister a command previously added by an extension (used when disabling). */
-  unregisterExtensionCommand(name: string): void {
-    this.extensions.unregisterExtensionCommand(name);
-  }
-
   getExtensionCommands(): ExtensionCommand[] {
     return this.extensions.getExtensionCommands();
   }

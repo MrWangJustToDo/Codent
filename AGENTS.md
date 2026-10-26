@@ -908,6 +908,7 @@ Beyond registration (`registerTool` / `registerCommand` / `registerInterceptor` 
 | Surface | Contract |
 |---|---|
 | `ctx.sessionId` / `isIdle()` / `mode` / `model` | Live session facts; `mode` is `AgentMode` (`normal` / `auto` / `plan`) — a plan *phase* is not a mode |
+| `ctx.env` | The extension's **own** config map (string values from its `ExtensionConfig.config`). Not a process-environment snapshot — use `ctx.coreEnv.getEnv()` (async) for the workspace environment. |
 | `ctx.signal` | The active run's `AbortSignal` (undefined when idle) — extension work cancels with the turn |
 | `ctx.getMessages()` | Defensive copy of the model-visible conversation (compaction + synthetic `<ctx>` blocks); mutation cannot reach the wire |
 | `ctx.getContextUsage()` | The footer's fill reading (`getContextFillTokens()` against the compaction budget), not a second estimate |
@@ -926,7 +927,7 @@ Roadmap (not built yet): **write** capabilities (`ctx.abort`, `ctx.compact`, ses
 
 ## Extension Point: Message Transformers
 
-`ExtensionContext` offers four registration channels today — `registerTool` / `registerCommand` / `registerInterceptor` / `registerContextProvider`. Its fifth, `registerMessageTransformer(fn)`, is the only one that edits **the message chain the model sees**. Use it for media-to-text (e.g. describe an image through an out-of-process multimodal endpoint before handing it to a text-only model), redaction, trimming to a budget, or wire-only context injection.
+`ExtensionContext` offers registration channels — `registerTool` / `registerToolOutputDecorator` / `registerCommand` / `registerInterceptor` / `registerContextProvider` / `registerMessageTransformer` / `registerFlush` / `registerExitFlush` (plus the bus-backed `ctx.events.observe`). `registerMessageTransformer(fn)` is the only one that edits **the message chain the model sees**. Use it for media-to-text (e.g. describe an image through an out-of-process multimodal endpoint before handing it to a text-only model), redaction, trimming to a budget, or wire-only context injection. Hook event types (`ToolBeforeEvent`, `SessionStartEvent`, …) are exported from `@codent/core`, so a TypeScript extension types its handler instead of re-declaring the shape.
 
 ```ts
 ctx.registerMessageTransformer((c) => {
@@ -1009,7 +1010,7 @@ Enabled when `ManagedAgentConfig.codeMode !== false` (`createCodeModeExtension()
 
 **Tool subset (kept deliberately small):** only a curated set is exposed to the sandbox as `external_*` bindings — read-only fs tools eager (`read_file`/`grep`/`glob`/`list_file`/`tree`), plus `websearch` lazy. `run_command` is also requested as a lazy binding, but it declares `needsApproval` and is **skipped by default**: a sandbox `external_*` call runs the raw tool execute and cannot participate in the host approval/interceptor chain. Set `codeMode.allowApprovalTools: true` only when that boundary is intentionally accepted. Interactive / stateful tools (`ask_user`, `task`, `todo`, plan tools) are excluded — including `get_command_output` / `kill_command`, so a background job started inside the sandbox is read through its log file via `read_file` (see the `run_command` section) and is polled/killed by the outer agent. Lazy tools stay out of the system prompt's full type stubs and are listed in a discoverable catalog instead (`discover_tools`), keeping the per-turn prompt small (progressive disclosure). The curated bindings are snapshotted from the base toolset before user extensions load, so an extension that later shadows `read_file`/`run_command` cannot change what the sandbox executes.
 
-**Per-turn system prompt:** the extension injects code-mode guidance through a `before_agent_start` interceptor (`event.appendSystemPrompt`) documenting the sandbox API + `external_*` bindings.
+**Per-turn system prompt:** the extension injects code-mode guidance through `registerContextProvider` (its own `<ctx kind="ext:codent-code-mode">` section) documenting the sandbox API + `external_*` bindings. There is no system-prompt append channel — `before_agent_start` is observe-only.
 
 **Config:** `ManagedAgentConfig.codeMode` accepts `boolean` (default `true`) or `{ timeout?, memoryLimit?, lazyToolsConfig?, allowApprovalTools? }`. The isolate backend must be a CoreEnv optional capability: `createIsolateDriver?(): Promise<IsolateDriver | null> | IsolateDriver | null` (`IsolateDriver` from `@tanstack/ai-code-mode`, type-only — zero native deps in core). Module map: `packages/core/src/agent/code-mode/` (`extension.ts`, `index.ts`); Node host: `packages/node/src/environment/isolate-driver.ts` (lazy-loads `ai-isolate-node`, returns `null` on failure).
 

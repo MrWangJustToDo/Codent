@@ -15,6 +15,7 @@ import { ExtensionRunner, copyModelMessages, createAgentEventBus } from "../dist
 // ── a runtime whose facts we can change under the extension ─────────────────
 const facts = {
   sessionId: "ses_one",
+  sessionName: "First session",
   idle: true,
   mode: "normal",
   model: "model-a",
@@ -24,6 +25,7 @@ const facts = {
 
 const runtime = {
   sessionId: () => facts.sessionId,
+  sessionName: () => facts.sessionName,
   isIdle: () => facts.idle,
   mode: () => facts.mode,
   model: () => facts.model,
@@ -35,7 +37,7 @@ const runtime = {
 };
 
 const bus = createAgentEventBus();
-const runner = new ExtensionRunner({ getEnvVar: () => undefined, eventBus: bus, getRuntime: () => runtime });
+const runner = new ExtensionRunner({ eventBus: bus, getRuntime: () => runtime });
 
 let captured;
 let handlerCtx;
@@ -55,6 +57,11 @@ await runner.loadExtension({
 
 assert.ok(captured, "activation receives a context");
 assert.equal(captured.sessionId, "ses_one");
+assert.equal(
+  runner.getUI().getContext().sessionName,
+  "First session",
+  "the UI context reports the live session name, not null"
+);
 assert.equal(captured.isIdle(), true);
 assert.equal(captured.mode, "normal");
 assert.equal(captured.model, "model-a");
@@ -65,6 +72,7 @@ assert.equal(captured.getMessages()[0].role, "user");
 
 // Facts move under the extension — the context must follow, not replay activation-time values.
 facts.sessionId = "ses_two";
+facts.sessionName = "Second session";
 facts.idle = false;
 facts.mode = "auto";
 facts.model = "model-b";
@@ -72,6 +80,7 @@ const controller = new AbortController();
 facts.signal = controller.signal;
 
 assert.equal(captured.sessionId, "ses_two", "session id must be read live (session switch)");
+assert.equal(runner.getUI().getContext().sessionName, "Second session", "session name follows the session switch");
 assert.equal(captured.isIdle(), false);
 assert.equal(captured.mode, "auto", "the same AgentMode every other surface reports");
 assert.equal(captured.model, "model-b");
@@ -81,6 +90,21 @@ assert.equal(captured.signal, controller.signal, "the run's own signal, not a co
 // The raw bus dispatches interceptors through `intercept` (observers use `emit`).
 await bus.intercept({ type: "probe:ping", payload: {} });
 assert.equal(handlerCtx, captured, "interceptors receive the extension's live context");
+
+// `ctx.env` is the extension's OWN config map, filtered to strings.
+let envProbe;
+await runner.loadExtension(
+  {
+    id: "env-probe",
+    name: "Env Probe",
+    version: "1.0.0",
+    activate(ctx) {
+      envProbe = ctx.env;
+    },
+  },
+  { config: { FOO: "bar", NUM: 3, FLAG: true } }
+);
+assert.deepEqual(envProbe, { FOO: "bar" }, "ctx.env is ExtensionConfig.config, string values only");
 
 // Commands are dispatched outside the runner but resolve the same context.
 assert.equal(runner.contextForCommand("probe-cmd"), captured);

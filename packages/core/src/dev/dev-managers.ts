@@ -13,7 +13,6 @@ export {
   DefaultAgentEventBus,
   createAgentEventBus,
   AGENT_EVENT_META,
-  INTERCEPTOR_EVENT_PATTERNS,
 } from "../agent/agent-event-bus/index.js";
 export type {
   AgentEvent,
@@ -25,7 +24,8 @@ export type {
   AgentEventPayloadMap,
 } from "../agent/agent-event-bus/index.js";
 export { bridgeTelemetryToAgentLog, summarizePayload } from "../agent/log/event-log-bridge.js";
-export { DEFAULT_EVENT_LOG_RULES } from "../agent/log/event-log-rules.js";
+export { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG } from "../agent/log/event-log-rules.js";
+export { SPECIALIZED_EVENT_LOG_TYPES } from "../agent/log/event-log-specialized.js";
 export { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
 export { createJsonlFileSink } from "../agent/log/jsonl-file-sink.js";
 export { createLogExtension } from "../agent/log/extension.js";

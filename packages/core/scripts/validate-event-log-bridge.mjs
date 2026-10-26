@@ -9,7 +9,13 @@
 
 import assert from "node:assert/strict";
 
-import { createAgentEventBus, bridgeTelemetryToAgentLog } from "../dist/dev.mjs";
+import {
+  bridgeTelemetryToAgentLog,
+  createAgentEventBus,
+  DEFAULT_EVENT_LOG_RULES,
+  SPECIALIZED_EVENT_LOG,
+  SPECIALIZED_EVENT_LOG_TYPES,
+} from "../dist/dev.mjs";
 
 import { createLogCapture, waitFor } from "./helpers/log-capture.mjs";
 
@@ -318,6 +324,23 @@ console.log("approval request + resolution bridged: OK");
   policyBus.emit("compaction:auto-complete", { tokensBefore: 1, tokensAfter: 0 });
   policyCapture.log.flushSync();
   assert.equal((await policyCapture.readEntries()).length, before, "explicit false suppresses custom-handler events");
+}
+
+// The rule table's `"specialized"` marker and the handler map are one fact stated twice (the table
+// is static and typed by every payload key; the map holds the functions). A marker with no handler
+// would silently drop rows, and a handler with no marker would be invisible to readers.
+{
+  const marked = Object.entries(DEFAULT_EVENT_LOG_RULES)
+    .filter(([, rule]) => rule === SPECIALIZED_EVENT_LOG)
+    .map(([type]) => type)
+    .sort();
+  const handled = [...SPECIALIZED_EVENT_LOG_TYPES].sort();
+  assert.deepEqual(marked, handled, "every specialized log rule has a handler and vice versa");
+  // A `false` cell means "never logged"; none of the specialized events may also claim suppression.
+  for (const type of handled) {
+    assert.notEqual(DEFAULT_EVENT_LOG_RULES[type], false, `${type}: not both specialized and suppressed`);
+  }
+  console.log("specialized-rule table matches the handler map — ok");
 }
 
 console.log("event-log-bridge validation passed");

@@ -97,7 +97,7 @@ registerCoreEnv(createFsEnv(rootPath));
 // ----------------------------------------------------------------------------
 {
   const bus = createAgentEventBus("root");
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const order = [];
 
   await runner.loadExtension({
@@ -131,7 +131,7 @@ registerCoreEnv(createFsEnv(rootPath));
   const failures = [];
   bus.on("agent:extension-error", (e) => failures.push(e.payload));
 
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const seen = [];
   let toolRegistered = true;
 
@@ -179,7 +179,7 @@ registerCoreEnv(createFsEnv(rootPath));
 // ----------------------------------------------------------------------------
 {
   const bus = createAgentEventBus("root");
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const flushed = [];
 
   for (const id of ["a", "b"]) {
@@ -232,7 +232,7 @@ registerCoreEnv(createFsEnv(rootPath));
 // ----------------------------------------------------------------------------
 {
   const bus = createAgentEventBus("root");
-  const runner = new ExtensionRunner({ getEnvVar: () => undefined, cwd: "/workspace", eventBus: bus });
+  const runner = new ExtensionRunner({ cwd: "/workspace", eventBus: bus });
   const ran = [];
 
   await runner.loadExtension({

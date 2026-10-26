@@ -31,7 +31,7 @@
  *   `get_command_output` / the job's log file.
  */
 
-import { BUILTIN_EXTENSION_ORDER } from "../extension/dispatch-order.js";
+import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { formatDuration } from "../tools/presentation/format/format.js";
 
 import type { SessionJobSummary } from "../../runtime-types/session-payloads.js";

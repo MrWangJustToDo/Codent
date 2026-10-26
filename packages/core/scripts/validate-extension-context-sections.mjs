@@ -28,7 +28,7 @@ const bus = createAgentEventBus();
 const failures = [];
 bus.on("agent:extension-error", (event) => failures.push(event.payload));
 
-const runner = new ExtensionRunner({ getEnvVar: () => undefined, eventBus: bus, getRuntime: () => runtime });
+const runner = new ExtensionRunner({ eventBus: bus, getRuntime: () => runtime });
 
 await runner.loadExtension({
   id: "sec",

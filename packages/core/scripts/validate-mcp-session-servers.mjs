@@ -120,7 +120,6 @@ async function activateMcpExtension({ servers, configPath } = {}) {
   };
 
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     cwd: root,
     onRegisterTool: () => {},
     onRegisterCommand: () => {},
@@ -288,7 +287,6 @@ assert.equal(empty.manager.configSourceKind, "file", "an empty map is treated as
   };
 
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     cwd: root,
     onRegisterTool: (def) => registeredToolNames.push(def.name),
     onRegisterCommand: () => {},

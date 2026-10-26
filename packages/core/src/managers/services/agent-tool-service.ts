@@ -12,8 +12,8 @@ import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
 import { AgentToolRegistry, type ResolvedAgentTool } from "../../agent/tools/runtime/tool-registry.js";
 import { withTimeoutAbort } from "../../agent/tools/shared/abort-timeout.js";
 
+import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type { ExtensionToolDefinition } from "../../agent/extension";
-import type { DispatchRank } from "../../agent/extension/dispatch-order.js";
 import type { ExtensionContext } from "../../agent/extension/types.js";
 import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
 import type { ToolPresentationInfo } from "../../agent/tools/presentation/types.js";

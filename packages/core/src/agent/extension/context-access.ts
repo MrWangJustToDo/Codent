@@ -81,6 +81,8 @@ export interface ExtensionContextUsage {
 export interface ExtensionRuntimeAccess {
   /** Active disk session id, or null when none is bound. */
   sessionId(): string | null;
+  /** The session's display name (auto-generated from the first message), or null when unbound. */
+  sessionName(): string | null;
   /** Whether a run is in flight. */
   isIdle(): boolean;
   /** Session mode as the runtime reports it (`normal` / `auto` / plan phase). */

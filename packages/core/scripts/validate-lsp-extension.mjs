@@ -97,7 +97,6 @@ const { ExtensionRunner } = dev;
 const registeredTools = [];
 const registeredCommands = [];
 const runner = new ExtensionRunner({
-  getEnvVar: () => undefined,
   onRegisterTool: (def) => registeredTools.push(def),
   onRegisterCommand: (cmd) => registeredCommands.push(cmd),
   cwd: projectDir,

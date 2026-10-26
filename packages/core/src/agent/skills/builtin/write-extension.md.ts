@@ -170,7 +170,7 @@ time (never a snapshot):
 Observable turn/message events: \`turn:start\`/\`turn:end\` (one model turn), \`message:start\`/
 \`message:end\` (one assistant message; \`firstOutput\` marks the run's first).
 
-## The six registration channels
+## The registration channels
 
 Every registration lives on \`ctx\` and is scoped to this extension: disabling the
 extension unregisters everything it added.
@@ -336,6 +336,15 @@ Every function must be **pure** — a function of the stored output (or parsed i
 The rendered value is persisted with the session and replayed on restore, so a timestamp,
 a random value, or wall-clock state would corrupt the saved transcript.
 
+## Decorating another tool's output
+
+\`ctx.registerToolOutputDecorator(toolName, decorator)\` wraps the **model-facing** output of a tool
+you do not own (for example the built-in LSP extension appending diagnostics to \`write_file\`
+results). The decorator receives \`(ctx, next)\` and returns \`ModelToolContent\`; call \`next()\` for
+the undecorated value. It is agent-scoped, removed when your extension is disabled or destroyed,
+and the returned disposer removes it earlier. Unlike \`present\`, it changes what the **model** sees,
+not what the user sees — keep it for information the model must act on.
+
 ## Drawing into the host UI
 
 \`\`\`js
@@ -362,7 +371,7 @@ const view = ctx.ui.getContext();                             // model/status/us
 
 \`\`\`js
 ctx.cwd                    // workspace root path (string)
-ctx.env                    // environment snapshot
+ctx.env                    // this extension's config map (ExtensionConfig.config strings)
 ctx.coreEnv.rootPath       // same root, via the runtime abstraction
 await ctx.coreEnv.fs.readFile("notes.md")
 await ctx.coreEnv.runCommand("git", ["status"])   // or the command API the host provides

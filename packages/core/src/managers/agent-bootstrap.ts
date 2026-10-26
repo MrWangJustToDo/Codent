@@ -192,16 +192,11 @@ export class AgentBootstrap {
   private async loadExtensions(report: BootstrapReport, skillRegistry: SkillRegistry): Promise<void> {
     const { managed, config, env, rootPath, log, manager } = this.deps;
     const extensionRunner = new ExtensionRunner({
-      // Extensions access the environment primarily via ctx.coreEnv.getEnv() (async).
-      // getEnvVar stays a sync best-effort hook for convenience fields like API keys.
-      getEnvVar: () => undefined,
       onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank, { publishCatalog: false }),
-      onRegisterCommand: (cmd) => managed.registerCommand(cmd),
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
       // Live run/session facts and one-shot model access for extensions (`ctx.signal`,
       // `ctx.getMessages()`, `ctx.llm`). A function because every fact is per run.
       getRuntime: () => managed.getExtensionRuntime(),
-      onUnregisterCommand: (name) => managed.unregisterExtensionCommand(name),
       onRegisterToolOutputDecorator: (name, decorator, ownerId) =>
         managed.registerToolOutputDecorator(name, decorator, ownerId),
       onRemoveToolOutputDecoratorOwner: (ownerId) => managed.removeToolOutputDecoratorOwner(ownerId),

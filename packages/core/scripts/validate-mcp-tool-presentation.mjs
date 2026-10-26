@@ -176,7 +176,6 @@ async function activateMcpExtension() {
   const toolDefs = [];
 
   const runner = new ExtensionRunner({
-    getEnvVar: () => undefined,
     cwd: root,
     onRegisterTool: (def) => toolDefs.push(def),
     onRegisterCommand: () => {},
