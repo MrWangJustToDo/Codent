@@ -36,6 +36,8 @@ class EventBusScopeNode {
     pattern: string;
     handler: EventInterceptor<InterceptableEvent>;
     rank: DispatchRank;
+    /** Cleared by the disposer; a snapshot taken before an await must not run a removed entry. */
+    active: boolean;
   }> = [];
   readonly retained = new Map<string, () => unknown>();
 
@@ -115,7 +117,14 @@ export class DefaultAgentEventBus implements AgentEventBus {
     if (options?.replay !== false) {
       const provider = this.findRetained(type, options?.includeParents === true);
       if (provider) {
-        typed(this.buildEvent(type, provider() as never));
+        try {
+          typed(this.buildEvent(type, provider() as never));
+        } catch (error) {
+          // A retained replay is still a listener notification. Without this guard a throwing
+          // handler (or a throwing retained provider) escaped `on()` AFTER the subscription was
+          // registered, so the caller never received a disposer and leaked the listener.
+          this.onInterceptorError?.({ pattern: type, event: type, scopeId: this.node.id, error });
+        }
       }
     }
 
@@ -173,7 +182,14 @@ export class DefaultAgentEventBus implements AgentEventBus {
 
   async intercept<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined> {
     for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
-      for (const registration of node.interceptors) {
+      // Snapshot: `node.interceptors` is mutated by onIntercept()/its disposer, and this loop
+      // awaits between entries. Iterating the live array let an interceptor registered during
+      // dispatch run twice and one unregistered during dispatch shift indices (skipping a later
+      // interceptor, including one that would have cancelled).
+      for (const registration of [...node.interceptors]) {
+        // The disposer may have run while a previous interceptor was awaiting: the snapshot keeps
+        // the entry alive, but it is no longer registered.
+        if (!registration.active) continue;
         if (!interceptorMatches(registration.pattern, event.type)) continue;
         // Isolated like the observer wildcards: a throwing interceptor must not
         // propagate into the tool call it wraps (one broken extension would fail
@@ -207,6 +223,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
       // Default when the caller supplies none (a non-extension interceptor): order 0, and a
       // sequence past every explicit one so insertion order is preserved as before.
       rank: rank ?? { order: resolveExtensionOrder(undefined), seq: Number.MAX_SAFE_INTEGER },
+      active: true,
     };
     const list = this.node.interceptors;
     list.push(registration);
@@ -214,6 +231,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
     // walking a plain array. Ties keep insertion order via the rank's sequence tie-break.
     list.sort((a, b) => compareDispatchRank(a.rank, b.rank));
     return () => {
+      registration.active = false;
       const index = list.indexOf(registration);
       if (index >= 0) list.splice(index, 1);
     };

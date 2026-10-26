@@ -176,6 +176,8 @@ function makeRunCoordinatorStub() {
       drop = null;
       continuation = false;
     },
+    getMaxOutputTokensOverride: () => undefined,
+    setMaxOutputTokensOverride: () => {},
     getWireDropPartTypes: () => drop,
     setWireDropPartTypes: (next) => {
       drop = next;
@@ -525,7 +527,12 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
   let truncationAttempts = 0;
   const escalations = [];
   const truncationManaged = {
-    run: makeRunCoordinatorStub(),
+    run: {
+      ...makeRunCoordinatorStub(),
+      setMaxOutputTokensOverride(max) {
+        escalations.push(max);
+      },
+    },
     usage: null,
     log: { warn() {}, debug() {}, error() {} },
     setError() {},
@@ -547,11 +554,7 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
     manager: {},
     getMessages: () => msgs,
     run: () => alwaysTruncated(),
-    runner: {
-      setMaxOutputTokens(max) {
-        escalations.push(max);
-      },
-    },
+    runner: {},
   })) {
     void chunk;
   }
@@ -612,7 +615,7 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
     manager: {},
     getMessages: () => msgs,
     run: () => truncateThenRateLimit(),
-    runner: { setMaxOutputTokens() {} },
+    runner: {},
   })) {
     mixedOut.push(chunk.type);
   }

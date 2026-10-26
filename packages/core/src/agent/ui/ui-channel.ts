@@ -183,7 +183,13 @@ export class AgentUIChannel {
   /** Monotonic revision bumped on every messages change (wire projection cache). */
   private revision = 0;
 
-  /** Current task run phase for parent task tool UI (`tools` vs `summary`). */
+  /**
+   * Summary-stream sub-state for one task row (`tools` while the child explores, `summary` once
+   * `begin_summary`/the progress fallback started its report). This is NOT the task's terminal
+   * phase — that is `readTaskRunPhase` (`agent/subagent/task-run-state.ts`), which keeps the
+   * one-way `running → summary` transition after the stream ends. Hosts that need the outcome
+   * read the phase machine, not this.
+   */
   getTaskRunPhase(): TaskSummaryPhase {
     return resolveTaskRunPhase(this.getMessages(), this.summaryStreamState);
   }

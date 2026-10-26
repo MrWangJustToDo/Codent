@@ -273,27 +273,107 @@ function applyEvent(
         // unrelated full resync — `dispatch()` deliberately does not refetch the snapshot.
         lastStreamDurationMs: event.payload.lastStreamDurationMs,
         lastFinishReason: event.payload.lastFinishReason,
-        // On-disk session identity (agent identity is the connection, not this).
-        ...(event.payload.sessionId ? { sessionId: event.payload.sessionId } : {}),
+        // On-disk session identity (agent identity is the connection, not this). The snapshot
+        // field is `activeSessionId`; writing `sessionId` here left every consumer reading the
+        // value from the last full resync, so an in-place switch showed the old identity. A null
+        // payload (no bound session) must clear it rather than retain the previous value.
+        activeSessionId: event.payload.sessionId ?? undefined,
       };
     case "lifecycle": {
-      // Keep task phases fresh between snapshot refetches — subagent summaries
-      // otherwise only update on commands.
-      if (event.payload.type === "subagent:phase") {
-        const phase = event.payload.payload.phase;
-        const subagentId = event.payload.payload.subagentId;
-        const parentTaskToolCallId = event.payload.payload.parentTaskToolCallId;
-        if (!phase) return snapshot;
+      // The envelope carries the emitting agent; for a child event that is the subagent id.
+      const lifecycle = event.payload as {
+        type?: string;
+        agentId?: string;
+        payload?: {
+          subagentId?: string;
+          description?: string;
+          parentTaskToolCallId?: string;
+          phase?: "running" | "summary" | "limit";
+          cancelled?: boolean;
+        };
+      };
+      const data = lifecycle.payload ?? {};
+      const subagentId = data.subagentId ?? lifecycle.agentId;
+      if (!lifecycle.type?.startsWith("subagent:") || !subagentId) return snapshot;
+
+      /**
+       * The row(s) a lifecycle event describes.
+       *
+       * The child's id is the normal key. When an event carries only its parent `task` call (some
+       * lifecycle paths do), fall back to the row registered for that call — but only when it is
+       * **unambiguous**. One `task` call can own a discarded pre-fork generation and the respawn
+       * that replaced it, and writing a call-level phase onto every match is exactly the bug
+       * `resolveSubagentRowDisplay` documents (the discarded generation read "limit reached").
+       */
+      const targetsFor = (allowTaskFallback: boolean): Set<string> | null => {
+        if (snapshot.subagents.some((entry) => entry.id === subagentId)) return new Set([subagentId]);
+        // A child-scoped event (`created`/`started`/`completed`/`error`) names its own child and
+        // must never land on a sibling that merely shares the task call — that is how a respawn
+        // overwrote the discarded generation's row. Only a call-scoped `phase` may fall back.
+        if (!allowTaskFallback) return null;
+        const taskId = data.parentTaskToolCallId;
+        if (!taskId) return null;
+        const byTask = snapshot.subagents.filter((entry) => entry.parentTaskToolCallId === taskId);
+        return byTask.length === 1 ? new Set([byTask[0]!.id]) : null;
+      };
+
+      /**
+       * Patch the resolved row, or create it for the two events that introduce a child.
+       *
+       * Only `created`/`started` may create a row: a `phase`/`completed`/`error` whose target
+       * cannot be resolved is a call-scoped event with an ambiguous owner (see above), and
+       * inventing a row from it would show a child that never existed.
+       */
+      const upsert = (
+        patch: Partial<(typeof snapshot.subagents)[number]>,
+        options: { create: boolean; taskFallback?: boolean }
+      ): AgentSessionSnapshot => {
+        const targets = targetsFor(options.taskFallback === true);
+        if (!targets) {
+          if (!options.create) return snapshot;
+          const row = { id: subagentId, status: "running" as const, ...patch };
+          return { ...snapshot, subagents: [...snapshot.subagents, row] };
+        }
         return {
           ...snapshot,
-          subagents: snapshot.subagents.map((entry) =>
-            entry.id === subagentId || (parentTaskToolCallId && entry.parentTaskToolCallId === parentTaskToolCallId)
-              ? { ...entry, taskPhase: phase }
-              : entry
-          ),
+          subagents: snapshot.subagents.map((entry) => {
+            if (!targets.has(entry.id)) return entry;
+            return { ...entry, ...patch };
+          }),
         };
+      };
+
+      switch (lifecycle.type) {
+        case "subagent:created":
+          return upsert(
+            {
+              status: "running",
+              ...(data.parentTaskToolCallId ? { parentTaskToolCallId: data.parentTaskToolCallId } : {}),
+            },
+            { create: true }
+          );
+        case "subagent:started":
+          return upsert(
+            {
+              status: "running",
+              ...(data.description ? { description: data.description } : {}),
+              ...(data.parentTaskToolCallId ? { parentTaskToolCallId: data.parentTaskToolCallId } : {}),
+            },
+            { create: true }
+          );
+        case "subagent:phase":
+          return data.phase ? upsert({ taskPhase: data.phase }, { create: false, taskFallback: true }) : snapshot;
+        case "subagent:completed":
+          return upsert({ status: "completed" }, { create: false });
+        case "subagent:error":
+          return upsert({ status: data.cancelled ? "aborted" : "error" }, { create: false });
+        case "subagent:destroyed":
+          // A destroyed child is not a row any more; keeping it made `stop()` decide from a
+          // child that no longer exists (and made a remount render a stale preview).
+          return { ...snapshot, subagents: snapshot.subagents.filter((entry) => entry.id !== subagentId) };
+        default:
+          return snapshot;
       }
-      return snapshot;
     }
     case "queues":
       return { ...snapshot, queues: event.payload };
@@ -677,6 +757,11 @@ export class RemoteSessionClient implements AgentSession {
             return;
           }
           console.error("[RemoteSessionClient] SSE error — reconnecting", error);
+        } finally {
+          // Also covers a failed resync()/fetch(): the `onStop` listener is registered before the
+          // try, and the reader-loop finally alone skipped this path — one leaked listener and
+          // one pinned AbortController per reconnect attempt while the server is down.
+          stopController.signal.removeEventListener("abort", onStop);
         }
 
         if (stopped || stopController.signal.aborted) return;

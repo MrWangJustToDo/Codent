@@ -135,7 +135,7 @@ The exclusivity is a **client** rule: a server (`pnpm start:server`) may itself 
 
 **One model-catalog read per runtime.** `loadModels(...)` runs once per host plane (flags / `.env` / `.agents/config/models.json` / remote provider); the result is carried on the runtime as a **catalog** (`CodentAgentOptions.models` → `CodentAgent.readModels()`, type `ModelCatalogRead = { entries }`) and every consumer projects that one read — ACP's config options + legacy `models`, the app's `/models`, the CLI seed. The read deliberately carries **no active selection**: which entry/model a session runs on is the session's (`SessionData.model`, the session snapshot; ACP additionally records the selected entry index per session), and a runtime-level `active` would be a second answer that only agrees while one runtime has one session. The plane's resolved default travels with the session-creation defaults (`defaults.model` / `modelStyle` / `baseURL` / `apiKey`) plus a host-side seed for the entry index — never inside the read. Validate: `pnpm --filter @codent/core run validate:agent-runtime-instances`.
 
-**Model + depth is one decision.** `/models` is the only command (`/models [entryIndex:modelId [effort|off]]`; no argument lists the entries) — `/effort` was removed from the catalog, so no host advertises it. The TUI renders it as a two-level option menu (model → depth) that **commits nothing until a leaf is accepted**, so `Esc` retreats one level and the session stays on the model it started on; the menu's depth list is built once per model row from `offerableReasoningEfforts` (positive metadata evidence: `reasoning` capability **and** a non-empty list), so a plain model's row is a leaf. A headless host advertises the same depth as ACP's `category: "thought_level"` select, written through `applyThoughtLevel`. Switching the model drops an explicit effort the new model does not advertise (`ManagedAgent.setModel`, strict rule); *validating* a hand-typed depth stays permissive (`supportedReasoningEfforts`, which falls back to the known set when metadata is missing). The `"<entryIndex>:<model>"` wire value is core's `encodeModelChoice`/`decodeModelChoice`. Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:acp-catalog`, and the app's `test/nested-command-menu.test.mjs`.
+**Model + depth is one decision.** `/models` is the only command (`/models [entryIndex:modelId [effort|off]]`; no argument lists the entries) — `/effort` was removed from the catalog, so no host advertises it. The TUI renders it as a two-level option menu (model → depth) that **commits nothing until a leaf is accepted**, so `Esc` retreats one level and the session stays on the model it started on; the menu's depth list is built once per model row from `offerableReasoningEfforts` (positive metadata evidence: `reasoning` capability **and** a non-empty list), so a plain model's row is a leaf. A headless host advertises the same depth as ACP's `category: "thought_level"` select, written through `applyThoughtLevel`. Switching the model drops an explicit effort the new model does not advertise (`ManagedAgent.setModel`, strict rule); *validating* a hand-typed depth stays permissive (`supportedReasoningEfforts`, which falls back to the known set when metadata is missing). The `"<entryIndex>:<model>"` wire value is core's `encodeModelChoice`/`decodeModelChoice`. Validate: `validate:builtin-command-arguments`, `validate:acp:command-args`, `validate:acp:catalog`, and the app's `test/nested-command-menu.test.mjs`.
 
 **Provider-catalog tie-break.** A bare model id resolves through `lookupModelFromModelsDev`, which scores every provider entry carrying that id (`scoreModelEntry`) and takes the best. Provider catalogs disagree about the same model: at an identical score one entry may advertise named effort levels while another only says `[{"type":"toggle"}]`. Ties used to fall through to payload key order, so the winner was arbitrary — harmless until depth offering became strict, at which point a toggle-only entry meant NO depth submenu for a model that supports thinking. `compareModelEntries` therefore breaks ties toward an entry that can describe depths, as a **boolean** (has named levels / has none), never by list size: ranking by count was measured rewriting a working menu (`deepseek/deepseek-v4.1-flash` went `["low","high"]` → all seven, claiming levels the upstream may reject), and two catalogs disagreeing is not evidence the larger set is right. It is a tie-break, not a filter — metadata richness still wins, so a fully-described paid listing is never displaced by a bare one that merely advertises levels. Measured: 230 model ids resolved to a level-less winner with a level-carrying sibling; 206 regained a menu, and **no model that already had one changed its level set**. Validate: `validate:models-dev-lookup`.
 
@@ -225,8 +225,8 @@ Internal modules (tools, middleware, subagent runner, hook registry, session-syn
 `@codent/core` uses **TanStack AI** (`@tanstack/ai`, provider adapters) for agent execution.
 
 Key integration points:
-- `core/src/models/model-config.ts` — connection resolution (`openai` | `anthropic` style, baseURL, apiKey, models.dev metadata)
-- `core/src/models/adapter-factory.ts` — TanStack text adapters (`createOpenaiChatCompletions`, `createAnthropicChat`)
+- `packages/core/src/models/config/model-config.ts` — connection resolution (`openai` | `anthropic` style, baseURL, apiKey, models.dev metadata)
+- `packages/core/src/models/adapter/adapter-factory.ts` — TanStack text adapters (`createOpenaiChatCompletions`, `createAnthropicChat`)
 - `core/src/managers/run-agent.ts` — `AgentRunner` + `chat()` stream, compaction middleware
 - `core/src/agent/compaction/` — Channel convert + summary-first wire projection (`getModelVisibleMessages`); engine messages are ephemeral
 - `core/src/agent/ui/ui-channel.ts` — Durable UIMessage chain (SoT); compaction appends SUMMARY here
@@ -386,13 +386,15 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
 **Class members / accessors**
 
 - No underscore-prefixed members (`_status` ✗ → `currentStatus` ✓). Getter backing fields use descriptive names.
-- Read accessors: `getXxx()` / `setXxx()` methods. A bare property getter for state access is not used — `get status(): AgentStatus { return this.currentStatus; }` is gone, and `validate:accessor-convention` fails any class that reintroduces one alongside its `getStatus()`. A class may not offer two spellings for one read. (Plain computed properties over private data, e.g. `get size(): number` on a cache, are a different thing and are not what this rule targets — the rule is about exposing *state* two ways.)
+- Read accessors: `getXxx()` / `setXxx()` methods. Two rules: (a) a class may not offer **two spellings for one read** — `get status(): AgentStatus { return this.currentStatus; }` alongside `getStatus()` is what `validate:accessor-convention` fails everywhere; (b) `ManagedAgent` (the composition root) must not use bare property getters for state at all — both are enforced by that validator's `METHOD_ONLY_CLASSES` / duplicate check. A single-spelling computed property over private data on any *other* class (`get configPath()`, `get size()`, `get scopeId()`) is allowed; the rule is about exposing *state* twice, not about avoiding getters.
 
 **Barrels**
 
-- Domain directories expose `index.ts`; import from the directory root when consuming 2+
-  symbols from it. The top-level `src/agent/` namespace is intentionally barrel-free —
-  cross-domain imports use direct module paths there.
+- Domain directories expose `index.ts` where the domain is consumed as a unit; import from
+  the directory root when consuming 2+ symbols from it. That 2+ rule is a guideline, not a
+  gate: the enforced rule is that a barrel which exists is consumed through its directory
+  root (`validate:module-organization`). The top-level `src/agent/` namespace is
+  intentionally barrel-free — cross-domain imports use direct module paths there.
 
 **Import layering** (`packages/core/scripts/validate-layer-boundaries.mjs`)
 
@@ -413,14 +415,22 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
 - Keep files ≤ **400 lines** where a cohesive boundary exists (`.cursor/rules/040`). This is the
   design guideline, not the enforced gate: `eslint.config.cjs` raises `max-lines` to **800** for
   this repo, so a file between the two numbers passes lint without an exemption — the gap is a
-  deliberate allowance for cohesive modules, not a licence to keep growing one. Files that
-  legitimately exceed **400** document the trade-off instead of being cut arbitrarily: the
-  `/* eslint-disable max-lines */` at the top of such a file must be paired with a written
-  justification naming what the file composes and which parts were extracted instead
-  (`run-coordinator.ts`, `managed-agent-runner-wiring.ts`, `managed-agent-compact.ts`). An
-  unexplained disable is a silent exemption, and this file's carried one long enough for the
-  tracker to mark it done at 514 lines and never revisit it at 1750. A file that needs the 800
-  ceiling at all should say so in its header, because at that size a reader is owed the reason.
+  deliberate allowance for cohesive modules, not a licence to keep growing one. Above **400**
+  a split is a judgement call (look for a cohesive seam); at or above the **800** ceiling it is
+  mandatory to say why not: the `/* eslint-disable max-lines */` at the top of such a file must
+  be paired with a written justification naming what the file composes and which parts were
+  extracted instead — the current members are `agent/extension/runner.ts` and
+  `managers/managed-agent.ts`, and their headers name what was split out — and
+  `validate:file-size` fails an allowlisted file that drops back under the ceiling so the list
+  cannot go stale. An unexplained disable is a silent
+  exemption, and this file's carried one long enough for the tracker to mark it done at 514
+  lines and never revisit it at 1750.
+
+**JSDoc attachment.** A doc block must sit on the declaration it describes. Two directly stacked
+JSDoc blocks mean one was abandoned by a refactor, so the declaration below is described twice (or
+its real owner is not described at all) — TypeScript and ESLint cannot see it.
+`validate:jsdoc-attachment` fails that shape across `packages/core/src`; it is the gate for the
+class of bug that put `getL1State`'s doc on `setDisplayName`.
 
 **Built-in identity**
 
@@ -437,7 +447,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   `mode.toggle` while the catalog advertised `execute`. `/resume`'s id-or-name rule is
   `resolveSessionRef` (`agent-session/session-reference.ts`), and `ask_user` result assembly (including
   the multi-select + free-text merge) is `buildAskUserOutput` (`agent/tools/builtin/interaction/ask-user-output.ts`).
-  Validate: `validate:builtin-command-arguments`, `validate:acp-command-args`, `validate:ask-user-output`.
+  Validate: `validate:builtin-command-arguments`, `validate:acp:command-args`, `validate:ask-user-output`.
 - Guards: `validate:builtin-tool-names` (the registry matches the tools core builds),
   `validate:command-catalog` (app commands are catalog-derived), and `validate:host-tool-names`
   (app/acp keep no built-in name literals in tool-identity positions).
@@ -785,7 +795,7 @@ Cursor-like lifecycle: explore → review → Build → forced retro → complet
 
 **Auto mode:** `/mode auto` skips all tool approvals. Footer shows `Auto`. Mutually exclusive with plan mode (entering one clears the other). Cleared on `/new` / reset; persisted as `SessionData.autoMode` (legacy sessions may still have `autoApprove`). While auto is on, turn context includes an `<auto_mode>` block.
 
-Turning it **on** answers every approval the run is currently **parked on** and resumes the pump: a pending approval is a question the mode has just answered, and leaving it pending means switching auto on looks like it did nothing. This is one rule in the local session dispatch (`mode.set` / `mode.toggle` → `settleApprovalsForMode` → `AgentChatController.approvePendingApprovals`), so the TUI, ACP (`session/set_mode`, the `mode` config option, `/mode`) and remote sessions all behave the same; the TUI's `/mode` command used to answer them itself, which is exactly why ACP and `mode.toggle` (Shift+Tab) left the run suspended. ACP additionally **cancels** the outstanding `session/request_permission` when the approval disappears from the pending snapshot — otherwise the client keeps a dialog for a tool that already ran, and a late `deny` would re-decide a completed call (`packages/acp/src/interactions.ts`). Validate: `validate:auto-mode-approvals`, `validate:acp-auto-approval`.
+Turning it **on** answers every approval the run is currently **parked on** and resumes the pump: a pending approval is a question the mode has just answered, and leaving it pending means switching auto on looks like it did nothing. This is one rule in the local session dispatch (`mode.set` / `mode.toggle` → `settleApprovalsForMode` → `AgentChatController.approvePendingApprovals`), so the TUI, ACP (`session/set_mode`, the `mode` config option, `/mode`) and remote sessions all behave the same; the TUI's `/mode` command used to answer them itself, which is exactly why ACP and `mode.toggle` (Shift+Tab) left the run suspended. ACP additionally **cancels** the outstanding `session/request_permission` when the approval disappears from the pending snapshot — otherwise the client keeps a dialog for a tool that already ran, and a late `deny` would re-decide a completed call (`packages/acp/src/interactions.ts`). Validate: `validate:auto-mode-approvals`, `validate:acp:auto-approval`.
 
 **Session / safety:** `/new` and `ManagedAgent.reset()` always `planMode.disable()`, turn off auto mode, and clear the session `approvals` table. Resume restores `planMode` + `autoMode` with plan winning if both were somehow set, restores `approvals` (or backfills from UIMessage parts when the field is missing), adopts the persisted `reasoningEffort` / `model` + `modelStyle` (skipped under `providerMode: "remote"`, where the provider server owns the model) and mirrors the session's display name. Chat `onConfig` rebuilds TanStack `resumeToolState.approvals` from that table so approved/denied tools do not re-prompt. Plan building auto-approve still requires `todosSeeded` (and applies to `retro` as well as `executing`) — separate from `/mode auto`.
 

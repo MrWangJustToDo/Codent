@@ -211,24 +211,7 @@ export class McpManager {
   }
 
   forceKill(): void {
-    const env = this.env;
-    for (const transport of this.stdioTransports) {
-      try {
-        let child: McpProcessHandle | undefined;
-        if (env.getMCPTransportProcess) {
-          child = env.getMCPTransportProcess(transport);
-        }
-        if (child && !child.killed) {
-          child.kill("SIGKILL");
-        }
-        if (transport && typeof transport === "object" && "close" in transport) {
-          (transport as { close(): void }).close();
-        }
-      } catch {
-        // Ignore errors during force kill
-      }
-    }
-    this.stdioTransports = [];
+    this.closeStdioTransports();
     this.clients.clear();
     this.serverStatuses.clear();
     this.serverInstructions.clear();
@@ -243,9 +226,35 @@ export class McpManager {
       }
     }
     this.clients.clear();
-    this.stdioTransports = [];
+    // Close transports even when no client reached `clients`: a server that failed during
+    // connect (or after `createMCPClient` but before its tools were wrapped) has already
+    // spawned a child, and only `forceKill` used to reap it. Disabling the MCP extension is a
+    // graceful shutdown, so a half-connected server must not survive it.
+    this.closeStdioTransports();
     this.serverStatuses.clear();
     this.serverInstructions.clear();
+  }
+
+  /** Close/kill every stdio transport and forget them. Best-effort; idempotent. */
+  private closeStdioTransports(): void {
+    const env = this.env;
+    for (const transport of this.stdioTransports) {
+      try {
+        let child: McpProcessHandle | undefined;
+        if (env.getMCPTransportProcess) {
+          child = env.getMCPTransportProcess(transport);
+        }
+        if (child && !child.killed) {
+          child.kill("SIGKILL");
+        }
+        if (transport && typeof transport === "object" && "close" in transport) {
+          (transport as { close(): void }).close();
+        }
+      } catch {
+        // Ignore errors during teardown
+      }
+    }
+    this.stdioTransports = [];
   }
 
   getConnectedServers(): string[] {

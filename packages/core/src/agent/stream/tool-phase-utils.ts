@@ -161,13 +161,16 @@ export function hasPendingToolApprovals(messages: UIMessage[]): boolean {
 }
 
 export function countPendingToolApprovals(messages: UIMessage[]): number {
-  const lastAssistant = lastAssistantMessage(messages);
-  if (!lastAssistant) return 0;
-
+  // Every assistant message, not just the newest: the retained `interaction` projection
+  // (`collectPendingApprovals`) and the wire both see an unanswered part in ANY message, so a
+  // last-message-only counter disagreed with them the moment one survived a turn — the UI was
+  // forced into approval mode while the status said completed/idle. One scan, one answer.
   let count = 0;
-  for (const part of lastAssistant.parts) {
-    if (!isToolCallPart(part)) continue;
-    if (isPendingToolApprovalPart(part)) count++;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (isToolCallPart(part) && isPendingToolApprovalPart(part)) count++;
+    }
   }
   return count;
 }
@@ -203,13 +206,15 @@ export function isToolContinuationPrepare(status: AgentStatus, messages?: Array<
 }
 
 export function hasPendingAskUser(messages: UIMessage[]): boolean {
-  const lastAssistant = lastAssistantMessage(messages);
-  if (!lastAssistant) return false;
-
-  for (const part of lastAssistant.parts) {
-    if (!isToolCallPart(part)) continue;
-    if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
-    if (part.state === "input-complete" && part.output === undefined) return true;
+  // Same rule as approvals: `collectPendingAskUser` (the retained projection) walks the whole
+  // chain, so this predicate must too or the two disagree.
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (!isToolCallPart(part)) continue;
+      if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
+      if (part.state === "input-complete" && part.output === undefined) return true;
+    }
   }
   return false;
 }

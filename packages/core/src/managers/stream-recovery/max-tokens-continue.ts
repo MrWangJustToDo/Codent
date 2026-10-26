@@ -75,7 +75,9 @@ export function handleMaxTokensTruncation(options: {
   const { managed, runner, truncation } = options;
 
   if (!truncation.maxTokensEscalated && runner) {
-    runner.setMaxOutputTokens(ESCALATED_MAX_TOKENS);
+    // Run-scoped: the runner is cached across turns (see `runnerConfigKey`), so mutating it
+    // made one truncated turn raise the cap forever.
+    managed.run.setMaxOutputTokensOverride(ESCALATED_MAX_TOKENS);
     truncation.maxTokensEscalated = true;
     managed.log?.debug("agent", "Output truncated — escalating max_tokens", {
       escalatedTokens: ESCALATED_MAX_TOKENS,

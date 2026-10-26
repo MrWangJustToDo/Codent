@@ -389,9 +389,6 @@ export async function fetchModelsDev(): Promise<ModelsDevData> {
 // ============================================================================
 
 /**
- * Convert a models.dev model entry into our {@link ModelInfo}.
- */
-/**
  * Multimodal capability for each metadata input modality.
  *
  * models.dev's `modalities.input` (observed value set: `text` | `image` | `audio` | `video` |

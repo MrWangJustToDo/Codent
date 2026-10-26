@@ -69,7 +69,6 @@ export interface LspConnection {
   /** Start the server process and perform the LSP initialize handshake. */
   start(): Promise<void>;
 
-  /** Send a JSON-RPC request and await its response. */
   /**
    * Send a request and await its response.
    *

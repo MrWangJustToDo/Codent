@@ -220,6 +220,11 @@ export class AgentManager {
       managed = built.managed;
       const { bootstrap } = built;
 
+      // A build can await extension activation and MCP connects; a concurrent `dispose()` may have
+      // run in that window. Registering now would leave a live agent (and its child processes) in
+      // a registry nothing will ever tear down. The catch below disposes it.
+      if (this.disposed) throw new Error("AgentManager has been disposed");
+
       this.agents.register(managed);
       managed.manager = this;
 
@@ -271,9 +276,6 @@ export class AgentManager {
     }
   }
 
-  /**
-   * Spawn a subagent from a parent agent
-   */
   /**
    * Spawn a subagent under `parentId`.
    *

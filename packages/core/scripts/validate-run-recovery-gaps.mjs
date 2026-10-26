@@ -101,28 +101,26 @@ import {
 {
   // A minimal managed stub: `handleMaxTokensTruncation` only touches `log`,
   // `run.setWireContinuationArmed`, and the runner's max output tokens.
-  const observed = { continuationArmed: false };
-  let maxOutputTokens = 0;
+  const observed = { continuationArmed: false, maxOutputTokens: 0 };
   const managed = {
     log: { debug() {}, warn() {} },
     run: {
       setWireContinuationArmed(value) {
         observed.continuationArmed = value;
       },
+      setMaxOutputTokensOverride(value) {
+        observed.maxOutputTokens = value;
+      },
     },
   };
-  const runner = {
-    setMaxOutputTokens(value) {
-      maxOutputTokens = value;
-    },
-  };
+  const runner = {};
 
   const truncation = createTruncationState();
 
   // 1st: escalate. 2nd+: continue.
   const first = handleMaxTokensTruncation({ managed, runner, truncation });
   assert.equal(first.shouldRetry, true, "first truncation escalates max_tokens");
-  assert.ok(maxOutputTokens > 0, "the escalation reached the runner");
+  assert.ok(observed.maxOutputTokens > 0, "the escalation reached the run scope");
 
   let continuations = 0;
   while (handleMaxTokensTruncation({ managed, runner, truncation }).shouldRetry) {

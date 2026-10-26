@@ -661,6 +661,7 @@ export class ManagedAgent {
       endStateBatch: () => this.endStateBatch(),
       syncInteractionStateFromUIMessages: (messages) => this.syncInteractionStateFromUIMessages(messages),
       resetRunOutcome: () => this.resetRunOutcome(),
+      getToolCompactCache: () => this.getToolCompactCache(),
       mode: this.mode,
       approvals: this.approvals,
       run: this.run,
@@ -844,7 +845,6 @@ export class ManagedAgent {
     this.runFinalizer.finalizeSnapshot(messages);
   }
 
-  /** L1 status snapshot for Emitter / Session projection. */
   /** Rename the display name and notify state-channel subscribers (session rename command). */
   setDisplayName(name: string): void {
     this.name = name;
@@ -860,6 +860,7 @@ export class ManagedAgent {
     this.emitStateChange();
   }
 
+  /** L1 status snapshot for Emitter / Session projection. */
   getL1State(): AgentL1State {
     return {
       status: this.currentStatus,

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- end-to-end recovery scenarios share one fixture; splitting the file would duplicate it */
 /**
  * Wire overrides must survive the channel projection and reach the adapter.
  *
@@ -193,9 +194,17 @@ function makeCapturingAdapter() {
 class TestRun {
   drop = null;
   continuation = false;
+  maxOutputTokensOverride = undefined;
   resetWireOverride() {
     this.drop = null;
     this.continuation = false;
+    this.maxOutputTokensOverride = undefined;
+  }
+  getMaxOutputTokensOverride() {
+    return this.maxOutputTokensOverride;
+  }
+  setMaxOutputTokensOverride(value) {
+    this.maxOutputTokensOverride = value;
   }
   getWireDropPartTypes() {
     return this.drop;
@@ -615,12 +624,16 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
   const escalationRun = new TestRun();
   const escalation = handleMaxTokensTruncation({
     managed: { run: escalationRun, log: { debug: noop, warn: noop, error: noop }, getMessagesForLLM: () => [] },
-    runner: { setMaxOutputTokens: noop },
+    runner: {},
     truncation: createTruncationState(),
   });
   assert.equal(escalation.shouldRetry, true, "the escalation retries");
   assert.equal(escalation.countsAsRecoveryAttempt, false, "the escalation must not spend a recovery attempt");
   assert.equal(escalationRun.isWireContinuationArmed(), false, "the escalation does not arm the continuation prompt");
+  assert.ok(
+    escalationRun.getMaxOutputTokensOverride() > 0,
+    "the escalation lands on the run scope, not the cached runner"
+  );
 
   // Budget exhausted → stop retrying, and the labelled attempt never exceeds the cap.
   // (Re-assign rather than reuse the state above: `handleMaxTokensTruncation`

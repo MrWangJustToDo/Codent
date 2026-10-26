@@ -39,7 +39,6 @@ import type {
   ExtensionContextProvider,
   ExtensionContextSectionProvider,
   ExtensionRegistrations,
-  TurnContextProvider,
   ExtensionInfo,
   ExtensionRenderPayload,
   ExtensionUiContext,
@@ -707,16 +706,21 @@ export class ExtensionRunner {
     // extensions stay informative; an empty string explicitly opts out.
     const provider = this.contextProviders.get(instance.api.id)?.provider;
     const ctxForDisable = this.contexts.get(instance.api.id);
-    const custom =
-      provider?.disabledContent === undefined
-        ? undefined
-        : ((await provider.disabledContent(ctxForDisable)) ?? undefined);
+    // A broken extension is the one that most needs disabling, so its own notice producer must
+    // not be able to block the disable: a throw used to reject `setEnabled`, leaving the
+    // extension active with no rollback — the remedy unreachable through the path that needs it.
+    const custom = await this.captureDisabledNotice(
+      instance.api.id,
+      "context provider",
+      provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined
+    );
     const sectionNotices: Array<[string, string]> = [];
     for (const section of provider?.sections ?? []) {
-      const body =
-        section.disabledContent === undefined
-          ? undefined
-          : ((await section.disabledContent(ctxForDisable)) ?? undefined);
+      const body = await this.captureDisabledNotice(
+        instance.api.id,
+        `section "${section.name}"`,
+        section.disabledContent ? () => section.disabledContent!(ctxForDisable) : undefined
+      );
       if (body?.trim()) sectionNotices.push([this.sectionKind(instance.api.id, section.name), body.trim()]);
     }
 
@@ -815,15 +819,14 @@ export class ExtensionRunner {
    * Capture a disabled notice without letting a failing producer block the disable.
    * The failure is reported (log + `agent:extension-error`) and the generic notice is used instead.
    */
-  private async safeDisabledNotice(
+  private async captureDisabledNotice(
     extensionId: string,
     source: string,
-    producer: TurnContextProvider | undefined,
-    ctx: ExtensionContext | undefined
+    produce: (() => Promise<string | undefined> | string | undefined) | undefined
   ): Promise<string | undefined> {
-    if (!producer) return undefined;
+    if (!produce) return undefined;
     try {
-      return (await producer(ctx)) ?? undefined;
+      return (await produce()) ?? undefined;
     } catch (err) {
       const message = errorMessage(err);
       this.writeExtensionLog("warn", extensionId, `${source} disabledContent failed: ${message}`);

@@ -184,7 +184,18 @@ export class AgentBootstrap {
       return;
     }
     const memoryManager = new MemoryManager({ rootPath, env });
-    await memoryManager.initialize();
+    try {
+      await memoryManager.initialize();
+    } catch (error) {
+      // `.agents/memory` is not guaranteed writable (read-only mount, restricted remote fs).
+      // Every other bootstrap resource degrades; memory used to abort the whole agent, which
+      // made an unwritable cache directory fatal to a conversation that never needed it.
+      this.deps.log.warn("memory", "Memory initialization failed; continuing without memory", {
+        error: errorMessage(error),
+      });
+      report.memory = { enabled: false };
+      return;
+    }
     managed.setMemoryManager(memoryManager);
     report.memory = { enabled: true };
   }

@@ -42,6 +42,8 @@ export interface SessionLifecycleHost {
   endStateBatch?(): void;
   syncInteractionStateFromUIMessages?(messages: UIMessage[]): void;
   resetRunOutcome?(): void;
+  /** Projection cache keyed by toolCallId; entries are conversation-scoped. */
+  getToolCompactCache?(): { clear(): void };
   readonly mode: ModeCoordinator;
   readonly approvals: ToolApprovalTable;
   readonly run: RunCoordinator;
@@ -143,6 +145,7 @@ export class SessionLifecycleService {
     this.host.usage.reset();
     this.host.resetMediaHydrationMisses();
     this.host.getTodoManager()?.reset();
+    this.host.getToolCompactCache?.().clear();
     this.host.streamHub.clearAll();
     this.host.resetTurnContext();
     this.host.resetSessionSyncTracker();
@@ -237,7 +240,16 @@ export class SessionLifecycleService {
       this.host.refreshState();
       return next;
     } catch (error) {
-      if (!adopted) this.host.releaseSessionOwnership(next.id);
+      if (!adopted) {
+        this.host.releaseSessionOwnership(next.id);
+      } else {
+        // The switch committed when `setSessionData(next)` ran. A later reset step failing does
+        // not un-switch it, so the departure claim must be released here exactly as the resume
+        // path does — otherwise the old id stays "active in another live session" for the life
+        // of the agent and can never be resumed. Point writers at the adopted id too.
+        if (current?.id) this.host.releaseSessionOwnership(current.id);
+        this.host.bindSessionLogSink(next.id);
+      }
       throw error;
     }
   }

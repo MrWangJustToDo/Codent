@@ -349,20 +349,6 @@ export type ExtensionUIEvent =
   | { type: "context"; context: ExtensionUiContext };
 
 /**
- * The channel → payload pairing, in one place.
- *
- * The pair is a fact about the protocol, not two independent facts, so it is written once and
- * {@link AgentSessionEvent} is derived from it. `AGENT_EVENT_META` then constrains each routed
- * event against this map (`AgentEventChannelPayloadType`), which is what makes a wrong pairing a
- * compile error: pointing a routed event at another channel's name leaves its payload assignable
- * to neither, and TS2559 fires "has no properties in common".
- *
- * That check is the answer to a real blind spot. `channel` alone is a free string (any channel name
- * type-checks) and the projector's per-case `as` erased the payload side, so `session:mcp` routed to
- * `"plan"` — a valid channel holding the wrong payload type — compiled cleanly and passed all 249
- * validators. The pairing was the only unstated fact, and it is now the stated one.
- */
-/**
  * The channel → payload pairing, in one place. {@link AgentSessionEvent} is derived from it, and
  * `AGENT_EVENT_META` is constrained against it, so a channel paired with the wrong payload type is
  * not expressible. `channel` alone is a free string and the projector's per-case `as` erases the

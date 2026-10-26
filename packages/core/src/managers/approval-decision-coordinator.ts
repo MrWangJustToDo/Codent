@@ -68,6 +68,28 @@ export class ApprovalDecisionCoordinator {
     return this.deps.enqueueRun();
   }
 
+  /**
+   * Deny every pending approval without scheduling a pump.
+   *
+   * Used when a turn is torn down (Esc / force-submit / session switch): the question belonged
+   * to the interrupted turn, and leaving it pending kept it in `interactions.approvals` (and in
+   * the wire) after the run had ended. The caller owns reconcile + persistence because the same
+   * teardown already writes the cancelled tool rows.
+   */
+  denyPendingApprovals(reason: string): void {
+    const pending = collectPendingApprovals(this.deps.getMessages());
+    if (pending.length === 0) return;
+    for (const approval of pending) {
+      this.recordDecision({
+        approvalId: approval.approvalId,
+        toolCallId: approval.toolCallId,
+        toolName: approval.toolName,
+        approved: false,
+        reason,
+      });
+    }
+  }
+
   /** Auto mode / plan execution: approve everything pending, without scheduling a pump. */
   autoApprovePending(): void {
     if (!this.deps.shouldAutoApprove()) return;

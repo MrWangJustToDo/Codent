@@ -55,6 +55,18 @@ interface SessionWithErasedSnapshot extends Omit<AgentSession, "getSnapshot"> {
 const sessions = new Map<string, SessionWithErasedSnapshot>();
 
 /**
+ * Drop cache entries whose agent no longer exists in the manager. The map is only pruned by the
+ * DELETE route, while an agent can be destroyed by other paths (`destroyAgent`, an owner-session
+ * conflict, host teardown) — and a cached handle retains the whole agent graph.
+ */
+function pruneDeadSessions(): void {
+  const manager = getServerManager();
+  for (const id of [...sessions.keys()]) {
+    if (!manager.getAgent(id)) sessions.delete(id);
+  }
+}
+
+/**
  * Disconnect recovery: when the last SSE subscriber leaves, a run can keep
  * going (or park in `waiting`/`awaiting_user` with nobody able to answer).
  * After a grace period (covers the client's 500ms-30s reconnect backoff) a
@@ -206,7 +218,12 @@ async function resolveServerModelSetCommand(command: AgentSessionCommand): Promi
 
 async function getSession(id: string): Promise<SessionWithErasedSnapshot | undefined> {
   const existing = sessions.get(id);
-  if (existing) return existing;
+  if (existing) {
+    // Evicting is not enough: returning the entry we just deleted would hand this request a
+    // handle to an agent the manager no longer owns (and keep it alive for one more call).
+    if (getServerManager().getAgent(id)) return existing;
+    sessions.delete(id);
+  }
   const { createLocalAgentSession } = await loadCore();
   const manager = getServerManager();
   const managed = manager.getAgent(id);
@@ -393,6 +410,11 @@ export const agentSessionRoutes = new Hono()
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+      // `?channels=,` parses to an empty list. Core reads `[]` as "use every default channel",
+      // which is the opposite of a caller that named no channel, so reject it explicitly.
+      if (requested.length === 0) {
+        return c.json({ error: true, message: "channels must name at least one channel" }, 400);
+      }
       const unknown = requested.filter((s) => !known.has(s));
       if (unknown.length > 0) {
         return c.json({ error: true, message: `Unknown channel(s): ${unknown.join(", ")}` }, 400);
@@ -472,6 +494,11 @@ export const agentSessionRoutes = new Hono()
     const manager = getServerManager();
     if (manager.getAgent(id)) {
       manager.destroyAgent(id);
+      // `destroyAgent` is synchronous: teardown (and releasing the disk-session claim) runs
+      // asynchronously. Answering before it settles made an immediate re-create/resume of the
+      // same agent id fail with "already active in another live session".
+      await manager.settleTeardowns?.();
     }
+    pruneDeadSessions();
     return c.json({ ok: true });
   });

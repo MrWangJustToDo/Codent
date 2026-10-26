@@ -1,10 +1,11 @@
 /**
  * File-size guard for `packages/core/src`.
  *
- * The design guideline is 400 lines (`.cursor/rules/040`), but four cohesive modules
- * legitimately exceed the 800-line ESLint ceiling or sit just under it. Keep those in the
- * allowlist with a written reason, and fail any new file above the hard ceiling — without a
- * guard, "400 guideline" is just a comment the next module can ignore.
+ * The design guideline is 400 lines (`.cursor/rules/040`); the enforced ceiling is 800
+ * (`eslint max-lines`). This guard counts RAW source lines — stricter than ESLint's
+ * `skipBlankLines` — so the two can disagree by the blank-line count, and the allowlist is what
+ * reconciles them. Keep every file above the ceiling there with a written reason, and fail any
+ * new one: without a guard, "400 guideline" is just a comment the next module can ignore.
  *
  * Run: pnpm --filter @codent/core run validate:file-size
  */

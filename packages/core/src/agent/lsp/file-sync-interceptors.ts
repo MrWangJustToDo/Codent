@@ -15,6 +15,8 @@ export interface FileSyncInterceptorDeps {
   getManager: () => LspManager;
   fileSync: FileSync;
   getProjectConfig: () => ProjectLspConfig | null;
+  /** Re-index a file after a successful write/edit (tree-sitter symbol fallback). */
+  onFileChanged?: (path: string) => void;
 }
 
 export function registerFileSyncInterceptors({
@@ -22,6 +24,7 @@ export function registerFileSyncInterceptors({
   getManager,
   fileSync,
   getProjectConfig,
+  onFileChanged,
 }: FileSyncInterceptorDeps): void {
   // ---- File-sync + auto-diagnostics interceptors ----
   const handleAfter = async (toolName: string, filePath: string): Promise<void> => {
@@ -30,6 +33,10 @@ export function registerFileSyncInterceptors({
         await fileSync.handleFileRead(filePath);
       } else if (toolName === BUILTIN_TOOL_NAMES.writeFile || toolName === BUILTIN_TOOL_NAMES.editFile) {
         await fileSync.handleFileWrite(filePath);
+        // The symbol index is only useful if it follows edits: without this, `ast_search` /
+        // `code_overview` (and the LSP-fallback definition lookup) kept answering from the state
+        // of the workspace at first use for the rest of the session.
+        onFileChanged?.(filePath);
       }
     } catch {
       // File-sync errors are non-fatal

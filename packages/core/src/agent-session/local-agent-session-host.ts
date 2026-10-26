@@ -230,9 +230,11 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // resolves a disk id to its owning agent is `sessionOwningAgent` below.
     const live = this.manager.getAgent(sessionId) ?? this.sessionOwningAgent(sessionId);
     if (live) {
-      // Release the disk-session claim before tearing down, mirroring the branch/close paths, so
-      // the ownership table does not keep pointing at a session whose log is about to vanish.
-      this.manager.releaseSessionOwnership?.(sessionId, live.id);
+      // Do NOT release the disk-session claim here. `destroy` below releases it at the END of
+      // teardown (after the pump is aborted, writes drained, log flushed). Releasing first opened
+      // a window where another live agent could resume a session that is about to be deleted,
+      // adopt it, and then have every later save silently refused by the tombstone.
+      //
       // Block new writes and drain in-flight ones before the log disappears. `destroy` aborts a
       // live pump, whose cancellation path queues a final persist; without this barrier that write
       // can land after the file is removed and resurrect the deleted session.

@@ -89,6 +89,8 @@ export async function prepareManagedAgentForRun(
     },
   });
   host.getCompaction().resetReactiveCompactRetries();
+  // A previous phase's truncation escalation is not this phase's budget.
+  host.run.resetMaxOutputTokensOverride();
 
   // Always consume the flag (avoid `||` short-circuit leaving a stale continuation mark).
   const flaggedContinuation = host.consumePrepareAsContinuation() === true;

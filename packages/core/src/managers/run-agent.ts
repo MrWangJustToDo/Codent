@@ -374,6 +374,7 @@ async function executeManagedAgentRun(
         abortController,
         threadId: input.threadId,
         runId: input.runId,
+        maxOutputTokens: managed.run.getMaxOutputTokensOverride(),
       }),
     runner,
   });

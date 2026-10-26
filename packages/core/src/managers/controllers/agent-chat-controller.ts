@@ -20,6 +20,7 @@ import {
 } from "../../agent/stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
+import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
@@ -165,6 +166,11 @@ export class AgentChatController {
     this.pumpDepth = 0;
     // Immediately clear loading tool rows; stream teardown may still finalize later.
     this.applyCancelledIncompleteTools(true);
+    // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
+    // kept the part in `interactions.approvals` while the run was over: the next input was
+    // admitted against a status that said `aborted`, then parked on the old question forever.
+    // Deny here (channel write + table) so the turn ends with no unanswered interaction.
+    this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
     // App no longer checkpoints on status — persist cancelled tools on abort.
     this.persistMessages("pump-complete");
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
@@ -282,7 +288,7 @@ export class AgentChatController {
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
     this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
-    void this.enqueueRun();
+    void this.enqueueRunOnce();
   }
 
   sendMessage(content: string | ContentPart[]): Promise<void> {
@@ -341,17 +347,6 @@ export class AgentChatController {
     // Single notification path: the session `queues` projection on the unified
     // bus (the domain Emitter was removed — see unified-agent-event-bus).
     this.eventBus?.emit("session:queues", snapshot);
-  }
-
-  private enqueueRun(): Promise<void> {
-    // Recover from a previous rejected pump so later sendMessage/approval calls still run.
-    const epoch = this.lifecycleEpoch;
-    const run = () => {
-      if (epoch !== this.lifecycleEpoch) return;
-      return this.pumpToolPhases();
-    };
-    this.runChain = this.runChain.then(run, run);
-    return this.runChain;
   }
 
   /**
@@ -461,6 +456,7 @@ export class AgentChatController {
 
     let hasError = false;
     let toolPhases = 0;
+    let finalized = false;
     const messages = this.channel.getMessages();
     this.managed.statusController.prepareRunPhase(messages);
 
@@ -519,7 +515,7 @@ export class AgentChatController {
         if (keepPumping && outcomeKind === "finished") {
           this.managed.statusController.reconcileWithPolicy(messages, "during-run");
           this.persistMessages("pump-complete");
-          void this.enqueueRun();
+          void this.enqueueRunOnce();
           return;
         }
 
@@ -531,6 +527,33 @@ export class AgentChatController {
           turnStartedAt: turnStart,
           persist: () => this.persistMessages("pump-complete"),
         });
+        finalized = true;
+      }
+    } catch (error) {
+      // The loop's steps are not all pure bookkeeping: `applyCommandSafetyPolicy` awaits the
+      // command analyzer over CoreEnv (a live HTTP call on a remote workspace), and
+      // `syncPlanModeFromMessages` touches the plan controller. Letting a throw escape left
+      // the turn unfinalized — status stuck at `running`, tool rows half-open, and an
+      // unhandled rejection that the host's process guard turns into `exit(1)`. Finalize as
+      // an error instead; a broken auxiliary step must not take the process with it.
+      const normalized = toError(error);
+      this.managed.log?.error("agent", "Run loop failed", normalized);
+      const message = normalized.message;
+      if (!finalized && token.isCurrent) {
+        try {
+          this.managed.setError(message);
+          this.managed.statusController.onRunError(message);
+          this.managed.runFinalizer.finalizeChat({
+            kind: "error",
+            messages: this.channel.getMessages(),
+            waitingForUser: false,
+            phases: toolPhases,
+            turnStartedAt: turnStart,
+            persist: () => this.persistMessages("pump-complete"),
+          });
+        } catch {
+          // Teardown is already failing; one more failure must not escape the pump.
+        }
       }
     } finally {
       // A non-current (interrupted/superseded) pump must not decrement: the

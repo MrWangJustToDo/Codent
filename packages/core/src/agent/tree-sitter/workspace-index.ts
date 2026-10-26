@@ -29,6 +29,11 @@ export class WorkspaceIndex {
   /** Whether the initial build has completed */
   private built = false;
   private building: Promise<void> | null = null;
+  /**
+   * Bumped whenever the index is reset. An in-flight `_build()` from the previous root must not
+   * land entries into the new one, so every async step checks the generation it started with.
+   */
+  private generation = 0;
 
   constructor(
     private rootDir: string,
@@ -43,18 +48,35 @@ export class WorkspaceIndex {
       await this.building;
       return;
     }
-    this.building = this._build();
+    const generation = this.generation;
+    this.building = this._build(generation);
     await this.building;
-    this.built = true;
+    if (generation === this.generation) this.built = true;
+    if (generation === this.generation) this.building = null;
+  }
+
+  /**
+   * Point the index at a new workspace root and drop everything indexed from the previous one.
+   * The next `build()` re-walks; stale symbol hits from the old root were otherwise served for
+   * the rest of the session after a cwd change.
+   */
+  reset(rootDir: string): void {
+    this.rootDir = rootDir;
+    this.generation += 1;
+    this.index.clear();
+    this.fileToKeys.clear();
+    this.indexedFiles.clear();
+    this.built = false;
     this.building = null;
   }
 
-  private async _build(): Promise<void> {
+  private async _build(generation: number): Promise<void> {
     const files = await this.collectFiles(this.rootDir);
     const batchSize = 50;
     for (let i = 0; i < files.length; i += batchSize) {
+      if (generation !== this.generation) return;
       const batch = files.slice(i, i + batchSize);
-      await Promise.all(batch.map((f) => this.indexFile(f).catch(() => {})));
+      await Promise.all(batch.map((f) => this.indexFile(f, generation).catch(() => {})));
     }
   }
 
@@ -84,11 +106,11 @@ export class WorkspaceIndex {
     return collected;
   }
 
-  /** Index (or re-index) a single file */
-  async indexFile(filePath: string): Promise<void> {
+  /** Index (or re-index) a single file. `generation` is set only by an in-flight `_build`. */
+  async indexFile(filePath: string, generation?: number): Promise<void> {
     const absPath = this.env.resolve(filePath);
 
-    this.removeFile(absPath);
+    if (generation === undefined || generation === this.generation) this.removeFile(absPath);
 
     try {
       const stats = await this.env.stat(absPath);
@@ -100,6 +122,7 @@ export class WorkspaceIndex {
 
       const tree = await this.treeSitter.parse(absPath, content);
       if (!tree) return;
+      if (generation !== undefined && generation !== this.generation) return;
 
       const symbols = extractSymbols(tree, languageId);
       this.addSymbols(absPath, symbols);

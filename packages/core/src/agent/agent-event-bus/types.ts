@@ -211,13 +211,17 @@ export interface AgentEventBus {
    * `options.replay` is `false` (for callers that reconcile the initial value
    * themselves per-subscription).
    */
-  on<T extends AgentEventType>(type: T, listener: AgentEventListener<T>, options?: { replay?: boolean }): () => void;
+  on<T extends AgentEventType>(
+    type: T,
+    listener: AgentEventListener<T>,
+    options?: { replay?: boolean; includeParents?: boolean }
+  ): () => void;
   /** Subscribe to every observer event in scope (interceptor events excluded). */
   on(type: "*", listener: AgentEventWildcardListener): () => void;
   on(
     type: AgentEventType | "*",
     listener: AgentEventListener | AgentEventWildcardListener,
-    options?: { replay?: boolean }
+    options?: { replay?: boolean; includeParents?: boolean }
   ): () => void;
 
   /**

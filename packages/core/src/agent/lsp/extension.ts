@@ -360,6 +360,9 @@ async function activateLsp(
     getManager,
     fileSync,
     getProjectConfig: () => projectConfig,
+    onFileChanged: (path) => {
+      void workspaceIndex.indexFile(path).catch(() => {});
+    },
   });
 
   // ---- Session lifecycle ----
@@ -401,6 +404,8 @@ async function activateLsp(
     activeManager = newManager;
     onManager?.(newManager);
     fileSync.setManager(newManager);
+    // The index was built against the previous root; symbols from it must not survive the swap.
+    workspaceIndex.reset(newRoot);
     const cfg = await loadProjectConfig(ctx, newManager);
     projectConfig = cfg;
     if (cfg?.autoStart?.length) newManager.startEagerly(cfg.autoStart);

@@ -247,10 +247,6 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
 }
 
 /**
- * Parse the streamed args and pre-fork the subagent. Any parse failure simply
- * skips pre-forking — the task tool then runs serially at execute time.
- */
-/**
  * What a pre-fork registration needs from the middleware that owns the queue publication.
  *
  * Injected rather than reached through module scope: the description map and the publisher belong

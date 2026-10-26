@@ -140,9 +140,7 @@ export class PlanModeController {
       // A resumed file can carry `todoPlanBound: true` with no plan phase (the flag is
       // persisted independently of `planMode`). Clearing it here is what stops that stale
       // binding from tagging every later list as plan-owned.
-      if (!snapshot) {
-        this.deps.getTodoManager()?.setPlanBound(false);
-      }
+      this.deps.getTodoManager()?.setPlanBound(false);
       this.notifyChange();
       return;
     }

@@ -588,7 +588,6 @@ function hasWriteRedirectionAcrossCommands(command: string): boolean {
     .some((segment) => hasWriteRedirection(segment));
 }
 
-/** Background marker (` & ` / trailing `&`), excluding `&&`. */
 /**
  * Background marker (` & ` / trailing `&`), excluding `&&`.
  *

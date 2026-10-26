@@ -60,6 +60,12 @@ export interface AgentRunnerConfig {
 export interface AgentRunnerRunInput {
   messages?: Array<UIMessage | ModelMessage>;
   /**
+   * Run-scoped output cap, read at call time. A `max_tokens` recovery raises this for its
+   * retry stream without mutating the runner's long-lived config (see
+   * `RunCoordinator.maxOutputTokensOverride`).
+   */
+  maxOutputTokens?: number;
+  /**
    * Preferred: the same AbortController identity owned by {@link ManagedAgent.run}.
    * `ManagedAgent.abort()` must abort this controller to cancel TanStack `chat()`.
    * Managed run paths (chat pump, subagent, recovery) MUST pass this — the
@@ -163,15 +169,11 @@ export class AgentRunner {
       ...(this.config.reasoningEffort ? { reasoning: toTanStackReasoningLevel(this.config.reasoningEffort) } : {}),
       modelOptions: {
         ...(this.config.temperature != null ? { temperature: this.config.temperature } : {}),
-        ...maxTokensOption(this.config.modelStyle, this.config.maxOutputTokens),
+        ...maxTokensOption(this.config.modelStyle, input.maxOutputTokens ?? this.config.maxOutputTokens),
       },
     });
 
     assertAsyncIterable(stream, `chat(model=${this.config.model})`);
     return stream;
-  }
-
-  setMaxOutputTokens(max: number): void {
-    this.config.maxOutputTokens = max;
   }
 }

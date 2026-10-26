@@ -67,6 +67,12 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   let firstTokenAt = 0;
   let lastModel: string | undefined;
   let lastProvider: string | undefined;
+  let lastRoundUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  } = { inputTokens: 0, outputTokens: 0 };
   let lastIteration = 0;
   let lastRoundElapsedMs = 0;
   let lastReasoningTokens = 0;
@@ -203,6 +209,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     },
     onUsage: (ctx, usage) => {
       const parsed = extractTanStackUsage(usage);
+      lastRoundUsage = parsed;
       // AG-UI SpecTokenUsage[] entries carry a provider; keep the extractor as
       // the preferred source (future-proof) and fall back to the model prefix.
       lastProvider = extractTanStackProvider(usage) ?? providerFromModel(ctx?.model) ?? lastProvider;
@@ -221,16 +228,18 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     onFinish: (_ctx, info) => {
       // Rounds are already recorded per-iteration in onUsage; nothing to add
       // here. Emit telemetry with the overall run duration.
-      const windowUsage = deps.usage.getWindowUsage();
+      // This ROW is one request. `window.outputTokens` accumulates across iterations/turns, so
+      // pairing it with the last sample's input/cache described no real call; report the last
+      // round's own numbers (the window totals stay on the usage channel).
       deps.emitEvent?.("llm:response", {
         model: lastModel,
         provider: lastProvider,
         iteration: lastIteration,
         finishReason: info.finishReason ?? undefined,
-        inputTokens: windowUsage.inputTokens,
-        outputTokens: windowUsage.outputTokens,
-        cacheReadTokens: windowUsage.cacheReadTokens ?? 0,
-        cacheWriteTokens: windowUsage.cacheWriteTokens ?? 0,
+        inputTokens: lastRoundUsage.inputTokens,
+        outputTokens: lastRoundUsage.outputTokens,
+        cacheReadTokens: lastRoundUsage.cacheReadTokens ?? 0,
+        cacheWriteTokens: lastRoundUsage.cacheWriteTokens ?? 0,
         reasoningTokens: lastReasoningTokens,
         costUsd: lastCostUsd,
         roundElapsedMs: lastRoundElapsedMs,

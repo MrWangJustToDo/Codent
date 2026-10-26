@@ -232,12 +232,6 @@ function sumUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUs
 }
 
 /**
- * The conversation to send: the caller's messages when given, else the single user prompt.
- *
- * Both entry points are optional on the type, so this is where "one of them must exist" is enforced —
- * a query with neither would otherwise send an empty conversation and get an empty answer.
- */
-/**
  * Attach already-billed usage to a failure.
  *
  * A structured call can be billed and still fail (no completion event, or a value the schema rejects);
@@ -249,6 +243,12 @@ function withUsage<T extends Error>(error: T, usage: TokenUsage | undefined): T 
   return error;
 }
 
+/**
+ * The conversation to send: the caller's messages when given, else the single user prompt.
+ *
+ * Both entry points are optional on the type, so this is where "one of them must exist" is enforced —
+ * a query with neither would otherwise send an empty conversation and get an empty answer.
+ */
 function queryMessages(options: SideTextQueryOptions): Array<{ role: "user" | "assistant"; content: string }> {
   if (options.messages && options.messages.length > 0) {
     return options.messages.map((message) => ({ role: message.role, content: message.content }));
@@ -595,13 +595,6 @@ function logModeDecision<TSchema extends SchemaInput>(
 // Shared helpers
 // ============================================================================
 
-/**
- * Build the request options shared by both branches — the AbortController mirror,
- * the unified reasoning disable, and model options.
- *
- * Extracted so the structured branch cannot drift from the text branch on abort
- * propagation or the thinking disable.
- */
 /** Request options shared by both branches, plus the teardown that detaches the abort mirror. */
 interface QueryRequestOptions {
   request: {

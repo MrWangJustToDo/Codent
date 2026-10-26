@@ -12,6 +12,7 @@
  * new id and does not inherit another conversation's jobs.
  */
 
+import { registerEnvTeardownHook } from "../../../../../env/teardown.js";
 import { generateId } from "../../../../../utils/generate-id.js";
 
 import { appendJobLogFooter, createCommandJobLogWriter, readJobLogFooter, sweepStaleJobLogs } from "./output-log.js";
@@ -139,12 +140,29 @@ export interface CommandJobRegistryOptions {
   ownerSessionId?: string | (() => string | undefined | null);
 }
 
+/**
+ * Registries alive in this process. `clearCoreEnv()` is the one teardown that runs when a host
+ * gives up the workspace, and a background job's child process outlives the agent that started it
+ * unless something reaps it — this is that hook (see `env/teardown.ts` for why the direction is
+ * inverted rather than `env/` importing this module).
+ */
+const liveRegistries = new Set<CommandJobRegistry>();
+registerEnvTeardownHook(() => {
+  for (const registry of [...liveRegistries]) {
+    // Best-effort and intentionally not awaited: the hook is synchronous. `destroyAll` preserves
+    // terminal un-notified records, so a subsequent resume can still deliver them.
+    void registry.destroyAll().catch(() => undefined);
+  }
+});
+
 export class CommandJobRegistry {
   /** Owning runtime's env, so durable job logs land under the runtime root. Ambient when omitted. */
   constructor(
     private readonly env?: ResolvedCoreEnv,
     private readonly options: CommandJobRegistryOptions = {}
-  ) {}
+  ) {
+    liveRegistries.add(this);
+  }
 
   private readonly jobs = new Map<string, CommandJobRecord>();
   /** Lazily restores durable records; tools/middleware await this before touching the registry. */
@@ -670,6 +688,7 @@ export class CommandJobRegistry {
     const disposable = ids.filter((id) => !preserve.has(id));
     await Promise.allSettled(disposable.map((id) => this.disposeLog(id)));
     await Promise.allSettled(disposable.map((id) => this.removeRecord(id)));
+    liveRegistries.delete(this);
     if (ids.length > 0) this.notifyChange();
   }
 

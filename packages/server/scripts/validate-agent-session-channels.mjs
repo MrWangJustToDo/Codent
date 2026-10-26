@@ -298,6 +298,76 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   clientUnsub();
 }
 
+// ── Lifecycle projection: id first, unambiguous task fallback, no generation bleed ──
+// The `lifecycle` channel is the only subagent source for a client that does not subscribe to
+// `subagents` (the extension sidepanel). These cases drive the reducer directly: a row must be
+// created by the events that introduce a child, a call-scoped phase must find its row when the
+// child id is absent, and an ambiguous call (a discarded pre-fork plus its respawn) must not be
+// patched wholesale — that regression is what `resolveSubagentRowDisplay` exists to undo.
+{
+  const lifecycle = (type, agentId, payload) => ({ channel: "lifecycle", payload: { type, agentId, payload } });
+  const ids = (snapshot) => snapshot.subagents.map((row) => row.id);
+  let snapshot = { subagents: [] };
+
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:started", "sub-agent-1", {
+      subagentId: "sub-agent-1",
+      description: "explore the tree",
+      parentTaskToolCallId: "task-1",
+    })
+  );
+  assert.deepEqual(ids(snapshot), ["sub-agent-1"]);
+  assert.equal(snapshot.subagents[0].description, "explore the tree");
+
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:phase", "root-agent", { phase: "summary", parentTaskToolCallId: "task-1" })
+  );
+  assert.equal(
+    snapshot.subagents[0].taskPhase,
+    "summary",
+    "a phase without a child id resolves through the single row registered for its task call"
+  );
+
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:started", "sub-agent-2", {
+      subagentId: "sub-agent-2",
+      description: "retry",
+      parentTaskToolCallId: "task-1",
+    })
+  );
+  const before = snapshot.subagents.map((row) => row.taskPhase);
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:phase", "root-agent", { phase: "limit", parentTaskToolCallId: "task-1" })
+  );
+  assert.deepEqual(
+    snapshot.subagents.map((row) => row.taskPhase),
+    before,
+    "an ambiguous task fallback (two generations) must not patch every row"
+  );
+
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:phase", "sub-agent-2", {
+      subagentId: "sub-agent-2",
+      phase: "limit",
+      parentTaskToolCallId: "task-1",
+    })
+  );
+  assert.equal(snapshot.subagents.find((row) => row.id === "sub-agent-2").taskPhase, "limit");
+  assert.notEqual(snapshot.subagents.find((row) => row.id === "sub-agent-1").taskPhase, "limit");
+
+  snapshot = applyEventForTests(
+    snapshot,
+    lifecycle("subagent:destroyed", "sub-agent-1", { subagentId: "sub-agent-1" })
+  );
+  assert.deepEqual(ids(snapshot), ["sub-agent-2"], "destroyed removes the row");
+  console.log("lifecycle projection: id + unambiguous task fallback + no generation bleed — ok");
+}
+
 unsub();
 await host.destroy(session.getSnapshot().agentId);
 // Await the close, and destroy keep-alive sockets first. `server.close()` only fires its

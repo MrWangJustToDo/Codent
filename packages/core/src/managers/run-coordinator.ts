@@ -223,6 +223,27 @@ export class RunCoordinator {
     this.pendingAbortControllers = [];
     this.cancelAbortController();
     this.currentAbortController = null;
+    this.maxOutputTokensOverride = undefined;
+  }
+
+  /**
+   * Per-run output-token ceiling. A `max_tokens` truncation raises it for the recovery
+   * streams of THAT run only; writing it onto the cached `AgentRunner` (whose config outlives
+   * the run) raised the cap for every later turn in the process, which an endpoint with a
+   * lower real ceiling rejects. Cleared when the next run is prepared.
+   */
+  private maxOutputTokensOverride?: number;
+
+  getMaxOutputTokensOverride(): number | undefined {
+    return this.maxOutputTokensOverride;
+  }
+
+  setMaxOutputTokensOverride(max: number | undefined): void {
+    this.maxOutputTokensOverride = max;
+  }
+
+  resetMaxOutputTokensOverride(): void {
+    this.maxOutputTokensOverride = undefined;
   }
 
   // ==========================================================================

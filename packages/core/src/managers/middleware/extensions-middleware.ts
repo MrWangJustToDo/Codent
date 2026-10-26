@@ -164,6 +164,15 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
     // Runs before TanStack builds the tool-result messages for the model's next turn
     // (buildToolResultChunks). Mutating info.results[].result here rewrites what the
     // model sees. Clear the per-run stash afterwards.
+    // A run that aborts/errors inside the tool phase never reaches onToolPhaseComplete, so its
+    // interceptor-modified results (potentially large payloads) would stay in the per-agent map
+    // for the life of the process — and their ids can never match a later result.
+    onAbort: () => {
+      modifiedResults.clear();
+    },
+    onError: () => {
+      modifiedResults.clear();
+    },
     onToolPhaseComplete: async (_ctx, info) => {
       if (modifiedResults.size === 0) return;
       for (const result of info.results) {

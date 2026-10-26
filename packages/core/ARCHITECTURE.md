@@ -76,7 +76,7 @@ packages/cli/src/index.tsx
 ### 1.2 App agent creation
 
 ```
-packages/app/src/adapter/create-agent.ts
+packages/app/src/adapter/session-bootstrap.ts
   resolveModelConfigFromProvider({ model, style, baseURL, apiKey }, host.getModelProvider?.())
     // uses the runtime's ModelProvider (remote forces baseURL/apiKey); ambient fallback when omitted
   host.create({ modelInfo, modelStyle, ... })   // host = CodentAgent.host (local) | remote host
@@ -150,7 +150,7 @@ table. It enforces **three** properties:
 - `models/**` MUST NOT import `managers/**`
 - `runtime-types/**` may only reach upward from `hosts.ts` (the port file), type-only
 - `env/index.ts` is the bottom of the stack and must not import upward — process-scoped teardown is registered via `env/teardown.ts` hooks instead
-- Edges that must stay type-only: `agent → agent-session`, `models → agent` (narrowed to two leaf modules), `runtime-types → {managers, agent, models}`
+- Edges that must stay type-only: `agent → agent-session`, `runtime-types → {managers, agent, models}`. `models → agent` is `allow` but narrowed to two leaf modules (`stream/stream-errors`, `usage/usage-history-service`); a third target is a table change.
 - Package-wide stream helpers live in `agent/stream/` (not under `subagent/`)
 - UI channel lives in `agent/ui/ui-channel.ts`
 - Run middleware lives in `managers/middleware/` (wired by `run-agent`); plan-mode middleware stays in `agent/plan/`
