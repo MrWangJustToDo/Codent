@@ -9,6 +9,7 @@ import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
 import { DefaultExtensionUI } from "./default-extension-ui.js";
 import { compareDispatchRank, resolveExtensionOrder, sortByDispatchRank } from "./dispatch-order.js";
+import { ExtensionLlmError } from "./extension-llm-error.js";
 import { z } from "./extension-zod.js";
 import { MessageTransformerRegistry } from "./message-transformer-registry.js";
 import { createObserverSurface } from "./observer-surface.js";
@@ -55,6 +56,13 @@ import type { ModelMessage } from "@tanstack/ai";
 
 /** Throttle window for coalescing pushed context snapshots (ms). */
 const CONTEXT_THROTTLE_MS = 250;
+
+/**
+ * Allowed section names: a slug. The name becomes part of the `<ctx kind="id:name">` shell, and the
+ * kind is recovered from message text by splitting on whitespace, so anything outside this set (a
+ * space, a quote, `>`) corrupts the envelope and breaks per-kind admission.
+ */
+const SECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9._-]*$/;
 
 export interface ExtensionRunnerOptions {
   getEnvVar: (key: string) => string | undefined;
@@ -151,6 +159,8 @@ export class ExtensionRunner {
   private contextProviders = new Map<string, { provider: ExtensionContextProvider; rank: DispatchRank }>();
   /** Live context per active extension — the object handed to every handler of that extension. */
   private contexts = new Map<string, ExtensionContext>();
+  /** Providers already warned about a bad/duplicate section name (one row, not one per turn). */
+  private warnedSectionProviders = new WeakSet<object>();
   /**
    * Wrapped interceptor per (handler, extension). `ctx.events.off(handler)` must unregister the
    * wrapper that was actually registered, not the caller's original function.
@@ -170,8 +180,8 @@ export class ExtensionRunner {
    * unsubscribes the provider). Cleared when the extension is re-enabled.
    */
   private disabledExtensionNotices = new Map<string, string>();
-  /** Disabled notices for named sections, keyed by `"<extensionId>:<sectionName>"`. */
-  private disabledSectionNotices = new Map<string, string>();
+  /** Disabled notices for named sections, keyed by the section kind, stamped with its owner. */
+  private disabledSectionNotices = new Map<string, { extensionId: string; content: string }>();
   private eventBus: BusExtensionEventBus;
   /** Raw scoped bus (interception + telemetry) behind the extension-facing facade. */
   private readonly rawBus: AgentEventBus;
@@ -433,15 +443,21 @@ export class ExtensionRunner {
       // kind, so two producers would fight over one slot and re-inject each other every turn.
       const byName = new Map<string, ExtensionContextSectionProvider>();
       for (const section of provider.sections ?? []) {
+        // The name is interpolated into the `<ctx kind="id:name">` shell, whose identity recovery
+        // splits on whitespace — so an unconstrained name silently breaks independent admission.
+        if (!SECTION_NAME_RE.test(section.name)) {
+          this.warnSectionOnce(provider, id, `invalid context section name "${section.name}" — skipped`);
+          continue;
+        }
         if (byName.has(section.name)) {
-          this.writeExtensionLog("warn", id, `duplicate context section "${section.name}" — the last one wins`);
+          this.warnSectionOnce(provider, id, `duplicate context section "${section.name}" — the last one wins`);
         }
         byName.set(section.name, section);
       }
       for (const [name, section] of byName) {
         try {
           const body = await section.content?.(ctx);
-          if (body?.trim()) turnContextSections.push({ id: `${id}:${name}`, content: body.trim() });
+          if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
         } catch (err) {
           const message = errorMessage(err);
           this.options.eventBus?.emit("agent:extension-error", {
@@ -460,7 +476,7 @@ export class ExtensionRunner {
       if (notice?.trim()) turnContextSections.push({ id, content: notice.trim() });
     }
     for (const [id, notice] of this.disabledSectionNotices) {
-      if (notice?.trim()) turnContextSections.push({ id, content: notice.trim() });
+      if (notice.content.trim()) turnContextSections.push({ id, content: notice.content.trim() });
     }
 
     return { turnContextSections };
@@ -476,6 +492,7 @@ export class ExtensionRunner {
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
       this.ranks.delete(api.id);
       this.disabledExtensionNotices.delete(api.id);
+      this.clearSectionNotices(api.id);
     }
 
     const registrations: ExtensionRegistrations = {
@@ -659,14 +676,16 @@ export class ExtensionRunner {
 
     if (enabled) {
       this.activating.add(instance.api.id);
+      // `unregisterInstanceArtifacts` drops the context on disable; re-activation must put the same
+      // object back, or every per-dispatch lookup (tools, commands, sections, observers, interceptors)
+      // silently receives `undefined` for the rest of the session.
+      this.contexts.set(instance.api.id, instance.context);
       try {
         await instance.api.activate(instance.context);
         instance.state = "active";
         instance.error = undefined;
         this.disabledExtensionNotices.delete(instance.api.id);
-        for (const key of [...this.disabledSectionNotices.keys()]) {
-          if (key.startsWith(`${instance.api.id}:`)) this.disabledSectionNotices.delete(key);
-        }
+        this.clearSectionNotices(instance.api.id);
         this.options.onToolRegistrationBatchComplete?.();
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
@@ -709,7 +728,9 @@ export class ExtensionRunner {
         : custom.trim();
     if (notice) this.disabledExtensionNotices.set(instance.api.id, notice);
     else this.disabledExtensionNotices.delete(instance.api.id);
-    for (const [key, body] of sectionNotices) this.disabledSectionNotices.set(key, body);
+    for (const [key, body] of sectionNotices) {
+      this.disabledSectionNotices.set(key, { extensionId: instance.api.id, content: body });
+    }
     return { ok: true, message: `Extension "${id}" disabled` };
   }
 
@@ -775,6 +796,25 @@ export class ExtensionRunner {
     instance.registrations.exitFlush = null;
   }
 
+  /** One warning per provider, not one per turn (a duplicate name would otherwise log every turn). */
+  private warnSectionOnce(provider: object, extensionId: string, message: string): void {
+    if (this.warnedSectionProviders.has(provider)) return;
+    this.warnedSectionProviders.add(provider);
+    this.writeExtensionLog("warn", extensionId, message);
+  }
+
+  /** Drop every disabled notice belonging to one extension's named sections. */
+  private clearSectionNotices(extensionId: string): void {
+    for (const [key, entry] of this.disabledSectionNotices) {
+      if (entry.extensionId === extensionId) this.disabledSectionNotices.delete(key);
+    }
+  }
+
+  /** The context kind of one named section: `<extensionId>:<sectionName>`. */
+  private sectionKind(extensionId: string, name: string): string {
+    return `${extensionId}:${name}`;
+  }
+
   /** The live context of an active extension, for dispatch sites outside the runner. */
   contextFor(extensionId: string): ExtensionContext | undefined {
     return this.contexts.get(extensionId);
@@ -809,7 +849,8 @@ export class ExtensionRunner {
   private async completeViaRuntime(extensionId: string, request: ExtensionLlmRequest): Promise<ExtensionLlmResult> {
     const runtime = this.options.getRuntime?.();
     if (!runtime) {
-      throw new Error(
+      throw new ExtensionLlmError(
+        "no-adapter",
         `Extension "${extensionId}" cannot call a model: this extension host has no agent runtime attached.`
       );
     }
@@ -964,12 +1005,17 @@ export class ExtensionRunner {
         // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension
         // ordering itself with `order` would get its declared position through one entry point
         // and the default through the other.
-        on: (type, handler) =>
-          this.eventBus.on(
+        on: (type, handler) => {
+          const unsub = this.eventBus.on(
             type,
             this.wrapInterceptor(api.id, handler as EventInterceptor<InterceptableEvent>) as typeof handler,
             this.rankOf(api.id)
-          ),
+          );
+          // Same bookkeeping as `registerInterceptor`: without it, an interceptor registered through
+          // this entry point kept firing (and cancelling tools) after the extension was disabled.
+          registrations?.unsubInterceptors.push(unsub);
+          return unsub;
+        },
         off: (type, handler) =>
           this.eventBus.off(
             type,

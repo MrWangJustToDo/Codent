@@ -659,6 +659,8 @@ registerModelProvider(await createRemoteProvider("http://localhost:3100"));
 | `agent:tool-start` / `agent:tool-end` / `agent:tool-error` | Tool lifecycle (extensions middleware) |
 | `agent:retry` | Recoverable LLM failure being retried (429/gateway backoff, capability strip, reactive compact, max_tokens continuation); payload carries `attempt`/`maxAttempts`/`strategy`/`error`/`delayMs`. Retry state also lives on the Session snapshot + `state` channel (`AgentRetryState`) and is cleared once the stream recovers or the run reaches a terminal status |
 | `agent:iteration` | Agent-loop progress within a run (one iteration = one model turn). Payload `{ current, max }` (1-based; idle `0`; `max` = `maxIterations` budget). Projected onto the retained `iteration` channel + `AgentSessionSnapshot.iteration`; deliberately **not** logged |
+| `turn:start` / `turn:end` | One model turn opened / closed (`index` + budget; finish reason + tool-call count). Per turn, observable, never default-logged |
+| `message:start` / `message:end` | An assistant message began streaming / was finalized (`firstOutput` on the run's first; finalized text + tool-call count). Observable, never default-logged |
 | `agent:abort` / `agent:stream-error` | User abort / stream failure (`RUN_ERROR`, empty-stream guard, and other pump failures; main chat records error without crashing the host) |
 | `agent:stop` | Run finished or aborted |
 | `memory:prefetch` | Relevant memory injection before run |
@@ -905,7 +907,7 @@ Beyond registration (`registerTool` / `registerCommand` / `registerInterceptor` 
 
 | Surface | Contract |
 |---|---|
-| `ctx.sessionId` / `isIdle()` / `mode` / `model` | Live session facts; `mode` is `normal` / `auto` / a plan phase |
+| `ctx.sessionId` / `isIdle()` / `mode` / `model` | Live session facts; `mode` is `AgentMode` (`normal` / `auto` / `plan`) — a plan *phase* is not a mode |
 | `ctx.signal` | The active run's `AbortSignal` (undefined when idle) — extension work cancels with the turn |
 | `ctx.getMessages()` | Defensive copy of the model-visible conversation (compaction + synthetic `<ctx>` blocks); mutation cannot reach the wire |
 | `ctx.getContextUsage()` | The footer's fill reading (`getContextFillTokens()` against the compaction budget), not a second estimate |

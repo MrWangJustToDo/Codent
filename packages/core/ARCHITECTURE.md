@@ -1081,7 +1081,7 @@ An extension that buffers state needs two exits, and they are different mechanis
 
 | Registration | When it runs | Awaited? |
 | ------------ | ------------ | -------- |
-| `ctx.registerFlush(fn)` | `destroyExtension` / `destroyAll` / disable — **before** `deactivate()` | yes, per extension |
+| `ctx.registerFlush(fn)` (receives the live `ctx`) | `destroyExtension` / `destroyAll` / disable — **before** `deactivate()` | yes, per extension |
 | `ctx.registerExitFlush(fn)` | `process.on("exit")` and the fatal handlers | no (best-effort, contained) |
 
 Order per extension: `session:shutdown` (interceptors) → `flush` → `deactivate` → unregister registrations + clear UI slots. A throwing flush is reported as `agent:extension-error` with phase `flush` and does not skip the remaining phases. The runner releases both registrations in `unregisterInstanceArtifacts`, so a destroyed extension stops running on `exit`.
@@ -1094,7 +1094,7 @@ Extension interception (`tool:before:*` / `tool:after:*` / `tool:error:*` / `bef
 
 **Message transformers (`ctx.registerMessageTransformer`) are deliberately NOT one of those interceptor patterns.** They are a named registration method with a different shape: interceptor mode is a shared mutable payload with cancel short-circuitness, whereas a message transformer receives the model-facing message array and returns a replacement. The interceptor pattern lists above and below do not gain a message-transform entry, and `AgentEventBus` gains no third dispatch mode.
 
-The non-bus extension surfaces are therefore exactly: `registerTool`, `registerCommand`, `registerContextProvider`, `registerMessageTransformer`, and `ui.render` / `ui.notify` / `ui.getContext` — each a registration or projection API, none a dispatch mode. **Observation (`ctx.events.observe` / `observeAny` / `retained`) is NOT on that list**: it is bus-backed, delivered by the observer dispatch mode the bus already had, which is why the observation section above documents it under the bus rather than under the non-bus surfaces.
+The non-bus extension surfaces are therefore exactly: `registerTool`, `registerCommand`, `registerContextProvider` (a base section and/or a list of named `sections`), `registerMessageTransformer`, `registerFlush` / `registerExitFlush`, the live run/session accessors (`sessionId`, `isIdle()`, `mode`, `model`, `signal`, `getContextUsage()`, `getSystemPrompt()`, `getMessages()`), the one-shot model port `llm.complete`, and `ui.render` / `ui.notify` / `ui.getContext` — each a registration, projection or request API, none a dispatch mode. **Observation (`ctx.events.observe` / `observeAny` / `retained`) is NOT on that list**: it is bus-backed, delivered by the observer dispatch mode the bus already had, which is why the observation section above documents it under the bus rather than under the non-bus surfaces.
 
 **Dispatch order (`ExtensionAPI.order`).** Four extension surfaces are observable as a **sequence**, and each was ordered by the same uncontrolled variable — the order extensions load. `order?: number` makes the sequence declarable: **lower runs first**, absent means `0`.
 
@@ -1141,7 +1141,7 @@ Validate: `pnpm --filter @codent/core run validate:extension-event-observation`.
 **Per-turn prompt hooks:** On each root user prompt (not tool continuations / subagents), `prepareForRun` calls `ExtensionRunner.collectBeforeAgentStart`, which:
 
 1. Runs `before_agent_start` interceptors (observable event only — a fresh event per handler).
-2. Runs each enabled extension's `registerContextProvider({ content })` (only non-empty content emits).
+2. Runs each enabled extension's `registerContextProvider({ content, sections })` (only non-empty content emits). A provider may publish a base section (`content`) plus any number of **named** sections, each hashed and admitted independently.
 3. Emits each extension's turn-context text as its **own** `<ctx kind=<extension id>>` section in the dynamic turn snapshot (enable and disable share the same tag — an enabled extension carries its injected `content`, a disabled one carries only its `disabledContent` notice). Per-extension kinds keep the per-kind hash admission granular (only the changed extension re-injects, which is prompt-cache friendly).
 
 There is no system-prompt append channel (`extension_system_append` was removed): extensions inject exclusively through `registerContextProvider`, so the frozen system prompt stays byte-stable and cacheable.

@@ -163,8 +163,11 @@ scope/naming freely (no compatibility work is owed).
 
 ## Open Questions
 
-- Per-run completion budget: constant vs. `ManagedAgentConfig` field (default: constant, overridable).
-- Whether `getContextUsage()` should report the raw model window as well as the compaction budget
-  (the footer shows the latter; an extension may want the former).
+- ~~Per-run completion budget: constant vs. config field.~~ **Resolved**: a constant default overridden
+  by `ManagedAgentConfig.extensionLlm.callsPerRun`, keyed to the user turn; idle calls are bounded by
+  the output-token cap only (there is no run to run away in).
+- ~~Does `getContextUsage()` report the raw window too?~~ **Resolved**: `{ fillTokens, limitTokens }`
+  only — the same reading the footer shows. An extension needing the raw window has no honest source
+  today (the runtime tracks the compaction budget, not the model's advertised window per call).
 - Whether Phase 2's `ctx.executeTool()` reuses the code-mode sandbox bindings or the live tool
   registry (both exist; the registry is the correct one for hook parity).

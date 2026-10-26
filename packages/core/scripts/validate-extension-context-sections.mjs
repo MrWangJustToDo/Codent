@@ -50,6 +50,9 @@ await runner.loadExtension({
             throw new Error("section exploded");
           },
         },
+        // The name is interpolated into `<ctx kind="id:name">`, so anything outside a slug is
+        // refused rather than corrupting the envelope.
+        { name: "bad name", content: () => "SHOULD-NOT-APPEAR" },
       ],
     });
   },
@@ -68,6 +71,7 @@ assert.equal(ids.filter((id) => id === "sec:selection").length, 1, "one block pe
 
 // ── 2. a throwing producer is contained to its own section ─────────────────
 assert.equal(byId(first, "sec:boom"), undefined, "the failing section is skipped");
+assert.equal(byId(first, "sec:bad name"), undefined, "an invalid section name is skipped, not interpolated");
 assert.ok(byId(first, "sec:index"), "its siblings are still injected");
 assert.ok(
   failures.some((event) => String(event.error ?? "").includes('section "boom": section exploded')),
@@ -90,10 +94,33 @@ assert.equal(byId(afterDisable, "sec").content, "sections disabled", "the base s
 assert.equal(byId(afterDisable, "sec:selection").content, "SELECTION-OFF", "and so does the named section");
 assert.equal(byId(afterDisable, "sec:index"), undefined, "a section without a disabled notice is simply absent");
 
+// ── 4b. a duplicate reload does not resurrect a stale disabled notice ─────
+// `setEnabled(false)` stores the section notice; reloading the same id (a second file, a
+// re-discovery) destroys the copy and must drop its notices, or the live section and a "disabled"
+// section share one kind every turn.
+await runner.loadExtension({
+  id: "sec",
+  name: "Sections",
+  version: "1.0.0",
+  description: "sections probe (reloaded)",
+  async activate(ctx) {
+    ctx.registerContextProvider({
+      content: () => "<memory_index>stable</memory_index>",
+      sections: [{ name: "index", content: () => "INDEX-V2" }],
+    });
+  },
+});
+const afterReload = await runner.collectBeforeAgentStart("reloaded", "ses");
+assert.equal(byId(afterReload, "sec:index").content, "INDEX-V2", "the reloaded extension is live");
+assert.equal(
+  afterReload.turnContextSections.filter((section) => section.id === "sec:selection").length,
+  0,
+  "a stale disabled notice for the old definition is gone"
+);
+
 // ── 5. re-enabling restores the live content under the same kinds ─────────
 await runner.setEnabled("sec", true);
 const afterEnable = await runner.collectBeforeAgentStart("fourth", "ses");
-assert.equal(byId(afterEnable, "sec:index").content, "INDEX-V1");
-assert.equal(byId(afterEnable, "sec:selection").content, "SELECTION-TURN-2");
+assert.equal(byId(afterEnable, "sec:index").content, "INDEX-V2", "re-enable uses the reloaded definition");
 
 console.log("extension context sections validation passed");

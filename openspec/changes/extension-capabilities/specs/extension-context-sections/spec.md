@@ -23,8 +23,9 @@ extension id.
 #### Scenario: Disabled extension under the same kinds
 
 - **WHEN** the extension is disabled at runtime
-- **THEN** each of its sections is replaced by its declared disabled notice under the same kind
-- **AND** re-enabling restores the content under the same kinds
+- **THEN** each section that declares a disabled notice is replaced by it under the same kind
+- **AND** a section without one is simply absent
+- **AND** re-enabling restores the live content under the same kinds
 
 ### Requirement: Section kinds are declared, not implicit
 
@@ -33,7 +34,10 @@ name, and the runtime SHALL render the block's outer tag from that kind rather t
 literal written in extension code.
 
 Kinds MUST be unique within an extension, and two extensions MUST NOT collide: the namespace is
-the extension id.
+the extension id. A section name SHALL be a slug (`[A-Za-z][A-Za-z0-9._-]*`), because it is
+interpolated into the tag and the tag is recovered from message text — an invalid name is reported
+and skipped rather than emitted. A duplicate name SHALL keep the last registration and report one
+warning, not one per turn.
 
 #### Scenario: Rendered kind
 

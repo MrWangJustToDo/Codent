@@ -12,7 +12,14 @@ import type { DispatchRank } from "./dispatch-order.js";
 import type { EventInterceptor, ExtensionEventBus, InterceptableEvent } from "./types.js";
 
 export class BusExtensionEventBus implements ExtensionEventBus {
-  private readonly disposers = new Map<EventInterceptor<InterceptableEvent>, () => void>();
+  /**
+   * Disposer per (type, handler).
+   *
+   * Keyed by handler alone, `off(typeB, h)` after `on(typeA, h)` removed typeA's registration and
+   * left typeB's live — and the per-dispatch wrapper the runner memoizes made that collision the
+   * normal case rather than a corner one.
+   */
+  private readonly disposers = new Map<string, Map<EventInterceptor<InterceptableEvent>, () => void>>();
 
   constructor(private readonly bus: AgentEventBus) {}
 
@@ -23,19 +30,23 @@ export class BusExtensionEventBus implements ExtensionEventBus {
   on<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>, rank?: DispatchRank): () => void {
     const key = handler as EventInterceptor<InterceptableEvent>;
     const unsub = this.bus.onIntercept(type, handler, rank);
-    this.disposers.set(key, unsub);
+    const byHandler = this.disposers.get(type) ?? new Map();
+    byHandler.set(key, unsub);
+    this.disposers.set(type, byHandler);
     return () => {
-      this.disposers.delete(key);
+      const current = this.disposers.get(type);
+      if (current?.get(key) === unsub) current.delete(key);
+      if (current?.size === 0) this.disposers.delete(type);
       unsub();
     };
   }
 
   off<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>): void {
-    void type;
     const key = handler as EventInterceptor<InterceptableEvent>;
-    const unsub = this.disposers.get(key);
+    const unsub = this.disposers.get(type)?.get(key);
     if (unsub) {
-      this.disposers.delete(key);
+      this.disposers.get(type)!.delete(key);
+      if (this.disposers.get(type)!.size === 0) this.disposers.delete(type);
       unsub();
     }
   }

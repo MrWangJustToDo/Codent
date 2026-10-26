@@ -48,6 +48,12 @@ export interface LifecycleMiddlewareDeps {
   maxIterations?: number;
   /** Called at the start of each model iteration with 1-based progress. */
   onIteration?: (state: AgentIterationState) => void;
+  /**
+   * Identity of the owning user turn. `firstOutput` is per turn, not per `chat()`: a restart-style
+   * retry (429, capability strip, reactive compact) re-enters the engine, and the first output of the
+   * retried attempt is still the turn's first output.
+   */
+  getRunToken?: () => unknown;
 }
 
 export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -68,7 +74,9 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   // Turn/message boundary state (see `turn:end` / `message:*` in the event registry).
   let turnIndex = 0;
   let turnToolCalls = 0;
+  let turnClosed = false;
   let runFirstOutput = false;
+  let runToken: unknown;
   let messageStarted = false;
   let messageId = "";
   let messageFirstOutput = false;
@@ -80,7 +88,25 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     onIteration: (_ctx, info) => {
       // TanStack `IterationInfo.iteration` is 0-based (one iteration = one model
       // turn); expose 1-based progress plus the run's iteration budget.
-      deps.onIteration?.({ current: info.iteration + 1, max: deps.maxIterations ?? 0 });
+      //
+      // This — not `onStart` — is the turn boundary: `onStart` fires once per `chat()` while
+      // `RUN_FINISHED` fires once per iteration, so deriving the index there made every tool-using
+      // turn report index 1 repeatedly.
+      const index = info.iteration + 1;
+      deps.onIteration?.({ current: index, max: deps.maxIterations ?? 0 });
+      turnIndex = index;
+      turnToolCalls = 0;
+      turnClosed = false;
+      messageStarted = false;
+      messageId = "";
+      messageText = "";
+      messageToolCalls = 0;
+      const token = deps.getRunToken?.();
+      if (token !== runToken) {
+        runToken = token;
+        runFirstOutput = false;
+      }
+      deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
     },
     onStart: (ctx) => {
       memoryCommitted = false;
@@ -90,19 +116,6 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       firstTokenAt = 0;
       lastModel = ctx.model;
       lastIteration = ctx.iteration;
-
-      // One model turn begins. The turn index pairs with `agent:iteration` (both 1-based); the
-      // per-turn message state starts empty and `turn:end` closes it on RUN_FINISHED.
-      turnIndex = ctx.iteration + 1;
-      deps.emitEvent?.("turn:start", { index: turnIndex, max: deps.maxIterations ?? 0 });
-      turnToolCalls = 0;
-      messageStarted = false;
-      messageId = "";
-      messageText = "";
-      messageToolCalls = 0;
-      // `firstOutput` is per RUN, so it resets only when the run itself starts over (iteration 0,
-      // including a restart-style retry).
-      if (ctx.iteration === 0) runFirstOutput = false;
 
       deps.emitEvent?.("llm:request", {
         model: ctx.model,
@@ -115,7 +128,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         toolsCount: ctx.toolNames?.length ?? 0,
       });
     },
-    onChunk: (_ctx, chunk) => {
+    onChunk: (ctx, chunk) => {
       // TanStack fires RUN_STARTED once per model iteration (each LLM stream),
       // so this marks the start of a new round for per-round timing.
       if (chunk.type === "RUN_STARTED") {
@@ -140,7 +153,10 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       ) {
         if (!messageStarted) {
           messageStarted = true;
-          messageId = (chunk as { messageId?: string }).messageId ?? `turn-${turnIndex}`;
+          messageId =
+            (chunk as { messageId?: string }).messageId ??
+            (ctx as { currentMessageId?: string } | undefined)?.currentMessageId ??
+            `turn-${turnIndex}`;
           messageFirstOutput = !runFirstOutput;
           runFirstOutput = true;
           deps.emitEvent?.("message:start", {
@@ -158,6 +174,10 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         messageToolCalls += 1;
       }
       if (chunk.type === "RUN_FINISHED") {
+        // A turn paused for approval / `ask_user` gets a second, interrupt-shaped RUN_FINISHED for the
+        // same iteration. Closing twice would report a suspended turn as finished.
+        if (turnClosed) return chunk;
+        turnClosed = true;
         const finishReason = (chunk as { finishReason?: string }).finishReason ?? null;
         deps.emitEvent?.("turn:end", { index: turnIndex, finishReason, toolCalls: turnToolCalls });
         if (messageStarted) {

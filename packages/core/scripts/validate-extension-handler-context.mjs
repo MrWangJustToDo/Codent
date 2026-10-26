@@ -66,14 +66,14 @@ assert.equal(captured.getMessages()[0].role, "user");
 // Facts move under the extension — the context must follow, not replay activation-time values.
 facts.sessionId = "ses_two";
 facts.idle = false;
-facts.mode = "planning";
+facts.mode = "auto";
 facts.model = "model-b";
 const controller = new AbortController();
 facts.signal = controller.signal;
 
 assert.equal(captured.sessionId, "ses_two", "session id must be read live (session switch)");
 assert.equal(captured.isIdle(), false);
-assert.equal(captured.mode, "planning");
+assert.equal(captured.mode, "auto", "the same AgentMode every other surface reports");
 assert.equal(captured.model, "model-b");
 assert.equal(captured.signal, controller.signal, "the run's own signal, not a copy");
 
@@ -86,6 +86,17 @@ assert.equal(handlerCtx, captured, "interceptors receive the extension's live co
 assert.equal(runner.contextForCommand("probe-cmd"), captured);
 assert.equal(runner.contextFor("probe"), captured);
 
+// ── a disable/enable cycle keeps the context wired ─────────────────────────
+// Disabling drops the runner's context entry; re-activation must restore it, or every per-dispatch
+// lookup (tool execute, command, section, observer, interceptor) silently receives `undefined`.
+assert.equal((await runner.setEnabled("probe", false)).ok, true);
+assert.equal(runner.contextFor("probe"), undefined, "disable releases the live context");
+assert.equal((await runner.setEnabled("probe", true)).ok, true);
+assert.equal(runner.contextFor("probe"), captured, "re-enable restores the same context object");
+handlerCtx = undefined;
+await bus.intercept({ type: "probe:ping", payload: {} });
+assert.equal(handlerCtx, captured, "and handlers receive it again");
+
 // ── the conversation copy is isolated ───────────────────────────────────────
 const source = [{ role: "user", content: [{ type: "text", content: "original" }] }];
 const copy = copyModelMessages(source);
@@ -93,5 +104,16 @@ assert.notEqual(copy, source, "a new outer array");
 assert.notEqual(copy[0], source[0], "and new message objects");
 copy[0].content[0].content = "mutated";
 assert.equal(source[0].content[0].content, "original", "a part mutation must not reach the run's wire");
+
+// Nested part data is shared with the UI channel unless the copy is deep: this is the durability
+// rule (the session is persisted from that channel), so a nested write must not get through either.
+const nestedSource = [{ role: "user", content: [{ type: "image", source: { value: "https://orig/1.png" } }] }];
+const nestedCopy = copyModelMessages(nestedSource);
+nestedCopy[0].content[0].source.value = "https://evil/2.png";
+assert.equal(
+  nestedSource[0].content[0].source.value,
+  "https://orig/1.png",
+  "nested part payloads must be isolated too"
+);
 
 console.log("extension handler context validation passed");

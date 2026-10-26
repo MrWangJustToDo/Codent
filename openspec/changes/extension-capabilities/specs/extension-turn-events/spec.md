@@ -6,6 +6,13 @@ A runtime turn (one model request plus the tool calls it requested) SHALL open w
 event carrying at least its 1-based index and the run's iteration budget, and SHALL close with a
 `turn:end` event carrying the same index, the finish reason, and how many tool calls the turn issued.
 
+The boundary is the **iteration**, not the engine invocation: one `chat()` may contain several
+turns, and an iteration that pauses for approval closes exactly once (the engine's second,
+interrupt-shaped completion chunk is not a second turn end).
+
+`turn:end` fires when the model's response is finished, **before** the turn's tool calls execute; a
+consumer that wants post-tool state reads `ctx.getMessages()` after the tool phase, not here.
+
 `agent:iteration` SHALL remain the retained progress projection (`{ current, max }` on the
 `iteration` channel); it MUST agree with `turn:start` on the index, and consumers that need the
 boundary pair MUST NOT have to interpret a projection to get it.
@@ -32,14 +39,27 @@ MUST still emit `turn:end`.
 - **AND** the turn is not reported as completed by `turn:end`
 - **AND** the run's own terminal event still fires
 
+#### Scenario: A restarted attempt keeps the run's first output
+
+- **WHEN** a run is retried after a recoverable failure (the engine is re-entered, iterations restart)
+- **THEN** the retried attempt's turns are reported again from index 1
+- **AND** `firstOutput` is not reported again: it belongs to the user turn, not to one attempt
+
 ### Requirement: Assistant message boundaries are observable
 
 The runtime SHALL emit `message:start` when an assistant message begins streaming and
-`message:end` when it is finalized, both carrying at least: the role, the message id, and whether
-the message is the run's first assistant output. `message:end` SHALL carry the message's finalized
+`message:end` when it is finalized, both carrying at least: the role, a message id, and whether the
+message is the run's first assistant output. The id is the streaming chunk's when the provider
+supplies one, and an event-scoped fallback otherwise (a tool-call-only message has no upstream id). `message:end` SHALL carry the message's finalized
 assistant text and its tool-call count, and SHALL fire for messages that end with tool calls as well
 as text. (The wire form of a content part belongs to the UI channel; the event reports what an
 extension reasons about.)
+
+#### Scenario: Events are notifications, not barriers
+
+- **WHEN** an extension starts a model call from a `message:start` handler
+- **THEN** the run does not wait for it (observer dispatch is synchronous and fire-and-forget)
+- **AND** a failure surfaces as `agent:extension-error` rather than a failed turn
 
 #### Scenario: First output is derivable
 
@@ -59,18 +79,18 @@ extension reasons about.)
 
 ### Requirement: Turn and message events are observable, not default-logged
 
-`turn:end`, `message:start` and `message:end` SHALL be classified `observable` so extensions can
-subscribe and `observeAny` delivers them. They SHALL NOT produce a default log entry (2–4 rows per
+`turn:start`, `turn:end`, `message:start` and `message:end` SHALL be classified `observable` so
+extensions can subscribe and `observeAny` delivers them. They SHALL NOT produce a default log entry (2–4 rows per
 turn would dominate the timeline); an extension that wants them persisted subscribes and logs them
 under its own scope.
 
 #### Scenario: Observable to extensions
 
-- **WHEN** an extension subscribes to `turn:end`
-- **THEN** it receives it in its own agent scope
-- **AND** `observeAny` includes it
+- **WHEN** an extension subscribes to `turn:start` or `turn:end`
+- **THEN** it receives them in its own agent scope
+- **AND** `observeAny` includes all four events
 
 #### Scenario: Timeline stays quiet
 
 - **WHEN** a normal run completes with several turns
-- **THEN** the agent log contains no per-turn or per-message rows beyond the existing lifecycle rows
+- **THEN** the agent log contains no `turn:*` or `message:*` rows beyond the existing lifecycle rows

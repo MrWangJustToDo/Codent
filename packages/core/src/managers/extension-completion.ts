@@ -7,30 +7,21 @@
  * ever seeing a base URL, a key, or a tracker.
  */
 
+import { ExtensionLlmError } from "../agent/extension/extension-llm-error.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
-import { DEFAULT_BASE_URLS } from "../models/config/model-config.js";
+import { DEFAULT_BASE_URLS, trimBaseURL } from "../models/config/model-config.js";
+import { resolveModelInfoFromModelsDev } from "../models/config/models-config.js";
+import { errorMessage } from "../utils/errors.js";
 
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { ExtensionLlmRequest, ExtensionLlmResult } from "../agent/extension/context-access.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { LoadedModelEntry } from "../models/config/models-config.js";
-import type { ModelStyle } from "../models/types.js";
+import type { ModelInfo, ModelStyle } from "../models/types.js";
 
-/** Why an extension completion failed. Extensions branch on `code`, not on message text. */
-export type ExtensionLlmErrorCode = "no-adapter" | "unknown-model" | "budget-exceeded" | "bad-request";
-
-/** Typed rejection of an extension completion. */
-export class ExtensionLlmError extends Error {
-  readonly code: ExtensionLlmErrorCode;
-
-  constructor(code: ExtensionLlmErrorCode, message: string) {
-    super(message);
-    this.name = "ExtensionLlmError";
-    this.code = code;
-  }
-}
+export { ExtensionLlmError, type ExtensionLlmErrorCode } from "../agent/extension/extension-llm-error.js";
 
 /** Default output-token cap when the caller does not set one. */
 export const DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS = 4096;
@@ -81,14 +72,7 @@ async function resolveAdapter(
   const sessionModel = host.getExtensionModel();
 
   if (!requestedModel || requestedModel === sessionModel) {
-    const adapter = await host.resolveTextAdapter?.();
-    if (!adapter) {
-      throw new ExtensionLlmError(
-        "no-adapter",
-        "This session has no model connection to run an extension completion on."
-      );
-    }
-    return adapter;
+    return withTypedAdapterError(async () => (await host.resolveTextAdapter?.()) ?? null);
   }
 
   const entries = host.getExtensionCatalog();
@@ -98,9 +82,14 @@ async function resolveAdapter(
       `Cannot select model "${requestedModel}": this runtime has no model catalog to validate it against.`
     );
   }
+
   const connection = host.getExtensionConnection();
-  const entry = entries.find((candidate) => candidate.models.includes(requestedModel));
-  if (!entry) {
+  const connectionBase = connection.baseURL ?? (connection.style ? DEFAULT_BASE_URLS[connection.style] : undefined);
+  // EVERY entry offering the model, then the one on the session's connection. `find` alone made the
+  // result depend on catalog order: a model listed by two entries was rejected whenever the first one
+  // belonged to another provider, even though the session could run it.
+  const candidates = entries.filter((entry) => entry.models.includes(requestedModel));
+  if (candidates.length === 0) {
     throw new ExtensionLlmError(
       "unknown-model",
       `Model "${requestedModel}" is not offered by this session's catalog. Available: ${entries
@@ -108,37 +97,88 @@ async function resolveAdapter(
         .join(", ")}`
     );
   }
-  // Same connection = same style and same base URL. A catalog entry from another provider would come
-  // with its own base URL (and usually its own key); using it would turn "pick a cheap model" into
-  // "reach a provider the host never configured".
-  const connectionBase = connection.baseURL ?? (connection.style ? DEFAULT_BASE_URLS[connection.style] : undefined);
-  const sameConnection =
-    connection.style !== undefined &&
-    entry.style === connection.style &&
-    trimTrailingSlash(entry.baseURL) === trimTrailingSlash(connectionBase ?? "");
-  if (!sameConnection) {
+  const build = host.createExtensionAdapter ?? defaultCreateAdapter;
+  const matches = candidates.filter(
+    (candidate) =>
+      connection.style !== undefined &&
+      candidate.style === connection.style &&
+      trimBaseURL(candidate.baseURL) === trimBaseURL(connectionBase ?? "") &&
+      // A catalog entry may carry its own key (another account on the same endpoint). Using it would
+      // break "one credential set": prefer the session's key, and treat an entry that names a
+      // different one as a different connection.
+      (!candidate.apiKey || !connection.apiKey || candidate.apiKey === connection.apiKey)
+  );
+  const entry = matches[0];
+  if (!entry) {
     throw new ExtensionLlmError(
       "unknown-model",
-      `Model "${requestedModel}" belongs to a different connection than this session's; an extension may only use the session's own connection.`
+      `Model "${requestedModel}" is only offered on a different connection than this session's; an extension may only use the session's own connection.`
     );
   }
 
-  const build =
-    host.createExtensionAdapter ??
-    ((input: { style: ModelStyle; model: string; baseURL: string; apiKey?: string }) =>
-      createTextAdapter({ style: input.style, model: input.model, baseURL: input.baseURL, apiKey: input.apiKey }));
+  // Capability metadata (structured output, reasoning, pricing) is per model, not per connection: a
+  // named model built without it silently loses the structured-output gate and is priced at the
+  // session model's rate in one surface and its own in the other.
+  const modelInfo = await resolveModelInfoFromModelsDev(requestedModel, entry.style).catch(() => undefined);
 
   return build({
     style: entry.style,
     model: requestedModel,
     baseURL: entry.baseURL,
     ...((entry.apiKey ?? connection.apiKey) ? { apiKey: entry.apiKey ?? connection.apiKey } : {}),
+    ...(modelInfo ? { modelInfo } : {}),
   });
 }
 
-/** Base URLs are configuration text: `https://x/v1` and `https://x/v1/` are the same endpoint. */
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
+/** Build the default adapter for a catalog model (the shared factory, with model metadata). */
+function defaultCreateAdapter(input: {
+  style: ModelStyle;
+  model: string;
+  baseURL: string;
+  apiKey?: string;
+  modelInfo?: ModelInfo;
+}): TextAdapterConfig {
+  return createTextAdapter({
+    style: input.style,
+    model: input.model,
+    baseURL: input.baseURL,
+    ...(input.apiKey ? { apiKey: input.apiKey } : {}),
+    ...(input.modelInfo ? { modelInfo: input.modelInfo } : {}),
+  });
+}
+
+/**
+ * Adapter resolution throws plain `Error`s for a missing connection ("no modelStyle configured",
+ * "requires an API key"). An extension branches on `code`, so those become the typed no-adapter case.
+ */
+async function withTypedAdapterError(
+  resolve: () => Promise<TextAdapterConfig | null | undefined>
+): Promise<TextAdapterConfig> {
+  let adapter: TextAdapterConfig | null | undefined;
+  try {
+    adapter = await resolve();
+  } catch (error) {
+    throw new ExtensionLlmError(
+      "no-adapter",
+      `This session has no usable model connection for an extension completion: ${errorMessage(error)}`
+    );
+  }
+  if (!adapter) {
+    throw new ExtensionLlmError(
+      "no-adapter",
+      "This session has no model connection to run an extension completion on."
+    );
+  }
+  return adapter;
+}
+
+/** The reason a signal aborted, as a throwable (a bare `AbortSignal.reason` may be anything). */
+function abortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error(reason === undefined ? "The extension completion was aborted." : String(reason));
+  error.name = "AbortError";
+  return error;
 }
 
 function normalizeMessages(request: ExtensionLlmRequest): Array<{ role: "user" | "assistant"; content: string }> {
@@ -177,6 +217,11 @@ export async function completeExtensionQuery(
     request.maxOutputTokens ?? host.getExtensionMaxOutputTokens?.() ?? DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS;
   const signal = request.signal ?? host.getExtensionSignal();
 
+  // A signal that is already aborted must not start a request at all: the run may have been cancelled
+  // between the handler deciding to call and the call landing, and the adapter would otherwise issue
+  // (and bill) a request nobody wants.
+  if (signal?.aborted) throw abortReason(signal);
+
   try {
     const result = await runSideTextQuery(adapter, {
       ...(request.system ? { systemPrompt: request.system } : {}),
@@ -190,7 +235,9 @@ export async function completeExtensionQuery(
       ...(host.log ? { log: host.log } : {}),
     });
 
-    if ("usage" in result && result.usage) host.usage.addTotal(result.usage);
+    // Price the model that ran, not the session's: a named catalog model can differ in rate, and the
+    // usage-history row already uses this adapter's pricing — one call must not have two costs.
+    if ("usage" in result && result.usage) host.usage.addTotal(result.usage, adapter.pricing ?? undefined);
     host.log?.info("side-query", `extension completion (${extensionId})`, {
       model: request.model?.trim() || host.getExtensionModel(),
       maxOutputTokens,
@@ -206,21 +253,4 @@ export async function completeExtensionQuery(
     if (billed) host.usage.addTotal(billed);
     throw error;
   }
-}
-
-/**
- * Copy a model-visible message list so an extension cannot mutate the run's wire.
- *
- * Content parts are shared with the UI channel by design (the durability rule forbids rewriting
- * them), so a shallow array copy is not enough: a part object mutated by an extension would be
- * persisted on the next save.
- */
-export function copyModelMessages<T extends { content: unknown }>(messages: readonly T[]): T[] {
-  return messages.map((message) => {
-    const content = message.content;
-    if (Array.isArray(content)) {
-      return { ...message, content: content.map((part) => (part && typeof part === "object" ? { ...part } : part)) };
-    }
-    return { ...message };
-  });
 }

@@ -53,11 +53,17 @@ The default model is the one the session is using.
 - **THEN** that model is used over the same connection
 - **AND** its capability metadata still selects structured vs. text mode
 
-#### Scenario: Unknown model
+#### Scenario: Unknown or unreachable model
 
-- **WHEN** the caller names a model the catalog does not offer
+- **WHEN** the caller names a model the catalog does not offer, the catalog offers it only on another
+  connection (style, base URL, or a different key), or the runtime carries no catalog
 - **THEN** the call rejects with a typed error
 - **AND** no request is issued
+
+#### Scenario: Model listed by several entries
+
+- **WHEN** two catalog entries offer the model and one of them is the session's connection
+- **THEN** that entry is used, regardless of catalog order
 
 #### Scenario: No credential smuggling
 
@@ -90,8 +96,9 @@ A completion SHALL accept an `AbortSignal`; when omitted it SHALL use the run's 
 context. Aborting SHALL reject with the runtime's abort error, and MUST NOT tear down the extension
 or the run.
 
-When no text adapter can be resolved, the call SHALL reject with a typed error the caller can catch
-and degrade from; the run SHALL be unaffected.
+When no text adapter can be resolved — including a host whose connection is not configured — the call
+SHALL reject with a typed error the caller can catch and degrade from; the run SHALL be unaffected.
+A signal that is already aborted SHALL reject before any request is issued.
 
 #### Scenario: Abort mid-flight
 
@@ -108,7 +115,9 @@ and degrade from; the run SHALL be unaffected.
 ### Requirement: Spend guardrails
 
 The runtime SHALL bound extension spend: a default `maxOutputTokens` cap when the caller omits one,
-and a per-run completion budget that fails closed with a typed error once exhausted. Every
+and a per-run completion budget that fails closed with a typed error once exhausted. The budget is
+keyed to the **user turn** (a tool phase does not reset it) and applies only while a run is in
+flight; an idle completion (a command, an observer) is bounded by the output-token cap alone. Every
 completion SHALL be recorded as a side query in the agent log with the calling extension id.
 
 The budget SHALL be configurable per agent, and its refusal SHALL be reported as an extension

@@ -152,6 +152,24 @@ export default {
 };
 \`\`\`
 
+## What a handler can reach
+
+Every handler also receives the extension context as a **trailing argument** — \`(event, ctx)\`,
+\`(input, opts, ctx)\`, \`(args, ctx)\`, section producers \`(ctx)\` — and it reads live facts at call
+time (never a snapshot):
+
+| Member | Meaning |
+|---|---|
+| \`ctx.sessionId\` / \`ctx.isIdle()\` / \`ctx.mode\` / \`ctx.model\` | Live session facts (\`mode\` is \`normal\` / \`auto\` / \`plan\`). |
+| \`ctx.signal\` | The active run's \`AbortSignal\` (\`undefined\` when idle). Forward it to long work. |
+| \`ctx.getMessages()\` | A copy of the model-visible conversation; mutating it cannot reach the wire. |
+| \`ctx.getContextUsage()\` | \`{ fillTokens, limitTokens }\` (the footer's reading), or \`undefined\` when unknown. |
+| \`ctx.getSystemPrompt()\` | The effective system prompt for the run. |
+| \`ctx.llm.complete({ messages \\| prompt, system?, schema?, model?, maxOutputTokens? })\` | One-shot model call outside the turn (text, or schema-validated \`data\`). Uses the session's connection; \`model\` must be one it offers. Tokens are charged to the session automatically; a per-run budget bounds runaway use. Rejections are \`ExtensionLlmError\` with \`code\` \`"no-adapter" \\| "unknown-model" \\| "budget-exceeded" \\| "bad-request"\`. |
+
+Observable turn/message events: \`turn:start\`/\`turn:end\` (one model turn), \`message:start\`/
+\`message:end\` (one assistant message; \`firstOutput\` marks the run's first).
+
 ## The six registration channels
 
 Every registration lives on \`ctx\` and is scoped to this extension: disabling the
@@ -164,7 +182,7 @@ extension unregisters everything it added.
 | \`name\` | yes | The name the model calls. Prefix it to avoid clashing with built-ins. |
 | \`description\` | yes | What the model reads to decide when to call it. Be specific. |
 | \`inputSchema\` | yes | Any Standard-Schema / JSON-Schema shape (Zod via \`ctx.z\`, plain JSON Schema object, etc.). |
-| \`execute(input, opts)\` | yes | \`opts\` carries \`toolCallId\`, \`abortSignal\`, and \`agentId\`. Must return an object. |
+| \`execute(input, opts, ctx)\` | yes | \`opts\` carries \`toolCallId\`, \`abortSignal\`, and \`agentId\`; \`ctx\` is the live context. Must return an object. |
 | \`outputSchema\` | no | Schema for the returned value. |
 | \`present\` | no | How the call is displayed — see "Tool display" below. |
 | \`toModelOutput(ctx)\` | no | Transform what the model sees (e.g. drop fields the UI needs but the model does not). Must be **idempotent**: open it with \`if (isProjectedModelContent(output)) return output;\` — a re-projection can be handed the projection's own output, and reading its fields off that puts \`undefined\` on the wire (\`validate:model-output-idempotency\`). |
@@ -180,7 +198,7 @@ registrar) — key per-agent resources off it, not off a value captured at activ
 ctx.registerCommand({
   name: "my-thing",                 // becomes /my-thing
   description: "One line for the autocomplete menu",
-  async execute(args) {             // args is the split remainder; "" -> []
+  async execute(args, ctx) {        // args is the split remainder; "" -> []
     return "text shown to the user"; // or void for no message
   },
   // Optional: a browseable secondary menu, shown after "/my-thing "
@@ -198,7 +216,7 @@ Prefer a short prefix such as \`/my-\`.
 ### \`ctx.registerInterceptor(hook, handler)\` — observe or intercept
 
 \`\`\`js
-const off = ctx.registerInterceptor("tool:after:edit_file", async (event) => {
+const off = ctx.registerInterceptor("tool:after:edit_file", async (event, ctx) => {
   await audit(event.payload.args);
 });
 // off() unregisters just this handler.
@@ -251,19 +269,30 @@ const usage = ctx.events.retained("session:usage");               // on-demand r
 - A throwing or rejecting handler is contained and reported as \`agent:extension-error\`; it can
   never abort the run.
 
-### \`ctx.registerContextProvider({ content, disabledContent })\` — per-turn context
+### \`ctx.registerContextProvider({ content, disabledContent, sections })\` — per-turn context
 
 \`\`\`js
 ctx.registerContextProvider({
   content: () => "…injected while enabled…",         // string | undefined
   disabledContent: () => "…notice while disabled…",
+  // Optional named sections: each gets its own <ctx kind="<id>:<name>"> and its own
+  // content hash, so a changing selection never re-injects a stable index.
+  sections: [
+    { name: "index", content: () => renderIndex() },
+    { name: "selection", content: () => renderSelection(), disabledContent: () => "…off…" },
+  ],
 });
 \`\`\`
 
-One section per extension, emitted each user turn as \`<ctx kind=<extension id>>\`, so it
-is prompt-cache friendly (\`undefined\` or an empty string injects nothing, and a section
-only re-injects when its content changes). Both callbacks are re-evaluated every turn —
-read live state in them instead of caching a string at activation.
+Section names must be slugs (\`[A-Za-z][A-Za-z0-9._-]*\`) — the name becomes part of the
+\`<ctx kind=…>\` tag. A section without \`disabledContent\` is simply absent while the
+extension is disabled; a throwing producer is skipped and reported without affecting the
+other sections.
+
+The base section is emitted each user turn as \`<ctx kind=<extension id>>\`, so it is
+prompt-cache friendly (\`undefined\` or an empty string injects nothing, and a section only
+re-injects when its content changes). All callbacks are re-evaluated every turn — read live
+state in them instead of caching a string at activation.
 
 Keep it small and stable: this text is sent on **every** turn.
 

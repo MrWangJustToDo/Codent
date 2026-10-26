@@ -396,6 +396,9 @@ export type { TaskOutput } from "./agent/subagent/task-tool.js";
 // ============================================================================
 
 export { FileError, ExecutionError } from "./env/types";
+// Typed rejection of an extension model completion: callers branch on `code`, so the class has to be
+// reachable from the public entry (same precedent as the adapter errors above).
+export { ExtensionLlmError, type ExtensionLlmErrorCode } from "./agent/extension/extension-llm-error.js";
 export type { CoreEnvExecFileOptions } from "./env";
 export type { CoreEnvShellInfo } from "./env/types";
 export type {
@@ -416,6 +419,13 @@ export type {
   ExtensionAPI,
   ExtensionFactory,
   ExtensionContext,
+  ExtensionContextSectionProvider,
+  ExtensionContextUsage,
+  ExtensionLlm,
+  ExtensionLlmMessage,
+  ExtensionLlmRequest,
+  ExtensionLlmResult,
+  ExtensionRuntimeAccess,
   ExtensionConfig,
   ExtensionInstance,
   ExtensionRegistrations,

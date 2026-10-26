@@ -79,18 +79,14 @@ import { selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { generateId } from "../utils/generate-id.js";
+import { copyModelMessages } from "../utils/model-messages.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
-import {
-  completeExtensionQuery,
-  copyModelMessages,
-  DEFAULT_EXTENSION_CALLS_PER_RUN,
-  ExtensionLlmError,
-} from "./extension-completion.js";
+import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
@@ -365,8 +361,8 @@ export class ManagedAgent {
    * Extension completion budget for the CURRENT run. Keyed by the run's abort signal so the counter
    * resets when a new run starts without touching the run lifecycle.
    */
-  private extensionLlmBudget: { signal: AbortSignal | null; count: number; reported: boolean } = {
-    signal: null,
+  private extensionLlmBudget: { runId: string | null; count: number; reported: boolean } = {
+    runId: null,
     count: 0,
     reported: false,
   };
@@ -1496,7 +1492,7 @@ export class ManagedAgent {
         ...(this.config.modelApiKey ? { apiKey: this.config.modelApiKey } : {}),
       }),
       getExtensionCatalog: () => this.runtime?.models?.entries,
-      getExtensionSignal: () => this.run.currentAbortController?.signal,
+      getExtensionSignal: () => this.extensionRunSignal(),
       getExtensionModel: () => this.config.model || this.getModelInfo()?.id,
       getExtensionMaxOutputTokens: () => this.config.extensionLlm?.maxOutputTokens,
       consumeExtensionBudget: (extensionId: string) => this.consumeExtensionLlmBudget(extensionId),
@@ -1505,23 +1501,34 @@ export class ManagedAgent {
     this.extensionRuntime = {
       sessionId: () => this.getSessionData()?.id ?? null,
       isIdle: () => !isActiveStatus(this.getStatus()),
-      mode: () => {
-        if (this.autoMode.isEnabled()) return "auto";
-        const phase = this.planMode.getState().phase;
-        return phase === "off" ? "normal" : phase;
-      },
+      mode: () => this.getAgentMode(),
       model: () => this.config.model || this.getModelInfo()?.id,
-      signal: () => this.run.currentAbortController?.signal,
+      signal: () => this.extensionRunSignal(),
       messages: () => copyModelMessages(this.getMessagesForLLM()),
-      contextUsage: () => ({
-        fillTokens: this.usage.getContextFillTokens(),
-        limitTokens: this.usage.getTokenLimit(),
-      }),
+      contextUsage: () => {
+        const limitTokens = this.usage.getTokenLimit();
+        // The footer hides the segment at a non-positive limit; reporting `{ fill, 0 }` would make a
+        // consumer's percentage `Infinity` instead of "unknown".
+        if (limitTokens <= 0) return undefined;
+        return { fillTokens: this.usage.getContextFillTokens(), limitTokens };
+      },
       systemPrompt: () => this.getSystemPrompt() ?? "",
       complete: (extensionId: string, request: ExtensionLlmRequest): Promise<ExtensionLlmResult> =>
         completeExtensionQuery(host, extensionId, request),
     };
     return this.extensionRuntime;
+  }
+
+  /**
+   * The current run's abort signal — and only that.
+   *
+   * `currentAbortController` survives a finished run (it is cleared on session reset, not at run end),
+   * so returning it unconditionally made `ctx.signal` truthy while idle and, after a user abort,
+   * handed every idle `ctx.llm` call an already-aborted signal. `isIdle()` and `signal` must agree.
+   */
+  private extensionRunSignal(): AbortSignal | undefined {
+    if (isActiveStatus(this.getStatus())) return this.run.currentAbortController?.signal;
+    return undefined;
   }
 
   /** The live context of the extension that owns a command (commands are dispatched by the session). */
@@ -1536,9 +1543,14 @@ export class ManagedAgent {
    * fresh run, and no lifecycle wiring is needed for a limit that is only ever read here.
    */
   private consumeExtensionLlmBudget(extensionId: string): void {
-    const signal = this.run.currentAbortController?.signal ?? null;
-    if (this.extensionLlmBudget.signal !== signal) {
-      this.extensionLlmBudget = { signal, count: 0, reported: false };
+    // Keyed by the user turn (`currentRunId`), not by the abort controller: tool phases mint a new
+    // controller inside one turn (which reset the counter mid-turn), and an idle call has no run to
+    // charge. Idle completions are bounded by the output-token cap instead — a command the user typed
+    // is not a runaway loop.
+    const runId = this.getCurrentRunId();
+    if (runId === null) return;
+    if (this.extensionLlmBudget.runId !== runId) {
+      this.extensionLlmBudget = { runId, count: 0, reported: false };
     }
     const limit = this.config.extensionLlm?.callsPerRun ?? DEFAULT_EXTENSION_CALLS_PER_RUN;
     if (this.extensionLlmBudget.count >= limit) {

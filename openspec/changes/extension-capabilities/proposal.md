@@ -36,10 +36,10 @@ transcript entry.
 `sessionId`, `isIdle()`, plan/auto mode, current model, context-window fill, the effective system
 prompt, a read-only copy of the model-visible conversation, and the run's abort signal.
 
-**Turn and message events.** `turn:end` completes the turn that `agent:iteration` starts (finish
-reason, tool-call count); `message:start` / `message:end` expose assistant message boundaries. This
-replaces the temptation to bolt on a purpose-built "first output" event: it is derivable, and every
-consumer gets the general facts instead.
+**Turn and message events.** `turn:start` / `turn:end` bracket one model turn (index + budget; finish
+reason + tool-call count), and `message:start` / `message:end` expose assistant message boundaries.
+This replaces the temptation to bolt on a purpose-built "first output" event: it is derivable, and
+every consumer gets the general facts instead.
 
 **Named context sections.** One extension may publish several per-turn sections (`index`,
 `selection`, …), each admitted by its own content hash so a changing section never re-injects a
@@ -55,9 +55,9 @@ loading. Each is a deliberate slice; none is needed to unblock memory.
 
 ### New Capabilities
 
-- `extension-handler-context`: a live, per-dispatch context (its shape, freshness, and invalidation), and the run/session facts it exposes.
+- `extension-handler-context`: a live, per-dispatch context (its shape, freshness, invalidation and restoration after a disable/enable), and the run/session facts it exposes.
 - `extension-model-access`: `ctx.llm` — one-shot text/structured completions over a message list, model selection within the session catalog, automatic usage attribution, abort and guardrails.
-- `extension-turn-events`: turn-end and assistant message events, completing the turn that `agent:iteration` starts.
+- `extension-turn-events`: explicit turn boundaries (`turn:start` / `turn:end`) and assistant message events.
 - `extension-context-sections`: several named per-turn sections per extension, admitted independently.
 
 ### Modified Capabilities
@@ -83,7 +83,7 @@ loading. Each is a deliberate slice; none is needed to unblock memory.
     where it replaces captured state (34 registration sites, all additive).
 - `@codent/app` / `@codent/acp` / `@codent/server`: no behavioural change (hosts only observe events).
 - Tests: `validate:extension-handler-context`, `validate:extension-model-access`,
-  `validate:extension-turn-events`, `validate:extension-context-sections`; updates to
-  `validate:turn-context-kinds` (extension-owned kinds) and the extension-facing observers.
+  `validate:extension-turn-events`, `validate:extension-context-sections`. (`validate:turn-context-kinds`
+  needs no change: extension-owned kinds are not catalog kinds.)
 - Docs: `AGENTS.md` extension section (replace the "registration only" description with the new
   access surface and the phase roadmap) and the `ExtensionContext` doc comments.

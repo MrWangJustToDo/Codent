@@ -160,6 +160,9 @@ export function buildAgentRunner(
     createLifecycleMiddleware({
       usage: usage,
       getPricing: () => usage.getPricing(),
+      // Per-user-turn identity: a retried attempt keeps the same id, so `firstOutput` is not
+      // reported twice when the engine is re-entered.
+      getRunToken: () => deps.getCurrentRunId?.() ?? null,
       onThinking: () => emitEvent("agent:thinking"),
       onFirstModelOutput: deps.commitSurfacedMemories,
       emitEvent,

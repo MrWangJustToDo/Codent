@@ -4,8 +4,10 @@
 
 Every extension handler SHALL receive the current `ExtensionContext` as a trailing argument, in
 addition to whatever the handler already closes over: interceptors and observers (`(event, ctx)`),
-tool `execute` (`(input, options, ctx)`), command `execute` / `injectMessage` (`(args, ctx)`), and
-context-section producers (`(ctx)`).
+tool `execute` (`(input, options, ctx)`), command `execute` / `injectMessage` (`(args, ctx)`),
+context-section producers (`(ctx)`), the message transformer (`(transformCtx, ctx)`) and the awaited
+flush (`(ctx)`). The synchronous exit flush SHALL NOT receive it — it runs on `process.on("exit")`,
+where no run exists.
 
 The argument SHALL be **live**, not a snapshot taken at activation: it reads the current session,
 run and model at call time. A handler MUST NOT be able to observe a value from a previous run or a
@@ -32,10 +34,12 @@ replaced session through it.
 
 - `sessionId` — the active disk session id, or `null` when none is bound;
 - `isIdle()` — whether a run is in flight;
-- `mode` — the current session mode (`normal` / `auto` / plan phases) as the runtime reports it;
+- `mode` — the session mode as `AgentMode` (`normal` / `auto` / `plan`), the same value the
+  `session:mode` channel and the UI report; a plan *phase* is not a mode;
 - `model` — the model the session is currently using, if known;
-- `getContextUsage()` — the context-window fill the footer shows (same single reading as
-  `UsageTracker.getContextFillTokens()`), or `undefined` when unknown;
+- `getContextUsage()` — `{ fillTokens, limitTokens }`: the fill (the same single reading as
+  `UsageTracker.getContextFillTokens()`) and the budget it is measured against, or `undefined` when
+  no budget is configured;
 - `getSystemPrompt()` — the effective system prompt for the current run;
 - `getMessages()` — a read-only copy of the model-visible conversation (compaction and synthetic
   `<ctx>` blocks included);
@@ -60,6 +64,17 @@ Every fact SHALL be read through the same source the runtime itself uses; a seco
 
 - **WHEN** an extension mutates the array or an object returned by `ctx.getMessages()`
 - **THEN** the next model request is unaffected
+
+### Requirement: Re-enabling restores the context
+
+Disabling an extension releases its per-dispatch registrations; enabling it again SHALL restore the
+same live context, so a handler registered by the re-activation receives it exactly as it did before.
+
+#### Scenario: Disable, then enable
+
+- **WHEN** an extension is disabled and then enabled again
+- **THEN** its tools, commands, sections, observers and interceptors receive the live context again
+- **AND** the context is the same object, still reading current facts
 
 ### Requirement: One context object, one shape
 

@@ -180,15 +180,20 @@ async function runStructuredQuery<TSchema extends SchemaInput>(
     // ignores the request. The structured failure has already been recorded, with
     // `fallback: "text"` on it, so nothing is restated here.
     try {
-      return await runTextModeQuery(textAdapter, options, contract);
+      const fallback = await runTextModeQuery(textAdapter, options, contract);
+      // The structured attempt was billed even though it failed; its usage belongs to this call.
+      return { ...fallback, usage: sumUsage(billedUsage(structuredError), fallback.usage) };
     } catch (textError) {
       // Both reasons, because the log is optional: a caller with no `log` would
       // otherwise see only the text-mode reason and never learn that the model was
       // asked for structured output first — the single most useful fact about the
       // failure.
-      throw new Error(
-        `structured attempt failed: ${reasonOf(structuredError)}; ` +
-          `text fallback also failed: ${reasonOf(textError)}`
+      throw withUsage(
+        new Error(
+          `structured attempt failed: ${reasonOf(structuredError)}; ` +
+            `text fallback also failed: ${reasonOf(textError)}`
+        ),
+        sumUsage(billedUsage(structuredError), billedUsage(textError))
       );
     }
   }
@@ -196,6 +201,34 @@ async function runStructuredQuery<TSchema extends SchemaInput>(
 
 function reasonOf(error: unknown): string {
   return errorMessage(error);
+}
+
+/** Usage already billed by an attempt that failed (the port attaches it to the thrown error). */
+function billedUsage(error: unknown): TokenUsage | undefined {
+  return (error as { usage?: TokenUsage }).usage;
+}
+
+/**
+ * Sum the usage of two attempts of one logical query.
+ *
+ * The structured attempt can be billed and still fail (no completion event, a value the schema
+ * rejects); the text fallback then bills again. Returning only the fallback's usage made the first
+ * attempt the one LLM call a session never paid for.
+ */
+function sumUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    ...(a.cacheReadTokens !== undefined || b.cacheReadTokens !== undefined
+      ? { cacheReadTokens: (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0) }
+      : {}),
+    ...(a.reasoningTokens !== undefined || b.reasoningTokens !== undefined
+      ? { reasoningTokens: (a.reasoningTokens ?? 0) + (b.reasoningTokens ?? 0) }
+      : {}),
+  };
 }
 
 /**

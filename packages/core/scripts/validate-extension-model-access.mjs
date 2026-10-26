@@ -56,6 +56,18 @@ registerCoreEnv({
 
 const USAGE = { promptTokens: 11, completionTokens: 5, totalTokens: 16 };
 
+const ANSWER_SCHEMA = {
+  "~standard": {
+    version: 1,
+    vendor: "test",
+    validate: (value) =>
+      value && typeof value === "object" && value.answer === "ok"
+        ? { value }
+        : { issues: [{ message: "answer must be ok" }] },
+    jsonSchema: { input: () => ({ type: "object", properties: { answer: { type: "string" } }, required: ["answer"] }) },
+  },
+};
+
 const textStream = () =>
   (async function* () {
     yield { type: "TEXT_MESSAGE_CONTENT", delta: "hello" };
@@ -120,15 +132,13 @@ function makeHost(overrides = {}) {
 
 // ── 2. multi-message requests keep their conversation ───────────────────────
 {
-  let seen = null;
-  const { host } = makeHost({
-    resolveTextAdapter: async () => ({
-      ...adapter(() => {
-        seen = "called";
-        return textStream();
-      }),
-    }),
-  });
+  let received = null;
+  const captureAdapter = adapter(() => textStream());
+  captureAdapter.adapter.chatStream = (options) => {
+    received = options?.messages;
+    return textStream();
+  };
+  const { host } = makeHost({ resolveTextAdapter: async () => captureAdapter });
   const result = await completeExtensionQuery(host, "ext-a", {
     messages: [
       { role: "user", content: "one" },
@@ -137,7 +147,44 @@ function makeHost(overrides = {}) {
     ],
   });
   assert.equal(result.text, "hello");
-  assert.equal(seen, "called", "a multi-message request still goes through the adapter");
+  assert.deepEqual(
+    received?.map((message) => message.role),
+    ["user", "assistant", "user"],
+    "roles and order reach the provider — a flattened transcript would lose them"
+  );
+  assert.deepEqual(
+    received?.map((message) => message.content),
+    ["one", "two", "three"]
+  );
+}
+
+// ── 2b. a billed structured failure is still attributed (fallback sums both) ─
+{
+  const billedStructured = () =>
+    (async function* () {
+      // Billed and completed, but the object fails validation → the port throws AFTER the provider
+      // charged, which is exactly the case `withUsage` exists for.
+      yield { type: "CUSTOM", name: "structured-output.complete", value: { object: { answer: "wrong" }, raw: "" } };
+      yield { type: "RUN_FINISHED", usage: { promptTokens: 100, completionTokens: 10, totalTokens: 110 } };
+    })();
+  const textJson = () =>
+    (async function* () {
+      yield { type: "TEXT_MESSAGE_CONTENT", delta: '{"answer":"ok"}' };
+      yield { type: "RUN_FINISHED", usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10 } };
+    })();
+  const stub = {
+    ...adapter(textJson),
+    adapter: { ...adapter(textJson).adapter, structuredOutputStream: billedStructured },
+  };
+  const { host, usage } = makeHost({ resolveTextAdapter: async () => stub });
+  const result = await completeExtensionQuery(host, "ext-a", { prompt: "json", schema: ANSWER_SCHEMA });
+  assert.deepEqual(result, { data: { answer: "ok" } });
+  assert.equal(
+    usage.getTotal().inputTokens,
+    107,
+    "the failed structured attempt's prompt tokens are not dropped by the text fallback"
+  );
+  assert.equal(usage.getTotal().outputTokens, 13, "nor its completion tokens");
 }
 
 // ── 3. structured completion returns the validated value ────────────────────
@@ -223,6 +270,18 @@ function makeHost(overrides = {}) {
   await assert.rejects(
     () => completeExtensionQuery(host, "ext-a", {}),
     (error) => error instanceof ExtensionLlmError && error.code === "bad-request"
+  );
+}
+
+// ── 8b. an aborted signal rejects the call ────────────────────────────────
+{
+  const controller = new AbortController();
+  controller.abort(new Error("user cancelled"));
+  const { host } = makeHost();
+  await assert.rejects(
+    () => completeExtensionQuery(host, "ext-a", { prompt: "hi", signal: controller.signal }),
+    (error) => /abort|cancel/i.test(error?.message ?? ""),
+    "a pre-aborted signal must not issue a request"
   );
 }
 

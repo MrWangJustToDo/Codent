@@ -54,7 +54,7 @@ export function parseModelStyle(raw: string | undefined, fallback: ModelStyle = 
   return fallback;
 }
 
-function trimBaseURL(url: string): string {
+export function trimBaseURL(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
