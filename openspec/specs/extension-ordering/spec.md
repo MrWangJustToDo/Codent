@@ -18,15 +18,16 @@ position once rather than per registration.
 - interceptor dispatch — lower order runs earlier in the chain,
 - message-transformer chaining — lower order runs earlier in the chain,
 - same-named extension tool resolution — the highest order is the resolution winner, because a later-running extension is the one that supersedes (this is the same "later supersedes" direction the surface already had, now controllable),
+- same-named extension command resolution — the highest order is the live command, and disabling it SHALL hand the name back to the next-ranked registration rather than deleting it,
 - turn-context section ordering — lower order produces the earlier section.
 
 A non-finite or otherwise invalid `order` SHALL be treated as `0` rather than producing an
 implementation-defined sequence.
 
-Ordering SHALL NOT be read as uniformly "lower wins": on the three first-run surfaces lower runs
-first, while on tool resolution the **later** entrant wins. Both follow from one rule — resolve the
-sequence by `(order, load sequence)` and read it in that sequence — so the two directions SHALL NOT
-be implemented as separate ad-hoc comparisons.
+Ordering SHALL NOT be read as uniformly "lower wins": on the first-run surfaces lower runs first,
+while on resolution surfaces (tools, commands) the **later** entrant wins. Both follow from one rule
+— resolve the sequence by `(order, load sequence)` and read it in that sequence — so the two
+directions SHALL NOT be implemented as separate ad-hoc comparisons.
 
 #### Scenario: A gate declares itself early
 
@@ -47,6 +48,11 @@ be implemented as separate ad-hoc comparisons.
 
 - **WHEN** two extensions register a tool under the same name, the earlier-loaded declaring `order: -10` and the later-loaded declaring `order: 10`
 - **THEN** the `order: 10` extension's tool definition is the one resolved
+
+#### Scenario: A shadowed command comes back
+
+- **WHEN** two extensions register a command under the same name and the higher-ranked one is disabled
+- **THEN** dispatch and `contextForCommand` resolve the lower-ranked extension's command again
 
 #### Scenario: A lower order produces the earlier context section
 
@@ -139,3 +145,19 @@ remaining extensions relative to one another.
 
 - **WHEN** B is re-enabled after being disabled
 - **THEN** B returns to the position determined by its `order` and load sequence, not to the end of the sequence
+
+### Requirement: Built-in extensions are the dispatch baseline
+
+Built-in extensions SHALL declare one canonical below-default order (`BUILTIN_EXTENSION_ORDER`,
+currently `-100`), because they load **last**: without a declared position that load position makes
+them run last in every chain and win every same-named tool, which is the opposite of a baseline.
+
+#### Scenario: A user extension replaces a built-in tool
+
+- **WHEN** a user extension registers a tool under a name a built-in also registers
+- **THEN** the user extension's definition is live, because the built-in's below-default order loses the resolution reading
+
+#### Scenario: A user extension gets the last word in a chain
+
+- **WHEN** a built-in and a user extension both register an interceptor for the same hook
+- **THEN** the built-in runs first and the user extension runs after it, even though the built-in loaded last
