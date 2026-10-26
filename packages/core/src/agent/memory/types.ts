@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type { ResolvedCoreEnv } from "../../env";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
+import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Constants
@@ -69,11 +70,45 @@ export interface MemoryLog {
   warn(message: string): void;
 }
 
-/** The telemetry events the memory extension may publish (through the host-injected emitter). */
+/** The telemetry events the memory service publishes through the agent's sink. */
 export type MemoryTelemetryEvent = "memory:prefetch" | "memory:extract" | "memory:consolidate";
 
 /** Host telemetry sink, typed by the same payload map the bus validates. */
 export type MemoryTelemetry = <T extends MemoryTelemetryEvent>(type: T, data: AgentEventPayloadMap[T]) => void;
+
+/**
+ * One per-turn selection request.
+ *
+ * The state (surfaced set, pending commit, last injected content) lives in the owning
+ * `MemoryService`, not in the extension: a session switch resets it through the same lifecycle
+ * hook as every other conversation-scoped value, and the extension only supplies the live turn
+ * facts (messages / signal / completion / log). Telemetry is the agent's own sink (the service is
+ * owned by the agent), so the extension does not carry one.
+ */
+export interface MemoryPrefetchInput {
+  /** Model-visible conversation for the current turn. */
+  messages: readonly ModelMessage[];
+  /** Structured one-shot completion (the extension's `ctx.llm`). */
+  complete: MemoryCompletion;
+  /** Run abort signal — checked before and after the side query. */
+  signal?: AbortSignal;
+  /** Optional log port (the extension's `ctx.logger`). */
+  log?: MemoryLog;
+}
+
+/**
+ * What the memory extension needs from `MemoryService`. Declared here (agent layer) so the
+ * extension does not import `managers/`; the service implements this structurally.
+ */
+export interface MemorySelectionPort {
+  prefetchRelevantMemories(input: MemoryPrefetchInput): Promise<void>;
+  /** Body the selection section publishes; empty when this turn selected nothing. */
+  getRelevantContent(): string;
+  /** Mark this turn's selection as shown (first assistant message / turn boundary). */
+  commitSurfacedMemories(): void;
+  /** Drop the pending commit without marking it surfaced (abort / stream error). */
+  discardPendingSurfaced(): void;
+}
 
 // ============================================================================
 // Zod Schemas

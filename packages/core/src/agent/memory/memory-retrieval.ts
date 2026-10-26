@@ -26,7 +26,8 @@ import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { splitDisplayLines } from "../../utils/display-lines.js";
 import { errorMessage } from "../../utils/errors.js";
-import { formatSectionTag } from "../turn-context/turn-context-message.js";
+import { extractTextFromContent } from "../compaction/message-utils.js";
+import { formatSectionTag, isContextText } from "../turn-context/turn-context-message.js";
 
 import {
   DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
@@ -37,6 +38,7 @@ import {
 
 import type { MemoryManager } from "./memory-manager.js";
 import type { Memory, MemoryCompletion, MemoryLog } from "./types.js";
+import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Types
@@ -55,6 +57,29 @@ export interface FindRelevantMemoriesOptions {
   maxBytesPerFile?: number;
   maxLinesPerFile?: number;
   maxSessionBytes?: number;
+}
+
+// ============================================================================
+// Query extraction
+// ============================================================================
+
+/**
+ * The current user turn's text: the newest GENUINE user message on the model-visible wire.
+ *
+ * Synthetic `<ctx kind=...>` blocks are `user` role too (turn context, background notifications,
+ * the continuation prompt), so a raw "last user message" can be an injected block rather than a
+ * request. Skipping them keeps the query a real user turn; an image-only message still stops the
+ * search (returns "") instead of silently querying with an older question.
+ */
+export function extractUserQuery(messages: readonly ModelMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role !== "user") continue;
+    const text = extractTextFromContent(message.content);
+    if (isContextText(text)) continue;
+    return text;
+  }
+  return "";
 }
 
 // ============================================================================

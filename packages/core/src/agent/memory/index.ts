@@ -30,5 +30,8 @@ export {
   type MemoryLog,
   type MemoryTelemetry,
   type MemoryTelemetryEvent,
+  type MemoryPrefetchInput,
+  type MemorySelectionPort,
 } from "./types.js";
+export { extractUserQuery } from "./memory-retrieval.js";
 export type { RelevantMemory, FindRelevantMemoriesOptions } from "./memory-retrieval.js";

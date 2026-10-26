@@ -18,7 +18,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 
-import { registerCoreEnv, MemoryManager, createMemoryExtension } from "../dist/dev.mjs";
+import { registerCoreEnv, MemoryManager, MemoryService, createMemoryExtension } from "../dist/dev.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
@@ -79,7 +79,15 @@ await manager.initialize();
 await manager.writeMemory("user-prefers-tabs", "user", "Prefers tabs over spaces", "Always use tabs for indentation.");
 await manager.flushIndex(); // writeMemory debounces index refresh — flush synchronously for the test
 
-const api = createMemoryExtension({ memoryManager: manager });
+/**
+ * The selection state (surfaced set, pending commit, injected body) lives in the owning
+ * `MemoryService`; the extension is only the per-turn trigger. The lifecycle calls
+ * `memoryService.resetState()` on a session switch, which is what the test simulates below.
+ */
+const memoryService = new MemoryService();
+memoryService.setManager(manager);
+
+const api = createMemoryExtension({ memoryManager: manager, selection: memoryService });
 assert.equal(api.id, "codent-memory", "extension id is codent-memory");
 assert.equal(typeof api.activate, "function", "extension has activate");
 
@@ -199,11 +207,84 @@ observers.get("message:start")({
 await selectionSection.content();
 assert.equal(llmCalls.length, 1, "a committed memory is not selected again in the same session");
 
-// A session switch clears the surfaced set (the new conversation has not seen them).
-mockCtx.sessionId = "ses_2";
+// A session switch clears the surfaced set (the new conversation has not seen them). This is the
+// real lifecycle hook (`SessionLifecycleService.resetTransientState` → `memory.resetState()`).
+memoryService.resetState();
 const afterSwitch = await selectionSection.content();
 assert.ok(afterSwitch.includes("user-prefers-tabs"), "a new session may surface the memory again");
 assert.equal(llmCalls.length, 2, "the selection query runs again after a session switch");
+
+// Only the turn's FIRST assistant message commits, and only for this agent.
+observers.get("message:start")({
+  type: "message:start",
+  agentId: "agent-1",
+  payload: { role: "assistant", firstOutput: false },
+});
+await selectionSection.content();
+assert.equal(llmCalls.length, 3, "firstOutput:false does not commit the turn's selection");
+
+observers.get("message:start")({
+  type: "message:start",
+  agentId: "another-agent",
+  payload: { role: "assistant", firstOutput: true },
+});
+await selectionSection.content();
+assert.equal(llmCalls.length, 4, "a child/foreign agent message does not commit this agent's selection");
+
+// An aborted run drops the pending set: a later pump that skips prepare must not consume it.
+observers.get("agent:abort")({ type: "agent:abort", agentId: "agent-1", payload: {} });
+observers.get("message:start")({
+  type: "message:start",
+  agentId: "agent-1",
+  payload: { role: "assistant", firstOutput: true },
+});
+await selectionSection.content();
+assert.equal(llmCalls.length, 5, "an aborted turn does not consume the surfaced set");
+
+// The real commit marks it, and the same memory is not selected again in this session.
+observers.get("message:start")({
+  type: "message:start",
+  agentId: "agent-1",
+  payload: { role: "assistant", firstOutput: true },
+});
+assert.equal(await selectionSection.content(), undefined, "a committed memory is not selected again");
+assert.equal(llmCalls.length, 5, "the committed set suppresses the next completion");
+
+// An already-aborted run issues no completion at all.
+mockCtx.signal = { aborted: true };
+assert.equal(await selectionSection.content(), undefined, "an aborted run injects no selection");
+assert.equal(llmCalls.length, 5, "an aborted run issues no completion");
+mockCtx.signal = undefined;
+
+// Synthetic <ctx> blocks are user-role but are not the user's query.
+let filteredQuery = "";
+let filteredProvider = null;
+const filterSelection = new MemoryService();
+filterSelection.setManager(manager);
+const filterApi = createMemoryExtension({ memoryManager: manager, selection: filterSelection });
+await filterApi.activate(
+  makeCtx({
+    z: (await import("zod")).z,
+    onProvider: (provider) => {
+      filteredProvider = provider;
+    },
+    extra: {
+      getMessages: () => [
+        { role: "user", content: "How do I indent?" },
+        { role: "user", content: '<ctx kind="current_date">\nOctober 27, 2026\n</ctx>' },
+      ],
+      llm: {
+        complete: async (request) => {
+          filteredQuery = request.prompt;
+          return { data: { selected_memories: [] } };
+        },
+      },
+    },
+  }).ctx
+);
+await filteredProvider.sections.find((entry) => entry.name === "selection").content();
+assert.ok(filteredQuery.includes("How do I indent?"), "selection skips synthetic <ctx> user messages");
+assert.ok(!filteredQuery.includes("<ctx"), "the query is the real user text, not the injected block");
 
 // memory_list executes and returns summaries.
 const listTool = registeredTools.find((t) => t.name === "memory_list");
@@ -286,7 +367,11 @@ assert.equal(
 // ---------------------------------------------------------------------------
 // 4. Config semantics
 // ---------------------------------------------------------------------------
-const toolsOnlyApi = createMemoryExtension({ memoryManager: manager, config: { indexDisabled: true } });
+const toolsOnlyApi = createMemoryExtension({
+  memoryManager: manager,
+  selection: memoryService,
+  config: { indexDisabled: true },
+});
 let toolsOnlyProvider = null;
 const toolsOnlyTools = [];
 const toolsOnlyCommands = [];
@@ -318,7 +403,11 @@ assert.ok(
   "indexDisabled keeps per-turn selection"
 );
 
-const indexOnlyApi = createMemoryExtension({ memoryManager: manager, config: { toolsDisabled: true } });
+const indexOnlyApi = createMemoryExtension({
+  memoryManager: manager,
+  selection: memoryService,
+  config: { toolsDisabled: true },
+});
 const indexOnlyTools = [];
 const indexOnlyCommands = [];
 await indexOnlyApi.activate(
@@ -336,6 +425,7 @@ assert.ok(
 
 const noContextApi = createMemoryExtension({
   memoryManager: manager,
+  selection: memoryService,
   config: { indexDisabled: true, selectionDisabled: true },
 });
 let noContextProvider = null;
@@ -348,6 +438,36 @@ await noContextApi.activate(
   }).ctx
 );
 assert.equal((noContextProvider.sections ?? []).length, 0, "both disabled leaves the provider with only its notice");
+
+// ---------------------------------------------------------------------------
+// 5. Selection service: telemetry sink + finalize discards the pending commit
+// ---------------------------------------------------------------------------
+{
+  const events = [];
+  const service = new MemoryService((type, data) => events.push([type, data]));
+  service.setManager(manager);
+  let calls = 0;
+  const complete = async () => {
+    calls += 1;
+    return { data: { selected_memories: ["user-prefers-tabs"] } };
+  };
+  const input = { messages: [{ role: "user", content: "tabs" }], complete };
+
+  await service.prefetchRelevantMemories(input);
+  assert.equal(events.length, 1, "the service emits memory:prefetch through its own sink");
+  assert.equal(events[0][0], "memory:prefetch");
+  assert.equal(events[0][1].status, "selected");
+  assert.ok(service.getRelevantContent().includes("user-prefers-tabs"));
+
+  // The extension never carries an emitter; the agent's sink is injected at construction.
+  // A turn that finalizes without producing a message drops the pending set, so a later pump
+  // cannot commit a selection the model never saw.
+  service.clearTurnContext();
+  service.commitSurfacedMemories();
+  await service.prefetchRelevantMemories(input);
+  assert.equal(calls, 2, "clearTurnContext discards the pending commit (the memory is selected again)");
+  assert.equal(events.length, 2, "the second turn emits its own selection event");
+}
 
 // Cleanup
 await rm(root, TEMP_RM_OPTIONS);

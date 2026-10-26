@@ -673,7 +673,7 @@ registerModelProvider(await createRemoteProvider("http://localhost:3100"));
 | `message:start` / `message:end` | An assistant message began streaming / was finalized (`firstOutput` on the run's first; finalized text + tool-call count). Observable, never default-logged |
 | `agent:abort` / `agent:stream-error` | User abort / stream failure (`RUN_ERROR`, empty-stream guard, and other pump failures; main chat records error without crashing the host) |
 | `agent:stop` | Run finished or aborted |
-| `memory:prefetch` | Per-turn memory selection (emitted by the memory extension through its host-injected sink) |
+| `memory:prefetch` | Per-turn memory selection (triggered by the memory extension, emitted by `MemoryService` through the agent's telemetry sink) |
 | `memory:extract` / `memory:consolidate` | Post-run memory extraction |
 | `compaction:auto-*` / `compaction:reactive-*` | Auto / reactive context compaction |
 | `session:save-error` | Session persistence failure |
@@ -923,7 +923,7 @@ Beyond registration (`registerTool` / `registerCommand` / `registerInterceptor` 
 | `ctx.getMessages()` | Defensive copy of the model-visible conversation (compaction + synthetic `<ctx>` blocks); mutation cannot reach the wire |
 | `ctx.getContextUsage()` | The footer's fill reading (`getContextFillTokens()` against the compaction budget), not a second estimate |
 | `ctx.getSystemPrompt()` | Effective system prompt for the run |
-| `ctx.llm.complete({ messages \| prompt, system?, schema?, model?, maxOutputTokens?, signal? })` | One-shot completion (text or schema-validated), outside the agent loop. Uses the **session's own connection**; `model` must be an entry that connection offers (unknown/cross-connection → typed `ExtensionLlmError`, no request). Usage is attributed to the session **automatically** (no caller-side tracker, no opt-out); `maxOutputTokens` is a ceiling (the host cap wins), a per-run call budget fails closed and is reported once as `agent:extension-error`, and an unbilled failure returns its slot. The built-in memory extension's per-turn selection is the first consumer |
+| `ctx.llm.complete({ messages \| prompt, system?, schema?, model?, maxOutputTokens?, signal? })` | One-shot completion (text or schema-validated), outside the agent loop. Uses the **session's own connection**; `model` must be an entry that connection offers (unknown/cross-connection → typed `ExtensionLlmError`, no request). Usage is attributed to the session **automatically** (no caller-side tracker, no opt-out); `maxOutputTokens` is a ceiling (the host cap wins), a per-run call budget fails closed and is reported once as `agent:extension-error`, and an unbilled failure returns its slot. The built-in memory extension's per-turn selection (delegated to `MemoryService`) is the first consumer |
 
 Accessor spelling on `ExtensionContext` is deliberate: value facts that cost nothing are getters (`sessionId`, `mode`, `model`, `signal`), and anything that does work or copies is a method (`isIdle()`, `getMessages()`, `getContextUsage()`, `getSystemPrompt()`). `validate:accessor-convention` only scans classes, so this rule is prose.
 

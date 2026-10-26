@@ -314,10 +314,10 @@ export class AgentBootstrap {
           const instance = await extensionRunner.loadExtension(
             createMemoryExtension({
               memoryManager,
+              // The owning agent's service: it owns the per-turn query, surfaced set and pending
+              // commit, so a session switch resets them through the normal lifecycle hook.
+              selection: managed.memory,
               ...(memoryConfig ? { config: memoryConfig } : {}),
-              // Extensions cannot emit bus events; this core-internal sink keeps `memory:prefetch`
-              // (and the extraction events when that moves here) on the same telemetry surface.
-              emitEvent: (type, data) => managed.emitEvent(type, data),
             })
           );
           if (!recordExtensionResult(report, "codent-memory", instance)) {

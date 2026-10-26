@@ -134,7 +134,6 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
       // show up in the session's lifetime totals.
       usage: host.usage,
       resolveTextAdapter: host.resolveTextAdapter,
-      emitEvent: (type, data) => host.emitEvent(type, data),
       // Best-effort pass-through of the run's controller. Note the limit: this
       // runs from `finalize`, which only happens once the turn has settled (and
       // only for `reason === "finished"`, so an aborted turn never gets here),

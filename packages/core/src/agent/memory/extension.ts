@@ -10,16 +10,16 @@
  *   are always visible; the full body is loaded on demand via `memory_read`), plus the per-turn
  *   selection section `ext:codent-memory:selection`.
  *
- * The per-turn relevance query (top-N memories by current user message) also lives here: the
- * extension selects through its own `ctx.llm` port and publishes the result as its
- * `ext:codent-memory:selection` section, so the run lifecycle no longer knows memory exists. The
- * index is the sibling `ext:codent-memory:index` section (independent hash admission), and the
- * surfaced set is committed when the turn's first assistant message starts
- * (`message:start.firstOutput`).
+ * The per-turn relevance query (top-N memories by current user message) is triggered here but
+ * OWNED by `MemoryService`: the extension supplies the live turn facts (`ctx.getMessages()` /
+ * `ctx.signal` / `ctx.llm` / logger) and publishes the returned body as its
+ * `ext:codent-memory:selection` section. The query, the surfaced set and the pending commit stay
+ * in the service so a session switch resets them through the same lifecycle hook as every other
+ * conversation-scoped value. The index is the sibling `ext:codent-memory:index` section
+ * (independent hash admission).
  *
- * End-of-turn extraction/consolidation still belongs to the run lifecycle (`MemoryService`): it
- * needs the finished turn's model-visible window and runs after finalize, which a context
- * provider cannot express.
+ * End-of-turn extraction/consolidation also belongs to `MemoryService`: it needs the finished
+ * turn's model-visible window and runs after finalize, which a context provider cannot express.
  *
  * Runtime-agnostic: all I/O goes through the injected `MemoryManager`, which uses the global
  * CoreEnv (`getEnv()`), and all model access goes through `ctx.llm`.
@@ -27,16 +27,11 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
-import { defaultByteLength } from "../../env";
-import { errorMessage } from "../../utils/errors.js";
-import { extractTextFromContent } from "../compaction/message-utils.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
-import { findRelevantMemories, formatRelevantMemories } from "./memory-retrieval.js";
-
 import type { MemoryManager } from "./memory-manager.js";
-import type { MemoryCompletion, MemoryLog, MemoryTelemetry } from "./types.js";
+import type { MemoryCompletion, MemoryLog, MemorySelectionPort } from "./types.js";
 import type { ExtensionAPI, ExtensionContext, ExtensionContextSectionProvider } from "../extension/types.js";
 import type { SchemaInput } from "@tanstack/ai";
 
@@ -59,7 +54,8 @@ export interface MemoryExtensionConfig {
   indexDisabled?: boolean;
   /**
    * Disable the per-turn relevance query (the `ext:codent-memory:selection` section).
-   * Default: false (one selection completion per user turn).
+   * Default: false (one selection completion per user turn). Disabling it also stops spending one
+   * `extensionLlm` completion slot per turn.
    */
   selectionDisabled?: boolean;
 }
@@ -71,19 +67,19 @@ export interface MemoryExtensionConfig {
 export interface CreateMemoryExtensionOptions {
   /** Pre-initialized memory manager (created by the agent factory). */
   memoryManager: MemoryManager;
+  /**
+   * The owning agent's `MemoryService` (structural port — the extension lives in the agent layer
+   * and must not import `managers/`). It owns the per-turn query, the surfaced set and the pending
+   * commit; the extension only triggers it and publishes the result.
+   */
+  selection: MemorySelectionPort;
   /** Fine-grained config. */
   config?: MemoryExtensionConfig;
-  /**
-   * Host telemetry sink for `memory:prefetch` (and, once extraction moves here, the other two
-   * memory events). Injected by the core bootstrap because an extension cannot emit bus events;
-   * it is core-internal, not part of the public extension API.
-   */
-  emitEvent?: MemoryTelemetry;
 }
 
 /** Create the built-in Memory extension. */
 export function createMemoryExtension(options: CreateMemoryExtensionOptions): ExtensionAPI {
-  const { memoryManager, config, emitEvent } = options;
+  const { memoryManager, selection, config } = options;
   return {
     id: "codent-memory",
     // Built-ins are the baseline: they run first in interceptor/transformer chains and lose a
@@ -94,7 +90,7 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
     description:
       "Persistent cross-session memories: memory_list/memory_read/memory_write tools + MEMORY.md index injected into turn context",
     async activate(ctx) {
-      await activateMemory(ctx, memoryManager, config, emitEvent);
+      await activateMemory(ctx, memoryManager, selection, config);
     },
   };
 }
@@ -102,8 +98,8 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
 async function activateMemory(
   ctx: ExtensionContext,
   memoryManager: MemoryManager,
-  config?: MemoryExtensionConfig,
-  emitEvent?: MemoryTelemetry
+  selection: MemorySelectionPort,
+  config?: MemoryExtensionConfig
 ): Promise<void> {
   const z = ctx.z;
 
@@ -241,15 +237,9 @@ creating a duplicate (check memory_list first).`,
   // Per-turn context: index + selection as independent named sections
   // ==========================================================================
 
-  /** Filenames already injected this session, and the ones this turn injected (commit pending). */
-  const alreadySurfaced = new Set<string>();
-  let pendingFilenames: string[] = [];
-  let lastSessionId: string | null = null;
-
-  const log: MemoryLog = {
-    info: (message) => ctx.logger.log("info", "memory", message),
-    warn: (message) => ctx.logger.log("warn", "memory", message),
-  };
+  // The extension logger is the one extension-side logging path (same as skills/LSP/MCP/code-mode);
+  // the selection service receives it structurally instead of a bespoke log object.
+  const log: MemoryLog = ctx.logger;
 
   // The one-shot port: the host owns the connection/catalog/usage/budget, and defaults the
   // abort signal to the live run (`ctx.signal`).
@@ -261,16 +251,6 @@ creating a duplicate (check memory_list first).`,
       schema: schema as SchemaInput,
     });
     return result.data;
-  };
-
-  /** The current user turn's text (the last user message on the model-visible wire). */
-  const latestUserText = (): string => {
-    const messages = ctx.getMessages();
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (message?.role === "user") return extractTextFromContent(message.content);
-    }
-    return "";
   };
 
   const indexContent = (): string | undefined => {
@@ -287,75 +267,43 @@ creating a duplicate (check memory_list first).`,
     ].join("\n");
   };
 
+  /**
+   * Per-turn selection. The service owns the query extraction, the surfaced set and the pending
+   * commit; the extension only supplies the live turn facts and publishes the body. This keeps
+   * one completion per user turn (the caller evaluates context providers once per turn) while the
+   * reset/commit rules remain in the conversation lifecycle.
+   */
   const produceSelection = async (): Promise<string | undefined> => {
-    // A session switch means a new conversation: none of the surfaced memories are "already
-    // shown" to it. Comparing ids is robust for new/switch/restore, none of which this extension
-    // has to observe separately.
-    if (ctx.sessionId !== lastSessionId) {
-      alreadySurfaced.clear();
-      lastSessionId = ctx.sessionId;
-    }
-
-    if (ctx.signal?.aborted) {
-      pendingFilenames = [];
-      emitEvent?.("memory:prefetch", { status: "aborted" });
-      return undefined;
-    }
-
-    const query = latestUserText();
-    if (!query.trim()) {
-      pendingFilenames = [];
-      emitEvent?.("memory:prefetch", { status: "skip-no-query" });
-      return undefined;
-    }
-
-    try {
-      const relevant = await findRelevantMemories(
-        query,
-        memoryManager,
-        complete,
-        alreadySurfaced,
-        {},
-        memoryManager.getEnv(),
-        log
-      );
-      // An abort mid-call makes the helper fall back to keyword selection; that result belongs to
-      // a turn nobody is waiting for, so drop it instead of injecting it.
-      if (ctx.signal?.aborted) {
-        pendingFilenames = [];
-        emitEvent?.("memory:prefetch", { status: "aborted" });
-        return undefined;
-      }
-      if (relevant.length === 0) {
-        pendingFilenames = [];
-        emitEvent?.("memory:prefetch", { status: "empty" });
-        return undefined;
-      }
-      const content = formatRelevantMemories(relevant);
-      pendingFilenames = relevant.map((memory) => memory.filename);
-      emitEvent?.("memory:prefetch", {
-        status: "selected",
-        count: relevant.length,
-        filenames: pendingFilenames,
-        byteSize: defaultByteLength(content, "utf-8"),
-      });
-      return content;
-    } catch (err) {
-      pendingFilenames = [];
-      emitEvent?.("memory:prefetch", { status: "error", error: errorMessage(err) });
-      return undefined;
-    }
+    await selection.prefetchRelevantMemories({
+      messages: ctx.getMessages(),
+      complete,
+      log,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    });
+    const content = selection.getRelevantContent();
+    return content.trim() ? content : undefined;
   };
 
   // One commit per turn: the first assistant message proves the turn is actually running. A turn
-  // aborted before any message never consumes the surfaced set.
+  // aborted before any message never consumes the surfaced set. `firstOutput` is per user turn
+  // (the run token changes on the next turn), and the agent filter excludes subagent messages that
+  // up-flow into this scope.
   ctx.events.observe("message:start", (event) => {
     if (event.agentId !== ctx.agentId) return;
     const payload = event.payload as { role?: string; firstOutput?: boolean };
     if (payload.role !== "assistant" || payload.firstOutput !== true) return;
-    for (const filename of pendingFilenames) alreadySurfaced.add(filename);
-    pendingFilenames = [];
+    selection.commitSurfacedMemories();
   });
+
+  // Failure side of the same rule: a run that ends before any message must not leave a selection
+  // "pending" for whatever pump happens next to commit (e.g. answering a client tool after an
+  // abort, which skips the per-turn prepare).
+  const discardPendingSelection = (event: { agentId: string }) => {
+    if (event.agentId !== ctx.agentId) return;
+    selection.discardPendingSurfaced();
+  };
+  ctx.events.observe("agent:abort", discardPendingSelection);
+  ctx.events.observe("agent:stream-error", discardPendingSelection);
 
   const sections: ExtensionContextSectionProvider[] = [];
   if (config?.indexDisabled !== true) {

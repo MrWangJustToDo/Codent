@@ -535,7 +535,14 @@ export class ManagedAgent {
     this.parentId = init.parentId;
     this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
-    this.memory = init.memory ?? new MemoryService();
+    this.memory =
+      init.memory ??
+      new MemoryService((type, data) => {
+        // The service owns the memory telemetry; it is constructed here so the sink is the
+        // agent's own emitter (extensions cannot emit bus events, and the memory extension is
+        // only the trigger for selection).
+        this.emitEvent(type, data);
+      });
     this.session = init.session ?? new SessionService();
     this.sessionPersistence = new SessionPersistence(this);
     // The store resolves the runtime env when bound, else ambient lazily at first write.
@@ -1694,6 +1701,7 @@ export class ManagedAgent {
   }
 
   clearTurnContext(): void {
+    this.memory.clearTurnContext();
     this.turnContext.clearTurnContext();
   }
 

@@ -872,23 +872,33 @@ freshly extracted memories surface without waiting for compaction. The index is 
 at snapshot time by re-evaluating the provider each user turn and hash-diffed like any
 other `<ctx kind=...>` section (only changed index re-injects).
 
-### 7.2 Per-turn selection (inside the extension)
+### 7.2 Per-turn selection (triggered by the extension, owned by `MemoryService`)
 
 The built-in extension's `selection` section producer runs during
-`collectExtensionPromptHooks` (the slot the old core prefetch occupied):
+`collectExtensionPromptHooks` (the slot the old core prefetch occupied) and calls the owning
+`MemoryService`:
 
 ```
-Extract last user message text (ctx.getMessages)
-findRelevantMemories(query, manager, complete = ctx.llm, alreadySurfaced)
-  → one structured completion (or keyword fallback), max ~5 memories
-formatRelevantMemories → section content (inner <relevant_memories> block)
-emit memory:prefetch { status: selected | empty | aborted | skip-no-query | error }
+memoryService.prefetchRelevantMemories({
+  messages: ctx.getMessages(), complete: ctx.llm, signal: ctx.signal, log
+})
+  inspect: extractUserQuery (newest GENUINE user message; synthetic <ctx> blocks skipped)
+  run:     findRelevantMemories(query, manager, complete, alreadySurfaced)
+             → one structured completion (or keyword fallback), max ~5 memories
+  store:   relevantContent + pendingSurfacedFilenames, emit memory:prefetch
+             { status: selected | empty | aborted | skip-no-query | error }
+assistant message:start(firstOutput) → memoryService.commitSurfacedMemories()
+agent:abort / agent:stream-error    → memoryService.discardPendingSurfaced()
+turn finalize                       → memoryService.clearTurnContext()
+session new/switch/restore          → memoryService.resetState()  (clears surfaced + pending + body)
 ```
 
-A session-id change resets `alreadySurfaced` (new/switch/restore all covered by the comparison).
-The section is admitted independently, so a changed selection re-injects without touching the
-index. `selectionDisabled` turns the query off; the host-injected `emitEvent` keeps the event (an
-extension cannot emit bus events).
+The state and reset rules are therefore in the conversation lifecycle, not in an extension
+closure; the extension only supplies live turn facts and publishes `getRelevantContent()` as its
+section. The section is admitted independently, so a changed selection re-injects without
+touching the index. `selectionDisabled` turns the query off. The service emits `memory:prefetch`
+through the agent's telemetry sink (it is constructed by `ManagedAgent`; an extension cannot emit
+bus events).
 
 ### 7.3 Per-iteration injection
 
