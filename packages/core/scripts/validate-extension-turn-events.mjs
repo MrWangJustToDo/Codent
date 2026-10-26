@@ -47,9 +47,13 @@ function drive() {
 
   const turns = of("turn:end");
   assert.deepEqual(turns[0].payload, { index: 1, finishReason: "stop", toolCalls: 0 });
+
+  const turnStarts = of("turn:start");
+  assert.equal(turnStarts.length, 1, "every turn opens with turn:start");
+  assert.deepEqual(turnStarts[0].payload, { index: 1, max: 0 }, "the start carries the index turn:end will close");
 }
 
-// ── 2. the second turn is not the first output ─────────────────────────────
+// ── 2. the turn pair is symmetric, and the second turn is not the first output ─
 {
   const { middleware, ctx, of } = drive();
   middleware.onStart(ctx);
@@ -74,6 +78,11 @@ function drive() {
     [1, 2],
     "turn indices pair with agent:iteration (both 1-based)"
   );
+  assert.deepEqual(
+    of("turn:start").map((event) => event.payload.index),
+    [1, 2],
+    "each turn:end has the turn:start that opened it"
+  );
 }
 
 // ── 3. a tool-only turn still brackets its message ─────────────────────────
@@ -89,6 +98,7 @@ function drive() {
   assert.equal(end.toolCalls, 2, "both tool calls are counted on the message");
   assert.equal(end.text, "");
   assert.deepEqual(of("turn:end")[0].payload, { index: 1, finishReason: "tool_calls", toolCalls: 2 });
+  assert.equal(of("turn:start").length, 1, "a tool-only turn still opens");
 }
 
 // ── 4. an aborted turn is not reported as finished ─────────────────────────
@@ -100,6 +110,7 @@ function drive() {
   // No RUN_FINISHED: the stream died / the run was aborted.
 
   assert.equal(of("turn:end").length, 0, "an aborted turn must not be reported as completed");
+  assert.equal(of("turn:start").length, 1, "but it did start, and that is not retracted");
   assert.equal(of("message:end").length, 0, "and its message is not finalized");
   assert.equal(of("message:start").length, 1, "while the start it did emit stays valid");
 }

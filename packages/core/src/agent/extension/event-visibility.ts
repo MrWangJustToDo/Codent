@@ -45,6 +45,7 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "turn:summary": "observable",
   // Agent lifecycle / tools / approvals
   "agent:thinking": "observable",
+  "turn:start": "observable",
   "turn:end": "observable",
   "message:start": "observable",
   "message:end": "observable",

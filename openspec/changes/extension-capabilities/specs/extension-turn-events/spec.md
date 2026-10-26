@@ -1,19 +1,23 @@
 ## ADDED Requirements
 
-### Requirement: Turn completion is an event
+### Requirement: Turn boundaries are explicit events
 
-A runtime turn (one model request plus the tool calls it requested) SHALL complete with a
-`turn:end` event carrying at least: the 1-based turn index, the finish reason, and how many tool
-calls the turn issued. Its start remains `agent:iteration` (`{ current, max }`, retained on the
-`iteration` channel); `turn:end` completes the same index.
+A runtime turn (one model request plus the tool calls it requested) SHALL open with a `turn:start`
+event carrying at least its 1-based index and the run's iteration budget, and SHALL close with a
+`turn:end` event carrying the same index, the finish reason, and how many tool calls the turn issued.
 
-The pair SHALL be the supported way to reason about turns. A consumer MUST be able to pair them by
-index, and a turn that ends without a tool batch MUST still emit `turn:end`.
+`agent:iteration` SHALL remain the retained progress projection (`{ current, max }` on the
+`iteration` channel); it MUST agree with `turn:start` on the index, and consumers that need the
+boundary pair MUST NOT have to interpret a projection to get it.
 
-#### Scenario: Pairing with the iteration event
+A consumer MUST be able to pair the two events by index, and a turn that ends without a tool batch
+MUST still emit `turn:end`.
+
+#### Scenario: Pairing by index
 
 - **WHEN** a run enters turn 3
-- **THEN** `agent:iteration` reports `{ current: 3, max }`
+- **THEN** `turn:start` reports index 3 with the iteration budget
+- **AND** `agent:iteration` reports `{ current: 3, max }`
 - **AND** when that turn finishes, `turn:end` reports index 3 with its finish reason
 
 #### Scenario: Tool-only turn
@@ -24,7 +28,8 @@ index, and a turn that ends without a tool batch MUST still emit `turn:end`.
 #### Scenario: Aborted turn
 
 - **WHEN** a run is aborted mid-turn
-- **THEN** the turn that was in flight is not reported as completed
+- **THEN** the `turn:start` already emitted is not retracted
+- **AND** the turn is not reported as completed by `turn:end`
 - **AND** the run's own terminal event still fires
 
 ### Requirement: Assistant message boundaries are observable

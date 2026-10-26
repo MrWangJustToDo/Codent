@@ -90,6 +90,11 @@ export type AgentEventPayloadMap = {
   };
   "agent:thinking": EmptyAgentEventPayload;
   /**
+   * One model turn began: `index` matches the turn `agent:iteration` reports (both 1-based) and the
+   * `turn:end` that closes it. `max` is the run's iteration budget (0 when unbudgeted).
+   */
+  "turn:start": { index: number; max: number };
+  /**
    * One model turn finished (a model request plus the tool calls it issued).
    *
    * Completes the index that `agent:iteration` opened; a consumer pairs the two by `index`. An

@@ -97,12 +97,18 @@ ctx.llm.complete({ system?, messages | prompt, schema?, model?, maxOutputTokens?
 
 No streaming (Phase 4): it would add a chunk channel and cancellation surface for no current caller.
 
-### Turn start is `agent:iteration`; this adds `turn:end` plus message events
+### Turn boundaries are an explicit pair; `agent:iteration` stays a projection
 
-`agent:iteration` already reports `{ current, max }` per turn and is retained on the `iteration`
-channel — a second `turn:start` would be a duplicate source. `turn:end` completes it with the
-finish reason and tool-call count, which is what "act after a model response and its tool calls"
-needs.
+Turns open with `turn:start` (`index` + budget) and close with `turn:end` (finish reason + tool-call
+count). `agent:iteration` keeps reporting `{ current, max }` as the retained progress projection, and
+the two agree on the index.
+
+The first draft of this design reused `agent:iteration` as the start and added only `turn:end`
+("a second start event would be a duplicate source"). That reasoning holds for the *projection* but
+not for the *contract*: `agent:iteration` is a retained channel value that a UI consumes as progress,
+so an extension wanting "one turn began" had to read a projection and infer a boundary from it — the
+same shape the bespoke "first output" event was rejected for. Boundaries are facts; progress is a
+view of them.
 
 `message:start` / `message:end` are the general form of "the model produced output". This is
 deliberately **not** a bespoke `agent:first-output`: memory's commit point (surfaced memories) is

@@ -914,7 +914,7 @@ Beyond registration (`registerTool` / `registerCommand` / `registerInterceptor` 
 
 Context providers may publish **several named sections** (`sections: [{ name, content, disabledContent }]`), each injected as its own `<ctx kind="<extensionId>:<name>">` and admitted by its own content hash — a changing section never re-injects a stable one. A throwing producer is contained to its section; a duplicate name keeps the last and warns.
 
-Turn/message boundaries are observable: `agent:iteration` opens a turn, `turn:end` closes it (`index` / `finishReason` / `toolCalls`), and `message:start` / `message:end` bracket assistant messages (`firstOutput` on the run's first). None of the three is default-logged. Validate: `pnpm --filter @codent/core run validate:extension-handler-context`, `validate:extension-model-access`, `validate:extension-turn-events`, `validate:extension-context-sections`.
+Turn/message boundaries are observable: `turn:start` opens a turn (`index` + iteration budget), `turn:end` closes it (`index` / `finishReason` / `toolCalls`), and `message:start` / `message:end` bracket assistant messages (`firstOutput` on the run's first). `agent:iteration` stays the retained progress projection and agrees on the index. None of them is default-logged. Validate: `pnpm --filter @codent/core run validate:extension-handler-context`, `validate:extension-model-access`, `validate:extension-turn-events`, `validate:extension-context-sections`.
 
 Roadmap (not built yet): **write** capabilities (`ctx.abort`, `ctx.compact`, session writes, `ctx.executeTool`) → interactive UI requests / provider+MCP registration / reload / trust gate → streaming completions.
 

@@ -29,6 +29,8 @@
 - [x] 3.1 Add `turn:end` (`index`, `finishReason`, `toolCalls`) paired with `agent:iteration`
 - [x] 3.2 Add `message:start` / `message:end` for assistant messages (role, message id, first-output
       flag, final parts or summary reference); fire for tool-call-only messages too
+- [x] 3.4 Add `turn:start` (`index` + iteration budget) and pair it with `turn:end`; `agent:iteration`
+      stays the retained progress projection with the same index
 - [x] 3.3 Register the three events in `AgentEvents`, their metadata (dispatch `emit`, no channel, no
       retained value) and the visibility table (`observable`, default-not-logged)
 

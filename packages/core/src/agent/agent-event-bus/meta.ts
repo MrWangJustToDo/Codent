@@ -125,6 +125,7 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "agent:iteration": { mode: "emit", channel: "iteration", retained: true },
   // Turn/message boundaries: observable facts about a run, not session channels. Two to four per
   // turn, so they are deliberately not default-logged (see DEFAULT_EVENT_LOG_RULES).
+  "turn:start": { mode: "emit" },
   "turn:end": { mode: "emit" },
   "message:start": { mode: "emit" },
   "message:end": { mode: "emit" },

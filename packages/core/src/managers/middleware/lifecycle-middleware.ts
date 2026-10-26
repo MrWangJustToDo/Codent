@@ -94,6 +94,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       // One model turn begins. The turn index pairs with `agent:iteration` (both 1-based); the
       // per-turn message state starts empty and `turn:end` closes it on RUN_FINISHED.
       turnIndex = ctx.iteration + 1;
+      deps.emitEvent?.("turn:start", { index: turnIndex, max: deps.maxIterations ?? 0 });
       turnToolCalls = 0;
       messageStarted = false;
       messageId = "";
