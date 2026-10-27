@@ -1,5 +1,6 @@
 import { createLogExtension, type LogExtension } from "../agent/log/extension.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
+import { AGENT_DATA_DIR } from "../utils/workspace-paths.js";
 
 import { AgentEventBusScope } from "./agent-event-bus-scope.js";
 import { buildManagedAgent } from "./agent-factory.js";
@@ -54,11 +55,11 @@ export async function getDefaultSkillDirs(env?: ResolvedCoreEnv): Promise<SkillD
     dirs.push(...parsedDirs.map((path) => ({ path, source: "user" as const })));
   }
 
-  const userSkillDir = e.path.join(await e.homedir(), ".agents", "skills");
+  const userSkillDir = e.path.join(await e.homedir(), AGENT_DATA_DIR, "skills");
 
   dirs.push({ path: userSkillDir, source: "user" });
 
-  dirs.push({ path: ".agents/skills", source: "project" });
+  dirs.push({ path: `${AGENT_DATA_DIR}/skills`, source: "project" });
 
   return dirs;
 }

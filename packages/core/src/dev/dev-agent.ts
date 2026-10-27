@@ -397,6 +397,7 @@ export {
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
 export { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
 export type {
+  CommandJobChange,
   CommandJobChangeListener,
   CommandJobRecord,
   CommandJobPollResult,

@@ -251,6 +251,17 @@ Every loader result goes through `recordExtensionResult` / `recordExtensionError
 `state: "error"` activation is counted as failed rather than active. The report travels with
 `SessionBootstrapContext`; `session:doc` uses its import notices instead of dropping them.
 
+**Search exclusion is one policy, not a list per tool.** `grep` and `glob` resolve a single
+`SearchPolicy` (`agent/tools/builtin/fs/search/search-policy.ts`) — the workspace's own ignore rules
+(`.gitignore` / `.git/info/exclude` / global excludes, via `git grep` / `git ls-files` or `rg`'s
+native handling) plus a short build/dependency list and the runtime data directory derived from
+`AGENT_DATA_DIR` (`.agents`), which is the floor when the workspace has no git at all. An explicit
+`path` inside an ignored tree reopens it (`git check-ignore`), so ignoring is a default rather than a
+cage. The engines are a ladder — `rg` → `git grep --untracked` → `grep -r` for content, `fd` →
+`git ls-files` → `find` for paths — all fed by that one policy, so a machine without ripgrep cannot
+silently fall back to a recursive walk that knows nothing about ignore rules (that fallback walked
+this repo's 524 MB `.agents/` at 12.6 s for a 57 ms answer). Validate: `validate:search-ignore-policy`.
+
 ### 2.3 Event infrastructure — the unified bus (manager construct time)
 
 ```
@@ -392,7 +403,9 @@ Sources: `managers/middleware/*` for run stack; `agent/plan/plan-mode-middleware
 15. background-middleware    the background class, in order: one-shot completion pushes
                              (<ctx kind=background_notification>, persisted + id-deduped, `jobs` attr)
                              and then the <background_jobs> pointer (hash-admitted, only jobs the
-                             wire does not already announce and whose call is still visible)
+                             wire does not already announce and whose call is still visible).
+                             Delivery only: the turn that makes an IDLE session deliver at all is
+                             started by `ManagedAgent.wakeForBackgroundJobs` (see §command jobs)
 16. prompt-cache-middleware  Anthropic cache_control + OpenAI prompt_cache_key + sorted tools
                              (must stay last so cache breakpoints see the final payload)
 ```
@@ -957,6 +970,9 @@ delivers what its policy resolves. (3) background pushes (`background-middleware
 core delivery and runs first; the `<background_jobs>` pointer is the safety net that re-lists only
 jobs the wire no longer announces (so a compacted-away result is recoverable, and the same pass
 never mentions a job twice). Background tasks land here.
+The push rides a model call, so a job that ends while the session is IDLE would deliver only when
+the user next types; `ManagedAgent` therefore starts a turn for it (see the command-job note in
+§8.2). The middleware stays delivery-only.
 Recovery for (2) is the "cleanup": only blocks whose tag **and** scope match the current one count.
 The todo counter spans prompts (only a `todo` update resets it) and falls back to the current turn
 when no `todo` call is in the window (a plan-seeded or compacted-away list still nags); the repeat
@@ -1063,6 +1079,8 @@ Observer `emit` is synchronous fire-and-forget with per-listener error containme
 
 Tool process chunks (`run_command` stdout/stderr) are scoped by required `agentId`; Session `tool` channel receives them (`chunk` / `clear`).
 Command output, task summaries and compact summaries share the per-agent `AgentStreamHub` (`reset` / `append` / `end`), exposed through `ManagedAgent.getStreamHub()` for the runner/host wiring; the field itself is private. Command source projects onto `tool`, text sources onto `summary`; compact stream keys are stable (`compact:${agentId}`). Command-job lifecycle is the separate `AgentCommandService`; session switching resets it together with the other transient session state.
+
+**Idle wake (`AgentCommandService` / `AgentChatController.wakeForBackgroundCompletion`):** the completion notification is a one-shot push the background middleware can only make *during* a model call, so a job that ends while the session is idle would wait for the user to type. The registry therefore reports which jobs reached a terminal state in each change (`CommandJobChange.finished` — `restore` / `create` / evict / clear report an empty list, so `/resume` never starts a turn for a historical record), and `ManagedAgent` starts a turn for an idle session. Delivery is untouched: the wake only supplies the missing reason to call the model, `collectCompleted()` there is a peek, and `markNotified` still happens in the middleware. No wake for a live pump (`shouldDeferQueue`), a session parked on the user (`waiting` / `awaiting_user`), a manual `/compact` (`compacting` owns the transcript), plan review (`ready` is an interactive pause) or a subagent (no user; its turn belongs to its parent). Validate: `validate:background-wake`, `validate:command-jobs-channel`.
 
 ### 8.3 Event types (summary)
 

@@ -11,6 +11,8 @@
  * `validate:skills-extension` re-checks the API surface this text documents.
  */
 
+import { AGENT_DATA_DIR } from "../../../utils/workspace-paths.js";
+
 export const writeExtensionBody = `# Writing a codent extension
 
 An extension is a module that runs inside the agent's process and can add tools, slash
@@ -30,8 +32,8 @@ Core scans these directories in order, later ids winning:
 
 1. \`--extension-dirs <dir>\` (CLI flag) / \`extensionDirs\` config — extras first
 2. \`AGENT_EXTENSION_DIRS\` (comma-separated env var)
-3. \`.agents/extension\`      (project)
-4. \`~/.agents/extension\`    (user home)
+3. \`${AGENT_DATA_DIR}/extension\`      (project)
+4. \`~/${AGENT_DATA_DIR}/extension\`    (user home)
 
 Each **file** in those directories is one extension (not a subdirectory), matched by
 \`.mjs\` / \`.js\` / \`.cjs\` / \`.ts\`. The id defaults to the file's basename, so
@@ -406,7 +408,7 @@ Then, in the session:
    (\`active\` / \`error\`), tool count, and command count. Toggle one to enable/disable it;
    a load error is shown here.
 2. Run your slash command, or ask the agent to call your tool.
-3. Read \`.agents/logs/<sessionId>/agent.log\` for \`ctx.logger\` output and load failures.
+3. Read \`${AGENT_DATA_DIR}/logs/<sessionId>/agent.log\` for \`ctx.logger\` output and load failures.
 
 A failing extension never kills the session — it is reported and skipped. That also means
 a typo can look like "nothing happened", so check the panel and the log first.

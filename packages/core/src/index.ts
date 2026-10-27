@@ -486,6 +486,9 @@ export { EXTENSION_EVENT_VISIBILITY, observableExtensionEvents } from "./agent/e
 
 export { generateId } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
+// The runtime data directory (sessions, logs, plans, cache) — hosts need its name to exclude it
+// from their own listings/searches, and the name has exactly one definition.
+export { AGENT_DATA_DIR } from "./utils/workspace-paths.js";
 export type { GenerateIdOptions } from "./utils/generate-id.js";
 
 // ============================================================================

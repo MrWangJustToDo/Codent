@@ -5,6 +5,7 @@ import { defineServerTool, isProjectedModelContent } from "../tools/runtime/defi
 import { toolOutputBaseSchema } from "../tools/shared/schemas.js";
 import { withDuration } from "../tools/shared/tool-result.js";
 
+import { PLAN_STORE_DIR } from "./plan-store.js";
 import { isUsableVerification, gateCompletePlanVerification } from "./plan-verification.js";
 
 import type { PlanModeController } from "./plan-mode-controller.js";
@@ -50,7 +51,7 @@ function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: Crea
     present: { category: "other" },
     description: isUpdate
       ? `Update the current plan while in plan mode (review/planning). Replaces the plan artifact and overwrites the plan file. Prefer this over rewriting ## Plan in chat. Requires a non-empty verification checklist.`
-      : `Create a structured implementation plan while in plan mode. Auto-saves under .agents/plans/ for user review in the ready banner. Prefer this over free-form ## Plan markdown when possible. Requires a non-empty verification checklist.`,
+      : `Create a structured implementation plan while in plan mode. Auto-saves under ${PLAN_STORE_DIR}/ for user review in the ready banner. Prefer this over free-form ## Plan markdown when possible. Requires a non-empty verification checklist.`,
     inputSchema: structuredPlanInputSchema,
     outputSchema: planToolOutputSchema,
     execute: async (input) => {

@@ -5,7 +5,9 @@
  *
  * Four layers, each of which can stop working on its own while the others stay green:
  *  1. `CommandJobRegistry` → change callback: membership + lifecycle changes notify, output
- *     appends do not (they are far too frequent to broadcast and carry nothing to display).
+ *     appends do not (they are far too frequent to broadcast and carry nothing to display), and
+ *     only the terminal transition reports `finished` ids (create/restore/clear are bookkeeping,
+ *     and the idle wake in `ManagedAgent` must not treat a restored record as news).
  *  2. Event → channel wiring: `session:jobs` maps to the retained `jobs` channel, the channel is
  *     in the default set (an opt-in channel is one no remote client ever receives), it is
  *     classified observable for extensions, and it deliberately carries NO event→log rule.
@@ -71,17 +73,26 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
 
 {
   const registry = new CommandJobRegistry();
+  /** Every change payload, in order. */
   const notified = [];
-  registry.setChangeListener((jobs) => notified.push(jobs));
+  /** Just the `finished` id batches — the list a consumer uses to tell news from bookkeeping. */
+  const finishedBatches = [];
+  registry.setChangeListener((change) => {
+    notified.push(change);
+    finishedBatches.push(change.finished);
+  });
+  const jobsOf = (change) => change.jobs;
 
   // (a) Every membership / lifecycle change notifies.
   const job = registry.create("sleep 30");
   assert.equal(notified.length, 1, "(a) create notifies");
   assert.deepEqual(
-    notified[0].map((j) => j.jobId),
+    jobsOf(notified[0]).map((j) => j.jobId),
     [job.id],
     "(a) the notification carries the job"
   );
+  // …but creating a job is not a completion: the idle-wake consumer must not start a turn for it.
+  assert.deepEqual(finishedBatches[0], [], "(a) create reports no finished job");
 
   // Output appends are the hot path and must not notify.
   registry.appendStdout(job.id, "partial output\n");
@@ -90,7 +101,7 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
 
   // `kill` handles and raw output must not cross the boundary: the payload is replayed to remote
   // clients and persisted nowhere, so it stays JSON-serializable and summary-only.
-  assert.deepEqual(Object.keys(notified[0][0]).sort(), [
+  assert.deepEqual(Object.keys(jobsOf(notified[0])[0]).sort(), [
     "command",
     "endedAt",
     "exitCode",
@@ -101,7 +112,8 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
 
   registry.markExited(job.id, 0);
   assert.equal(notified.length, 2, "(a) markExited notifies");
-  assert.equal(notified[1][0].status, "exited", "(a) markExited reports the real status");
+  assert.equal(jobsOf(notified[1])[0].status, "exited", "(a) markExited reports the real status");
+  assert.deepEqual(finishedBatches[1], [job.id], "(a) markExited is the transition that reports a finished job");
 
   // A second terminal transition on a finished job is a no-op (and so is its notification).
   registry.markExited(job.id, 0);
@@ -109,11 +121,18 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
 
   const failing = registry.create("exit 1");
   registry.markFailed(failing.id, "boom");
-  assert.equal(notified.at(-1).find((j) => j.jobId === failing.id).status, "failed");
+  assert.equal(jobsOf(notified.at(-1)).find((j) => j.jobId === failing.id).status, "failed");
+  assert.deepEqual(notified.at(-1).finished, [failing.id], "(a) markFailed reports the finished job");
 
   const killed = registry.create("sleep 300");
   registry.markKilled(killed.id);
-  assert.equal(notified.at(-1).find((j) => j.jobId === killed.id).status, "killed");
+  assert.equal(jobsOf(notified.at(-1)).find((j) => j.jobId === killed.id).status, "killed");
+  assert.deepEqual(notified.at(-1).finished, [killed.id], "(a) markKilled reports the finished job");
+
+  // Eviction / clear are bookkeeping: terminal rows leave the list, but nothing just finished.
+  registry.clear();
+  assert.deepEqual(notified.at(-1).jobs, [], "(a) clear drops the list");
+  assert.deepEqual(notified.at(-1).finished, [], "(a) clear reports no finished job");
 
   // No listener → no crash (the registry is also constructed standalone/ambient).
   const bare = new CommandJobRegistry();

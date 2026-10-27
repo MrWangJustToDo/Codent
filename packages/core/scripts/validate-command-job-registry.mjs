@@ -885,7 +885,7 @@ console.log("teardown log deletion OK");
   const service = new AgentCommandService({
     env: () => env,
     ownerSessionId: () => owner,
-    onJobsChange: (jobs) => events.push(jobs.map((job) => job.jobId)),
+    onJobsChange: ({ jobs }) => events.push(jobs.map((job) => job.jobId)),
   });
   const startEnv = {
     ...env,

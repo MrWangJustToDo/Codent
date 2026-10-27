@@ -18,6 +18,7 @@
 
 import { RequestError } from "@agentclientprotocol/sdk";
 import {
+  AGENT_DATA_DIR,
   buildDefaultSystemPrompt,
   CodentAgent,
   createDirectModelProvider,
@@ -250,7 +251,7 @@ export async function bootstrapLocalAcp(
 
   if (!model?.trim()) {
     throw new Error(
-      "ACP host requires a model — pass --model (with --base-url / --api-key), set `.agents/config/models.json`, or set MODEL/BASE_URL/API_KEY in .env."
+      `ACP host requires a model — pass --model (with --base-url / --api-key), set \`${AGENT_DATA_DIR}/config/models.json\`, or set MODEL/BASE_URL/API_KEY in .env.`
     );
   }
 

@@ -37,6 +37,7 @@ import {
   type ReasoningEffort,
 } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
+import { AGENT_CACHE_DIR } from "../utils/workspace-paths.js";
 
 // ============================================================================
 // Constants
@@ -243,7 +244,7 @@ let lastNetworkError: string | null = null;
 
 function getCachePath(): string {
   const env = getEnv();
-  return env.path.join(env.rootPath, ".agents", "cache", "models-dev.json");
+  return env.path.join(env.rootPath, AGENT_CACHE_DIR, "models-dev.json");
 }
 
 /**

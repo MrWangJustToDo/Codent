@@ -7,6 +7,8 @@
 
 import { z } from "zod";
 
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
+
 import type { ResolvedCoreEnv } from "../../env";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -17,7 +19,7 @@ import type { ModelMessage } from "@tanstack/ai";
 
 export const MEMORY_TYPES = ["user", "feedback", "project", "reference"] as const;
 
-export const DEFAULT_MEMORY_DIR = ".agents/memory";
+export const DEFAULT_MEMORY_DIR = `${AGENT_DATA_DIR}/memory`;
 
 export const MEMORY_INDEX_FILENAME = "MEMORY.md";
 

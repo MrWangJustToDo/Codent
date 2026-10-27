@@ -217,6 +217,8 @@
     "validate:session-interaction-channel": "pnpm run build && node scripts/validate-session-interaction-channel.mjs",
     "validate:agent-iteration-progress": "pnpm run build && node scripts/validate-agent-iteration-progress.mjs",
     "validate:command-jobs-channel": "pnpm run build && node scripts/validate-command-jobs-channel.mjs",
+    "validate:background-wake": "pnpm run build && node scripts/validate-background-wake.mjs",
+    "validate:search-ignore-policy": "pnpm run build && node scripts/validate-search-ignore-policy.mjs",
     "validate:l1-state-display-name": "pnpm run build && node scripts/validate-l1-state-display-name.mjs",
     "validate:media-missing-and-compaction": "pnpm run build && node scripts/validate-media-missing-and-compaction.mjs",
     "validate:session-identity": "pnpm run build && node scripts/validate-session-identity.mjs",

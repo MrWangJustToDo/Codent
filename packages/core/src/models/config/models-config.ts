@@ -28,6 +28,7 @@ import {
   serverAdvertisedModels,
 } from "../../provider/remote-model-provider.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 import { selectModel } from "./model-selection.js";
 
@@ -38,7 +39,7 @@ import type { ModelInfo, ModelStyle } from "../types.js";
 // Constants
 // ============================================================================
 
-export const MODELS_CONFIG_DIR = ".agents/config";
+export const MODELS_CONFIG_DIR = `${AGENT_DATA_DIR}/config`;
 export const MODELS_CONFIG_FILE = "models.json";
 
 // ============================================================================

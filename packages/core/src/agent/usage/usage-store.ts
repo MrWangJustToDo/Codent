@@ -13,6 +13,7 @@
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { totalTokensOf } from "../../runtime-types/token-usage.js";
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 import type { TokenUsage } from "../../runtime-types/token-usage.js";
 
@@ -21,7 +22,7 @@ import type { TokenUsage } from "../../runtime-types/token-usage.js";
 // ============================================================================
 
 /** Directory for global usage history: `.agents/usage/`. */
-export const USAGE_DIR = ".agents/usage";
+export const USAGE_DIR = `${AGENT_DATA_DIR}/usage`;
 export const USAGE_FILE_PREFIX = "usage-";
 export const USAGE_FILE_SUFFIX = ".jsonl";
 

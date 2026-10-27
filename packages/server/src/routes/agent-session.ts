@@ -164,7 +164,7 @@ async function loadCore() {
   return import("@codent/core");
 }
 
-/** Load the server's own models.json (`.agents/config/models.json`), if any. */
+/** Load the server's own models.json (`.agents/config/models.json` — see `AGENT_DATA_DIR`), if any. */
 async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
   const { loadModelsConfigFromFile } = await loadCore();
   try {

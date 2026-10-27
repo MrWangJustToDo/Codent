@@ -13,7 +13,7 @@
  * ```
  */
 
-import { renderRgbaAsTerminalText } from "@codent/core";
+import { AGENT_DATA_DIR, renderRgbaAsTerminalText } from "@codent/core";
 import { stdioTransport } from "@tanstack/ai-mcp/stdio";
 import mime from "mime-types";
 import { exec, execFile } from "node:child_process";
@@ -238,7 +238,7 @@ export interface CreateNodeEnvOptions extends LocalEnvironmentConfig {
 export function createNodeEnv(options: CreateNodeEnvOptions): CoreEnv {
   const { rootPath } = options;
   const useOsSandbox = resolveLocalEnvironmentMode(options) === "os";
-  const homeAgents = path.join(os.homedir(), ".agents");
+  const homeAgents = path.join(os.homedir(), AGENT_DATA_DIR);
   const { filesystem, resolvePath } = createNativeFilesystem(rootPath, {
     // Allow reading user-global skills / extensions under ~/.agents
     extraReadRoots: [homeAgents],

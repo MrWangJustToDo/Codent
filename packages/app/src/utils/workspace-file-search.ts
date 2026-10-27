@@ -1,3 +1,5 @@
+import { AGENT_DATA_DIR } from "@codent/core";
+
 import { parseGitPathList } from "./workspace-git-paths.js";
 import { joinWorkspacePath } from "./workspace-path.js";
 
@@ -105,7 +107,7 @@ export function clearWorkspaceFileListCache(): void {
 const SKIP_FS_DIRS = new Set([
   ".git",
   "node_modules",
-  ".agents",
+  AGENT_DATA_DIR,
   "dist",
   "build",
   ".next",

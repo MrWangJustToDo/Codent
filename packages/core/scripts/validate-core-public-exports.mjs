@@ -61,6 +61,7 @@ for (const name of [
   "computeToolDisplay",
   "previewEdit",
   "generateId",
+  "AGENT_DATA_DIR",
   "CONVERSATION_SUMMARY_START",
   "CONVERSATION_SUMMARY_END",
   "extractCompactionSummaryBody",

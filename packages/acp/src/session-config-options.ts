@@ -24,6 +24,7 @@
 
 import { RequestError } from "@agentclientprotocol/sdk";
 import {
+  AGENT_DATA_DIR,
   decodeModelChoice,
   encodeModelChoice,
   offerableReasoningEfforts,
@@ -329,7 +330,10 @@ export async function applyModel(
   const catalog = entriesOf(read);
   // No read = this host was never given a model list; nothing can be validated (or switched).
   if (!catalog?.length)
-    throw RequestError.invalidParams(undefined, "No models are configured (no `.agents/config/models.json`)");
+    throw RequestError.invalidParams(
+      undefined,
+      `No models are configured (no \`${AGENT_DATA_DIR}/config/models.json\`)`
+    );
 
   const current = target.session.getSnapshot();
   const decoded = decodeModelChoice(value);

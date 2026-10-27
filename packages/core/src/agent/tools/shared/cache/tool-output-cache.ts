@@ -23,6 +23,8 @@
  * Both are non-fatal by contract: a failed delete never fails the tool call.
  */
 
+import { AGENT_CACHE_DIR } from "../../../../utils/workspace-paths.js";
+
 import { createStaleFileSweeper } from "./stale-sweep.js";
 
 import type { StaleSweepOptions } from "./stale-sweep.js";
@@ -34,7 +36,7 @@ import type { ModelMessage } from "@tanstack/ai";
 // ============================================================================
 
 /** Cache directory holding one file per spilled tool result (workspace-relative). */
-export const TOOL_OUTPUT_CACHE_DIR = ".agents/cache/tool-output";
+export const TOOL_OUTPUT_CACHE_DIR = `${AGENT_CACHE_DIR}/tool-output`;
 
 /**
  * Only `.txt` entries are swept. Background job logs live in a sibling directory

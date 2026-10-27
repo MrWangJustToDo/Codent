@@ -1,3 +1,5 @@
+import { AGENT_DATA_DIR } from "@codent/core";
+
 import { useConfigEditor } from "../hooks/use-config-editor.js";
 import { useConfig } from "../hooks/use-config.js";
 import { useDiffRenderer } from "../hooks/use-diff-renderer.js";
@@ -60,7 +62,7 @@ registerBuiltinCommand("settings", {
       {
         label: "config",
         value: "config",
-        description: blocked || "Edit provider / models in .agents/config/models.json",
+        description: blocked || `Edit provider / models in ${AGENT_DATA_DIR}/config/models.json`,
       },
     ];
   },

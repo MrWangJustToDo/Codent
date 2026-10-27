@@ -41,11 +41,11 @@ pump），只有 `finalizeRun` 才写 `agent:stop`。
 
 | | InteractiveChat（root 对话） | Worker（`task` / 内部 worker） |
 |---|---|---|
-| 入口 | `AgentChatController.pumpToolPhases` (`agent-chat-controller.ts:468`) | `runSubagent` → `executeSubagentRun` (`agent/subagent/run-subagent.ts:94`) |
-| span | 每个工具相位一次 `runManagedSpan`，`outcome` 留给 pump (`agent-chat-controller.ts:605`) | 一次 `runManagedSpan`，`outcome` 由 `finalizeSubagentTask` 走 `path: "detached"` (`task-result.ts:105`) |
-| run token | 有（`RunCoordinator.beginRun`，唯一调用点 `agent-chat-controller.ts:470`） | 无；靠自身 abort signal + status |
+| 入口 | `AgentChatController.pumpToolPhases` (`agent-chat-controller.ts:491`) | `runSubagent` → `executeSubagentRun` (`agent/subagent/run-subagent.ts:94`) |
+| span | 每个工具相位一次 `runManagedSpan`，`outcome` 留给 pump (`agent-chat-controller.ts:628`) | 一次 `runManagedSpan`，`outcome` 由 `finalizeSubagentTask` 走 `path: "detached"` (`task-result.ts:105`) |
+| run token | 有（`RunCoordinator.beginRun`，唯一调用点 `agent-chat-controller.ts:493`） | 无；靠自身 abort signal + status |
 | 结束判定 | 循环读消息链（`shouldContinueAgentPump`）+ 队列 | 一次流结束即结束 |
-| `flagEmptyStream` | 开（空流=错误）(`agent-chat-controller.ts:610`) | 关（空流按正常结束）(`run-subagent.ts:279`) |
+| `flagEmptyStream` | 开（空流=错误）(`agent-chat-controller.ts:633`) | 关（空流按正常结束）(`run-subagent.ts:279`) |
 | abort 形状的异常 | 保留错误文本（`abortErrorAsCancel: false`） | 视为取消（`abortErrorAsCancel: true`，`run-subagent.ts:282`） |
 | finalize | `finalizeChat` → `finalizeRun(kind)`（`waiting` 除外） | `finalizeDetached(kind)` |
 | extensions / memory / todo / session store | 有（仅 root 装配，`agent-factory.ts:125-172`） | 无（`agent-factory.ts` 的 `!parentId` 分支之外全不装配；`MemoryService.runExtraction` 因无 manager 直接返回，`memory-service.ts:166-167`） |
@@ -76,7 +76,7 @@ type AgentStatus =
 |---|---|---|---|
 | `isTerminalStatus` (`:36`) | `aborted` `error` `waiting` `awaiting_user` | "流正常结束时**不许被覆盖**" | `resolveFinishStatus` (`:45`)、`onRunFinish` |
 | `isActiveStatus` (`:40`) | `running` `thinking` `responding` `waiting` `awaiting_user` `compacting` | "现在有活可干，abort 能改变点什么" | abort 监听器 (`managed-agent-run-lifecycle.ts:85`)、`abortManagedAgentRun` (`:183`)、`ctx.isIdle()` (`managed-agent.ts:1580`) |
-| `shouldDeferMidRunQueue` (`agent/queue/defer-mid-run-queue.ts:11`) | `pumpDepth > 0` 或 `waiting`/`awaiting_user` | "这条新输入该排队还是直接开跑" | `shouldDeferQueue` (`agent-chat-controller.ts:365`) |
+| `shouldDeferMidRunQueue` (`agent/queue/defer-mid-run-queue.ts:11`) | `pumpDepth > 0` 或 `waiting`/`awaiting_user` | "这条新输入该排队还是直接开跑" | `shouldDeferQueue` (`agent-chat-controller.ts:388`) |
 
 关键点：**`completed` 不在 `TERMINAL_STATUSES` 里，也不在 `ACTIVE_STATUSES` 里**。
 它不是"终止态"，而是"正常结束写下的那个值"，因此下一次 `onRunStart` 可以把它推进 `running`。
@@ -223,13 +223,13 @@ sequenceDiagram
 
 ### 3.2 prepare
 
-pump 入口 (`agent-chat-controller.ts:468-485`)：
+pump 入口 (`agent-chat-controller.ts:491-508`)：
 
 1. `token = managed.run.beginRun()` —— 使上一个 token 失效，返回本次的 token (`run-coordinator.ts:126`)。
 2. `pumpDepth += 1`，`resetTurnLifecycle()`（重置 `turnLifecycleFinalized`，`run-coordinator.ts:177`），
    `clearPrepareAsContinuation()`，`setError("")`。
 3. `applyCancelledIncompleteTools()`：只清理被截断/不可解析的残留 tool call
-   (`:652-663` → `incomplete-tool-calls.ts:43`)，不动待审批与有效 `input-complete`。
+   (`:675-686` → `incomplete-tool-calls.ts:43`)，不动待审批与有效 `input-complete`。
 4. `statusController.prepareRunPhase(messages)`：**有未决审批时直接返回**（`:105`），
    所以"审批没答完就再发一条消息"不会偷跑一次模型。
 
@@ -264,11 +264,11 @@ run 结束 `finalizeStream()` 去掉尾部空 shell 并补 tool display (`ui-cha
 
 ### 3.4 工具相位与"续跑"
 
-`pumpToolPhases` 的循环（`agent-chat-controller.ts:487-524`）每次迭代：
+`pumpToolPhases` 的循环（`agent-chat-controller.ts:510-547`）每次迭代：
 
 1. token 失效或 epoch 变了 → 直接 `return`（不 finalize，见 §4）。
 2. `hasPendingInteraction(current)` → `break`（挂在用户问题上，不能进模型）。
-3. `toolPhase > 0` 时走 `prepareContinuationPhase`（`:444-466`）：
+3. `toolPhase > 0` 时走 `prepareContinuationPhase`（`:467-489`）：
    - `needsToolPhaseContinue` → 标记续跑，不再注入用户消息（工具还没跑完）；
    - 否则先 drain **steer**（同一 turn、下一次 LLM 调用前送达）；
    - 若刚 steer 过、或 `needsAgentResponseAfterTools` → 标记续跑；
@@ -276,10 +276,10 @@ run 结束 `finalizeStream()` 去掉尾部空 shell 并补 tool display (`ui-cha
 4. `executeStream(messages, token)` —— 一次 `chat()`。
 5. 若 `status === "error"` 记 `hasError`；token 失效则 `applyCancelledIncompleteTools(true)` + persist 后返回。
 6. `syncPlanModeFromMessages()`、`autoApprovePending()`（auto/plan 执行期）、
-   `await applyCommandSafetyPolicy()`（对 `run_command` 的命令安全策略，`:519`）。
+   `await applyCommandSafetyPolicy()`（对 `run_command` 的命令安全策略，`:542`）。
 7. `after` 再次检查 pending → break；`shouldKeepPumping`（工具还要续 / 队列有货）否则 break。
 
-`MAX_TOOL_PHASES = 40`（`:32`）。触顶后若仍需要跑，会**不 finalize** 地再排一个 pump（`:547-552`）：
+`MAX_TOOL_PHASES = 40`（`:32`）。触顶后若仍需要跑，会**不 finalize** 地再排一个 pump（`:570-575`）：
 `reconcileWithPolicy(during-run)` → persist → `enqueueRunOnce()` → return。这样不会留下僵死的 `running`，
 也不会把队列困在没人 drain 的 turn 里。
 
@@ -298,13 +298,13 @@ run 结束 `finalizeStream()` 去掉尾部空 shell 并补 tool display (`ui-cha
 
 ### 3.5 结束判定
 
-循环退出后（`agent-chat-controller.ts:526-563`）：
+循环退出后（`agent-chat-controller.ts:549-586`）：
 
 1. `outcomeKind = runFinalizer.deriveChatOutcome({ hasError, waitingForUser })`
    ——优先级 `aborted > error > waiting > finished`（`run-finalizer.ts:48-54`）。
-2. 若 `outcomeKind` 是 `error`/`aborted`：**拒绝所有未决审批**（`:539-543`）。
+2. 若 `outcomeKind` 是 `error`/`aborted`：**拒绝所有未决审批**（`:562-566`）。
    理由在注释里：终态轮不能带着一个没回答的问题，否则下一轮 `prepareRunPhase` 直接返回，
-   会话看起来"死了"（`:534-538`）。
+   会话看起来"死了"（`:557-561`）。
 3. `keepPumping && outcomeKind === "finished"` → 不 finalize，再排 pump（§3.4）。
 4. 否则 `finalizeChat`（`run-finalizer.ts:60-102`）：
    - `waitingForUser === false` 时 `discardPreforkRuns("run-finish")`（`:62-64`）；
@@ -339,6 +339,38 @@ queueMicrotask(() => log.setRun(null))
 - memory extraction 只在 `finished` 跑，且用的是"当前 controller 的 signal"——
   它在 turn 已 settle 后运行，没有东西会中断它（`:136-146` 明确记录了这个限制）。
 
+### 3.7 后台任务完成：空闲时唤醒
+
+`run_command(run_in_background)` 的完成通知是**一次性推送**：`background-middleware` 在下一次模型调用
+的 `onConfig` 里把 `<ctx kind=background_notification>` 同时写进 wire 和 channel，然后才 `markNotified`
+（`background-middleware.ts:65-91`）。所以 agent 空闲时任务结束，通知只能等用户下次输入——用户看不见
+"任务已经跑完"这件事。
+
+补上的那一环在 core，不在 middleware：
+
+```
+registry.finish()  → notifyChange([job.id])        registry.ts:507
+  → AgentCommandService.onJobsChange({ jobs, finished })
+  → ManagedAgent：emit("session:jobs") + 若 finished 非空 → wakeForBackgroundJobs()   managed-agent.ts:1834-1873
+      → collectCompleted() 只 peek（空则返回，不开空轮）
+      → AgentChatController.wakeForBackgroundCompletion()   agent-chat-controller.ts:345-357
+          → enqueueRunOnce()  → 首个 onConfig 注入通知 → 模型汇报完 → finalize
+```
+
+`finished` 字段存在的唯一理由是**区分"刚结束"和"恢复出来的历史"**：`ready()` 恢复磁盘记录时走同一个
+变更通知，如果按"列表里有终态项"判断，`/resume` 一恢复就会自己开一轮。
+
+唤醒只回答"要不要开一轮"，**投递仍然只发生在 middleware**（见 §7 第 15 条）：
+
+| 当前状态 | 开新一轮？ | 说明 |
+|---|---|---|
+| 空闲（`idle` / `completed` / `error` / `aborted`） | 是 | 首个 `onConfig` 注入通知，模型读完汇报 |
+| pump 在跑，或 pump 已排队（`shouldDeferQueue`） | 否 | 通知随这次 run 的下一次模型调用送达（旧行为） |
+| 停在用户身上（`waiting` / `awaiting_user`） | 否 | 同上；用户回答后的那次 pump 送达 |
+| 手动 `/compact` 进行中（status `compacting`） | 否 | compaction 拥有 transcript，不能叠一轮 |
+| plan 模式 `ready`（等 review） | 否 | 用户正在看计划，且模型可能顺手改计划 |
+| 子 agent（`parentId` 存在） | 否 | 没有"用户"；worker 的轮次属于父 agent |
+
 ---
 
 ## 4. 并发与顺序
@@ -349,10 +381,10 @@ queueMicrotask(() => log.setRun(null))
 |---|---|---|
 | `RunToken`（对象身份，非计数器） | `run-coordinator.ts:15`、`:126` | "我还是当前 run 吗"。`beginRun` 使旧 token 失效；漏检是可见的 API 缺口而不是口头约定 |
 | `lifecycleEpoch` + `pendingRunEpoch` | `agent-chat-controller.ts:56-62`、`:112-115` | 会话清空/resume 后，为旧 transcript 排的 pump 不得开跑 |
-| `pumpDepth` | `agent-chat-controller.ts:50`、`:473`、`:596` | 是否有 pump 正在执行（排队判定、`stop()` 判定） |
-| `runChain` | `agent-chat-controller.ts:46`、`:405` | pump 串行化；`enqueueRunOnce` 合并同一时刻的多次请求 |
+| `pumpDepth` | `agent-chat-controller.ts:50`、`:496`、`:619` | 是否有 pump 正在执行（排队判定、`stop()` 判定） |
+| `runChain` | `agent-chat-controller.ts:46`、`:428` | pump 串行化；`enqueueRunOnce` 合并同一时刻的多次请求 |
 
-`enqueueRunOnce`（`:393-407`）的三条不变量：
+`enqueueRunOnce`（`:416-430`）的三条不变量：
 
 - `runPending()` 为真就 join 已有链，不排第二个 pump（排队 pump 会**重读** channel，
   所以它之后到达的审批答复/工具结果由它处理，不需要第二次）。
@@ -362,7 +394,7 @@ queueMicrotask(() => log.setRun(null))
 
 `runPending()` 存在的理由是 `pumpDepth` 关不掉的同 tick 窗口：两处状态变化都看到
 `pumpDepth === 0`，各排一个 pump，第二个没活可干却仍会跑一次模型，产出一段没人要的回复
-（`:376-386`）。
+（`:399-409`）。
 
 ### 4.2 为什么"非当前 pump"既不能减 depth 也不能 finalize
 
@@ -383,13 +415,13 @@ managed.finalizeRun("aborted")       // turn 级 finalize 在这里发生
 ```
 
 旧 pump 随后从 `await` 返回，它的 `finally` 只有在 `token.isCurrent` 时才 `pumpDepth -= 1`
-（`:592-597`）。否则一个正在收尾的旧 pump 会把**新 pump** 的 depth 减掉，
+（`:615-620`）。否则一个正在收尾的旧 pump 会把**新 pump** 的 depth 减掉，
 接下来的 `sendMessage` 就会在"看起来空闲"时再开一个 pump，两个流同时写同一条消息链。
-同理，旧 pump 不能走 outcome 分支：`if (!token.isCurrent) { ...; return; }`（`:506-511`、`:526`）
+同理，旧 pump 不能走 outcome 分支：`if (!token.isCurrent) { ...; return; }`（`:529-534`、`:549`）
 ——turn 已经由打断者 finalize 过了。
 
 `beginTurnFinalize`（`run-coordinator.ts:182`）保证 `agent:stop`/persist/memory extraction 每轮只发生一次；
-`pumpToolPhases` 的 `catch` 路径在 finalize 前还会再查 `finalized`（`:574`）。
+`pumpToolPhases` 的 `catch` 路径在 finalize 前还会再查 `finalized`（`:597`）。
 
 ### 4.3 abort controller 的归属
 
@@ -476,7 +508,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | provider `RUN_ERROR`（可恢复） | `run-stream-recovery.ts:258-268` | §5.1 阶梯 | `agent:retry` + state `retry`（`retry.attempt/maxAttempts/strategy`） | **重试同一次尝试**，不换 turn |
 | provider `RUN_ERROR`（不可恢复） | 同上 → `terminalError` throw（`:290`） | `runManagedSpan` catch → `onError` | `agent:stream-error`、status `error`、error 文本 | **终止**：`finalizeChat(error)` → `agent:stop("error")` |
 | 流外抛错（含 abort 形状） | `managed-span.ts:89-103` | 根：保留错误文本（`onAbortError` 只写 error 不改 status，`agent-status-controller.ts:163-168`），后续 `reconcileAfterRun` 据 error 文本落 `error`；子：`abortErrorAsCancel` → 视为取消 | 错误文本 / 取消 | 根：终止；子：`aborted` |
-| 空模型流（HTTP 200 但零 chunk） | `managed-span.ts:75-85` + `empty-model-stream.ts:61`，**仅 root**（`agent-chat-controller.ts:610`） | `onEmpty` → `onRunError(EMPTY_MODEL_STREAM_MESSAGE)` + log | 明确提示"检查 provider URL / API key / 网络"（`empty-model-stream.ts:10`） | **终止**（error）；subagent 不判空 |
+| 空模型流（HTTP 200 但零 chunk） | `managed-span.ts:75-85` + `empty-model-stream.ts:61`，**仅 root**（`agent-chat-controller.ts:633`） | `onEmpty` → `onRunError(EMPTY_MODEL_STREAM_MESSAGE)` + log | 明确提示"检查 provider URL / API key / 网络"（`empty-model-stream.ts:10`） | **终止**（error）；subagent 不判空 |
 | 工具执行报错 | `extensions-middleware.ts:116-127` | `agent:tool-error`（warn，带 `cancelled` 判定）；错误结果照常进 wire | 工具行错误 | **继续**：模型看到失败结果，可能自己换方案 |
 | 工具被 abort（execute 没返回） | `incomplete-tool-calls.ts:241-250` | 框架兜底写 `{success:false,error,cancelled:true}`，part state `complete` | 中性 ⚠（不是故障） | 随 run 结束；不再被下一次 `chat()` 重试 |
 | 审批被拒 | `apply-tool-denial-reason.ts:97-129` | 写 `approval-responded` + 合成 denial tool-result | 拒绝原因进入模型上下文 | **继续**：模型拿到"用户拒绝，别假设已执行"（`:5`） |
@@ -490,7 +522,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | 扩展 handler 抛错 | `extension/runner.ts:303-321` | 记录 + `agent:extension-error`（自带递归保护） | 警告，不打断 | **继续** |
 | message transformer 抛错 | `message-transform-middleware.ts:105-127` | 保留上一版合法消息集，`agent:extension-error` phase `message-transform` | 警告 | **继续** |
 | 持久化失败（后台写） | `session-persistence.ts:77-81` | `session:save-error`（否则未处理的 rejection 会打崩进程） | 警告 | **继续** |
-| pump 辅助步骤抛错（命令安全分析 / plan 同步） | `agent-chat-controller.ts:564-591` | 归一化 → `onRunError` + 拒绝未决审批 → `finalizeChat(error)` | error | **终止**（error），不会把进程带走 |
+| pump 辅助步骤抛错（命令安全分析 / plan 同步） | `agent-chat-controller.ts:587-614` | 归一化 → `onRunError` + 拒绝未决审批 → `finalizeChat(error)` | error | **终止**（error），不会把进程带走 |
 
 三种"重试"要分清：
 
@@ -563,15 +595,15 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 2. **只有当前 token 才能改 outcome / 减 depth。**
    `token.isCurrent` 是"我还能代表这个 run 说话"的唯一凭据。旧 pump 减 depth 会偷走新 pump 的
    depth（下一句话直接并发开流）；旧 pump 走 outcome 会对已被打断者终结的 turn 二次终结
-   （`agent-chat-controller.ts:506-511`、`:592-597`）。
+   （`agent-chat-controller.ts:529-534`、`:615-620`）。
 
 3. **有未决交互就必须停 pump。**
-   循环顶部 `hasPendingInteraction → break`（`agent-chat-controller.ts:492`），结束判定同样优先 `waiting`
+   循环顶部 `hasPendingInteraction → break`（`agent-chat-controller.ts:515`），结束判定同样优先 `waiting`
    （`run-finalizer.ts:52`）。否则会在"用户还没回答"时替用户假设答案跑模型；`prepareRunPhase`
    也会因为残留审批直接返回，看起来像 dead session。
 
 4. **终态轮不带未答问题。**
-   `error`/`aborted` 分支主动 `denyPendingApprovals`（`agent-chat-controller.ts:539-543`）。理由同上：
+   `error`/`aborted` 分支主动 `denyPendingApprovals`（`agent-chat-controller.ts:562-566`）。理由同上：
    一条迟到的 pending 审批会永久卡住后续 turn。
 
 5. **审批决定第一次胜出。**
@@ -604,7 +636,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
    （`ui-channel.ts:482-487`）。
 
 10. **排队判定要覆盖"已排队但未开始"的窗口。**
-    `runPending()` 与 `pumpDepth` 一起用（`agent-chat-controller.ts:384-386`）。只读 `pumpDepth`
+    `runPending()` 与 `pumpDepth` 一起用（`agent-chat-controller.ts:407-409`）。只读 `pumpDepth`
     会让同 tick 的两次状态变化各排一个 pump，第二个跑一次没有意义的模型调用。
 
 11. **等待不是结束：`waiting` 不调用 `finalizeRun`。**
@@ -626,6 +658,14 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 
 14. **子代理不能再生子代理。** `createManagedAgent` / `spawnSubagent` 都显式拒绝
     （`agent-manager.ts:208`、`:295-299`）；深度固定为 1。
+
+15. **唤醒不投递，投递不唤醒。**
+    `wakeForBackgroundCompletion` 只调用 `enqueueRunOnce()`（`agent-chat-controller.ts:345-357`）；
+    `collectCompleted()` 在唤醒路径上只是 peek，注入与 `markNotified` 仍由
+    `background-middleware` 完成（`managed-agent.ts:1857-1873`、`background-middleware.ts:73-91`）。
+    唤醒如果顺手标记，注入还没发生就把输出丢了；如果顺手注入，就有了第二个 formatter 和第二个
+    投递点。另外只有 `finished`（终态跃迁）才算"新消息"——否则 `/resume` 恢复出未通知的记录时
+    会自己开一轮（`registry.ts:387`、`:507`）。
 
 ---
 
@@ -664,6 +704,9 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `packages/core/src/agent/subagent/task-prefork.ts` | 并发窗口与提前起跑 |
 | `packages/core/src/agent/compaction/cut-point.ts` | 配对安全的切点 |
 | `packages/core/src/agent/ui/ui-channel.ts` | 消息链 SoT、`session:messages`、generation 守卫 |
+| `packages/core/src/agent/tools/builtin/shell/jobs/registry.ts` | 后台任务状态机、一次性完成队列、`finished` 变更通知 |
+| `packages/core/src/managers/services/agent-command-service.ts` | 每 agent 的任务注册表、durable 恢复、`<background_jobs>` 段 |
+| `packages/core/src/managers/middleware/background-middleware.ts` | 完成通知注入（一次性，`onConfig`）+ `<background_jobs>` 指针（兜底） |
 | `packages/core/src/agent/agent-event-bus/meta.ts` | 事件 → channel/retained 的唯一路由表 |
 | `packages/core/src/agent/log/event-log-rules.ts` | 哪些事件默认写日志、写什么级别 |
 | `packages/core/src/agent-session/local-agent-session.ts` | channel 订阅与回放 |
@@ -686,6 +729,8 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `validate:local-agent-session`、`validate:agent-session-types`、`validate:agent-event-bus` | channel 投影与事件信封 |
 | `validate:middleware-order`、`validate:wire-override-reaches-adapter`、`validate:message-ops-purity` | middleware 相邻关系与 wire 契约 |
 | `validate:extension-turn-events` | `turn:*` / `message:*` 的触发点 |
+| `validate:background-wake` | 空闲唤醒的判定矩阵与端到端投递（一次、只投递一次） |
+| `validate:command-jobs-channel` | registry 变更通知的 `finished` 契约 + footer 摘要 |
 
 ---
 

@@ -1,3 +1,5 @@
+import { PLAN_STORE_DIR } from "./plan-store.js";
+
 import type { PlanModePhase } from "./plan-mode-controller.js";
 
 /** Turn-context block stating that neither plan nor auto mode is active. */
@@ -31,7 +33,7 @@ export function buildPlanModePlanningPrompt(): string {
     "- goal, ordered steps, **key_files (required, aim for 3-5)**, risks, **verification** (required), optional mermaid.",
     "- **key_files** MUST be a non-empty list of the key files the plan will touch or rely on (aim for 3-5) so execution starts from concrete file anchors.",
     "- **verification** MUST be a concrete checklist that proves the plan outcome (observable behavior, acceptance checks, or focused project scripts).",
-    "The plan is auto-saved under `.agents/plans/`. The user reviews it in the ready banner (markdown preview) — do not dump a long plan overview in chat.",
+    `The plan is auto-saved under \`${PLAN_STORE_DIR}/\`. The user reviews it in the ready banner (markdown preview) — do not dump a long plan overview in chat.`,
     "You may also output a `## Plan` markdown section as a fallback; prefer `create_plan`.",
     "Use `update_plan` to revise after feedback (verification still required).",
     "</plan_mode>",

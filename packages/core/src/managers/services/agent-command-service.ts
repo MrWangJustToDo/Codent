@@ -20,6 +20,7 @@ import {
 import { errorMessage } from "../../utils/errors.js";
 
 import type {
+  CommandJobChange,
   CommandJobPollResult,
   CommandJobSummary,
   CompletedCommandJob,
@@ -39,8 +40,9 @@ export interface AgentCommandServiceOptions {
   env: () => ResolvedCoreEnv;
   /** The disk session that owns the jobs; resolved lazily for the same reason. */
   ownerSessionId: () => string | undefined | null;
-  /** Forwarded to the session `jobs` channel (the registry's change listener). */
-  onJobsChange: (jobs: CommandJobSummary[]) => void;
+  /** Forwarded to the session `jobs` channel (the registry's change listener) and to the
+   * idle-wake check (`finished`). */
+  onJobsChange: (change: CommandJobChange) => void;
 }
 
 export class AgentCommandService implements AgentCommandPort {
@@ -174,7 +176,8 @@ export class AgentCommandService implements AgentCommandPort {
   /** Session switch: drop this session's jobs and completion queue, and clear the jobs channel. */
   async reset(_reason: string): Promise<void> {
     this.closing = true;
-    this.options.onJobsChange([]);
+    // Membership only: dropping a session's jobs is not a completion, so nothing is woken.
+    this.options.onJobsChange({ jobs: [], finished: [] });
     await this.destroy();
   }
 

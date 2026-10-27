@@ -21,6 +21,7 @@
  */
 
 import { getEnv } from "../../../../../env";
+import { AGENT_CACHE_DIR } from "../../../../../utils/workspace-paths.js";
 import { createStaleFileSweeper } from "../../../shared/cache/stale-sweep.js";
 
 import type { CoreEnvFs, ResolvedCoreEnv } from "../../../../../env";
@@ -31,7 +32,7 @@ import type { StaleSweepOptions } from "../../../shared/cache/stale-sweep.js";
 // ============================================================================
 
 /** Cache directory holding one log per background job (workspace-relative). */
-export const COMMAND_JOB_LOG_DIR = ".agents/cache/command-jobs";
+export const COMMAND_JOB_LOG_DIR = `${AGENT_CACHE_DIR}/command-jobs`;
 
 /** Buffered write interval — batches noisy streams into fewer filesystem writes. */
 export const JOB_LOG_FLUSH_INTERVAL_MS = 250;

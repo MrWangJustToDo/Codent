@@ -1,4 +1,4 @@
-import { parseModelsConfig } from "@codent/core";
+import { AGENT_DATA_DIR, parseModelsConfig } from "@codent/core";
 
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useCommandOutput } from "../hooks/use-command-output.js";
@@ -45,7 +45,7 @@ export const ConfigEditorOverlay = () => {
       showOutput(
         "/settings config",
         [
-          `Saved .agents/config/models.json (entry ${entryIndex}: ${describeEditedEntry(result.loaded, entryIndex)})`,
+          `Saved ${AGENT_DATA_DIR}/config/models.json (entry ${entryIndex}: ${describeEditedEntry(result.loaded, entryIndex)})`,
           result.reloadError
             ? `Not live yet — reloading failed: ${result.reloadError}\nRestart to apply it.`
             : result.model

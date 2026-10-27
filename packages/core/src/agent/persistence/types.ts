@@ -15,6 +15,8 @@
 
 import { z } from "zod";
 
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
+
 import type { ModelStyle, ReasoningEffort } from "../../models/types.js";
 import type { TokenUsage } from "../../runtime-types/token-usage.js";
 import type { PlanModeState } from "../plan/plan-mode-controller.js";
@@ -27,14 +29,14 @@ import type { UIMessage as TanStackUIMessage } from "@tanstack/ai";
 
 /** v6: one append-only message log per session; no snapshot file. v7: message timestamps. */
 export const SESSION_VERSION = 7;
-export const SESSION_DIR = ".agents/sessions";
+export const SESSION_DIR = `${AGENT_DATA_DIR}/sessions`;
 /** Append-only message log suffix; the single source of truth per session. */
 export const SESSION_LOG_SUFFIX = ".session.jsonl";
 /** Log line kind: one message + the full non-message state snapshot at that point. */
 export const SESSION_LOG_MESSAGE = "message";
 
 /** Directory for per-session AgentLog JSONL files: `.agents/logs/{sessionId}/`. */
-export const AGENT_LOG_DIR = ".agents/logs";
+export const AGENT_LOG_DIR = `${AGENT_DATA_DIR}/logs`;
 
 /**
  * Whether a session id is safe to interpolate into a path.

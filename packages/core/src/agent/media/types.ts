@@ -11,8 +11,10 @@
  * only during persist, and hydrate happens only during restore.
  */
 
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
+
 /** Directory relative to workspace root where media files are stored. */
-export const MEDIA_DIR = ".agents/media";
+export const MEDIA_DIR = `${AGENT_DATA_DIR}/media`;
 
 /**
  * UIMessage part types that carry inline binary media.

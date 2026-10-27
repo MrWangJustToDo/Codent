@@ -95,9 +95,24 @@ export interface CommandJobSummary {
   endedAt: number | null;
 }
 
-/** Listener invoked with the full job list whenever the registry's membership or a job's
- * lifecycle state changes. Output appends do NOT notify (see the class doc). */
-export type CommandJobChangeListener = (jobs: CommandJobSummary[]) => void;
+/**
+ * One change notification: the full job list, plus which jobs reached a terminal state in THIS
+ * transition.
+ *
+ * `finished` is what separates "a job just ended" from "a record was restored": `ready()` replays
+ * a session's durable records through the same notification, and a consumer that treats every
+ * terminal row as news (the idle wake in `ManagedAgent`) would otherwise start a model turn the
+ * moment a session is resumed.
+ */
+export interface CommandJobChange {
+  jobs: CommandJobSummary[];
+  /** Ids that just reached `exited` / `failed` / `killed`; empty for restore / eviction / clear. */
+  finished: string[];
+}
+
+/** Listener invoked whenever the registry's membership or a job's lifecycle state changes.
+ * Output appends do NOT notify (see the class doc). */
+export type CommandJobChangeListener = (change: CommandJobChange) => void;
 
 /**
  * Max retained chars per stream once a job has finished (older output is
@@ -369,8 +384,8 @@ export class CommandJobRegistry {
   }
 
   /** Broadcast the current status list. No-op without a listener. */
-  private notifyChange(): void {
-    this.changeListener?.(this.list());
+  private notifyChange(finished: readonly string[] = []): void {
+    this.changeListener?.({ jobs: this.list(), finished: [...finished] });
   }
 
   create(command: string, toolCallId?: string): CommandJobRecord {
@@ -487,7 +502,9 @@ export class CommandJobRegistry {
     this.afterFinished(job);
     this.finalizeLog(job);
     void this.persist(job);
-    this.notifyChange();
+    // The one transition that is NEWS rather than bookkeeping: a job just ended. Every other
+    // notifyChange() (create / restore / evict / clear) reports membership only.
+    this.notifyChange([job.id]);
   }
 
   /** Record the terminal status in the job log (no-op when logging is off). */

@@ -13,13 +13,19 @@ import { canExecArgs, execArgs } from "../shell/exec-args.js";
 
 import { expandBraceGlobs, filterGlobOutput, findPathPattern, normalizeExcludePattern } from "./search/glob-pattern.js";
 import {
-  activeExcludeDirs,
   formatSearchModelOutput,
   SEARCH_COMMAND_TIMEOUT,
   isCommandNotFound,
   quoteForShell,
   resolveSearchPath,
 } from "./search/search-command.js";
+import {
+  activeExcludeDirs,
+  defaultSearchPolicy,
+  isGitWorkTree,
+  searchTargetBypassesIgnore,
+  type SearchPolicy,
+} from "./search/search-policy.js";
 
 import type { CoreEnv } from "../../../../env";
 import type { GlobOutput } from "../../shared/schemas.js";
@@ -43,6 +49,8 @@ function buildFdArgs(
     type: string;
     exclude: string | undefined;
     absoluteSearchPath?: string;
+    excludeDirs: readonly string[];
+    noIgnore: boolean;
   }
 ): string[] {
   const args: string[] = ["--color=never"];
@@ -77,11 +85,13 @@ function buildFdArgs(
   if (hasPathSegment) {
     args.push("--full-path");
   }
-  // `glob` is a filesystem query, not a git query: `.agents/**` and other intentionally
-  // ignored/hidden trees are valid targets. Keep the common build/cache exclusions below.
-  args.push("--hidden", "--no-ignore");
+  // Hidden files stay visible (dotfiles are source), but `fd`'s ignore handling — it honours
+  // `.gitignore` by default — is dropped only when the caller explicitly targeted a tree the
+  // ignore rules would skip. The policy's build/data directories are excluded below either way.
+  args.push("--hidden");
+  if (options.noIgnore) args.push("--no-ignore");
 
-  for (const dir of activeExcludeDirs(searchPath)) {
+  for (const dir of options.excludeDirs) {
     args.push("--exclude", dir);
   }
 
@@ -104,7 +114,7 @@ const FD_BINARIES = ["fd", "fdfind"];
 function buildFindArgs(
   pattern: string,
   searchPath: string,
-  options: { type: string; exclude: string | undefined }
+  options: { type: string; exclude: string | undefined; excludeDirs: readonly string[] }
 ): string[] {
   const typeFlag = options.type === "directory" ? "d" : options.type === "file" ? "f" : undefined;
   const namePattern = pattern.includes("**") ? pattern.replace(/\*\*\//g, "") : pattern;
@@ -122,7 +132,7 @@ function buildFindArgs(
     args.push("-name", namePattern);
   }
 
-  for (const dir of activeExcludeDirs(searchPath)) {
+  for (const dir of options.excludeDirs) {
     args.push("-not", "-path", `*/${dir}/*`, "-not", "-path", `*/${dir}`);
   }
   if (options.exclude && !options.exclude.includes("/") && !options.exclude.includes("**")) {
@@ -145,7 +155,37 @@ function buildFindArgs(
 }
 
 /**
- * Run the glob search, preferring `fd` and falling back to `find`.
+ * Build `git ls-files` arguments — the ignore-aware rung when `fd` is absent.
+ *
+ * `find` has no notion of `.gitignore`, so a machine without `fd` listed generated and VCS-excluded
+ * trees the repository had already excluded (the grep side had the same gap and read a 524 MB
+ * `.agents/` directory). git already knows: `--cached --others --exclude-standard` is "tracked plus
+ * untracked, minus ignored", which is exactly the file set a source search means.
+ */
+function buildGitLsFilesArgs(searchPath: string, options: { excludeDirs: readonly string[] }): string[] {
+  const args: string[] = ["-P", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", searchPath];
+  // Policy directories are not necessarily in `.gitignore`; `git ls-files` has no --exclude-dir,
+  // so the equivalent is an exclude pathspec.
+  for (const dir of options.excludeDirs) {
+    args.push(`:(glob,exclude)**/${dir}/**`);
+  }
+  return args;
+}
+
+/** Directory rows for a file list — git cannot list directories, so they are derived. */
+function directoriesOf(fileList: string): string {
+  const dirs = new Set<string>();
+  for (const file of fileList.split("\n")) {
+    const parts = file.split("/");
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      dirs.add(parts.slice(0, depth).join("/"));
+    }
+  }
+  return [...dirs].join("\n");
+}
+
+/**
+ * Run the glob search, preferring `fd`, then `git ls-files`, and falling back to `find`.
  *
  * Availability, not failure, drives the fallback: binaries are probed before spawning (and
  * the spawn result re-checked) rather than relying on exit code 127, which is POSIX-only
@@ -162,6 +202,9 @@ async function runGlobSearch(
     type: string;
     exclude: string | undefined;
     absoluteSearchPath?: string;
+    excludeDirs: readonly string[];
+    noIgnore: boolean;
+    policy: SearchPolicy;
     fetchCount: number;
     signal?: AbortSignal;
   }
@@ -185,6 +228,31 @@ async function runGlobSearch(
       }
       return filterGlobOutput(result.stdout, pattern, searchPath, options.fetchCount, env, options.exclude);
     }
+    // No `fd`: use the repository's own ignore machinery before falling back to raw `find`.
+    if (!options.noIgnore && options.policy.respectVcsIgnore) {
+      if (await isGitWorkTree(env, options.signal)) {
+        const gitResult = await execArgs(env, "git", buildGitLsFilesArgs(searchPath, options), {
+          cwd: env.rootPath,
+          signal: options.signal,
+        });
+        if (!gitResult.missing) {
+          if (gitResult.killed && !gitResult.truncated && gitResult.stdout.length === 0) {
+            throw new ExecutionError("timeout", "git ls-files was killed before it produced a complete result");
+          }
+          if (gitResult.code !== 0 && gitResult.stdout.length === 0) {
+            throw new ExecutionError(
+              "unknown",
+              `git ls-files failed with exit code ${gitResult.code}: ${gitResult.stderr.trim() || "no diagnostic output"}`
+            );
+          }
+          // `-z` keeps a path containing a newline intact; the filter works line-by-line.
+          const fileList = gitResult.stdout.split("\0").filter(Boolean).join("\n");
+          const rows = options.type === "directory" ? directoriesOf(fileList) : fileList;
+          return filterGlobOutput(rows, pattern, searchPath, options.fetchCount, env, options.exclude);
+        }
+      }
+    }
+
     const findResult = await execArgs(env, "find", buildFindArgs(pattern, searchPath, options), {
       cwd: env.rootPath,
       signal: options.signal,
@@ -244,7 +312,10 @@ export const createGlobTool = () => {
     present: { category: "searches" },
     description:
       "Finds paths matching a glob pattern (e.g. '**/*.ts', 'src/**/*.json'). Prefer over tree/list_file when you know a filename pattern; use grep to search file contents. " +
-      "Uses `fd` when available (includes hidden/ignored paths, excluding common build dirs), falls back to `find`. " +
+      "Uses `fd` when available, then `git ls-files`, then `find`. " +
+      "Respects the repository's ignore rules (.gitignore) and skips common build, dependency and " +
+      "agent-runtime directories; hidden files are still listed. Pass `path` to list inside an " +
+      "ignored directory — an explicit path overrides the ignore rules for that subtree. " +
       "Supports pagination, type filtering (file/directory), and automatic exclusion of common non-source directories.",
     inputSchema: z.object({
       pattern: z
@@ -289,10 +360,19 @@ export const createGlobTool = () => {
         const normalizedExclude = exclude ? normalizeExcludePattern(exclude) : undefined;
         const absoluteSearchPath = toPosixPath((coreEnv.path ?? defaultPath).resolve(coreEnv.rootPath, searchPath));
 
+        // The same policy `grep` uses: build/dependency/data trees are never source, and the
+        // repository's ignore rules apply unless the caller named a tree they would skip.
+        const policy = defaultSearchPolicy();
         const searchOptions = {
           type: fileType,
           exclude: normalizedExclude,
           absoluteSearchPath,
+          excludeDirs: activeExcludeDirs(searchPath, policy),
+          noIgnore: await searchTargetBypassesIgnore(coreEnv, policy, searchPath, {
+            isFile: false,
+            signal: abortSignal,
+          }),
+          policy,
           offset: skip,
           limit: take,
           fetchCount,

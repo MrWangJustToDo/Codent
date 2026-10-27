@@ -1,27 +1,17 @@
 import { z } from "zod";
 
-import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
-import { toPosixPath } from "../../../../utils/posix-path.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { grepOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
-import { canExecArgs, execArgs } from "../shell/exec-args.js";
 
 import { expandBraceGlobs, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
-import {
-  activeExcludeDirs,
-  formatSearchModelOutput,
-  isCommandNotFound,
-  quoteForShell,
-  resolveSearchPath,
-  SEARCH_COMMAND_TIMEOUT,
-  truncateLines,
-} from "./search/search-command.js";
+import { parseCountLine, parseGrepLine, runGrepSearch } from "./search/grep-search.js";
+import { formatSearchModelOutput, resolveSearchPath } from "./search/search-command.js";
+import { activeExcludeDirs, defaultSearchPolicy, searchTargetBypassesIgnore } from "./search/search-policy.js";
 
-import type { CoreEnv } from "../../../../env";
 import type { GrepOutput } from "../../shared/schemas.js";
 
 /** Maximum characters per matching line content (to prevent context overflow) */
@@ -75,404 +65,19 @@ function stripOuterQuotes(pattern: string): { pattern: string; hadQuotes: boolea
   return { pattern, hadQuotes };
 }
 
-/** The basename part of a path-shaped include glob, for GNU grep's basename-only flag. */
-function includeBasename(glob: string): string {
-  return toPosixPath(glob).split("/").pop() ?? glob;
-}
-
-/** Whether an include glob carries path semantics that GNU grep's --include cannot express. */
-function includeNeedsJsFilter(include: string | undefined): boolean {
-  return include !== undefined && (include.includes("/") || include.includes("\\") || include.includes("**"));
-}
-
-function buildRgArgs(
-  pattern: string,
-  searchPath: string,
-  options: {
-    ignoreCase: boolean;
-    include: string | undefined;
-    outputMode: string;
-    context: number;
-    searchPathIsFile: boolean;
-    fetchCount: number;
-  }
-): string[] {
-  const args: string[] = ["--color=never"];
-  // Match glob's search policy: an explicit filesystem search may target `.agents`
-  // and other hidden/ignored paths. Common build directories remain excluded below.
-  args.push("--hidden", "--no-ignore");
-
-  if (options.ignoreCase) {
-    args.push("-i");
-  }
-
-  if (options.outputMode === "files_with_matches") {
-    args.push("--files-with-matches");
-  } else if (options.outputMode === "count") {
-    args.push("--count");
-  } else {
-    // `--null` makes the file boundary unambiguous. Context output is `path-line-content`,
-    // and both path and content can contain `-digits-`; without a separator, a date
-    // directory like `2024-01-02/a.ts` was parsed as file `2024`, line `1`.
-    args.push("--line-number", "--no-heading", "--null");
-    if (options.context > 0) {
-      args.push("-C", String(options.context));
-    }
-  }
-
-  // --glob is only meaningful for directory searches; skip when searching a
-  // single file to avoid conflicts between the glob and the file path.
-  // Brace groups like `*.{ts,tsx}` are expanded to one --glob per alternative
-  // since rg does not brace-expand its own --glob values.
-  if (options.include && !options.searchPathIsFile) {
-    for (const glob of expandBraceGlobs(options.include)) {
-      // ripgrep, like fd, matches a path glob from the search root/cwd; a caller's
-      // `nested/*.ts` would match nothing unless it can start at any depth. The JS
-      // include filter applies the exact relative semantics afterwards.
-      const normalized = glob.replace(/^\.\//, "");
-      const rgGlob = normalized.includes("/") && !normalized.startsWith("**/") ? `**/${normalized}` : normalized;
-      args.push("--glob", rgGlob);
-    }
-  }
-
-  if (!options.searchPathIsFile) {
-    for (const dir of activeExcludeDirs(searchPath)) {
-      args.push("--glob", `!**/${dir}/**`);
-    }
-  }
-
-  // `--` then the pattern as a single argv entry: no quoting, no escaping, and no shell
-  // to reinterpret it, so a pattern containing quotes or metacharacters arrives intact.
-  //
-  // `--max-count` bounds the work at the source. Truncation to `fetchCount` happens in JS
-  // either way (there is no `| head` any more), but without a source-side cap a search in a
-  // large repository streams every match before all but the first few are discarded.
-  if (options.outputMode !== "count") {
-    args.push("--max-count", String(options.fetchCount));
-  }
-  args.push("--", pattern, searchPath);
-  return args;
-}
-
-function buildGrepArgs(
-  pattern: string,
-  searchPath: string,
-  options: {
-    ignoreCase: boolean;
-    include: string | undefined;
-    outputMode: string;
-    context: number;
-    searchPathIsFile: boolean;
-    fetchCount: number;
-  }
-): string[] {
-  const args: string[] = ["--color=never"];
-
-  // Use -r (recursive) only when searching a directory; for a single file, plain grep
-  // avoids conflicts between --include and a direct file path.
-  if (!options.searchPathIsFile) {
-    args.push("-r");
-  }
-
-  if (options.ignoreCase) {
-    args.push("-i");
-  }
-
-  if (options.outputMode === "files_with_matches") {
-    args.push("-l");
-  } else if (options.outputMode === "count") {
-    args.push("-c");
-  } else {
-    args.push("-n");
-  }
-
-  if (options.outputMode === "content") {
-    // Match rg's `--null`: GNU grep's context separator (`path-line-content`) is
-    // ambiguous when either the path or the matched text contains `-digits-`.
-    args.push("-Z");
-    if (options.context > 0) {
-      args.push("-C", String(options.context));
-    }
-  }
-
-  // --include and --exclude-dir are only meaningful for directory searches; skip them when
-  // searching a single file to avoid conflicts. Brace groups are expanded to one --include
-  // per alternative since grep does not brace-expand its own --include values.
-  const needsJsIncludeFilter = includeNeedsJsFilter(options.include);
-  if (options.include && !options.searchPathIsFile) {
-    // GNU grep's --include is basename-only. For a path glob, still give it the basename
-    // as a cheap pre-filter (e.g. `nested/*.ts` → `*.ts`); the exact path semantics are
-    // applied in JS after the command returns.
-    for (const glob of expandBraceGlobs(options.include)) {
-      args.push("--include", needsJsIncludeFilter ? includeBasename(glob) : glob);
-    }
-  }
-
-  if (!options.searchPathIsFile) {
-    for (const dir of activeExcludeDirs(searchPath)) {
-      args.push("--exclude-dir", dir);
-    }
-  }
-
-  // `-e` keeps a pattern beginning with `-` from being parsed as an option; `--` keeps
-  // the search path option-safe. Count mode must not use `-m`: GNU grep applies `-m` to
-  // the count per file, which returned `Count: 101` for a 1997-match file at limit=100.
-  args.push("-E", "-e", pattern);
-  if (options.outputMode !== "count") {
-    args.push("-m", String(options.fetchCount));
-  }
-  args.push("--", searchPath);
-  return args;
-}
-
-/**
- * Run the content search, preferring ripgrep and falling back to grep.
- *
- * Availability drives the choice: binaries are probed rather than relying on exit code 127,
- * which is POSIX-only for "command not found" (cmd.exe reports 9009, PowerShell reports 1),
- * so the code-based fallback never fired on Windows.
- *
- * Truncation to `fetchCount` happens in JS on both paths, replacing the previous `head`
- * pipeline — the shell is never responsible for correctness.
- */
-async function runGrepSearch(
-  env: CoreEnv,
-  pattern: string,
-  searchPath: string,
-  options: {
-    ignoreCase: boolean;
-    include: string | undefined;
-    outputMode: string;
-    context: number;
-    fetchCount: number;
-    searchPathIsFile: boolean;
-    signal?: AbortSignal;
-  }
-): Promise<string> {
-  // Context lines occupy raw lines but are not matches. Give the parser enough rows to
-  // reach the requested match page; count mode must never be capped by a match limit.
-  // A path-shaped include is filtered in JS *after* the command, so the source-side cap
-  // must not discard candidates from not-yet-seen files either.
-  const lineCap =
-    options.outputMode === "count" || includeNeedsJsFilter(options.include)
-      ? Number.MAX_SAFE_INTEGER
-      : options.context > 0
-        ? options.fetchCount * (2 * options.context + 3) + 10
-        : options.fetchCount;
-
-  const failure = (
-    binary: string,
-    result: { code: number | null; stderr: string; stdout: string }
-  ): ExecutionError | null => {
-    // rg/grep use 0 for matches and 1 for a clean no-match. A non-zero other status with
-    // no stdout is a real failure (invalid regex, missing path, unreadable input), not an
-    // empty result; the model must not be told "0 matches" for a search that never ran.
-    if (result.code !== null && result.code !== 0 && result.code !== 1 && result.stdout.length === 0) {
-      return new ExecutionError(
-        "unknown",
-        `${binary} failed with exit code ${result.code}: ${result.stderr.trim() || "no diagnostic output"}`
-      );
-    }
-    return null;
-  };
-
-  if (canExecArgs(env)) {
-    const rgResult = await execArgs(env, "rg", buildRgArgs(pattern, searchPath, options), {
-      cwd: env.rootPath,
-      signal: options.signal,
-    });
-    if (!rgResult.missing) {
-      if (rgResult.killed && !rgResult.truncated && rgResult.stdout.length === 0) {
-        throw new ExecutionError("timeout", "rg was killed before it produced a complete result");
-      }
-      const error = failure("rg", rgResult);
-      if (error) throw error;
-      return truncateLines(rgResult.stdout, lineCap);
-    }
-
-    const grepResult = await execArgs(env, "grep", buildGrepArgs(pattern, searchPath, options), {
-      cwd: env.rootPath,
-      signal: options.signal,
-    });
-    if (!grepResult.missing) {
-      if (grepResult.killed && !grepResult.truncated && grepResult.stdout.length === 0) {
-        throw new ExecutionError("timeout", "grep was killed before it produced a complete result");
-      }
-      const error = failure("grep", grepResult);
-      if (error) throw error;
-      return truncateLines(grepResult.stdout, lineCap);
-    }
-    // Neither binary is available — an empty result is the honest answer.
-    return "";
-  }
-
-  // Legacy path for hosts without argument-vector execution (task 1.7): the same argv,
-  // joined and quoted, with truncation still in JS.
-  const timeout = SEARCH_COMMAND_TIMEOUT;
-  const rgArgv = buildRgArgs(pattern, searchPath, options).map(quoteForShell);
-  const rgResult = await env.runCommand(`rg ${rgArgv.join(" ")}`, {
-    timeout,
-    cwd: env.rootPath,
-    signal: options.signal,
-  });
-  if (!isCommandNotFound(rgResult.exitCode)) {
-    const error = failure("rg", { code: rgResult.exitCode ?? null, stderr: rgResult.stderr, stdout: rgResult.stdout });
-    if (error) throw error;
-    return truncateLines(rgResult.stdout, lineCap);
-  }
-  const grepArgv = buildGrepArgs(pattern, searchPath, options).map(quoteForShell);
-  const grepResult = await env.runCommand(`grep ${grepArgv.join(" ")}`, {
-    timeout,
-    cwd: env.rootPath,
-    signal: options.signal,
-  });
-  const error = failure("grep", {
-    code: grepResult.exitCode ?? null,
-    stderr: grepResult.stderr,
-    stdout: grepResult.stdout,
-  });
-  if (error) throw error;
-  return truncateLines(grepResult.stdout, lineCap);
-}
-
-function parseLineNumber(value: string): number | null {
-  const lineNumber = Number(value);
-  if (!Number.isFinite(lineNumber) || lineNumber < 0 || !Number.isInteger(lineNumber)) {
-    return null;
-  }
-  return lineNumber;
-}
-
-/**
- * Parse ripgrep/grep content output.
- *
- * Match lines use `path:line:content` — the line number is the first `:digits:` segment
- * (non-greedy path), not the last, so colons in file content are not mistaken for a line.
- * Context lines use `path-line-content` (rg uses `-` instead of `:` around the line number).
- */
-function parseGrepLine(
-  line: string,
-  defaultFile?: string
-): { file: string; lineNumber: number; content: string; context?: boolean } | null {
-  if (line === "--") {
-    return null;
-  }
-
-  // `rg --null` / `grep -Z` place a NUL after the file path. The remainder is
-  // `line:content` for a match or `line-content` for context, so neither a path nor
-  // matched text can be mistaken for a delimiter.
-  const nul = line.indexOf("\0");
-  if (nul >= 0) {
-    const file = line.slice(0, nul);
-    const rest = line.slice(nul + 1);
-    const match = rest.match(/^(\d+):(.*)$/s);
-    if (match) {
-      const lineNumber = parseLineNumber(match[1]!);
-      if (lineNumber !== null) return { file, lineNumber, content: match[2] };
-    }
-    const context = rest.match(/^(\d+)-(.*)$/s);
-    if (context) {
-      const lineNumber = parseLineNumber(context[1]!);
-      if (lineNumber !== null) {
-        return { file, lineNumber, content: `[context] ${context[2]}`, context: true };
-      }
-    }
-    return null;
-  }
-
-  // Single-file context lines are `line-content`; this must be recognized before the
-  // generic `path:line:content` matcher, which would otherwise turn `12-config:30` into
-  // a fictional file named `12-config`.
-  if (defaultFile) {
-    const singleContext = line.match(/^(\d+)-(.*)$/s);
-    if (singleContext) {
-      const lineNumber = parseLineNumber(singleContext[1]!);
-      if (lineNumber !== null) {
-        return { file: defaultFile, lineNumber, content: `[context] ${singleContext[2]}`, context: true };
-      }
-    }
-  }
-
-  // Match `path:line:content` format (from recursive directory search)
-  const matchLine = line.match(/^(.+?):(\d+):(.*)$/s);
-  if (matchLine) {
-    const lineNumber = parseLineNumber(matchLine[2]);
-    if (lineNumber === null) {
-      return null;
-    }
-    return {
-      file: matchLine[1],
-      lineNumber,
-      content: matchLine[3],
-    };
-  }
-
-  // Match `line:content` format (from single file search without -r)
-  // This happens when searching a specific file; use defaultFile as the path.
-  const singleFileMatch = line.match(/^(\d+):(.*)$/s);
-  if (singleFileMatch && defaultFile) {
-    const lineNumber = parseLineNumber(singleFileMatch[1]);
-    if (lineNumber === null) {
-      return null;
-    }
-    return {
-      file: defaultFile,
-      lineNumber,
-      content: singleFileMatch[2],
-    };
-  }
-
-  // Context lines use `path-line-content` (rg uses `-` around the line number)
-  const contextLine = line.match(/^(.+?)-(\d+)-(.*)$/s);
-  if (contextLine) {
-    const lineNumber = parseLineNumber(contextLine[2]);
-    if (lineNumber === null) {
-      return null;
-    }
-    return {
-      file: contextLine[1],
-      lineNumber,
-      content: `[context] ${contextLine[3]}`,
-      context: true,
-    };
-  }
-
-  return null;
-}
-
-/**
- * Parse `rg --count` / `grep -c` output.
- *
- * Two shapes, matching {@link parseGrepLine}: `path:count` for a search over a directory (or several
- * files), and a BARE count when the search was a single file — grep omits the path there, so
- * `defaultFile` supplies it. Without that case the number was read as a file NAME with a count of
- * `0`: `grep -c` reporting 5 matches came back as "5: Count: 0".
- */
-function parseCountLine(line: string, defaultFile?: string): { file: string; lineNumber: number; content: string } {
-  const countMatch = line.match(/:(\d+)$/);
-  const bareCount = defaultFile !== undefined ? line.match(/^(\d+)$/) : null;
-  if (!countMatch && !bareCount) {
-    return { file: line, lineNumber: 0, content: "Count: 0" };
-  }
-  const counted = countMatch ?? bareCount!;
-  const count = parseLineNumber(counted[1]!) ?? 0;
-  return {
-    file: countMatch ? line.slice(0, -countMatch[0].length) : defaultFile!,
-    lineNumber: 0,
-    content: `Count: ${count}`,
-  };
-}
-
 export const createGrepTool = () => {
   return defineServerTool({
     name: "grep",
     present: { category: "searches" },
     description:
       "Searches file contents using regular expressions. Returns file paths and line numbers with matching content. " +
-      "Uses ripgrep (rg) when available, falls back to grep. " +
+      "Uses ripgrep (rg) when available, then git grep, then grep. " +
       'Use outputMode="files_with_matches" for broad searches (just file paths). ' +
       'Use outputMode="count" to get match counts per file. ' +
-      "Searches hidden/ignored paths too, while excluding common build directories. " +
+      "Respects the repository's ignore rules (.gitignore) and skips common build, dependency and " +
+      "agent-runtime directories; hidden files are still searched. Pass `path` to search inside an " +
+      "ignored directory (e.g. generated output or session logs) — an explicit path overrides the " +
+      "ignore rules for that subtree. " +
       "Supports pagination with offset/limit, context lines, and case-insensitive search.",
     inputSchema: z.object({
       pattern: z.string().describe("The regex pattern to search for in file contents."),
@@ -548,6 +153,16 @@ export const createGrepTool = () => {
           // Non-fatal — treat as directory for backward compatibility
         }
 
+        // One policy for every engine (rg / git grep / grep): which trees are never source, and
+        // whether the repository's own ignore rules apply. `noIgnore` is the ONE deliberate
+        // exception — an explicitly targeted tree that those rules would otherwise skip.
+        const policy = defaultSearchPolicy();
+        const excludeDirs = activeExcludeDirs(searchPath, policy);
+        const noIgnore = await searchTargetBypassesIgnore(coreEnv, policy, searchPath, {
+          isFile: searchPathIsFile,
+          signal: abortSignal,
+        });
+
         const searchOptions = {
           ignoreCase: ignoreCase ?? false,
           include,
@@ -555,6 +170,9 @@ export const createGrepTool = () => {
           context: contextLines,
           fetchCount,
           searchPathIsFile,
+          policy,
+          excludeDirs,
+          noIgnore,
           signal: abortSignal,
         };
 

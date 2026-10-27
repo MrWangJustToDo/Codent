@@ -80,6 +80,7 @@ import { selectModel } from "../models/config/model-selection.js";
 import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
+import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 import { copyModelMessages } from "../utils/model-messages.js";
 
@@ -1830,12 +1831,45 @@ export class ManagedAgent {
       this.commandService = new AgentCommandService({
         env: () => this.getCoreEnv(),
         ownerSessionId: () => this.getSessionData?.()?.id,
-        onJobsChange: (jobs) => {
+        onJobsChange: ({ jobs, finished }) => {
           this.eventBus?.emit("session:jobs", { jobs });
+          if (finished.length > 0) void this.wakeForBackgroundJobs();
         },
       });
     }
     return this.commandService;
+  }
+
+  /**
+   * Deliver a finished background job to a session that is not running.
+   *
+   * The notification itself belongs to `background-middleware`, which injects it at the next
+   * model call — so a job that ends while the agent is idle would wait for the user to type
+   * before anyone saw the result. An idle session is therefore WOKEN: the pump starts a turn,
+   * the middleware injects the notification at its first `onConfig`, and the model reports back.
+   * Nothing is delivered here; this only supplies the missing reason to start a turn (one
+   * delivery path, one formatter).
+   *
+   * A live pump or a session parked on the user keeps the old behavior — the notification rides
+   * along with the next model call of that same turn (`wakeForBackgroundCompletion` answers
+   * false). Never for a subagent: it has no user, and a worker turn belongs to its parent.
+   */
+  private async wakeForBackgroundJobs(): Promise<void> {
+    if (this.parentId) return;
+    const chat = this.chatController;
+    // The service that reported this finish — never re-created here: a session switch sets the
+    // field to undefined while the old registry is still winding down, and minting a new service
+    // would restore the previous session's records into the new (or leaving) one.
+    const service = this.commandService;
+    if (!chat || !service) return;
+    try {
+      // Peek, do not mark: delivery (and the notified flag) stays the middleware's.
+      const completed = await service.collectCompleted();
+      if (completed.length === 0) return;
+      chat.wakeForBackgroundCompletion();
+    } catch (error) {
+      this.log?.warn("system", "Background completion wake skipped", { error: errorMessage(error) });
+    }
   }
 
   // ============================================================================

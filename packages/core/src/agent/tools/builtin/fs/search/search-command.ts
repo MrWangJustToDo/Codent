@@ -1,26 +1,12 @@
 import { defaultPath } from "../../../../../env";
 import { FileError } from "../../../../../env/types";
 import { splitDisplayLines } from "../../../../../utils/display-lines.js";
-import { toPosixPath, toPosixPathKey } from "../../../../../utils/posix-path.js";
+import { toPosixPathKey } from "../../../../../utils/posix-path.js";
 
 import type { CoreEnv } from "../../../../../env";
 
 /** Default command timeout in ms */
 export const SEARCH_COMMAND_TIMEOUT = 30_000;
-
-/** Directories excluded from grep/glob searches */
-export const DEFAULT_EXCLUDE_DIRS = ["node_modules", ".git", "dist", "coverage", ".cache", ".next", ".output"];
-
-/**
- * Default exclusions that still apply when the search root is explicit.
- *
- * `path: "dist"` means the caller asked for files inside `dist`; excluding every
- * `dist` directory would make that explicit request return nothing.
- */
-export function activeExcludeDirs(searchPath: string): string[] {
-  const basename = toPosixPath(searchPath).replace(/\/+$/, "").split("/").pop();
-  return basename ? DEFAULT_EXCLUDE_DIRS.filter((dir) => dir !== basename) : DEFAULT_EXCLUDE_DIRS;
-}
 
 /**
  * Byte ceiling for captured search output.

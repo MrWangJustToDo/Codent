@@ -334,6 +334,29 @@ export class AgentChatController {
   }
 
   /**
+   * Start a turn for a background completion that landed while no run was in flight.
+   *
+   * The notification is a one-shot push from `background-middleware`, injected at the next model
+   * call — which an idle session never makes, so the result would wait for the user to type. This
+   * supplies the missing reason to start a turn; delivery still happens in the middleware.
+   *
+   * @returns whether a pump was enqueued.
+   */
+  wakeForBackgroundCompletion(): boolean {
+    // A live pump delivers the notification at its next model call (the old behavior), and a
+    // session parked on the user — approval / `ask_user` — must not be resumed behind their back.
+    if (this.shouldDeferQueue()) return false;
+    // A manual `/compact` owns the transcript but is not a pump, so `shouldDeferQueue` cannot
+    // see it: a turn started now would run concurrently with the compaction.
+    if (this.managed.getStatus() === "compacting") return false;
+    // Plan review is an interactive pause: the user is reading the plan, so the next turn is
+    // theirs to start. Waking here would also let the model revise the plan unprompted.
+    if (this.managed.planMode.getPhase() === "ready") return false;
+    void this.enqueueRunOnce();
+    return true;
+  }
+
+  /**
    * Approve every pending tool approval, then resume the pump.
    *
    * A pending approval is a QUESTION, and turning on auto mode (or entering plan execution, which

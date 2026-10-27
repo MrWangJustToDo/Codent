@@ -1,4 +1,4 @@
-import { parseModeCommand } from "@codent/core";
+import { AGENT_DATA_DIR, parseModeCommand } from "@codent/core";
 
 import { getActiveSession } from "../utils/session-resolve.js";
 
@@ -230,7 +230,7 @@ registerBuiltinCommand("mode", {
         const result = await session.dispatch({ type: "plan.list" });
         if (!result.ok) return { ok: false, error: result.error };
         const files = result.data?.files ?? [];
-        if (files.length === 0) return { ok: true, message: "No saved plans in .agents/plans/" };
+        if (files.length === 0) return { ok: true, message: `No saved plans in ${AGENT_DATA_DIR}/plans/` };
         return { ok: true, message: `Saved plans:\n${files.map((file) => `- ${file}`).join("\n")}` };
       }
     }

@@ -4,6 +4,7 @@ import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../.
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
+import { AGENT_CACHE_DIR } from "../../../../utils/workspace-paths.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../builtin.js";
@@ -30,9 +31,12 @@ import type { ToolPresentationResolver } from "../types.js";
 // Helpers
 // ============================================================================
 
+/** The cache path as a regex fragment — the hint lines are produced from the same constant. */
+const CACHE_DIR_PATTERN = AGENT_CACHE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const CACHE_HINT_PATTERNS = [
-  /^Full output saved to:\s*\.agents\/cache\//,
-  /^Use read_file with path="\.agents\/cache\//,
+  new RegExp(`^Full output saved to:\\s*${CACHE_DIR_PATTERN}/`),
+  new RegExp(`^Use read_file with path="${CACHE_DIR_PATTERN}/`),
   /^\.\.\.\s*\(\d+\s+lines?\s+omitted\)\s*\.\.\.$/,
   /^\.\.\.\s*\(\d+\s+chars?\s+omitted\)\s*\.\.\.$/,
 ];

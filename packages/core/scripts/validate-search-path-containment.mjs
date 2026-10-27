@@ -82,6 +82,17 @@ function run(tool, input, env) {
   return tool.execute(input, { toolCallId: "t", context: { coreEnv: env } });
 }
 
+/**
+ * The search-tool spawns, without the VCS probe.
+ *
+ * `grep`/`glob` ask git whether the workspace is a repository (the ignore-aware rung), so the
+ * first recorded spawn is that probe. The assertions below are about the binary the SEARCH uses
+ * and the argument it receives; counting the probe would make them about spawn order instead.
+ */
+function searchCalls(records) {
+  return records.filter((record) => record.file !== "git");
+}
+
 /** Assert a call rejects with the fs layer's traversal error and never reaches the binary. */
 async function expectRejected(label, promiseFactory, records) {
   try {
@@ -118,8 +129,8 @@ check("the stub root differs from process.cwd()", process.cwd() !== "/repo");
   );
   check(
     'glob: default path keeps the search argument as "." (root-relative output)',
-    records[0]?.args?.includes("."),
-    `args=${json(records[0]?.args)}`
+    searchCalls(records)[0]?.args?.includes("."),
+    `args=${json(searchCalls(records)[0]?.args)}`
   );
 }
 
@@ -134,8 +145,8 @@ check("the stub root differs from process.cwd()", process.cwd() !== "/repo");
   );
   check(
     'grep: default path keeps the search argument as "."',
-    records[0]?.args?.includes("."),
-    `args=${json(records[0]?.args)}`
+    searchCalls(records)[0]?.args?.includes("."),
+    `args=${json(searchCalls(records)[0]?.args)}`
   );
 }
 
@@ -170,8 +181,8 @@ check("the stub root differs from process.cwd()", process.cwd() !== "/repo");
   );
   check(
     "glob: in-root relative path is passed through unchanged (relative stays relative)",
-    records[0]?.args?.includes("src"),
-    `args=${json(records[0]?.args)}`
+    searchCalls(records)[0]?.args?.includes("src"),
+    `args=${json(searchCalls(records)[0]?.args)}`
   );
 }
 
@@ -186,8 +197,8 @@ check("the stub root differs from process.cwd()", process.cwd() !== "/repo");
   );
   check(
     "grep: in-root relative path is passed through unchanged",
-    records[0]?.args?.includes("src"),
-    `args=${json(records[0]?.args)}`
+    searchCalls(records)[0]?.args?.includes("src"),
+    `args=${json(searchCalls(records)[0]?.args)}`
   );
 }
 
@@ -214,7 +225,9 @@ check("the stub root differs from process.cwd()", process.cwd() !== "/repo");
   await run(createGlobTool(), { pattern: "**/*.ts", path: "/repo/src" }, env);
   check(
     "glob: absolute in-root path is accepted with cwd = workspace root",
-    records.length > 0 && records.every((r) => r.cwd === "/repo") && records[0]?.args?.includes("/repo/src"),
+    records.length > 0 &&
+      records.every((r) => r.cwd === "/repo") &&
+      searchCalls(records)[0]?.args?.includes("/repo/src"),
     `records=${json(records)}`
   );
 }

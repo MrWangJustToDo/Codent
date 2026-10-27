@@ -1,4 +1,5 @@
 import { errorMessage } from "../../utils/errors.js";
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 import { mcpConfigSchema } from "./types.js";
 
@@ -16,7 +17,7 @@ export interface McpConfigLoadResult {
 // Constants
 // ============================================================================
 
-export const DEFAULT_MCP_CONFIG_PATH = ".agents/mcp.json";
+export const DEFAULT_MCP_CONFIG_PATH = `${AGENT_DATA_DIR}/mcp.json`;
 
 /**
  * Additional default MCP config file paths (checked in order if no explicit path given).

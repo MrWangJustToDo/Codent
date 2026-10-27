@@ -4,9 +4,10 @@
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { toPosixPath } from "../../utils/posix-path.js";
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 /** Project-local extension directory (relative to CoreEnv rootPath). */
-export const DEFAULT_EXTENSION_DIR = ".agents/extension";
+export const DEFAULT_EXTENSION_DIR = `${AGENT_DATA_DIR}/extension`;
 
 /** Environment variable for additional extension directories (comma-separated). */
 export const EXTENSION_DIRS_ENV_VAR = "AGENT_EXTENSION_DIRS";
@@ -45,7 +46,7 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env
   }
 
   dirs.push(DEFAULT_EXTENSION_DIR);
-  dirs.push(e.path.join(await e.homedir(), ".agents", "extension"));
+  dirs.push(e.path.join(await e.homedir(), AGENT_DATA_DIR, "extension"));
 
   return dirs;
 }

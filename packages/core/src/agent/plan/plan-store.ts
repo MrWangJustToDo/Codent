@@ -6,10 +6,11 @@ import { join } from "pathe";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { slugifyName } from "../../utils/slug.js";
+import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 import { extractPlan } from "./extract-plan.js";
 
-export const PLAN_STORE_DIR = ".agents/plans";
+export const PLAN_STORE_DIR = `${AGENT_DATA_DIR}/plans`;
 
 export function slugifyPlanName(input: string): string {
   return slugifyName(input, { unicode: false, maxLength: 48, fallbackPrefix: "plan" });

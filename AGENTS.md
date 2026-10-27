@@ -699,6 +699,8 @@ Three injection shapes share that one catalog (`TURN_CONTEXT_KINDS`) and one she
    - `TodoManager` keeps only the policy (threshold/cooldown/growth).
 3. **Background pushes** — `background-middleware`, two layers **in this order**: (a) the `background_notification` completion push — the core delivery, one per completed job, appended first, carrying status + output tail and a machine-readable `jobs="id,…"` attr; (b) the `<background_jobs>` pointer — the safety net, hash-admitted like a turn-context section, listing only jobs whose `run_command` call is still in the wire **and** that this wire does not already announce. A pointer build failure is logged (a silent one would lose the model's only route back to a job whose notification a cut removed). Background *tasks* land in this class.
 
+   Both layers ride a model call, so a completion that lands while the session is **idle** is invisible until the user types. `ManagedAgent` therefore **wakes** it: the registry's change notification carries `finished` (the ids that just reached a terminal state — `create` / restore / evict / clear report an empty list, so `/resume` never starts a turn for a historical record), and an idle agent enqueues one pump (`AgentChatController.wakeForBackgroundCompletion`). The wake starts the turn; delivery stays the middleware's (`collectCompleted()` there is a peek, `markNotified` still happens after the injection). No wake while a pump is live or queued, while parked on the user (`waiting` / `awaiting_user`), during a manual `/compact` (`compacting` owns the transcript), in plan review (`ready`), or for a subagent. Validate: `validate:background-wake`.
+
 Every `<ctx kind=…>` tag is the catalog value and every section body is rendered by `formatSectionTag` — one renderer, so the inner tag a builder writes is the same tag admission and recovery read back. `validate:turn-context-kinds` fails if any source file outside `turn-context-message.ts` spells a catalog kind as a quoted literal (compound values), writes a literal `<ctx kind=…>` tag (that is how `background_notification` had drifted out of the catalog), or renders a section tag literally in a builder; it also asserts both counter reminders resolve to the single `reminder` kind with distinct inner tags and scope attrs. `syntheticKindFromId` recognizes only ids the current shell writes (`ctx-<kind>-<8hex>[-<nonce>]`) — there is no legacy-id branch. Validate: `validate:turn-context`, `validate:turn-context-kinds`, `validate:todo-reminder`, `validate:repeat-reminder`, `validate:repeat-reminder-persistence`.
 `<current_date>` uses **day** granularity (not hour/minute) so the payload stays stable within a calendar day.
 `findCutPointByBudget` counts synthetic `<ctx kind=...>` messages in the token budget but never selects one as the cut boundary (`isValidCutBoundary` rejects them).
@@ -1122,9 +1124,36 @@ Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. E
 
 ## Tool Output Truncation
 
-### grep Tool
+### grep / glob Tool — what a search may look at
+
+Both tools resolve **one** `SearchPolicy` (`agent/tools/builtin/fs/search/search-policy.ts`) and hand
+it to every engine, so `rg`, `git grep` and `grep` cannot disagree about what the workspace is:
+
+- **The repository's own ignore rules decide** (`.gitignore` + `.git/info/exclude` + global
+  excludes). That is what every other coding agent does, and it is the only list that cannot fall
+  behind: a hand-kept set of directory names is why a repo-wide `grep` here used to walk `.agents/`
+  (524 MB of session logs — **12.6 s** for a search `git grep` answers in **57 ms**, with 17% of
+  the returned rows being session-log paths).
+- **The runtime data directory is excluded by derivation, not by name**: `AGENT_DATA_DIR` (`.agents`)
+  is the floor for a non-git workspace, alongside the build/dependency defaults. A workspace with no
+  git still never greps its own transcripts.
+- **Explicit intent wins.** A `path` inside an excluded/ignored tree reopens it
+  (`git check-ignore` decides), so `grep({ path: ".agents/sessions" })` still works. Ignoring is a
+  default, not a cage — the tool description says so, because otherwise a model can only rediscover
+  the escape by trial and error.
+
+Engine ladder: `rg` (`--no-config`, `.gitignore` honoured, `--no-ignore` only for an explicit
+target) → **`git grep --untracked`** when `rg` is absent (same ignore semantics, untracked files
+included, ~50 ms) → `grep -r` with `--exclude-dir` from the policy. `glob` is the same ladder with
+`fd` → `git ls-files --cached --others --exclude-standard` → `find`. The legacy no-`execFile` host
+path keeps the policy's directory list (no VCS rung).
+
 - Max 500 chars per matching line content
 - Max 50KB total content across all matches
+- Validate: `validate:search-ignore-policy` (real temp repo: ignored tree skipped, untracked file
+  found, explicit path reopens, `glob` agrees, `--no-config` always / `--no-ignore` never by
+  default, `git grep` answers without ripgrep), plus `validate:search-fallback`,
+  `validate:search-path-containment`, `validate:search-abort`.
 
 ### read_file Tool
 
@@ -1144,7 +1173,7 @@ Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. E
 - Max 50KB for stdout and stderr each
 - Keeps the **end** of output (most relevant for errors)
 
-**Background jobs (`run_in_background`) and their log.** Output is retained in memory (head-trimmed: 256K/stream running, 64K/stream finished, 50 finished jobs kept) **and** tee'd to a durable log at `.agents/cache/command-jobs/<jobId>.log`, whose workspace-relative path is returned as `cachedOutputPath` by `run_command` (background) and `get_command_output`. A sibling `<jobId>.json` record persists the status, exit code, pid (when known), output tail and `notified` flag, scoped to the disk session that **started** the job (snapshotted per job, so `/new`/`/resume` switching the live id cannot re-file it): on a process restart the registry restores completed jobs (so `get_command_output`/`kill_command` still answer and an un-notified completion is delivered once), marks a still-`running` record as interrupted (trusting a terminal footer in the log when the crash landed after finish), and leaves another session's records alone. A graceful teardown (`destroyAll`) keeps terminal **un-notified** records/logs for the next resume and deletes the rest; a running job's process is **not** reaped on restart (no supervisor), and its pid is informational. Records are kept 7 days; logs keep the 24 h sweep, so a notification can still carry the status/tail after its full log is gone. A **`<background_jobs>` pointer** (`listForTurnContext`: job id, command, status/exit code, log path; no output) is the safety net for the one-shot notification: compaction summarizes a prefix away, so the notification that delivered a result is usually still visible *until* a later cut drops it. The pointer lists only jobs whose `run_command` tool call is still in the model-visible wire **and** that the wire does not already announce (the notification carries `jobs="id,…"`, so this is a set check, not prose parsing) — running jobs have no notification, so they are listed too. It is admitted by content like every other kind (a cut that dropped it re-admits it, a surviving copy keeps it) and re-lists a job once its announcement is summarized away. Running jobs come first; the list is capped at five. The model can also poll any job through `get_command_output`, so the pointer stays metadata-only. Ownership: `managers/services/agent-command-service.ts` owns the per-agent registry, its durable restore and that section; `background-middleware` owns delivering it (hash-admitted against the wire) together with the one-shot completion push.
+**Background jobs (`run_in_background`) and their log.** Output is retained in memory (head-trimmed: 256K/stream running, 64K/stream finished, 50 finished jobs kept) **and** tee'd to a durable log at `.agents/cache/command-jobs/<jobId>.log`, whose workspace-relative path is returned as `cachedOutputPath` by `run_command` (background) and `get_command_output`. A sibling `<jobId>.json` record persists the status, exit code, pid (when known), output tail and `notified` flag, scoped to the disk session that **started** the job (snapshotted per job, so `/new`/`/resume` switching the live id cannot re-file it): on a process restart the registry restores completed jobs (so `get_command_output`/`kill_command` still answer and an un-notified completion is delivered once), marks a still-`running` record as interrupted (trusting a terminal footer in the log when the crash landed after finish), and leaves another session's records alone. A graceful teardown (`destroyAll`) keeps terminal **un-notified** records/logs for the next resume and deletes the rest; a running job's process is **not** reaped on restart (no supervisor), and its pid is informational. Records are kept 7 days; logs keep the 24 h sweep, so a notification can still carry the status/tail after its full log is gone. A **`<background_jobs>` pointer** (`listForTurnContext`: job id, command, status/exit code, log path; no output) is the safety net for the one-shot notification: compaction summarizes a prefix away, so the notification that delivered a result is usually still visible *until* a later cut drops it. The pointer lists only jobs whose `run_command` tool call is still in the model-visible wire **and** that the wire does not already announce (the notification carries `jobs="id,…"`, so this is a set check, not prose parsing) — running jobs have no notification, so they are listed too. It is admitted by content like every other kind (a cut that dropped it re-admits it, a surviving copy keeps it) and re-lists a job once its announcement is summarized away. Running jobs come first; the list is capped at five. The model can also poll any job through `get_command_output`, so the pointer stays metadata-only. Ownership: `managers/services/agent-command-service.ts` owns the per-agent registry, its durable restore and that section; `background-middleware` owns delivering it (hash-admitted against the wire) together with the one-shot completion push. **An idle session is woken** rather than left waiting for the user's next message: a terminal transition reports `finished`, `ManagedAgent` peeks the completion queue and starts one turn, and the middleware injects+marks inside it (see the turn-context background-push bullet).
 - one file per job, chunks appended in arrival order, stderr lines marked `[stderr] `;
 - header (`# <command>` + start time) on creation, terminal footer `[exit <code> · <status> · finished <iso>]` — **no footer means still running**;
 - **unbounded by design**: the log is never sized against a cap and never truncated — background output is always written. Disk growth is bounded by the 24 h stale sweep plus deletion with the job record, not by cutting the file, so `read_file` line offsets stay valid for as long as the file exists;

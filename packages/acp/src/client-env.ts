@@ -31,7 +31,7 @@ import {
   type ReadTextFileResponse,
   type TerminalOutputResponse,
 } from "@agentclientprotocol/sdk";
-import { defaultPath, ExecutionError } from "@codent/core";
+import { AGENT_DATA_DIR, defaultPath, ExecutionError } from "@codent/core";
 
 import { toWirePath } from "./paths.js";
 
@@ -47,8 +47,8 @@ import type {
   StartCommandOptions,
 } from "@codent/core";
 
-/** The `.agents` directory name — this project's own storage, never the client's business. */
-const AGENT_STATE_DIR = ".agents";
+/** This project's own storage directory — never the client's business. */
+const AGENT_STATE_DIR = AGENT_DATA_DIR;
 
 /** Bound on `terminal/output` polling: 20 ms doubling to 250 ms. */
 const POLL_INITIAL_MS = 20;
