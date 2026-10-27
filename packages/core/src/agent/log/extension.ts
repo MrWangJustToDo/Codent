@@ -136,7 +136,7 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       if (started) return;
       started = true;
       unsubscribe = bridgeTelemetryToAgentLog(bus, options.resolveLog, options.policy);
-      unregisterExitFlush = registerExtensionExitFlush(flushSinksSync);
+      unregisterExitFlush = registerExtensionExitFlush(flushSinksSync, { last: true });
     },
 
     getAttachedSinkCount: () => sinks.size,

@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { ApprovalDecisionCoordinator } from "../dist/dev.mjs";
+import { ApprovalDecisionCoordinator, ToolApprovalTable } from "../dist/dev.mjs";
 
 function toolCall(id, name, command, approvalId, extra = {}) {
   return {
@@ -195,6 +195,67 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
   });
   await ctrl.coordinator.applyCommandSafetyPolicy();
   assert.equal(ctrl.decisions.length, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 5. First decision wins: a repeated / late answer is inert
+//
+// The channel used to apply a second decision (approved and denied rank equally), so a deny
+// followed by a late allow flipped `resumeToolState` and executed the tool the user refused.
+// The coordinator must not write, settle, or pump for an approval that is no longer pending,
+// and must not invent a row for an id no part carries.
+// ---------------------------------------------------------------------------
+{
+  let current = messages;
+  const calls = [];
+  let pumps = 0;
+  const coordinator = new ApprovalDecisionCoordinator({
+    getMessages: () => current,
+    addToolApprovalResponse: (approvalId, approved, reason) => {
+      calls.push({ approvalId, approved });
+      // Model the channel: the decision becomes part of the transcript.
+      current = current.map((message) => ({
+        ...message,
+        parts: message.parts.map((part) =>
+          part.approval?.id === approvalId
+            ? { ...part, approval: { ...part.approval, approved, ...(reason ? { reason } : {}) } }
+            : part
+        ),
+      }));
+      return calls.length;
+    },
+    upsertApproval: () => {},
+    shouldAutoApprove: () => false,
+    reconcile: () => {},
+    persist: () => {},
+    enqueueRun: async () => {
+      pumps += 1;
+    },
+    getCoreEnv: () => ({}),
+  });
+
+  await coordinator.respondToToolApproval("ap_a", false, "no");
+  await coordinator.respondToToolApproval("ap_a", true); // late allow — must be ignored
+  assert.equal(calls.length, 1, "a second answer must not reach the channel");
+  assert.deepEqual(calls[0], { approvalId: "ap_a", approved: false });
+  assert.equal(pumps, 1, "a second answer must not schedule a pump");
+
+  await coordinator.respondToToolApproval("ap_unknown", true); // no part carries this id
+  assert.equal(calls.length, 1, "an unknown approval id must not invent a decision");
+  assert.equal(pumps, 1, "an unknown approval id must not schedule a pump");
+}
+
+// ---------------------------------------------------------------------------
+// 6. The approval table itself is first-wins (approved and denied rank equally)
+// ---------------------------------------------------------------------------
+{
+  const table = new ToolApprovalTable();
+  table.upsert({ id: "ap", toolCallId: "call", status: "pending" });
+  const decided = table.upsert({ id: "ap", toolCallId: "call", status: "denied", reason: "no" });
+  assert.equal(decided.status, "denied", "pending → denied is applied");
+  const late = table.upsert({ id: "ap", toolCallId: "call", status: "approved" });
+  assert.equal(late.status, "denied", "an answered row must not flip to the other answer");
+  assert.equal(late.reason, "no", "the first decision's reason is kept");
 }
 
 console.log("approval-decisions validation passed");

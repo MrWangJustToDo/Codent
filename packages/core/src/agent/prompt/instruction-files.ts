@@ -177,6 +177,7 @@ async function resolveFile(
     rootPath,
     maxBytes,
     env,
+    sourcePath: filePath,
   });
 
   const truncated = truncateToBudget(expanded.content, maxBytes, env);
@@ -226,6 +227,12 @@ export interface ExpandImportsOptions {
   maxDepth?: number;
   /** Owning runtime's env; ambient only when omitted. */
   env?: ResolvedCoreEnv;
+  /**
+   * The file `content` was read from. Seeded into the cycle guard so a file that imports itself
+   * (`AGENTS.md` containing `@AGENTS.md`) is skipped at the first hop instead of being inlined
+   * into itself once.
+   */
+  sourcePath?: string;
 }
 
 /** Mutable per-chain expansion state. */
@@ -277,6 +284,7 @@ export async function expandInstructionImports(
   content: string,
   options: ExpandImportsOptions
 ): Promise<{ content: string; notices: string[] }> {
+  const env = options.env ?? getEnv();
   const state: ImportState = {
     visited: new Set(),
     depth: 0,
@@ -285,7 +293,10 @@ export async function expandInstructionImports(
     expandedBytes: 0,
     notices: [],
   };
-  return expandWithState(content, options.env ?? getEnv(), options.baseDir, options.rootPath, state);
+  // The root file is the start of the chain: seeding it is what makes a self-reference a cycle
+  // at the first hop rather than a duplicate copy of the whole document.
+  if (options.sourcePath) state.visited.add(env.path.resolve(options.sourcePath));
+  return expandWithState(content, env, options.baseDir, options.rootPath, state);
 }
 
 async function expandWithState(

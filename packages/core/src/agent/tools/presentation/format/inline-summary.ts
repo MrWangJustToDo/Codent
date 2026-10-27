@@ -1,3 +1,4 @@
+import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
 import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { isCancelledToolCall } from "../state.js";
 
@@ -34,6 +35,11 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
   // settles the part as `error` (the guard would bail) and a cancelled run_command would
   // otherwise render as a clean finish with an `(error)` body.
   if (isCancelledToolCall(part)) return "cancelled";
+
+  // A thrown tool is not a success: without this, `write_file` reported "updated" and
+  // `edit_file` "applied" for calls that failed. No summary is the correct verdict — the row's
+  // error header already carries the message, exactly as it does for a non-`complete` failure.
+  if (isBareToolErrorResult(output)) return null;
 
   if (part.state !== "complete") return null;
 

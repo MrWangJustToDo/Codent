@@ -266,12 +266,18 @@ registerCoreEnv(createFsEnv(rootPath));
   ext.start();
 
   log.info("system", "buffered-at-exit");
+  // An ordinary exit flush writes through `ctx.logger` — exactly the "state a crash report needs"
+  // use case. It must land, which means the log sink's finalizer has to run AFTER it (the sink is
+  // registered first, at agent construction, so insertion order alone ran it too early).
+  const disposeUserFlush = registerExtensionExitFlush(() => log.info("system", "user-exit-entry"));
   // No polling and no async flush: only the exit path can land this, which is the property under
   // test (a 10s interval and an immediate read make a timer-based write impossible).
   flushExtensionExitFlushesSync();
+  disposeUserFlush();
 
   const content = fs.readFileSync(path.join(dir, "agent.log"), "utf-8");
   assert.ok(content.includes("buffered-at-exit"), "the log extension's pending batch lands on the exit path");
+  assert.ok(content.includes("user-exit-entry"), "an ordinary exit flush that logs must run BEFORE the sink finalizer");
 
   ext.dispose();
   assert.equal(ext.getAttachedSinkCount(), 0, "dispose releases every registered sink");

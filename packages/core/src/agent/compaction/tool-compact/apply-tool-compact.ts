@@ -34,6 +34,15 @@ export interface ApplyToolCompactOptions {
 // Helpers
 // ============================================================================
 
+/**
+ * A denied approval placeholder (`{ approved: false }`) is not a tool output. Kept as a predicate
+ * rather than an `@ts-ignore` on `rawOutput.approved` — the payload is `unknown`, and this branch is
+ * load-bearing (compacting the placeholder away makes TanStack skip the approval gate).
+ */
+function isDeniedToolResult(output: unknown): output is { approved: false } {
+  return typeof output === "object" && output !== null && (output as Record<string, unknown>).approved === false;
+}
+
 function findToolResultMessages(messages: ModelMessage[]): ToolResultRef[] {
   const results: ToolResultRef[] = [];
 
@@ -108,9 +117,7 @@ export async function applyToolCompact(
     const rawOutput = parseToolMessageOutput(message.content);
     if (isPendingToolExecutionResult(rawOutput)) continue;
 
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore – approved check on raw output
-    if (rawOutput?.approved === false) continue;
+    if (isDeniedToolResult(rawOutput)) continue;
 
     if (isToolErrorResult(rawOutput)) {
       const normalized = normalizeModelToolContent(formatToolErrorForModel(rawOutput));

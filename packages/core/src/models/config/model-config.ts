@@ -106,10 +106,9 @@ export async function resolveModelConfig(input: ResolveModelConfigInput = {}): P
 
   const modelInfo = mergeModelInfo(lookedUp, input.modelInfo);
 
-  const finalConnection: ModelConnection = {
-    ...connection,
-    baseURL: modelInfo?.baseURL ?? connection.baseURL,
-  };
-
-  return { connection: finalConnection, modelInfo };
+  // `resolveModelConnection` already applied the documented precedence
+  // (`input.baseURL || modelInfo.baseURL || default`). Re-deriving it here with
+  // `modelInfo.baseURL ?? …` silently overruled an explicit `--base-url` / provider override
+  // whenever metadata carried a URL, which is why the remote path had to re-force it afterwards.
+  return { connection, modelInfo };
 }

@@ -26,6 +26,11 @@ const SCAN_DIRS = [
   "agent/mcp",
   "managers",
   "provider",
+  "models",
+  "runtime",
+  "agent-session",
+  "agent/usage",
+  "agent/code-mode",
   "agent/prompt",
   "agent/turn-context",
   "agent/plan",
@@ -87,14 +92,16 @@ for (const rel of SCAN_DIRS) {
       let m;
       while ((m = CALL_RE.exec(line)) !== null) {
         const before = line.slice(0, m.index);
-        // A fallback is either `x ?? getEnv()` or a typed default parameter (`env: CoreEnv = getEnv()`).
-        // A bare assignment (`const env = getEnv()`) reads the ambient registry unconditionally and is
-        // reported — the blind spot that hid the unmigrated call sites.
-        const isFallback = /\?\?\s*$/.test(before) || /:[\s\w.<>[\],|]+\s*=\s*$/.test(before);
+        // A fallback is either `x ?? getEnv()`, a ternary (`env ? resolve(env) : getEnv()`), or a
+        // typed default parameter (`env: CoreEnv = getEnv()`). A bare assignment
+        // (`const env = getEnv()`) reads the ambient registry unconditionally and is reported —
+        // the blind spot that hid the unmigrated call sites.
+        const isFallback =
+          /\?\?\s*$/.test(before) || /\?\s[^:]*:\s*$/.test(before) || /:[\s\w.<>[\],|]+\s*=\s*$/.test(before);
         if (isFallback) continue;
         // A method *named* `getEnv` / `getModelProvider` (e.g. `getEnv(): ResolvedCoreEnv {`,
-        // the registry's own `getModelProvider(): ModelProvider {`) is not a registry call.
-        if (/^get(?:Env|ModelProvider)\s*\(\s*\)\s*:/.test(line.slice(m.index))) continue;
+        // `getModelProvider() {`) is not a registry call.
+        if (/^get(?:Env|ModelProvider)\s*\(\s*\)\s*(?::|\{)/.test(line.slice(m.index))) continue;
         if (allowReason) continue;
         offenders.push(`${relPath}:${i + 1}  ${line.trim()}`);
       }

@@ -80,8 +80,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let flushChain: Promise<void> = Promise.resolve();
   /** True while `flushBatch` owns the buffer. `flushSync` must yield to it. */
   let flushInFlight = false;
-  /** Whether the session-boundary divider has been decided for this sink. */
-  let boundaryWritten = false;
+  /** Whether the session-boundary divider has been decided for this sink. `false` means the
+   * caller asked for a continuation (a temporary re-point), so no divider is ever written. */
+  let boundaryWritten = options.sessionBoundary === false;
 
   /** Shift segments `{file}.{maxFiles-1}` → drop, ..., `{file}` → `{file}.1`, then truncate. */
   const rotate = async (): Promise<void> => {

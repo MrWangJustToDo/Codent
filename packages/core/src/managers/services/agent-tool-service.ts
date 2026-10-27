@@ -6,6 +6,7 @@
  * environment, runner, or UI state.
  */
 
+import { normalizeModelToolContent } from "../../agent/compaction/tool-compact/parse-tool-message.js";
 import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin.js";
 import { describeToolPresentations } from "../../agent/tools/presentation/describe.js";
 import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
@@ -68,8 +69,11 @@ export class AgentToolService {
     const entry = this.registry.resolve(name);
     if (!entry) return undefined;
     const decorators = this.decorators.get(name);
-    if (!entry.toModelOutput || !decorators || decorators.length === 0) return entry;
-    let chain: ToModelOutputFn = entry.toModelOutput;
+    if (!decorators || decorators.length === 0) return entry;
+    // A tool with no handler of its own still runs the decorator chain: the base is the identity
+    // (the same JSON normalization the framework applies), not "skip the decorator". Without this,
+    // `registerToolOutputDecorator` silently did nothing for client tools and third-party tools.
+    let chain: ToModelOutputFn = entry.toModelOutput ?? ((ctx) => normalizeModelToolContent(ctx.output));
     for (const decorator of decorators) {
       const prev = chain;
       chain = async (ctx) => decorator.fn(ctx, prev);

@@ -452,6 +452,13 @@ export type ToolLifecycleEvent = ToolBeforeEvent | ToolAfterEvent | ToolErrorEve
 export interface ExtensionEventBus {
   emit<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined>;
   /**
+   * Whether any interceptor (exact or wildcard pattern) would receive `type`.
+   *
+   * Fast-path guard for callers whose event payload is expensive to prepare — the `tool:after`
+   * path uses it to decide whether a detached copy of the tool result is needed at all.
+   */
+  hasInterceptors(type: string): boolean;
+  /**
    * Register an interceptor. `rank` is the declaring extension's dispatch position — supplied by
    * the runner so the shared scope node can order interceptors across extensions.
    */

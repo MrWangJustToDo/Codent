@@ -1,5 +1,6 @@
 import { parseModelsConfig } from "@codent/core";
 
+import { useCoreEnv } from "../context/core-env-context.js";
 import { useCommandOutput } from "../hooks/use-command-output.js";
 import { useConfigEditor } from "../hooks/use-config-editor.js";
 import { applyModelsConfigEdit, describeEditedEntry, selectEditedEntry } from "../utils/apply-models-config-edit.js";
@@ -23,6 +24,8 @@ import type { ModelsConfig } from "@codent/core";
 export const ConfigEditorOverlay = () => {
   const close = useConfigEditor.getActions().close;
   const showOutput = useCommandOutput.getActions().show;
+  // The workspace being edited is the host's env, not whatever was registered last process-wide.
+  const env = useCoreEnv();
 
   // The wizard's draft is seeded once, at mount, and the overlay is unmounted on
   // close (Agent returns early), so the seeded entry can be read directly.
@@ -34,7 +37,7 @@ export const ConfigEditorOverlay = () => {
   const handleDone = (config: ModelsConfig): void => {
     close();
     const { entryIndex } = selectEditedEntry();
-    void applyModelsConfigEdit(config, { entryIndex }).then((result) => {
+    void applyModelsConfigEdit(config, { entryIndex, env }).then((result) => {
       if (!result.ok) {
         showOutput("/settings config", `Config not saved: ${result.error}`);
         return;

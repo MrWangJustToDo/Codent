@@ -30,10 +30,12 @@ import {
 } from "./session-journal.js";
 import { fingerprintUIMessage } from "./session-sync-tracker.js";
 import {
+  AGENT_LOG_DIR,
   SESSION_DIR,
   SESSION_LOG_MESSAGE,
   SESSION_LOG_SUFFIX,
   SESSION_VERSION,
+  isSafeSessionId,
   isSupportedSessionVersion,
 } from "./types.js";
 
@@ -193,6 +195,9 @@ export class SessionStore {
    * Serializes concurrent saves per session.
    */
   async save(session: SessionData): Promise<void> {
+    if (!isSafeSessionId(session.id)) {
+      throw new Error(`Invalid session id: ${session.id}`);
+    }
     const key = this.getLogKey(session.id);
     if (deletedSessionPaths.has(key)) return;
     const prev = sessionSaveLocks.get(key) ?? Promise.resolve();
@@ -218,6 +223,7 @@ export class SessionStore {
    * until it has something to write. `load()` uses the same check to report "not found".
    */
   async exists(id: string): Promise<boolean> {
+    if (!isSafeSessionId(id)) return false;
     if (deletedSessionPaths.has(this.getLogKey(id))) return false;
     return this.fs.exists(this.getLogPath(id));
   }
@@ -232,6 +238,7 @@ export class SessionStore {
    * missing or holds no usable lines.
    */
   async load(id: string): Promise<SessionData | null> {
+    if (!isSafeSessionId(id)) return null;
     const logPath = this.getLogPath(id);
     if (deletedSessionPaths.has(this.getLogKey(id))) return null;
     if (!(await this.fs.exists(logPath))) return null;
@@ -380,8 +387,12 @@ export class SessionStore {
 
   /**
    * Delete a session by ID (its log; there is no separate snapshot file).
+   *
+   * Also removes `.agents/logs/<id>/`: that timeline carries the user's prompts, tool arguments and
+   * tool output, so leaving it behind made "delete this conversation" keep the conversation.
    */
   async delete(id: string): Promise<boolean> {
+    if (!isSafeSessionId(id)) return false;
     const logPath = this.getLogPath(id);
     const key = this.getLogKey(id);
     // Mark before waiting: a save queued after this point must not restart the session. An
@@ -393,9 +404,22 @@ export class SessionStore {
     sessionSaveLocks.delete(key);
     this.lastSaved.delete(id);
     this.statusStamps.delete(id);
-    if (!(await this.fs.exists(logPath))) return false;
-    await this.fs.remove(logPath);
-    return true;
+    let removed = false;
+    if (await this.fs.exists(logPath)) {
+      await this.fs.remove(logPath);
+      removed = true;
+    }
+    // Same containment rule as the log path: never build a directory from an id that could leave
+    // the logs root. Best-effort — a failed log cleanup must not fail the deletion itself.
+    if (isSafeSessionId(id) && !id.startsWith(".")) {
+      const logDir = `${AGENT_LOG_DIR}/${id}`;
+      try {
+        if (await this.fs.exists(logDir)) await this.fs.remove(logDir);
+      } catch {
+        // Non-fatal.
+      }
+    }
+    return removed;
   }
 
   /**

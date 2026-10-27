@@ -238,8 +238,9 @@ export async function readSessionMessageWindow(
   offset: number,
   limit: number
 ): Promise<{ messages: SessionMessage[]; total: number }> {
-  const path = getJournalPath(sessionId);
+  let path: string;
   try {
+    path = getJournalPath(sessionId);
     if (!(await env.fs.exists(path))) return { messages: [], total: 0 };
   } catch {
     return { messages: [], total: 0 };
@@ -289,8 +290,9 @@ export async function readSessionMessageWindow(
  * streaming window/search paths. It folds the whole log, so its memory is O(messages), not O(file).
  */
 export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: string): Promise<SessionMessage[]> {
-  const path = getJournalPath(sessionId);
+  let path: string;
   try {
+    path = getJournalPath(sessionId);
     if (!(await env.fs.exists(path))) return [];
     const lines = await readLog(env.fs, path);
     const { uiMessages } = foldLog(lines);

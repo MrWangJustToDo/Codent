@@ -455,7 +455,13 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
       // the fetch route wires to its own outbound request.
       const res = await client.fetch.proxy.$post(
         {
-          json: { url, method, headers: Object.keys(headers).length > 0 ? headers : undefined, body },
+          json: {
+            url,
+            method,
+            headers: Object.keys(headers).length > 0 ? headers : undefined,
+            body,
+            redirect: init?.redirect,
+          },
         },
         { init: { signal: init?.signal } }
       );

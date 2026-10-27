@@ -57,6 +57,14 @@ export async function runManagedSpan(
 
   const channel = runOptions.channel ?? managed.getUI() ?? ensureUIChannel(managed, runOptions.uiAttach);
 
+  // One answer to "did this run get cancelled", shared by the success and throw paths: two copies
+  // of the same expression is how one of them keeps checking a stale signal after the other moves.
+  const isAbortedNow = (): boolean => managed.getStatus() === "aborted" || Boolean(managed.getAbortSignal()?.aborted);
+  const abortedSpan = (messages: UIMessage[]): ManagedSpanResult & Pick<RunAgentOnceResult, "channel"> => {
+    onAbort?.(messages);
+    return { messages, aborted: true, channel };
+  };
+
   try {
     const result = await runAgentOnce({
       ...runOptions,
@@ -64,11 +72,7 @@ export async function runManagedSpan(
       parentTaskToolCallId,
     });
 
-    const aborted = managed.getStatus() === "aborted" || Boolean(managed.getAbortSignal()?.aborted);
-    if (aborted) {
-      onAbort?.(result.messages);
-      return { messages: result.messages, aborted: true, channel: result.channel };
-    }
+    if (isAbortedNow()) return abortedSpan(result.messages);
 
     if (flagEmptyStream) {
       const before = (runOptions.messages ?? []) as UIMessage[];
@@ -87,19 +91,14 @@ export async function runManagedSpan(
     return { messages: result.messages, aborted: false, channel: result.channel };
   } catch (err) {
     const messages = channel.getMessages();
-    const actuallyAborted = managed.getStatus() === "aborted" || Boolean(managed.getAbortSignal()?.aborted);
-    if (actuallyAborted) {
-      onAbort?.(messages);
-      return { messages, aborted: true, channel };
-    }
+    if (isAbortedNow()) return abortedSpan(messages);
 
     const error = toError(err);
     const message = formatAgentStreamError(error).message;
     if (managed.isAbortError(err)) {
-      if (abortErrorAsCancel) {
-        onAbort?.(messages);
-        return { messages, aborted: true, channel };
-      }
+      // The run is not marked aborted (status/signal), but the failure IS the abort: a child
+      // worker treats it as a cancellation; the root keeps the error text for the user.
+      if (abortErrorAsCancel) return abortedSpan(messages);
       onAbortError?.(message, error);
       return { messages, aborted: false, errorMessage: message, channel };
     }

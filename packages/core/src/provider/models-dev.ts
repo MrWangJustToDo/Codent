@@ -28,9 +28,15 @@
  */
 
 import { getEnv } from "../env";
+import {
+  REASONING_EFFORT_VALUES,
+  type ModelCapability,
+  type ModelInfo,
+  type ModelStyle,
+  type ReasoningEchoField,
+  type ReasoningEffort,
+} from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
-
-import type { ModelCapability, ModelInfo, ModelStyle, ReasoningEchoField, ReasoningEffort } from "../models/types.js";
 
 // ============================================================================
 // Constants
@@ -38,8 +44,11 @@ import type { ModelCapability, ModelInfo, ModelStyle, ReasoningEchoField, Reason
 
 export const MODELS_DEV_URL = "https://models.dev/api.json";
 
-/** Effort values we recognize from models.dev `reasoning_options`. */
-const REASONING_EFFORTS = new Set<ReasoningEffort>(["none", "low", "medium", "high", "xhigh", "max", "minimal"]);
+/**
+ * Effort values we recognize from models.dev `reasoning_options` — derived from the one runtime
+ * list, so adding a level in `models/types.ts` cannot leave the catalog silently dropping it.
+ */
+const REASONING_EFFORTS = new Set<ReasoningEffort>(REASONING_EFFORT_VALUES);
 
 /**
  * The named effort levels a models.dev entry advertises (`reasoning_options[type=effort].values`).

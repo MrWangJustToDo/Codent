@@ -1,6 +1,7 @@
 import { isSyntheticCancelOutput } from "../../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
+import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
@@ -211,6 +212,9 @@ function formatGrepOutput(output: GrepOutput): string {
 
 function formatTodoOutput(output: TodoOutput): string {
   const { stats, source } = output;
+  // `stats` is required by the schema, but this formatter is also reachable from host code that
+  // renders a stored part. A framework/extension shape without it must not throw inside a render.
+  if (!stats) return source === "plan" ? "Updated plan todos" : "Updated todos";
   const tag = source === "plan" ? " (plan)" : "";
   return `Updated ${stats.total} todos${tag}: ${stats.completed} completed, ${stats.inProgress} in progress, ${stats.pending} pending`;
 }
@@ -311,6 +315,14 @@ export function formatToolOutput(
   // marker that is no tool's schema. Without this short-circuit every formatter read fields that
   // cannot be there (`todo` threw on `stats.total`, `run_command` printed `Exit code: undefined`).
   if (isExtensionDeniedOutput(output)) return formatExtensionDeniedOutput(output);
+
+  // A tool that THREW settles as `{ error: string }`, which is not any tool's output schema.
+  // Every formatter below reads its own fields, so without this the commonest failure
+  // (`write_file` on an existing path) rendered "Overwrote file: undefined" and `todo` threw a
+  // TypeError inside a host render. The model-facing projection has always short-circuited the
+  // same shape; this is the UI-side counterpart. Empty is deliberate: the row's error header
+  // already carries the message, and a fabricated body is worse than none.
+  if (isBareToolErrorResult(output)) return "";
 
   if (toolName) {
     const uiRenderer = resolvePresentation(toolName)?.text;

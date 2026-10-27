@@ -124,8 +124,25 @@ export function buildMediaRefPath(ref: MediaRef): string {
 }
 
 /**
+ * A media filename hash is the lowercase SHA-256 hex of the base64 payload
+ * ({@link sha256Stable}). Validated before it becomes a path: a restored/shared session can carry
+ * any string in `mediaRef.hash`, and concatenating it into `${MEDIA_DIR}/${hash}.${ext}` let
+ * `../../.env` read a workspace file and hydrate it into a data URL for the model.
+ */
+const MEDIA_HASH_RE = /^[0-9a-f]{64}$/;
+
+/** Whether `hash` is a valid media content hash (and therefore safe as a path segment). */
+export function isMediaHash(hash: string): boolean {
+  return MEDIA_HASH_RE.test(hash);
+}
+
+/**
  * Parse a `media://<hash>.<ext>` reference string.
  * Returns `{ hash, ext }` or `null` if the string is not a valid media reference.
+ *
+ * Deliberately does not require a full hash: the shape is also used by hosts/fixtures with short
+ * ids. The path boundary ({@link isMediaHash} in `MediaStore.load` and hydration) is where a hash
+ * must be real, because that is where it becomes a filename.
  */
 export function parseMediaRefPath(ref: string): { hash: string; ext: string } | null {
   if (!isMediaRefValue(ref)) return null;

@@ -1,9 +1,5 @@
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
-import {
-  attachRunErrorCode,
-  attachRunErrorRetryAfterMs,
-  extractRunErrorMessage,
-} from "../agent/stream/stream-errors.js";
+import { readRetryAfterMs, runErrorFromChunk } from "../agent/stream/stream-errors.js";
 import { discardRegisteredPrefork } from "../agent/subagent/task-prefork.js";
 import { toError } from "../utils/errors.js";
 
@@ -14,11 +10,7 @@ import {
   readTruncationProgress,
 } from "./stream-recovery/max-tokens-continue.js";
 import { tryReactiveCompactRetry } from "./stream-recovery/reactive-compact-retry.js";
-import {
-  extractRetryAfterMs,
-  extractRetryAfterSeconds,
-  isTransientRetryableError,
-} from "./stream-recovery/transient-retry.js";
+import { extractRetryAfterSeconds, isTransientRetryableError } from "./stream-recovery/transient-retry.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent } from "./managed-agent.js";
@@ -100,8 +92,7 @@ async function attemptErrorRecovery(
   options: AttemptRecoveryOptions,
   error: unknown,
   multimodalStripAttempted: boolean,
-  recoveryAttempts: number,
-  providerRetryAfterMs?: number
+  recoveryAttempts: number
 ): Promise<RecoveryResult | null> {
   // Never start a new recovery strategy for an already-cancelled run.
   if (options.signal?.aborted) return null;
@@ -128,14 +119,12 @@ async function attemptErrorRecovery(
 
   // Same messages + backoff (429 / gateway / network). Applies to root and subagents.
   if (isTransientRetryableError(error)) {
-    // The SDK-normalized `retryAfterMs` (on the RUN_ERROR chunk we were handed) wins
-    // over our own header/message scraping; `extractRetryAfterSeconds` is the fallback
-    // for a thrown error that never became a RUN_ERROR.
-    const retryAfterSeconds =
-      providerRetryAfterMs != null && providerRetryAfterMs > 0
-        ? providerRetryAfterMs / 1000
-        : extractRetryAfterSeconds(error);
-    options.managed.log?.warn("agent", "Transient provider error — retrying with backoff", {
+    // Read from the error, which `runErrorFromChunk` already populated from the chunk (SDK
+    // `retryAfterMs` / `metadata.tanstack.retryAfterMs`). A thrown error that never became a
+    // RUN_ERROR falls back to header/message scraping.
+    const errorRetryAfterMs = readRetryAfterMs(error);
+    const retryAfterSeconds = errorRetryAfterMs != null ? errorRetryAfterMs / 1000 : extractRetryAfterSeconds(error);
+    options.managed.log?.debug("agent", "Transient provider error — retrying with backoff", {
       attempt: recoveryAttempts + 1,
       maxAttempts: MAX_RECOVERY_ATTEMPTS,
       retryAfterSeconds,
@@ -217,14 +206,21 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
   let clearRetryOnNextChunk = false;
   const truncation = createTruncationState();
 
+  /**
+   * Two points check the run signal (between attempts, and during a backoff). Both must clear the
+   * surfaced retry state, because neither path reaches a terminal status change that would.
+   */
+  const cancelled = (): boolean => {
+    if (!options.signal?.aborted) return false;
+    options.managed.setRetry?.(null);
+    return true;
+  };
+
   while (true) {
     // Cancelled between attempts — stop before starting another stream. Clear the
     // retry visibility first: this path returns without a terminal status change,
     // so nothing else unwinds the state recorded for the attempt that just ended.
-    if (options.signal?.aborted) {
-      options.managed.setRetry?.(null);
-      return;
-    }
+    if (cancelled()) return;
     let shouldRetry = false;
     let truncationDetected = false;
     /** Whether this retry consumes `MAX_RECOVERY_ATTEMPTS` (truncation owns its own budget). */
@@ -232,6 +228,22 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
     let retryAfterSeconds: number | undefined;
     let lastErrorMessage = "";
     let retryStrategy: AgentRetryStrategy | undefined;
+    /**
+     * A `RUN_ERROR` chunk the ladder evaluated and declined. It is carried out of the loop and
+     * thrown AFTER the `try` instead of inside it: throwing from the loop lands in this attempt's
+     * own `catch`, which would run the same ladder a second time (and consume reactive-compaction
+     * budget for an error that never retried). The old flag existed only to detect that shape.
+     */
+    let terminalError: Error | null = null;
+
+    /** The one place a recovery decision becomes this attempt's retry state. */
+    const applyRecovery = (result: RecoveryResult): void => {
+      shouldRetry = true;
+      multimodalStripAttempted = result.multimodalStripAttempted;
+      retryAfterSeconds = result.retryAfterSeconds;
+      retryStrategy = result.strategy;
+    };
+
     const stream = options.run(messages);
     assertAsyncIterable<StreamChunk>(stream, "AgentRunner.run");
 
@@ -244,26 +256,15 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
         }
 
         if (chunk.type === "RUN_ERROR") {
-          const runError = attachRunErrorRetryAfterMs(
-            attachRunErrorCode(errorFromUnknown(extractRunErrorMessage(chunk) || "Agent run failed"), chunk),
-            chunk
-          );
+          const runError = runErrorFromChunk(chunk);
           lastErrorMessage = runError.message;
-          const result = await attemptErrorRecovery(
-            options,
-            runError,
-            multimodalStripAttempted,
-            recoveryAttempts,
-            extractRetryAfterMs(chunk)
-          );
+          const result = await attemptErrorRecovery(options, runError, multimodalStripAttempted, recoveryAttempts);
           if (result) {
-            shouldRetry = true;
-            multimodalStripAttempted = result.multimodalStripAttempted;
-            retryAfterSeconds = result.retryAfterSeconds;
-            retryStrategy = result.strategy;
+            applyRecovery(result);
             break;
           }
-          throw runError;
+          terminalError = runError;
+          break;
         }
 
         // Detect output token limit before yielding RUN_FINISHED
@@ -281,16 +282,12 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
       if (!shouldRetry) {
         lastErrorMessage = errorFromUnknown(error).message;
         const result = await attemptErrorRecovery(options, error, multimodalStripAttempted, recoveryAttempts);
-        if (result) {
-          shouldRetry = true;
-          multimodalStripAttempted = result.multimodalStripAttempted;
-          retryAfterSeconds = result.retryAfterSeconds;
-          retryStrategy = result.strategy;
-        } else {
-          throw error;
-        }
+        if (result) applyRecovery(result);
+        else throw error;
       }
     }
+
+    if (terminalError) throw terminalError;
 
     if (truncationDetected) {
       const truncationResult = handleMaxTokensTruncation({
@@ -357,10 +354,7 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
     // not leave the recorded retry surfaced: this return skips both the recovery
     // clear and the terminal-status clear in `ManagedAgent.setStatus`, so hosts
     // that keep rendering a live snapshot would keep showing "Retrying …".
-    if (options.signal?.aborted) {
-      options.managed.setRetry?.(null);
-      return;
-    }
+    if (cancelled()) return;
 
     if (countsAsRecoveryAttempt) recoveryAttempts++;
   }

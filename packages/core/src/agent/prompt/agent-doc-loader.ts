@@ -18,6 +18,7 @@
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { formatByteSize } from "../../utils/byte-size.js";
 
 import {
   INSTRUCTION_FILENAMES,
@@ -98,13 +99,19 @@ export function formatAgentDocResult(result: AgentDocLoadResult, env?: ResolvedC
   const parts: string[] = [];
 
   if (result.source) {
-    const sizeKB = (e.byteLength(result.content, "utf-8") / 1024).toFixed(1);
-    parts.push(`Loaded instructions from ${e.path.basename(result.source)} (${sizeKB} KB)`);
+    parts.push(
+      `Loaded instructions from ${e.path.basename(result.source)} (${formatByteSize(
+        e.byteLength(result.content, "utf-8")
+      )})`
+    );
   }
 
   if (result.overrideSource && result.overrideContent != null) {
-    const sizeKB = (e.byteLength(result.overrideContent, "utf-8") / 1024).toFixed(1);
-    parts.push(`Loaded override from ${e.path.basename(result.overrideSource)} (${sizeKB} KB)`);
+    parts.push(
+      `Loaded override from ${e.path.basename(result.overrideSource)} (${formatByteSize(
+        e.byteLength(result.overrideContent, "utf-8")
+      )})`
+    );
   }
 
   if (result.importNotices.length > 0) {

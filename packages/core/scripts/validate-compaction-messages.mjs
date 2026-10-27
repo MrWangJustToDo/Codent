@@ -99,4 +99,13 @@ const lastTool = compacted.find((m) => m.role === "tool" && m.toolCallId === "ca
 assert.ok(lastTool);
 assert.equal(lastTool.content, "x".repeat(500));
 
+// Wide characters are ~1 token each, not 1/4: without the correction a CJK session kept ~4×
+// the `keepRecentTokens` budget and the cut could land past the trigger it was meant to respect.
+{
+  const ascii = estimateTokens([{ role: "user", content: "a".repeat(400) }]);
+  const cjk = estimateTokens([{ role: "user", content: "中".repeat(400) }]);
+  assert.ok(cjk >= 400, `400 CJK chars must estimate at least 400 tokens (got ${cjk})`);
+  assert.ok(ascii < 150, `400 ASCII chars must stay near chars/4 (got ${ascii})`);
+}
+
 console.log("compaction-messages validation passed");

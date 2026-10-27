@@ -4,7 +4,7 @@
  * Two caches under `.agents/cache/` stay bounded by deleting entries past an age
  * threshold — background job logs and spilled tool output. The policy is
  * identical in both (readdir → suffix filter → mtime check → best-effort remove,
- * at most once per process, never throwing); only the directory, suffix and
+ * at most once per workspace root per process, never throwing); only the directory, suffix and
  * threshold differ, so the walk lives here once.
  *
  * Age-based on purpose in both cases: the reference-based collector
@@ -55,20 +55,23 @@ export interface StaleFileSweeper {
 // ============================================================================
 
 /**
- * Create a sweeper for one cache directory. Each sweeper owns its own
- * once-per-process guard, so two caches never suppress each other's sweep.
+ * Create a sweeper for one cache directory. Each sweeper owns its own guard, and the guard is
+ * keyed by workspace root: the process may host several runtimes (different roots), and a single
+ * process-wide boolean made the *first* workspace's write suppress every other workspace's sweep
+ * for the life of the process.
  */
 export function createStaleFileSweeper(spec: StaleFileSweepSpec): StaleFileSweeper {
-  let sweptThisProcess = false;
+  const sweptRoots = new Set<string>();
 
   return {
     reset(): void {
-      sweptThisProcess = false;
+      sweptRoots.clear();
     },
 
     async sweep(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number> {
-      if (sweptThisProcess && !options?.force) return 0;
-      sweptThisProcess = true;
+      const rootKey = env?.rootPath ?? "";
+      if (sweptRoots.has(rootKey) && !options?.force) return 0;
+      sweptRoots.add(rootKey);
 
       const now = options?.now ?? Date.now();
       let removed = 0;

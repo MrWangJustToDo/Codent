@@ -67,6 +67,12 @@ export class ToolApprovalTable {
 
   upsert(input: UpsertToolApprovalInput): ToolApprovalRecord {
     const existing = this.byToolCallId.get(input.toolCallId);
+    // First decision wins. An answered row is final: a second answer (late client response, or a
+    // deny racing an auto-approval batch) used to overwrite it because approved and denied have
+    // the same rank, which let a late `allow` contradict a denial already written to the channel.
+    if (existing && existing.status !== "pending") {
+      return { ...existing };
+    }
     // Do not downgrade an answered decision back to pending.
     if (existing && statusRank(input.status) < statusRank(existing.status)) {
       return { ...existing };

@@ -145,7 +145,9 @@ export class OutputAccumulator {
       // throw new Error("Cannot append to a finished output accumulator");
     }
 
-    this.totalDecodedBytes += data.byteLength;
+    // Byte accounting happens in `appendDecodedText`, from the DECODED text. Counting the raw
+    // chunk here too doubled every chunk, so a 26 KB stream reported `truncated: true` and the
+    // cancel/timeout path told the model "only its tail was kept" for complete output.
     this.appendDecodedText(this.decoder.decode(data, { stream: true }));
   }
 

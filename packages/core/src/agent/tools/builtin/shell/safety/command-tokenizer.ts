@@ -30,6 +30,13 @@
  *
  * Substitution is honoured only where a shell would honour it: inside single quotes it is
  * literal text, so it is not executed and not split.
+ *
+ * PROCESS SUBSTITUTION (`<(…)`, `>(…)`, and zsh's `=(…)`) is the same hazard with a different
+ * prefix, and it used to be the *worse* case: `<(…)` has no `$` or backtick, so the old extractor
+ * left it alone, the redirection branch then consumed the whole `<( … )` as a redirection target,
+ * and only the outer `cat` was ever classified. `cat <(rm -rf src)` reported `readOnly: true` and
+ * was auto-approved on exactly the hosts this fallback serves (no grammar → remote env / Windows).
+ * The body is a command that really runs, so it is split out like `$(…)`.
  */
 
 /** Separators that begin a new command within a compound command string. */
@@ -84,9 +91,11 @@ function collectCommands(command: string, out: string[][], depth: number): void 
 /**
  * Whether a command string contains a command substitution.
  *
- * Used by the analyzer as a trust guard: a substitution body is a command that really
- * executes, so a parse that did not surface it says nothing about the whole string. Exposed
- * so the fallback and the AST path cannot disagree about what counts as a substitution.
+ * Covers `$(…)`, backticks and process substitution (`<(…)` / `>(…)` / `=(…)`) — all of them
+ * run a command that the outer token stream does not name. Used by the analyzer as a trust
+ * guard: a substitution body is a command that really executes, so a parse that did not surface
+ * it says nothing about the whole string. Exposed so the fallback and the AST path cannot
+ * disagree about what counts as a substitution.
  */
 export function hasCommandSubstitution(command: string): boolean {
   return extractSubstitutions(command).substitutions.length > 0;
@@ -95,14 +104,16 @@ export function hasCommandSubstitution(command: string): boolean {
 /**
  * Replace every command substitution with a placeholder, returning the bodies separately.
  *
- * Recognises `$(...)` (with balanced nested parens) and `` `...` ``. A `$((...))` arithmetic
- * expansion is *not* a command substitution and is left as ordinary text. Substitutions inside
- * single quotes are literal to a shell, so they are left untouched.
+ * Recognises `$(...)` (with balanced nested parens), `` `...` ``, and process substitution
+ * (`<(…)` / `>(…)` / `=(…)`). A `$((...))` arithmetic expansion is *not* a command substitution
+ * and is left as ordinary text. Substitutions inside single quotes are literal to a shell, so
+ * they are left untouched.
  */
 function extractSubstitutions(command: string): { flattened: string; substitutions: string[] } {
   const substitutions: string[] = [];
   let flattened = "";
   let singleQuoted = false;
+  let doubleQuoted = false;
 
   for (let i = 0; i < command.length; i += 1) {
     const char = command[i]!;
@@ -114,7 +125,7 @@ function extractSubstitutions(command: string): { flattened: string; substitutio
       continue;
     }
 
-    if (char === "'") {
+    if (char === "'" && !doubleQuoted) {
       singleQuoted = !singleQuoted;
       flattened += char;
       continue;
@@ -125,10 +136,35 @@ function extractSubstitutions(command: string): { flattened: string; substitutio
       continue;
     }
 
+    if (char === '"') {
+      doubleQuoted = !doubleQuoted;
+      flattened += char;
+      continue;
+    }
+
     // Arithmetic expansion `$((...))`, not a command substitution.
     if (char === "$" && command[i + 1] === "(" && command[i + 2] === "(") {
       flattened += char;
       continue;
+    }
+
+    // Process substitution: `<(…)` / `>(…)` (bash/ksh), `=(…)` (zsh). The body is a command
+    // that really executes, so it is classified like `$(…)` rather than treated as text.
+    // Unlike `$(…)`, process substitution is literal inside double quotes, so it is only
+    // recognised outside them.
+    if (!doubleQuoted && (char === "<" || char === ">" || char === "=") && command[i + 1] === "(") {
+      const end = findMatchingParen(command, i + 1);
+      if (end !== -1) {
+        substitutions.push(command.slice(i + 2, end));
+        flattened += SUBSTITUTION_PLACEHOLDER;
+        i = end;
+        continue;
+      }
+      // Unbalanced: everything after it may be the body. Classify the remainder as its own
+      // command so no part of it can be granted read-only status, then stop flattening.
+      substitutions.push(command.slice(i + 2));
+      flattened += SUBSTITUTION_PLACEHOLDER;
+      break;
     }
 
     if (char === "$" && command[i + 1] === "(") {

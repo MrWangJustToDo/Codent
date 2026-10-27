@@ -6,6 +6,7 @@ import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table
 import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
+import { isReasoningEffort } from "../models/types.js";
 
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
@@ -55,8 +56,15 @@ export interface SessionHost {
   /**
    * Adopt the model a resumed session was saved with (no-op under remote-provider).
    * The persisted record is kept in sync by {@link SessionService.setModelConfig}.
+   *
+   * @returns whether the effective model changed (the caller then resolves its metadata).
    */
-  applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => void;
+  applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => boolean;
+  /**
+   * Re-resolve capabilities / context window / pricing for the configured model.
+   * Optional so hosts that only restore sessions keep compiling.
+   */
+  refreshModelMetadata?: () => Promise<void>;
   /**
    * Record how many `media://` refs the restore could not hydrate (`0` clears it).
    * The wire seam uses this to substitute text placeholders for refs no provider can fetch;
@@ -172,14 +180,23 @@ export async function restoreManagedSession(
   // ambient config (env / CLI flags), which may differ from what the session ran
   // on (e.g. after `/models`). Without this a resumed session silently reverts to
   // the default model.
-  host.applyPersistedModel?.({
-    model: session.model,
-    ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
-  });
+  const modelChanged =
+    host.applyPersistedModel?.({
+      model: session.model,
+      ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
+    }) ?? false;
+
+  // The persisted model is not the bootstrap one, so its metadata was never resolved: capabilities
+  // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
+  // unset (compaction trigger loses its clamp). Resolve it before the restore completes.
+  if (modelChanged) await host.refreshModelMetadata?.();
 
   // Restore the persisted reasoning-effort level so resumed sessions keep their
   // configured thinking depth. `setReasoningEffort` also invalidates the runner.
-  host.setReasoningEffort?.(session.reasoningEffort);
+  // A level written by a build that knew one more value must not abort the restore.
+  if (session.reasoningEffort === undefined || isReasoningEffort(session.reasoningEffort)) {
+    host.setReasoningEffort?.(session.reasoningEffort);
+  }
 
   // Hydrate UI channel when present; hosts also apply uiMessages via resume APIs.
   // Bump the UI generation first so a run that started on the session being left

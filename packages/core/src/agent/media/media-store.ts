@@ -17,7 +17,7 @@
 
 import { buildDataUrl, stripDataUrlPrefix } from "../../utils/data-url.js";
 
-import { MEDIA_DIR, mimeToExtension } from "./types.js";
+import { MEDIA_DIR, isMediaHash, mimeToExtension } from "./types.js";
 
 import type { MediaRef } from "./types.js";
 import type { ResolvedCoreEnv } from "../../env";
@@ -104,6 +104,9 @@ export class MediaStore {
    * For `sourceType: "data"`, returns raw base64.
    */
   async load(ref: MediaRef): Promise<string> {
+    // The hash is a path segment. A restored/copied session (or an extension-written part) can
+    // carry any string there; `../../.env` must not become a readable file. Real refs are SHA-256.
+    if (!isMediaHash(ref.hash)) throw new Error(`Invalid media reference: ${ref.hash}`);
     const ext = mimeToExtension(ref.mimeType);
     const filePath = `${MEDIA_DIR}/${ref.hash}.${ext}`;
     const env = this.env;

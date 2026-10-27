@@ -217,7 +217,6 @@ export async function completeExtensionQuery(
 ): Promise<ExtensionLlmResult> {
   const messages = normalizeMessages(request);
   const adapter = await resolveAdapter(host, request.model?.trim() || undefined);
-  host.consumeExtensionBudget(extensionId);
 
   // A ceiling, not a default: a caller may ask for less, never for more than the host allows.
   const cap = host.getExtensionMaxOutputTokens?.() ?? DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS;
@@ -226,8 +225,11 @@ export async function completeExtensionQuery(
 
   // A signal that is already aborted must not start a request at all: the run may have been cancelled
   // between the handler deciding to call and the call landing, and the adapter would otherwise issue
-  // (and bill) a request nobody wants.
+  // (and bill) a request nobody wants. Checked BEFORE consuming the budget — charging a slot for a
+  // request that is never issued exhausts a run's allowance across repeated cancels.
   if (signal?.aborted) throw abortReason(signal);
+
+  host.consumeExtensionBudget(extensionId);
 
   try {
     const result = await runSideTextQuery(adapter, {

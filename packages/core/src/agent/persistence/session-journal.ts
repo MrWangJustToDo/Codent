@@ -10,16 +10,18 @@
  * A torn trailing line (crash mid-append) is skipped on read.
  */
 
+import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { readTextPieces } from "../../utils/read-text-pieces.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
-import { SESSION_DIR, SESSION_LOG_SUFFIX } from "./types.js";
+import { SESSION_DIR, SESSION_LOG_SUFFIX, isSafeSessionId } from "./types.js";
 
 import type { PersistedToolCallPart, PersistedUIMessage, SessionLogLine, SessionStateFields } from "./types.js";
 import type { CoreEnvFs } from "../../env";
 import type { UIMessage } from "@tanstack/ai";
 
 export function getJournalPath(id: string): string {
+  if (!isSafeSessionId(id)) throw new Error(`Invalid session id: ${id}`);
   return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
 }
 
@@ -209,23 +211,7 @@ function scanBackwardsForState(content: string): SessionStateFields | null {
 export async function writeLog(fs: CoreEnvFs, path: string, lines: SessionLogLine[]): Promise<void> {
   const body = lines.map((line) => JSON.stringify(line)).join("\n");
   const content = body ? body + "\n" : "";
-  if (fs.rename) {
-    const tmpPath = `${path}.tmp`;
-    try {
-      await fs.writeFile(tmpPath, content);
-      await fs.rename(tmpPath, path);
-      return;
-    } catch {
-      // Best-effort cleanup, then fall back to an in-place write rather than
-      // dropping the save; a host whose `rename` fails simply stays non-atomic.
-      try {
-        await fs.remove(tmpPath);
-      } catch {
-        // The temp file may not exist if the initial write failed.
-      }
-    }
-  }
-  await fs.writeFile(path, content);
+  await writeFileAtomic(fs, path, content);
 }
 
 export interface FoldedSessionLog {

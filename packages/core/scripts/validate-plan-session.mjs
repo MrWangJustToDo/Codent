@@ -180,4 +180,39 @@ stuck.restoreState({
 assert.equal(stuck.getPhase(), "executing");
 assert.equal(stuck.shouldAutoApproveTools(), false);
 
+// Every phase transition is session state: quitting right after `/mode done` used to restore
+// `retro` + `todosSeeded` (auto-approving tools the user had left). A restore must NOT write.
+{
+  let persists = 0;
+  const transitional = new PlanModeController({
+    getTodoManager: () => new TodoManager(),
+    persist: () => {
+      persists += 1;
+    },
+  });
+
+  transitional.enable();
+  const afterEnable = persists;
+  assert.ok(afterEnable > 0, "entering planning persists");
+
+  await transitional.applyStructuredPlan({
+    goal: "persist phases",
+    steps: ["one", "two"],
+    keyFiles: ["src/index.ts"],
+  });
+  const afterReady = persists;
+  assert.ok(afterReady > afterEnable, "planning → ready persists");
+
+  transitional.beginExecution();
+  const afterExecuting = persists;
+  assert.ok(afterExecuting > afterReady, "review → building persists");
+
+  transitional.cancelExecution();
+  assert.ok(persists > afterExecuting, "building → review persists");
+
+  const beforeRestore = persists;
+  transitional.restoreState(transitional.getState());
+  assert.equal(persists, beforeRestore, "hydrating from disk must not write its own partial state");
+}
+
 console.log("validate:plan-session OK");

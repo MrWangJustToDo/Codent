@@ -73,10 +73,11 @@ import {
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
 import { selectModel } from "../models/config/model-selection.js";
-import { selectableModelIds } from "../models/config/models-config.js";
+import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { generateId } from "../utils/generate-id.js";
@@ -114,7 +115,6 @@ import { ExtensionRegistryService } from "./services/extension-registry-service.
 import { MemoryService } from "./services/memory-service.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "./services/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
-import { UsageHistoryService } from "./services/usage-history-service.js";
 import { SessionPersistence } from "./session-persistence.js";
 import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -580,6 +580,9 @@ export class ManagedAgent {
         this.invalidateRunner();
         this.emitStateChange();
       },
+      // Every phase transition is session state. `enablePlan`/`setAuto` already persist through
+      // `ModeCoordinator`; execute/retro/complete/cancel reach here instead.
+      persist: () => this.persistSession(),
     });
     // A mode switch is session state (autoMode is persisted with every save), so
     // emit it live AND persist: otherwise a toggle that is not followed by another
@@ -658,7 +661,7 @@ export class ManagedAgent {
       getChatController: () => this.getChatController(),
       acquireSessionOwnership: (sessionId) => this.manager?.acquireSessionOwnership(sessionId, this.id) ?? true,
       releaseSessionOwnership: (sessionId) => this.manager?.releaseSessionOwnership(sessionId, this.id),
-      bindSessionLogSink: (sessionId) => this.bindSessionLogSink(sessionId),
+      bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
       emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
       emitSessionSwitch: (fromSessionId, toSessionId, messageCount) =>
         this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason: "resume" }),
@@ -1112,8 +1115,13 @@ export class ManagedAgent {
    * style against an OpenAI-style proxy is a hard error.
    *
    * A no-op when the effective model already matches the live config.
+   *
+   * @returns whether the model actually changed. The caller uses it to decide whether the new
+   * model's metadata must be resolved (a resumed session's persisted model is not in the
+   * bootstrap `modelInfo`, so adopting it without re-resolving left capabilities "unknown" and
+   * the context window unset).
    */
-  applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): void {
+  applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): boolean {
     const remote = this.config.providerMode === "remote";
     const selection = remote
       ? selectModel({
@@ -1134,8 +1142,41 @@ export class ManagedAgent {
     const style = remote ? this.config.modelStyle : next.modelStyle;
     const sameModel = selection.model === this.config.model;
     const sameStyle = !style || style === this.config.modelStyle;
-    if (sameModel && sameStyle) return;
+    if (sameModel && sameStyle) return false;
     this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) });
+    return true;
+  }
+
+  /**
+   * Resolve the metadata (capabilities, context window, pricing) for the model that is currently
+   * configured, and adopt it.
+   *
+   * Called after a resumed session adopts a different model. `setModel` without `modelInfo`
+   * deliberately resets to "unknown" (the safe reading), but on RESUME the metadata is
+   * recoverable — models.dev is consulted through the same lookup `/models` uses. Without this,
+   * a resume silently disabled the pre-send multimodal strip (unknown = permissive) and dropped
+   * the context window (so the compaction trigger lost its clamp).
+   *
+   * Best-effort: an offline lookup keeps bootstrap metadata when it already describes this model,
+   * and clears it only when it describes a different one.
+   */
+  async refreshModelMetadata(): Promise<void> {
+    const model = this.config.model;
+    if (!model) return;
+
+    const info = await resolveModelInfoFromModelsDev(model, this.config.modelStyle).catch(() => undefined);
+    if (info) {
+      this.setModelInfo(info);
+      this.usage.setPricing(info.pricing ?? null);
+      this.usage.setCapabilities(info.capabilities);
+      return;
+    }
+
+    if (this.modelInfo && this.modelInfo.id !== model) {
+      this.setModelInfo(null);
+      this.usage.setPricing(null);
+      this.usage.setCapabilities(undefined);
+    }
   }
 
   /** Current reasoning-effort level, or undefined when unset (model default). */
@@ -1160,16 +1201,33 @@ export class ManagedAgent {
 
   /** Replace the model metadata. Pass `null` to clear it (unknown model). */
   setModelInfo(info: ModelInfo | null): void {
-    if (!info) {
-      this.modelInfo = null;
-      return;
-    }
-    this.log?.debug("agent", "Setting model info", {
-      id: info.id,
-      style: info.style,
-      contextWindow: info.contextWindow,
-    });
     this.modelInfo = info;
+    if (info) {
+      this.log?.debug("agent", "Setting model info", {
+        id: info.id,
+        style: info.style,
+        contextWindow: info.contextWindow,
+      });
+    }
+    // The footer's budget is `min(tokenThreshold, contextWindow)` — the same reading the trigger
+    // uses. Storing the raw threshold made a 200k model with a 1M configured threshold report
+    // "16%" while compacting at 160k, i.e. the number that exists to expose a missed trigger
+    // could never reach 100%.
+    this.syncCompactionBudget();
+  }
+
+  /**
+   * Clamp the persisted compaction budget to the model that is actually configured.
+   *
+   * Called whenever the window becomes known or changes (bootstrap, `/models`, resume). A model
+   * switch DOWN must lower the budget immediately: the trigger is clamped separately, but a stale
+   * `usage.tokenLimit` also makes the footer lie about how full the window is.
+   */
+  private syncCompactionBudget(): void {
+    const config = this.getCompactionConfig();
+    if (!config) return;
+    const window = this.modelInfo?.contextWindow;
+    this.usage.setTokenLimit(window ? Math.min(config.tokenThreshold, window) : config.tokenThreshold);
   }
 
   getModelInfo(): ModelInfo | null {
@@ -1209,9 +1267,10 @@ export class ManagedAgent {
 
     if (next.modelInfo) {
       this.setModelInfo(next.modelInfo);
-      if (next.modelInfo.pricing) {
-        this.usage.setPricing(next.modelInfo.pricing);
-      }
+      // Always replace (including "no price known"): `if (pricing) setPricing(...)` left the
+      // PREVIOUS model's rate in place after a switch to an unpriced model, so every later call
+      // was billed at a rate that model does not have.
+      this.usage.setPricing(next.modelInfo.pricing ?? null);
       this.usage.setCapabilities(next.modelInfo.capabilities);
     } else {
       // No metadata for the new model (unknown id / offline) means "unknown", not
@@ -1219,6 +1278,7 @@ export class ManagedAgent {
       // new model accepts (old `[]`) or send media it rejects (old `[vision]`).
       // `undefined` restores the permissive default.
       this.setModelInfo(null);
+      this.usage.setPricing(null);
       this.usage.setCapabilities(undefined);
     }
 
@@ -1329,8 +1389,8 @@ export class ManagedAgent {
    * `restoreManagedSession`, so the restore's own `session:restore` entry lands in the
    * session being restored instead of the transient bootstrap dir.
    */
-  bindSessionLogSink(sessionId?: string): void {
-    this.logBinding.bind(sessionId);
+  bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void {
+    this.logBinding.bind(sessionId, options);
   }
 
   /**
@@ -1675,7 +1735,7 @@ export class ManagedAgent {
       tokenThreshold: config.tokenThreshold,
     });
     this.compaction.setConfig(config);
-    this.usage.setTokenLimit(config.tokenThreshold);
+    this.syncCompactionBudget();
   }
 
   getCompactionConfig(): CompactionConfig | null {
@@ -1936,6 +1996,11 @@ export class ManagedAgent {
   abort(reason?: string): void {
     this.abortManualCompaction(reason ?? "aborted");
     abortManagedAgentRun(this, reason);
+    // A stopped run must not keep pumping: `pumpToolPhases` only checks `token.isCurrent` after
+    // the stream, so without this an aborted/destroyed agent still ran plan sync, auto-approve and
+    // the command-safety round trip (a real CoreEnv call on a remote workspace), and could enter
+    // another `executeStream`.
+    this.run.invalidateCurrentRun();
     this.cascadeAbortToChildren(reason);
     // A cancelled tool may never reach `onAfterToolCall`, so its command preview has no chance
     // to be marked ended. Settle every command stream here; completed previews remain available

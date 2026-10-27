@@ -10,6 +10,7 @@ import {
   DEFAULT_BASE_URLS,
   DEFAULT_LOCAL_OPENAI_BASE_URL,
   parseModelStyle,
+  resolveModelConfig,
   resolveModelConnection,
 } from "../dist/index.mjs";
 
@@ -49,5 +50,26 @@ const noV1 = resolveModelConnection({
   apiKey: "key",
 });
 assert.equal(noV1.baseURL, "https://gateway.example.com/api");
+
+// One rule for baseURL precedence: an explicit connection field wins over metadata. The async
+// resolver used to re-apply `modelInfo.baseURL ?? connection.baseURL` afterwards, which silently
+// ignored `--base-url` when metadata carried a URL. Empty `model` skips the models.dev lookup.
+{
+  const resolved = await resolveModelConfig({
+    baseURL: "https://explicit.example/v1",
+    modelInfo: {
+      id: "m",
+      name: "M",
+      style: "openai",
+      apiModel: "m",
+      baseURL: "https://metadata.example/v1",
+    },
+  });
+  assert.equal(
+    resolved.connection.baseURL,
+    "https://explicit.example/v1",
+    "an explicit baseURL must win over modelInfo.baseURL"
+  );
+}
 
 console.log("model-config validation passed");

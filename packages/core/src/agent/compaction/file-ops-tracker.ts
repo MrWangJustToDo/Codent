@@ -104,6 +104,9 @@ export function extractFileOpsFromMessages(messages: ModelMessage[]): FileOps {
   return ops;
 }
 
+/** Per-section cap: the summary is meant to shrink context, not become the largest message in it. */
+const MAX_FILES_PER_SECTION = 40;
+
 /**
  * Format file operations into markdown sections for appending to a summary.
  *
@@ -112,19 +115,20 @@ export function extractFileOpsFromMessages(messages: ModelMessage[]): FileOps {
 export function formatFileOperations(ops: FileOps): string {
   const parts: string[] = [];
 
-  if (ops.readFiles.size > 0) {
-    parts.push("## Files Read");
-    for (const f of [...ops.readFiles].sort()) {
+  const pushSection = (heading: string, files: ReadonlySet<string>): void => {
+    if (files.size === 0) return;
+    parts.push(heading);
+    const sorted = [...files].sort();
+    for (const f of sorted.slice(0, MAX_FILES_PER_SECTION)) {
       parts.push(`- \`${f}\``);
     }
-  }
+    if (sorted.length > MAX_FILES_PER_SECTION) {
+      parts.push(`- … ${sorted.length - MAX_FILES_PER_SECTION} more`);
+    }
+  };
 
-  if (ops.modifiedFiles.size > 0) {
-    parts.push("## Files Modified");
-    for (const f of [...ops.modifiedFiles].sort()) {
-      parts.push(`- \`${f}\``);
-    }
-  }
+  pushSection("## Files Read", ops.readFiles);
+  pushSection("## Files Modified", ops.modifiedFiles);
 
   return parts.length > 0 ? "\n\n" + parts.join("\n") : "";
 }

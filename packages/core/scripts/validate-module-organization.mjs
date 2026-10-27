@@ -202,6 +202,10 @@ const SINGLE_DEFINITION_SYMBOLS = [
   "isBinaryMediaPartType",
   "isExpiredMemory",
   "slugifyName",
+  // Error-shape and effort vocabularies are read by both the model path and the UI path; a second
+  // definition is how `formatToolOutput` and the compaction projection drifted apart.
+  "isToolErrorResult",
+  "REASONING_EFFORT_VALUES",
   // The line-window family (`utils/line-window.ts`): a second definition of a display window is exactly
   // the divergence this list is for, and the `validate-no-inline-*` guards cannot see a re-declaration.
   "takeLatestLines",

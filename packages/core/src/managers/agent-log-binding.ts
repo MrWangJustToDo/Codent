@@ -33,7 +33,7 @@ export class AgentLogBinding {
    * Attach (or re-point) the session JSONL sink. No-op for subagents: they write an independent
    * file into the parent's directory, bound by `AgentManager.spawnSubagent`.
    */
-  bind(sessionId?: string): void {
+  bind(sessionId?: string, options?: { sessionBoundary?: boolean }): void {
     if (this.deps.getParentId()) return;
 
     const resolved = sessionId ?? this.deps.getSessionId() ?? this.deps.getAgentId();
@@ -42,8 +42,12 @@ export class AgentLogBinding {
     if (log.getFileSinkDir() === dir) return;
 
     this.detachHandle?.();
-    const options = { dir, env: this.deps.getCoreEnv() };
-    this.detachHandle = this.deps.attachViaManager?.(log, options) ?? log.attachFileSink(options);
+    const sinkOptions = {
+      dir,
+      env: this.deps.getCoreEnv(),
+      ...(options?.sessionBoundary === false ? { sessionBoundary: false } : {}),
+    };
+    this.detachHandle = this.deps.attachViaManager?.(log, sinkOptions) ?? log.attachFileSink(sinkOptions);
     // Track for the process-level crash/exit guards.
     registerActiveAgentLog(log);
   }

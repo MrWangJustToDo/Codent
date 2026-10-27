@@ -293,6 +293,11 @@ export async function extractMemories(
   const dialogue = serializeForExtraction(recentMessages);
   if (!dialogue.trim()) return 0;
 
+  // Keep the TAIL of the window: extraction exists to capture what the user just said (a
+  // correction, a preference, a decision), and the previous `slice(0, …)` kept the OLDEST 12k
+  // characters of the 30-message window — silently dropping the turn that triggered extraction.
+  const boundedDialogue = dialogue.slice(-MAX_EXTRACTION_CHARS);
+
   // Get existing memories to avoid duplicates
   const existing = await memoryManager.listMemories();
   const existingDesc = existing.length > 0 ? existing.map((m) => `- ${m.name}: ${m.description}`).join("\n") : "(none)";
@@ -313,7 +318,7 @@ export async function extractMemories(
     "Reply with the JSON object only — no prose, no markdown code fences.",
     `Existing memories:\n${existingDesc}`,
     "",
-    `Dialogue:\n${dialogue.slice(0, MAX_EXTRACTION_CHARS)}`,
+    `Dialogue:\n${boundedDialogue}`,
   ].join("\n");
 
   let extracted: ExtractedMemory[];

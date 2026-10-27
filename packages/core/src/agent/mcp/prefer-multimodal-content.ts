@@ -193,9 +193,12 @@ export function wrapMcpToolForMultimodalContent(tool: AnyServerTool, client: MCP
     ...tool,
     execute: async (args, ctx) => {
       ctx?.abortSignal?.throwIfAborted();
+      // Forward the run's abort signal: without it, Esc could not reach a slow/hung `tools/call`
+      // and the row (and the pump) stayed parked on the server until it finished on its own.
       const result = (await client.callTool(
         serverToolName,
-        (args ?? {}) as Record<string, unknown>
+        (args ?? {}) as Record<string, unknown>,
+        ctx?.abortSignal ? { signal: ctx.abortSignal } : undefined
       )) as McpCallToolResult;
       return resolveMcpToolExecuteResult(serverToolName, result);
     },

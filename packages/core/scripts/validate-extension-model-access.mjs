@@ -276,16 +276,17 @@ function makeHost(overrides = {}) {
   );
 }
 
-// ── 8b. an aborted signal rejects the call ────────────────────────────────
+// ── 8b. an aborted signal rejects the call, and is not charged ────────────
 {
   const controller = new AbortController();
   controller.abort(new Error("user cancelled"));
-  const { host } = makeHost();
+  const { host, state } = makeHost();
   await assert.rejects(
     () => completeExtensionQuery(host, "ext-a", { prompt: "hi", signal: controller.signal }),
     (error) => /abort|cancel/i.test(error?.message ?? ""),
     "a pre-aborted signal must not issue a request"
   );
+  assert.equal(state.budgetUsed, 0, "a request that is never issued must not consume a budget slot");
 }
 
 // ── 9. the per-run budget fails closed ─────────────────────────────────────

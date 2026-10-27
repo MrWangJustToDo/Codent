@@ -55,20 +55,35 @@ export function flushActiveAgentLogsSync(): void {
  *
  * Process-wide rather than per-agent because the path that needs them most — a hard exit with a
  * live session — never runs agent teardown, so there is no per-agent registry to consult.
+ *
+ * Two sets because order is the contract: a user flush commonly writes through `ctx.logger`, whose
+ * entries only reach the file when the log sink is flushed. The sink's own flush is registered by
+ * the built-in log extension at agent construction (i.e. FIRST), so a single insertion-ordered set
+ * ran it before every user flush and silently dropped what they wrote. Finalizers always run last.
  */
 const extensionExitFlushes = new Set<() => void>();
+const extensionExitFinalizers = new Set<() => void>();
 
-/** Register an extension's synchronous exit flush. Returns the disposer (idempotent). */
-export function registerExtensionExitFlush(flush: () => void): () => void {
-  extensionExitFlushes.add(flush);
+/**
+ * Register an extension's synchronous exit flush. Returns the disposer (idempotent).
+ *
+ * `last: true` marks a finalizer (the log sink's own flush) that every ordinary flush must run
+ * before.
+ */
+export function registerExtensionExitFlush(flush: () => void, options?: { last?: boolean }): () => void {
+  const target = options?.last ? extensionExitFinalizers : extensionExitFlushes;
+  target.add(flush);
   return () => {
-    extensionExitFlushes.delete(flush);
+    target.delete(flush);
   };
 }
 
 /**
  * Run every registered extension exit flush. Never throws: a failing flush is contained so it
  * cannot prevent the process from exiting.
+ *
+ * Ordinary flushes run first (they may append to an AgentLog), then the finalizers (the log sink),
+ * so the state those flushes just wrote is what lands on disk.
  */
 export function flushExtensionExitFlushesSync(): void {
   for (const flush of [...extensionExitFlushes]) {
@@ -76,6 +91,13 @@ export function flushExtensionExitFlushesSync(): void {
       flush();
     } catch {
       // Non-fatal: a failing extension flush must not block the exit path.
+    }
+  }
+  for (const flush of [...extensionExitFinalizers]) {
+    try {
+      flush();
+    } catch {
+      // Non-fatal: a failing sink flush must not block the exit path.
     }
   }
 }
@@ -127,8 +149,12 @@ export function installAgentLogProcessGuards(): void {
           // Non-fatal: keep trying the remaining logs.
         }
       }
-      flushActiveAgentLogsSync();
+      // Ordinary extension flushes first (they may write through `ctx.logger`), then the log
+      // sink's finalizer inside the same call, then a last drain for logs the log extension does
+      // not own. The previous order drained the logs BEFORE user flushes ran, so anything an exit
+      // flush logged was left in the buffer.
       flushExtensionExitFlushesSync();
+      flushActiveAgentLogsSync();
     } finally {
       proc.exit(1);
     }
@@ -137,7 +163,7 @@ export function installAgentLogProcessGuards(): void {
   proc.on("uncaughtException", (err) => handleFatal("uncaughtException", err));
   proc.on("unhandledRejection", (reason) => handleFatal("unhandledRejection", reason));
   proc.on("exit", () => {
-    flushActiveAgentLogsSync();
     flushExtensionExitFlushesSync();
+    flushActiveAgentLogsSync();
   });
 }

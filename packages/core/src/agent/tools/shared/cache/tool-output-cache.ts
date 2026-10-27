@@ -199,16 +199,41 @@ export async function maybeCacheOutput(
 }
 
 /**
- * Extract `cachedOutputPath` from a message part, if present.
+ * Walk a tool message's `content` for the spill path.
+ *
+ * A model tool message's `content` is a JSON **string** or an array of **text** parts
+ * (`{ type: "text", content: "<json>" }`) — it is not a UI `tool-result` part. The previous
+ * reader looked for `part.type === "tool-result"` (a UI-only shape) and skipped strings, so the
+ * reference collector deleted nothing on the real wire. This walks every shape and recurses into
+ * a part's `content` (and a tool-result part's `content` for callers that pass UI parts).
  */
-function extractCachedPathFromPart(part: unknown): string | null {
-  if (!part || typeof part !== "object") return null;
-  const p = part as Record<string, unknown>;
-  if (p.type !== "tool-result") return null;
-  const result = p.result;
-  if (!result || typeof result !== "object") return null;
-  const path = (result as Record<string, unknown>).cachedOutputPath;
-  return typeof path === "string" && path.length > 0 ? path : null;
+function extractCachedPathFromValue(value: unknown, depth = 0): string | null {
+  if (depth > 4) return null;
+  if (typeof value === "string") {
+    try {
+      return extractCachedPathFromValue(JSON.parse(value), depth + 1);
+    } catch {
+      return null;
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const path = extractCachedPathFromValue(item, depth + 1);
+      if (path) return path;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const path = record.cachedOutputPath;
+    if (typeof path === "string" && path.length > 0) return path;
+    // Content parts keep their payload under `content`; recurse so `{type:"text", content}` and
+    // a UI `tool-result` part are both covered.
+    if (record.content !== undefined && record.content !== value) {
+      return extractCachedPathFromValue(record.content, depth + 1);
+    }
+  }
+  return null;
 }
 
 /**
@@ -243,13 +268,10 @@ export async function cleanupOrphanedToolCache(
     const msg = messages[i];
     if (msg.role !== "tool") continue;
 
-    const content = msg.content;
-    if (!Array.isArray(content)) continue;
-
-    for (const part of content) {
-      const path = extractCachedPathFromPart(part);
-      if (path) pathsToDelete.add(path);
-    }
+    // `msg.content` is a JSON string or an array of text parts on the model wire; the walker
+    // handles both (and a UI tool-result part, for callers that pass those).
+    const path = extractCachedPathFromValue(msg.content);
+    if (path) pathsToDelete.add(path);
   }
 
   if (pathsToDelete.size === 0) return;

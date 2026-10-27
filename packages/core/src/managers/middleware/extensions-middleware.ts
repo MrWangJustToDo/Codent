@@ -132,12 +132,17 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       const eventBus = runner.getEventBus();
 
       if (info.ok) {
+        const eventType = `tool:after:${info.toolName}` as const;
         const event: ToolAfterEvent = {
-          type: `tool:after:${info.toolName}`,
+          type: eventType,
           payload: {
             toolName: info.toolName,
             args: info.toolCall.function.arguments,
-            result: info.result,
+            // Interceptors observe a DETACHED copy when one is listening: a tool result is stored
+            // on the channel (and persisted to the session log) immediately afterwards, so an
+            // in-place edit of the "shared mutable" payload used to rewrite durable history. The
+            // supported way to change what the model sees is `modifiedResult`.
+            result: eventBus.hasInterceptors(eventType) ? cloneForInterceptors(info.result) : info.result,
             durationMs: info.duration,
           },
           defaultReturn: undefined,
@@ -184,4 +189,19 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       modifiedResults.clear();
     },
   });
+}
+
+/**
+ * Detach a tool result before handing it to interceptors.
+ *
+ * `structuredClone` is the cheap, correct guard for the shapes tool results actually have (plain
+ * JSON data). A non-cloneable payload (a host object a tool attached) falls back to the original:
+ * that restores the old behaviour for that tool rather than dropping the interceptor's view.
+ */
+function cloneForInterceptors(value: unknown): unknown {
+  try {
+    return structuredClone(value);
+  } catch {
+    return value;
+  }
 }

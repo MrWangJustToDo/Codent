@@ -18,6 +18,7 @@ import {
   TOOL_OUTPUT_CACHE_DIR,
   TOOL_OUTPUT_MAX_AGE_MS,
   cacheToolOutput,
+  cleanupOrphanedToolCache,
   clearCoreEnv,
   maybeCacheOutput,
   getEnv,
@@ -128,6 +129,40 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 }
 
 // ---------------------------------------------------------------------------
+// 2b. The guard is per workspace root, not per process
+// ---------------------------------------------------------------------------
+{
+  const root2 = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codent-tool-cache2-"));
+  const env2 = createEnv(root2);
+  const rel2 = `${TOOL_OUTPUT_CACHE_DIR}/call_root2-stdout.txt`;
+  const abs2 = path.join(root2, rel2);
+  await fs.promises.mkdir(path.join(root2, TOOL_OUTPUT_CACHE_DIR), { recursive: true });
+  await fs.promises.writeFile(abs2, "x\n");
+  const when = new Date(Date.now() - STALE_AGE);
+  await fs.promises.utimes(abs2, when, when);
+
+  resetToolOutputSweepForTesting();
+  await writeEntry("call_root1-guard.txt", { ageMs: STALE_AGE });
+  await sweepStaleToolOutput(getEnv()); // marks root1
+  assert.equal(
+    await sweepStaleToolOutput(env2),
+    1,
+    "a second workspace must still be swept after the first one's guard was armed"
+  );
+  assert.equal(
+    await fs.promises
+      .access(abs2)
+      .then(() => true)
+      .catch(() => false),
+    false,
+    "the second workspace's stale entry is removed"
+  );
+
+  await fs.promises.rm(root2, TEMP_RM_OPTIONS);
+  console.log("per-workspace sweep guard OK");
+}
+
+// ---------------------------------------------------------------------------
 // 3. Wiring: the first cache write of a process triggers the sweep
 // ---------------------------------------------------------------------------
 {
@@ -159,6 +194,46 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   assert.equal(big.content.includes("Full output saved to:"), true, "preview references the cache path");
   assert.equal(await exists(big.cachedOutputPath), true, "a returned path always exists on disk");
   console.log("maybeCacheOutput threshold contract OK");
+}
+
+// ---------------------------------------------------------------------------
+// 4b. Compaction GC reads the real tool-message `content`
+//
+// `convertMessagesToModelMessages` emits a tool message as `{ role: "tool", content }` where
+// `content` is either the JSON string or an array of text parts — never a UI `tool-result` part.
+// The collector used to look for `part.type === "tool-result"` and skip strings, so it deleted
+// nothing in production. Cover both real shapes.
+// ---------------------------------------------------------------------------
+{
+  const keptString = await writeEntry("call_kept_string-stdout.txt");
+  const orphanString = await writeEntry("call_orphan_string-stdout.txt");
+  const keptParts = await writeEntry("call_kept_parts-stdout.txt");
+  const orphanParts = await writeEntry("call_orphan_parts-stdout.txt");
+
+  const stringMessage = (toolCallId, cachedOutputPath) => ({
+    role: "tool",
+    toolCallId,
+    content: JSON.stringify({ success: true, cachedOutputPath }),
+  });
+  const partsMessage = (toolCallId, cachedOutputPath) => ({
+    role: "tool",
+    toolCallId,
+    content: [{ type: "text", content: JSON.stringify({ success: true, cachedOutputPath }) }],
+  });
+
+  const messages = [
+    stringMessage("call_orphan_string", orphanString),
+    partsMessage("call_orphan_parts", orphanParts),
+    stringMessage("call_kept_string", keptString),
+    partsMessage("call_kept_parts", keptParts),
+  ];
+  await cleanupOrphanedToolCache(getEnv(), messages, 2);
+
+  assert.equal(await exists(orphanString), false, "a spilled file behind the cut (string content) is deleted");
+  assert.equal(await exists(orphanParts), false, "a spilled file behind the cut (text-part content) is deleted");
+  assert.equal(await exists(keptString), true, "a still-visible string-content spill file is kept");
+  assert.equal(await exists(keptParts), true, "a still-visible text-part spill file is kept");
+  console.log("compaction reference GC OK (string + content-part tool messages)");
 }
 
 // ---------------------------------------------------------------------------

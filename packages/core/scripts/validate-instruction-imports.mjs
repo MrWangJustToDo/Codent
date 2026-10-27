@@ -152,6 +152,33 @@ await (async () => {
 })();
 
 // ---------------------------------------------------------------------------
+// 4b. A file that imports ITSELF is a cycle at the first hop
+//
+// The root file was not seeded into `visited`, so the first hop re-expanded the whole document
+// into itself and only the second hop was reported.
+// ---------------------------------------------------------------------------
+await (async () => {
+  const selfPath = join(ws, "self.md");
+  const source = "# Self\n\n@self.md\n";
+  write("self.md", source);
+
+  const r = await expandInstructionImports(source, {
+    baseDir: ws,
+    rootPath: ws,
+    sourcePath: selfPath,
+    maxBytes: 65536,
+  });
+
+  assert.equal((r.content.match(/# Self/g) ?? []).length, 1, "the document is not inlined into itself");
+  assert.ok(
+    r.notices.some((n) => /circular/i.test(n)),
+    `self-import must be reported as circular, got: ${JSON.stringify(r.notices)}`
+  );
+
+  console.log("✓ a self-import is cut at the first hop");
+})();
+
+// ---------------------------------------------------------------------------
 // 5. Depth bound
 // ---------------------------------------------------------------------------
 await (async () => {

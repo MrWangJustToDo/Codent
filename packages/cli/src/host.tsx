@@ -273,7 +273,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     !remoteSession &&
     !remoteProvider &&
     !appConfig.modelExplicit &&
-    !(await loadModelsConfigFromFile());
+    !(await loadModelsConfigFromFile(undefined, coreEnv));
 
   if (!needsConfigEditor) {
     await initConfig(appConfig);

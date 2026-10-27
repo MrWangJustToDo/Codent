@@ -194,7 +194,7 @@ export async function bootstrapLocalAcp(
     modelsDefaultEntryIndex = 0;
   } else {
     try {
-      const loaded = await loadModels({ kind: "file" });
+      const loaded = await loadModels({ kind: "file", env });
       if (loaded) {
         const entry = loaded.entries[loaded.active.entryIndex];
         const activeModel = loaded.active.model ?? entry?.models[0] ?? "";

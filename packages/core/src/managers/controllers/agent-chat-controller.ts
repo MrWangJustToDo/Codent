@@ -123,12 +123,31 @@ export class AgentChatController {
   }
 
   stop(): void {
+    // An idle stop is not a run: it must not abort a completed turn's controller (that signal is
+    // still held by finalize-time memory extraction, and aborting it cancelled work the run had
+    // already started), nor emit `agent:abort` for a run that does not exist. A run PARKED on an
+    // approval has no live pump but is still the user's Esc target, so a pending interaction is
+    // reason enough — as is a live pump, a queued pump, or an eagerly started `task` subagent.
+    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
+    const messages = this.channel.getMessages();
+    const hasInteraction = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+    if (this.pumpDepth <= 0 && !this.runPending() && registeredPrefork === 0 && !hasInteraction) return;
     this.interruptCurrentRun("user-cancelled");
   }
 
-  /** Whether a pump is executing or queued (used to refuse conflicting commands). */
+  /**
+   * Whether a pump is executing or queued, OR the run is parked on a user interaction (tool
+   * approval / `ask_user`).
+   *
+   * The parked case matters: `pumpDepth` is 0 and nothing is queued while the agent waits, yet
+   * the turn is still open. `/compact` inside that window appended a checkpoint in front of a
+   * tool loop that had not finished, and `/clone` / `/fork` dehydrated a branch whose last turn
+   * can never complete.
+   */
   isRunActive(): boolean {
-    return this.pumpDepth > 0 || this.runPending();
+    if (this.pumpDepth > 0 || this.runPending()) return true;
+    const messages = this.channel.getMessages();
+    return hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
   }
 
   /**
@@ -171,6 +190,9 @@ export class AgentChatController {
     // admitted against a status that said `aborted`, then parked on the old question forever.
     // Deny here (channel write + table) so the turn ends with no unanswered interaction.
     this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+    // The deny rewrote the channel AFTER the last status flip, so the retained count would
+    // otherwise keep reporting the approvals that no longer exist (snapshot / ACP consumers).
+    this.managed.setPendingApprovalCount(0);
     // App no longer checkpoints on status — persist cancelled tools on abort.
     this.persistMessages("pump-complete");
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
@@ -504,11 +526,22 @@ export class AgentChatController {
 
       if (token.isCurrent) {
         this.syncPlanModeFromMessages();
-        const messages = this.channel.getMessages();
-        const waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+        let messages = this.channel.getMessages();
+        let waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
         const keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
         // Prefer status already set by executeStream (error/abort) over message-derived waits.
         const outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
+
+        // A terminal turn has no unanswered questions. `deriveChatOutcome` ranks error above
+        // waiting, so a stream that asked for approval and THEN failed used to end as `error`
+        // with the approval still pending: the next user turn was admitted, saw a pending
+        // approval, and returned from prepareRunPhase without ever calling the model — the
+        // session looked dead until the stale prompt was answered or Esc was pressed.
+        if (outcomeKind === "error" || outcomeKind === "aborted") {
+          this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+          messages = this.channel.getMessages();
+          waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+        }
 
         // Phase cap or early stream end while tools/model still need work — chain
         // another pump without finalizing the turn (avoids stale "running" + trapped queues).
@@ -543,6 +576,8 @@ export class AgentChatController {
         try {
           this.managed.setError(message);
           this.managed.statusController.onRunError(message);
+          // Same terminal rule as the normal path: an error is not a wait.
+          this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
           this.managed.runFinalizer.finalizeChat({
             kind: "error",
             messages: this.channel.getMessages(),

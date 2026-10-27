@@ -173,7 +173,15 @@ export function registerLspTools({
 function proxyManager(getManager: () => LspManager): LspManager {
   return new Proxy({} as LspManager, {
     get(_target, prop) {
-      return (getManager() as unknown as Record<string, unknown>)[prop as string];
+      const manager = getManager();
+      const value = Reflect.get(manager, prop) as unknown;
+      // Methods must run with `this === manager`: through a bare proxy `this` is the empty target,
+      // so any method that memoizes (`this.x = …`) wrote to a throwaway object while reads still
+      // resolved through the proxy. Binding once per access is the cheap, correct fix.
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(manager) : value;
+    },
+    set(_target, prop, value) {
+      return Reflect.set(getManager(), prop, value);
     },
   });
 }

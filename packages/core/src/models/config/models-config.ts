@@ -18,13 +18,15 @@
 
 import { z } from "zod";
 
-import { getEnv } from "../../env";
+import { getEnv, resolveCoreEnv } from "../../env";
 import { registerModelProvider } from "../../provider/model-provider-registry.js";
 import { createDirectModelProvider } from "../../provider/model-provider.js";
 import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../../provider/remote-model-provider.js";
+import { writeFileAtomic } from "../../utils/atomic-write.js";
 
 import { selectModel } from "./model-selection.js";
 
+import type { CoreEnv, ResolvedCoreEnv } from "../../env";
 import type { ModelInfo, ModelStyle } from "../types.js";
 
 // ============================================================================
@@ -138,6 +140,11 @@ export interface ModelsConfigSource {
   kind: "file" | "provider" | "session";
   /** File mode: `.agents/config/models.json` under this root (default: CoreEnv rootPath). */
   rootPath?: string;
+  /**
+   * File mode: the owning runtime's env. Ambient only when omitted (the single-runtime host
+   * compatibility seam); a server hosting several workspaces must pass it.
+   */
+  env?: CoreEnv;
   /** Provider mode: provider-proxy base URL exposing `GET /api/provider/info`.
    *  Session mode: agent-server base URL exposing `GET /api/agent/models`. */
   serverUrl?: string;
@@ -259,11 +266,18 @@ function validateModelsConfig(data: unknown): ModelsConfig {
  */
 export type RawModelsConfig = ModelsConfig & Record<string, unknown>;
 
-function modelsConfigPaths(rootPath?: string): { env: ReturnType<typeof getEnv>; dir: string; configPath: string } {
-  const env = getEnv();
-  const base = rootPath ?? env.rootPath;
-  const dir = env.path.join(base, MODELS_CONFIG_DIR);
-  return { env, dir, configPath: env.path.join(dir, MODELS_CONFIG_FILE) };
+function modelsConfigPaths(
+  rootPath?: string,
+  env?: CoreEnv
+): { env: ResolvedCoreEnv; dir: string; configPath: string } {
+  // Injected env wins; the ambient registry is the compatibility seam for hosts that call this
+  // without a runtime in scope (single-runtime CLI). Under a server hosting several workspaces the
+  // ambient read/write would target whichever root was registered last — a credentials-bearing
+  // file, so the runtime must pass its own env.
+  const resolved = env ? resolveCoreEnv(env) : getEnv();
+  const base = rootPath ?? resolved.rootPath;
+  const dir = resolved.path.join(base, MODELS_CONFIG_DIR);
+  return { env: resolved, dir, configPath: resolved.path.join(dir, MODELS_CONFIG_FILE) };
 }
 
 /**
@@ -274,11 +288,11 @@ function modelsConfigPaths(rootPath?: string): { env: ReturnType<typeof getEnv>;
  * exists want {@link loadModelsConfigFromFile}; callers about to rewrite the file
  * want this one, so what they did not touch survives.
  */
-export async function readModelsConfigFile(rootPath?: string): Promise<RawModelsConfig | null> {
-  const { env, configPath } = modelsConfigPaths(rootPath);
-  const exists = await env.fs.exists(configPath);
+export async function readModelsConfigFile(rootPath?: string, env?: CoreEnv): Promise<RawModelsConfig | null> {
+  const { env: resolved, configPath } = modelsConfigPaths(rootPath, env);
+  const exists = await resolved.fs.exists(configPath);
   if (!exists) return null;
-  return JSON.parse(await env.fs.readFile(configPath)) as RawModelsConfig;
+  return JSON.parse(await resolved.fs.readFile(configPath)) as RawModelsConfig;
 }
 
 /**
@@ -288,19 +302,21 @@ export async function readModelsConfigFile(rootPath?: string): Promise<RawModels
  * keys this package's types do not declare. Validation belongs to the producer
  * (`parseModelsConfig` for a draft), not to the writer.
  */
-export async function writeModelsConfigFile(config: unknown, rootPath?: string): Promise<void> {
-  const { env, dir, configPath } = modelsConfigPaths(rootPath);
-  const dirExists = await env.fs.exists(dir);
-  if (!dirExists) await env.fs.mkdir(dir);
-  await env.fs.writeFile(configPath, JSON.stringify(config, null, 2));
+export async function writeModelsConfigFile(config: unknown, rootPath?: string, env?: CoreEnv): Promise<void> {
+  const { env: resolved, dir, configPath } = modelsConfigPaths(rootPath, env);
+  const dirExists = await resolved.fs.exists(dir);
+  if (!dirExists) await resolved.fs.mkdir(dir);
+  // Crash-safe: a torn write would leave invalid JSON, and the next launch would discard the
+  // whole config (including every provider entry and the websearch toolConfig).
+  await writeFileAtomic(resolved.fs, configPath, JSON.stringify(config, null, 2));
 }
 
 // ============================================================================
 // File I/O (local mode)
 // ============================================================================
 
-export async function loadModelsConfigFromFile(rootPath?: string): Promise<ModelsConfig | null> {
-  const raw = await readModelsConfigFile(rootPath);
+export async function loadModelsConfigFromFile(rootPath?: string, env?: CoreEnv): Promise<ModelsConfig | null> {
+  const raw = await readModelsConfigFile(rootPath, env);
   if (raw === null) return null;
   return normalizeGlobalToolConfig(validateModelsConfig(raw));
 }
@@ -314,8 +330,8 @@ export async function loadModelsConfigFromFile(rootPath?: string): Promise<Model
  * before this saw them. Rewriting callers should prefer
  * {@link writeModelsConfigFile} with a round-tripped raw document.
  */
-export async function saveModelsConfig(config: ModelsConfig, rootPath?: string): Promise<void> {
-  await writeModelsConfigFile(config, rootPath);
+export async function saveModelsConfig(config: ModelsConfig, rootPath?: string, env?: CoreEnv): Promise<void> {
+  await writeModelsConfigFile(config, rootPath, env);
 }
 
 // ============================================================================
@@ -391,7 +407,7 @@ export async function resolveModelsConfig(source: ModelsConfigSource): Promise<M
   if (source.kind === "provider" && source.serverUrl) {
     return resolveModelsConfigFromProvider(source.serverUrl);
   }
-  return loadModelsConfigFromFile(source.rootPath);
+  return loadModelsConfigFromFile(source.rootPath, source.env);
 }
 
 // ============================================================================
@@ -472,6 +488,12 @@ export async function loadModels(source: ModelsConfigSource): Promise<LoadedMode
   if (!config) return null;
   const entries = await loadModelEntries(config);
   let active: ModelsConfigActive = config.active ?? { entryIndex: 0 };
+  // A hand-edited / stale file can point past the entry list (a deleted entry). The schema has no
+  // upper bound, and `registerModelProviderForEntry` throws `No model entry at index N` — which a
+  // host's single `catch {}` then turned into "discard the whole config". Heal to the first entry.
+  if (!Number.isInteger(active.entryIndex) || active.entryIndex < 0 || active.entryIndex >= entries.length) {
+    active = { ...active, entryIndex: 0 };
+  }
   // The recorded selection is the client's choice, so it stands — unless the entry does not offer
   // it. Then the entry's served model is what a request will carry (`selectModel` applies the same
   // rule on the wire), and reporting the un-offered id would make the host display (footer / help)

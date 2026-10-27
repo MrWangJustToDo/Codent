@@ -42,6 +42,12 @@ export function approvalReason(approval: ToolCallPart["approval"] | undefined): 
  * reason, and the decision timestamp. Returns the same array when nothing
  * changed, so replaying a decision is a no-op.
  *
+ * **First decision wins.** An approval that already carries `approved` is left
+ * untouched: a second answer (a late client response, or a user deny racing an
+ * auto-approval batch) must not flip a decision that has already been acted on —
+ * a late `allow` after a `deny` used to reach `resumeToolState` and execute the
+ * tool the user had refused.
+ *
  * `decidedAt` is the single time value for the decision: the channel stamps it
  * onto the part, which both feeds the persisted log and makes the same value
  * usable by the in-memory approval table.
@@ -61,6 +67,7 @@ export function applyToolApprovalDecision(
     const parts = message.parts.map((part) => {
       if (!isToolCallPart(part) || part.approval?.id !== approvalId) return part;
       const approval = part.approval;
+      if (approval?.approved !== undefined) return part;
       const reason = approved ? undefined : options?.reason?.trim() || DEFAULT_TOOL_DENIAL_MESSAGE;
       const current = { ...approval, approved, ...(reason ? { reason } : {}) } as ToolCallPart["approval"];
       // Keep an existing decision time: the first decision owns the timestamp.
@@ -101,6 +108,9 @@ export function applyToolDenialReason(messages: UIMessage[], approvalId: string,
     if (toolCallIndex === -1) return message;
 
     const toolCallPart = message.parts[toolCallIndex] as ToolCallPart;
+    // A decision that was already made (first-wins) may be an approval; never attach a denial
+    // result to it, or the transcript would claim the opposite of what `resumeToolState` does.
+    if (toolCallPart.approval?.approved !== false) return message;
     const hasDenialResult = message.parts.some(
       (part) => part.type === "tool-result" && part.toolCallId === toolCallPart.id
     );

@@ -150,6 +150,105 @@ async function testNoBodyFallback() {
 }
 
 // ============================================================================
+// 4. SSRF: a private / loopback / metadata target is refused before any request
+// ============================================================================
+
+async function testPrivateTargetsRejected() {
+  let called = 0;
+  const env = fakeEnv(async () => {
+    called += 1;
+    return new Response("should never be fetched", { status: 200, headers: { "content-type": "text/plain" } });
+  });
+
+  const blocked = [
+    ["cloud metadata", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"],
+    ["GCP metadata name", "http://metadata.google.internal/computeMetadata/v1/"],
+    ["loopback", "http://127.0.0.1:8080/admin"],
+    ["localhost", "http://localhost/"],
+    ["IPv6 loopback", "http://[::1]/"],
+    ["IPv4-mapped IPv6", "http://[::ffff:127.0.0.1]/"],
+    ["private 10/8", "http://10.0.0.5/"],
+    ["private 192.168/16", "http://192.168.1.1/"],
+    ["link-local", "http://169.254.1.1/"],
+    ["decimal loopback", "http://2130706433/"],
+    ["userinfo loopback", "http://example.com@127.0.0.1/"],
+    ["non-http scheme", "file:///etc/passwd"],
+  ];
+
+  for (const [label, url] of blocked) {
+    await assert.rejects(() => run(env, url), /Refusing to fetch|must start with http/, `must refuse ${label}`);
+  }
+  assert.equal(called, 0, "a refused URL must not reach the fetch implementation");
+
+  console.log(`  ✓ ${blocked.length} private/loopback/metadata targets refused before any request`);
+}
+
+// ============================================================================
+// 5. A redirect that lands on a private address is refused before the body is used
+// ============================================================================
+
+async function testRedirectToPrivateRejected() {
+  const duck = {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    url: "http://127.0.0.1/secret",
+    headers: new Headers({ "content-type": "text/plain" }),
+    body: null,
+    arrayBuffer: async () => new TextEncoder().encode("internal secret").buffer,
+  };
+  const env = fakeEnv(async () => duck);
+
+  await assert.rejects(() => run(env, "https://example.test/redirect"), /Refusing to fetch|private/);
+
+  console.log("  ✓ a redirect to a private address is refused");
+}
+
+// ============================================================================
+// 6. A redirect to a private address is refused BEFORE the second request
+// ============================================================================
+async function testRedirectHopIsValidatedBeforeRequest() {
+  let calls = 0;
+  let sawManual = false;
+  const env = fakeEnv(async (_url, init) => {
+    calls += 1;
+    sawManual = init?.redirect === "manual";
+    if (calls === 1) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://127.0.0.1/secret" },
+      });
+    }
+    return new Response("internal secret", { status: 200, headers: { "content-type": "text/plain" } });
+  });
+
+  await assert.rejects(() => run(env, "https://example.test/start"), /Refusing to fetch|private/);
+  assert.equal(calls, 1, "the private redirect target must not be requested");
+  assert.equal(sawManual, true, "webfetch must ask the host for manual redirects");
+  console.log("  ✓ a redirect hop is validated before it is requested");
+}
+
+// ============================================================================
+// 7. A public redirect chain is followed and reports the final URL
+// ============================================================================
+async function testPublicRedirectChain() {
+  let calls = 0;
+  const env = fakeEnv(async (url) => {
+    calls += 1;
+    if (url === "https://example.test/start") {
+      return new Response(null, { status: 301, headers: { location: "/next" } });
+    }
+    return new Response("landed", { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+  });
+
+  const result = await run(env, "https://example.test/start");
+  assert.equal(calls, 2, "both the redirect and its target are requested");
+  assert.equal(result.content, "landed");
+  assert.equal(result.finalUrl, "https://example.test/next", "relative Location resolves against the hop");
+  console.log("  ✓ a public redirect chain is followed with the final URL");
+}
+
+// ============================================================================
 // Run
 // ============================================================================
 
@@ -158,6 +257,10 @@ async function main() {
   await testBombRejected();
   await testSmallSucceeds();
   await testNoBodyFallback();
+  await testPrivateTargetsRejected();
+  await testRedirectToPrivateRejected();
+  await testRedirectHopIsValidatedBeforeRequest();
+  await testPublicRedirectChain();
   console.log("\n✓ All webfetch size-bound validation tests passed");
 }
 

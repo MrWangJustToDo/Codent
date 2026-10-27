@@ -203,6 +203,11 @@ setupEnv();
   assert.equal(files.has(logPath), false, "log removed");
   assert.equal(await reader.load(session.id), null, "deleted session does not resurrect");
   assert.equal(await reader.delete(session.id), false, "delete() of a missing session returns false");
+
+  // An id from a host/client must not become a path outside `.agents/sessions/`.
+  assert.equal(await reader.load("../escape"), null, "load() refuses a traversal id");
+  assert.equal(await reader.delete("../escape"), false, "delete() refuses a traversal id");
+  assert.equal(await reader.exists("../escape"), false, "exists() refuses a traversal id");
 }
 
 // --- #3: the file name is the session identity ------------------------------

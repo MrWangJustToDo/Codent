@@ -108,7 +108,7 @@ hasCoreEnv();           // Check if registered
 
 LLM credentials are **not** part of CoreEnv. Hosts register a `ModelProvider` separately so local/remote workspace and local/remote keys combine freely. The provider is carried on the runtime: pass it to `CodentAgent.create({ provider })` (or `{ direct }`), and model resolution reads it back through the runtime — `resolveModelConfigFromProvider(input, provider?)` takes the runtime's provider and only falls back to the ambient registry when none is passed. `CodentAgent.getModelProvider()` exposes the runtime's provider (surfaced to the app as the `AgentRuntimePort` it consumes) so `createAgentSessionFromConfig` resolves per runtime (remote-session runtimes omit it).
 
-**models.dev is the one documented ambient-env exception on the run path.** `provider/models-dev.ts` reads `getEnv()` (not a runtime-injected env): the dataset is identical across workspaces, so the in-memory memo is process-global and there is no runtime in scope. It is **allowlisted** in `validate:runtime-env-guard` (which now scans `provider/`), so the exception is a recorded decision, not a blind spot. Consequence: its disk cache (`<root>/.agents/cache/models-dev.json`) is workspace-scoped and follows the **ambient** root — harmless for the single-runtime hosts (CLI / ACP), and the one place a second runtime in a process would bind to the last-registered env. The cache lives on the CoreEnv plane and is orthogonal to the provider plane: with `--remote-provider` and a local workspace, models.dev is fetched/cached **locally**; the provider server's `/api/provider/info` carries only the connection (`mode`/`style`/`model`/`basePath`), no metadata. The lookup is best-effort (`resolveModelConfig` catches it), so a models.dev failure just leaves `modelInfo` unset.
+**models.dev is the documented ambient-env exception on the provider-metadata path; side-query usage history is the other one.** `provider/models-dev.ts` reads `getEnv()` (not a runtime-injected env): the dataset is identical across workspaces, so the in-memory memo is process-global and there is no runtime in scope. `models/config/models-config.ts` no longer belongs on that list: it takes the owning runtime's env (callers pass it) and falls back to ambient only when none is supplied. The guard allowlists **only `provider/models-dev.ts`** and scans `models/`, `runtime/`, `agent-session/`, `agent/usage/` and `agent/code-mode/` too, so a new ambient read on those paths fails instead of passing unseen. Residual: `sharedUsageHistory` in `runSideTextQuery` still files side-query records under the ambient workspace — an attribution problem, not a correctness one, recorded here rather than hidden. Consequence: its disk cache (`<root>/.agents/cache/models-dev.json`) is workspace-scoped and follows the **ambient** root — harmless for the single-runtime hosts (CLI / ACP), and the one place a second runtime in a process would bind to the last-registered env. The cache lives on the CoreEnv plane and is orthogonal to the provider plane: with `--remote-provider` and a local workspace, models.dev is fetched/cached **locally**; the provider server's `/api/provider/info` carries only the connection (`mode`/`style`/`model`/`basePath`), no metadata. The lookup is best-effort (`resolveModelConfig` catches it), so a models.dev failure just leaves `modelInfo` unset.
 
 ```typescript
 import { CodentAgent, createDirectModelProvider } from "@codent/core";
@@ -227,10 +227,10 @@ Internal modules (tools, middleware, subagent runner, hook registry, session-syn
 Key integration points:
 - `packages/core/src/models/config/model-config.ts` — connection resolution (`openai` | `anthropic` style, baseURL, apiKey, models.dev metadata)
 - `packages/core/src/models/adapter/adapter-factory.ts` — TanStack text adapters (`createOpenaiChatCompletions`, `createAnthropicChat`)
-- `core/src/managers/run-agent.ts` — `AgentRunner` + `chat()` stream, compaction middleware
-- `core/src/agent/compaction/` — Channel convert + summary-first wire projection (`getModelVisibleMessages`); engine messages are ephemeral
-- `core/src/agent/ui/ui-channel.ts` — Durable UIMessage chain (SoT); compaction appends SUMMARY here
-- `core/src/agent/mcp/` — MCP via `@tanstack/ai-mcp` (`McpManager` re-wraps tool execute so multimodal `content[]` is not dropped when `structuredContent` is present)
+- `packages/core/src/managers/run-agent.ts` — `AgentRunner` + `chat()` stream, compaction middleware
+- `packages/core/src/agent/compaction/` — Channel convert + summary-first wire projection (`getModelVisibleMessages`); engine messages are ephemeral
+- `packages/core/src/agent/ui/ui-channel.ts` — Durable UIMessage chain (SoT); compaction appends SUMMARY here
+- `packages/core/src/agent/mcp/` — MCP via `@tanstack/ai-mcp` (`McpManager` re-wraps tool execute so multimodal `content[]` is not dropped when `structuredContent` is present)
 - `app/src/hooks/use-agent-chat.ts` — React hook via Session `dispatch` / subscribe (no ManagedAgent)
 
 ## Build, Lint, Test Commands
@@ -442,7 +442,7 @@ class of bug that put `getL1State`'s doc on `setDisplayName`.
   derives from core's `present` descriptors / catalog; only a host-owned view may be *selected* by a
   core identifier. Adding or renaming a built-in is then a core-only edit.
 - A command's **argument grammar** is core too (`agent/commands/arguments.ts`): `parseModeCommand` /
-  `parseEffortCommand` return an intent, and each host maps that intent to its `AgentSessionCommand`s
+  `parseModelsCommand` return an intent, and each host maps that intent to its `AgentSessionCommand`s
   plus its own message text. A host that re-parses the raw string is how ACP's `/mode execute` became
   `mode.toggle` while the catalog advertised `execute`. `/resume`'s id-or-name rule is
   `resolveSessionRef` (`agent-session/session-reference.ts`), and `ask_user` result assembly (including

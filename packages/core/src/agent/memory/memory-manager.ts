@@ -20,6 +20,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
+import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { slugifyName } from "../../utils/slug.js";
 
 import { isExpiredMemory } from "./memory-expiry.js";
@@ -352,9 +353,12 @@ export class MemoryManager {
 
     const bytes = this.env.byteLength(indexContent, "utf-8");
     if (bytes > this.maxIndexBytes) {
-      const truncated = indexContent.slice(0, this.maxIndexBytes);
-      const lastNewline = truncated.lastIndexOf("\n");
-      this.cachedIndex = lastNewline > 0 ? truncated.slice(0, lastNewline + 1) : truncated;
+      // Byte budget, not a character slice: `maxIndexBytes` is bytes, and a CJK index sliced at
+      // that character count is up to ~3× the documented budget injected every turn.
+      this.cachedIndex = truncateToUtf8Bytes(indexContent, this.maxIndexBytes, {
+        lineBoundary: true,
+        byteLength: (text) => this.env.byteLength(text, "utf-8"),
+      }).text;
     } else {
       this.cachedIndex = indexContent;
     }

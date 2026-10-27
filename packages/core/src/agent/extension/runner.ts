@@ -159,6 +159,8 @@ export class ExtensionRunner {
   private loadSequence = 0;
   /** Resolved dispatch position per extension id (declared `order` + the load sequence). */
   private readonly ranks = new Map<string, DispatchRank>();
+  /** Extension ids with an in-flight `setEnabled` call (a toggle is not re-entrant). */
+  private readonly pendingToggles = new Set<string>();
   /**
    * Per name, the extension tools registered with their owner and rank — bookkeeping that mirrors
    * what the host holds. The authoritative tool stack (which entry is live) lives in the host's
@@ -411,23 +413,7 @@ export class ExtensionRunner {
 
       // Named sections: each is its own `<ctx kind="<id>:<name>">` block, so a change in one never
       // re-injects another. A failing producer is contained to its own section.
-      //
-      // Duplicate names keep the LAST registration (matching how a replaced provider behaves) and are
-      // reported once, rather than emitting two blocks under the same kind — admission is keyed by
-      // kind, so two producers would fight over one slot and re-inject each other every turn.
-      const byName = new Map<string, ExtensionContextSectionProvider>();
-      for (const section of provider.sections ?? []) {
-        // The name is interpolated into the `<ctx kind="id:name">` shell, whose identity recovery
-        // splits on whitespace — so an unconstrained name silently breaks independent admission.
-        if (!SECTION_NAME_RE.test(section.name)) {
-          this.warnSectionOnce(provider, id, `invalid context section name "${section.name}" — skipped`);
-          continue;
-        }
-        if (byName.has(section.name)) {
-          this.warnSectionOnce(provider, id, `duplicate context section "${section.name}" — the last one wins`);
-        }
-        byName.set(section.name, section);
-      }
+      const byName = this.normalizeContextSections(provider, id);
       for (const [name, section] of byName) {
         try {
           const body = await section.content?.(ctx);
@@ -661,6 +647,20 @@ export class ExtensionRunner {
    * Returns a result describing what happened.
    */
   async setEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
+    // A toggle is not re-entrant. Two overlapping calls used to both observe the pre-toggle state
+    // and both run `activate()`, registering two copies of every tool, observer and interceptor.
+    if (this.pendingToggles.has(id)) {
+      return { ok: false, message: `Extension "${id}" is already being toggled` };
+    }
+    this.pendingToggles.add(id);
+    try {
+      return await this.applyEnabled(id, enabled);
+    } finally {
+      this.pendingToggles.delete(id);
+    }
+  }
+
+  private async applyEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
     const instance = this.extensions.find((e) => e.api.id === id);
     if (!instance) return { ok: false, message: `Extension "${id}" not loaded` };
 
@@ -715,7 +715,10 @@ export class ExtensionRunner {
       provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined
     );
     const sectionNotices: Array<[string, string]> = [];
-    for (const section of provider?.sections ?? []) {
+    const disabledSections = provider
+      ? this.normalizeContextSections(provider, instance.api.id)
+      : new Map<string, ExtensionContextSectionProvider>();
+    for (const section of disabledSections.values()) {
       const body = await this.captureDisabledNotice(
         instance.api.id,
         `section "${section.name}"`,
@@ -808,6 +811,32 @@ export class ExtensionRunner {
     instance.registrations.exitFlush = null;
   }
 
+  /**
+   * Validate and dedupe a provider's named sections. One implementation for both the enable path
+   * (`collectBeforeAgentStart`) and the disable path (`setEnabled`): the disable path used to
+   * interpolate `section.name` verbatim, so an invalid name produced a `<ctx kind="id:bad name>x">`
+   * shell whose identity recovery split on whitespace, and a `>` in the name closed the tag early.
+   */
+  private normalizeContextSections(
+    provider: ExtensionContextProvider,
+    extensionId: string
+  ): Map<string, ExtensionContextSectionProvider> {
+    const byName = new Map<string, ExtensionContextSectionProvider>();
+    for (const section of provider.sections ?? []) {
+      // The name is interpolated into the `<ctx kind="id:name">` shell, whose identity recovery
+      // splits on whitespace — so an unconstrained name silently breaks independent admission.
+      if (!SECTION_NAME_RE.test(section.name)) {
+        this.warnSectionOnce(provider, extensionId, `invalid context section name "${section.name}" — skipped`);
+        continue;
+      }
+      if (byName.has(section.name)) {
+        this.warnSectionOnce(provider, extensionId, `duplicate context section "${section.name}" — the last one wins`);
+      }
+      byName.set(section.name, section);
+    }
+    return byName;
+  }
+
   /** One warning per provider, not one per turn (a duplicate name would otherwise log every turn). */
   private warnSectionOnce(provider: object, extensionId: string, message: string): void {
     if (this.warnedSectionProviders.has(provider)) return;
@@ -883,7 +912,11 @@ export class ExtensionRunner {
       byExtension = new Map();
       this.interceptorWrappers.set(handler, byExtension);
     }
-    const existing = byExtension.get(extensionId);
+    // Keyed by (extension, pattern), not extension alone: one handler registered for two patterns
+    // used to share a wrapper that closed over the FIRST pattern, so a failure on the second was
+    // reported against the wrong hook — and the memo made that the normal case.
+    const key = `${extensionId}\0${pattern}`;
+    const existing = byExtension.get(key);
     if (existing) return existing;
     const wrapped: EventInterceptor<InterceptableEvent> = async (event) => {
       try {
@@ -897,7 +930,7 @@ export class ExtensionRunner {
         return undefined;
       }
     };
-    byExtension.set(extensionId, wrapped);
+    byExtension.set(key, wrapped);
     return wrapped;
   }
 
@@ -1069,11 +1102,17 @@ export class ExtensionRunner {
         registrations.exitFlushRef?.();
         // Also registered process-wide: an exit with a live session never runs agent teardown,
         // and that is exactly the case where the final batch matters most.
-        registrations.exitFlushRef = registerExtensionExitFlush(flush);
+        const ref = registerExtensionExitFlush(flush);
+        registrations.exitFlushRef = ref;
         return () => {
           if (registrations.exitFlush === flush) registrations.exitFlush = null;
-          registrations.exitFlushRef?.();
-          registrations.exitFlushRef = null;
+          // Identity-checked like `registerFlush` / `registerContextProvider`: a disposer held
+          // across a replacement must not unregister the LIVE flush. The field guard alone was not
+          // enough — the call below ran unconditionally and removed the newer registration.
+          if (registrations.exitFlushRef === ref) {
+            ref();
+            registrations.exitFlushRef = null;
+          }
         };
       },
 
@@ -1094,6 +1133,7 @@ export class ExtensionRunner {
         // observer accessors. Not a spread: `BusExtensionEventBus` keeps its
         // methods on the prototype, so spreading the instance would drop them.
         emit: (event) => this.eventBus.emit(event),
+        hasInterceptors: (type) => this.eventBus.hasInterceptors(type),
         // The `ctx.events.on` accessor is an interceptor registration equivalent to
         // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension
         // ordering itself with `order` would get its declared position through one entry point

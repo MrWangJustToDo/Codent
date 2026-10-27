@@ -169,6 +169,47 @@ assert.deepEqual(chained.entries[0].models, [SERVED_MODEL], "an id-less config m
 }
 
 // ============================================================================
+// 4b. A file read is scoped to the env it is GIVEN, never the ambient registry
+// ============================================================================
+//
+// The config file carries `baseURL`/`apiKey` for every entry. A server hosting several workspaces
+// used to read and write whichever root was registered last (the path accepted a `rootPath` but
+// the fs came from `getEnv()`), so an edit in workspace B could rewrite workspace A's file.
+{
+  const ambientConfig = JSON.stringify({
+    models: [{ type: "direct", style: "openai", baseURL: "https://ambient.example/v1", models: ["ambient-model"] }],
+    active: { entryIndex: 0, model: "ambient-model" },
+  });
+  const scopedConfig = JSON.stringify({
+    models: [{ type: "direct", style: "openai", baseURL: "https://scoped.example/v1", models: ["scoped-model"] }],
+    active: { entryIndex: 0, model: "scoped-model" },
+  });
+
+  registerCoreEnv({
+    rootPath: "/ambient",
+    fs: {
+      exists: async () => true,
+      readFile: async () => ambientConfig,
+    },
+  });
+
+  const scopedEnv = {
+    rootPath: "/scoped",
+    fs: {
+      exists: async (p) => p === "/scoped/.agents/config/models.json",
+      readFile: async (p) => {
+        assert.equal(p, "/scoped/.agents/config/models.json", "the injected env's path is what is read");
+        return scopedConfig;
+      },
+    },
+  };
+
+  const scoped = await loadModels({ kind: "file", env: scopedEnv });
+  assert.equal(scoped.active.model, "scoped-model", "the read follows the injected env, not the ambient root");
+  assert.equal(scoped.entries[0].models[0], "scoped-model", "and so does the selectable list");
+}
+
+// ============================================================================
 // 5. No credential crosses the plane, in either direction
 // ============================================================================
 //

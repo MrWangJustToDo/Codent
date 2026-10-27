@@ -51,8 +51,9 @@ await runner.loadExtension({
           },
         },
         // The name is interpolated into `<ctx kind="id:name">`, so anything outside a slug is
-        // refused rather than corrupting the envelope.
-        { name: "bad name", content: () => "SHOULD-NOT-APPEAR" },
+        // refused rather than corrupting the envelope. The disabled notice exercises the DISABLE
+        // path, which used to skip this validation.
+        { name: "bad name", content: () => "SHOULD-NOT-APPEAR", disabledContent: () => "BAD-OFF" },
       ],
     });
   },
@@ -93,6 +94,16 @@ const afterDisable = await runner.collectBeforeAgentStart("third", "ses");
 assert.equal(byId(afterDisable, "ext:sec").content, "sections disabled", "the base section announces the disable");
 assert.equal(byId(afterDisable, "ext:sec:selection").content, "SELECTION-OFF", "and so does the named section");
 assert.equal(byId(afterDisable, "ext:sec:index"), undefined, "a section without a disabled notice is simply absent");
+assert.equal(
+  byId(afterDisable, "ext:sec:bad name"),
+  undefined,
+  "an invalid section name is refused on the DISABLE path too (it would break the <ctx> envelope)"
+);
+assert.equal(
+  afterDisable.turnContextSections.some((section) => section.id.startsWith("ext:sec:bad")),
+  false,
+  "the invalid name is never interpolated into a kind"
+);
 
 // ── 4b. a duplicate reload does not resurrect a stale disabled notice ─────
 // `setEnabled(false)` stores the section notice; reloading the same id (a second file, a
@@ -122,5 +133,17 @@ assert.equal(
 await runner.setEnabled("sec", true);
 const afterEnable = await runner.collectBeforeAgentStart("fourth", "ses");
 assert.equal(byId(afterEnable, "ext:sec:index").content, "INDEX-V2", "re-enable uses the reloaded definition");
+
+// ── 6. concurrent toggles are refused, not applied twice ──────────────────
+// Two overlapping calls used to both observe the old state and both run activate().
+{
+  const [a, b] = await Promise.all([runner.setEnabled("sec", false), runner.setEnabled("sec", false)]);
+  assert.equal([a, b].filter((r) => r.ok).length, 1, "exactly one toggle applies");
+  assert.ok(
+    [a, b].some((r) => /already being toggled/i.test(r.message)),
+    "the overlapping toggle is reported instead of running activation twice"
+  );
+  await runner.setEnabled("sec", true);
+}
 
 console.log("extension context sections validation passed");

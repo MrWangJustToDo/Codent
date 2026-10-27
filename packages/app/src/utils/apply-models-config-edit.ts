@@ -34,6 +34,7 @@ import {
   type ModelsConfig,
   type ModelsConfigEntry,
   type RawModelsConfig,
+  type CoreEnv,
 } from "@codent/core";
 import { toRaw } from "reactivity-store";
 
@@ -44,6 +45,12 @@ import { mergeModelsConfig } from "./merge-models-config.js";
 export interface ApplyModelsConfigEditOptions {
   /** Entry the wizard was seeded from (defaults to the file's active entry). */
   entryIndex?: number;
+  /**
+   * The owning app runtime's env. The wizard runs inside the host process, so this is the
+   * workspace whose `.agents/config/models.json` the user is editing; omitted = ambient (the
+   * single-runtime hosts' compatibility seam).
+   */
+  env?: CoreEnv;
 }
 
 export type ApplyModelsConfigEditResult =
@@ -80,7 +87,7 @@ export async function applyModelsConfigEdit(
     //   can legitimately be empty (a config that failed to load, or a session
     //   started before the file existed), and merging against that would drop every
     //   entry the user already had.
-    const existing = await readModelsConfigFile();
+    const existing = await readModelsConfigFile(undefined, options.env);
     const merged = mergeModelsConfig(existing, draft, options);
 
     // Rewrite the legacy `global.toolConfig.websearchProvider` key to `provider` on save.
@@ -90,14 +97,14 @@ export async function applyModelsConfigEdit(
     const toWrite =
       normalizedGlobal === merged.global ? merged : { ...merged, global: normalizedGlobal as ModelsConfig["global"] };
 
-    await writeModelsConfigFile(toWrite);
+    await writeModelsConfigFile(toWrite, undefined, options.env);
 
     // Read back what was actually written — the merge and the schema both get a
     // vote here, so a live provider can never disagree with the file. The write is
     // already durable, so a reload failure must NOT be reported as a failed edit
     // and must not be rolled back: it degrades to "restart to apply".
     try {
-      const loaded = await loadModels({ kind: "file" });
+      const loaded = await loadModels({ kind: "file", env: options.env });
       if (loaded) {
         await registerModelProviderForEntry(loaded);
         useConfig.getActions().setModelsConfig(loaded);

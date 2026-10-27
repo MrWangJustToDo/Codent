@@ -119,6 +119,11 @@ const upstream = createHttpServer((req, res) => {
     res.end("proxied-text");
     return;
   }
+  if (req.url === "/redirect") {
+    res.writeHead(302, { location: "/text" });
+    res.end();
+    return;
+  }
   res.writeHead(200, { "content-type": "application/octet-stream" });
   res.end(binaryBody);
 });
@@ -133,6 +138,16 @@ const binRes = await env.fetch(`http://127.0.0.1:${upstreamPort}/bin`);
 assert.equal(binRes.status, 200);
 const binBuf = new Uint8Array(await binRes.arrayBuffer());
 assert.deepEqual([...binBuf], [...binaryBody]);
+
+// `redirect` must reach the server's outbound fetch: `manual` returns the 3xx so the caller
+// (webfetch) can validate each hop before following it.
+const manualRes = await env.fetch(`http://127.0.0.1:${upstreamPort}/redirect`, { redirect: "manual" });
+assert.equal(manualRes.status, 302, "manual redirect mode is forwarded to the proxy");
+assert.equal(manualRes.headers.get("location"), "/text");
+const followedRes = await env.fetch(`http://127.0.0.1:${upstreamPort}/redirect`);
+assert.equal(followedRes.status, 200, "default redirect mode still follows");
+assert.equal(await followedRes.text(), "proxied-text");
+
 upstream.close();
 
 // ── 11. MCP stdio init failure surfaces as a rejected transport start ──

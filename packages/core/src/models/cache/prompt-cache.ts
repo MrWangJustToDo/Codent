@@ -93,7 +93,9 @@ export function buildAnthropicCachedSystemPrompts(
 
 /** Stable tool order for prefix-identical tool schemas across requests. */
 export function sortToolsByName<T extends { name: string }>(tools: T[]): T[] {
-  return [...tools].sort((a, b) => a.name.localeCompare(b.name));
+  // Code-unit order, NOT `localeCompare`: collation is ICU/locale dependent, so the same tool set
+  // could sort differently on another machine (or ICU version) and silently miss the prefix cache.
+  return [...tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /**

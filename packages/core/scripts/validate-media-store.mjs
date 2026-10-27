@@ -263,6 +263,21 @@ async function testTypesUtils() {
   console.log("  ✓ type utilities (mimeToExtension, parseMediaRefPath, buildMediaRefPath)");
 }
 
+async function testInvalidHashRejected() {
+  const store = new MediaStore(getEnv());
+  // `mediaRef.hash` is concatenated into `.agents/media/<hash>.<ext>`. A restored/shared session can
+  // carry any string there, so a non-hash must be refused rather than read as a workspace path.
+  const loaded = await store.tryLoad({
+    hash: "../../.env",
+    mimeType: "image/png",
+    filename: "evil.png",
+    size: 0,
+    sourceType: "url",
+  });
+  assert.equal(loaded, null, "a traversal-shaped media hash must not resolve to a file");
+  console.log("  ✓ invalid media hash is refused at the path boundary");
+}
+
 async function testDuplicateContent() {
   const store = new MediaStore(getEnv());
 
@@ -337,6 +352,7 @@ async function main() {
   await testDehydrateHydrateRoundTrip();
   await testInlineDataUrlWithoutMediaRef();
   await testTypesUtils();
+  await testInvalidHashRejected();
   await testDuplicateContent();
   await testBinaryOnDisk();
   await testRepairStringifiedMultimodalOnHydrate();

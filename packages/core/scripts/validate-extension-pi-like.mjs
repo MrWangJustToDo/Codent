@@ -134,6 +134,47 @@ registerCoreEnv({
   assert.equal(phaseResults[0].result.note, "rewritten", "modifiedResult applied via onToolPhaseComplete");
 }
 
+// --- 2b. in-place mutation of payload.result must not rewrite durable history -----------------
+// Interceptors receive a detached copy when one is listening: the *same* object is stored on the UI
+// channel (and persisted to the session log) right after this hook, so `payload.result.x = …` used to
+// silently rewrite the stored tool output. The supported channel is `modifiedResult`.
+{
+  const runner = new ExtensionRunner({ onRegisterTool: () => {} });
+  await runner.loadExtension({
+    id: "mutate",
+    name: "Mutate",
+    version: "1.0.0",
+    activate(ctx) {
+      ctx.registerInterceptor("tool:after:ext_echo", (event) => {
+        event.payload.result.note = "mutated-in-place";
+      });
+    },
+  });
+
+  const middleware = createExtensionsMiddleware({
+    getExtensionRunner: () => runner,
+    getSessionId: () => "sess-mutate",
+    emitEvent: () => {},
+  });
+
+  const original = { echoed: "hi" };
+  await middleware.onAfterToolCall?.(undefined, {
+    ok: true,
+    toolName: "ext_echo",
+    duration: 5,
+    result: original,
+    toolCallId: "call-mutate",
+    toolCall: { toolCallId: "call-mutate", function: { arguments: {} } },
+  });
+
+  assert.equal(
+    original.note,
+    undefined,
+    "an interceptor's in-place edit must not leak into the object the caller stores/persists"
+  );
+  assert.deepEqual(original, { echoed: "hi" }, "the original result is untouched");
+}
+
 // --- 3. Observe-only tool:after stays unchanged (backward compat) ------------
 {
   const runner = new ExtensionRunner({ onRegisterTool: () => {} });

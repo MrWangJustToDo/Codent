@@ -129,6 +129,7 @@ assert.equal(
   let restoreEntered = false;
   let persistDrainCalls = 0;
   const resetCalls = [];
+  const sinkBinds = [];
   const markReset = (name) => () => resetCalls.push(name);
 
   const lifecycleHost = {
@@ -173,7 +174,7 @@ assert.equal(
     resetCommandJobs: markReset("commandJobs"),
     emitSessionSwitch: () => {},
     refreshState: () => {},
-    bindSessionLogSink: () => {},
+    bindSessionLogSink: (sessionId, options) => sinkBinds.push({ sessionId, options }),
     sessionPersistence: {
       restore: async (sessionId) => {
         restoreEntered = true;
@@ -188,6 +189,14 @@ assert.equal(
   const restored = await lifecycle.resume(target.id);
   assert.equal(restored.id, target.id);
   assert.equal(restoreEntered, true);
+  // The departure entry is written into the session being LEFT. That sink must not stamp the
+  // ending file with a "new session" divider (it did, immediately before "Session switched…").
+  const departure = sinkBinds.find((bind) => bind.sessionId === leaving.id);
+  assert.deepEqual(
+    departure?.options,
+    { sessionBoundary: false },
+    "re-pointing at the leaving session is a continuation, not a new session"
+  );
   assert.equal(persistDrainCalls, 2, "resume drains before and after stop()");
   // Restore owns mode/approvals/usage/todos/media misses/tracker; resume only
   // clears the volatile state that the on-disk session cannot rehydrate.

@@ -267,7 +267,7 @@ export class UsageTracker {
     this.emitChange();
   }
 
-  setPricing(pricing: ModelPricing): void {
+  setPricing(pricing: ModelPricing | null): void {
     this.pricing = pricing;
   }
 

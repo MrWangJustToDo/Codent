@@ -46,39 +46,61 @@ export interface RunErrorSignals {
 }
 
 /**
+ * Read the SDK-normalized retry hint from a `RUN_ERROR` chunk (or any source with the same shape).
+ *
+ * One definition of the field path: {@link attachRunErrorRetryAfterMs} writes it onto an error and
+ * `extractRetryAfterMs` (recovery) reads it from a chunk or a caught error. Those two used to parse
+ * the same two locations independently, so a third location added by the SDK would have been
+ * picked up by only one of them.
+ */
+export function readRetryAfterMs(source: unknown): number | undefined {
+  if (source == null || typeof source !== "object") return undefined;
+  const record = source as {
+    retryAfterMs?: unknown;
+    metadata?: { tanstack?: { retryAfterMs?: unknown } };
+  };
+  const direct = record.retryAfterMs;
+  if (typeof direct === "number" && Number.isFinite(direct) && direct > 0) return direct;
+  const nested = record.metadata?.tanstack?.retryAfterMs;
+  if (typeof nested === "number" && Number.isFinite(nested) && nested > 0) return nested;
+  return undefined;
+}
+
+/**
  * Copy the SDK-normalized retry hint from a `RUN_ERROR` chunk onto `error`.
  *
- * Reads `metadata.tanstack.retryAfterMs` (the mirror `@tanstack/ai` 0.67+ writes)
- * and also the bare `retryAfterMs` a chunk may carry. No-op when `error` already
- * has one or the chunk has none — the same "the error owns the field once set"
- * rule as {@link attachRunErrorCode}, because both write the same object.
+ * No-op when `error` already has one or the chunk has none — the same "the error owns the field
+ * once set" rule as {@link attachRunErrorCode}, because both write the same object.
  */
 export function attachRunErrorRetryAfterMs(error: Error, chunk: StreamChunk): Error {
   if (chunk.type !== "RUN_ERROR") return error;
   const target = error as Error & RunErrorSignals;
   if (target.retryAfterMs !== undefined) return error;
-  const record = chunk as { retryAfterMs?: unknown; metadata?: { tanstack?: { retryAfterMs?: unknown } } };
-  const raw = record.retryAfterMs ?? record.metadata?.tanstack?.retryAfterMs;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    target.retryAfterMs = raw;
-  }
+  const raw = readRetryAfterMs(chunk);
+  if (raw !== undefined) target.retryAfterMs = raw;
   return error;
 }
 
 /**
- * Fail fast when the model run emits RUN_ERROR instead of completing silently.
+ * The Error a `RUN_ERROR` chunk represents, carrying the chunk's out-of-band signals
+ * (`code`, `retryAfterMs`).
  *
- * The thrown error carries the chunk's `code` / `retryAfterMs` (via the two
- * `attachRunError*` helpers), so a consumer that classifies the failure downstream
- * sees the same signals it would have seen on the chunk route. Dropping them here
- * made an overflow check that reads `code` work on one route and not the other.
+ * Two consumers must build this identically: the recovery loop (which classifies it and may
+ * retry) and {@link throwOnRunError} (which turns the chunk into a throw for direct channel
+ * consumers). Building it twice is how an overflow check that reads `code` worked on one route
+ * and not the other.
+ */
+export function runErrorFromChunk(chunk: StreamChunk): Error {
+  const message = extractRunErrorMessage(chunk) || "Agent run failed";
+  return attachRunErrorRetryAfterMs(attachRunErrorCode(new Error(message), chunk), chunk);
+}
+
+/**
+ * Fail fast when the model run emits RUN_ERROR instead of completing silently.
  */
 export async function* throwOnRunError(stream: AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk> {
   for await (const chunk of stream) {
-    if (chunk.type === "RUN_ERROR") {
-      const message = extractRunErrorMessage(chunk) || "Agent run failed";
-      throw attachRunErrorRetryAfterMs(attachRunErrorCode(new Error(message), chunk), chunk);
-    }
+    if (chunk.type === "RUN_ERROR") throw runErrorFromChunk(chunk);
     yield chunk;
   }
 }

@@ -29,6 +29,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { extractTextFromContent } from "../compaction/message-utils.js";
 import { formatSectionTag, isContextText } from "../turn-context/turn-context-message.js";
 
+import { isExpiredMemory } from "./memory-expiry.js";
 import {
   DEFAULT_MAX_MEMORY_BYTES_PER_FILE,
   DEFAULT_MAX_MEMORY_LINES_PER_FILE,
@@ -205,12 +206,9 @@ function filterExpired(memories: Memory[], log?: MemoryLog): Memory[] {
   const live: Memory[] = [];
   let expired = 0;
   for (const m of memories) {
-    if (m.expiresAt) {
-      const t = Date.parse(m.expiresAt);
-      if (Number.isNaN(t) || t <= now) {
-        expired++;
-        continue;
-      }
+    if (isExpiredMemory(m, now)) {
+      expired++;
+      continue;
     }
     live.push(m);
   }

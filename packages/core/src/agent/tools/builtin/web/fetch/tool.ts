@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import { isAbortError } from "../../../../../runtime-types/abort.js";
 import { buildDataUrl, parseDataUrl } from "../../../../../utils/data-url.js";
+import { assertPublicHttpUrl } from "../../../../../utils/public-url.js";
 import { defineServerTool, isProjectedModelContent } from "../../../runtime/define-tool.js";
 import { createTimeoutAbort } from "../../../shared/abort-timeout.js";
 import { maybeCacheOutput } from "../../../shared/cache/tool-output-cache.js";
@@ -87,6 +88,41 @@ export type WebfetchOutput = z.infer<typeof webfetchOutputSchema>;
 // Tool Factory
 // ============================================================================
 
+const MAX_REDIRECTS = 5;
+
+interface RedirectFollowResult {
+  response: Response;
+  finalUrl: string;
+}
+
+/** Follow redirects one hop at a time, validating every target before it is requested. */
+async function fetchWithValidatedRedirects(
+  envFetch: (input: string, init?: RequestInit) => Promise<Response>,
+  startUrl: string,
+  init: RequestInit
+): Promise<RedirectFollowResult> {
+  let current = startUrl;
+  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+    const response = await envFetch(current, { ...init, redirect: "manual" });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return { response, finalUrl: current };
+      // Release the redirect body before the next hop (best-effort; a body-less 3xx is normal).
+      await response.body?.cancel().catch(() => {});
+      // Resolve relative to the URL that produced it, then validate BEFORE requesting it.
+      current = assertPublicHttpUrl(new URL(location, current).toString()).toString();
+      continue;
+    }
+
+    // A host that ignores `redirect: "manual"` still follows: validate where it landed. The
+    // request has already happened on such a host, so this only withholds the body.
+    if (response.url && response.url !== current) assertPublicHttpUrl(response.url);
+    return { response, finalUrl: response.url || current };
+  }
+  throw new Error(`Too many redirects (limit: ${MAX_REDIRECTS})`);
+}
+
 /**
  * Creates a webfetch tool for fetching web content.
  *
@@ -147,10 +183,10 @@ Usage notes:
 
     execute: async ({ url, format, timeout }, { abortSignal, toolCallId, coreEnv }) => {
       return withDuration(async () => {
-        // Validate URL
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-          throw new Error("URL must start with http:// or https://");
-        }
+        // Scheme + SSRF guard. `webfetch` is model-driven and approval-free, so a URL chosen by
+        // prompt-injected page content must not reach the loopback interface, a private network,
+        // or a cloud metadata endpoint (see utils/public-url.ts for exactly what is refused).
+        const requestUrl = assertPublicHttpUrl(url).toString();
 
         const timeoutMs = Math.min((timeout ?? DEFAULT_TIMEOUT) * 1000, MAX_TIMEOUT * 1000);
 
@@ -176,19 +212,20 @@ Usage notes:
 
           const envFetch = coreEnv.fetch;
 
-          let response = await envFetch(url, {
+          // Manual redirects: `fetch(..., { redirect: "follow" })` requests the private target
+          // before `response.url` can be checked, so the guard would only withhold the body while
+          // still issuing the request. Each hop is validated before it is requested.
+          let { response, finalUrl } = await fetchWithValidatedRedirects(envFetch, requestUrl, {
             signal: controller.signal,
             headers,
-            redirect: "follow",
           });
 
           // Retry with honest UA if blocked by Cloudflare bot detection
           if (response.status === 403 && response.headers.get("cf-mitigated") === "challenge") {
-            response = await envFetch(url, {
+            ({ response, finalUrl } = await fetchWithValidatedRedirects(envFetch, finalUrl, {
               signal: controller.signal,
               headers: { ...headers, "User-Agent": "codent-webfetch" },
-              redirect: "follow",
-            });
+            }));
           }
 
           if (!response.ok) {
@@ -209,8 +246,6 @@ Usage notes:
 
           const contentType = response.headers.get("content-type") || "text/plain";
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || "text/plain";
-          // fetch() follows redirects; response.url is where we actually landed.
-          const finalUrl = response.url || url;
 
           // Handle images
           const isImage = mime.startsWith("image/") && mime !== "image/svg+xml";

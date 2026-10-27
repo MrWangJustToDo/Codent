@@ -40,6 +40,7 @@ import {
   buildMediaRefPath,
   extensionToMime,
   isBinaryMediaPartType,
+  isMediaHash,
   isMediaRefValue,
   parseMediaRefPath,
 } from "./types.js";
@@ -355,6 +356,11 @@ export async function hydrateUIMessages(
         } else {
           onMissing?.({ ref: source.value, reason: "not-found", path: "content" });
         }
+        continue;
+      }
+
+      if (!isMediaHash(mediaRef.hash)) {
+        onMissing?.({ ref: buildMediaRefPath(mediaRef), reason: "invalid-ref", path: "content" });
         continue;
       }
 

@@ -27,6 +27,10 @@ export class BusExtensionEventBus implements ExtensionEventBus {
     return this.bus.intercept(event);
   }
 
+  hasInterceptors(type: string): boolean {
+    return this.bus.hasInterceptors(type);
+  }
+
   on<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>, rank?: DispatchRank): () => void {
     const key = handler as EventInterceptor<InterceptableEvent>;
     const unsub = this.bus.onIntercept(type, handler, rank);

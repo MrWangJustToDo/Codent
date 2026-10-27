@@ -548,6 +548,19 @@ No manual user text is required; each `y` only approves one tool when several `r
 
 Lifecycle tool events (`agent:tool-start` / `agent:tool-end` / `agent:tool-error`) always emit on the agent's scoped `AgentEventBus` (observer mode), whether or not an extension runner is present. Extension interception (`tool:before:*` / `tool:after:*`) is interceptor mode on the same bus.
 
+### 4.5 Network boundary (`webfetch` vs the CoreEnv proxy)
+
+`webfetch` is model-driven and approval-free, so its URL is untrusted input. `utils/public-url.ts` refuses
+loopback/private/link-local/CGNAT/metadata hosts by name and by literal IP (IPv4-mapped IPv6 included),
+and `webfetch` follows redirects **one hop at a time** (`redirect: "manual"`, validating each `Location`
+before the next request) — a followed redirect has already issued the request by the time `response.url`
+exists, so checking only the final URL would withhold the body but not the request. The CoreEnv fetch
+proxy is deliberately **not** guarded: it also serves non-model callers that may legitimately reach a
+local dev server or loopback MCP endpoint, and every model-driven caller must vet its own URL. Both the
+proxy and `webfetch` read bodies through the bounded reader (`DEFAULT_MAX_BODY_BYTES`) rather than
+`response.text()`/`arrayBuffer()`, because `content-length` is the wire length (missing, compressed, or
+wrong) and cannot bound a bomb.
+
 ---
 
 ## 5. Compaction flow
@@ -658,7 +671,7 @@ The durable channel stays chronological. Projection is never written back.
 The summarizer sees both the cut-away history and the kept tail (budget-aware) so Goal/Next stay aligned.
 On later iterations (no compact), `onConfig` again converts the live channel and projects summary-first wire.
 
-**Segmented summarization sizing:** `summarizeConversation` splits `toSummarize` with `splitMessagesByTokenBudget`, which sizes each message by its **serialized** length (`serializeConversation` caps tool results at 2000 chars and tool args at 200) rather than the raw wire. `estimateTokens` on the raw wire counts full tool output and overestimates the actual prompt several-fold, so measuring it forced needless multi-segment passes. The per-call input budget is `contextWindow − min(defaultMaxTokens, SUMMARY_OUTPUT_CAP) − overhead`, so a model declaring a huge `limit.output` (e.g. 384k) does not starve the budget.
+**Segmented summarization sizing:** `summarizeConversation` splits `toSummarize` with `splitMessagesByTokenBudget`, which sizes each message by its **serialized** length (`serializeConversation` caps tool results at 2000 chars and tool args at 200) rather than the raw wire. `estimateTokens` on the raw wire counts full tool output and overestimates the actual prompt several-fold, so measuring it forced needless multi-segment passes. The per-call input budget is `contextWindow − min(defaultMaxTokens, SUMMARY_OUTPUT_CAP) − overhead`, so a model declaring a huge `limit.output` (e.g. 384k) does not starve the budget. Both this sizing and `estimateTokens` count a non-ASCII character as one token's worth (4 char units): CJK/emoji are ~1 token per character, and a raw `chars / 4` undercounted them by ~4× in both the kept window and the summarizer batch.
 
 **Compact observability:** auto-compact writes its decision-side inputs to the agent log at `debug` (category `compaction`) so segmentation can be diagnosed without reconstructing it from subagent logs. `autoCompact` logs the cut plan (`tokensBefore`, `triggerAt`, `keepRecentTokens`, `cutIndex`, `splitTurn`, slice message counts) plus `estimatedTokens` (raw wire) vs `serializedTokens` (truncated prompt) for `toSummarize`; `summarizeConversation` logs the resolved `inputBudget` / `stillTokens` / `compressBudget` alongside both measures and the resulting `segments` + per-segment `segmentTokens`.
 
@@ -710,7 +723,9 @@ so the reason for declining each is recorded rather than left to be rediscovered
 
 **File:** `packages/app/src/commands/compact.ts`
 
-Calls exported `autoCompact` + `applyCompactionResult` directly (same engine as auto-compact).
+Dispatches `session.dispatch({ type: "compact", focus })`; the session (core) runs
+`autoCompact` + `applyCompactionResult` — the same engine as auto-compact. The executors are
+deliberately **not** exported from the package entry (see `validate-core-public-exports`).
 
 ### 5.6 Configuration
 
@@ -770,7 +785,7 @@ App hosts subscribe to Session `messages`/`state` for UI only — they do **not*
 
 On restore, `ModeCoordinator.restore` rehydrates plan phase (and reloads markdown from `planFilePath` when missing) with plan winning over auto. `/new` / `ManagedAgent.reset` always leave plan mode through `ModeCoordinator.reset()`.
 
-`SessionStore.save`: incremental append — content signature (state sans `updatedAt` + per-message fingerprints) is compared **before** `updatedAt` is bumped, so a re-save of unchanged data is a true no-op with zero IO. New/changed messages are appended as lines; a state-only change re-emits the last message line; a session that goes non-empty → empty, any non-append history change, or a save with no delta baseline (`prev === undefined`, e.g. an unprimed store) rewrites the file to converge on the session. Per-session write lock; `delete()` removes the log and clears the cached bookkeeping. The message timestamps (`message.updatedAt` / `part.approval.updatedAt`) are resolved before that comparison and are deliberately not part of it: an unchanged message keeps the stamp it was written with (from disk or from the last write), so a re-emitted line is byte-identical and a state-only re-emit cannot move an approval's decision time. The only mutation of the live objects is `session.updatedAt`, always after the no-op check.
+`SessionStore.save`: incremental append — content signature (state sans `updatedAt` + per-message fingerprints) is compared **before** `updatedAt` is bumped, so a re-save of unchanged data is a true no-op with zero IO. New/changed messages are appended as lines; a state-only change re-emits the last message line; a session that goes non-empty → empty, any non-append history change, or a save with no delta baseline (`prev === undefined`, e.g. an unprimed store) rewrites the file to converge on the session. Per-session write lock. Whole-file rewrites go through `utils/atomic-write.ts` (write a unique sibling temp, then `rename`; a host without `rename` falls back to the in-place write) so a crash cannot leave a truncated session log or `models.json`. `delete()` removes the log **and** `.agents/logs/<id>/` (that timeline carries prompts, tool args and output), clears the cached bookkeeping, and refuses an id that could escape `.agents/` (`isSafeSessionId`). The message timestamps (`message.updatedAt` / `part.approval.updatedAt`) are resolved before that comparison and are deliberately not part of it: an unchanged message keeps the stamp it was written with (from disk or from the last write), so a re-emitted line is byte-identical and a state-only re-emit cannot move an approval's decision time. The only mutation of the live objects is `session.updatedAt`, always after the no-op check.
 
 **Run finalization** (`finalizeRun`):
 
@@ -1238,8 +1253,8 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Shared types        | `runtime-types/*`                                                                                                                            |
 | Telemetry           | `agent/agent-event-bus/*` (the unified bus), `managers/telemetry/emit-agent-telemetry.ts`, `agent/log/*` (the log extension)                                        |
 | Persistence         | `managers/services/session-service.ts`, `agent/persistence/session-store.ts`                                                                          |
-| Services (extracted) | `managers/services/` — session / memory / compaction / extension-registry / usage-history; `managers/run-coordinator.ts` (run lifecycle)               |
-| Usage               | `agent/usage/usage-store.ts` (pure IO), `managers/services/usage-history-service.ts` (global history)                                                   |
+| Services (extracted) | `managers/services/` — session / memory / compaction / extension-registry; `managers/run-coordinator.ts` (run lifecycle)               |
+| Usage               | `agent/usage/usage-store.ts` (pure IO), `agent/usage/usage-history-service.ts` (global history; managers import it directly)                                                   |
 | Cross-cutting utils | `utils/emitter.ts`, `utils/generate-id.ts`                                                                                                             |
 | Domain helpers      | `agent/stream/*` (empty-stream), `agent/run/*`, `agent/queue/*` (tool-phase / pending queue — stay with chat/run)                                                                   |
 | Memory              | `managers/services/memory-service.ts`, `agent/memory/*.ts`                                                                                             |

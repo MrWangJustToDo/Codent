@@ -14,6 +14,7 @@
 import { truncateText } from "../../utils/text-truncation.js";
 
 import { buildToolCallNameMap, extractTextFromContent, serializeToolMessageContent } from "./message-utils.js";
+import { estimateCharUnits } from "./token-estimator.js";
 
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -46,19 +47,19 @@ function truncateToolResult(text: string): string {
 export function serializedMessageChars(message: ModelMessage, toolCallMap: Map<string, string>): number {
   if (message.role === "user") {
     const text = extractTextFromContent(message.content);
-    return text ? `[User]: ${text}`.length : 0;
+    return text ? estimateCharUnits(`[User]: ${text}`) : 0;
   }
 
   if (message.role === "assistant") {
     let chars = 0;
     const text = extractTextFromContent(message.content);
-    if (text) chars += `[Assistant]: ${text}`.length;
+    if (text) chars += estimateCharUnits(`[Assistant]: ${text}`);
     if (message.toolCalls && message.toolCalls.length > 0) {
       const toolCalls = message.toolCalls.map((tc) => {
         const args = truncateToolArgs(tc.function.arguments);
         return `${tc.function.name}(${args})`;
       });
-      chars += `[Assistant tool calls]: ${toolCalls.join("; ")}`.length;
+      chars += estimateCharUnits(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
     }
     return chars;
   }
@@ -66,14 +67,15 @@ export function serializedMessageChars(message: ModelMessage, toolCallMap: Map<s
   if (message.role === "tool") {
     const toolName = (message.toolCallId && toolCallMap.get(message.toolCallId)) || "tool";
     const resultText = truncateToolResult(serializeToolMessageContent(message.content));
-    return resultText ? `[Tool result from ${toolName}]: ${resultText}`.length : 0;
+    return resultText ? estimateCharUnits(`[Tool result from ${toolName}]: ${resultText}`) : 0;
   }
 
   return 0;
 }
 
 /**
- * Serialized character count for a message list, matching
+ * Serialized size in estimator char units (wide characters count as one token's worth, not one
+ * quarter), matching
  * {@link serializeConversation} (including the `\n\n` segment join).
  */
 export function measureSerializedConversationChars(messages: ModelMessage[]): number {

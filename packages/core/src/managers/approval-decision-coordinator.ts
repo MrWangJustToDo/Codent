@@ -9,7 +9,6 @@
  * ONE pump instead of scheduling one per decision — cannot drift from that sequence.
  */
 
-import { findToolCallIdForApproval, findToolCallNameForApproval } from "../agent/approval/tool-approval-table.js";
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
 import { analyzeCommand, createAnalysisContext } from "../agent/tools/builtin/shell/safety/command-analyzer.js";
 import {
@@ -43,10 +42,22 @@ export class ApprovalDecisionCoordinator {
 
   /** One explicit y/n answer; settles once and joins the pump. */
   async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<void> {
-    const messages = this.deps.getMessages();
-    const toolCallId = findToolCallIdForApproval(messages, approvalId) ?? approvalId;
-    const toolName = findToolCallNameForApproval(messages, approvalId);
-    this.recordDecision({ approvalId, toolCallId, toolName, approved, reason });
+    // First decision wins: only a PENDING approval may be answered. A repeated or late answer
+    // (remote client retry, an old dialog, a deny racing auto-mode) must be inert — otherwise it
+    // rewrites the channel decision, invents a table row for an id no part carries, and runs a
+    // model turn over an unchanged transcript.
+    const pending = collectPendingApprovals(this.deps.getMessages()).find(
+      (approval) => approval.approvalId === approvalId
+    );
+    if (!pending) return;
+
+    this.recordDecision({
+      approvalId,
+      toolCallId: pending.toolCallId,
+      toolName: pending.toolName,
+      approved,
+      reason,
+    });
     this.settle();
     return this.deps.enqueueRun();
   }

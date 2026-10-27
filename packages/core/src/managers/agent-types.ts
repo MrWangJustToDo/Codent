@@ -1,23 +1,13 @@
 import { z } from "zod";
 
+import { REASONING_EFFORT_VALUES } from "../models/types.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 
-import type { ReasoningEffort } from "../models/types.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Agent Config
 // ============================================================================
-
-export const REASONING_EFFORT_VALUES: readonly ReasoningEffort[] = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "minimal",
-];
 
 /** Default maximum agentic-loop iterations for the main agent run loop (defined in runtime-types, re-exported for manager-side consumers). */
 export { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";

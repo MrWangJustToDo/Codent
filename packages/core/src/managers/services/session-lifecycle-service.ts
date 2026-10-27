@@ -33,7 +33,7 @@ export interface SessionLifecycleHost {
   getChatController(): AgentChatController | undefined;
   acquireSessionOwnership(sessionId: string): boolean;
   releaseSessionOwnership(sessionId: string): void;
-  bindSessionLogSink(sessionId?: string): void;
+  bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void;
   emitSessionNew(sessionId: string, reason: "session-new"): void;
   emitSessionSwitch(fromSessionId: string, toSessionId: string, messageCount: number): void;
   refreshState(): void;
@@ -295,7 +295,7 @@ export class SessionLifecycleService {
       if (leavingId && leavingId !== sessionId) {
         // `session:restore` above belongs to the target. The departure entry belongs to the
         // session being left, so temporarily point the sink back before emitting it.
-        this.host.bindSessionLogSink(leavingId);
+        this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
         try {
           this.host.emitSessionSwitch(leavingId, sessionId, session.uiMessages.length);
         } finally {

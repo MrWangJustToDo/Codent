@@ -59,7 +59,6 @@ export const READONLY_PREFIXES: ReadonlySet<string> = new Set([
   "hexdump",
   "od",
   "strings",
-  "man",
 
   // ---- text transforms that write only to stdout ----
   "cut",
@@ -159,10 +158,16 @@ export const WRITE_MODE_TOKENS: Readonly<Record<string, (token: string) => boole
   ack: (token) => token === "--pager" || token.startsWith("--pager="),
   // `jq -i` edits its input files in place (jq 1.7+).
   jq: (token) => token === "-i" || token === "--in-place" || token.startsWith("--in-place="),
+  // `man` is deliberately NOT in the table: `-P pager` / `--pager` / `-H` hand the page to a
+  // program of the caller's choosing, so a name-only (or flag-only) entry would be an executor.
 };
 
 /** Whole-invocation verdicts for commands whose arguments decide read-only status. */
 export const ARGUMENT_GUARDS: Readonly<Record<string, (tokens: string[]) => boolean>> = {
+  // `xxd [in [out]]` writes `out` whenever a second operand is present — with or without `-r`
+  // (`xxd in out` is a hex dump written to `out`). Only the one-operand forms print to stdout.
+  xxd: (tokens) => positionalArgs(tokens).length <= 1,
+
   // `uniq` takes an OUTPUT file as its second positional operand: `uniq in.txt out.txt` writes
   // `out.txt` and prints nothing. One operand at most.
   uniq: (tokens) => positionalArgs(tokens).length <= 1,
@@ -219,14 +224,17 @@ function writesGitFile(token: string): boolean {
 }
 
 /** Git global options that appear BEFORE the subcommand and consume a separate value. */
-const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  "-C",
-  "-c",
-  "--git-dir",
-  "--work-tree",
-  "--namespace",
-  "--exec-path",
-]);
+const GIT_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set(["-C", "--git-dir", "--work-tree", "--namespace"]);
+
+/**
+ * Git global options that inject CONFIG or a PROGRAM, so the invocation is not read-only no
+ * matter how harmless the subcommand looks.
+ *
+ * `-c core.pager=…` makes `git log --paginate` execute it; `-c diff.external=…` makes `git diff`
+ * execute it; `--exec-path` relocates every git subcommand. All three were previously skipped as
+ * ordinary value options, so `git -c core.pager="sh -c id" log` was classified read-only.
+ */
+const GIT_EXEC_OPTIONS: ReadonlySet<string> = new Set(["-c", "--config-env", "--exec-path"]);
 
 /**
  * Split git's tokens into its subcommand and that subcommand's own arguments.
@@ -240,6 +248,9 @@ function gitSubcommand(tokens: string[]): { sub: string; args: string[] } | null
   while (i < tokens.length) {
     const token = tokens[i]!;
     if (!token.startsWith("-")) break;
+    if (GIT_EXEC_OPTIONS.has(token) || token.startsWith("--config-env=") || token.startsWith("--exec-path=")) {
+      return null;
+    }
     if (GIT_GLOBAL_VALUE_OPTIONS.has(token)) {
       i += 2;
       continue;

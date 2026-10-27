@@ -487,3 +487,15 @@ export { EXTENSION_EVENT_VISIBILITY, observableExtensionEvents } from "./agent/e
 export { generateId } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
 export type { GenerateIdOptions } from "./utils/generate-id.js";
+
+// ============================================================================
+// Network boundary
+// ============================================================================
+
+// Bounded body reads are shared with the CoreEnv fetch proxy (a first-party host cannot reach a
+// deep path); the SSRF guard stays internal to `webfetch`, the only caller whose URL is model input.
+export {
+  DEFAULT_MAX_BODY_BYTES,
+  readBodyBounded,
+  readBodyTextBounded,
+} from "./agent/tools/builtin/web/fetch/bounded-body.js";

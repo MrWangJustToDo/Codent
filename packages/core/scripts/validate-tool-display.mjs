@@ -25,6 +25,32 @@ assert.equal(readFile.summary, "42 lines", `read_file summary (${readFile.summar
 const writeFile = core.computeToolDisplay("write_file", { path: "a.ts", bytes: 10, ok: true });
 assert.equal(writeFile?.summary, "updated", `write_file summary (${writeFile?.summary})`);
 
+// The framework's own failure shape is not any tool's schema: it must render as an error (the
+// row header), never as fabricated success text. `todo` used to THROW from inside this function
+// because its formatter read `stats.total` off `{ error }`, and `write_file` rendered
+// "Overwrote file: undefined" for the common "file already exists" failure.
+for (const [name, output] of [
+  ["write_file", { error: "File already exists: src/a.ts." }],
+  ["edit_file", { error: "No match found" }],
+  ["todo", { error: "Disk full" }],
+  ["run_command", { error: "spawn failed" }],
+]) {
+  assert.equal(
+    core.formatToolOutput(output, name),
+    "",
+    `${name} must not fabricate a body from a framework error result`
+  );
+  assert.equal(
+    core.getInlineSummary({ type: "tool-call", id: "c", name, arguments: "{}", state: "complete", output }, name),
+    null,
+    `${name} must not summarize a failed call as a success`
+  );
+}
+
+// A `todo` payload without `stats` (any non-error malformed shape) must not throw in a render.
+assert.doesNotThrow(() => core.formatToolOutput({ source: "plan" }, "todo"));
+assert.equal(core.formatToolOutput({ source: "plan" }, "todo"), "Updated plan todos");
+
 // A successful command has nothing the host cannot compute itself (it owns a detailed
 // block, rendered locally from the stored output), so no payload is attached.
 assert.equal(

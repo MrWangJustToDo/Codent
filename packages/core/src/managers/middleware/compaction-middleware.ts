@@ -50,6 +50,18 @@ export interface CompactionMiddlewareDeps {
 
 /** TanStack compaction via {@link ChatMiddleware.onConfig}. */
 export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): ChatMiddleware<ToolRunContext> {
+  /**
+   * Fill (in tokens) at which the last attempt failed or made no progress.
+   *
+   * A failing summarizer used to be retried on EVERY model call: the trigger reads the same fill
+   * and `isLatestDurableMessageCompactionSummary` stays false, so a 30-iteration run could start
+   * 30 full summarizer subagents over the whole pre-cut history. One failure is remembered until
+   * the context has grown enough to be worth another attempt (or a success clears it); a user
+   * abort is not a failure and does not arm this.
+   */
+  let failedAtFill: number | null = null;
+  const RETRY_AFTER_FILL_GROWTH = 8_000;
+
   return defineMiddleware("context-transform", {
     name: "compaction",
     onConfig: async (_ctx, config) => {
@@ -72,6 +84,13 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
 
       const alreadyCompacted = isLatestDurableMessageCompactionSummary(channel.getMessages());
       if (!isSubagent && !alreadyCompacted && deps.shouldTriggerAutoCompact(llmMessages)) {
+        const fillBefore = deps.getUsage().getContextFillTokens() ?? 0;
+        if (failedAtFill !== null && fillBefore < failedAtFill + RETRY_AFTER_FILL_GROWTH) {
+          // The previous attempt failed (or made no progress) on this same context; retrying
+          // before it grows would re-summarize the whole prefix on every model call.
+          return { messages: llmMessages };
+        }
+
         const compactionGeneration = managed?.beginCompactionGeneration();
         try {
           deps.status.beginCompaction("auto");
@@ -119,15 +138,21 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
 
           if (result.compacted) {
+            failedAtFill = null;
             deps.emitEvent?.("compaction:auto-complete", {
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
             });
+          } else {
+            // No progress (empty summary, summarizer no-op): remember where we tried so the
+            // next model call does not start the same summarization again.
+            failedAtFill = fillBefore;
           }
         } catch (err) {
           // A user cancel is not a compaction failure — stay silent.
           if (!isAbortError(err) && (!managed || managed.isCompactionCurrent(compactionGeneration))) {
             const error = toError(err);
+            failedAtFill = fillBefore;
             deps.emitEvent?.("compaction:auto-error", { error: error.message });
           }
         } finally {

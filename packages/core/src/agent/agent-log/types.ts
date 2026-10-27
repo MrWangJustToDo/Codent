@@ -82,6 +82,12 @@ export interface AgentLogFileSinkOptions {
   maxFiles?: number;
   /** Batch-flush interval in ms (default 250). */
   flushIntervalMs?: number;
+  /**
+   * Write the `---------- new session ----------` divider when the target file already exists.
+   * Defaults to `true`. Set `false` for a *temporary* re-point (emitting the departure entry into
+   * the session being left), which must not stamp that ending file as starting again.
+   */
+  sessionBoundary?: boolean;
   /** Owning runtime's env, so the log lands under the runtime root. Ambient when omitted. */
   env?: ResolvedCoreEnv;
 }

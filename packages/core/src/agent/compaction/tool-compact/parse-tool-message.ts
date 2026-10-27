@@ -1,5 +1,10 @@
 import { isContentPartArray } from "@tanstack/ai";
 
+import {
+  extractToolErrorMessage,
+  isPendingToolExecutionResult,
+  isToolErrorResult,
+} from "../../../runtime-types/tool-error.js";
 import { serializeToolMessageContent } from "../message-utils.js";
 
 import type { ContentPart, ModelMessage } from "@tanstack/ai";
@@ -50,51 +55,13 @@ export function extractCachedOutputPath(output: unknown): string | null {
 }
 
 /**
- * TanStack approval continuation marker — tool is approved but not executed yet.
- * Must not be compacted or passed through `toModelOutput`; doing so strips
- * `pendingExecution` and the engine skips the real tool run.
+ * TanStack `output-error` tool results — see `runtime-types/tool-error.ts`.
+ *
+ * Re-exported here because the compaction projection is the original consumer; the predicate is
+ * defined once, in the low layer, so the UI path (`formatToolOutput` / `getInlineSummary`) uses
+ * the same reading.
  */
-export function isPendingToolExecutionResult(output: unknown): boolean {
-  if (!output || typeof output !== "object") return false;
-  return (output as Record<string, unknown>).pendingExecution === true;
-}
-
-/**
- * TanStack `output-error` tool results — `{ error: string }` from server execution.
- * Must not pass through success-only `toModelOutput` handlers (they treat missing
- * fields as success and emit misleading text like "Overwrote file: undefined").
- */
-export function isToolErrorResult(output: unknown): boolean {
-  if (isPendingToolExecutionResult(output)) return false;
-
-  if (output && typeof output === "object" && "error" in output) {
-    const error = (output as Record<string, unknown>).error;
-    return typeof error === "string" && error.length > 0;
-  }
-
-  if (typeof output === "string") {
-    return output.startsWith("Error executing tool:");
-  }
-
-  return false;
-}
-
-/** Extract a human-readable error message from a tool error payload. */
-export function extractToolErrorMessage(output: unknown): string {
-  if (output && typeof output === "object" && "error" in output) {
-    const error = (output as Record<string, unknown>).error;
-    if (typeof error === "string" && error.length > 0) return error;
-  }
-
-  if (typeof output === "string") {
-    if (output.startsWith("Error executing tool:")) {
-      return output.slice("Error executing tool:".length).trim();
-    }
-    return output;
-  }
-
-  return "Tool execution failed";
-}
+export { extractToolErrorMessage, isPendingToolExecutionResult, isToolErrorResult };
 
 /** LLM-facing shape for failed tool results (preserves failure semantics). */
 export function formatToolErrorForModel(output: unknown): string | ContentPart[] {

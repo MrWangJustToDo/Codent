@@ -33,6 +33,13 @@ export interface PlanModeControllerDeps {
   getCoreEnv?: () => ResolvedCoreEnv;
   /** Invalidate runner / notify UI when phase changes. */
   onPhaseChange?: () => void;
+  /**
+   * Persist the session after a phase transition. Every transition goes through
+   * {@link notifyChange}: `/mode execute`, `/mode done` and `/mode cancel` used to reach disk only
+   * if an unrelated save followed, so quitting right after `/mode done` restored `retro` +
+   * `todosSeeded` and kept auto-approving tools the user thought they had left.
+   */
+  persist?: () => void;
 }
 
 export interface BeginPlanExecutionResult {
@@ -66,6 +73,8 @@ export class PlanModeController {
   private preservedExistingTodos = false;
   private planFilePath: string | null = null;
   private todoUnsub: (() => void) | null = null;
+  /** True while hydrating from disk: a restore must not write its own partial state back. */
+  private restoring = false;
 
   /** Unified event bus for the owning agent (session `plan` projection + telemetry). */
   private eventBus?: AgentEventBus;
@@ -82,6 +91,9 @@ export class PlanModeController {
     // Session `plan` projection — the bus is the single change mechanism.
     this.eventBus?.emit("session:plan", this.getState());
     this.deps.onPhaseChange?.();
+    // A phase reached while restoring came FROM disk; writing it back can only capture a
+    // half-hydrated session (todos/UI messages are restored after this point).
+    if (!this.restoring) this.deps.persist?.();
   }
 
   getState(): PlanModeState {
@@ -127,6 +139,15 @@ export class PlanModeController {
    * Call after todos have been restored. Does not emit plan lifecycle enter/exit events.
    */
   restoreState(snapshot: PlanModeState | null | undefined): void {
+    this.restoring = true;
+    try {
+      this.applyRestoredState(snapshot);
+    } finally {
+      this.restoring = false;
+    }
+  }
+
+  private applyRestoredState(snapshot: PlanModeState | null | undefined): void {
     this.detachTodoListener();
 
     if (!snapshot || snapshot.phase === "off") {

@@ -138,6 +138,14 @@ const mustAsk = [
   ["git diff --output= writes", "git diff --output=/repo/x"],
   ["git log --output= writes", "git log --output=/repo/x"],
   ["git show --output= writes", "git show --output=/repo/x"],
+  // Process substitution has no `$`/backtick, so it used to be swallowed as a redirection
+  // target: only `cat` was classified and `cat <(rm -rf src)` was auto-approved. The body is a
+  // command that really runs and must be classified on both paths.
+  ["process substitution", "cat <(rm -rf src)"],
+  ["process substitution via sh", "cat <(sh -c 'rm -rf src')"],
+  ["output process substitution", "tee >(rm -rf src)"],
+  // `xxd` writes its second OPERAND even without `-r`; only one operand keeps stdout.
+  ["xxd with an output operand", "xxd in.bin out.bin"],
 ];
 
 for (const [label, cmd] of mustAsk) {
@@ -167,6 +175,11 @@ const mustAllow = [
   ["git diff", "git diff"],
   ["git log", "git log --oneline"],
   ["git diff --output-indicator is not a write", "git diff --output-indicator-new=+ --output-indicator-old=-"],
+  // `xxd` prints unless `-r` names an output operand.
+  ["xxd print", "xxd f"],
+  ["xxd reverse to stdout", "xxd -r in.hex"],
+  // Process substitution inside double quotes is literal text, not a command.
+  ["quoted process substitution is literal", 'echo "a <(b)"'],
 ];
 
 for (const [label, cmd] of mustAllow) {
@@ -300,6 +313,18 @@ const writeForms = [
   ["git push", "git push"],
   ["git commit", "git commit -m x"],
   ["git checkout", "git checkout main"],
+
+  // Config/program injection through a GLOBAL git option: the subcommand is still `log`/`diff`,
+  // but `-c core.pager=…` / `-c diff.external=…` make git execute it.
+  ["git -c pager", 'git -c core.pager="sh -c id" log --paginate'],
+  ["git -c external diff", "git -c diff.external=/tmp/evil diff"],
+  ["git --exec-path", "git --exec-path=/tmp/evil status"],
+  ["git --config-env", "git --config-env=core.pager=EVIL log"],
+
+  // `xxd -r IN OUT` reverses into OUT; `man` is not in the table because `-P` runs a pager.
+  ["xxd reverse writes", "xxd -r report.hex out.bin"],
+  ["xxd writes without -r", "xxd in.bin out.bin"],
+  ["man -P executes", 'man -P "sh -c id" ls'],
 ];
 
 for (const [label, cmd] of writeForms) {

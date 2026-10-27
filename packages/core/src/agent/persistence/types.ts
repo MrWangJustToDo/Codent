@@ -37,6 +37,24 @@ export const SESSION_LOG_MESSAGE = "message";
 export const AGENT_LOG_DIR = ".agents/logs";
 
 /**
+ * Whether a session id is safe to interpolate into a path.
+ *
+ * Ids are minted as `ses_…`, but several entry points accept one from outside the store — ACP
+ * `session/delete`, `session.resume` over HTTP, `session_search` / `session_read`. Without this
+ * guard, `../../x` resolved to a `<root>/**\/*.session.jsonl` path *inside* the workspace, which
+ * the CoreEnv root containment does not stop (only the suffix constrains the target).
+ *
+ * Both separators are rejected so a Windows host cannot be used to escape either, and `.` / `..`
+ * are refused outright. A bounded id keeps the store's one invariant: its path is a file directly
+ * inside `.agents/sessions/`.
+ */
+export function isSafeSessionId(id: string): boolean {
+  if (id.length === 0 || id === "." || id === "..") return false;
+  if (id.includes("/") || id.includes("\\") || id.includes("\0")) return false;
+  return true;
+}
+
+/**
  * Whether this reader understands a log written with `version`.
  *
  * Only *newer* formats are rejected: their line/state shape may differ, so folding

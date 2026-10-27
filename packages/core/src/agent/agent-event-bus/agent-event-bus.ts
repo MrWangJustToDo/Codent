@@ -136,7 +136,15 @@ export class DefaultAgentEventBus implements AgentEventBus {
     options?: { includeParents?: boolean }
   ): AgentEvent<T>["payload"] | undefined {
     const provider = this.findRetained(type, options?.includeParents === true);
-    return provider ? (provider() as AgentEvent<T>["payload"]) : undefined;
+    if (!provider) return undefined;
+    try {
+      return provider() as AgentEvent<T>["payload"];
+    } catch (error) {
+      // Same containment as the `on()` replay: this is a user-facing read, and one faulty provider
+      // must not turn `subscribe()` (which reconciles retained values) into a failed subscription.
+      this.onInterceptorError?.({ pattern: type, event: type, scopeId: this.node.id, error });
+      return undefined;
+    }
   }
 
   emit<T extends AgentEventType>(type: T, payload: AgentEvent<T>["payload"], meta?: AgentEventMetaInput): void {

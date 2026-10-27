@@ -2,13 +2,12 @@
  * Extract assistant text and task-summary stream helpers from UIMessage snapshots.
  */
 
+import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
+
 import type { UIMessage } from "@tanstack/ai";
 
 /** Minimum chars before streaming summary text to the parent task tool UI. */
 export const SUMMARY_STREAM_MIN_CHARS = 80;
-
-/** Must match {@link BEGIN_SUMMARY_TOOL_NAME} — kept local to avoid stream↔subagent import cycles. */
-const BEGIN_SUMMARY_TOOL_NAME = "begin_summary";
 
 type MessagePart = UIMessage["parts"][number];
 
@@ -16,67 +15,43 @@ function isToolPart(part: MessagePart): boolean {
   return part.type === "tool-call" || part.type === "tool-result";
 }
 
-function textFromPart(part: MessagePart): string {
-  if (part.type === "text") {
-    return part.content?.trim() ?? "";
-  }
-  return "";
-}
-
-function thinkingFromPart(part: MessagePart): string {
-  if (part.type === "thinking") {
-    return part.content?.trim() ?? "";
-  }
-  return "";
-}
-
 /**
- * Raw (untrimmed) text for streaming length tracking.
- * Trim would drop trailing newlines mid-stream and make lengths non-monotonic,
- * which previously cleared the parent task stdout window and flickered the
- * "… N lines hidden above" indicator.
+ * Text/thinking readers in one parameterized pair.
+ *
+ * `raw` exists for streaming length tracking: trim drops trailing newlines mid-stream and makes
+ * lengths non-monotonic, which previously cleared the parent task stdout window and flickered the
+ * "… N lines hidden above" indicator. Four near-identical getters plus two joiners used to encode
+ * that one distinction.
  */
-function textFromPartRaw(part: MessagePart): string {
-  if (part.type === "text") {
-    return part.content ?? "";
+function partText(part: MessagePart, raw: boolean): string {
+  if (part.type !== "text") return "";
+  const content = part.content ?? "";
+  return raw ? content : content.trim();
+}
+
+function partThinking(part: MessagePart, raw: boolean): string {
+  if (part.type !== "thinking") return "";
+  const content = part.content ?? "";
+  return raw ? content : content.trim();
+}
+
+function joinParts(parts: MessagePart[], pick: (part: MessagePart, raw: boolean) => string, raw: boolean): string {
+  const values: string[] = [];
+  for (const part of parts) {
+    const value = pick(part, raw);
+    if (value.length > 0) values.push(value);
   }
-  return "";
+  return values.join("\n");
 }
 
-function thinkingFromPartRaw(part: MessagePart): string {
-  if (part.type === "thinking") {
-    return part.content ?? "";
-  }
-  return "";
-}
+/** Join a segment's text, falling back to its thinking; `raw` keeps lengths monotonic. */
+function joinSegment(parts: MessagePart[], options: { raw?: boolean } = {}): string {
+  const raw = options.raw === true;
+  const text = joinParts(parts, partText, raw);
+  if (text.length > 0) return raw ? text : text.trim();
 
-function joinSegmentText(parts: MessagePart[]): string {
-  const text = parts
-    .map((part) => textFromPart(part))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  if (text) return text;
-
-  return parts
-    .map((part) => thinkingFromPart(part))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-}
-
-/** Join segment text without trim — lengths only grow as StreamProcessor appends. */
-function joinSegmentTextRaw(parts: MessagePart[]): string {
-  const text = parts
-    .map((part) => textFromPartRaw(part))
-    .filter((value) => value.length > 0)
-    .join("\n");
-  if (text.length > 0) return text;
-
-  return parts
-    .map((part) => thinkingFromPartRaw(part))
-    .filter((value) => value.length > 0)
-    .join("\n");
+  const thinking = joinParts(parts, partThinking, raw);
+  return raw ? thinking : thinking.trim();
 }
 
 function splitByToolBoundaries(parts: MessagePart[]): MessagePart[][] {
@@ -102,10 +77,6 @@ function splitByToolBoundaries(parts: MessagePart[]): MessagePart[][] {
 /** Split assistant parts into per-step segments at tool-call / tool-result boundaries. */
 export function splitStepSegments(parts: MessagePart[]): MessagePart[][] {
   return splitByToolBoundaries(parts);
-}
-
-function joinTextParts(parts: MessagePart[]): string {
-  return joinSegmentText(parts);
 }
 
 function segmentHasTool(parts: MessagePart[]): boolean {
@@ -182,15 +153,15 @@ export function extractAssistantText(messages: UIMessage[]): string {
   for (let i = segments.length - 1; i >= 0; i--) {
     const segment = segments[i]!;
     if (segmentHasTool(segment)) continue;
-    const text = joinTextParts(segment);
+    const text = joinSegment(segment);
     if (text) return text;
   }
 
   const lastText = [...scopedParts].reverse().find((part) => part.type === "text");
-  if (lastText) return textFromPart(lastText);
+  if (lastText) return partText(lastText, false);
 
   const lastThinking = [...scopedParts].reverse().find((part) => part.type === "thinking");
-  return lastThinking ? thinkingFromPart(lastThinking) : "";
+  return lastThinking ? partThinking(lastThinking, false) : "";
 }
 
 /**
@@ -213,7 +184,7 @@ export function getSummaryStreamText(
   if (segmentHasTool(lastSegment)) return null;
 
   // Use raw (untrimmed) text so streamed lengths stay monotonic as deltas arrive.
-  const text = joinSegmentTextRaw(lastSegment);
+  const text = joinSegment(lastSegment, { raw: true });
   if (text.length < SUMMARY_STREAM_MIN_CHARS) return null;
 
   return text;

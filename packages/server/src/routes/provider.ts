@@ -17,13 +17,14 @@ import {
 import { Hono } from "hono";
 
 import { REMOTE_PROVIDER_API_KEY } from "../provider-constants.js";
+import { getServerEnv } from "../server-runtime.js";
 
 export { REMOTE_PROVIDER_API_KEY };
 
 /** Read the server's own models.json (`.agents/config/models.json`), if any. */
 async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
   try {
-    return await loadModelsConfigFromFile();
+    return await loadModelsConfigFromFile(undefined, getServerEnv());
   } catch {
     return null;
   }
