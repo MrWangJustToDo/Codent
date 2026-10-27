@@ -99,7 +99,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
   const backgroundCopy = subagentSafe
     ? "Background commands are NOT available to subagents: there is no get_command_output or kill_command " +
       "to poll or stop a job, so run_in_background is denied. "
-    : "Set run_in_background=true for long-lived processes (dev servers, watchers); then poll with get_command_output and stop with kill_command. " +
+    : "Set run_in_background=true for long-lived processes (dev servers, watchers). A finished job is pushed back to you as a notification (an idle session is woken for it), so you never have to poll to wait — end the turn and report what you started; poll on demand with get_command_output when you need intermediate output, and stop it with kill_command. " +
       `get_command_output and kill_command are lazy tools — discover them via ${DISCOVERY_TOOL_NAME} before calling. ` +
       "Background jobs also append their output to a durable log file (cachedOutputPath) that can be read with read_file. ";
 
@@ -143,8 +143,10 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
             ? "Not available to subagents: background commands are denied (there is no get_command_output or " +
                 "kill_command to poll or stop the job)."
             : "When true, start the command in the background and return a jobId immediately. " +
-                "Use get_command_output to read output/status and kill_command to stop it (both lazy — " +
-                `discover them via ${DISCOVERY_TOOL_NAME} first). ` +
+                "A finished job is pushed back to you as a notification (an idle session is woken for it), so " +
+                "don't poll to wait — end the turn and report what you started. " +
+                "Poll on demand with get_command_output for intermediate output, and stop it with kill_command " +
+                `(both lazy — discover them via ${DISCOVERY_TOOL_NAME} first). ` +
                 "The job's output is also appended to a durable log file returned as cachedOutputPath — read it with read_file " +
                 '(no trailing "[exit ...]" footer means the job is still running). ' +
                 "Prefer for long-lived servers (e.g. npm run dev)."
@@ -342,9 +344,15 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
             content:
               `Started background job ${output.jobId} for: ${output.command}\n` +
               `Status: ${output.status ?? "running"}\n` +
+              // The delivery contract, stated where the model reads it right after starting the job:
+              // `background-middleware` pushes the completion, and an idle session is woken for it
+              // (`ManagedAgent.wakeForBackgroundJobs`). The polling route is for intermediate output —
+              // not for waiting, which is what the old text implied.
+              `You do not need to poll to wait for it: its completion is pushed back to you as a notification ` +
+              `(an idle session is woken for it), so end the turn and report what you started. ` +
               `get_command_output and kill_command are lazy tools — call ${DISCOVERY_TOOL_NAME} to get them, ` +
-              `then use get_command_output with jobId="${output.jobId}" to read output/status ` +
-              `and kill_command to stop the job when finished. ` +
+              `then poll on demand with get_command_output for jobId="${output.jobId}" (intermediate output/status) ` +
+              `and use kill_command to stop the job when finished. ` +
               (output.cachedOutputPath
                 ? `Full output is appended to ${output.cachedOutputPath} — read it with read_file ` +
                   `(a missing "[exit ...]" footer means the job is still running). `

@@ -25,7 +25,7 @@ export async function buildDefaultSystemPrompt(platform?: string, env?: CoreEnv)
 
 2. **File Operations** — read_file to examine code; prefer edit_file over write_file for existing files; delete_file when needed. Navigate with tree (structure overview), list_file (one-directory detail), glob (paths by pattern), grep (content search).
 
-3. **Code Execution** — run_command for shell work (build, test, run, etc.); get_command_output / kill_command for long-running background commands started via run_command.
+3. **Code Execution** — run_command for shell work (build, test, run, etc.). For a long job pass run_in_background: get a jobId back immediately and the completion is pushed to you when it ends (an idle session is woken for it), so end the turn instead of polling to wait; get_command_output / kill_command poll on demand and stop it.
 
 4. **Research** — task to spawn a read-only subagent for broad exploration; websearch when the URL is unknown or you need current info; webfetch for a known URL.
 

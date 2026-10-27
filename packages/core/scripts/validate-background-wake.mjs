@@ -28,7 +28,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { clearCoreEnv, registerCoreEnv } from "../dist/dev.mjs";
+import {
+  buildDefaultSystemPrompt,
+  clearCoreEnv,
+  createGetCommandOutputTool,
+  createRunCommandTool,
+  getToolMetadata,
+  registerCoreEnv,
+} from "../dist/dev.mjs";
 import { AgentManager } from "../dist/index.mjs";
 
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
@@ -277,6 +284,62 @@ function makeCapturingAdapter() {
   );
   assert.equal(e2e.getStatus(), "completed", "the wake turn ends like any other turn");
   manager.destroyAgent(e2e.id);
+}
+
+// ============================================================================
+// 9. What the model is TOLD: the wake is only useful if the tools stop implying
+//    "poll until it finishes". The old copy named polling as the way to read a job's
+//    result, so a model sat in a poll loop on a completion that would be pushed.
+// ============================================================================
+
+{
+  const run = createRunCommandTool();
+  const get = createGetCommandOutputTool();
+
+  // The start result is where the model is standing when it decides to wait or end its turn.
+  const startText = await getToolMetadata(run)?.toModelOutput({
+    toolCallId: "tc-copy",
+    input: { command: "npm run build", run_in_background: true },
+    output: {
+      command: "npm run build",
+      stdout: "",
+      stderr: "",
+      exitCode: -1,
+      durationMs: 0,
+      success: true,
+      jobId: "job_copy",
+      status: "running",
+      runInBackground: true,
+      cachedOutputPath: null,
+    },
+  });
+  const startTextBody = (Array.isArray(startText) ? startText : [startText])
+    .map((part) => part?.content ?? "")
+    .join("\n");
+  assert.match(startTextBody, /pushed back to you/, "the start result states the push contract");
+  assert.match(startTextBody, /woken for it/, "…and that an idle session is woken, not left waiting");
+  assert.match(startTextBody, /end the turn/, "…so the model ends the turn instead of waiting");
+  assert.match(startTextBody, /poll on demand/, "…while polling stays available for intermediate output");
+
+  // The same contract on the two surfaces a model can reach without a start result.
+  for (const [name, text] of [
+    ["run_command description", run.description],
+    ["run_command run_in_background", run.inputSchema.shape.run_in_background.description],
+    ["get_command_output description", get.description],
+  ]) {
+    assert.match(text, /push(?:ed)? back to you/, `${name}: names the push as the delivery path`);
+    assert.match(text, /poll on demand|do not need to poll to wait/i, `${name}: polling survives as on-demand`);
+  }
+  assert.ok(
+    !/then poll with get_command_output/.test(run.description),
+    "run_command no longer presents polling as the way to wait for a job"
+  );
+
+  // The default system prompt is the other place the model learns this, and its length cap is
+  // asserted in `validate:default-prompt` — here only the sentence, so the two cannot disagree.
+  const prompt = await buildDefaultSystemPrompt("test-platform");
+  assert.match(prompt, /completion is pushed to you/, "the default prompt states the push contract");
+  assert.match(prompt, /instead of polling to wait/, "…and tells the model not to wait by polling");
 }
 
 // ============================================================================

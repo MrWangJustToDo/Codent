@@ -16,6 +16,10 @@ export const createGetCommandOutputTool = ({ context }: { context?: AgentToolCon
     description:
       "Read incremental stdout/stderr and status for a background job started with run_command(run_in_background=true). " +
       "Each call returns output since the previous poll for that jobId. " +
+      // Polling is for intermediate output, not for waiting: the completion is pushed by
+      // `background-middleware` and an idle session is woken for it. Saying only "each call
+      // returns the delta" invited a model to sit here re-polling a job it would be told about.
+      "Use it on demand; you do not need to poll to wait for the job to finish — its completion is pushed back to you. " +
       "The job's full log is returned as cachedOutputPath — read it with read_file for output that already scrolled past.",
     inputSchema: z.object({
       jobId: z.string().describe("The jobId returned by a background run_command."),
