@@ -5,14 +5,9 @@
 import { StreamProcessor } from "@tanstack/ai";
 
 import { generateId } from "../../utils/generate-id.js";
-import { repairMessagesSnapshotChunk } from "../media/repair-stringified-multimodal.js";
 import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "../stream/apply-tool-denial-reason.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
-import {
-  resolveTaskRunPhase,
-  type TaskSummaryPhase,
-  type TaskSummaryStreamState,
-} from "../stream/extract-assistant-text.js";
+import { type TaskSummaryStreamState } from "../stream/extract-assistant-text.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 import { throwOnRunError } from "../stream/stream-errors.js";
 import { shouldSuppressMessagesSnapshot } from "../stream/suppress-messages-snapshot.js";
@@ -183,17 +178,6 @@ export class AgentUIChannel {
   /** Monotonic revision bumped on every messages change (wire projection cache). */
   private revision = 0;
 
-  /**
-   * Summary-stream sub-state for one task row (`tools` while the child explores, `summary` once
-   * `begin_summary`/the progress fallback started its report). This is NOT the task's terminal
-   * phase — that is `readTaskRunPhase` (`agent/subagent/task-run-state.ts`), which keeps the
-   * one-way `running → summary` transition after the stream ends. Hosts that need the outcome
-   * read the phase machine, not this.
-   */
-  getTaskRunPhase(): TaskSummaryPhase {
-    return resolveTaskRunPhase(this.getMessages(), this.summaryStreamState);
-  }
-
   /** Channel generation for cheap wire-projection fingerprints. */
   getRevision(): number {
     return this.revision;
@@ -298,32 +282,15 @@ export class AgentUIChannel {
    * extra top-level field on the part never reaches the model wire.
    */
   attachToolDisplay(toolCallId: string, display: ToolDisplayPayload): void {
-    type DisplayAwarePart = { type?: string; id?: string; display?: ToolDisplayPayload };
-
-    let changed = false;
-    const next = this.getMessages().map((message) => {
-      const parts = (message as { parts?: DisplayAwarePart[] }).parts;
-      if (!parts?.length) return message;
-
-      let touched = false;
-      const patched = parts.map((part) => {
-        if (part?.type !== "tool-call" || part.id !== toolCallId) return part;
-        touched = true;
-        return { ...part, display };
-      });
-      if (!touched) return message;
-
-      changed = true;
-      return { ...message, parts: patched } as typeof message;
-    });
-
-    // Patch the processor directly, NOT the channel-level `setMessages`: that one also
-    // refreshes the run-boundary snapshot (`historicalMessageIds`), and doing so mid-run
-    // makes `shouldSuppressStaleTextChunk` drop every remaining TEXT delta of the
-    // assistant message that is still streaming — the tool call is normally mid-message,
-    // so the model's text after the tool would be lost. `addToolApprovalResponse`
-    // patches the processor for the same reason.
-    if (changed) this.processor.setMessages(next);
+    // Copy-on-write patch of the processor's array ONLY (not channel-level `setMessages`): that one
+    // also refreshes the run-boundary snapshot (`historicalMessageIds`), and doing so mid-run makes
+    // `shouldSuppressStaleTextChunk` drop every remaining TEXT delta of the assistant message that
+    // is still streaming — the tool call is normally mid-message, so the model's text after the
+    // tool would be lost. `addToolApprovalResponse` patches the processor for the same reason.
+    const next = patchToolCallParts(this.getMessages(), (part) =>
+      part.id === toolCallId ? { ...part, display } : undefined
+    );
+    if (next) this.processor.setMessages(next);
   }
 
   subscribeApprovalRequests(listener: ApprovalListener): () => void {
@@ -446,10 +413,10 @@ export class AgentUIChannel {
     if (shouldSuppressMessagesSnapshot(chunk)) {
       return;
     }
-    // Upstream >= 0.53.0 fixed the stringified-ContentPart snapshot corruption
-    // (collectUserContent in ag-ui-wire.js); keep the repair as a defensive
-    // passthrough for legacy snapshots if suppression is ever relaxed.
-    const normalized = normalizeToolCallName(repairMessagesSnapshotChunk(chunk));
+    // No snapshot repair here: the branch above has already returned for MESSAGES_SNAPSHOT, and
+    // `repairMessagesSnapshotChunk` is a no-op for every other chunk type. Legacy stringified
+    // snapshots are repaired on the restore path (`repairStringifiedMultimodalUIMessages`).
+    const normalized = normalizeToolCallName(chunk);
     if (shouldSuppressReplayedToolChunk(this.getMessages(), normalized)) {
       return;
     }
@@ -637,46 +604,69 @@ function attachMissingToolDisplays(
   messages: TanStackUIMessage[],
   resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
 ): TanStackUIMessage[] | null {
-  type ToolCallPartLike = {
-    type?: string;
-    id?: string;
-    name?: string;
-    state?: string;
-    output?: unknown;
-    arguments?: unknown;
-    display?: ToolDisplayPayload;
-  };
   const displayableStates = new Set(["complete", "output-available", "output-error"]);
 
+  return patchToolCallParts(messages, (part) => {
+    if (!part.name || part.display) return undefined;
+    if (!part.state || !displayableStates.has(part.state) || part.output === undefined) return undefined;
+
+    let input: unknown;
+    if (typeof part.arguments === "string" && part.arguments) {
+      try {
+        input = JSON.parse(part.arguments);
+      } catch {
+        input = undefined;
+      }
+    }
+
+    const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
+    return display ? { ...part, display } : undefined;
+  });
+}
+
+/** Structural view of a tool-call part for the display patchers (UI parts carry extra fields). */
+interface PatchableToolCallPart {
+  type?: string;
+  id?: string;
+  name?: string;
+  state?: string;
+  output?: unknown;
+  arguments?: unknown;
+  display?: ToolDisplayPayload;
+}
+
+interface PatchableMessage {
+  parts?: PatchableToolCallPart[];
+}
+
+/**
+ * Copy-on-write patch of tool-call parts.
+ *
+ * Returns a new array when at least one part was replaced, `null` otherwise — the two callers
+ * differ only in the predicate/replacement (per-call attach vs finalize-time backfill), and both
+ * used to carry their own copy of the map/touched/changed skeleton.
+ */
+function patchToolCallParts<M extends PatchableMessage>(
+  messages: M[],
+  replace: (part: PatchableToolCallPart) => PatchableToolCallPart | undefined
+): M[] | null {
   let changed = false;
   const next = messages.map((message) => {
-    const parts = (message as { parts?: ToolCallPartLike[] }).parts;
+    const parts = message.parts;
     if (!parts?.length) return message;
 
     let touched = false;
     const patched = parts.map((part) => {
-      if (part?.type !== "tool-call" || !part.name || part.display) return part;
-      if (!part.state || !displayableStates.has(part.state) || part.output === undefined) return part;
-
-      let input: unknown;
-      if (typeof part.arguments === "string" && part.arguments) {
-        try {
-          input = JSON.parse(part.arguments);
-        } catch {
-          input = undefined;
-        }
-      }
-
-      const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
-      if (!display) return part;
-
+      if (part?.type !== "tool-call") return part;
+      const replacement = replace(part);
+      if (!replacement || replacement === part) return part;
       touched = true;
-      return { ...part, display };
+      return replacement;
     });
     if (!touched) return message;
 
     changed = true;
-    return { ...message, parts: patched } as typeof message;
+    return { ...message, parts: patched } as M;
   });
 
   return changed ? next : null;

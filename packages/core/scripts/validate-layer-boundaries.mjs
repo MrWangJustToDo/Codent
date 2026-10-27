@@ -215,8 +215,8 @@ const ALLOWED_EDGES = {
   "provider → models": {
     mode: "allow",
     reason:
-      "resolveModelConnection/resolveModelConfig + models.dev metadata types, and the model-selection rule (whose choice wins) that the remote merge applies",
-    onlyTargets: ["config/model-config", "config/model-selection", "types"],
+      "resolveModelConnection/resolveModelConfig + models.dev metadata types, the model-selection rule (whose choice wins) that the remote merge applies, and the public /api/provider/info payload shape (ModelsConfig) for the ProviderInfo alias",
+    onlyTargets: ["config/model-config", "config/model-selection", "config/models-config", "types"],
   },
   "provider → env": { mode: "allow", reason: "CoreEnv.fetch for models.dev lookup" },
   "provider → utils": { mode: "allow", reason: "ids" },

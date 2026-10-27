@@ -35,8 +35,6 @@ export interface ManagedSpanResult {
   aborted: boolean;
   /** A stream failure normalized for the host. */
   errorMessage?: string;
-  /** Set when the run produced no model output (root-only guard). */
-  emptyStream?: boolean;
 }
 
 export async function runManagedSpan(
@@ -82,7 +80,6 @@ export async function runManagedSpan(
           messages: result.messages,
           aborted: false,
           errorMessage: EMPTY_MODEL_STREAM_MESSAGE,
-          emptyStream: true,
           channel: result.channel,
         };
       }

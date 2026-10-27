@@ -120,57 +120,46 @@ export class SessionLifecycleService {
     this.host.beginStateBatch?.();
     try {
       this.stop(reason);
-      this.resetTransientState(reason);
+      this.resetTransientState(reason, "full");
     } finally {
       this.host.endStateBatch?.();
     }
   }
 
   /**
-   * Full transient reset for `reset()` / a new session: clear both the persisted-looking
-   * parts (mode, approvals, usage, todos) and the volatile parts. Resume does NOT use this
-   * before a successful load; it uses {@link resetResumeEphemeralState} after restore so a
-   * failed target cannot partially reset the current session.
-   */
-  private resetTransientState(reason: SessionLifecycleReason): void {
-    this.host.mode.reset();
-    this.host.approvals.clear();
-    this.host.run.resetRunState();
-    this.host.run.resetTurnLifecycle();
-    this.host.getCompaction().resetReactiveCompactRetries();
-    this.host.statusController.resetToIdle();
-    this.host.clearErrorAndRetry();
-    this.host.clearPendingApprovals();
-    this.host.memory.resetState();
-    this.host.usage.reset();
-    this.host.resetMediaHydrationMisses();
-    this.host.getTodoManager()?.reset();
-    this.host.getToolCompactCache?.().clear();
-    this.host.streamHub.clearAll();
-    this.host.resetTurnContext();
-    this.host.resetSessionSyncTracker();
-    this.host.resetIterationProgress();
-    this.host.resetRunOutcome?.();
-    this.host.resetCommandJobs(reason);
-  }
-
-  /**
-   * Clear only state that restore does not rehydrate.
+   * Clear transient session state, in one order for both scopes.
    *
-   * Resume must not run the full `resetTransientState` before a successful load: a
-   * failed target would leave the current session's mode/approvals/usage/todos (and
-   * error/retry) reset even though the session did not switch. Restore owns the
-   * persisted pieces; this clears the volatile pieces after the new data has landed.
+   * `full` is the `reset()` / new-session path: it also clears the persisted-looking parts
+   * (mode, approvals, usage, todos). `resume` is the after-restore path, which must NOT clear
+   * those before a successful load — a failed target would otherwise reset the current session's
+   * mode/approvals/usage/todos even though the session did not switch.
+   *
+   * The two scopes used to be two hand-maintained lists of the same calls; every new transient
+   * field had to be added to both. One ordered list with scoped calls makes the invariant
+   * structural (the shared order below is identical in both paths).
    */
-  private resetResumeEphemeralState(reason: SessionLifecycleReason): void {
+  private resetTransientState(reason: SessionLifecycleReason, scope: "full" | "resume"): void {
+    const full = scope === "full";
+    if (full) {
+      this.host.mode.reset();
+      this.host.approvals.clear();
+    }
     this.host.run.resetRunState();
     this.host.run.resetTurnLifecycle();
     this.host.getCompaction().resetReactiveCompactRetries();
     this.host.statusController.resetToIdle();
     this.host.clearErrorAndRetry();
+    if (full) this.host.clearPendingApprovals();
     this.host.memory.resetState();
+    if (full) {
+      this.host.usage.reset();
+      this.host.resetMediaHydrationMisses();
+      this.host.getTodoManager()?.reset();
+      this.host.getToolCompactCache?.().clear();
+    }
     this.host.streamHub.clearAll();
     this.host.resetTurnContext();
+    if (full) this.host.resetSessionSyncTracker();
     this.host.resetIterationProgress();
     this.host.resetRunOutcome?.();
     this.host.resetCommandJobs(reason);
@@ -233,7 +222,7 @@ export class SessionLifecycleService {
       this.host.setSessionData(next);
       adopted = true;
       this.host.getChatController()?.clearTranscript();
-      this.resetTransientState(reason);
+      this.resetTransientState(reason, "full");
       this.host.refreshSubagents?.();
       if (current?.id) this.host.releaseSessionOwnership(current.id);
       this.host.emitSessionNew(next.id, reason);
@@ -285,7 +274,7 @@ export class SessionLifecycleService {
       const session = await this.host.sessionPersistence.restore(sessionId);
       // Clear volatile state only after the target load succeeded. This avoids a
       // partial reset of the current session when the target is missing/unreadable.
-      this.resetResumeEphemeralState("session-resume");
+      this.resetTransientState("session-resume", "resume");
       // The reset makes the status idle; re-apply the restored interaction state so a
       // session that was waiting on approval/ask_user does not come back as idle.
       this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);

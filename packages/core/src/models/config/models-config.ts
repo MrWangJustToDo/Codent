@@ -21,7 +21,12 @@ import { z } from "zod";
 import { getEnv, resolveCoreEnv } from "../../env";
 import { registerModelProvider } from "../../provider/model-provider-registry.js";
 import { createDirectModelProvider } from "../../provider/model-provider.js";
-import { createRemoteProvider, REMOTE_PROVIDER_API_KEY } from "../../provider/remote-model-provider.js";
+import {
+  createRemoteProvider,
+  fetchProviderInfo,
+  REMOTE_PROVIDER_API_KEY,
+  serverAdvertisedModels,
+} from "../../provider/remote-model-provider.js";
 import { writeFileAtomic } from "../../utils/atomic-write.js";
 
 import { selectModel } from "./model-selection.js";
@@ -182,16 +187,6 @@ export interface LoadedModelsState {
   active: ModelsConfigActive;
 }
 
-/** Remote `/api/provider/info` shape returned by the server. */
-export interface ProviderInfo {
-  mode: "remote";
-  style: ModelStyle;
-  model: string;
-  basePath: string;
-  /** Server's own models.json (unified shape) — drives the selectable list. */
-  config?: ModelsConfig;
-}
-
 // ============================================================================
 // Parse / validate
 // ============================================================================
@@ -338,19 +333,6 @@ export async function saveModelsConfig(config: ModelsConfig, rootPath?: string, 
 // Remote provider info (server mode)
 // ============================================================================
 
-async function fetchProviderInfo(serverUrl: string): Promise<ProviderInfo> {
-  const baseUrl = serverUrl.replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/api/provider/info`);
-  if (!res.ok) {
-    throw new Error(`Remote provider unavailable at ${baseUrl}/api/provider/info (HTTP ${res.status}).`);
-  }
-  const info = (await res.json()) as ProviderInfo;
-  if (info.mode !== "remote" || !info.basePath || !info.style) {
-    throw new Error(`Invalid provider info from ${baseUrl}/api/provider/info`);
-  }
-  return info;
-}
-
 export async function resolveModelsConfigFromProvider(serverUrl: string): Promise<ModelsConfig> {
   const info = await fetchProviderInfo(serverUrl);
   // A provider source ALWAYS routes through the server proxy: keys stay on the
@@ -427,25 +409,12 @@ export async function loadModelEntries(config: ModelsConfig): Promise<LoadedMode
       });
       continue;
     }
-    // remote-provider: ask the server for its connection + selectable list.
+    // remote-provider: ask the server for its connection + selectable list. The allowlist is the
+    // shared `serverAdvertisedModels` — its ids ∪ its recorded `active.model` ∪ the served model —
+    // so this list and bootstrap's `selectModel` cannot disagree about what the proxy accepts.
     const info = await fetchProviderInfo(entry.url);
     const baseUrl = entry.url.replace(/\/+$/, "");
-    // Mirror the server's allowlist (`collectAllowedModels` in the provider proxy): its
-    // models.json ids, its own recorded selection, PLUS the model it serves. The served
-    // model must be listed even when models.json names other ids — it is what every
-    // proxied request carries, so leaving it out advertised a list (and, via
-    // `entry.models[0]`, a "current" model) the client never sends. The old `??` fallback
-    // could not cover that case anyway: an empty `flatMap` is not nullish, so a chained
-    // `remote-provider`-only models.json produced an empty list instead of `[info.model]`.
-    const remoteModels = [
-      ...new Set([
-        ...(info.config?.models
-          ?.filter((e): e is DirectModelsConfigEntry => e.type === "direct")
-          .flatMap((e) => e.models ?? []) ?? []),
-        ...(info.config?.active?.model ? [info.config.active.model] : []),
-        ...(info.model ? [info.model] : []),
-      ]),
-    ];
+    const remoteModels = [...serverAdvertisedModels(info)];
     entries.push({
       type: "remote",
       style: info.style,

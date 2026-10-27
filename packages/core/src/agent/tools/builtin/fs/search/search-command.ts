@@ -174,3 +174,29 @@ export async function resolveSearchPath(coreEnv: CoreEnv, inputPath: string | un
 
   throw new FileError("permission_denied", `Path traversal blocked: "${raw}" resolves outside workspace root`, raw);
 }
+
+/**
+ * Model-facing body for the filesystem search tools: cancel notice, pagination header, rows.
+ *
+ * `glob` / `grep` / `list_file` render the same envelope, and this text is what the model reads —
+ * one definition keeps a cancelled-search notice (and the header wording) from drifting between
+ * them. `body` overrides the rows for grep's match/files summary; the row array is still used for
+ * the cancelled case.
+ */
+export function formatSearchModelOutput(input: {
+  cancelled?: boolean;
+  rows: readonly string[];
+  offset: number;
+  limit: number;
+  body?: string;
+}): string {
+  if (input.cancelled) {
+    return input.rows.length > 0
+      ? `[Search cancelled by user — this result is incomplete.]\n${input.rows.join("\n")}`
+      : "[Search cancelled by user.]";
+  }
+  return (
+    `offset(current pagination): ${input.offset}; limit(Maximum number of items to return): ${input.limit}\n` +
+    (input.body ?? input.rows.join("\n"))
+  );
+}

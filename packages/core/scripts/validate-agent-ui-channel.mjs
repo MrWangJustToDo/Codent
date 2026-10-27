@@ -422,7 +422,6 @@ await retryChannel.consumeRun({
     };
     // Simulate the retry-time UI reset (as runStreamWithRecovery does before a restart retry).
     retryChannel.resetRetryUiState();
-    assert.equal(retryChannel.getTaskRunPhase(), "tools");
     // The history is the wire: what the dead attempt already did must survive the reset, or the
     // retry re-explores from the prompt. (Subagent-only history loss is the bug this guards.)
     assert.equal(retryChannel.getMessages()[0].role, "user");
@@ -482,7 +481,6 @@ assert.ok(retrySnap);
 assert.equal(retrySnap.status, "ended");
 assert.equal(retrySnap.pendingLine, "C".repeat(80));
 // consumeRun finally ends the hub and unlocks phase; live phase is only meaningful mid-run
-assert.equal(retryChannel.getTaskRunPhase(), "tools");
 unsubRetry();
 
 // resetRetryUiState drops NO messages — not even assistant rows. The channel history is the wire
@@ -539,7 +537,6 @@ failChannel.setMessages([
 failChannel.failRun();
 assert.equal(failChannel.getMessages().length, 1, "failRun keeps the seeded user prompt");
 assert.equal(failChannel.getMessages()[0].id, "user-fail");
-assert.equal(failChannel.getTaskRunPhase(), "tools");
 
 // failRun records the failure message after the kept prompt
 const failErrorChannel = new AgentUIChannel({
@@ -558,7 +555,6 @@ assert.equal(failErrorMessages.length, 2, "failRun appends an error message afte
 assert.equal(failErrorMessages[0].id, "user-fail-error");
 assert.equal(failErrorMessages[1].role, "assistant");
 assert.match(failErrorMessages[1].parts[0].content, /boom/);
-assert.equal(failErrorChannel.getTaskRunPhase(), "tools");
 
 // ----------------------------------------------------------------------------
 // A session generation invalidates a run that started before clearMessages().

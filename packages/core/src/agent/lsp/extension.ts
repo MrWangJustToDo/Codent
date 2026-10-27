@@ -310,37 +310,45 @@ async function activateLsp(
   }
 
   // ---- LspManager ----
-  const rootDir = ctx.cwd;
-  const manager = new LspManager(
-    rootDir,
-    (config) => {
-      if (!createConnection) throw new Error("Current environment does not support LSP (no createLspConnection)");
-      return createConnection(config);
-    },
-    pathHelpers,
-    fsHelpers,
-    undefined,
-    {
-      // Only terminal states are surfaced (success / failure); the transient
-      // starting / restarting stages stay silent so the input feedback is not
-      // serialized into an error→loading→success flicker.
-      onServerReady: (languageId) => {
-        notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "ready");
-        // A write that landed while a server was starting had its sync deferred — send it now so its
-        // diagnostics reach the next tool call. All of them: the server that just became ready may serve
-        // several language ids, and the deferred write may belong to one of the others.
-        void fileSync.flushAllPendingSync().catch(() => {});
+  // One factory for the initial manager and the `session:start` swap. The connection guard and
+  // the three lifecycle callbacks are identical; a second copy is how the two managers drift
+  // (one reporting deferred syncs, the other not). The holder is assigned immediately after the
+  // manager exists, so a callback that somehow fires during construction can never hit a TDZ.
+  const syncRef: { current: FileSync | null } = { current: null };
+  const createManager = (root: string): LspManager =>
+    new LspManager(
+      root,
+      (config) => {
+        if (!createConnection) throw new Error("Current environment does not support LSP (no createLspConnection)");
+        return createConnection(config);
       },
-      onServerError: (languageId, error, kind) =>
-        notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "failed", error, kind),
-      onServerCrash: (languageId) => notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "crashed"),
-    },
-    getEnvVar,
-    env.commandExists
-  );
+      pathHelpers,
+      fsHelpers,
+      undefined,
+      {
+        // Only terminal states are surfaced (success / failure); the transient
+        // starting / restarting stages stay silent so the input feedback is not
+        // serialized into an error→loading→success flicker.
+        onServerReady: (languageId) => {
+          notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "ready");
+          // A write that landed while a server was starting had its sync deferred — send it now
+          // so its diagnostics reach the next tool call. All of them: the server that just became
+          // ready may serve several language ids, and the deferred write may belong to another.
+          void syncRef.current?.flushAllPendingSync().catch(() => {});
+        },
+        onServerError: (languageId, error, kind) =>
+          notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "failed", error, kind),
+        onServerCrash: (languageId) => notifyServerLifecycle(ctx.ui, ctx.logger, languageId, "crashed"),
+      },
+      getEnvVar,
+      env.commandExists
+    );
+
+  const manager = createManager(ctx.cwd);
   onManager?.(manager);
 
   const fileSync = new FileSync(manager, fsHelpers);
+  syncRef.current = fileSync;
 
   // ---- Project config (.lsp.json) ----
   let projectConfig: ProjectLspConfig | null = await loadProjectConfig(ctx, manager);
@@ -379,28 +387,7 @@ async function activateLsp(
       .shutdownAll()
       .catch(() => {});
 
-    const newManager = new LspManager(
-      newRoot,
-      (config) => {
-        if (!createConnection) throw new Error("Current environment does not support LSP");
-        return createConnection(config);
-      },
-      pathHelpers,
-      fsHelpers,
-      undefined,
-      {
-        onServerReady: (l) => {
-          notifyServerLifecycle(ctx.ui, ctx.logger, l, "ready");
-          // Deferred syncs belong to whichever manager is active now — and to every language id the
-          // server that just came up serves.
-          void fileSync.flushAllPendingSync().catch(() => {});
-        },
-        onServerError: (l, error, kind) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "failed", error, kind),
-        onServerCrash: (l) => notifyServerLifecycle(ctx.ui, ctx.logger, l, "crashed"),
-      },
-      getEnvVar,
-      env.commandExists
-    );
+    const newManager = createManager(newRoot);
     activeManager = newManager;
     onManager?.(newManager);
     fileSync.setManager(newManager);
@@ -435,9 +422,9 @@ async function activateLsp(
     else advertisedLazy.push(name);
   };
   pushAdvertised(BUILTIN_TOOL_NAMES.lspDiagnostics, lspRuntimeAvailable || tsFallbackAvailable);
-  pushAdvertised("lsp_hover", lspRuntimeAvailable || tsFallbackAvailable);
-  pushAdvertised("lsp_definition", lspRuntimeAvailable || tsFallbackAvailable);
-  pushAdvertised("lsp_completions", lspRuntimeAvailable);
+  pushAdvertised(BUILTIN_TOOL_NAMES.lspHover, lspRuntimeAvailable || tsFallbackAvailable);
+  pushAdvertised(BUILTIN_TOOL_NAMES.lspDefinition, lspRuntimeAvailable || tsFallbackAvailable);
+  pushAdvertised(BUILTIN_TOOL_NAMES.lspCompletions, lspRuntimeAvailable);
 
   if (advertisedEager.length > 0 || advertisedLazy.length > 0) {
     const scope = lspRuntimeAvailable ? "LSP" : "Code (tree-sitter fallback)";

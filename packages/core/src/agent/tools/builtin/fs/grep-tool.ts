@@ -13,6 +13,7 @@ import { canExecArgs, execArgs } from "../shell/exec-args.js";
 import { expandBraceGlobs, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
 import {
   activeExcludeDirs,
+  formatSearchModelOutput,
   isCommandNotFound,
   quoteForShell,
   resolveSearchPath,
@@ -720,19 +721,19 @@ export const createGrepTool = () => {
     // pagination/truncation/cache metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GrepOutput }) {
       if (isProjectedModelContent(output)) return output;
-      const lines = output.matches?.map?.((m) => `${m.file}:${m.lineNumber}: ${m.content}`);
+      const lines = output.matches?.map?.((m) => `${m.file}:${m.lineNumber}: ${m.content}`) ?? [];
       // A stopped search says so. Without this the model reads the (necessarily partial) matches
       // below as the complete answer to its query.
       if (output.cancelled === true) {
         return [
           {
             type: "text" as const,
-            // The repo's wording for a stopped search (`websearch`) when there is nothing to show;
-            // "incomplete" only qualifies a result that actually carries matches.
-            content:
-              lines && lines.length > 0
-                ? `[Search cancelled by user — this result is incomplete.]\n${lines.join("\n")}`
-                : "[Search cancelled by user.]",
+            content: formatSearchModelOutput({
+              cancelled: true,
+              rows: lines,
+              offset: output.offset,
+              limit: output.limit,
+            }),
           },
         ];
       }
@@ -745,13 +746,16 @@ export const createGrepTool = () => {
         ? output.content
         : isFilesMode
           ? `${actualMatches.length} files:\n${actualMatches.map((m) => m.file).join("\n")}`
-          : `${actualMatches.length} matches:\n${lines?.join("\n")}`;
+          : `${actualMatches.length} matches:\n${lines.join("\n")}`;
       return [
         {
           type: "text" as const,
-          content:
-            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}\n` +
+          content: formatSearchModelOutput({
+            rows: lines,
+            offset: output.offset,
+            limit: output.limit,
             body,
+          }),
         },
       ];
     },

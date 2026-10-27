@@ -67,14 +67,7 @@ export class ApprovalDecisionCoordinator {
     const pending = collectPendingApprovals(this.deps.getMessages());
     if (pending.length === 0) return;
 
-    for (const approval of pending) {
-      this.recordDecision({
-        approvalId: approval.approvalId,
-        toolCallId: approval.toolCallId,
-        toolName: approval.toolName,
-        approved: true,
-      });
-    }
+    this.approveAll(pending);
     this.settle();
     return this.deps.enqueueRun();
   }
@@ -105,23 +98,26 @@ export class ApprovalDecisionCoordinator {
   autoApprovePending(): void {
     if (!this.deps.shouldAutoApprove()) return;
 
-    let didApprove = false;
-    for (const part of this.deps.getMessages().flatMap((message) => message.parts)) {
-      if (part.type !== "tool-call") continue;
-      const toolCall = part as ToolCallPart;
-      if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
-      const approvalId = toolCall.approval.id;
-      if (!approvalId) continue;
+    // Same set and same decision as `approvePendingApprovals`; only the pump differs. The old
+    // hand-rolled part scan repeated `isPendingToolApprovalPart` and could drift from the
+    // collection the retained interaction channel uses (it also visited non-assistant messages).
+    const pending = collectPendingApprovals(this.deps.getMessages());
+    if (pending.length === 0) return;
+
+    this.approveAll(pending);
+    this.settle();
+  }
+
+  /** Record approval for every pending interaction, in the order the collector returned them. */
+  private approveAll(pending: ReturnType<typeof collectPendingApprovals>): void {
+    for (const approval of pending) {
       this.recordDecision({
-        approvalId,
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
+        approvalId: approval.approvalId,
+        toolCallId: approval.toolCallId,
+        toolName: approval.toolName,
         approved: true,
       });
-      didApprove = true;
     }
-
-    if (didApprove) this.settle();
   }
 
   /**

@@ -288,6 +288,32 @@ assert.deepEqual(chained.entries[0].models, [SERVED_MODEL], "an id-less config m
   clearModelProvider();
 }
 
+// A server's own recorded selection is part of the allowlist even when no entry lists it and it is
+// not the served model. `createRemoteProvider` and `loadModels` used to read two allowlists, and
+// the provider's omitted `active.model` — so `/models` offered an id bootstrap then refused.
+{
+  const url = "http://active-only.test:3100";
+  serveProvider(url, {
+    models: [
+      {
+        type: "direct",
+        style: "openai",
+        baseURL: "https://upstream.example/v1",
+        apiKey: "k",
+        models: ["listed-model"],
+      },
+    ],
+    active: { entryIndex: 0, model: "active-only-model" },
+  });
+
+  const provider = await createRemoteProvider(url);
+  const connection = await provider.getConnection();
+  assert.ok(connection.models.includes("active-only-model"), "active.model is in the provider allowlist");
+
+  const loaded = await loadModels({ kind: "provider", serverUrl: url });
+  assert.ok(loaded.entries[0].models.includes("active-only-model"), "and in the /models list");
+}
+
 globalThis.fetch = realFetch;
 
 console.log("provider-model-list validation passed");

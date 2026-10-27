@@ -1,21 +1,16 @@
 /**
- * Validates subagent summary extraction and begin_summary-gated streaming.
+ * Validates subagent summary extraction (`extractAssistantText`): only text after
+ * `begin_summary`, the last text-only step, and the thinking fallback.
+ *
+ * Streaming gating is not tested here: it lives in `AgentUIChannel.appendSummaryDelta`
+ * (`summaryPhaseUnlocked`) and is exercised by `validate:agent-ui-channel`.
  *
  * Run: pnpm --filter @codent/core run validate:extract-assistant-text
  */
 
 import assert from "node:assert/strict";
 
-import {
-  BEGIN_SUMMARY_TOOL_NAME,
-  extractAssistantText,
-  getSummaryStreamText,
-  resolveTaskRunPhase,
-  shouldStreamTaskSummary,
-} from "../dist/dev.mjs";
-
-const unlocked = { summaryPhaseUnlocked: true };
-const locked = { summaryPhaseUnlocked: false };
+import { BEGIN_SUMMARY_TOOL_NAME, extractAssistantText } from "../dist/dev.mjs";
 
 const summaryText = "## Final Summary\n\nThis is the comprehensive project summary the parent should see.";
 
@@ -44,53 +39,6 @@ const messages = [
 const summary = extractAssistantText(messages);
 assert.ok(summary.includes("## Final Summary"));
 assert.ok(!summary.includes("I'll start by exploring"));
-
-assert.equal(getSummaryStreamText(messages[0].parts, locked), null);
-assert.equal(getSummaryStreamText(messages[0].parts, unlocked), summary);
-assert.equal(resolveTaskRunPhase(messages, unlocked), "summary");
-assert.equal(resolveTaskRunPhase(messages, locked), "tools");
-
-const currentTurnNarration = [
-  {
-    type: "text",
-    content:
-      "We'll explore the monorepo structure first. We'll delve into core files to understand the agent loop and tool system in detail across packages.",
-  },
-];
-
-assert.equal(getSummaryStreamText(currentTurnNarration, locked), null);
-assert.equal(getSummaryStreamText([{ type: "text", content: "Planning next step." }], unlocked), null);
-assert.equal(resolveTaskRunPhase([{ id: "a1", role: "assistant", parts: currentTurnNarration }], locked), "tools");
-assert.equal(resolveTaskRunPhase([{ id: "a1", role: "assistant", parts: currentTurnNarration }], unlocked), "summary");
-
-const currentTurnSummary = [{ type: "text", content: summaryText }];
-
-assert.equal(getSummaryStreamText(currentTurnSummary, locked), null);
-assert.equal(getSummaryStreamText(currentTurnSummary, unlocked), summaryText);
-assert.equal(shouldStreamTaskSummary(currentTurnSummary, unlocked), true);
-
-const toolStillRunning = [{ type: "tool-call", id: "tc3", name: "glob", arguments: "{}", state: "input-complete" }];
-
-assert.equal(getSummaryStreamText(toolStillRunning, unlocked), null);
-assert.equal(resolveTaskRunPhase([{ id: "a2", role: "assistant", parts: toolStillRunning }], unlocked), "tools");
-
-const shortFinal = [
-  { type: "tool-call", id: "tc4", name: BEGIN_SUMMARY_TOOL_NAME, arguments: "{}", state: "complete", output: "{}" },
-  { type: "text", content: "Short" },
-];
-assert.equal(getSummaryStreamText(shortFinal, unlocked), null);
-
-// Trailing newlines must not shrink stream text (trim would drop them and flicker UI).
-{
-  const base = "A".repeat(80);
-  const withNl = base + "\n";
-  const withMore = withNl + "next line";
-  assert.equal(getSummaryStreamText([{ type: "text", content: base }], unlocked), base);
-  assert.equal(getSummaryStreamText([{ type: "text", content: withNl }], unlocked), withNl);
-  assert.equal(getSummaryStreamText([{ type: "text", content: withMore }], unlocked), withMore);
-  assert.ok(withNl.length > base.length);
-  assert.ok(withMore.length > withNl.length);
-}
 
 const reasoningThenSummary = [
   {

@@ -6,9 +6,6 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "../subagent/begin-summary-tool.js";
 
 import type { UIMessage } from "@tanstack/ai";
 
-/** Minimum chars before streaming summary text to the parent task tool UI. */
-export const SUMMARY_STREAM_MIN_CHARS = 80;
-
 type MessagePart = UIMessage["parts"][number];
 
 function isToolPart(part: MessagePart): boolean {
@@ -87,50 +84,9 @@ function getLastAssistantMessage(messages: UIMessage[]): UIMessage | undefined {
   return [...messages].reverse().find((message) => message.role === "assistant");
 }
 
-const TERMINAL_TOOL_CALL_STATES = new Set(["complete", "error"]);
-
-/** Whether any subagent tool-call is still in progress. */
-export function hasIncompleteToolCalls(messages: UIMessage[]): boolean {
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) {
-      if (part.type !== "tool-call") continue;
-      const state = part.state ?? "input-complete";
-      if (!TERMINAL_TOOL_CALL_STATES.has(state)) return true;
-    }
-  }
-  return false;
-}
-
-export type TaskSummaryPhase = "tools" | "summary";
-
-/** Tracks whether {@link begin_summary} has unlocked summary streaming. */
+/** Tracks whether {@link BEGIN_SUMMARY_TOOL_NAME} has unlocked summary streaming. */
 export interface TaskSummaryStreamState {
   summaryPhaseUnlocked: boolean;
-}
-
-export const DEFAULT_TASK_SUMMARY_STREAM_STATE: TaskSummaryStreamState = {
-  summaryPhaseUnlocked: false,
-};
-
-/**
- * Resolve whether the subagent is in the tool phase or summary phase.
- * Summary phase begins after the model calls {@link BEGIN_SUMMARY_TOOL_NAME}.
- */
-export function resolveTaskRunPhase(
-  messages: UIMessage[],
-  streamState: TaskSummaryStreamState = DEFAULT_TASK_SUMMARY_STREAM_STATE
-): TaskSummaryPhase {
-  if (hasIncompleteToolCalls(messages)) return "tools";
-  return streamState.summaryPhaseUnlocked ? "summary" : "tools";
-}
-
-/** Whether summary text should be streamed to the parent task tool UI. */
-export function shouldStreamTaskSummary(
-  parts: MessagePart[],
-  streamState: TaskSummaryStreamState = DEFAULT_TASK_SUMMARY_STREAM_STATE
-): boolean {
-  return getSummaryStreamText(parts, streamState) !== null;
 }
 
 /**
@@ -162,30 +118,4 @@ export function extractAssistantText(messages: UIMessage[]): string {
 
   const lastThinking = [...scopedParts].reverse().find((part) => part.type === "thinking");
   return lastThinking ? partThinking(lastThinking, false) : "";
-}
-
-/**
- * Current-turn summary text for streaming to the parent task tool.
- *
- * Pass only the **current agent-loop turn** assistant parts (Vercel `readUIMessageStream`
- * semantics). Returns null until {@link TaskSummaryStreamState.summaryPhaseUnlocked} is set
- * by {@link BEGIN_SUMMARY_TOOL_NAME} and the last segment of this turn is text-only.
- */
-export function getSummaryStreamText(
-  parts: MessagePart[],
-  streamState: TaskSummaryStreamState = DEFAULT_TASK_SUMMARY_STREAM_STATE
-): string | null {
-  if (!streamState.summaryPhaseUnlocked) return null;
-
-  const segments = splitStepSegments(parts);
-  if (segments.length === 0) return null;
-
-  const lastSegment = segments[segments.length - 1]!;
-  if (segmentHasTool(lastSegment)) return null;
-
-  // Use raw (untrimmed) text so streamed lengths stay monotonic as deltas arrive.
-  const text = joinSegment(lastSegment, { raw: true });
-  if (text.length < SUMMARY_STREAM_MIN_CHARS) return null;
-
-  return text;
 }

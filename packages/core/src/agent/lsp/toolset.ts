@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { getSyntaxErrors } from "../tree-sitter/symbol-extractor.js";
 
 import { lspTextToModelOutput } from "./shared/tool-output.js";
@@ -83,17 +84,17 @@ export function registerLspTools({
     }
   };
 
-  if (shouldRegister("lsp_diagnostics")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspDiagnostics)) {
     ctx.registerTool(
       withLspTextOutput(createDiagnosticsTool({ manager: managerProxy, fallback: tsDiagnosticsFallback }))
     );
   }
-  if (shouldRegister("lsp_hover")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspHover)) {
     ctx.registerTool(
       withLazy(withLspTextOutput(createHoverTool({ manager: managerProxy, fallback: tsHoverFallback })))
     );
   }
-  if (shouldRegister("lsp_definition")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspDefinition)) {
     ctx.registerTool(
       withLazy(
         withLspTextOutput(
@@ -107,19 +108,19 @@ export function registerLspTools({
       )
     );
   }
-  if (shouldRegister("lsp_references")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspReferences)) {
     ctx.registerTool(withLazy(withLspTextOutput(createReferencesTool({ manager: managerProxy }))));
   }
-  if (shouldRegister("lsp_symbols")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspSymbols)) {
     ctx.registerTool(withLazy(withLspTextOutput(createSymbolsTool({ manager: managerProxy, workspaceIndex }))));
   }
-  if (shouldRegister("lsp_rename")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspRename)) {
     ctx.registerTool(withLspTextOutput(createRenameTool({ manager: managerProxy })));
   }
-  if (shouldRegister("lsp_code_actions")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspCodeActions)) {
     ctx.registerTool(withLspTextOutput(createCodeActionsTool({ manager: managerProxy })));
   }
-  if (shouldRegister("lsp_completions")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.lspCompletions)) {
     ctx.registerTool(
       withLazy(
         withLspTextOutput(
@@ -134,14 +135,14 @@ export function registerLspTools({
   }
 
   // ---- Tree-sitter tools (degrade when grammar locator is absent) ----
-  if (shouldRegister("ast_search")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.astSearch)) {
     ctx.registerTool(
       withLspTextOutput(
         createCodeSearchTool({ rootDir: () => getManager().resolvePath("."), treeSitter, env: treeSitterEnv })
       )
     );
   }
-  if (shouldRegister("code_rewrite")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.codeRewrite)) {
     ctx.registerTool(
       withLspTextOutput(
         createCodeRewriteTool({
@@ -155,7 +156,7 @@ export function registerLspTools({
       )
     );
   }
-  if (shouldRegister("code_overview")) {
+  if (shouldRegister(BUILTIN_TOOL_NAMES.codeOverview)) {
     ctx.registerTool(
       withLspTextOutput(
         createCodeOverviewTool({

@@ -448,35 +448,41 @@ export class CommandJobRegistry {
     // finish — and the completion notification maps `exited` to "completed", so the model was told a
     // failing command had completed. A `null` code (the child was signalled, so there is no status) is
     // not success either, and `exitCode` below keeps the non-zero value that says so.
-    job.status = exitCode === 0 ? "exited" : "failed";
-    job.exitCode = exitCode ?? 1;
-    job.endedAt = Date.now();
-    this.afterFinished(job);
-    this.finalizeLog(job);
-    void this.persist(job);
-    this.notifyChange();
+    this.finish(job, exitCode === 0 ? "exited" : "failed", { exitCode });
   }
 
   markFailed(jobId: string, message?: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
-    if (message) {
-      job.stderr += (job.stderr ? "\n" : "") + message;
-      this.logs.get(jobId)?.appendStderr(`${message}\n`);
-    }
-    job.status = "failed";
-    job.exitCode = job.exitCode ?? 1;
-    job.endedAt = Date.now();
-    this.afterFinished(job);
-    this.finalizeLog(job);
-    void this.persist(job);
-    this.notifyChange();
+    this.finish(job, "failed", { errorText: message });
   }
 
   markKilled(jobId: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
-    job.status = "killed";
+    this.finish(job, "killed");
+  }
+
+  /**
+   * The terminal transition every stop path shares: optional error text, status/exit code, log
+   * footer, persistence and one change notification. The three `mark*` callers differ only in the
+   * status and whether a code/text is known.
+   */
+  private finish(
+    job: CommandJobRecord,
+    status: CommandJobRecord["status"],
+    options: { exitCode?: number | null; errorText?: string } = {}
+  ): void {
+    if (options.errorText) {
+      job.stderr += (job.stderr ? "\n" : "") + options.errorText;
+      this.logs.get(job.id)?.appendStderr(`${options.errorText}\n`);
+    }
+    job.status = status;
+    if ("exitCode" in options) {
+      job.exitCode = options.exitCode ?? 1;
+    } else if (status === "failed") {
+      job.exitCode = job.exitCode ?? 1;
+    }
     job.endedAt = Date.now();
     this.afterFinished(job);
     this.finalizeLog(job);
@@ -516,16 +522,8 @@ export class CommandJobRegistry {
    * already caps surfaced output to 2000 chars).
    */
   private trimFinished(job: CommandJobRecord): void {
-    if (job.stdout.length > MAX_FINISHED_OUTPUT_CHARS) {
-      const cut = Math.max(job.stdoutReadOffset, job.stdout.length - MAX_FINISHED_OUTPUT_CHARS);
-      job.stdout = job.stdout.slice(cut);
-      job.stdoutReadOffset = Math.max(0, job.stdoutReadOffset - cut);
-    }
-    if (job.stderr.length > MAX_FINISHED_OUTPUT_CHARS) {
-      const cut = Math.max(job.stderrReadOffset, job.stderr.length - MAX_FINISHED_OUTPUT_CHARS);
-      job.stderr = job.stderr.slice(cut);
-      job.stderrReadOffset = Math.max(0, job.stderrReadOffset - cut);
-    }
+    this.trimStreamValue(job, "stdout", MAX_FINISHED_OUTPUT_CHARS);
+    this.trimStreamValue(job, "stderr", MAX_FINISHED_OUTPUT_CHARS);
   }
 
   /**
@@ -558,16 +556,31 @@ export class CommandJobRegistry {
    * read cursor.
    */
   private trimStream(job: CommandJobRecord, stream: "stdout" | "stderr"): void {
+    this.trimStreamValue(job, stream, MAX_RUNNING_OUTPUT_CHARS, TRIM_THRESHOLD_CHARS);
+  }
+
+  /**
+   * The one head-trim arithmetic: keep the tail from `maxChars`, never before the read cursor,
+   * and shift the cursor by what was dropped. `triggerChars` differs by call site (the running
+   * stream trims amortized; a finished job trims at its cap).
+   */
+  private trimStreamValue(
+    job: CommandJobRecord,
+    stream: "stdout" | "stderr",
+    maxChars: number,
+    triggerChars: number = maxChars
+  ): void {
     const value = job[stream];
-    if (value.length <= TRIM_THRESHOLD_CHARS) return;
+    if (value.length <= triggerChars) return;
     const offset = stream === "stdout" ? job.stdoutReadOffset : job.stderrReadOffset;
-    const cut = Math.max(offset, value.length - MAX_RUNNING_OUTPUT_CHARS);
+    const cut = Math.max(offset, value.length - maxChars);
     if (cut <= 0) return;
     job[stream] = value.slice(cut);
+    const nextOffset = Math.max(0, offset - cut);
     if (stream === "stdout") {
-      job.stdoutReadOffset = Math.max(0, job.stdoutReadOffset - cut);
+      job.stdoutReadOffset = nextOffset;
     } else {
-      job.stderrReadOffset = Math.max(0, job.stderrReadOffset - cut);
+      job.stderrReadOffset = nextOffset;
     }
   }
 

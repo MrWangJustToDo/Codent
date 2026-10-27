@@ -90,7 +90,7 @@ export function needsToolPhaseContinue(messages: UIMessage[]): boolean {
  */
 export function needsAgentResponseAfterTools(messages: UIMessage[]): boolean {
   if (needsToolPhaseContinue(messages)) return false;
-  if (hasPendingToolApprovals(messages) || hasPendingAskUser(messages)) return false;
+  if (hasPendingInteraction(messages)) return false;
 
   const toolTurnAssistant = findToolTurnAwaitingFollowUp(messages);
   if (!toolTurnAssistant) return false;
@@ -153,7 +153,29 @@ export function shouldContinueAgentPump(messages: UIMessage[]): boolean {
  * whether the run is over — the disagreement is the bug this exists to prevent.
  */
 export function hasPendingRunContinuation(messages: UIMessage[]): boolean {
-  return hasPendingToolApprovals(messages) || hasPendingAskUser(messages) || needsToolPhaseContinue(messages);
+  return hasPendingInteraction(messages) || needsToolPhaseContinue(messages);
+}
+
+/**
+ * Whether the run is parked on the user — an undecided tool approval or an unanswered `ask_user`.
+ *
+ * One walk for both questions. Every caller asked them together (`hasPendingToolApprovals(x) ||
+ * hasPendingAskUser(x)`), and each predicate scanned every assistant part on its own. This is also
+ * the definition the retained `interaction` projection uses, so the pump guard, the status count and
+ * the session snapshot cannot disagree about "waiting" by reading different scans.
+ */
+export function hasPendingInteraction(messages: UIMessage[]): boolean {
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (!isToolCallPart(part)) continue;
+      if (isPendingToolApprovalPart(part)) return true;
+      if (part.name === BUILTIN_TOOL_NAMES.askUser && part.state === "input-complete" && part.output === undefined) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function hasPendingToolApprovals(messages: UIMessage[]): boolean {

@@ -27,25 +27,29 @@ export function registerFileSyncInterceptors({
   onFileChanged,
 }: FileSyncInterceptorDeps): void {
   // ---- File-sync + auto-diagnostics interceptors ----
-  const handleAfter = async (toolName: string, filePath: string): Promise<void> => {
+  // The action is the only thing that differs; the tool NAME is never compared here again. The
+  // interceptor patterns already key off `BUILTIN_TOOL_NAMES`, so a renamed built-in cannot leave
+  // a handler that silently stops firing.
+  type FileSyncAction = "read" | "write";
+  const handleAfter = async (action: FileSyncAction, filePath: string): Promise<void> => {
     try {
-      if (toolName === BUILTIN_TOOL_NAMES.readFile) {
+      if (action === "read") {
         await fileSync.handleFileRead(filePath);
-      } else if (toolName === BUILTIN_TOOL_NAMES.writeFile || toolName === BUILTIN_TOOL_NAMES.editFile) {
-        await fileSync.handleFileWrite(filePath);
-        // The symbol index is only useful if it follows edits: without this, `ast_search` /
-        // `code_overview` (and the LSP-fallback definition lookup) kept answering from the state
-        // of the workspace at first use for the rest of the session.
-        onFileChanged?.(filePath);
+        return;
       }
+      await fileSync.handleFileWrite(filePath);
+      // The symbol index is only useful if it follows edits: without this, `ast_search` /
+      // `code_overview` (and the LSP-fallback definition lookup) kept answering from the state
+      // of the workspace at first use for the rest of the session.
+      onFileChanged?.(filePath);
     } catch {
       // File-sync errors are non-fatal
     }
   };
 
-  ctx.registerInterceptor<ToolAfterEvent>("tool:after:read_file", async (event) => {
+  ctx.registerInterceptor<ToolAfterEvent>(`tool:after:${BUILTIN_TOOL_NAMES.readFile}`, async (event) => {
     const path = extractToolPath(event.payload.args);
-    if (path) await handleAfter("read_file", path);
+    if (path) await handleAfter("read", path);
   });
 
   /**
@@ -64,17 +68,17 @@ export function registerFileSyncInterceptors({
     }
   }
 
-  ctx.registerInterceptor<ToolAfterEvent>("tool:after:write_file", async (event) => {
+  ctx.registerInterceptor<ToolAfterEvent>(`tool:after:${BUILTIN_TOOL_NAMES.writeFile}`, async (event) => {
     const path = extractToolPath(event.payload.args);
     const baseline = captureDiagnosticsBaseline(path);
-    if (path) await handleAfter("write_file", path);
+    if (path) await handleAfter("write", path);
     await maybeInjectDiagnostics(path, event, baseline);
   });
 
-  ctx.registerInterceptor<ToolAfterEvent>("tool:after:edit_file", async (event) => {
+  ctx.registerInterceptor<ToolAfterEvent>(`tool:after:${BUILTIN_TOOL_NAMES.editFile}`, async (event) => {
     const path = extractToolPath(event.payload.args);
     const baseline = captureDiagnosticsBaseline(path);
-    if (path) await handleAfter("edit_file", path);
+    if (path) await handleAfter("write", path);
     await maybeInjectDiagnostics(path, event, baseline);
   });
 

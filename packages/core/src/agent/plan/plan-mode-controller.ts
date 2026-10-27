@@ -151,13 +151,7 @@ export class PlanModeController {
     this.detachTodoListener();
 
     if (!snapshot || snapshot.phase === "off") {
-      this.phase = "off";
-      this.planMarkdown = null;
-      this.steps = [];
-      this.enabledAt = null;
-      this.todosSeeded = false;
-      this.preservedExistingTodos = false;
-      this.planFilePath = null;
+      this.resetPlanState("off", null);
       // A resumed file can carry `todoPlanBound: true` with no plan phase (the flag is
       // persisted independently of `planMode`). Clearing it here is what stops that stale
       // binding from tagging every later list as plan-owned.
@@ -197,13 +191,7 @@ export class PlanModeController {
 
   enable(): void {
     if (this.phase !== "off") return;
-    this.phase = "planning";
-    this.enabledAt = Date.now();
-    this.planMarkdown = null;
-    this.steps = [];
-    this.todosSeeded = false;
-    this.preservedExistingTodos = false;
-    this.planFilePath = null;
+    this.resetPlanState("planning", Date.now());
     this.eventBus?.emit("plan:enter", { phase: this.phase });
     this.notifyChange();
   }
@@ -212,15 +200,24 @@ export class PlanModeController {
     if (this.phase === "off") return;
     this.detachTodoListener();
     this.clearPlanTodos();
-    this.phase = "off";
+    this.resetPlanState("off", null);
+    this.eventBus?.emit("plan:exit", { phase: this.phase });
+    this.notifyChange();
+  }
+
+  /**
+   * Reset every plan artifact field, with the caller supplying the two values that differ per
+   * transition (`phase`, `enabledAt`). One list is what keeps a newly added field from surviving
+   * `disable()` and leaking into the next session.
+   */
+  private resetPlanState(phase: PlanModePhase, enabledAt: number | null): void {
+    this.phase = phase;
+    this.enabledAt = enabledAt;
     this.planMarkdown = null;
     this.steps = [];
-    this.enabledAt = null;
     this.todosSeeded = false;
     this.preservedExistingTodos = false;
     this.planFilePath = null;
-    this.eventBus?.emit("plan:exit", { phase: this.phase });
-    this.notifyChange();
   }
 
   /**

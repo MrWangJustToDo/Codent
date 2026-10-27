@@ -221,17 +221,50 @@ export function isContextText(text: string | undefined | null): boolean {
   return text.trimStart().startsWith(CONTEXT_OPEN_PREFIX);
 }
 
-/** Extract the kind from a rendered synthetic context message text. */
-export function contextKindFromText(text: string | undefined | null): string | undefined {
+/** Parsed `<ctx kind=… attr="…">body</ctx>` shell. `body` is absent when the close tag is missing. */
+interface ParsedContextShell {
+  kind: string;
+  attrs: Record<string, string>;
+  body?: string;
+}
+
+/**
+ * Parse the synthetic `<ctx …>` shell once.
+ *
+ * The kind, the machine-readable attrs and the body were each extracted by their own scan of the
+ * same envelope (three `indexOf(">")` / `matchAll` implementations in this file). Admission and
+ * counter recovery both read the result back, so a shell syntax change has one parser to update.
+ */
+function parseContextShell(text: string | undefined | null): ParsedContextShell | undefined {
   if (!text) return undefined;
   const trimmed = text.trimStart();
   if (!trimmed.startsWith(CONTEXT_OPEN_PREFIX)) return undefined;
   const openEnd = trimmed.indexOf(">");
   if (openEnd < 0) return undefined;
-  // The open tag is `<ctx kind=<kind>[ attr="value" ...]>`: the kind is the first
-  // whitespace-delimited token, so shell attrs never leak into the identity.
-  const rest = trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd).trim();
-  return rest.split(/\s+/)[0] || undefined;
+
+  // `<ctx kind=<kind>[ attr="value" ...]>`: the kind is the first whitespace-delimited token, so
+  // shell attrs never leak into the identity.
+  const open = trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd).trim();
+  const kind = open.split(/\s+/)[0];
+  if (!kind) return undefined;
+
+  const attrs: Record<string, string> = {};
+  const attributePattern = /([A-Za-z_][\w-]*)="([^"]*)"/g;
+  for (const match of open.matchAll(attributePattern)) {
+    attrs[match[1]!] = match[2]!.replace(/&quot;/g, '"');
+  }
+
+  const close = trimmed.lastIndexOf(CONTEXT_CLOSE);
+  return {
+    kind,
+    attrs,
+    ...(close >= openEnd ? { body: trimmed.slice(openEnd + 1, close).trim() } : {}),
+  };
+}
+
+/** Extract the kind from a rendered synthetic context message text. */
+export function contextKindFromText(text: string | undefined | null): string | undefined {
+  return parseContextShell(text)?.kind;
 }
 
 /**
@@ -241,18 +274,7 @@ export function contextKindFromText(text: string | undefined | null): string | u
  * later recovery (nag rounds, repeat count). A malformed / attr-less shell yields `{}`.
  */
 export function contextAttributesFromText(text: string | undefined | null): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  if (!text) return attrs;
-  const trimmed = text.trimStart();
-  if (!trimmed.startsWith(CONTEXT_OPEN_PREFIX)) return attrs;
-  const openEnd = trimmed.indexOf(">");
-  if (openEnd < 0) return attrs;
-  const rest = trimmed.slice(CONTEXT_OPEN_PREFIX.length, openEnd);
-  const attributePattern = /([A-Za-z_][\w-]*)="([^"]*)"/g;
-  for (const match of rest.matchAll(attributePattern)) {
-    attrs[match[1]!] = match[2]!.replace(/&quot;/g, '"');
-  }
-  return attrs;
+  return parseContextShell(text)?.attrs ?? {};
 }
 
 export function isContextModelMessage(message: ModelMessage): boolean {
@@ -285,17 +307,13 @@ export function isContextUIMessage(message: UIMessage): boolean {
  * round-trip is what makes admission stateless (no remembered hash map).
  */
 export function extractContextSection(text: string): TurnContextSection | undefined {
-  const kind = contextKindFromText(text);
-  if (!kind) return undefined;
-  const trimmed = text.trimStart();
-  const openEnd = trimmed.indexOf(">");
-  const close = trimmed.lastIndexOf(CONTEXT_CLOSE);
-  if (close < openEnd) return undefined;
-  const body = trimmed.slice(openEnd + 1, close).trim();
-  const inner = body.replace(SUPERSEDE_PREFIX, "").trim();
+  const shell = parseContextShell(text);
+  if (!shell || shell.body === undefined) return undefined;
+  const inner = shell.body.replace(SUPERSEDE_PREFIX, "").trim();
   if (!inner) return undefined;
-  const attrs = contextAttributesFromText(trimmed);
-  return Object.keys(attrs).length > 0 ? { key: kind, content: inner, attrs } : { key: kind, content: inner };
+  return Object.keys(shell.attrs).length > 0
+    ? { key: shell.kind, content: inner, attrs: shell.attrs }
+    : { key: shell.kind, content: inner };
 }
 
 /**

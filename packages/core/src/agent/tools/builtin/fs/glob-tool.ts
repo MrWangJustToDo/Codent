@@ -14,6 +14,7 @@ import { canExecArgs, execArgs } from "../shell/exec-args.js";
 import { expandBraceGlobs, filterGlobOutput, findPathPattern, normalizeExcludePattern } from "./search/glob-pattern.js";
 import {
   activeExcludeDirs,
+  formatSearchModelOutput,
   SEARCH_COMMAND_TIMEOUT,
   isCommandNotFound,
   quoteForShell,
@@ -355,25 +356,17 @@ export const createGlobTool = () => {
     // input, pagination/truncation/cache metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: GlobOutput }) {
       if (isProjectedModelContent(output)) return output;
-      // A stopped search says so — see the same branch in grep's `toModelOutput`.
-      if (output.cancelled === true) {
-        const partial = output.files ?? [];
-        return [
-          {
-            type: "text" as const,
-            content:
-              partial.length > 0
-                ? `[Search cancelled by user — this result is incomplete.]\n${partial.join("\n")}`
-                : "[Search cancelled by user.]",
-          },
-        ];
-      }
+      const rows = output.files ?? [];
       return [
         {
           type: "text" as const,
-          content:
-            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}\n` +
-            (output.content || output.files?.join("\n")),
+          content: formatSearchModelOutput({
+            cancelled: output.cancelled,
+            rows,
+            offset: output.offset,
+            limit: output.limit,
+            body: output.content || rows.join("\n"),
+          }),
         },
       ];
     },

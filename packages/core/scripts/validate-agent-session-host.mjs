@@ -98,6 +98,20 @@ function createFake(id, parentId) {
     getLastStreamDurationMs() {
       return managed.lastStreamDurationMs;
     },
+    getL1State() {
+      return {
+        status: managed.status,
+        name: managed.name,
+        sessionId: sessionData?.id ?? null,
+        error: managed.error,
+        pendingApprovalCount: managed.pendingApprovalCount,
+        model: "",
+        modelInfo: null,
+        reasoningEffort: null,
+        lastFinishReason: null,
+        lastStreamDurationMs: managed.lastStreamDurationMs,
+      };
+    },
     getAgentMode() {
       return "normal";
     },

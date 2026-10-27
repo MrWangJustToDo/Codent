@@ -18,6 +18,7 @@ import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
+import { splitFrontmatter } from "../../utils/frontmatter.js";
 
 import { skillMetadataSchema } from "./types.js";
 
@@ -134,26 +135,16 @@ export class SkillLoader {
    * @returns Parsed frontmatter and body
    */
   parseFrontmatter(text: string): ParsedFrontmatter {
-    if (!text.startsWith("---")) {
+    const split = splitFrontmatter(text);
+    if (!split) {
       return {
         metadata: null,
         body: text.trim(),
       };
     }
-
-    const endIndex = text.indexOf("\n---", 3);
-    if (endIndex === -1) {
-      return {
-        metadata: null,
-        body: text.trim(),
-      };
-    }
-
-    const yamlContent = text.slice(4, endIndex).trim();
-    const body = text.slice(endIndex + 4).trim();
 
     try {
-      const metadata = parseYaml(yamlContent);
+      const metadata = parseYaml(split.yaml);
       const validated = skillMetadataSchema.safeParse(metadata);
 
       if (!validated.success) {
@@ -166,7 +157,7 @@ export class SkillLoader {
 
       return {
         metadata: validated.data,
-        body,
+        body: split.body,
       };
     } catch (error) {
       return {

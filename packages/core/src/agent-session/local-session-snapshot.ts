@@ -16,23 +16,26 @@ export function readLocalAgentSessionSnapshot(
 ): AgentSessionSnapshot {
   const chat = managed.getChatController();
   const todos = managed.getTodoManager();
+  // L1 is the retained `agent:state` projection of the same facts. Spreading it here means a new
+  // L1 field reaches snapshot consumers without a second hand-maintained list; only the renames
+  // and the session-specific extras are mapped below (L1 uses `null` where the snapshot uses
+  // absence, and `sessionId` is `activeSessionId` here).
+  const l1 = managed.getL1State();
   return {
     agentId: managed.id,
     ...(managed.parentId ? { parentId: managed.parentId } : {}),
-    name: managed.name,
-    status: managed.getStatus(),
-    ...(managed.getSessionData()?.id ? { activeSessionId: managed.getSessionData()!.id } : {}),
-    error: managed.getError(),
-    pendingApprovalCount: managed.getPendingApprovalCount(),
-    ...(managed.getRetry() ? { retry: managed.getRetry() } : {}),
+    name: l1.name,
+    status: l1.status,
+    ...(l1.sessionId ? { activeSessionId: l1.sessionId } : {}),
+    error: l1.error,
+    pendingApprovalCount: l1.pendingApprovalCount,
+    ...(l1.retry ? { retry: l1.retry } : {}),
     mode: managed.getAgentMode(),
-    lastStreamDurationMs: managed.getLastStreamDurationMs(),
-    lastFinishReason: managed.getLastFinishReason?.() ?? null,
-    ...(managed.config?.model ? { model: managed.config.model } : {}),
-    ...(managed.modelInfo ? { modelInfo: managed.modelInfo } : {}),
-    ...(typeof managed.getReasoningEffort === "function" && managed.getReasoningEffort()
-      ? { reasoningEffort: managed.getReasoningEffort() }
-      : {}),
+    lastStreamDurationMs: l1.lastStreamDurationMs,
+    lastFinishReason: l1.lastFinishReason,
+    ...(l1.model ? { model: l1.model } : {}),
+    ...(l1.modelInfo ? { modelInfo: l1.modelInfo } : {}),
+    ...(l1.reasoningEffort ? { reasoningEffort: l1.reasoningEffort } : {}),
     messages: chat?.getMessages() ?? managed.getUI()?.getMessages() ?? [],
     queues: chat?.getQueuedMessages() ?? { steer: [], followUp: [] },
     usage: managed.usage.getChangeSnapshot(),

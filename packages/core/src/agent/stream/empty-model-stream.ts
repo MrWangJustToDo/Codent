@@ -1,4 +1,4 @@
-import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
+import { findLastMeaningfulAssistant } from "./empty-assistant-shell.js";
 
 import type { ToolCallPart, UIMessage } from "@tanstack/ai";
 
@@ -59,7 +59,7 @@ export function didStreamProduceModelOutput(before: UIMessage[], after: UIMessag
  * Callers should still skip when the run was aborted.
  */
 export function shouldFlagEmptyModelStream(before: UIMessage[], after: UIMessage[]): boolean {
-  // Trailing empty shells do not count as output (finalize may strip them).
-  const cleanedAfter = after.filter((message) => message.role !== "assistant" || !isEmptyAssistantShell(message));
-  return !didStreamProduceModelOutput(before, cleanedAfter);
+  // `findLastMeaningfulAssistant` already skips trailing empty shells, so filtering `after` here
+  // would change neither lookup nor the id comparison (and `before` was never filtered).
+  return !didStreamProduceModelOutput(before, after);
 }

@@ -5,6 +5,8 @@ import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { listFileOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 
+import { formatSearchModelOutput } from "./search/search-command.js";
+
 import type { ListFileOutput } from "../../shared/schemas.js";
 
 const DEFAULT_LIMIT = OUTPUT_LIMITS.MAX_ARRAY_ITEMS;
@@ -67,13 +69,11 @@ export const createListFileTool = () => {
     // pagination metadata is for the UI only.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: ListFileOutput }) {
       if (isProjectedModelContent(output)) return output;
-      const lines = output.entries?.map?.((e) => `${e.name}${e.type === "directory" ? "/" : ""}`);
+      const rows = output.entries?.map?.((e) => `${e.name}${e.type === "directory" ? "/" : ""}`) ?? [];
       return [
         {
           type: "text" as const,
-          content:
-            `offset(current pagination): ${output.offset}; limit(Maximum number of items to return): ${output.limit}` +
-            lines?.join("\n"),
+          content: formatSearchModelOutput({ rows, offset: output.offset, limit: output.limit }),
         },
       ];
     },

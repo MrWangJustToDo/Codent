@@ -21,6 +21,7 @@ import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
+import { splitFrontmatter } from "../../utils/frontmatter.js";
 import { slugifyName } from "../../utils/slug.js";
 
 import { isExpiredMemory } from "./memory-expiry.js";
@@ -380,27 +381,20 @@ export class MemoryManager {
    * Reuses the same pattern as SkillLoader.parseFrontmatter().
    */
   private parseFrontmatter(text: string): { metadata: MemoryMetadata | null; body: string } {
-    if (!text.startsWith("---")) {
+    const split = splitFrontmatter(text);
+    if (!split) {
       return { metadata: null, body: text.trim() };
     }
-
-    const endIndex = text.indexOf("\n---", 3);
-    if (endIndex === -1) {
-      return { metadata: null, body: text.trim() };
-    }
-
-    const yamlContent = text.slice(4, endIndex).trim();
-    const body = text.slice(endIndex + 4).trim();
 
     try {
-      const parsed = parseYaml(yamlContent);
+      const parsed = parseYaml(split.yaml);
       const validated = memoryMetadataSchema.safeParse(parsed);
 
       if (!validated.success) {
         return { metadata: null, body: text.trim() };
       }
 
-      return { metadata: validated.data, body };
+      return { metadata: validated.data, body: split.body };
     } catch {
       return { metadata: null, body: text.trim() };
     }

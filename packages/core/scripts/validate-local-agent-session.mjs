@@ -94,8 +94,14 @@ function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}
       return {
         status: managed.status,
         name: managed.name,
+        sessionId: null,
         error: managed.error,
         pendingApprovalCount: managed.pendingApprovalCount,
+        model: "",
+        modelInfo: null,
+        reasoningEffort: null,
+        lastFinishReason: null,
+        lastStreamDurationMs: managed.lastStreamDurationMs,
       };
     },
     getError() {

@@ -4,7 +4,6 @@ import {
   PLAN_COMPLETION_TOOL_NAMES,
 } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
-import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
 import { peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
 import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime/tool-sets.js";
@@ -391,9 +390,10 @@ export function runManagedAgentStream(
   input: RunAgentStreamInput
 ): AsyncIterable<StreamChunk> {
   return (async function* () {
-    const stream = await executeManagedAgentRun(manager, agentId, input);
-    assertAsyncIterable(stream, `executeManagedAgentRun(${agentId})`);
-    yield* stream;
+    // No `assertAsyncIterable` here: `executeManagedAgentRun` returns an async generator, so the
+    // outer value is already iterable. The real assertion lives where the stream is created
+    // (`AgentRunner.run` / `chat()`) and in the recovery wrapper that validates a custom `run`.
+    yield* await executeManagedAgentRun(manager, agentId, input);
   })();
 }
 

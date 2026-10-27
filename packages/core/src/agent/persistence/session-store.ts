@@ -21,8 +21,8 @@ import { isToolCallPart } from "../stream/message-parts.js";
 import {
   appendLogLines,
   foldLog,
+  forEachDecidedApproval,
   hasUserMessage,
-  readApprovalUpdatedAt,
   readLastState,
   readLog,
   readMessageUpdatedAt,
@@ -37,16 +37,10 @@ import {
   SESSION_VERSION,
   isSafeSessionId,
   isSupportedSessionVersion,
+  sessionLogPath,
 } from "./types.js";
 
-import type {
-  PersistedToolCallPart,
-  PersistedUIMessage,
-  SessionData,
-  SessionLogLine,
-  SessionMeta,
-  SessionStateFields,
-} from "./types.js";
+import type { PersistedUIMessage, SessionData, SessionLogLine, SessionMeta, SessionStateFields } from "./types.js";
 
 // ============================================================================
 // Constants
@@ -558,7 +552,7 @@ export class SessionStore {
   }
 
   private getLogPath(id: string): string {
-    return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
+    return sessionLogPath(id);
   }
 
   /** Process-wide map key: the log path alone is relative to the workspace. */
@@ -631,15 +625,11 @@ function collectApprovalStamps(messages: PersistedUIMessage[], knownTimes: Recor
   let changed = false;
   const now = Date.now();
   for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) {
-      if (!isToolCallPart(part)) continue;
-      const approval = part.approval;
-      if (!approval?.id || approval.approved === undefined) continue;
-      if (knownTimes[approval.id] !== undefined) continue;
-      knownTimes[approval.id] = readApprovalUpdatedAt(part as unknown as PersistedToolCallPart) ?? now;
+    forEachDecidedApproval(message, (approvalId, _part, stampedAt) => {
+      if (knownTimes[approvalId] !== undefined) return;
+      knownTimes[approvalId] = stampedAt ?? now;
       changed = true;
-    }
+    });
   }
   return changed;
 }
@@ -653,15 +643,10 @@ function snapshotTimestamps(
   const out = new Map<string, TimestampSnapshot>();
   for (const message of messages) {
     const approvals: Record<string, number> = {};
-    if (message.role === "assistant") {
-      for (const part of message.parts) {
-        if (!isToolCallPart(part)) continue;
-        const approval = part.approval;
-        if (!approval?.id || approval.approved === undefined) continue;
-        const at = readApprovalUpdatedAt(part as unknown as PersistedToolCallPart) ?? knownTimes[approval.id];
-        if (at !== undefined) approvals[approval.id] = at;
-      }
-    }
+    forEachDecidedApproval(message, (approvalId, _part, stampedAt) => {
+      const at = stampedAt ?? knownTimes[approvalId];
+      if (at !== undefined) approvals[approvalId] = at;
+    });
     const updatedAt = stamps.get(message.id);
     out.set(message.id, updatedAt === undefined ? { approvals } : { updatedAt, approvals });
   }

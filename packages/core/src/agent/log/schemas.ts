@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
 
+import type { LogCategory } from "../agent-log/types.js";
+
 /**
  * Log **entry schemas** — the validation boundary of the log extension, not of the seam.
  *
@@ -44,7 +46,16 @@ const logCategories = [
   // declared twice, and a category missing here is rejected by
   // `logEntrySchema` at write time (the entry silently never lands).
   "side-query",
-] as const;
+] as const satisfies readonly LogCategory[];
+
+/**
+ * Compile-time guard for the other drift direction: `satisfies` above rejects an entry that is not
+ * a `LogCategory`, while this rejects a union member missing from the array. Without it, adding a
+ * category to `LogCategory` and forgetting the array produces a schema that silently refuses
+ * entries the code now emits.
+ */
+type AssertNever<T extends never> = T;
+export type LogCategoryCoverage = AssertNever<Exclude<LogCategory, (typeof logCategories)[number]>>;
 export const logCategorySchema = z.enum(logCategories);
 
 export const logEntrySchema = z.strictObject({

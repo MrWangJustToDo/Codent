@@ -14,15 +14,15 @@ import { writeFileAtomic } from "../../utils/atomic-write.js";
 import { readTextPieces } from "../../utils/read-text-pieces.js";
 import { isToolCallPart } from "../stream/message-parts.js";
 
-import { SESSION_DIR, SESSION_LOG_SUFFIX, isSafeSessionId } from "./types.js";
+import { assertSafeSessionId, sessionLogPath } from "./types.js";
 
 import type { PersistedToolCallPart, PersistedUIMessage, SessionLogLine, SessionStateFields } from "./types.js";
 import type { CoreEnvFs } from "../../env";
 import type { UIMessage } from "@tanstack/ai";
 
 export function getJournalPath(id: string): string {
-  if (!isSafeSessionId(id)) throw new Error(`Invalid session id: ${id}`);
-  return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
+  assertSafeSessionId(id);
+  return sessionLogPath(id);
 }
 
 /**
@@ -339,6 +339,27 @@ export function readApprovalUpdatedAt(part: PersistedToolCallPart): number | und
 }
 
 /**
+ * Walk the decided approvals of one persisted message.
+ *
+ * The filter (assistant → tool-call → `approval.id` → `approved !== undefined`) and the part
+ * stamp read are identical in the log fold (earliest decision time) and the store's stamp
+ * collection (record time). One walker keeps the two from disagreeing about which parts count.
+ */
+export function forEachDecidedApproval(
+  message: PersistedUIMessage,
+  visit: (approvalId: string, part: PersistedToolCallPart, stampedAt: number | undefined) => void
+): void {
+  if (message.role !== "assistant") return;
+  for (const part of message.parts) {
+    if (!isToolCallPart(part)) continue;
+    const approval = part.approval;
+    if (!approval?.id || approval.approved === undefined) continue;
+    const persistedPart = part as unknown as PersistedToolCallPart;
+    visit(approval.id, persistedPart, readApprovalUpdatedAt(persistedPart));
+  }
+}
+
+/**
  * Fold log lines into the session they describe.
  *
  * Message lines are keyed by `UIMessage.id`: a later line for the same id
@@ -382,15 +403,11 @@ export function foldLog(lines: SessionLogLine[]): FoldedSessionLog {
       const fold = mergeFoldedMessage(prev, message, line.messageUpdatedAt);
       byId.set(message.id, fold);
 
-      if (fold.role !== "assistant") continue;
-      for (const part of fold.parts) {
-        if (!isToolCallPart(part)) continue;
-        const approval = part.approval;
-        if (!approval?.id || approval.approved === undefined) continue;
-        if (approvalAt[approval.id] !== undefined) continue;
-        const stamp = readApprovalUpdatedAt(part as unknown as PersistedToolCallPart) ?? updatedAt ?? lineTime;
-        if (stamp !== undefined) approvalAt[approval.id] = stamp;
-      }
+      forEachDecidedApproval(fold, (approvalId, _part, stampedAt) => {
+        if (approvalAt[approvalId] !== undefined) return;
+        const stamp = stampedAt ?? updatedAt ?? lineTime;
+        if (stamp !== undefined) approvalAt[approvalId] = stamp;
+      });
     }
   }
 

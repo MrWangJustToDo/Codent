@@ -50,10 +50,12 @@ export {
   type ModelsConfigEntry,
   type ModelsConfigGlobal,
   type ModelsConfigSource,
-  type ProviderInfo,
   type RawModelsConfig,
   type RemoteProviderConfigEntry,
 } from "./config/models-config.js";
+
+/** Public name for the `/api/provider/info` payload; the shape is defined once in `provider/`. */
+export type { ProviderInfoResponse as ProviderInfo } from "../provider/remote-model-provider.js";
 
 // TanStack text adapter (+ provider-specific protocol quirks live here only)
 export { createTextAdapter, type TextAdapterConfig, type ModelAdapterConfig } from "./adapter/adapter-factory.js";

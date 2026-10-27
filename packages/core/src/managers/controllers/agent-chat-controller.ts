@@ -12,8 +12,7 @@ import {
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
 import {
-  hasPendingAskUser,
-  hasPendingToolApprovals,
+  hasPendingInteraction,
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
   shouldContinueAgentPump,
@@ -122,6 +121,11 @@ export class AgentChatController {
     this.channel.clearMessages();
   }
 
+  /** A pump is executing or queued. Distinct from "the run is parked on the user". */
+  private isPumpLive(): boolean {
+    return this.pumpDepth > 0 || this.runPending();
+  }
+
   stop(): void {
     // An idle stop is not a run: it must not abort a completed turn's controller (that signal is
     // still held by finalize-time memory extraction, and aborting it cancelled work the run had
@@ -129,9 +133,7 @@ export class AgentChatController {
     // approval has no live pump but is still the user's Esc target, so a pending interaction is
     // reason enough — as is a live pump, a queued pump, or an eagerly started `task` subagent.
     const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
-    const messages = this.channel.getMessages();
-    const hasInteraction = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
-    if (this.pumpDepth <= 0 && !this.runPending() && registeredPrefork === 0 && !hasInteraction) return;
+    if (!this.isPumpLive() && registeredPrefork === 0 && !hasPendingInteraction(this.channel.getMessages())) return;
     this.interruptCurrentRun("user-cancelled");
   }
 
@@ -145,9 +147,7 @@ export class AgentChatController {
    * can never complete.
    */
   isRunActive(): boolean {
-    if (this.pumpDepth > 0 || this.runPending()) return true;
-    const messages = this.channel.getMessages();
-    return hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+    return this.isPumpLive() || hasPendingInteraction(this.channel.getMessages());
   }
 
   /**
@@ -157,11 +157,12 @@ export class AgentChatController {
    * pump, yet it can still have eagerly started `task` subagents streaming into the channel this is
    * about to replace — nothing else will join them, and this is their only stop, so a registered
    * pre-fork is reason enough to stop the run. With neither a pump nor a pre-fork it stays a no-op,
-   * so a plain resume fires no spurious abort/finalize.
+   * so a plain resume fires no spurious abort/finalize. The parked-interaction term is deliberately
+   * absent here: a session switch replaces a parked session instead of fabricating an abort for it.
    */
   stopIfActive(reason = "session-switch"): void {
     const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
-    if (this.pumpDepth <= 0 && !this.runPending() && registeredPrefork === 0) return;
+    if (!this.isPumpLive() && registeredPrefork === 0) return;
     this.interruptCurrentRun(reason);
   }
 
@@ -488,8 +489,7 @@ export class AgentChatController {
         if (!token.isCurrent || epoch !== this.lifecycleEpoch) return;
 
         let currentMessages = this.channel.getMessages();
-        if (hasPendingToolApprovals(currentMessages)) break;
-        if (hasPendingAskUser(currentMessages)) break;
+        if (hasPendingInteraction(currentMessages)) break;
 
         if (toolPhase > 0) {
           const prepared = this.prepareContinuationPhase(currentMessages);
@@ -519,15 +519,14 @@ export class AgentChatController {
         await this.approvalDecisions.applyCommandSafetyPolicy();
 
         const after = this.channel.getMessages();
-        if (hasPendingToolApprovals(after)) break;
-        if (hasPendingAskUser(after)) break;
+        if (hasPendingInteraction(after)) break;
         if (!this.shouldKeepPumping(after)) break;
       }
 
       if (token.isCurrent) {
         this.syncPlanModeFromMessages();
         let messages = this.channel.getMessages();
-        let waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+        let waitingForUser = hasPendingInteraction(messages);
         const keepPumping = !waitingForUser && this.shouldKeepPumping(messages);
         // Prefer status already set by executeStream (error/abort) over message-derived waits.
         const outcomeKind = this.managed.runFinalizer.deriveChatOutcome({ hasError, waitingForUser });
@@ -540,7 +539,7 @@ export class AgentChatController {
         if (outcomeKind === "error" || outcomeKind === "aborted") {
           this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
           messages = this.channel.getMessages();
-          waitingForUser = hasPendingToolApprovals(messages) || hasPendingAskUser(messages);
+          waitingForUser = hasPendingInteraction(messages);
         }
 
         // Phase cap or early stream end while tools/model still need work — chain

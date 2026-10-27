@@ -55,6 +55,20 @@ export function isSafeSessionId(id: string): boolean {
 }
 
 /**
+ * The one builder for a session's log path. `getJournalPath` (tools) and `SessionStore` used to
+ * each build `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`; a directory/suffix change had to land
+ * in both or `list()` and `session_read` would disagree about which file is a session.
+ */
+export function sessionLogPath(id: string): string {
+  return `${SESSION_DIR}/${id}${SESSION_LOG_SUFFIX}`;
+}
+
+/** Throw for an id that must not be interpolated into a path. */
+export function assertSafeSessionId(id: string): void {
+  if (!isSafeSessionId(id)) throw new Error(`Invalid session id: ${id}`);
+}
+
+/**
  * Whether this reader understands a log written with `version`.
  *
  * Only *newer* formats are rejected: their line/state shape may differ, so folding
