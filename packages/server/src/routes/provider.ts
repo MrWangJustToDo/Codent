@@ -17,14 +17,22 @@ import {
 import { Hono } from "hono";
 
 import { REMOTE_PROVIDER_API_KEY } from "../provider-constants.js";
-import { getServerEnv } from "../server-runtime.js";
 
 export { REMOTE_PROVIDER_API_KEY };
 
-/** Read the server's own models.json (`.agents/config/models.json`), if any. */
+/**
+ * Read the server's own models.json (`.agents/config/models.json`), if any.
+ *
+ * This route describes the PROCESS's provider, not a per-agent runtime: a server owns one
+ * workspace and registers its CoreEnv at bootstrap, so the ambient registration is that workspace
+ * (the runtime env is derived from the same object). Reading the runtime env here was wrong for a
+ * route mounted without a runtime — the provider-proxy validator imports the package entry (which
+ * has already initialized a runtime over `ROOT_PATH`) and then registers a temp workspace, so the
+ * two envs differ and the config disappeared.
+ */
 async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
   try {
-    return await loadModelsConfigFromFile(undefined, getServerEnv());
+    return await loadModelsConfigFromFile();
   } catch {
     return null;
   }
