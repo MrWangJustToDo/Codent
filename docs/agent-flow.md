@@ -303,7 +303,7 @@ run 结束 `finalizeStream()` 去掉尾部空 shell 并补 tool display (`ui-cha
 循环退出后（`agent-chat-controller.ts:570-587`）：
 
 1. `outcomeKind = runFinalizer.deriveChatOutcome({ hasError, waitingForUser })`
-   ——优先级 `aborted > error > waiting > finished`（`run-finalizer.ts:79-70`）。
+   ——优先级 `aborted > error > waiting > finished`（`run-finalizer.ts:79-84`）。
 2. 若 `outcomeKind` 是 `error`/`aborted`：**拒绝所有未决审批**（`:562-566`）。
    理由在注释里：终态轮不能带着一个没回答的问题，否则下一轮 `prepareRunPhase` 直接返回，
    会话看起来"死了"（`:557-561`）。
@@ -393,7 +393,7 @@ registry.finish()  → notifyChange([job.id])        registry.ts:507
 | 机制 | 位置 | 作用 |
 |---|---|---|
 | `RunToken`（对象身份，非计数器） | `run-coordinator.ts:15`、`:126` | "我还是当前 run 吗"。`beginRun` 使旧 token 失效；漏检是可见的 API 缺口而不是口头约定 |
-| `lifecycleEpoch` + `pendingRunEpoch` | `agent-chat-controller.ts:61-67`、`:117-114` | 会话清空/resume 后，为旧 transcript 排的 pump 不得开跑 |
+| `lifecycleEpoch` + `pendingRunEpoch` | `agent-chat-controller.ts:61-67`、`:116-120` | 会话清空/resume 后，为旧 transcript 排的 pump 不得开跑 |
 | `pumpDepth` | `agent-chat-controller.ts:55`、`:507`、`:646` | 是否有 pump 正在执行（排队判定、`stop()` 判定） |
 | `runChain` | `agent-chat-controller.ts:51`、`:439` | pump 串行化；`enqueueRunOnce` 合并同一时刻的多次请求 |
 
@@ -559,8 +559,8 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `agent:state` | `state` | 是 (`meta.ts:102`) | 否（不是日志事件；状态跳转另由 `setStatus` 记一行，`managed-agent.ts:783-791`） | `publishStateChange` (`:993-1001`)：status、error、pendingApprovalCount、retry、model、`lastFinishReason`、`lastStreamDurationMs` |
 | `session:messages` | `messages` | 是 (`:103`) | 否 | `AgentUIChannel` 每次消息变更 (`ui-channel.ts:585-592`) |
 | `session:usage` | `usage` | 是 (`:105`) | 否 | `UsageTracker` (`usage-tracker.ts:357`) |
-| `agent:iteration` | `iteration` | 是 (`:113`) | **否**（规则表里没有这一项） | lifecycle middleware `onIteration` → `setIterationProgress` (`managed-agent.ts:938`) |
-| `turn:start` | — | 否 (`:116`) | 否（`event-log-rules.ts:301`） | 每个 model iteration 开始 |
+| `agent:iteration` | `iteration` | 是 (`:113`) | **否**（规则表里没有这一项） | lifecycle middleware `onIteration` → `setIterationProgress` (`managed-agent.ts:938`)。尺度是**当前 chat**（每个 tool phase 重新从 1 开始，`max` 是那次 `chat()` 的预算），与 `turn:start.index` / `llm:*` 的 `iteration`（run 作用域）**不是同一套编号**，不要互相配对 |
+| `turn:start` | — | 否 (`:116`) | 否（`event-log-rules.ts:301`） | 每个 model turn 开始；`index` 是 run 作用域编号（与 `llm:*` 的 `iteration` 同源），`max` 只是当次 `chat()` 的预算，不是 `index` 的分母 |
 | `turn:end` | — | 否 | 否 (`:302`) | `RUN_FINISHED`；同一 iteration 的第二个"interrupt 形状"结束会被 `turnClosed` 吞掉（`lifecycle-middleware.ts:209-214`） |
 | `message:start` | — | 否 | 否 (`:303`) | 首个 text/reasoning/tool chunk；`firstOutput` 是**每个 user turn** 一次（`lifecycle-middleware.ts:181-170`） |
 | `message:end` | — | 否 | 否 (`:304`) | `RUN_FINISHED` 时收尾 |

@@ -14,7 +14,7 @@
 
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
-import { isToolCallPart } from "./message-parts.js";
+import { isSettledToolCallPart, isToolCallPart } from "./message-parts.js";
 
 import type { ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
 
@@ -42,7 +42,7 @@ export function hasValidToolArguments(part: ToolCallPart): boolean {
  */
 export function isCancellableIncompleteToolCall(part: ToolCallPart): boolean {
   if (part.output !== undefined) return false;
-  if (part.state === "complete" || part.state === "error") return false;
+  if (isSettledToolCallPart(part)) return false;
 
   // User still deciding — approval UI owns this.
   if (part.approval?.needsApproval === true && part.approval.approved === undefined) {
@@ -210,7 +210,7 @@ export function settleInterruptedToolCalls(
  */
 export function isInFlightToolCall(part: ToolCallPart): boolean {
   if (part.output !== undefined) return false;
-  if (part.state === "complete" || part.state === "error") return false;
+  if (isSettledToolCallPart(part)) return false;
   // User still deciding — approval UI owns this.
   if (part.approval?.needsApproval === true && part.approval.approved === undefined) return false;
   // Truncated arg streams are handled by cancelIncompleteToolCalls, not here.

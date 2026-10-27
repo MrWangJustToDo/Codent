@@ -90,15 +90,23 @@ export type AgentEventPayloadMap = {
   };
   "agent:thinking": EmptyAgentEventPayload;
   /**
-   * One model turn began: `index` matches the turn `agent:iteration` reports (both 1-based) and the
-   * `turn:end` that closes it. `max` is the run's iteration budget (0 when unbudgeted).
+   * One model turn began.
+   *
+   * `index` is the **run-scoped** model turn (1-based, counted per model call across every
+   * tool-phase chat of the turn) — the same number `llm:request` / `llm:response` carry, so a
+   * consumer can pair those with it. It is NOT `agent:iteration`.current, which restarts at 1 for
+   * every `chat()`; the two scales are deliberately different and must not be paired.
+   *
+   * `max` is the per-`chat()` `maxIterations` budget (0 when unbudgeted), i.e. the ceiling on the
+   * engine that is running this turn — NOT the denominator of `index`. After a few tool phases a
+   * run legitimately reports `{ index: 7, max: 50 }` because each phase gets a fresh budget.
    */
   "turn:start": { index: number; max: number };
   /**
    * One model turn finished (a model request plus the tool calls it issued).
    *
-   * Completes the index that `agent:iteration` opened; a consumer pairs the two by `index`. An
-   * aborted turn is not reported as finished.
+   * Completes the `index` its own `turn:start` opened (run-scoped). An aborted turn is not reported
+   * as finished.
    */
   "turn:end": { index: number; finishReason: string | null; toolCalls: number };
   /**
@@ -256,7 +264,13 @@ export type AgentEventPayloadMap = {
     outcome?: "finished" | "aborted" | "error";
     /** Driver-level tool-phase continuations executed in this run (each one streamed once). */
     phases?: number;
-    /** Tool calls that reached an outcome (ran / failed) in THIS pump — settled, not created. */
+    /**
+     * Tool calls that reached an outcome in THIS pump — settled, not created.
+     *
+     * "Settled" is `state: "complete" | "error"`, which covers ran, failed and **cancelled**
+     * (`settleToolCalls` marks in-flight calls complete/error on abort). A **denied** call is not
+     * counted: it stays `approval-responded` (with a synthesized `tool-result`) and never runs.
+     */
     toolCalls?: number;
     /** Token/cost deltas for THIS pump — a turn split by approvals reports each pump separately. */
     inputTokens?: number;

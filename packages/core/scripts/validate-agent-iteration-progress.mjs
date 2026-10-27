@@ -137,6 +137,33 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
     "progress stays engine-scoped"
   );
 
+  // A chat that ends BEFORE its first iteration still reports ITS OWN turn: early termination, a
+  // pending tool phase and the upstream error path all reach `onFinish` without an iteration, and
+  // reporting the previous turn's index there re-introduced "one model call, two numbers".
+  events.length = 0;
+  const early = createLifecycleMiddleware({
+    usage: {},
+    getPricing: () => null,
+    maxIterations: 7,
+    getRunToken: () => "run-e",
+    emitEvent: (type, data) => events.push({ type, data }),
+  });
+  await early.onStart?.({ model: "m", messages: [], iteration: 0 });
+  await early.onIteration?.({}, { iteration: 0, messageId: "e1" });
+  await early.onFinish?.(undefined, { finishReason: "stop" });
+  await early.onStart?.({ model: "m", messages: [], iteration: 0 });
+  await early.onFinish?.(undefined, { finishReason: "error" });
+  assert.deepEqual(
+    events.filter((e) => e.type === "llm:request").map((e) => e.data.iteration),
+    [1, 2],
+    "each chat announces its own turn"
+  );
+  assert.deepEqual(
+    events.filter((e) => e.type === "llm:response").map((e) => e.data.iteration),
+    [1, 2],
+    "…and a chat that never iterated reports the turn it announced, not the previous one"
+  );
+
   // A new run token restarts the numbering on the SAME middleware (a wake turn, or the next user
   // turn in the same process).
   events.length = 0;

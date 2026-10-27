@@ -57,13 +57,17 @@ export interface AgentL1State {
 }
 
 /**
- * Agent-loop progress for the current run. One iteration = one model turn
+ * Agent-loop progress for the CURRENT CHAT (one tool-phase pump). One iteration = one model turn
  * (TanStack middleware `onIteration`, 0-based on the wire → 1-based here).
+ *
+ * Not the run-scoped turn index: a chat pump starts a new `chat()` — and therefore a fresh counter
+ * and budget — for every tool phase, so this reads `1/max` on each of them while `turn:start.index`
+ * keeps counting the user turn (2, 3, …). The two scales are not interchangeable.
  */
 export interface AgentIterationState {
-  /** 1-based model-iteration index within the current run; 0 when idle / not started. */
+  /** 1-based model-iteration index within the current chat (a chat pump resets it per phase); 0 when idle. */
   current: number;
-  /** Configured max iterations (agent-loop budget) for the run; 0 when unknown. */
+  /** That `chat()`'s `maxIterations` budget; 0 when unknown — a per-chat ceiling, not `current`'s denominator. */
   max: number;
 }
 

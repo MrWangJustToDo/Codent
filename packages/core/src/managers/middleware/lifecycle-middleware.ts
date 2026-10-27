@@ -107,6 +107,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     onIteration: (_ctx, info) => {
       // This — not `onStart` — is the turn boundary: `onStart` fires once per `chat()` while this
       // fires once per model call, so the index here is the run-scoped one.
+      // One read: the run token is the same value for both the turn counter and `firstOutput`.
       const token = deps.getRunToken?.() ?? null;
       if (token !== turnsRunToken) {
         turnsRunToken = token;
@@ -126,9 +127,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       messageText = "";
       messageToolCalls = 0;
       // Per-user-turn identity for `firstOutput` (a retried attempt keeps the same run id).
-      const outputToken = deps.getRunToken?.();
-      if (outputToken !== runToken) {
-        runToken = outputToken;
+      if (token !== runToken) {
+        runToken = token;
         runFirstOutput = false;
       }
       deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
@@ -146,6 +146,11 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         turnsRunToken = requestToken;
         turnsInRun = 0;
       }
+      // The turn this chat is about to run. Assigning it here (not only in `onIteration`) is what
+      // keeps a chat that ends BEFORE its first iteration honest: early termination, a pending tool
+      // phase and the upstream error path all reach `onFinish` without an iteration, and the
+      // response would otherwise report the previous turn's number.
+      lastIteration = turnsInRun + 1;
 
       deps.emitEvent?.("llm:request", {
         model: ctx.model,
