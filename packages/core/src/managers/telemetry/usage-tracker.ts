@@ -208,6 +208,17 @@ export class UsageTracker {
   }
 
   /**
+   * Copy of the lifetime totals, for a DELTA baseline that outlives an await.
+   *
+   * {@link getTotal} returns the live object. It is safe today only because every accumulator
+   * REPLACES `this.total` instead of mutating it — an implicit contract one future in-place
+   * accumulation would break, silently turning every `turn:summary` delta into 0.
+   */
+  snapshotTotal(): TokenUsage {
+    return { ...this.total };
+  }
+
+  /**
    * Billed prompt tokens across the session lifetime — what a cache read is a share of.
    *
    * Accumulated **per sample** with the same convention-aware rule as the window fill, so an

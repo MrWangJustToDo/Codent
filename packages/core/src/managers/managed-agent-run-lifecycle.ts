@@ -101,6 +101,9 @@ export async function prepareManagedAgentForRun(
   // one without a prompt — see `markNextPrepareAsNewTurn`.
   const isToolContinuation =
     !forcedNewTurn && (isToolContinuationPrepare(host.getStatus(), options.messages) || flaggedContinuation);
+  // Remember it for the finalizer: a turn with no prompt skips memory extraction (nothing the user
+  // said to remember, and the notification + reply are not worth a side query).
+  if (forcedNewTurn) host.run.setPromptlessTurn(true);
   if (!isToolContinuation || host.getStreamStartedAt() === 0) {
     host.setStreamStartedAt(Date.now());
   }
@@ -135,7 +138,9 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   host.recordStreamDuration();
   host.persistSession();
   host.clearTurnContext();
-  if (reason === "finished") {
+  // Always consume: a wake turn that was aborted must not leave the mark for the NEXT turn.
+  const promptless = host.run.consumePromptlessTurn();
+  if (reason === "finished" && !promptless) {
     host.memory.runExtraction({
       getMessagesForLLM: () => host.getMessagesForLLM(),
       log: host.log,

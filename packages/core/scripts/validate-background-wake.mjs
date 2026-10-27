@@ -171,6 +171,22 @@ for (const parked of ["waiting", "awaiting_user"]) {
 }
 
 // ============================================================================
+// 3b. A stopped or failed run is NOT resumed by a background job
+// ============================================================================
+
+for (const stopped of ["aborted", "error"]) {
+  managed.setStatus(stopped, "validator");
+  const jobId = await runJob(`stopped ${stopped}`);
+  assert.equal(
+    wakes,
+    1,
+    `a ${stopped} session is not woken — the user stopped it (or it failed), and a finishing job must not restart it`
+  );
+  await commandService.markNotified([jobId]);
+}
+managed.setStatus("idle", "validator");
+
+// ============================================================================
 // 4. Manual compaction owns the transcript and is not a pump
 // ============================================================================
 
@@ -196,6 +212,14 @@ assert.equal(managed.planMode.getPhase(), "ready");
 const duringReview = await runJob("echo reviewed");
 assert.equal(wakes, 1, "plan review is not woken — the model would revise the plan unprompted");
 await commandService.markNotified([duringReview]);
+managed.planMode.disable();
+
+// `planning` has no approved plan yet: a promptless turn there could author one.
+managed.planMode.enable();
+assert.equal(managed.planMode.getPhase(), "planning");
+const duringPlanning = await runJob("echo planning");
+assert.equal(wakes, 1, "planning is not woken — nothing is approved, so no unprompted turn");
+await commandService.markNotified([duringPlanning]);
 managed.planMode.disable();
 managed.setStatus("idle", "validator");
 
@@ -301,12 +325,15 @@ function makeCapturingAdapter() {
   const scopedChat = scoped.initChat(manager);
   scopedChat.getUIChannel().addUserMessage("start the build in the background");
 
-  const observed = { requests: [], summaries: [], promptSubmits: 0 };
+  const observed = { requests: [], responses: [], summaries: [], promptSubmits: 0 };
   const bus = manager.of(scoped.id);
-  bus.on("llm:request", () => {
+  bus.on("llm:request", (event) => {
     // During the model call the run scope is set — the finalizer clears it just before the summary,
     // so this is the moment to observe it.
-    observed.requests.push({ runId: scoped.run.getCurrentRunId(), iteration: undefined });
+    observed.requests.push({ runId: scoped.run.getCurrentRunId(), iteration: event.payload.iteration });
+  });
+  bus.on("llm:response", (event) => {
+    observed.responses.push({ iteration: event.payload.iteration });
   });
   bus.on("turn:summary", () => {
     observed.summaries.push(1);
@@ -337,6 +364,11 @@ function makeCapturingAdapter() {
     0,
     "no prompt:submit for a turn nobody prompted — extension hooks and memory selection are skipped"
   );
+  // The index is the run-scoped model turn, and the request must agree with its response: the
+  // request used to log `ctx.iteration` (always 0 at `onStart`) while the response logged the
+  // counter, so one model call reported two different turns.
+  assert.equal(observed.requests[0]?.iteration, 1, "the first request of the run is turn 1");
+  assert.equal(observed.responses[0]?.iteration, 1, "…and its response reports the same turn");
 
   manager.destroyAgent(scoped.id);
 }

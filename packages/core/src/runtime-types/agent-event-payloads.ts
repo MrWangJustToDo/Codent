@@ -223,12 +223,13 @@ export type AgentEventPayloadMap = {
     /** Provider id reported by the adapter usage (sticky across iterations). */
     provider?: string;
     /**
-     * 1-based model turn within the current user turn.
+     * 1-based model-call index within the current user turn.
      *
-     * The engine's own counter (`ctx.iteration`) is per `chat()`, and a chat pump restarts the
-     * engine for every tool phase, so it is 0 for every request there; the lifecycle middleware
-     * counts `onStart` per run token instead and prefers the engine's value when a worker's single
-     * engine does advance it.
+     * Counted per model call (`onIteration`), the only hook that fires for a pump's one-call chat
+     * AND for a worker's multi-iteration chat alike. `llm:request` announces the turn it is about
+     * to run; `llm:response` reports the index that turn actually got. A restart-style retry
+     * (429 / capability strip / reactive compact) is another model call and takes the next index —
+     * `agent:retry` is the event that marks it.
      */
     iteration?: number;
     messagesCount?: number;
@@ -255,7 +256,7 @@ export type AgentEventPayloadMap = {
     outcome?: "finished" | "aborted" | "error";
     /** Driver-level tool-phase continuations executed in this run (each one streamed once). */
     phases?: number;
-    /** Tool calls executed in THIS pump (not the session total). */
+    /** Tool calls that reached an outcome (ran / failed) in THIS pump — settled, not created. */
     toolCalls?: number;
     /** Token/cost deltas for THIS pump — a turn split by approvals reports each pump separately. */
     inputTokens?: number;

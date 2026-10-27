@@ -73,15 +73,17 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   } = { inputTokens: 0, outputTokens: 0 };
   let lastIteration = 0;
   /**
-   * Chats (`onStart`) seen since the run token last changed — the fallback index for
-   * `iteration`.
+   * Model turns seen since the run token last changed — the index `iteration` and `turn:start`
+   * report.
    *
-   * `ctx.iteration` is the ENGINE's counter. `onStart` fires once per `chat()`, and a chat pump
-   * restarts the engine for every tool phase, so `ctx.iteration` is 0 for every request of a
-   * pump-driven turn: one 47-request turn logged `iter 0` forty-seven times, which told a reader
-   * nothing. Counting chats per run token makes the field mean "which model turn of this user
-   * turn". A worker keeps ONE engine for its whole run and `ctx.iteration` advances there, so the
-   * engine's value wins whenever it is non-zero and both profiles stay meaningful.
+   * Counted in `onIteration`, the only hook that fires exactly once per model call. Neither of the
+   * two alternatives works: `ctx.iteration` is the ENGINE's counter and is 0 at `onStart` (upstream
+   * assigns it in `beforeModel`, after `runOnStart`), and counting `onStart` would count *chats* —
+   * a pump starts one chat per tool phase, so it happens to match, while a worker's single chat
+   * with many iterations would report 1 forever.
+   *
+   * Consequence worth knowing: a restart-style retry (429 / capability strip / reactive compact) is
+   * another model call and takes the next index. `agent:retry` is the event that marks it.
    */
   let turnsInRun = 0;
   let turnsRunToken: unknown;
@@ -103,14 +105,19 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   return defineMiddleware("observe", {
     name: "lifecycle",
     onIteration: (_ctx, info) => {
-      // TanStack `IterationInfo.iteration` is 0-based (one iteration = one model
-      // turn); expose 1-based progress plus the run's iteration budget.
-      //
-      // This — not `onStart` — is the turn boundary: `onStart` fires once per `chat()` while
-      // `RUN_FINISHED` fires once per iteration, so deriving the index there made every tool-using
-      // turn report index 1 repeatedly.
-      const index = info.iteration + 1;
-      deps.onIteration?.({ current: index, max: deps.maxIterations ?? 0 });
+      // This — not `onStart` — is the turn boundary: `onStart` fires once per `chat()` while this
+      // fires once per model call, so the index here is the run-scoped one.
+      const token = deps.getRunToken?.() ?? null;
+      if (token !== turnsRunToken) {
+        turnsRunToken = token;
+        turnsInRun = 0;
+      }
+      turnsInRun += 1;
+      lastIteration = turnsInRun;
+      const index = turnsInRun;
+      // Progress keeps the ENGINE's 0-based counter: `max` is that engine's budget, so a run-scoped
+      // index would report `60/50` for a turn that crossed tool phases.
+      deps.onIteration?.({ current: info.iteration + 1, max: deps.maxIterations ?? 0 });
       turnIndex = index;
       turnToolCalls = 0;
       turnClosed = false;
@@ -118,9 +125,10 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       messageId = "";
       messageText = "";
       messageToolCalls = 0;
-      const token = deps.getRunToken?.();
-      if (token !== runToken) {
-        runToken = token;
+      // Per-user-turn identity for `firstOutput` (a retried attempt keeps the same run id).
+      const outputToken = deps.getRunToken?.();
+      if (outputToken !== runToken) {
+        runToken = outputToken;
         runFirstOutput = false;
       }
       deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
@@ -131,13 +139,13 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       roundStart = startTime;
       firstTokenAt = 0;
       lastModel = ctx.model;
-      const token = deps.getRunToken?.() ?? null;
-      if (token !== turnsRunToken) {
-        turnsRunToken = token;
+      // Reset here too: this request announces turn 1 of a new run, but the counter still holds the
+      // previous run's total until the first `onIteration` of this chat.
+      const requestToken = deps.getRunToken?.() ?? null;
+      if (requestToken !== turnsRunToken) {
+        turnsRunToken = requestToken;
         turnsInRun = 0;
       }
-      turnsInRun += 1;
-      lastIteration = ctx.iteration > 0 ? ctx.iteration + 1 : turnsInRun;
 
       deps.emitEvent?.("llm:request", {
         model: ctx.model,
@@ -145,7 +153,10 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         // for the first request of a run (usage never carries a provider here —
         // see {@link providerFromModel}).
         provider: lastProvider ?? providerFromModel(ctx?.model),
-        iteration: ctx.iteration,
+        // The turn this request is about to run: `onIteration` fires after `onStart` (upstream
+        // runs `runOnStart` once per chat, before its first iteration), so the counter still holds
+        // the previous turn's value here. `llm:response` reports the index the turn actually got.
+        iteration: turnsInRun + 1,
         messagesCount: ctx.messages.length,
         toolsCount: ctx.toolNames?.length ?? 0,
       });

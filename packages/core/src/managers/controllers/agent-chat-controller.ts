@@ -24,6 +24,7 @@ import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js
 import { countToolCalls } from "../run-finalizer.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
+import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 import type { AgentManager } from "../agent-manager.js";
 import type { ManagedAgent } from "../managed-agent.js";
@@ -31,6 +32,9 @@ import type { RunToken } from "../run-coordinator.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
+
+/** Statuses a background completion may wake (see {@link AgentChatController.wakeForBackgroundCompletion}). */
+const WAKEABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(["idle", "completed"]);
 
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 
@@ -347,12 +351,15 @@ export class AgentChatController {
     // A live pump delivers the notification at its next model call (the old behavior), and a
     // session parked on the user — approval / `ask_user` — must not be resumed behind their back.
     if (this.shouldDeferQueue()) return false;
-    // A manual `/compact` owns the transcript but is not a pump, so `shouldDeferQueue` cannot
-    // see it: a turn started now would run concurrently with the compaction.
-    if (this.managed.getStatus() === "compacting") return false;
-    // Plan review is an interactive pause: the user is reading the plan, so the next turn is
-    // theirs to start. Waking here would also let the model revise the plan unprompted.
-    if (this.managed.planMode.getPhase() === "ready") return false;
+    // Explicit allowlist, not "anything that is not parked". A run the user ABORTED or that ended in
+    // ERROR is deliberately left alone: they just stopped it (or it failed), and a background job
+    // finishing is not a reason to start talking again. `compacting` is excluded by the same set.
+    if (!WAKEABLE_STATUSES.has(this.managed.getStatus())) return false;
+    // `ready` is review — the user is reading the plan. `planning` has no approved plan yet, so a
+    // promptless turn there could author one. `executing` / `retro` stay wakeable: that plan was
+    // approved, and the mode already auto-approves its tools.
+    const planPhase = this.managed.planMode.getPhase();
+    if (planPhase === "ready" || planPhase === "planning") return false;
     // A wake is a new turn with no prompt: `startsNewTurn` gives it a run id and turn boundaries
     // even though the channel's last message is an assistant message.
     void this.enqueueRunOnce({ startsNewTurn: true });
@@ -504,7 +511,7 @@ export class AgentChatController {
     this.managed.clearPrepareAsNewTurn();
     this.managed.setError("");
     // Baselines for `turn:summary`: the summary reports THIS pump's work, not the session totals.
-    const usageAtStart = this.managed.usage.getTotal();
+    const usageAtStart = this.managed.usage.snapshotTotal();
     const costAtStart = this.managed.usage.getTotalCostUsd();
     const toolCallsAtStart = countToolCalls(this.channel.getMessages());
     // Safe: skips approval-responded and valid input-complete (needed for `y` / tool-phase).

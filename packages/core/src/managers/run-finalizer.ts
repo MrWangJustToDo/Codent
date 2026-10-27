@@ -10,6 +10,8 @@
  * accident.
  */
 
+import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
+
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "./agent-run-outcome.js";
 import type { AgentStatus, RunFinalizeReason } from "./agent-types.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
@@ -50,12 +52,19 @@ export interface ChatRunFinalizeInput {
   persist: () => void;
 }
 
-/** Tool calls present in a channel snapshot — the baseline for a pump's `turn:summary`. */
+/**
+ * Tool calls that reached an outcome in a channel snapshot.
+ *
+ * A pump reports `countToolCalls(end) - countToolCalls(start)` in `turn:summary`, so this has to be
+ * "settled", not "created": an approval-split turn requests its tools in one pump (they stay
+ * pending) and runs them in the next, and counting created parts reported `0 tools` for the pump
+ * that actually executed them.
+ */
 export function countToolCalls(messages: readonly UIMessage[]): number {
   let count = 0;
   for (const message of messages) {
     if (message.role !== "assistant") continue;
-    for (const part of message.parts) if (part.type === "tool-call") count += 1;
+    for (const part of message.parts) if (isToolCallPart(part) && isSettledToolCallPart(part)) count += 1;
   }
   return count;
 }

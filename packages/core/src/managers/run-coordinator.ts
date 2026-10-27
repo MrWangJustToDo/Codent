@@ -162,6 +162,14 @@ export class RunCoordinator {
    * nothing to collect here.
    */
   private prepareAsNewTurn = false;
+  /**
+   * Set while the CURRENT turn was started without a user prompt (the background wake).
+   *
+   * Only post-run memory extraction reads it: mining "a build finished" for durable memories costs
+   * a real LLM call and writes files, and there is no user input to remember. Cleared on finalize
+   * and on session reset.
+   */
+  private promptlessTurn = false;
   /** Guards turn-level finalizeRun so stop() + pump outcome do not double-fire. */
   private turnLifecycleFinalized = false;
   private streamStartedAt = 0;
@@ -197,6 +205,18 @@ export class RunCoordinator {
   consumePrepareAsNewTurn(): boolean {
     const value = this.prepareAsNewTurn;
     this.prepareAsNewTurn = false;
+    return value;
+  }
+
+  /** Mark the turn as having no user prompt (see {@link promptlessTurn}). */
+  setPromptlessTurn(value: boolean): void {
+    this.promptlessTurn = value;
+  }
+
+  /** Consume and clear the promptless-turn mark at finalize. */
+  consumePromptlessTurn(): boolean {
+    const value = this.promptlessTurn;
+    this.promptlessTurn = false;
     return value;
   }
 
@@ -246,6 +266,7 @@ export class RunCoordinator {
   }
 
   resetRunState(): void {
+    this.promptlessTurn = false;
     this.abort();
     this.pendingAbortControllers = [];
     this.cancelAbortController();

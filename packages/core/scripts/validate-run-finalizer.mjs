@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { RunFinalizer } from "../dist/dev.mjs";
+import { RunFinalizer, countToolCalls } from "../dist/dev.mjs";
 
 const messages = [
   { id: "u1", role: "user", parts: [{ type: "text", content: "do work" }] },
@@ -19,7 +19,14 @@ const messages = [
     role: "assistant",
     parts: [
       { type: "text", content: "working" },
-      { type: "tool-call", id: "call_1", name: "run_command", arguments: "{}", state: "input-complete" },
+      {
+        type: "tool-call",
+        id: "call_1",
+        name: "run_command",
+        arguments: "{}",
+        state: "complete",
+        output: { ok: true },
+      },
     ],
   },
 ];
@@ -150,6 +157,61 @@ function makeFinalizer({ status = "running", error = "", total } = {}) {
   );
   assert.equal(ctrl.calls[0].outcome.kind, "waiting");
   assert.equal("outcome" in ctrl.calls[2].data, false, "waiting summary carries no outcome");
+}
+
+// ---------------------------------------------------------------------------
+// 2a. `toolCalls` counts tools that REACHED AN OUTCOME in this pump
+// ---------------------------------------------------------------------------
+{
+  // An approval-split turn: the first pump requests the tool (pending approval), the resume pump
+  // runs it. Counting created parts reported `0 tools` for the pump that executed it.
+  const requested = [
+    {
+      id: "a2",
+      role: "assistant",
+      parts: [
+        { type: "tool-call", id: "call_pending", name: "run_command", arguments: "{}", state: "approval-requested" },
+      ],
+    },
+  ];
+  const executed = [
+    {
+      id: "a2",
+      role: "assistant",
+      parts: [
+        { type: "tool-call", id: "call_pending", name: "run_command", arguments: "{}", state: "complete", output: {} },
+      ],
+    },
+  ];
+  const ctrl = makeFinalizer();
+  ctrl.finalizer.finalizeChat({
+    kind: "finished",
+    messages: executed,
+    waitingForUser: false,
+    phases: 1,
+    turnStartedAt: Date.now(),
+    ...FROM_ZERO,
+    toolCallsBefore: countToolCalls(requested),
+    persist: () => {},
+  });
+  const summary = ctrl.calls.find((call) => call.op === "event").data;
+  assert.equal(summary.toolCalls, 1, "the pump that ran the approved tool reports it");
+
+  const pendingCtrl = makeFinalizer();
+  pendingCtrl.finalizer.finalizeChat({
+    kind: "waiting",
+    messages: requested,
+    waitingForUser: true,
+    phases: 1,
+    turnStartedAt: Date.now(),
+    ...FROM_ZERO,
+    persist: () => {},
+  });
+  assert.equal(
+    pendingCtrl.calls.find((call) => call.op === "event").data.toolCalls,
+    0,
+    "a pump that only requested (pending approval) reports no executed tool"
+  );
 }
 
 // ---------------------------------------------------------------------------
