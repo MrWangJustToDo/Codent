@@ -5,8 +5,9 @@
  * The sequence used to be copied across the chat pump, the subagent runner, the run skeleton's
  * optional outcome path and `ManagedAgent.syncRunStatusFromUIMessages`. The ordering is the asset:
  * `applyRunOutcome` before persistence, persistence before `finalizeRun`, and `turn:summary` last
- * (it must land while the run id is still set). This class owns it so a new caller cannot reorder it
- * by accident.
+ * (it must land while the run's **log scope** is still set; `finalizeRun` defers only
+ * `log.setRun(null)` to a microtask). This class owns it so a new caller cannot reorder it by
+ * accident.
  */
 
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "./agent-run-outcome.js";

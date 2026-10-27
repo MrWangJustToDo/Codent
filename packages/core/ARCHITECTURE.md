@@ -343,7 +343,7 @@ run-agent.ts: executeManagedAgentRun
 
 ```
 RunCoordinator.setupAbortController(abortSignal)  // current = run AbortController
-if !isToolContinuationPrepare(agent.status, messages):
+if !isToolContinuationPrepare(agent.status, messages) && !parentId:
   collectExtensionPromptHooks(prompt)   // memory selection lives here (§7)
   emitEvent("prompt:submit", { prompt })
 ```
@@ -458,8 +458,8 @@ Status logic is centralized in `AgentStatusController` (`managers/controllers/ag
 | Client tool (`ask_user`)    | `awaiting_user`         | App host calls `ManagedAgent.setClientToolWaiting(true)`     |
 | Auto-compact                | `compacting`            | `status.beginCompaction("auto")`                             |
 | Reactive compact            | `compacting`            | `status.beginCompaction("reactive")`                         |
-| Success                     | `completed` / `idle`    | `onRunFinish` (preserves `waiting` / `awaiting_user` if set) |
-| Stream ended, tools waiting | `completed` / `waiting` | `statusController.reconcileAfterRun` after `pumpToolPhases`  |
+| Success                     | `completed`             | `onRunFinish` (preserves `waiting` / `awaiting_user` if set; `idle` only on a session reset) |
+| Stream ended, tools waiting | `waiting` / `awaiting_user` | `statusController.reconcileAfterRun` after `pumpToolPhases` |
 | User abort                  | `aborted`               | `onRunAbort` / `onUserCancel` / `RunCoordinator`             |
 | Error                       | `error`                 | `onRunError` / `onExternalError`                             |
 
@@ -481,7 +481,8 @@ Core **declares** which tools need approval and **owns agent status** during the
 Tools with approval required (`defineServerTool` in `agent/tools/runtime/define-tool.ts`):
 
 - `write_file`, `edit_file`, `delete_file`
-- `run_command`
+- `run_command` — only when it is not in subagent-safe mode (`needsApproval: !subagentSafe`)
+- `kill_command`
 
 Helper (available but not used by app today):
 
@@ -1056,7 +1057,7 @@ Observer `emit` is synchronous fire-and-forget with per-listener error containme
 
 **Host observation API:** `AgentSession` only (`createLocalAgentSession` / HTTP client) — `getSnapshot` / `dispatch` / `subscribe(channels)`. There are **no** public domain `.on(...)` APIs: `AgentChatController.on("change")` and `ManagedAgent.on("change"|"ui")` were removed with the domain emitters, and the `AgentTelemetryBus` facade was deleted — `AgentEventBus` is the single mechanism.
 
-**Projection:** `local-agent-session` keeps one subscription per agent scope and routes events to channels via declared metadata (`AGENT_EVENT_META`); retained events (`state` / `mode` / `messages` / `usage` / `todos` / `plan` / `extensions` / `mcp` / `queues` / `interaction` / `iteration`) replay their current value to each new subscriber. The former structured `log` session channel was removed — log observability is provided exclusively by the persisted JSONL file sink (`.agents/logs/{sessionId}/agent.log`).
+**Projection:** `local-agent-session` keeps one subscription per agent scope and routes events to channels via declared metadata (`AGENT_EVENT_META`); retained events (`state` / `mode` / `messages` / `usage` / `todos` / `plan` / `extensions` / `mcp` / `queues` / `interaction` / `iteration` / `tool-presentation` / `jobs` / `subagents`) replay their current value to each new subscriber. The former structured `log` session channel was removed — log observability is provided exclusively by the persisted JSONL file sink (`.agents/logs/{sessionId}/agent.log`).
 
 **Messages channel:** Session snapshots always carry a full `UIMessage[]`; the `messages` channel delivers the same full array (JSON-patch / delta delivery is deferred). Wire projection for the model loop is cached by channel revision + last-message fingerprint (`WireProjectionCache`).
 
