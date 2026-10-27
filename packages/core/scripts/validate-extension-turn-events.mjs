@@ -2,8 +2,10 @@
  * Validates the turn/message boundary events.
  *
  * The hook that matters is `onIteration`, not `onStart`: TanStack calls `onStart` once per `chat()`
- * and `RUN_FINISHED` once per model iteration, so a boundary derived from `onStart` reports index 1
- * for every turn of a tool-using run. This drives the real hook sequence an engine produces.
+ * and fires `onIteration` once per model call, so a boundary derived from `onStart` reports index 1
+ * for every turn of a tool-using run. `index` is the RUN-scoped model turn (it keeps counting across
+ * the chat pump's per-tool-phase chats), NOT `agent:iteration.current`, which restarts at 1 for each
+ * chat. This drives the real hook sequence an engine produces.
  *
  * Run: pnpm --filter @codent/core run validate:extension-turn-events
  */
@@ -75,7 +77,7 @@ function drive(runToken = "turn-1") {
   assert.deepEqual(
     of("turn:start").map((e) => e.payload.index),
     [1, 2],
-    "the turn index comes from the iteration, matching agent:iteration"
+    "the turn index advances per model call within the run"
   );
   assert.deepEqual(
     of("turn:end").map((e) => ({ index: e.payload.index, toolCalls: e.payload.toolCalls })),
@@ -90,6 +92,27 @@ function drive(runToken = "turn-1") {
   assert.deepEqual(
     of("message:start").map((e) => e.payload.firstOutput),
     [true, false]
+  );
+}
+
+// ── 2b. a chat pump's next chat continues the numbering (each engine starts at 0) ─────────
+//
+// `agent:iteration.current` restarts per chat; the turn index must not. This is the shape that made
+// a root turn report index 1 on every tool phase before the index was made run-scoped.
+{
+  const { middleware, ctx, of, beginTurn } = drive();
+  middleware.onStart(ctx);
+  beginTurn(0);
+  middleware.onChunk(ctx, { type: "RUN_FINISHED", finishReason: "tool_calls" });
+
+  middleware.onStart(ctx); // next tool-phase pump: a fresh engine, iteration 0 again
+  beginTurn(0);
+  middleware.onChunk(ctx, { type: "RUN_FINISHED", finishReason: "stop" });
+
+  assert.deepEqual(
+    of("turn:start").map((e) => e.payload.index),
+    [1, 2],
+    "a new chat in the same run continues the turn numbering"
   );
 }
 

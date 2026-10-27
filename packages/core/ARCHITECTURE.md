@@ -1089,9 +1089,9 @@ Command output, task summaries and compact summaries share the per-agent `AgentS
 | Session bootstrap | `session:doc`, `session:skill`, `session:mcp`, `session:memory`, `session:start`                                                       |
 | Session I/O       | `session:restore`, `session:save-error`                                                                                                |
 | Run lifecycle     | `prompt:submit`, `agent:thinking`, `agent:abort`, `agent:stream-error`, `agent:extension-error`, `agent:stop`                                                   |
-| LLM iteration     | `llm:request`, `llm:response` — **per TanStack iteration**, not per user turn; log-only (no channel)                                     |
-| Iteration progress | `agent:iteration` → retained `iteration` channel + `AgentSessionSnapshot.iteration` (`{ current, max }`, 1-based per model turn). Projection-only: deliberately not written to the log |
-| Turn rollup       | `turn:summary` — end of `AgentChatController.pumpToolPhases` (outcome, tool phases / tool calls, tokens, cost, duration)                 |
+| LLM call          | `llm:request`, `llm:response` — **per `chat()`**, not per user turn: a chat pump starts one chat per tool phase (one pair each), while a worker's multi-iteration chat emits ONE pair whose response reports the last turn it covered. `iteration` is the run-scoped model turn; log-only (no channel) |
+| Iteration progress | `agent:iteration` → retained `iteration` channel + `AgentSessionSnapshot.iteration` (`{ current, max }`, 1-based **per `chat()`** — a chat pump restarts it per tool phase, so it reads `1/max` on each; `max` is that chat's budget). Deliberately a different scale from `turn:start.index` / `llm:*` `iteration` (run-scoped); never pair them. Projection-only: deliberately not written to the log |
+| Turn rollup       | `turn:summary` — one per pump, at the end of `AgentChatController.pumpToolPhases` (outcome, tool phases / settled tool calls, tokens, cost, duration — all deltas for THAT pump) |
 | Tools             | `agent:tool-start`, `agent:tool-approval-request`, `agent:tool-approval-resolved`, `agent:tool-end`, `agent:tool-error`                |
 | Memory            | `memory:prefetch`, `memory:extract`, `memory:consolidate`                                                                              |
 | Compaction        | `compaction:auto-*`, `compaction:reactive-*` (start kind matches path)                                                                 |
@@ -1124,7 +1124,7 @@ The seam is deliberately non-removable: ~76 core call sites plus `ctx.logger` wr
 
 **Opt-in hook echoes:** middleware hook-call echoes (`middleware:{name}:{hook}`) are off by default and only written when `MY_AGENT_LOG_HOOKS` is truthy.
 
-**Timeline metrics:** `llm:request`/`llm:response` carry `model`/`iteration`; `llm:response` adds `reasoningTokens`, `costUsd`, `roundElapsedMs`, `firstTokenMs` (from `UsageTracker` per-call tracking). Status transitions are logged from `ManagedAgent.setStatus` (`from`/`to` + controller-supplied `trigger`); approval resolutions are emitted as `agent:tool-approval-resolved` by `ToolApprovalTable.upsert` (pending → approved/denied only).
+**Timeline metrics:** `llm:request`/`llm:response` carry `model`/`iteration` (the run-scoped model turn; the request announces the turn it is about to run, the response reports the one it got — a chat that ends before its first iteration reports the announced number); `llm:response` adds `reasoningTokens`, `costUsd`, `roundElapsedMs`, `firstTokenMs` (from `UsageTracker` per-call tracking). Status transitions are logged from `ManagedAgent.setStatus` (`from`/`to` + controller-supplied `trigger`); approval resolutions are emitted as `agent:tool-approval-resolved` by `ToolApprovalTable.upsert` (pending → approved/denied only).
 
 ### 8.4a Teardown and the exit path
 
