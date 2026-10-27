@@ -35,8 +35,29 @@ export interface ChatRunFinalizeInput {
   waitingForUser: boolean;
   phases: number;
   turnStartedAt: number;
+  /**
+   * Usage and tool-call count when THIS pump started.
+   *
+   * The summary describes the pump, so it reports deltas against these. Reporting the session
+   * totals made the numbers unreadable and unbounded ("Turn complete … 58982→802 tokens" was
+   * 5.9k for the first turn and 5.4M twenty turns later) and made a turn split by approvals look
+   * like one long turn with an impossible tool count.
+   */
+  usageBefore: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+  costBefore: number;
+  toolCallsBefore: number;
   /** Chat controller-owned persistence (channel → session store). */
   persist: () => void;
+}
+
+/** Tool calls present in a channel snapshot — the baseline for a pump's `turn:summary`. */
+export function countToolCalls(messages: readonly UIMessage[]): number {
+  let count = 0;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) if (part.type === "tool-call") count += 1;
+  }
+  return count;
 }
 
 export class RunFinalizer {
@@ -84,18 +105,16 @@ export class RunFinalizer {
     }
 
     const totalUsage = this.deps.usage.getTotal();
-    const toolCallCount = input.messages
-      .filter((message) => message.role === "assistant")
-      .reduce((count, message) => count + message.parts.filter((part) => part.type === "tool-call").length, 0);
+    const delta = (now: number, before: number) => Math.max(0, now - before);
     this.deps.emitEvent("turn:summary", {
       ...(input.kind !== "waiting" ? { outcome: input.kind } : {}),
       phases: input.phases,
-      toolCalls: toolCallCount,
-      inputTokens: totalUsage.inputTokens,
-      outputTokens: totalUsage.outputTokens,
-      cacheReadTokens: totalUsage.cacheReadTokens,
-      cacheWriteTokens: totalUsage.cacheWriteTokens,
-      costUsd: this.deps.usage.getTotalCostUsd(),
+      toolCalls: delta(countToolCalls(input.messages), input.toolCallsBefore),
+      inputTokens: delta(totalUsage.inputTokens, input.usageBefore.inputTokens),
+      outputTokens: delta(totalUsage.outputTokens, input.usageBefore.outputTokens),
+      cacheReadTokens: delta(totalUsage.cacheReadTokens ?? 0, input.usageBefore.cacheReadTokens ?? 0),
+      cacheWriteTokens: delta(totalUsage.cacheWriteTokens ?? 0, input.usageBefore.cacheWriteTokens ?? 0),
+      costUsd: Math.max(0, this.deps.usage.getTotalCostUsd() - input.costBefore),
       durationMs: Date.now() - input.turnStartedAt,
     });
 

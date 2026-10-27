@@ -24,7 +24,14 @@ const messages = [
   },
 ];
 
-function makeFinalizer({ status = "running", error = "" } = {}) {
+/** Baselines for a pump that started with nothing recorded yet. */
+const FROM_ZERO = {
+  usageBefore: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  costBefore: 0,
+  toolCallsBefore: 0,
+};
+
+function makeFinalizer({ status = "running", error = "", total } = {}) {
   let currentStatus = status;
   let currentError = error;
   const calls = [];
@@ -38,13 +45,14 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     discardPreforkRuns: (cause) => calls.push({ op: "discard", cause }),
     emitEvent: (type, data) => calls.push({ op: "event", type, data }),
     usage: {
-      getTotal: () => ({
-        inputTokens: 11,
-        outputTokens: 22,
-        cacheReadTokens: 33,
-        cacheWriteTokens: 44,
-      }),
-      getTotalCostUsd: () => 0.5,
+      getTotal: () =>
+        total?.current ?? {
+          inputTokens: 11,
+          outputTokens: 22,
+          cacheReadTokens: 33,
+          cacheWriteTokens: 44,
+        },
+      getTotalCostUsd: () => total?.cost ?? 0.5,
     },
   });
   return {
@@ -94,6 +102,7 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     waitingForUser: false,
     phases: 2,
     turnStartedAt: Date.now() - 25,
+    ...FROM_ZERO,
     persist: () => {
       persisted += 1;
       ctrl.calls.push({ op: "persist" });
@@ -131,6 +140,7 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     waitingForUser: true,
     phases: 1,
     turnStartedAt: Date.now(),
+    ...FROM_ZERO,
     persist: () => ctrl.calls.push({ op: "persist" }),
   });
   assert.deepEqual(
@@ -140,6 +150,59 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
   );
   assert.equal(ctrl.calls[0].outcome.kind, "waiting");
   assert.equal("outcome" in ctrl.calls[2].data, false, "waiting summary carries no outcome");
+}
+
+// ---------------------------------------------------------------------------
+// 2b. The summary reports THIS pump, not the session
+// ---------------------------------------------------------------------------
+{
+  // Second pump of the same user turn: the session already carries the first pump's usage and
+  // tool calls, so reporting totals would double-count everything the turn has done so far.
+  const total = {
+    current: { inputTokens: 900, outputTokens: 80, cacheReadTokens: 800, cacheWriteTokens: 0 },
+    cost: 0.9,
+  };
+  const ctrl = makeFinalizer({ total });
+  ctrl.finalizer.finalizeChat({
+    kind: "waiting",
+    messages,
+    waitingForUser: true,
+    phases: 3,
+    turnStartedAt: Date.now(),
+    usageBefore: { inputTokens: 800, outputTokens: 60, cacheReadTokens: 700, cacheWriteTokens: 0 },
+    costBefore: 0.8,
+    toolCallsBefore: 1,
+    persist: () => {},
+  });
+  const summary = ctrl.calls.find((call) => call.op === "event").data;
+  assert.equal(summary.inputTokens, 100, "input tokens are the pump's delta");
+  assert.equal(summary.outputTokens, 20, "output tokens are the pump's delta");
+  assert.equal(summary.cacheReadTokens, 100, "cache reads are the pump's delta");
+  assert.equal(summary.toolCalls, 0, "tool calls are the pump's delta, not the channel's total");
+  assert.ok(Math.abs(summary.costUsd - 0.1) < 1e-9, "cost is the pump's delta");
+}
+
+{
+  // A pump that ran nothing (the second approval of a batch) reports zeros, not the session.
+  const total = { current: { inputTokens: 900, outputTokens: 80 }, cost: 0.9 };
+  const ctrl = makeFinalizer({ total });
+  ctrl.finalizer.finalizeChat({
+    kind: "waiting",
+    messages,
+    waitingForUser: true,
+    phases: 0,
+    turnStartedAt: Date.now(),
+    usageBefore: { inputTokens: 900, outputTokens: 80 },
+    costBefore: 0.9,
+    toolCallsBefore: 1,
+    persist: () => {},
+  });
+  const summary = ctrl.calls.find((call) => call.op === "event").data;
+  assert.deepEqual(
+    [summary.inputTokens, summary.outputTokens, summary.toolCalls, summary.costUsd],
+    [0, 0, 0, 0],
+    "an empty pump summarizes as nothing rather than repeating the session totals"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +216,7 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     waitingForUser: false,
     phases: 0,
     turnStartedAt: Date.now(),
+    ...FROM_ZERO,
     persist: () => {},
   });
   assert.equal(ctrl.calls.find((call) => call.op === "apply").outcome.errorMessage, "boom");
@@ -166,6 +230,7 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     waitingForUser: false,
     phases: 0,
     turnStartedAt: Date.now(),
+    ...FROM_ZERO,
     persist: () => {},
   });
   assert.equal(
@@ -183,6 +248,7 @@ function makeFinalizer({ status = "running", error = "" } = {}) {
     waitingForUser: false,
     phases: 0,
     turnStartedAt: Date.now(),
+    ...FROM_ZERO,
     persist: () => {},
   });
   assert.equal(

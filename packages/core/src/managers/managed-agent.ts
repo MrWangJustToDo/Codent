@@ -1965,6 +1965,15 @@ export class ManagedAgent {
     this.run.markNextPrepareAsContinuation();
   }
 
+  /** The next prepare starts a turn nobody prompted (a background-completion wake). */
+  markNextPrepareAsNewTurn(): void {
+    this.run.markNextPrepareAsNewTurn();
+  }
+
+  clearPrepareAsNewTurn(): void {
+    this.run.clearPrepareAsNewTurn();
+  }
+
   /** Clear a leftover continuation mark (e.g. on turn finalize). */
   clearPrepareAsContinuation(): void {
     this.run.clearPrepareAsContinuation();
@@ -1973,6 +1982,11 @@ export class ManagedAgent {
   /** Consume and clear the continuation flag for prepareForRun. */
   consumePrepareAsContinuation(): boolean {
     return this.run.consumePrepareAsContinuation();
+  }
+
+  /** Consume and clear the "starts a new turn without a prompt" flag for prepareForRun. */
+  consumePrepareAsNewTurn(): boolean {
+    return this.run.consumePrepareAsNewTurn();
   }
 
   async prepareForRun(options: {

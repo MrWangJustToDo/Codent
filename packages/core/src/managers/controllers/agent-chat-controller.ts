@@ -21,6 +21,7 @@ import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
+import { countToolCalls } from "../run-finalizer.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
@@ -352,7 +353,9 @@ export class AgentChatController {
     // Plan review is an interactive pause: the user is reading the plan, so the next turn is
     // theirs to start. Waking here would also let the model revise the plan unprompted.
     if (this.managed.planMode.getPhase() === "ready") return false;
-    void this.enqueueRunOnce();
+    // A wake is a new turn with no prompt: `startsNewTurn` gives it a run id and turn boundaries
+    // even though the channel's last message is an assistant message.
+    void this.enqueueRunOnce({ startsNewTurn: true });
     return true;
   }
 
@@ -413,9 +416,10 @@ export class AgentChatController {
    * channel, so a change made after it was scheduled (an approval response, a tool
    * result) is handled by that run rather than needing a second one.
    */
-  private enqueueRunOnce(): Promise<void> {
+  private enqueueRunOnce(options: { startsNewTurn?: boolean } = {}): Promise<void> {
     if (this.runPending()) return this.runChain;
     const epoch = this.lifecycleEpoch;
+    const startsNewTurn = options.startsNewTurn === true;
     this.pendingRunEpoch = epoch;
     const run = () => {
       // Only the slot owner may clear it. A callback from an older epoch can run
@@ -423,7 +427,7 @@ export class AgentChatController {
       // stale callback consume the NEW pump's slot and let a third pump start.
       if (this.pendingRunEpoch === epoch) this.pendingRunEpoch = null;
       if (epoch !== this.lifecycleEpoch) return;
-      return this.pumpToolPhases();
+      return this.pumpToolPhases({ startsNewTurn });
     };
     this.runChain = this.runChain.then(run, run);
     return this.runChain;
@@ -488,7 +492,7 @@ export class AgentChatController {
     return { continue: true, messages: current };
   }
 
-  private async pumpToolPhases(): Promise<void> {
+  private async pumpToolPhases(options: { startsNewTurn?: boolean } = {}): Promise<void> {
     const epoch = this.lifecycleEpoch;
     const token = this.managed.run.beginRun();
     this.currentToken = token;
@@ -496,7 +500,13 @@ export class AgentChatController {
     this.pumpDepth += 1;
     this.managed.resetTurnLifecycle();
     this.managed.clearPrepareAsContinuation();
+    // A stale wake mark must not survive a pump that ends before its first model call.
+    this.managed.clearPrepareAsNewTurn();
     this.managed.setError("");
+    // Baselines for `turn:summary`: the summary reports THIS pump's work, not the session totals.
+    const usageAtStart = this.managed.usage.getTotal();
+    const costAtStart = this.managed.usage.getTotalCostUsd();
+    const toolCallsAtStart = countToolCalls(this.channel.getMessages());
     // Safe: skips approval-responded and valid input-complete (needed for `y` / tool-phase).
     this.applyCancelledIncompleteTools();
 
@@ -518,6 +528,10 @@ export class AgentChatController {
           const prepared = this.prepareContinuationPhase(currentMessages);
           if (!prepared.continue) break;
           currentMessages = prepared.messages;
+        } else if (options.startsNewTurn) {
+          // Set at the last moment: a pump that stops on a pending interaction never reaches its
+          // first model call, and the mark must not leak into the resume pump.
+          this.managed.markNextPrepareAsNewTurn();
         }
 
         await this.executeStream(currentMessages, token);
@@ -580,6 +594,9 @@ export class AgentChatController {
           waitingForUser,
           phases: toolPhases,
           turnStartedAt: turnStart,
+          usageBefore: usageAtStart,
+          costBefore: costAtStart,
+          toolCallsBefore: toolCallsAtStart,
           persist: () => this.persistMessages("pump-complete"),
         });
         finalized = true;
@@ -606,6 +623,9 @@ export class AgentChatController {
             waitingForUser: false,
             phases: toolPhases,
             turnStartedAt: turnStart,
+            usageBefore: usageAtStart,
+            costBefore: costAtStart,
+            toolCallsBefore: toolCallsAtStart,
             persist: () => this.persistMessages("pump-complete"),
           });
         } catch {

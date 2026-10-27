@@ -287,7 +287,62 @@ function makeCapturingAdapter() {
 }
 
 // ============================================================================
-// 9. What the model is TOLD: the wake is only useful if the tools stop implying
+// 9. The wake turn is a REAL turn: own run scope, no user prompt
+// ============================================================================
+
+{
+  // A wake is a turn nobody typed, so it must still be addressable as a run: every log line and
+  // every `turn:summary` of the chat pump is scoped by the run id. Before this, the wake inherited
+  // the "tool continuation" classification (the channel's last message is an assistant message),
+  // so its requests, tools and summary carried no run at all and could not be attributed.
+  const scoped = await manager.createManagedAgent({ name: "background-wake-scope", model: "capturing-model" });
+  const { config } = makeCapturingAdapter();
+  scoped.setTextAdapter(config);
+  const scopedChat = scoped.initChat(manager);
+  scopedChat.getUIChannel().addUserMessage("start the build in the background");
+
+  const observed = { requests: [], summaries: [], promptSubmits: 0 };
+  const bus = manager.of(scoped.id);
+  bus.on("llm:request", () => {
+    // During the model call the run scope is set — the finalizer clears it just before the summary,
+    // so this is the moment to observe it.
+    observed.requests.push({ runId: scoped.run.getCurrentRunId(), iteration: undefined });
+  });
+  bus.on("turn:summary", () => {
+    observed.summaries.push(1);
+  });
+  bus.on("prompt:submit", () => {
+    observed.promptSubmits += 1;
+  });
+
+  const scopedService = scoped.getCommandService();
+  await scopedService.startBackground({
+    command: "npm run build",
+    toolCallId: "tc-scope",
+    coreEnv: scoped.getCoreEnv(),
+  });
+  exits.at(-1).onExit(0);
+  await flush();
+  await scopedChat.runChain;
+
+  assert.equal(observed.requests.length, 1, "the wake ran one model turn");
+  assert.equal(
+    typeof observed.requests[0].runId === "string" && observed.requests[0].runId.length > 0,
+    true,
+    `the wake turn carries its own run scope (got ${JSON.stringify(observed.requests[0].runId)})`
+  );
+  assert.equal(observed.summaries.length, 1, "the wake turn finalized with a turn summary");
+  assert.equal(
+    observed.promptSubmits,
+    0,
+    "no prompt:submit for a turn nobody prompted — extension hooks and memory selection are skipped"
+  );
+
+  manager.destroyAgent(scoped.id);
+}
+
+// ============================================================================
+// 10. What the model is TOLD: the wake is only useful if the tools stop implying
 //    "poll until it finishes". The old copy named polling as the way to read a job's
 //    result, so a model sat in a poll loop on a completion that would be pushed.
 // ============================================================================

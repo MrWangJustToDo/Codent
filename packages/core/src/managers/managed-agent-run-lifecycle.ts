@@ -32,6 +32,8 @@ export interface RunLifecycleHost {
   recordStreamDuration: () => void;
   consumePrepareAsContinuation: () => boolean;
   clearPrepareAsContinuation: () => void;
+  /** A pump started without a user prompt (background-completion wake) — new run scope, no hooks. */
+  consumePrepareAsNewTurn: () => boolean;
   beginTurnFinalize: () => boolean;
   getStreamStartedAt: () => number;
   setStreamStartedAt: (value: number) => void;
@@ -91,9 +93,14 @@ export async function prepareManagedAgentForRun(
   // A previous phase's truncation escalation is not this phase's budget.
   host.run.resetMaxOutputTokensOverride();
 
-  // Always consume the flag (avoid `||` short-circuit leaving a stale continuation mark).
+  // Always consume the flags (avoid `||` short-circuit leaving a stale mark behind).
+  const forcedNewTurn = host.consumePrepareAsNewTurn() === true;
   const flaggedContinuation = host.consumePrepareAsContinuation() === true;
-  const isToolContinuation = isToolContinuationPrepare(host.getStatus(), options.messages) || flaggedContinuation;
+  // A wake turn runs with the previous assistant message last, so the message-derived rule would
+  // classify it as a tool continuation. It is a NEW turn (own `runId`, own turn boundaries), just
+  // one without a prompt — see `markNextPrepareAsNewTurn`.
+  const isToolContinuation =
+    !forcedNewTurn && (isToolContinuationPrepare(host.getStatus(), options.messages) || flaggedContinuation);
   if (!isToolContinuation || host.getStreamStartedAt() === 0) {
     host.setStreamStartedAt(Date.now());
   }
@@ -105,9 +112,11 @@ export async function prepareManagedAgentForRun(
     host.log?.setRun(runId);
   }
 
-  if (!isToolContinuation && !host.parentId) {
+  if (!isToolContinuation && !forcedNewTurn && !host.parentId) {
     // Extension hooks once per user turn — consumed by the turn-context middleware
     // at onConfig (injection happens after compaction, against the real wire payload).
+    // A wake turn is skipped: there is no user prompt, so `before_agent_start` / memory selection
+    // would be handed "(structured)" and spend a side query on it.
     await host.collectExtensionPromptHooks(typeof options.prompt === "string" ? options.prompt : "(structured)");
 
     const userMsg = typeof options.prompt === "string" ? options.prompt : "(structured)";

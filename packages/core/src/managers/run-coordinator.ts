@@ -151,6 +151,17 @@ export class RunCoordinator {
 
   /** When true, next prepareForRun skips memory prefetch / prompt:submit (steer / tool continue). */
   private prepareAsContinuation = false;
+  /**
+   * When true, the next prepareForRun starts a NEW turn even though the channel's last message is
+   * not a user message — the background-completion wake, which runs a turn nobody typed.
+   *
+   * Kept separate from {@link prepareAsContinuation} because the two answer different questions:
+   * continuation is "same turn, no prompt"; this is "new turn, and still no prompt". Run scoping
+   * (a fresh `runId`, a `turn:start`/`turn:summary` pair) is what a wake turn needs, while the
+   * prompt hooks (`collectExtensionPromptHooks` / `prompt:submit`) describe a USER prompt and have
+   * nothing to collect here.
+   */
+  private prepareAsNewTurn = false;
   /** Guards turn-level finalizeRun so stop() + pump outcome do not double-fire. */
   private turnLifecycleFinalized = false;
   private streamStartedAt = 0;
@@ -170,6 +181,22 @@ export class RunCoordinator {
   consumePrepareAsContinuation(): boolean {
     const value = this.prepareAsContinuation;
     this.prepareAsContinuation = false;
+    return value;
+  }
+
+  /** The pump about to run was started without a user prompt (background completion wake). */
+  markNextPrepareAsNewTurn(): void {
+    this.prepareAsNewTurn = true;
+  }
+
+  clearPrepareAsNewTurn(): void {
+    this.prepareAsNewTurn = false;
+  }
+
+  /** Consume and clear the new-turn flag for prepareForRun. */
+  consumePrepareAsNewTurn(): boolean {
+    const value = this.prepareAsNewTurn;
+    this.prepareAsNewTurn = false;
     return value;
   }
 

@@ -222,6 +222,14 @@ export type AgentEventPayloadMap = {
     model?: string;
     /** Provider id reported by the adapter usage (sticky across iterations). */
     provider?: string;
+    /**
+     * 1-based model turn within the current user turn.
+     *
+     * The engine's own counter (`ctx.iteration`) is per `chat()`, and a chat pump restarts the
+     * engine for every tool phase, so it is 0 for every request there; the lifecycle middleware
+     * counts `onStart` per run token instead and prefers the engine's value when a worker's single
+     * engine does advance it.
+     */
     iteration?: number;
     messagesCount?: number;
     toolsCount?: number;
@@ -247,12 +255,15 @@ export type AgentEventPayloadMap = {
     outcome?: "finished" | "aborted" | "error";
     /** Driver-level tool-phase continuations executed in this run (each one streamed once). */
     phases?: number;
+    /** Tool calls executed in THIS pump (not the session total). */
     toolCalls?: number;
+    /** Token/cost deltas for THIS pump — a turn split by approvals reports each pump separately. */
     inputTokens?: number;
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     costUsd?: number;
+    /** Wall-clock of this pump (a waiting pump's duration is its own, not the whole turn's). */
     durationMs?: number;
   };
   "compaction:auto-start": {

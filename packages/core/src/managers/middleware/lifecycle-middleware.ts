@@ -72,6 +72,19 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     cacheWriteTokens?: number;
   } = { inputTokens: 0, outputTokens: 0 };
   let lastIteration = 0;
+  /**
+   * Chats (`onStart`) seen since the run token last changed — the fallback index for
+   * `iteration`.
+   *
+   * `ctx.iteration` is the ENGINE's counter. `onStart` fires once per `chat()`, and a chat pump
+   * restarts the engine for every tool phase, so `ctx.iteration` is 0 for every request of a
+   * pump-driven turn: one 47-request turn logged `iter 0` forty-seven times, which told a reader
+   * nothing. Counting chats per run token makes the field mean "which model turn of this user
+   * turn". A worker keeps ONE engine for its whole run and `ctx.iteration` advances there, so the
+   * engine's value wins whenever it is non-zero and both profiles stay meaningful.
+   */
+  let turnsInRun = 0;
+  let turnsRunToken: unknown;
   let lastRoundElapsedMs = 0;
   let lastReasoningTokens = 0;
   let lastCostUsd = 0;
@@ -118,7 +131,13 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       roundStart = startTime;
       firstTokenAt = 0;
       lastModel = ctx.model;
-      lastIteration = ctx.iteration;
+      const token = deps.getRunToken?.() ?? null;
+      if (token !== turnsRunToken) {
+        turnsRunToken = token;
+        turnsInRun = 0;
+      }
+      turnsInRun += 1;
+      lastIteration = ctx.iteration > 0 ? ctx.iteration + 1 : turnsInRun;
 
       deps.emitEvent?.("llm:request", {
         model: ctx.model,
