@@ -470,22 +470,30 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 
 `SessionLifecycleService` 把切换做成一个串行事务（`services/session-lifecycle-service.ts`）：
 
-1. `serializeSwitch`（`:77`）串行化所有切换；`settle()` 后拒绝新切换（`:94`）。
-2. `unloadCurrent`（`:195`）：`stop(reason)` → `awaitSessionPersistIdle()`。
-   `stop` 的顺序是契约（`:105-111`）：`abortManualCompaction` → `stopActiveRun` →
-   `cascadeAbortToChildren` → `discardPreforkRuns` → `streamHub.endAllCommands`。
-   先停生产者，再清缓冲：清完之后不可能再有生产者写入。
-3. `newSessionInner`（`:200`）：先 `acquireSessionOwnership(next.id)`，再 unload，再
-   `setSessionData(next)`（提交点），然后 `clearTranscript()` + `resetTransientState(full)`。
-   提交后任一步失败都要释放旧 id 的占用并把日志 sink 指回新 id（`:231-243`）。
-4. `resumeInner`（`:257`）：**先拿归属**再动状态；`awaitSessionPersistIdle()` 之后 `unloadCurrent`
-   （注释说明 `stop()` 自己可能同步排一个 `pump-complete` 写，必须 drain），
-   然后 `restore` → 成功后才 `resetTransientState("resume")` → `syncInteractionStateFromUIMessages`
-   (`:280`) 把恢复出来的 `waiting`/`awaiting_user` 重新贴上（否则会话从 idle 醒来）。
-5. `resetTransientState`（`:141-166`）一份有序清单，`full` / `resume` 两个作用域：
-   `run.resetRunState()`（abort + 清 controller）、`resetTurnLifecycle`、status → `idle`、
-   `memory.resetState`、`streamHub.clearAll`、`resetTurnContext`、`resetIterationProgress`…
-   `resume` 不碰 mode/approvals/usage/todos——恢复失败时不能把当前会话的这些值清掉（`:129-140`）。
+两阶段，一个提交点：**unload（清理）→ load（恢复，末尾才 adopt）**。
+
+1. `serializeSwitch` 串行化所有切换；`settle()` 后拒绝新切换。
+2. **unload**（`unloadCurrent`）：`stop(reason)` → `awaitSessionPersistIdle()`。
+   `stop` 的顺序是契约：`abortManualCompaction` → `stopActiveRun` → `cascadeAbortToChildren` →
+   `discardPreforkRuns` → `streamHub.endAllCommands`。先停生产者，再让它在途写的落定。
+   unload **不 adopt 任何东西**，所以 load 失败时会话仍然停在原来那个会话上。
+3. **load**（`restoreManagedSession`）：`readSessionForRestore`（load/hydrate/规范化写回，
+   **不 adopt**）→ 准备（plan 文件、mode/approvals、`applyPersistedModel`）→ 一次同步提交
+   （`ui.setMessages` + tracker + mode/approvals + `adoptRestoredSession` **最后**）→
+   commit 之后只剩 best-effort（display name、`session:restore`、media misses、state 帧），
+   失败只记 warn，不把已完成的切换报成失败。
+   旧顺序在 read 里就 adopt，于是 read 之后的任何失败都会留下「一个会话的数据 + 另一个会话的
+   transcript」，下一次保存按新 id 把目标会话日志改写成旧内容。
+4. ownership 在提交点交接：`acquire(target)` 先、提交后 `release(leaving)`；load 未提交则
+   `release(target)` 并把日志 sink 指回仍活跃的会话。
+   `session:switch` 的 `messageCount` 是**被离开**会话的条数（unload 前快照），写回离开会话的
+   sink 时带 `{ sessionBoundary: false }`，避免同一文件出现第二条分隔线。
+5. `newSessionInner`：create + `acquire` → unload → `setSessionData(next)`（提交点）→
+   `clearTranscript()` + `resetTransientState(full)`；提交后失败只修占用与 sink，不回滚新会话。
+6. `resetTransientState` 一份有序清单，`full` / `resume` 两个作用域：`run.resetRunState()`
+   （abort + 清 controller）、`resetTurnLifecycle`、status → `idle`、`memory.resetState`、
+   `streamHub.clearAll`、`resetTurnContext`、`resetIterationProgress`…
+   `resume` 不碰 mode/approvals/usage/todos——恢复失败时不能把当前会话的这些值清掉。
 
 ---
 

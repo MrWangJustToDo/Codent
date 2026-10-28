@@ -244,11 +244,17 @@ export class SessionLifecycleService {
   }
 
   /**
-   * Switch to an existing disk session.
+   * Switch to an existing disk session: `unload` the current conversation, then `load` the target.
    *
-   * Ownership is acquired before any state is touched. The old claim is released only after a
-   * successful restore; a failed restore either releases the target (nothing moved) or treats the
-   * adopted data as the completed switch and releases the old claim.
+   * Two phases, one commit:
+   *
+   * - **unload** stops every producer and drains the write it may have queued. It does NOT adopt
+   *   anything, so a failed load leaves the leaving session intact and active.
+   * - **load** reads + hydrates the target, prepares mode/approvals/model, and adopts it LAST
+   *   (`restoreManagedSession`'s commit). Everything that can fail runs before that adoption.
+   *
+   * Ownership is acquired up front and handed over only after the commit; the old claim is released
+   * at the same moment, so "active in another live session" always describes a real holder.
    */
   async resume(sessionId: string): Promise<SessionData> {
     return this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId)));
@@ -259,55 +265,57 @@ export class SessionLifecycleService {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
 
-    const leavingId = this.host.getSessionData()?.id;
-    let restored = false;
+    // Snapshot the departure BEFORE the load: the count belongs to the session being left, and once
+    // the load commits `getSessionData()` is the target.
+    const leaving = this.host.getSessionData();
+    const leavingId = leaving?.id;
+    const leavingMessageCount = leaving?.uiMessages.length ?? 0;
+
     try {
-      // Drain whatever was already queued before the abort, then drain again after it:
-      // `stop()` can synchronously queue a `pump-complete` write through
-      // `interruptCurrentRun`, and that write must settle before `restore` replaces the
-      // active session.
+      // Drain what was already queued, then unload: `stop()` can synchronously queue a
+      // `pump-complete` write through `interruptCurrentRun`, and both writes must settle before the
+      // restore replaces the active session.
       await this.host.awaitSessionPersistIdle();
-      // stop() may queue a final pump-complete write; unloadCurrent drains it.
       await this.unloadCurrent("session-resume");
 
+      // Restore-time logs belong to the target. A load that never commits re-points the sink at the
+      // still-active leaving session in the catch below.
       this.host.bindSessionLogSink(sessionId);
       const session = await this.host.sessionPersistence.restore(sessionId);
-      // Clear volatile state only after the target load succeeded. This avoids a
-      // partial reset of the current session when the target is missing/unreadable.
+
+      // COMMITTED: the restore adopted the target last, so the old claim is free from here on.
+      if (leavingId && leavingId !== sessionId) this.host.releaseSessionOwnership(leavingId);
+
+      // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
+      // the restore just adopted those.
       this.resetTransientState("session-resume", "resume");
-      // The reset makes the status idle; re-apply the restored interaction state so a
-      // session that was waiting on approval/ask_user does not come back as idle.
+      // The reset makes the status idle; re-apply the restored interaction state so a session that
+      // was waiting on approval/ask_user does not come back as idle.
       this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);
       this.host.refreshSubagents?.();
-      restored = true;
 
       if (leavingId && leavingId !== sessionId) {
-        // `session:restore` above belongs to the target. The departure entry belongs to the
-        // session being left, so temporarily point the sink back before emitting it.
+        // The departure entry belongs to the session being left, so point the sink back for this one
+        // line, then re-attach the target WITHOUT a second boundary (the target's boundary was
+        // written when its sink was bound above).
         this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
         try {
-          this.host.emitSessionSwitch(leavingId, sessionId, session.uiMessages.length);
+          this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount);
         } finally {
-          this.host.bindSessionLogSink(sessionId);
+          this.host.bindSessionLogSink(sessionId, { sessionBoundary: false });
         }
-        this.host.releaseSessionOwnership(leavingId);
       }
-      this.host.bindSessionLogSink();
       this.host.refreshState();
       return session;
-    } catch (err) {
-      const switched = this.host.getSessionData()?.id === sessionId;
-      if (!restored && !switched) {
+    } catch (error) {
+      // No commit ⇒ the leaving session is still the active one. Give the target claim back and
+      // re-point the log sink at whatever session is active. A post-commit failure keeps the switch
+      // (the state is already coherent); it simply surfaces.
+      if (this.host.getSessionData()?.id !== sessionId) {
         this.host.releaseSessionOwnership(sessionId);
         this.host.bindSessionLogSink();
       }
-      if (switched) {
-        if (leavingId && leavingId !== sessionId) this.host.releaseSessionOwnership(leavingId);
-        this.host.sessionPersistence.resetTracker(this.host.getSessionData()?.uiMessages);
-        this.host.streamHub.clearAll();
-        this.host.bindSessionLogSink();
-      }
-      throw err;
+      throw error;
     }
   }
 }

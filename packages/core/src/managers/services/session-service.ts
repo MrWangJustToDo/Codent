@@ -53,10 +53,29 @@ export interface SessionPersistInput {
 }
 
 export interface SessionRestoreInput {
-  usage: UsageTracker;
-  todoManager: TodoManager | null;
   /** Report media refs that could not be hydrated from disk (read-side of media IO failure). */
   onMissingMedia?: (miss: MediaHydrationMiss) => void;
+}
+
+/**
+ * A session read from disk, but not yet adopted.
+ *
+ * The read and the adoption are two steps on purpose: a session switch is `unload → load`, and
+ * everything that can fail during a load (metadata refresh, plan-file read, a throwing host hook)
+ * happens BETWEEN them. Until {@link SessionService.adoptRestoredSession} runs, `getSessionData()`
+ * still points at the session the agent was actually running — so a failed load leaves a coherent
+ * agent instead of half of each session.
+ */
+export interface RestoredSessionRead {
+  /** Canonical form (media refs dehydrated) — what `setSessionData` holds after adoption. */
+  session: SessionData;
+  /** Hydrated messages for the UI channel, approvals and the sync tracker. */
+  uiMessages: UIMessage[];
+}
+
+export interface SessionAdoptInput {
+  usage: UsageTracker;
+  todoManager: TodoManager | null;
 }
 
 export class SessionService {
@@ -494,17 +513,16 @@ export class SessionService {
   }
 
   /**
-   * Restore usage, todos, and uiMessages from a persisted session.
-   * Hydrates for the return value, then re-dehydrates into `this.data` and
-   * writes the canonical form back to disk (repairs stringified multimodal, etc.).
+   * Read + hydrate + canonicalize a persisted session, WITHOUT adopting it.
+   *
+   * The canonical form is written back to disk here (repairs stringified multimodal, blank names),
+   * but `this.data` is untouched — see {@link RestoredSessionRead} for why the two are separate.
    */
-  async restoreFromStore(sessionId: string, input: SessionRestoreInput): Promise<SessionData> {
+  async readSessionForRestore(sessionId: string, input: SessionRestoreInput = {}): Promise<RestoredSessionRead> {
     if (!this.store) throw new Error("Session store not available");
 
     const session = await this.store.load(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
-
-    const { usage, todoManager } = input;
 
     // Hydrate reads media files; canonicalize re-extracts media:// refs (writes).
     // Neither must abort a resume on media IO failure, so degrade to the stored
@@ -532,13 +550,26 @@ export class SessionService {
       session.name = "New Session";
     }
 
-    // Adopt only after the canonical rewrite landed. A save failure must leave the agent on the
-    // session it was actually running, otherwise ownership/log/tracker and live state disagree.
+    // Persist the canonical rewrite BEFORE anyone adopts it: a save failure must leave the agent on
+    // the session it was actually running, otherwise ownership/log/tracker and live state disagree.
     await this.store.save(session);
 
-    // Live state is the transaction's second half. Keep it after the canonical save: a
-    // failed save must leave the current session's usage/todos untouched, or the next
-    // persistState would write the target's counters into the session that is still active.
+    return { session, uiMessages: hydrated };
+  }
+
+  /**
+   * Adopt a session read by {@link readSessionForRestore} — the switch's COMMIT.
+   *
+   * Call this last and synchronously. It replaces the active session and its lifetime counters;
+   * anything that can fail must run before it, or the agent ends up with one session's data and
+   * another's transcript (the bug this split removes: the read used to adopt, so a failure in
+   * `restoreManagedSession` after it left `getSessionData()` on the target while the channel still
+   * held the previous transcript, and the next save rewrote the target's log with it).
+   */
+  adoptRestoredSession(restored: RestoredSessionRead, input: SessionAdoptInput): void {
+    const { session } = restored;
+    const { usage, todoManager } = input;
+
     usage.reset();
     if (session.usage) {
       usage.addTotal(session.usage);
@@ -568,10 +599,5 @@ export class SessionService {
     }
 
     this.setSessionData(session);
-
-    return {
-      ...session,
-      uiMessages: hydrated,
-    };
   }
 }

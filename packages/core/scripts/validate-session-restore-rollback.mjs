@@ -101,16 +101,28 @@ assert.deepEqual(released, ["ses_B"]);
     setWindowUsage: () => events.push("usage.setWindow"),
     setTotalCostUsd: () => events.push("usage.setCost"),
   };
-  const todos = {
-    restoreTodos: () => events.push("todos.restore"),
-    reset: () => events.push("todos.reset"),
-  };
   const failing = new SessionService();
   failing.setStore(store, { modelStyle: "openai", model: "m" });
   failing.setSessionData({ ...target, id: "ses_A", name: "A" });
-  await assert.rejects(() => failing.restoreFromStore("ses_B", { usage, todoManager: todos }), /disk full/);
-  assert.deepEqual(events, [], "a failed restore does not touch live usage or todos");
+  await assert.rejects(() => failing.readSessionForRestore("ses_B"), /disk full/);
+  assert.deepEqual(events, [], "a failed restore does not touch live usage");
   assert.equal(failing.getSessionData()?.id, "ses_A", "the failed restore leaves SessionData on A");
+
+  // The read NEVER adopts, even when it succeeds: adoption is the switch's commit, and the caller
+  // runs it last. This is what keeps a later failure on the load path from leaving one session's
+  // data with the other's transcript.
+  //
+  // A store whose post-load rewrite succeeds, so the read can be observed on its own.
+  const workingStore = { ...store, save: async () => {} };
+  const detached = new SessionService();
+  detached.setStore(workingStore, { modelStyle: "openai", model: "m" });
+  detached.setSessionData({ ...target, id: "ses_A", name: "A" });
+  const restored = await detached.readSessionForRestore("ses_B");
+  assert.equal(detached.getSessionData()?.id, "ses_A", "a successful read still leaves the active session alone");
+  assert.deepEqual(events, [], "…and does not touch live usage");
+  detached.adoptRestoredSession(restored, { usage, todoManager: null });
+  assert.equal(detached.getSessionData()?.id, "ses_B", "adoption is the commit");
+  assert.ok(events.includes("usage.reset"), "…and it is what applies the restored counters");
 }
 
 clearCoreEnv();

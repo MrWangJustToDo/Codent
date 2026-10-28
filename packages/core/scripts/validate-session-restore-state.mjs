@@ -186,7 +186,11 @@ let sessionId;
 
   const usage = new UsageTracker();
   const todos = new TodoManager();
-  const session = await service.restoreFromStore(sessionId, { usage, todoManager: todos });
+  // Read, then commit: the restored counters/todos and `SessionData` are adopted by the second
+  // step, after everything that can fail.
+  const restored = await service.readSessionForRestore(sessionId);
+  service.adoptRestoredSession(restored, { usage, todoManager: todos });
+  const session = { ...restored.session, uiMessages: restored.uiMessages };
   const disk = await lastState(sessionId);
 
   assert.equal(session.model, "switched-model", "model restored");
@@ -255,7 +259,9 @@ let sessionId;
   const store2 = new SessionStore();
   const service2 = new SessionService();
   service2.setStore(store2, { modelStyle: "openai", model: "default-model" });
-  const restored = await service2.restoreFromStore(session.id, { usage: new UsageTracker(), todoManager: null });
+  const restRead = await service2.readSessionForRestore(session.id);
+  service2.adoptRestoredSession(restRead, { usage: new UsageTracker(), todoManager: null });
+  const restored = { ...restRead.session, uiMessages: restRead.uiMessages };
   assert.equal(restored.autoMode, true, "autoMode from a state-only re-emit survives resume");
   assert.equal(restored.todos[0].content, "later", "todos from a state-only re-emit survive resume");
   assert.equal(restored.uiMessages.length, 1, "the re-emit does not duplicate the message");

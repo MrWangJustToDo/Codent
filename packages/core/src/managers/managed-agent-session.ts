@@ -7,6 +7,7 @@ import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/pers
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
 import { isReasoningEffort } from "../models/types.js";
+import { errorMessage } from "../utils/errors.js";
 
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
@@ -140,19 +141,20 @@ export async function restoreManagedSession(
   // degrades to the stored form; count the misses so they surface instead of
   // silently losing attachments.
   let mediaMissing = 0;
-  const session = await host.session.restoreFromStore(sessionId, {
-    usage: host.usage,
-    todoManager: host.getTodoManager(),
+  // READ. Nothing is adopted here: a failure below must leave the agent on the session it is
+  // actually running (the caller's unload half already stopped that session's producers).
+  const restored = await host.session.readSessionForRestore(sessionId, {
     onMissingMedia: () => {
       mediaMissing += 1;
     },
   });
+  const { session } = restored;
 
   // A process crash can leave a valid `input-complete` tool part on disk with no output
   // (or a truncated arg stream). No run exists to settle it, so the UI would render an
   // executing spinner forever and `isToolInFlight` would keep resurfacing it. Settle both
   // in-flight and incomplete calls before the channel and approvals are restored.
-  session.uiMessages = settleInterruptedToolCalls(session.uiMessages);
+  const uiMessages = settleInterruptedToolCalls(restored.uiMessages);
 
   const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
   if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {
@@ -161,20 +163,30 @@ export async function restoreManagedSession(
       planSnapshot.planMarkdown = markdown;
     }
   }
+  // Approvals are not stored separately: derive them from the restored message
+  // log (the tool-call parts carry pending/approved/denied + reason), keeping the
+  // decision timestamps recorded in the log.
+  const approvals = normalizeSessionApprovals({ uiMessages, approvalTimes: session.approvalTimes });
   // Mutual exclusivity: plan phase wins over auto on restore.
   const wantAuto = Boolean(session.autoMode ?? session.autoApprove);
+
+  // ---------------------------------------------------------------------------
+  // COMMIT — synchronous from here to `adoptRestoredSession`.
+  //
+  // Everything above can fail on I/O (plan file, media, session load) and must leave `setSessionData`
+  // on the session the agent was running. The session data is adopted LAST, after the channel,
+  // tracker, mode and approvals all point at the target; the previous order adopted inside the read,
+  // so a later failure left one session's data with the other's transcript — and the next save
+  // rewrote the target's log with the stale transcript.
+  // ---------------------------------------------------------------------------
+  // Mutual exclusivity: plan phase wins over auto on restore.
   if (host.mode) {
     host.mode.restore(planSnapshot, wantAuto);
   } else {
     host.planMode.restoreState(planSnapshot);
     host.setAutoModeEnabled(host.planMode.getPhase() === "off" && wantAuto);
   }
-  // Approvals are not stored separately: derive them from the restored message
-  // log (the tool-call parts carry pending/approved/denied + reason), keeping
-  // the decision timestamps recorded in the log.
-  host
-    .getApprovals()
-    .restore(normalizeSessionApprovals({ uiMessages: session.uiMessages, approvalTimes: session.approvalTimes }));
+  host.getApprovals().restore(approvals);
 
   // Adopt the model this session was saved with: the agent is created from the
   // ambient config (env / CLI flags), which may differ from what the session ran
@@ -185,11 +197,6 @@ export async function restoreManagedSession(
       model: session.model,
       ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
     }) ?? false;
-
-  // The persisted model is not the bootstrap one, so its metadata was never resolved: capabilities
-  // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
-  // unset (compaction trigger loses its clamp). Resolve it before the restore completes.
-  if (modelChanged) await host.refreshModelMetadata?.();
 
   // Restore the persisted reasoning-effort level so resumed sessions keep their
   // configured thinking depth. `setReasoningEffort` also invalidates the runner.
@@ -204,30 +211,51 @@ export async function restoreManagedSession(
   if (host.getUI) {
     const ui = host.getUI();
     ui?.advanceSessionGeneration();
-    ui?.setMessages(session.uiMessages);
+    ui?.setMessages(uiMessages);
   }
-  applyRestoredSessionChatState(host, session.uiMessages);
-  tracker.reset(session.uiMessages);
-  // Resumed sessions may carry a different display name than the previously
-  // viewed one — mirror it (and broadcast) so the header/snapshot stay in sync.
-  if (session.name) {
-    host.setDisplayName?.(session.name);
-  }
-  host.emitEvent("session:restore", {
-    sessionId,
-    messageCount: session.uiMessages.length,
-    tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
-    planPhase: host.planMode.getPhase(),
-    autoMode: host.isAutoModeEnabled(),
-    ...(mediaMissing > 0 ? { mediaMissing } : {}),
+  applyRestoredSessionChatState(host, uiMessages);
+  tracker.reset(uiMessages);
+  host.session.adoptRestoredSession(restored, {
+    usage: host.usage,
+    todoManager: host.getTodoManager(),
   });
-  // A miss is not only a diagnostic: the transcript still holds a `media://` ref no provider can
-  // fetch, so the wire seam must substitute a placeholder from the next run on. `0` clears it.
-  host.setMediaHydrationMisses?.(mediaMissing);
-  // The on-disk session (and thus `AgentL1State.sessionId`) just changed while the
-  // agent kept its identity — re-emit state so live subscribers see the switch.
-  host.refreshState?.();
-  return session;
+
+  // ---------------------------------------------------------------------------
+  // POST-COMMIT — best effort. The switch has happened: a metadata refresh or a listener throwing
+  // must not report the load as failed (the caller's rollback would release a session it is using).
+  // ---------------------------------------------------------------------------
+  try {
+    // The persisted model is not the bootstrap one, so its metadata was never resolved: capabilities
+    // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
+    // unset (compaction trigger loses its clamp).
+    if (modelChanged) await host.refreshModelMetadata?.();
+    // Resumed sessions may carry a different display name than the previously viewed one — mirror it
+    // (and broadcast) so the header/snapshot stay in sync.
+    if (session.name) {
+      host.setDisplayName?.(session.name);
+    }
+    host.emitEvent("session:restore", {
+      sessionId,
+      messageCount: uiMessages.length,
+      tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
+      planPhase: host.planMode.getPhase(),
+      autoMode: host.isAutoModeEnabled(),
+      ...(mediaMissing > 0 ? { mediaMissing } : {}),
+    });
+    // A miss is not only a diagnostic: the transcript still holds a `media://` ref no provider can
+    // fetch, so the wire seam must substitute a placeholder from the next run on. `0` clears it.
+    host.setMediaHydrationMisses?.(mediaMissing);
+    // The on-disk session (and thus `AgentL1State.sessionId`) just changed while the agent kept its
+    // identity — re-emit state so live subscribers see the switch.
+    host.refreshState?.();
+  } catch (error) {
+    host.getLog?.()?.warn("system", "post-restore step failed", {
+      sessionId,
+      error: errorMessage(error),
+    });
+  }
+
+  return { ...session, uiMessages };
 }
 
 /**

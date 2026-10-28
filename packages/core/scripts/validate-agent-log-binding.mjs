@@ -96,6 +96,12 @@ function makeBinding({ log, parentId, sessionId, attachViaManager }) {
   binding.bind("ses_c");
   assert.equal(log.calls[3].op, "manager-detach");
   assert.equal(log.calls[4].options.dir, ".agents/logs/ses_c");
+
+  // A resume re-points its sink twice (departure line, then the target again); the option must
+  // reach the sink so the second attach of the same directory writes no second boundary.
+  binding.bind("ses_d", { sessionBoundary: false });
+  assert.equal(log.calls.at(-1).options.dir, ".agents/logs/ses_d");
+  assert.equal(log.calls.at(-1).options.sessionBoundary, false, "a re-attach can skip the boundary");
 }
 
 // ---------------------------------------------------------------------------
