@@ -34,8 +34,5 @@ export const RESTART_INITIAL_BACKOFF_MS = 1000;
 export const RESTART_MAX_BACKOFF_MS = 30000;
 export const RESTART_MAX_ATTEMPTS = 3;
 
-/** Graceful shutdown timeout for an LSP server. */
-export const SHUTDOWN_TIMEOUT_MS = 3000;
-
 /** Delay after synthetic didChange before requesting member completions. */
 export const SYNTHETIC_DOT_SETTLE_DELAY_MS = 100;

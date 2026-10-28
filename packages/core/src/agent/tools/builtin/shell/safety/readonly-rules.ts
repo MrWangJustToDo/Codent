@@ -262,11 +262,6 @@ function gitSubcommand(tokens: string[]): { sub: string; args: string[] } | null
   return { sub: sub.toLowerCase(), args: tokens.slice(i + 1) };
 }
 
-/** The table key for a `git …` invocation (`git log`), or `null` when the shape is unknown. */
-export function gitTableKey(tokens: string[]): string | null {
-  const split = gitSubcommand(tokens);
-  return split ? `git ${split.sub}` : null;
-}
 /**
  * Whether a whole `git …` invocation is read-only.
  *

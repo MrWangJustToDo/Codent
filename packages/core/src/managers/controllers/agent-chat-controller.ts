@@ -733,9 +733,3 @@ export class AgentChatController {
     if (text) this.managed.planMode.onAssistantText(text);
   }
 }
-
-/** Format stream errors for display (re-export for app convenience). */
-export function formatChatError(error: Error | null): string | null {
-  if (!error) return null;
-  return formatAgentStreamError(error).message;
-}

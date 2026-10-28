@@ -44,7 +44,7 @@ import { createJsonlFileSink } from "./jsonl-file-sink.js";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { EventLogPolicy, EventLogResolver } from "./event-log-bridge.js";
 import type { AgentLog } from "../agent-log/agent-log.js";
-import type { AgentLogFileSinkOptions } from "../agent-log/types.js";
+import type { AgentLogFileSinkOptions, LogLevel } from "../agent-log/types.js";
 
 export type { EventLogPolicy, EventLogResolver, EventLogRule } from "./event-log-bridge.js";
 
@@ -85,6 +85,19 @@ export interface LogExtension {
 }
 
 /**
+ * `AGENT_LOG_LEVEL=debug|info|warn|error` — the one volume knob for the persisted timeline.
+ *
+ * The seam defaults to `debug`, so every level reached disk with no way to quieten a workspace (a
+ * busy session wrote ~1200 debug rows of ~1600). This is process-level policy, not workspace
+ * config: it belongs to the policy owner (this extension), not to `AgentLog`, which must also work
+ * before an extension is loaded.
+ */
+function configuredLogLevel(): LogLevel | undefined {
+  const raw = process.env.AGENT_LOG_LEVEL?.trim().toLowerCase();
+  return raw === "debug" || raw === "info" || raw === "warn" || raw === "error" ? raw : undefined;
+}
+
+/**
  * Create the built-in log extension.
  *
  * Follows the built-in-extension convention (one canonical `createXxxExtension` factory) while
@@ -114,6 +127,10 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
     bus,
 
     attachSink(log, sinkOptions) {
+      // Apply the process-level level here: the sink is the first point at which a log is bound to
+      // persisted output, and the seam is shared by every agent in the process.
+      const level = configuredLogLevel();
+      if (level) log.setMinLevel(level);
       // Re-pointing an already-attached log must release the previous binding first (its batch is
       // landed by `detach()`), including the seam side — otherwise the seam keeps feeding a sink
       // that is no longer in this registry.

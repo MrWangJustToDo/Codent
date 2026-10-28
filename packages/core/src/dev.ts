@@ -95,21 +95,9 @@ export { completeExtensionQuery } from "./managers/extension-completion.js";
 export { ExtensionLlmError } from "./agent/extension/extension-llm-error.js";
 export { copyModelMessages } from "./utils/model-messages.js";
 
-// ============================================================================
-// Built-in Memory extension (internal validation exports — not part of public API)
-// ============================================================================
-// ============================================================================
-// Built-in Jobs extension (internal validation exports — not part of public API)
-// ============================================================================
 // Already reachable through the published entry (`formatDuration`); re-exported here so every
 // validator import stays on `dist/dev.mjs`.
 export { formatDuration } from "./agent/tools/presentation/format/format.js";
-// ============================================================================
-// Built-in Skills extension (internal validation exports — not part of public API)
-// ============================================================================
-// ============================================================================
-// Built-in Code Mode extension (internal validation exports — not part of public API)
-// ============================================================================
 export { createCodeModeExtension, type CodeModeExtensionConfig } from "./agent/code-mode/extension.js";
 // Binding-name normalisation: a validator must exercise the real helper against the
 // real upstream `createCodeMode`, not a replica of the rename rule.

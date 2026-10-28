@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AgentLog, MAX_PENDING_LOG_ENTRIES, clearCoreEnv, registerCoreEnv } from "../dist/dev.mjs";
+import { AgentLog, createLogExtension, MAX_PENDING_LOG_ENTRIES, clearCoreEnv, registerCoreEnv } from "../dist/dev.mjs";
 
 import { waitFor } from "./helpers/log-capture.mjs";
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
@@ -315,6 +315,59 @@ await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
     "the unserializable entry is dropped, never written as a placeholder"
   );
   console.log("unserializable entry is contained OK:", written.length, "of 2 persisted");
+}
+
+// ----------------------------------------------------------------------------
+// 7. AGENT_LOG_LEVEL filters what reaches disk (the seam defaults to `debug`)
+// ----------------------------------------------------------------------------
+{
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-level-"));
+  const levelEnv = createEnv(root, { withAppendFile: true });
+  registerCoreEnv(levelEnv);
+  const previous = process.env.AGENT_LOG_LEVEL;
+  process.env.AGENT_LOG_LEVEL = "warn";
+  try {
+    const levelLog = new AgentLog();
+    const extension = createLogExtension({});
+    // Absolute: this fixture's mock fs does not resolve relative paths (the sink passes `dir`
+    // straight through to `appendFile`).
+    const levelDir = path.join(root, "level");
+    const detachLevel = extension.attachSink(levelLog, {
+      dir: levelDir,
+      filename: "agent.log",
+      flushIntervalMs: 10,
+      env: levelEnv,
+    });
+    levelLog.debug("system", "debug-dropped");
+    levelLog.info("system", "info-dropped");
+    levelLog.warn("system", "warn-kept");
+    levelLog.error("system", "error-kept");
+
+    const file = path.join(levelDir, "agent.log");
+    const kept = await waitFor(
+      async () => {
+        try {
+          return (await fs.promises.readFile(file, "utf-8")).trim().split("\n").filter(Boolean);
+        } catch {
+          return [];
+        }
+      },
+      (rows) => rows.length >= 2
+    );
+    assert.deepEqual(
+      kept.map((line) => JSON.parse(line).message),
+      ["warn-kept", "error-kept"],
+      "AGENT_LOG_LEVEL drops the noisier rows and keeps warn/error"
+    );
+    detachLevel();
+    extension.dispose();
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_LOG_LEVEL;
+    else process.env.AGENT_LOG_LEVEL = previous;
+    await fs.promises.rm(root, TEMP_RM_OPTIONS);
+    clearCoreEnv();
+  }
+  console.log("AGENT_LOG_LEVEL filters the persisted timeline OK");
 }
 
 console.log("agent-log-file-sink validation passed");

@@ -194,7 +194,7 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   compaction?: CompactionConfigInput;
   /**
-   * Post-construction hook (`managed-agent.ts:736`: `return config.setUp(this)`).
+   * Post-construction hook (`buildManagedAgent` calls `config.setUp(instance)`).
    *
    * TODO(core-init): nothing in the repo sets it — no host, manager path, or validator. It works
    * when passed; it simply has no producer, so a customisation here is unreachable from every

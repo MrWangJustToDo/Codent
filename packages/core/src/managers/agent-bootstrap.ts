@@ -243,6 +243,9 @@ export class AgentBootstrap {
     }
     for (const api of fromDisk.loaded) {
       const instance = await extensionRunner.loadExtension(api);
+      // Keep this row: bootstrap runs BEFORE the log extension starts, so the runner's
+      // `agent:extension-error` emit has no bus subscriber yet and the failure would be invisible
+      // in the persisted timeline (a later reload is covered by that event instead).
       if (!recordExtensionResult(report, api.id, instance)) {
         log.warn(
           "system",

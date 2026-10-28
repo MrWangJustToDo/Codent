@@ -45,8 +45,13 @@ const srcRoot = join(scriptDir, "../src");
  */
 const METHOD_ONLY_CLASSES = new Set(["ManagedAgent"]);
 
-/** `get foo()` / `set foo(...)` declarations inside a class body. */
-const GETTER_RE = /^\s{2}get ([A-Za-z_$][\w$]*)\(\)/;
+/**
+ * `get foo()` declarations inside a class body, with or without a return type.
+ *
+ * The type-less form (`\(\)` then `{`) missed every getter that annotates its type — i.e. all of
+ * them — so both rules below were vacuous (0 getters seen while the tree has a dozen).
+ */
+const GETTER_RE = /^\s{2}get ([A-Za-z_$][\w$]*)\(\)\s*(?::[^{;]+)?\{/;
 /** Method declarations: `foo(...)` or `getFoo()` at class-body indentation. */
 const METHOD_RE = /^\s{2}([A-Za-z_$][\w$]*)\([^)]*\)\s*(?::[^{;]+)?\{/;
 /** `class X {` / `export class X {` — including `abstract`/generics. */
@@ -79,7 +84,7 @@ function collectClasses(file) {
 
     const classMatch = CLASS_RE.exec(line);
     if (classMatch) {
-      current = { name: classMatch[1], line: i + 1, getters: [], methods: [] };
+      current = { name: classMatch[1], line: i + 1, getters: [], methods: [], underscored: [] };
       classes.push(current);
       continue;
     }
@@ -90,6 +95,10 @@ function collectClasses(file) {
       current.getters.push({ name: getter[1], line: i + 1 });
       continue;
     }
+
+    // Underscore-prefixed members are banned (the file's own rule, previously unchecked).
+    const underscored = /^\s+(?:private|protected|public)?\s*(?:readonly\s+)?(_[A-Za-z_$][\w$]*)\s*[:(=;]/.exec(line);
+    if (underscored) current.underscored.push({ name: underscored[1], line: i + 1 });
 
     const method = METHOD_RE.exec(line);
     if (method) {
@@ -113,6 +122,13 @@ for (const file of walkTsFiles(srcRoot)) {
   for (const cls of collectClasses(file)) {
     const methodNames = new Set(cls.methods.map((m) => m.name));
 
+    for (const member of cls.underscored) {
+      violations.push({
+        file: rel,
+        cls: cls.name,
+        detail: `member ${member.name} (line ${member.line}) — no underscore-prefixed members`,
+      });
+    }
     for (const getter of cls.getters) {
       // Rule 1a: `get foo()` next to `getFoo()`.
       const methodSpelling = `get${getter.name[0].toUpperCase()}${getter.name.slice(1)}`;

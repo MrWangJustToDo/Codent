@@ -121,17 +121,6 @@ function needsNormalization(text: string): boolean {
 }
 
 /**
- * Check if two strings are approximately equal using fuzzy matching.
- *
- * @param a - First string
- * @param b - Second string
- * @returns true if the strings are approximately equal
- */
-export function fuzzyEquals(a: string, b: string): boolean {
-  return normalizeForFuzzyMatch(a) === normalizeForFuzzyMatch(b);
-}
-
-/**
  * Find the index of a fuzzy match in a string.
  *
  * @param haystack - The string to search in

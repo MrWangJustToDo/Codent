@@ -1,4 +1,4 @@
-import { isActiveStatus, type AgentStatus } from "../../runtime-types";
+import type { AgentStatus } from "../../runtime-types";
 
 /**
  * Whether mid-run user input should be queued (steer/followUp) instead of
@@ -14,9 +14,4 @@ export function shouldDeferMidRunQueue(options: { pumpDepth: number; status: Age
   if (status === "waiting" || status === "awaiting_user") return true;
   // Stale "running/thinking/responding" with pumpDepth 0 — allow sendMessage to resume.
   return false;
-}
-
-/** True when status looks active but no pump is executing (stale continuation). */
-export function isStaleActiveRunStatus(options: { pumpDepth: number; status: AgentStatus }): boolean {
-  return options.pumpDepth === 0 && isActiveStatus(options.status) && !shouldDeferMidRunQueue(options);
 }

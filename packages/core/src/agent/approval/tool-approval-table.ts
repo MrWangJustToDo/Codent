@@ -152,29 +152,6 @@ export function recordFromToolCallPart(part: ToolCallPart, now = Date.now()): Up
   return null;
 }
 
-export function findToolCallIdForApproval(messages: UIMessage[], approvalId: string): string | undefined {
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (isToolCallPart(part) && part.approval?.id === approvalId) {
-        return part.id;
-      }
-    }
-  }
-  return undefined;
-}
-
-/** Resolve the tool name of the part carrying `approvalId` (best-effort). */
-export function findToolCallNameForApproval(messages: UIMessage[], approvalId: string): string | undefined {
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (isToolCallPart(part) && part.approval?.id === approvalId) {
-        return part.name;
-      }
-    }
-  }
-  return undefined;
-}
-
 /**
  * Translate answered rows into TanStack `resumeToolState.approvals`.
  * Pending rows are omitted so `executeToolCalls` still interrupts.

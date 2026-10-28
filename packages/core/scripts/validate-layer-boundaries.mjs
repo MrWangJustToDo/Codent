@@ -204,7 +204,6 @@ const ALLOWED_EDGES = {
   "runtime → models": { mode: "type-only", reason: "CodentAgentOptions carries a ModelStyle" },
   "runtime → managers": { mode: "allow", reason: "owns the AgentManager" },
   "runtime → agent-session": { mode: "allow", reason: "owns / creates the AgentSessionHost" },
-  "runtime → agent": { mode: "type-only", reason: "AgentToolConfig type for session defaults" },
   "managers → runtime": { mode: "type-only", reason: "ManagedAgent / manager name the owning AgentRuntime" },
 
   // models (config + metadata) and provider (the LLM connection plane) are a coupled pair:

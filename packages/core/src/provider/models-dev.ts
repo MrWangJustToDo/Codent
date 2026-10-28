@@ -736,16 +736,3 @@ function makerRank(provId: string, modelData: ModelsDevModel): number {
   const vendor = provId.toLowerCase();
   return vendor === family || vendor === brand ? 0 : 1;
 }
-
-/**
- * Get all models for a models.dev vendor id (e.g. "anthropic", "openai", "deepseek").
- */
-export async function getModelsByProviderFromModelsDev(vendorId: string): Promise<ModelInfo[]> {
-  const data = await fetchModelsDev();
-  const provData = data[vendorId];
-  if (!provData?.models) return [];
-
-  return Object.entries(provData.models).map(([modelId, modelData]) =>
-    parseModelsDevModel(vendorId, modelId, modelData)
-  );
-}

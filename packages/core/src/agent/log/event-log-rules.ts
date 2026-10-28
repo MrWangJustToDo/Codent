@@ -374,7 +374,13 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   "subagent:completed": {
     level: "info",
     category: "system",
-    formatMessage: (event) => `Subagent completed: ${p(event).summary ?? "(no summary)"}${taskBindingSuffix(p(event))}`,
+    // The summary is model-written and `task` runs with `SUBAGENT_NO_TRUNCATE`, so an inline copy is
+    // an unbounded JSONL line. Truncated here, same as the payload previews.
+    formatMessage: (event) => {
+      const summary =
+        typeof p(event).summary === "string" ? truncateText(p(event).summary as string, 200) : "(no summary)";
+      return `Subagent completed: ${summary}${taskBindingSuffix(p(event))}`;
+    },
   },
   "subagent:error": {
     level: "error",

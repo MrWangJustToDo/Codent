@@ -15,6 +15,7 @@ import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
+import { loadServerModelsConfig } from "../load-models-config.js";
 import { createMessagesDeltaWriter } from "../messages-delta.js";
 import { getServerEnv, getServerManager } from "../server-runtime.js";
 
@@ -176,16 +177,6 @@ const createBodySchema = z.object({
 
 async function loadCore() {
   return import("@codent/core");
-}
-
-/** Load the server's own models.json (`.agents/config/models.json` — see `AGENT_DATA_DIR`), if any. */
-async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
-  const { loadModelsConfigFromFile } = await loadCore();
-  try {
-    return await loadModelsConfigFromFile();
-  } catch {
-    return null;
-  }
 }
 
 /**

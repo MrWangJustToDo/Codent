@@ -113,12 +113,6 @@ function userMessageText(message: UIMessage | ModelMessage): string {
   return extractTextFromContent((message as ModelMessage).content);
 }
 
-/** Latest user message converted to ModelMessage[]. */
-export const getLatestUserMessage = (messages: Array<UIMessage | ModelMessage>) => {
-  const item = findUserMessage(messages, "last");
-  return item ? convertMessagesToModelMessages([item]) : null;
-};
-
 /** Text of the first user message. */
 export const getFirstUserInput = (messages: Array<UIMessage | ModelMessage>) => {
   const item = findUserMessage(messages, "first");

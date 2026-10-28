@@ -48,8 +48,3 @@ export function runEnvTeardownHooks(): void {
     }
   }
 }
-
-/** Test-only: drop every hook (so a validator can assert registration from scratch). */
-export function clearEnvTeardownHooksForTesting(): void {
-  hooks.clear();
-}

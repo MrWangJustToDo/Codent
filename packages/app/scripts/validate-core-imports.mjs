@@ -40,6 +40,14 @@ const FORBIDDEN_IDENTIFIERS = [
   "registerCoreEnv",
 ];
 
+/**
+ * Pure resolvers the UI may call: they read only their arguments (no process state), so no runtime
+ * singleton crosses the seam. Kept as an explicit allowlist WITH the reason, instead of a skip
+ * clause on the denylist above (which silently exempted `agentManager` and
+ * `createLocalAgentSessionHost` too — they were listed as forbidden and then always skipped).
+ */
+const ALLOWED_PURE_IDENTIFIERS = new Set(["buildDefaultSystemPrompt", "resolveModelConfigFromProvider"]);
+
 const CORE_IMPORT_RE =
   /(?:import\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+|import\s*\(\s*)["']@codent\/core(?:\/[^"']*)?["']/;
 
@@ -91,15 +99,8 @@ for (const file of walkTsFiles(srcRoot)) {
 
     const names = extractNamedImports(block);
     for (const name of names) {
+      if (ALLOWED_PURE_IDENTIFIERS.has(name)) continue;
       if (!FORBIDDEN_IDENTIFIERS.includes(name)) continue;
-      if (
-        name === "agentManager" ||
-        name === "buildDefaultSystemPrompt" ||
-        name === "createLocalAgentSessionHost" ||
-        name === "resolveModelConfigFromProvider"
-      ) {
-        continue;
-      }
       violations.push({ file: rel, line: i + 1, name });
     }
   }

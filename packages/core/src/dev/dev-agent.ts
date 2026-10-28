@@ -385,7 +385,7 @@ export {
   collectPendingApprovals,
   collectPendingAskUser,
 } from "../agent/stream/tool-phase-utils.js";
-export { isStaleActiveRunStatus, shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
+export { shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
 export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime/tool-sets.js";
 export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/catalog/tool-names.js";
 export {

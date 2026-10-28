@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 
-import { AgentLog, isStaleActiveRunStatus, ManagedAgent, shouldDeferMidRunQueue } from "../dist/dev.mjs";
+import { AgentLog, ManagedAgent, shouldDeferMidRunQueue } from "../dist/dev.mjs";
 
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 1, status: "running" }), true, "active pump defers");
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "waiting" }), true, "approval wait defers");
@@ -19,10 +19,6 @@ assert.equal(
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "responding" }), false, "stale responding must not defer");
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "completed" }), false, "completed allows send");
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "idle allows send");
-
-assert.equal(isStaleActiveRunStatus({ pumpDepth: 0, status: "running" }), true, "stale running is detectable");
-assert.equal(isStaleActiveRunStatus({ pumpDepth: 1, status: "running" }), false, "live pump is not stale");
-assert.equal(isStaleActiveRunStatus({ pumpDepth: 0, status: "waiting" }), false, "waiting is intentional pause");
 
 // A queued pump belongs to the transcript generation it was scheduled for. A
 // clear/resume must invalidate it before it can begin a real model turn.

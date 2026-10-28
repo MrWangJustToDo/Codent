@@ -163,7 +163,7 @@ export class LspManager {
    * afterwards starts a server into a session that has already ended.
    */
   private restartTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private _lombokJarPath: string | null = null;
+  private lombokJarPath: string | null = null;
   private path: LspPathHelpers;
   private fs: LspFsHelpers;
   private getEnvVar: (key: string) => string | undefined;
@@ -480,7 +480,7 @@ export class LspManager {
       exists: async (p) => Boolean(await this.fs.existsSync(p)),
       readdir: this.fs.readdir ?? (async () => []),
       getEnvVar: this.getEnvVar,
-      explicitJar: this._lombokJarPath,
+      explicitJar: this.lombokJarPath,
     });
   }
 
@@ -747,7 +747,7 @@ export class LspManager {
 
   /** Set an explicit Lombok jar path (Java jdtls support). */
   setLombokJar(jarPath: string): void {
-    this._lombokJarPath = jarPath;
+    this.lombokJarPath = jarPath;
   }
 
   /** Read a file's text content if it exists and is readable; null otherwise. */

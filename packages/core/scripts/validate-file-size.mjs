@@ -1,11 +1,12 @@
 /**
- * File-size guard for `packages/core/src`.
+ * File-size guard for every package's `src`.
  *
  * The design guideline is 400 lines (`.cursor/rules/040`); the enforced ceiling is 800
- * (`eslint max-lines`). This guard counts RAW source lines — stricter than ESLint's
- * `skipBlankLines` — so the two can disagree by the blank-line count, and the allowlist is what
- * reconciles them. Keep every file above the ceiling there with a written reason, and fail any
- * new one: without a guard, "400 guideline" is just a comment the next module can ignore.
+ * (`eslint max-lines` with `skipBlankLines`). This guard counts the SAME metric (non-blank lines),
+ * so the two cannot disagree — the old raw-line count made `server/remote-session-client.ts` fail
+ * here while passing ESLint, and it only scanned `packages/core/src`, so the ceiling did not exist
+ * for any other package. Keep every file above the ceiling in the allowlist with a written reason;
+ * fail any new one, and fail an allowlisted file that drops back under (a stale exemption).
  *
  * Run: pnpm --filter @codent/core run validate:file-size
  */
@@ -15,18 +16,26 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAX_LINES = 800;
 
-/** Existing over-ceiling files. Every entry must still exceed the ceiling or the guard is stale. */
+/** Existing over-ceiling files (`<package>/<path under src>`). Every entry must still exceed it. */
 const ALLOWLIST = new Map([
   [
-    "managers/managed-agent.ts",
+    "core/managers/managed-agent.ts",
     "Composes the agent lifecycle, controllers and public facade; split is tracked separately.",
   ],
   [
-    "agent/extension/runner.ts",
+    "core/agent/extension/runner.ts",
     "Extension registration/lifecycle orchestrator. The UI/context bridge, default renderer, observer surface, message-transformer registry, dispatch order and owner-id rule are already separate modules; what remains is the registration lifecycle itself, which the rollback paths require to stay in one class.",
+  ],
+  [
+    "acp/agent.ts",
+    "ACP agent surface: one handler per protocol method plus the session runtime and config-option advertisement. The projector, child projector, interactions and session config options are already separate modules.",
+  ],
+  [
+    "acp/projector.ts",
+    "ACP session/update projector: one method per protocol update kind plus transcript/message mapping. Split is tracked separately.",
   ],
 ]);
 
@@ -41,16 +50,32 @@ async function collect(dir) {
   return out;
 }
 
-const files = await collect(SRC);
+const packages = (await readdir(PACKAGES, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+
 const over = [];
 const seen = new Set();
-for (const file of files) {
-  const relative = file.slice(SRC.length + 1).replaceAll("\\", "/");
-  const source = await readFile(file, "utf8");
-  const lines = source.split("\n").length;
-  if (lines > MAX_LINES) {
-    over.push({ relative, lines, reason: ALLOWLIST.get(relative) });
-    if (ALLOWLIST.has(relative)) seen.add(relative);
+let scanned = 0;
+for (const pkg of packages) {
+  const srcDir = join(PACKAGES, pkg, "src");
+  let files;
+  try {
+    files = await collect(srcDir);
+  } catch {
+    continue; // package without a src tree
+  }
+  for (const file of files) {
+    scanned += 1;
+    const relative = `${pkg}/${file.slice(srcDir.length + 1).replaceAll("\\", "/")}`;
+    const source = await readFile(file, "utf8");
+    // SAME metric as `eslint max-lines` + `skipBlankLines`.
+    const lines = source.split("\n").filter((line) => line.trim().length > 0).length;
+    if (lines > MAX_LINES) {
+      over.push({ relative, lines, reason: ALLOWLIST.get(relative) });
+      if (ALLOWLIST.has(relative)) seen.add(relative);
+    }
   }
 }
 
@@ -65,4 +90,4 @@ const stale = [...ALLOWLIST.keys()].filter((file) => !seen.has(file));
 assert.deepEqual(stale, [], "ALLOWLIST entries must still exceed the ceiling; remove the stale entry");
 
 for (const entry of over) console.log(`ok  ${entry.relative} ${entry.lines} lines — allowlisted`);
-console.log(`file-size validation passed (${files.length} files, ceiling ${MAX_LINES})`);
+console.log(`file-size validation passed (${scanned} files across ${packages.length} packages, ceiling ${MAX_LINES})`);

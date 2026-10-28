@@ -456,8 +456,8 @@ export type AgentEventPayloadMap = {
 
 export type AgentEventPayload<T extends AgentEventType> = AgentEventPayloadMap[T];
 
-/** Compile-time completeness check against {@link AgentEventType}. */
-type _MissingPayloadKeys = Exclude<AgentEventType, keyof AgentEventPayloadMap>;
-type _AssertPayloadMapComplete = [_MissingPayloadKeys] extends [never] ? true : _MissingPayloadKeys;
-const _payloadMapComplete: _AssertPayloadMapComplete = true;
-void _payloadMapComplete;
+// Completeness is enforced where it can actually fail: `AGENT_EVENT_META` is
+// `satisfies Record<AgentEventType, …>` (a new event fails to compile until it has an entry), and
+// every emit site is typed against `AgentEventPayloadMap[T]`. The former check here was
+// `Exclude<AgentEventType, keyof AgentEventPayloadMap>` — and `AgentEventType` IS that key union, so
+// it was `never` by construction and could never fail.

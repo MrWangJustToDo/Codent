@@ -67,6 +67,7 @@
     "validate:env-workspace": "pnpm run build && node scripts/validate-env-workspace.mjs",
     "validate:messages-delta": "pnpm run build && node scripts/validate-messages-delta.mjs",
     "validate:provider-proxy": "pnpm run build && node scripts/validate-provider-proxy.mjs",
+    "validate:agent-create-keys": "node scripts/validate-agent-create-keys.mjs",
     "validate:remote-tool-catalog": "pnpm run build && node scripts/validate-remote-tool-catalog.mjs",
     "validate:remote-exec-degradation": "pnpm build && node scripts/validate-remote-exec-degradation.mjs"
   },

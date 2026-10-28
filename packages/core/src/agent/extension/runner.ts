@@ -252,7 +252,8 @@ export class ExtensionRunner {
 
   private reportTransformerFailure(extensionId: string, err: unknown): void {
     const message = errorMessage(err);
-    this.writeExtensionLog("warn", extensionId, `message transformer failed (messages kept as last valid): ${message}`);
+    // The event's log rule writes the row; a direct `writeExtensionLog` here made every failure two
+    // rows with the same text.
     this.rawBus.emit("agent:extension-error", {
       extensionId,
       phase: "message-transform",
@@ -302,12 +303,14 @@ export class ExtensionRunner {
 
   private reportObserverFailure(extensionId: string, err: unknown, eventType?: string): void {
     const message = errorMessage(err);
-    this.writeExtensionLog("warn", extensionId, `event observer failed: ${message}`);
     // Reporting by emitting the event the failing handler observes is a recursion: an `observeAny`
     // handler that always throws turned one failure into ~1.2k `agent:extension-error` emissions
     // (verified), evicting every other buffered log entry and replacing the real error with a
-    // swallowed stack overflow. The log row above is enough for this case.
-    if (eventType === "agent:extension-error" || this.reportingObserverFailure) return;
+    // swallowed stack overflow. In that case the direct row is the only record.
+    if (eventType === "agent:extension-error" || this.reportingObserverFailure) {
+      this.writeExtensionLog("warn", extensionId, `event observer failed: ${message}`);
+      return;
+    }
     this.reportingObserverFailure = true;
     try {
       this.rawBus.emit("agent:extension-error", {
@@ -403,7 +406,6 @@ export class ExtensionRunner {
         // Converge into the agent log via the existing `agent:extension-error`
         // rule (error/system) rather than a bare console write; console stays
         // as a fallback for standalone runners without an injected bus.
-        this.writeExtensionLog("error", id, `turn context provider failed: ${message}`);
         this.rawBus.emit("agent:extension-error", {
           extensionId: id,
           phase: "turn-context",
@@ -420,7 +422,6 @@ export class ExtensionRunner {
           if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
         } catch (err) {
           const message = errorMessage(err);
-          this.writeExtensionLog("error", id, `context section "${name}" failed: ${message}`);
           this.rawBus.emit("agent:extension-error", {
             extensionId: id,
             phase: "turn-context",
@@ -514,7 +515,7 @@ export class ExtensionRunner {
       this.unregisterInstanceArtifacts(instance);
       instance.state = "error";
       instance.error = error;
-      ctx.logger.error(`Failed to activate extension "${api.id}": ${error.message}`);
+      // Emitting is the record (and the bootstrap reports it too); the direct logger row duplicated it.
       this.rawBus.emit("agent:extension-error", {
         extensionId: api.id,
         phase: "activate",
