@@ -1,4 +1,5 @@
 import { formatByteSize } from "../../../../../utils/byte-size.js";
+import { defaultMimeForPartType } from "../../../../media/types.js";
 import { isProjectedModelContent } from "../../../runtime/projected-model-content.js";
 
 import type { ModelToolContent } from "../../../runtime/contract.js";
@@ -44,7 +45,7 @@ export function describeReadFileMedia(output: MediaRenderInput): { line: string;
       line: `Image read: ${output.path}${size}`,
       part: {
         type: "image",
-        source: { type: "data", value: output.base64, mimeType: output.mimeType ?? "image/png" },
+        source: { type: "data", value: output.base64, mimeType: output.mimeType ?? defaultMimeForPartType("image") },
       },
     };
   }

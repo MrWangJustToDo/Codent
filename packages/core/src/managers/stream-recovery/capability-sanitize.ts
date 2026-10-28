@@ -1,14 +1,16 @@
 import {
+  MULTIMODAL_PART_TYPES,
   chatMessagesHaveMultimodal,
   isMultimodalUnsupportedError,
   unsupportedMultimodalPartTypes,
+  type MultimodalPartType,
 } from "../../models/adapter/capability-message-utils.js";
 
 import type { ManagedAgent } from "../managed-agent.js";
 import type { ModelMessage, UIMessage } from "@tanstack/ai";
 
 /** Every multimodal part type — the drop set of a post-rejection retry. */
-const ALL_MULTIMODAL_PART_TYPES = ["image", "audio", "video", "document"] as const;
+const ALL_MULTIMODAL_PART_TYPES: ReadonlySet<MultimodalPartType> = new Set(MULTIMODAL_PART_TYPES);
 
 /**
  * Arm the per-run capability strip from the model's declared capabilities.

@@ -1,3 +1,5 @@
+import { compareCodeUnits } from "../../../utils/code-unit-order.js";
+
 import type { AnyClientTool, AnyServerTool } from "@tanstack/ai";
 
 // ============================================================================
@@ -19,8 +21,9 @@ export function toolsToArray(
   const exclude = options.exclude ?? new Set<string>();
   const result: Array<AnyServerTool | AnyClientTool> = [];
 
-  // Sort by name so tool-schema prefixes stay byte-stable across Map/object iteration.
-  for (const name of Object.keys(tools).sort((a, b) => a.localeCompare(b))) {
+  // Sort by name so tool-schema prefixes stay byte-stable across Map/object iteration. Code-unit
+  // order, not `localeCompare`: collation is ICU/locale dependent (see `compareCodeUnits`).
+  for (const name of Object.keys(tools).sort(compareCodeUnits)) {
     const tool = tools[name];
     if (!tool || exclude.has(name)) continue;
     result.push(tool);

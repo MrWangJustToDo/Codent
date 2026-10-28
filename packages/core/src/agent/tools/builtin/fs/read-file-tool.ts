@@ -4,6 +4,7 @@ import { estimateImageInputTokens, tryReadImageDimensions } from "../../../../mo
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { utf8ByteLength } from "../../../../utils/bytes.js";
 import { readTextPieces } from "../../../../utils/read-text-pieces.js";
+import { defaultMimeForPartType } from "../../../media/types.js";
 import { defineServerTool } from "../../runtime/define-tool.js";
 import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { extractPdfText } from "../../shared/pdf.js";
@@ -261,7 +262,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
 
           // Budget against vision-token estimate (not base64-as-text).
           let data = buffer;
-          let mimeType = fileTypeInfo.mimeType || "image/png";
+          let mimeType = fileTypeInfo.mimeType || defaultMimeForPartType("image");
           let dimensions = tryReadImageDimensions(data);
 
           // The byte ceiling above says nothing about what DECODING costs: a 1 KB PNG can declare

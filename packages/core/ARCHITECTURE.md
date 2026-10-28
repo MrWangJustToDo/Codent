@@ -610,7 +610,7 @@ That cache has **two** collectors, and neither subsumes the other: compaction's 
 
 The capability list has exactly one source of truth: `MODEL_CAPABILITIES` in `models/types.ts`. `ModelCapability` is derived from it, and the extension-facing boolean flags (`MODEL_CAPABILITY_FLAGS`, exhaustively keyed by that union) name each member — so the union, the list and the flag surface cannot drift apart, and a new capability is a compile error until it is named in both places.
 
-`parseModelsDevModel` (`provider/models-dev.ts`) fills the list for a metadata-resolved model:
+`parseModelsDevModel` (`provider/models-dev/parse.ts`) fills the list for a metadata-resolved model:
 
 | Source | Grants | Notes |
 | ------ | ------ | ----- |

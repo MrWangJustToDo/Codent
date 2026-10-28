@@ -98,14 +98,11 @@ export { createPromptCacheMiddleware } from "../managers/middleware/prompt-cache
 // instead of duplicating the factory list (see that script's section 1).
 export { buildAgentRunner } from "../managers/run-agent.js";
 
-export { deriveCapabilities, MODELS_DEV_COST_FIELDS, MODELS_DEV_MODEL_FIELDS } from "../provider/models-dev.js";
-export {
-  fetchModelsDev,
-  lookupModelFromModelsDev,
-  parseModelsDevModel,
-  resolveReasoningEchoField,
-  shouldEchoReasoning,
-} from "../provider/models-dev.js";
+export { MODELS_DEV_COST_FIELDS, MODELS_DEV_MODEL_FIELDS } from "../provider/models-dev/types.js";
+export { deriveCapabilities } from "../provider/models-dev/parse.js";
+export { fetchModelsDev } from "../provider/models-dev/cache.js";
+export { lookupModelFromModelsDev } from "../provider/models-dev/lookup.js";
+export { parseModelsDevModel, resolveReasoningEchoField, shouldEchoReasoning } from "../provider/models-dev/parse.js";
 export { MODEL_CAPABILITIES } from "../models/types.js";
 
 // Drives `validate:capability-unknown-vs-none`: the `undefined` (unknown) vs `[]` (declared

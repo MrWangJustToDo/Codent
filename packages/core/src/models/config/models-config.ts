@@ -549,6 +549,6 @@ export async function resolveModelInfoFromModelsDev(
   modelId: string,
   style?: ModelStyle
 ): Promise<ModelInfo | undefined> {
-  const { lookupModelFromModelsDev } = await import("../../provider/models-dev.js");
+  const { lookupModelFromModelsDev } = await import("../../provider/models-dev/lookup.js");
   return lookupModelFromModelsDev(modelId, style);
 }

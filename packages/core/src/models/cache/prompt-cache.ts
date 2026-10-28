@@ -1,3 +1,5 @@
+import { compareCodeUnits } from "../../utils/code-unit-order.js";
+
 import type { ModelStyle } from "../types.js";
 import type { ContentPart, ModelMessage, ServerTool, SystemPrompt } from "@tanstack/ai";
 
@@ -95,7 +97,7 @@ export function buildAnthropicCachedSystemPrompts(
 export function sortToolsByName<T extends { name: string }>(tools: T[]): T[] {
   // Code-unit order, NOT `localeCompare`: collation is ICU/locale dependent, so the same tool set
   // could sort differently on another machine (or ICU version) and silently miss the prefix cache.
-  return [...tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return [...tools].sort((a, b) => compareCodeUnits(a.name, b.name));
 }
 
 /**

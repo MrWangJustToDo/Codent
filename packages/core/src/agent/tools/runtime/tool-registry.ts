@@ -5,7 +5,7 @@
  * `AgentToolService` is the orchestration layer that registers and unregisters entries.
  */
 
-import { INCUMBENT_RANK, compareDispatchRank } from "../../dispatch-order.js";
+import { INCUMBENT_RANK, pickTopByRank } from "../../dispatch-order.js";
 
 import { getToolMetadata } from "./define-tool.js";
 
@@ -91,7 +91,7 @@ export class AgentToolRegistry {
   resolve(name: string): ResolvedAgentTool | undefined {
     const stack = this.stacks.get(name);
     if (!stack || stack.length === 0) return undefined;
-    const top = stack.reduce((best, entry) => (compareDispatchRank(entry.rank, best.rank) > 0 ? entry : best));
+    const top = pickTopByRank(stack);
     if (top.tool === undefined) return undefined;
     // Metadata belongs to the live tool. A shadowing tool does not inherit the shadowed
     // entry's `present`/`toModelOutput`: its output shape may differ, and presentation/catalog

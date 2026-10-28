@@ -21,6 +21,7 @@
 
 import { isContentPartArray } from "@tanstack/ai";
 
+import { defaultMimeForPartType } from "../media/types.js";
 import { describeReadFileMedia } from "../tools/builtin/fs/read/format-result.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
@@ -89,7 +90,7 @@ function toMediaRenderInput(media: MediaOutput): MediaRenderInput {
     base64: media.base64,
     ...(typeof media.size === "number" ? { size: media.size } : {}),
     ...(media.type === "image"
-      ? { mimeType: readString(media.mimeType) ?? "image/png" }
+      ? { mimeType: readString(media.mimeType) ?? defaultMimeForPartType("image") }
       : {
           ...(media.extractedText !== undefined ? { extractedText: media.extractedText } : {}),
           ...(typeof media.pageCount === "number" ? { pageCount: media.pageCount } : {}),

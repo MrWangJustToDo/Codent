@@ -53,8 +53,8 @@ const ALLOWLIST = new Map([
     "resolveCoreEnv()'s final fallback: injected getCoreEnv wins, then a hasCoreEnv()-guarded ambient read, then a non-throwing stub for standalone runners",
   ],
   [
-    "provider/models-dev.ts",
-    "process-global models.dev metadata (identical across workspaces; the in-memory memo is global by design) and no runtime is in scope. The disk cache path is workspace-scoped, so it follows the AMBIENT root — the multi-runtime caveat is documented in models-dev.ts and the design inventory.",
+    "provider/models-dev/cache.ts",
+    "process-global models.dev metadata (identical across workspaces; the in-memory memo is global by design) and no runtime is in scope. The disk cache path is workspace-scoped, so it follows the AMBIENT root — the multi-runtime caveat is documented in models-dev/cache.ts and the design inventory. The parse/rank modules are pure and must stay off this list.",
   ],
 ]);
 

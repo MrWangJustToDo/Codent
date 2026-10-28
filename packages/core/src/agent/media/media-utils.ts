@@ -38,6 +38,7 @@ import {
 } from "./repair-stringified-multimodal.js";
 import {
   buildMediaRefPath,
+  defaultMimeForPartType,
   extensionToMime,
   isBinaryMediaPartType,
   isMediaHash,
@@ -384,19 +385,11 @@ export async function hydrateUIMessages(
 // Helpers (MIME type only — ext/parse live in types.ts)
 // ============================================================================
 
-/** Fallback MIME per part kind, used when a data URL or media ref carries none. */
-const PART_TYPE_DEFAULT_MIME: Record<string, string> = {
-  image: "image/png",
-  audio: "audio/mpeg",
-  video: "video/mp4",
-  document: "application/pdf",
-};
-
 /** Guess MIME type from a data URL or raw base64 content. */
 function guessMimeType(value: string, partType: string): string {
   const parsed = parseDataUrl(value);
   if (parsed?.mimeType) return parsed.mimeType;
-  return PART_TYPE_DEFAULT_MIME[partType] ?? "application/octet-stream";
+  return defaultMimeForPartType(partType);
 }
 
 /** Guess MIME type from a media:// ref string. */
@@ -406,5 +399,5 @@ function guessMimeTypeFromRef(ref: string, partType: string): string {
     const mime = extensionToMime(parsed.ext);
     if (mime) return mime;
   }
-  return PART_TYPE_DEFAULT_MIME[partType] ?? "application/octet-stream";
+  return defaultMimeForPartType(partType);
 }

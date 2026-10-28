@@ -32,6 +32,25 @@ export function isBinaryMediaPartType(type: string | undefined): type is BinaryM
   return typeof type === "string" && (BINARY_MEDIA_PART_TYPES as readonly string[]).includes(type);
 }
 
+/**
+ * Fallback MIME per binary part kind, used when the value/file type carries none.
+ *
+ * One table: `media-utils` (hydrate/dehydrate), `read_file`'s media part, the wire projection and
+ * code-mode's media projection all need the same fallback, and four inline `"image/png"` literals
+ * were how the audio/video/document defaults drifted apart.
+ */
+export const DEFAULT_MIME_BY_PART_TYPE: Record<BinaryMediaPartType, string> = {
+  image: "image/png",
+  audio: "audio/mpeg",
+  video: "video/mp4",
+  document: "application/pdf",
+};
+
+/** Fallback MIME for a binary part type; octet-stream for anything else. */
+export function defaultMimeForPartType(type: string): string {
+  return isBinaryMediaPartType(type) ? DEFAULT_MIME_BY_PART_TYPE[type] : "application/octet-stream";
+}
+
 /** Protocol prefix used in dehydrated source.value to reference a media file. */
 export const MEDIA_PROTOCOL = "media://";
 

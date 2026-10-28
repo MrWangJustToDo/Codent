@@ -53,10 +53,6 @@ const MAX_RECOVERY_ATTEMPTS = 3;
 // Helpers
 // ============================================================================
 
-function errorFromUnknown(error: unknown): Error {
-  return toError(error);
-}
-
 /**
  * Exponential backoff with jitter.
  *
@@ -97,11 +93,7 @@ async function attemptErrorRecovery(
   // Never start a new recovery strategy for an already-cancelled run.
   if (options.signal?.aborted) return null;
   if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
-    options.managed.log?.error(
-      "agent",
-      `Max recovery attempts (${MAX_RECOVERY_ATTEMPTS}) exceeded`,
-      errorFromUnknown(error)
-    );
+    options.managed.log?.error("agent", `Max recovery attempts (${MAX_RECOVERY_ATTEMPTS}) exceeded`, toError(error));
     return null;
   }
 
@@ -277,7 +269,7 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
       }
     } catch (error) {
       if (!shouldRetry) {
-        lastErrorMessage = errorFromUnknown(error).message;
+        lastErrorMessage = toError(error).message;
         const result = await attemptErrorRecovery(options, error, multimodalStripAttempted, recoveryAttempts);
         if (result) applyRecovery(result);
         else throw error;
