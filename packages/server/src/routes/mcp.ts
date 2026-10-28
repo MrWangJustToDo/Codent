@@ -1,3 +1,4 @@
+import { errorMessage } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { spawn } from "node:child_process";
@@ -138,7 +139,7 @@ export const mcpRoutes = new Hono()
 
       return c.json({ id });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return c.json({ error: true, message }, 500);
     }
   })
@@ -184,7 +185,7 @@ export const mcpRoutes = new Hono()
 
       return c.json({ responses });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return c.json({ error: true, message }, 500);
     }
   })

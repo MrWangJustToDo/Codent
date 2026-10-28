@@ -1,3 +1,4 @@
+import { errorMessage } from "@codent/core";
 import { Box, Text } from "ink";
 import { useState } from "react";
 
@@ -245,7 +246,7 @@ export const ConfigEditor = ({
               onDone(config);
             } catch (err) {
               setSaving(false);
-              setError(err instanceof Error ? err.message : String(err));
+              setError(errorMessage(err));
             }
           })();
         } else if (input === "e" || input === "E") {

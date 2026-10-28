@@ -232,17 +232,6 @@ export class CompactionController {
     return this.active?.lease.kind === "manual";
   }
 
-  /**
-   * Force `compacting` back to `running`, if it is still set.
-   *
-   * A safety net for the reactive-retry shell, which can finish without an outcome to report (the
-   * compaction applied, but the retry path only needs the status unwound before the restarted
-   * stream).
-   */
-  settle(): void {
-    if (this.deps.getStatus() === "compacting") this.deps.setStatus("running", "compaction-end");
-  }
-
   private abortActive(reason: string): void {
     this.active?.controller?.abort(reason);
     // Dropping the lease IS the invalidation: a late `finish`/`release` from the aborted producer

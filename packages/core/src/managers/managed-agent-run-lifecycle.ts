@@ -130,9 +130,9 @@ export async function prepareManagedAgentForRun(
   }
 }
 
-export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinalizeReason): void {
+export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinalizeReason): boolean {
   // Idempotent per turn — pump `stop()` and outcome paths may both attempt finalize.
-  if (!host.beginTurnFinalize()) return;
+  if (!host.beginTurnFinalize()) return false;
 
   host.clearPrepareAsContinuation();
   host.recordStreamDuration();
@@ -177,6 +177,7 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   queueMicrotask(() => {
     host.log?.setRun(null);
   });
+  return true;
 }
 
 export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): void {

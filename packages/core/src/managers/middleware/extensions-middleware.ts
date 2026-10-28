@@ -28,6 +28,28 @@ export interface ExtensionsMiddlewareDeps {
   isTaskToolStartDeferred?: (toolCallId: string) => boolean;
   /** Called when a `run_command` settles, so its live command preview can be marked ended. */
   onToolSettled?: (toolCallId: string) => void;
+  /**
+   * Whether this tool's calls are approval-gated (the engine decided on the ORIGINAL input before
+   * this hook ever ran). Paired with the pre-forked `task` rule below, it is what makes an
+   * argument rewrite safe to apply: a gated call cannot honour one, because "approved A, ran B"
+   * would be indistinguishable from a legitimate call.
+   */
+  isApprovalGated?: (toolName: string) => boolean;
+  /** Report a refused rewrite, so a policy rejection is not silent. */
+  onArgRewriteRefused?: (toolName: string) => void;
+}
+
+/**
+ * Whether an interceptor's `modifiedArgs` may replace this call's arguments.
+ *
+ * Two shapes refuse it, for different reasons and with the same verdict (run the original args):
+ * an approval-gated tool had its approval + command-safety decision computed from the original
+ * input, and a pre-forked `task` started its subagent on the original args at `TOOL_CALL_END` — a
+ * rewrite would be silently ignored by the run while the model believes it took effect.
+ */
+function canRewriteArgs(deps: ExtensionsMiddlewareDeps, toolName: string): boolean {
+  if (toolName === BUILTIN_TOOL_NAMES.task) return false;
+  return deps.isApprovalGated?.(toolName) !== true;
 }
 
 export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -85,6 +107,12 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       }
 
       if (event.modifiedArgs !== undefined) {
+        // An approval-gated call was already decided on `hookCtx.args`; a preforked `task` already
+        // started on them. Rewriting now cannot be honoured honestly, so keep the original args.
+        if (!canRewriteArgs(deps, hookCtx.toolName)) {
+          deps.onArgRewriteRefused?.(hookCtx.toolName);
+          return;
+        }
         return {
           type: "transformArgs",
           args: event.modifiedArgs,

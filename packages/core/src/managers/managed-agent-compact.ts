@@ -122,6 +122,15 @@ export async function handleManagedReactiveCompact(
     // loop's other strategies (capability / transient).
     host.compactions.finish(lease, { status: "failed", error: compactError.message });
     return false;
+  } finally {
+    // Closure is structural, not a property of remembering every `return`. `release` is
+    // lease-checked and idempotent: after `finish` (or after a newer lease superseded this one)
+    // it is a no-op, so it can only ever end THIS producer's lease — never a newer owner's.
+    //
+    // This replaces the former `CompactionController.settle()`, which was lease-blind: it forced
+    // `compacting → running` by reading the status alone, so a delayed retry shell could have
+    // overwritten the status of a compaction that had legitimately claimed ownership since.
+    host.compactions.release(lease);
   }
 }
 

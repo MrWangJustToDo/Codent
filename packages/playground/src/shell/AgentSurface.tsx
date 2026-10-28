@@ -8,6 +8,7 @@ import {
   hasCoreEnv,
   registerCoreEnv,
   registerModelProvider,
+  errorMessage,
 } from "@codent/core";
 import { InkTerminalBox } from "@my-react/react-terminal/web";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -116,7 +117,7 @@ export const AgentSurface = memo(() => {
       setBoot({ phase: "ready", message: "Ready" });
     } catch (err) {
       if (currentInitId !== initIdRef.current) return;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       setBoot({ phase: "error", message: "Initialization failed", error: message });
     }
   }, [model, style, baseURL, apiKey, providerServerUrl, fetchProxyUrl, ensureCoreEnv, setBoot]);

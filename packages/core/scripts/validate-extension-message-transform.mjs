@@ -380,6 +380,42 @@ await runCase("in-place mutation does not reach the array the caller retained", 
   assert.notEqual(out, cached, "the handed array must not be the caller's array");
 });
 
+await runCase("in-place mutation of a content PART does not reach the caller's message", async () => {
+  const bus = createAgentEventBus();
+  const runner = makeRunner(bus);
+  await runner.loadExtension(
+    extension("inplace-part", (ctx) => {
+      ctx.registerMessageTransformer((c) => {
+        const content = c.messages[0].content;
+        content[0].text = "MUTATED";
+        content[1].source.data = "MUTATED-IMAGE";
+        content.push({ type: "text", text: "extra" });
+        return undefined;
+      });
+    })
+  );
+
+  const original = {
+    role: "user",
+    content: [
+      { type: "text", text: "original" },
+      { type: "image", source: { type: "base64", data: "abc" } },
+    ],
+  };
+  const out = await runner.applyMessageTransformers({
+    extensionId: "",
+    agentId: "x",
+    phase: "init",
+    messages: [original],
+  });
+
+  assert.equal(out[0].content[0].text, "MUTATED", "the transformer edits the wire it owns");
+  assert.equal(original.content[0].text, "original", "the part object is a copy, not the caller's");
+  assert.equal(original.content[1].source.data, "abc", "a nested part object is copied too");
+  assert.equal(original.content.length, 2, "pushing a part does not grow the caller's array");
+  assert.equal(out[0].content.length, 3);
+});
+
 await runCase("a cached array is transformed again on every call", async () => {
   const bus = createAgentEventBus();
   const runner = makeRunner(bus);

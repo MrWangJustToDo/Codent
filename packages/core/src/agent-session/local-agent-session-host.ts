@@ -233,11 +233,12 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // a window where another live agent could resume a session that is about to be deleted,
       // adopt it, and then have every later save silently refused by the tombstone.
       //
-      // Block new writes and drain in-flight ones before the log disappears. `destroy` aborts a
-      // live pump, whose cancellation path queues a final persist; without this barrier that write
-      // can land after the file is removed and resurrect the deleted session.
-      await live.session?.close?.();
-      // Tear-down settles the log flush; only after that is removing the file safe.
+      // Do NOT close the session store here either. `destroy` runs the ordered teardown —
+      // `session:shutdown` → extension destroy → `close()` → drain → log flush — and awaits it
+      // (`destroyAgent` is sync, but `settleTeardowns` is not). Closing first made every write a
+      // shutdown handler performs a no-op (`persistSession` refuses after close), so the final
+      // extension work was silently dropped on the delete path only. The file is removed after
+      // that teardown returns, so the ordering this barrier was protecting still holds.
       await this.destroy(live.id);
       // `destroy` is NOT enough on its own: it releases a still-empty session's startup
       // reservation but leaves the log file in place, so without this delete a live session that

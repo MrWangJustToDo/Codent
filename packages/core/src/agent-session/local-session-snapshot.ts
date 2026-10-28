@@ -1,3 +1,4 @@
+import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { describeToolPresentations } from "../agent/tools/presentation/describe.js";
 /**
@@ -45,7 +46,7 @@ export function readLocalAgentSessionSnapshot(
     plan: managed.getPlanModeState(),
     autoMode: managed.isAutoModeEnabled(),
     mcp: { servers: managed.getMcpManager()?.getServerStatuses() ?? [] },
-    extensions: { extensions: managed.getExtensionRunner()?.getExtensionInfos() ?? [] },
+    extensions: readExtensionSummary(managed.getExtensionRunner()),
     toolDescriptors:
       typeof managed.getToolPresentationCatalog === "function"
         ? managed.getToolPresentationCatalog()

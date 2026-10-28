@@ -39,7 +39,7 @@ assert.equal(managed.getUI(), channel);
 managed.setUIChannel(undefined);
 assert.equal(managed.getUI(), undefined);
 
-managed.syncRunStatusFromUIMessages([
+managed.runFinalizer.finalizeSnapshot([
   { id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] },
   { id: "a1", role: "assistant", parts: [{ type: "text", content: "hello" }] },
 ]);

@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_BODY_BYTES, readBodyBounded, readBodyTextBounded } from "@codent/core";
+import { DEFAULT_MAX_BODY_BYTES, readBodyBounded, readBodyTextBounded, errorMessage } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -61,7 +61,7 @@ export const fetchRoutes = new Hono().post("/proxy", zValidator("json", fetchReq
       encoding,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return c.json({ error: true, name: "Error", code: "fetch_error", message }, 500);
   }
 });

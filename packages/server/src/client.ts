@@ -16,7 +16,7 @@
  * ```
  */
 
-import { ExecutionError, FileError, defaultPath } from "@codent/core";
+import { ExecutionError, FileError, defaultPath, toError } from "@codent/core";
 import { hc } from "hono/client";
 
 import type { AppType } from ".";
@@ -602,7 +602,7 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
           if (!sid) throw new Error("MCP transport not started");
           const promise = performSend(sid, message);
           promise.catch((err: unknown) => {
-            transport.onerror?.(err instanceof Error ? err : new Error(String(err)));
+            transport.onerror?.(toError(err));
           });
           return promise;
         },

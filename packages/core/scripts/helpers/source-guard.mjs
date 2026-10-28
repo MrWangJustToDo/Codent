@@ -14,8 +14,21 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcRoot = resolve(here, "../../src");
+const repoRoot = resolve(here, "../../../..");
+const packagesRoot = join(repoRoot, "packages");
 
-const SKIP_DIRS = new Set(["node_modules", "dist", ".git"]);
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "dist",
+  ".git",
+  ".wxt",
+  ".output",
+  ".turbo",
+  "coverage",
+  "scripts",
+  "test",
+  "tests",
+]);
 
 /** Every `.ts` file under `packages/core/src`, excluding generated trees. */
 export function sourceFiles(dir = srcRoot, out = []) {
@@ -26,6 +39,55 @@ export function sourceFiles(dir = srcRoot, out = []) {
     else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) out.push(full);
   }
   return out;
+}
+
+/**
+ * Every `.ts`/`.tsx` source file in every workspace package.
+ *
+ * A "one definition" rule is only a rule if the consumer side is scanned too. Excluded on purpose:
+ * - `workers/` — `packages/playground/workers/*` are standalone runtimes (a fetch proxy with its
+ *   own entry); importing the core barrel there would pull the whole agent into a Worker bundle.
+ * - `packages/mcp-server` — a standalone MCP server with no `@codent/core` dependency; giving it
+ *   one to share an error helper is the wrong trade.
+ * - `vite-plugins/` — build-time tooling, not a runtime host.
+ */
+const SKIP_PACKAGES = new Set(["mcp-server"]);
+
+export function packageSourceFiles(out = []) {
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "workers" || entry.name === "vite-plugins" || SKIP_DIRS.has(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) out.push(full);
+    }
+  };
+  for (const pkg of readdirSync(packagesRoot, { withFileTypes: true })) {
+    if (!pkg.isDirectory() || pkg.name.startsWith(".") || SKIP_PACKAGES.has(pkg.name)) continue;
+    walk(join(packagesRoot, pkg.name));
+  }
+  return out;
+}
+
+/**
+ * Scan every package (not just core) for re-derived shared rules.
+ *
+ * `definitionFiles` are repo-relative paths (`packages/core/src/utils/errors.ts`).
+ */
+export function scanPackages({ patterns, definitionFiles = [] }) {
+  const allowed = new Set(definitionFiles);
+  const offenders = [];
+  for (const file of packageSourceFiles()) {
+    const rel = relative(repoRoot, file).split("\\").join("/");
+    if (allowed.has(rel)) continue;
+    const lines = readFileSync(file, "utf8").split("\n");
+    lines.forEach((line, index) => {
+      for (const { re, reason } of patterns) {
+        if (re.test(line)) offenders.push({ rel, line: index + 1, text: line.trim(), reason });
+      }
+    });
+  }
+  return offenders;
 }
 
 /**

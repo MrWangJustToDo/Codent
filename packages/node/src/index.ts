@@ -13,7 +13,7 @@
  * ```
  */
 
-import { AGENT_DATA_DIR, renderRgbaAsTerminalText } from "@codent/core";
+import { AGENT_DATA_DIR, renderRgbaAsTerminalText, errorMessage } from "@codent/core";
 import { stdioTransport } from "@tanstack/ai-mcp/stdio";
 import mime from "mime-types";
 import { exec, execFile } from "node:child_process";
@@ -128,7 +128,7 @@ function isSharpMissing(message: string): boolean {
 }
 
 function describeResizeFailure(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   if (isSharpMissing(message)) {
     return (
       `the optional dependency "sharp" is not installed. npm omits it on platforms ` +
@@ -149,7 +149,7 @@ function describeResizeFailure(err: unknown): string {
 let warnedImageTextUnavailable = false;
 
 function describeImageTextFailure(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   if (isSharpMissing(message)) {
     return (
       `the optional dependency "sharp" is not installed, so the workspace preview cannot ` +

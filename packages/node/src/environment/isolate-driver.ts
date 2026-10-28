@@ -12,6 +12,8 @@
  * native-addon mismatch into a catchable Error, which this function then
  * converts into a `null` (degrade).
  */
+import { errorMessage } from "@codent/core";
+
 import type { IsolateDriver } from "@tanstack/ai-code-mode";
 
 /**
@@ -34,7 +36,7 @@ const MINIMUM_NODE_MAJOR = 24;
  * real packaging fault behind "upgrade Node and try again".
  */
 function describeLoadFailure(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   const major = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
 
   const addonAbsent = /Cannot find (package|module) 'isolated-vm'/.test(message);

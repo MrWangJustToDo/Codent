@@ -13,12 +13,22 @@ import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.j
 
 import type { AgentRegistry } from "./agent-registry.js";
 import type { SessionOwnership } from "./session-ownership.js";
+import type { AgentLog } from "../agent/agent-log/agent-log.js";
 
 export interface LifecycleCoordinatorDeps {
   registry: AgentRegistry;
   ownership: SessionOwnership;
   /** Drop the per-agent event-bus scope. */
   clearAgentScope: (id: string) => void;
+  /**
+   * Keep this agent's log resolvable for the whole teardown. The registry entry is removed
+   * synchronously (callers rely on `destroyAgent` being immediate), but teardown is async and
+   * emits `agent:extension-error` / `session:save-error` producers that must still reach a sink —
+   * otherwise the failures that explain a bad shutdown are the ones dropped.
+   */
+  retainLog?: (id: string, log: AgentLog) => void;
+  /** Release a retained log once its teardown has flushed and settled. */
+  releaseLog?: (id: string) => void;
 }
 
 export class LifecycleCoordinator {
@@ -123,10 +133,12 @@ export class LifecycleCoordinator {
         // flushed. Releasing at the top let a new resume claim the id while this
         // teardown was still writing to it.
         this.deps.ownership.releaseAllFor(id);
+        this.deps.releaseLog?.(id);
       }
     })();
     this.trackTeardown(teardown);
 
+    this.deps.retainLog?.(id, managedAgent.log);
     this.deps.registry.delete(id);
   }
 

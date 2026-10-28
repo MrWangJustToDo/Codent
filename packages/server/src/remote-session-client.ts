@@ -11,7 +11,7 @@
  *   stream for `HEARTBEAT_TIMEOUT_MS` triggers a reconnect.
  */
 
-import { presentationFromInfo } from "@codent/core";
+import { presentationFromInfo, errorMessage } from "@codent/core";
 
 import { applyEvent, type ToolBufferMap } from "./remote-session-reducer.js";
 
@@ -348,7 +348,7 @@ export class RemoteSessionClient implements AgentSession {
       // timeout (~300s, UND_ERR_HEADERS_TIMEOUT) lands here. The run keeps
       // going server-side and streams over SSE; rejecting instead would crash
       // fire-and-forget callers with an unhandled rejection.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       console.error(`[RemoteSessionClient] dispatch transport error: ${message}`);
       return { ok: false, code: "failed", error: message };
     }

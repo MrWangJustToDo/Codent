@@ -5,6 +5,7 @@ import {
   createDirectModelProvider,
   registerCoreEnv,
   registerModelProvider,
+  errorMessage,
 } from "@codent/core";
 import { createRemoteEnv, createRemoteProvider } from "@codent/server/client";
 import { InkTerminalBox } from "@my-react/react-terminal/web";
@@ -80,7 +81,7 @@ const AgentBootstrap = () => {
       setAdapter(ext);
     } catch (err) {
       if (currentInitId !== initIdRef.current) return;
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       if (currentInitId === initIdRef.current) {
         setLoading(false);

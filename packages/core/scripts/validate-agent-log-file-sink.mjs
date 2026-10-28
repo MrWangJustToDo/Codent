@@ -370,4 +370,60 @@ await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
   console.log("AGENT_LOG_LEVEL filters the persisted timeline OK");
 }
 
+// ----------------------------------------------------------------------------
+// 7b. The level also filters the bootstrap PENDING buffer
+//
+// Entries are accepted by the seam while it still defaults to `debug`; the sink is bound later,
+// and the drain used to hand them over without re-checking the level the extension just applied.
+// That made `AGENT_LOG_LEVEL` ineffective for exactly the bootstrap rows it exists to quiet.
+// ----------------------------------------------------------------------------
+{
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-pending-level-"));
+  const levelEnv = createEnv(root, { withAppendFile: true });
+  registerCoreEnv(levelEnv);
+  const previous = process.env.AGENT_LOG_LEVEL;
+  process.env.AGENT_LOG_LEVEL = "warn";
+  try {
+    const pendingLog = new AgentLog();
+    pendingLog.debug("system", "bootstrap-debug");
+    pendingLog.info("system", "bootstrap-info");
+    pendingLog.warn("system", "bootstrap-warn");
+
+    const extension = createLogExtension({});
+    const dir = path.join(root, "pending-level");
+    const detach = extension.attachSink(pendingLog, {
+      dir,
+      filename: "agent.log",
+      flushIntervalMs: 10,
+      env: levelEnv,
+    });
+    pendingLog.error("system", "after-attach-error");
+
+    const file = path.join(dir, "agent.log");
+    const kept = await waitFor(
+      async () => {
+        try {
+          return (await fs.promises.readFile(file, "utf-8")).trim().split("\n").filter(Boolean);
+        } catch {
+          return [];
+        }
+      },
+      (rows) => rows.length >= 2
+    );
+    assert.deepEqual(
+      kept.map((line) => JSON.parse(line).message),
+      ["bootstrap-warn", "after-attach-error"],
+      "the pending drain honours the level, so bootstrap debug/info never reach disk"
+    );
+    detach();
+    extension.dispose();
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_LOG_LEVEL;
+    else process.env.AGENT_LOG_LEVEL = previous;
+    await fs.promises.rm(root, TEMP_RM_OPTIONS);
+    clearCoreEnv();
+  }
+  console.log("AGENT_LOG_LEVEL filters the pending bootstrap buffer OK");
+}
+
 console.log("agent-log-file-sink validation passed");

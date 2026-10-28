@@ -163,7 +163,6 @@ for (const file of walkTsFiles(srcRoot)) {
       });
     }
     for (const getter of cls.getters) {
-      // Rule 1a: `get foo()` next to `getFoo()`.
       const methodSpelling = `get${getter.name[0].toUpperCase()}${getter.name.slice(1)}`;
       if (methodNames.has(methodSpelling)) {
         violations.push({

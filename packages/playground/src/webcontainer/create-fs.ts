@@ -1,4 +1,4 @@
-import { FileError } from "@codent/core";
+import { FileError, errorMessage } from "@codent/core";
 
 import { resolveWorkspacePath, toWorkdirPath } from "./workspace-path.js";
 
@@ -6,7 +6,7 @@ import type { CoreEnvFs } from "@codent/core";
 import type { FileSystemAPI, WebContainer } from "@webcontainer/api";
 
 function wrapFsError(err: unknown, path: string): never {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   const lower = message.toLowerCase();
   if (lower.includes("enoent") || lower.includes("no such file")) {
     throw new FileError("not_found", message, path, err instanceof Error ? err : undefined);
@@ -24,12 +24,7 @@ export function createWebContainerFs(wc: WebContainer, rootPath: string, onChang
     try {
       return resolveWorkspacePath(rootPath, inputPath);
     } catch (err) {
-      throw new FileError(
-        "permission_denied",
-        err instanceof Error ? err.message : String(err),
-        inputPath,
-        err instanceof Error ? err : undefined
-      );
+      throw new FileError("permission_denied", errorMessage(err), inputPath, err instanceof Error ? err : undefined);
     }
   };
 

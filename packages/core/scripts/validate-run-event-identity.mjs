@@ -72,7 +72,7 @@ const count = (events, type) => events.filter((event) => event === type).length;
 // 4. forceSubmit on an idle agent: no fabricated run, message still delivered
 // ============================================================================
 {
-  const { managed, chat, events } = makeAgent("idle-force-submit");
+  const { chat, events } = makeAgent("idle-force-submit");
   let pumps = 0;
   chat.pumpToolPhases = async () => {
     pumps += 1;
@@ -98,7 +98,7 @@ const count = (events, type) => events.filter((event) => event === type).length;
 // 5. forceSubmit over a parked turn still interrupts it, exactly once
 // ============================================================================
 {
-  const { managed, chat, events } = makeAgent("parked-force-submit", { status: "waiting" });
+  const { chat, events } = makeAgent("parked-force-submit", { status: "waiting" });
   let pumps = 0;
   chat.pumpToolPhases = async () => {
     pumps += 1;
@@ -126,6 +126,55 @@ const count = (events, type) => events.filter((event) => event === type).length;
   assert.equal(count(events, "agent:abort"), 1, "the parked turn is interrupted once");
   assert.equal(count(events, "agent:stop"), 1, "and finalized once");
   assert.equal(pumps, 1, "then the new message starts its own turn");
+}
+
+// ============================================================================
+// 6. Esc on a live pump reports the cancel
+//
+// `interruptCurrentRun` recorded status `aborted` BEFORE calling `abort()`, and the abort's
+// "was there a run" test reads that same status — so the main cancel path emitted no
+// `agent:abort`, while a parked agent (which `onUserCancel` ignores) did. The log bridge's
+// abort row and `agent:abort` observers (memory-selection discard) never fired on a real Esc.
+// ============================================================================
+{
+  const { managed, chat, events } = makeAgent("running-stop", { status: "running" });
+  chat.pumpDepth = 1; // an in-flight pump — the state Esc actually interrupts
+
+  chat.stop();
+
+  assert.equal(count(events, "agent:abort"), 1, "Esc on a live pump reports the cancel exactly once");
+  assert.equal(managed.getStatus(), "aborted", "and the turn ends aborted");
+}
+
+// ============================================================================
+// 7. A settled turn is not "current": idle forceSubmit cannot erase its reading
+//
+// The run token stayed valid after a normal completion, so `forceSubmit`'s
+// `isCurrentRunValid()` fallback treated an idle agent as running: it aborted the settled
+// controller (cancelling finalize-time memory extraction that still held its signal) and reached
+// `finalizeRun` with nothing to finalize — which cleared `lastIteration` (ACP's
+// `max_turn_requests` reading) before the guard rejected it.
+// ============================================================================
+{
+  const { managed, chat, events } = makeAgent("settled-force-submit");
+  managed.setStatus("running", "test");
+  managed.setIterationProgress({ current: 3, max: 3 });
+  // Real pump, stubbed model call: the pump's `finally` is what retires the run token.
+  chat.executeStream = async () => {};
+
+  await chat.pumpToolPhases({ startsNewTurn: true });
+
+  assert.equal(managed.run.isCurrentRunValid(), false, "a settled turn holds no current run");
+  assert.deepEqual(managed.getL1State().lastIteration, { current: 3, max: 3 }, "the reading is published");
+  assert.equal(managed.readIteration().current, 0, "and live progress is cleared");
+
+  events.length = 0;
+  chat.pumpToolPhases = async () => {};
+  chat.forceSubmit("next");
+  await chat.runChain;
+
+  assert.equal(count(events, "agent:abort"), 0, "an idle force-submit does not abort a settled turn");
+  assert.deepEqual(managed.getL1State().lastIteration, { current: 3, max: 3 }, "and does not erase lastIteration");
 }
 
 console.log("\nvalidate-run-event-identity: all assertions passed");

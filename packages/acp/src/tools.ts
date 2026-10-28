@@ -230,8 +230,14 @@ export function toolCallInfo(
 
 /** Build the ACP `tool_call_update` status from a tool part state. */ export function toolStatusFor(
   state: string,
-  hasError: boolean
+  hasError: boolean,
+  cancelled = false
 ): "pending" | "in_progress" | "completed" | "failed" {
+  // A cancel is neither a success nor a fault. The protocol version this host speaks (`ToolCallStatus`
+  // in the SDK's v1 schema) has no `cancelled` member, so the only terminal non-success is `failed`
+  // — never `completed` (the `task` tool's `aborted` marker used to read as success). The distinction
+  // travels in `_meta.cancelled`, which ACP reserves exactly for this.
+  if (cancelled) return "failed";
   if (hasError || state === "error") return "failed";
   if (state === "complete") return "completed";
   // `input-streaming` / `awaiting-input` mean the arguments are still arriving: the row is waiting

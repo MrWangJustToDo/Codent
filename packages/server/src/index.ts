@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { installAgentLogProcessGuards, registerCoreEnv } from "@codent/core";
+import { installAgentLogProcessGuards, registerCoreEnv, errorMessage } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
 import { serve } from "@hono/node-server";
 import "dotenv/config";
@@ -90,7 +90,7 @@ if (REMOTE_ENV) {
     console.log(`[server] Registered remote CoreEnv: ${REMOTE_ENV} (rootPath=${coreEnv.rootPath})`);
   } catch (err) {
     console.error(`[server] Failed to connect to remote CoreEnv at ${REMOTE_ENV}`);
-    console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`  ${errorMessage(err)}`);
     process.exit(1);
   }
 } else {

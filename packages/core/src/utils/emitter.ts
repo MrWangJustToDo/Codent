@@ -29,16 +29,22 @@ export class Emitter<TEvents extends Record<string, unknown>> {
   }
 
   /**
-   * Emit an event to current subscribers. Listener errors are swallowed.
+   * Emit an event to current subscribers. A listener error does not stop delivery (one faulty
+   * subscriber must not cost the others their frame); it is handed to `onListenerError` so the
+   * seam's owner can report it instead of losing it.
    */
-  emit<K extends keyof TEvents & string>(type: K, payload: TEvents[K]): void {
+  emit<K extends keyof TEvents & string>(
+    type: K,
+    payload: TEvents[K],
+    onListenerError?: (error: unknown) => void
+  ): void {
     const set = this.listeners.get(type);
     if (!set || set.size === 0) return;
     for (const listener of [...set]) {
       try {
         listener(payload);
-      } catch {
-        // Ignore listener errors
+      } catch (error) {
+        onListenerError?.(error);
       }
     }
   }

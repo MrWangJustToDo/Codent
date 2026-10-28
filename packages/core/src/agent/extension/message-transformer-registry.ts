@@ -20,10 +20,15 @@
  *      already-mutated array, so a transformer that mutates and returns `void` would
  *      silently become a no-op on the second call.
  *
- * So ownership is granted structurally: a fresh outer array AND fresh message objects.
- * The boundary is deliberate and documented — the `content` parts *inside* a message are
- * still shared, because cloning them would mean walking every part of every model call.
- * A transformer that wants to change a part returns a new message rather than mutating.
+ * So ownership is granted structurally: a fresh outer array, fresh message objects, and fresh
+ * content containers — the `content` array, each part object, and one level of nested object
+ * inside a part (an image `source`, for example). A transformer that mutates `part.text`, pushes
+ * a part, or rewrites `part.source.data` therefore edits its own copy; without the part-level
+ * copies those edits wrote through to the objects the channel and the persistence path share
+ * (the durability rule every wire transform is required to follow).
+ *
+ * Primitive values (including base64 strings) are shared, not re-allocated: they are immutable,
+ * and copying them would duplicate every image on every model call.
  */
 
 import { compareDispatchRank } from "../dispatch-order.js";
@@ -51,6 +56,31 @@ function describeValue(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "an array with invalid entries";
   return typeof value;
+}
+
+/**
+ * Copy one content part's own containers.
+ *
+ * Part objects are flat data with at most one nested object (an image/document `source`), so one
+ * level is enough to make an in-place edit local; going deeper would start copying payload
+ * strings, which are immutable and can be large.
+ */
+function cloneContentPart(part: unknown): unknown {
+  if (!part || typeof part !== "object") return part;
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(part as Record<string, unknown>)) {
+    if (Array.isArray(value)) copy[key] = [...value];
+    else if (value && typeof value === "object") copy[key] = { ...(value as Record<string, unknown>) };
+    else copy[key] = value;
+  }
+  return copy;
+}
+
+/** Ownership copy for one model message — see the note at the top of this file. */
+function cloneModelMessage(message: ModelMessage): ModelMessage {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return { ...message };
+  return { ...message, content: content.map(cloneContentPart) } as ModelMessage;
 }
 
 export interface MessageTransformerRegistryHost {
@@ -112,8 +142,8 @@ export class MessageTransformerRegistry {
    * so this method does not throw.
    */
   async apply(ctx: MessageTransformContext): Promise<ModelMessage[]> {
-    // Fresh outer array + fresh message objects: see the ownership note at the top.
-    let current: ModelMessage[] = ctx.messages.map((message) => ({ ...message }));
+    // Fresh outer array + fresh message objects + fresh content containers (see ownership note).
+    let current: ModelMessage[] = ctx.messages.map(cloneModelMessage);
 
     // Declared dispatch order, load sequence as the tie-break — not insertion order.
     const ordered = Array.from(this.transformers, ([extensionId, entry]) => ({ extensionId, ...entry })).sort((a, b) =>

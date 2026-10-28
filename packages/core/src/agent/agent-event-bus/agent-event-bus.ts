@@ -83,6 +83,8 @@ export class DefaultAgentEventBus implements AgentEventBus {
       /** Scope the interceptor was registered on (an agent id for scoped buses). */
       scopeId: string;
       error: unknown;
+      /** Which dispatch mode failed. Absent means interceptor (the original caller shape). */
+      kind?: "interceptor" | "observer";
     }) => void
   ) {}
 
@@ -157,13 +159,19 @@ export class DefaultAgentEventBus implements AgentEventBus {
     // whether it is emitted.
     const deliverToWildcards = !INTERNAL_EXTENSION_EVENTS.has(type);
     for (let node: EventBusScopeNode | null = this.node; node; node = node.parent) {
-      node.observers.emit(type, event);
+      // A live observer gets the same containment as a retained replay (see `on()`): one broken
+      // subscriber loses its frame, not the notification, and the failure is reported instead of
+      // vanishing in `Emitter`'s catch. Silence here was the worst case to debug — a projector or
+      // log sink failing on every live frame with no diagnostic at all.
+      node.observers.emit(type, event, (error) =>
+        this.onInterceptorError?.({ pattern: type, event: type, scopeId: node.id, error, kind: "observer" })
+      );
       if (!deliverToWildcards) continue;
       for (const listener of [...node.wildcards]) {
         try {
           listener(event);
-        } catch {
-          // Ignore wildcard listener errors
+        } catch (error) {
+          this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" });
         }
       }
     }
@@ -293,7 +301,13 @@ export class DefaultAgentEventBus implements AgentEventBus {
 /** Create a root event bus (no parent scope). */
 export function createAgentEventBus(
   id = "root",
-  onInterceptorError?: (info: { pattern: string; event: string; scopeId: string; error: unknown }) => void
+  onInterceptorError?: (info: {
+    pattern: string;
+    event: string;
+    scopeId: string;
+    error: unknown;
+    kind?: "interceptor" | "observer";
+  }) => void
 ): AgentEventBus {
   return new DefaultAgentEventBus(new EventBusScopeNode(id, null), onInterceptorError);
 }

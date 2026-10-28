@@ -161,7 +161,7 @@ assert.equal(managed.getStatus(), "completed");
 assert.equal(managed.getL1State().lastFinishReason, null);
 
 managed.setStatus("running");
-managed.syncRunStatusFromUIMessages([
+managed.runFinalizer.finalizeSnapshot([
   {
     id: "u1",
     role: "user",
@@ -176,7 +176,7 @@ managed.syncRunStatusFromUIMessages([
 assert.equal(managed.getStatus(), "completed");
 
 managed.setStatus("running");
-managed.syncRunStatusFromUIMessages([
+managed.runFinalizer.finalizeSnapshot([
   {
     id: "u1",
     role: "user",

@@ -31,6 +31,7 @@ import {
   formatToolOutput,
   isCompactionSummaryUIMessage,
   isContextUIMessage,
+  isCancelledToolCall,
   isUserVisibleTaskRow,
   parseToolInput,
 } from "@codent/core";
@@ -607,7 +608,13 @@ export class AcpProjector {
     // A denied call never runs; a still-undecided one is waiting, not executing.
     if (approval?.needsApproval && approval.approved === false) return "failed";
     if (approval?.needsApproval && approval.approved === undefined) return "pending";
-    return toolStatusFor(String(part.state), part.output?.success === false);
+    // User cancel: one predicate for both marker shapes (`cancelled` / `aborted`), the same one
+    // the TUI renders — so the client sees `cancelled`, not `failed` or `completed`.
+    return toolStatusFor(
+      String(part.state),
+      (part.output as { success?: boolean } | undefined)?.success === false,
+      isCancelledToolCall(part as { output?: unknown })
+    );
   }
 
   private emitToolCall(part: ToolCallPartLike, replay: boolean): void {
@@ -775,6 +782,10 @@ export class AcpProjector {
 
   private resultStatusOf(part: ToolResultPartLike): ToolCallStatus {
     const output = part.output as { success?: boolean } | undefined;
+    // A cancelled call that returned its own partial output (`run_command` with `cancelled: true`)
+    // or a `task` whose subagent stopped (`aborted: true`) did not complete. Without this the
+    // result writer upgraded both to `completed`.
+    if (isCancelledToolCall(part as { output?: unknown })) return "failed";
     return part.state === "error" || part.outcome || part.error || output?.success === false ? "failed" : "completed";
   }
 
@@ -831,6 +842,7 @@ export class AcpProjector {
         ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
         : {}),
       status,
+      ...(isCancelledToolCall(part as { output?: unknown }) ? { _meta: { cancelled: true } } : {}),
       ...(content
         ? { content }
         : text

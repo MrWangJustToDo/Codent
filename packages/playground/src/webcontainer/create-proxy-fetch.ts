@@ -1,3 +1,5 @@
+import { errorMessage } from "@codent/core";
+
 /**
  * Browser → CORS-safe proxy → upstream URL.
  *
@@ -163,7 +165,7 @@ export function createProxiedFetch(): typeof fetch {
         throw new DOMException("The operation was aborted.", "AbortError");
       }
       throw new TypeError(
-        `Fetch proxy unreachable (${endpoint}): ${err instanceof Error ? err.message : String(err)}. ` +
+        `Fetch proxy unreachable (${endpoint}): ${errorMessage(err)}. ` +
           "For GitHub Pages, deploy packages/playground/workers/fetch-proxy and set Fetch proxy URL / VITE_FETCH_PROXY_URL."
       );
     }

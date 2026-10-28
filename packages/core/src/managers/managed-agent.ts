@@ -56,6 +56,7 @@ import { getModelVisibleMessages } from "../agent/compaction/message-chain-proje
 import { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
 import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.js";
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
+import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { scopeExtensionOwnerId } from "../agent/extension/owner-id.js";
 import { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
@@ -887,11 +888,6 @@ export class ManagedAgent {
     this.statusController.reconcileWithPolicy(messages, "idle-clear");
   }
 
-  /** Reconcile status after a chat pump finishes. */
-  syncRunStatusFromUIMessages(messages: TanStackUIMessage[]): void {
-    this.runFinalizer.finalizeSnapshot(messages);
-  }
-
   /** Rename the display name and notify state-channel subscribers (session rename command). */
   setDisplayName(name: string): void {
     this.name = name;
@@ -1102,9 +1098,7 @@ export class ManagedAgent {
     this.chatController?.setEventBus(bus);
     bus.retain("agent:state", () => this.getL1State());
     bus.retain("session:mode", () => this.modeState());
-    bus.retain("session:extensions", () => ({
-      extensions: this.extensions.getExtensionRunner()?.getExtensionInfos() ?? [],
-    }));
+    bus.retain("session:extensions", () => readExtensionSummary(this.extensions.getExtensionRunner()));
     bus.retain("session:tool-presentation", () => ({ descriptors: this.getToolPresentationCatalog() }));
     bus.retain("session:mcp", () => ({ servers: this.getMcpManager()?.getServerStatuses() ?? [] }));
     bus.retain("session:interaction", () => this.readInteractions());
@@ -1147,10 +1141,6 @@ export class ManagedAgent {
   // ============================================================================
   // Config & resources
   // ============================================================================
-
-  getConfig(): Readonly<AgentConfig> {
-    return { ...this.config };
-  }
 
   updateConfig(updates: Partial<AgentConfig>): void {
     // Mutate the single config object in place (AgentConfigSchema strips the
@@ -1545,8 +1535,14 @@ export class ManagedAgent {
    * Memory extraction runs only when `reason === "finished"`. Idempotent per turn until {@link resetTurnLifecycle}.
    */
   finalizeRun(reason: RunFinalizeReason): void {
+    // Nothing to finalize: the turn already settled. Everything below is run-scoped state, so a
+    // late caller (the idle `forceSubmit` path used to reach here) must not touch it — the old
+    // order erased `lastIteration` (the reading ACP classifies as `max_turn_requests`) and reset
+    // the retained iteration channel before the idempotency guard rejected the finalize.
+    if (!this.run.canFinalizeTurn()) return;
     // Keep the reading before the reset: the turn may have ended exactly at its budget, and the
-    // stop reason is classified AFTER finalize (ACP). Clearing both would make that unanswerable.
+    // stop reason is classified AFTER finalize (ACP). The status flip inside the finalize is what
+    // publishes `lastIteration`, so both writes must land before it runs.
     this.lastIterationState = this.iterationState;
     // A terminal turn (or an abort) must not leave the retained `iteration` channel
     // reporting the last model turn of the run.

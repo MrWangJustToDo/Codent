@@ -4,7 +4,7 @@ import { getBuiltinToolPresentation } from "./builtin.js";
 import { formatDuration } from "./format/format.js";
 import { DURATION_THRESHOLD_MS, getDurationMs } from "./format/inline-summary.js";
 import { keepsCompactRow } from "./row-rules.js";
-import { getUiToolState, parseToolInput } from "./state.js";
+import { getUiToolState, isCancelledToolCall, parseToolInput } from "./state.js";
 
 import type { ToolDisplayPayload, ToolPresentation } from "./types.js";
 import type { ToolCallPart } from "@tanstack/ai";
@@ -81,6 +81,11 @@ export function shouldFoldToolRow(
 
 /** Errored tool rows fold into the activity summary as an error count. */
 export function isErrorToolRow(part: ToolCallPart): boolean {
+  // A cancelled call is not a failure: its output carries `success: false`
+  // (`run_command`'s own catch) or `success: true` + `aborted` (`task`), and the row is
+  // rendered with the neutral cancel marker. Counting it as an error made the compact
+  // summary report failures the user never saw.
+  if (isCancelledToolCall(part)) return false;
   return getUiToolState(part) === "output-error";
 }
 

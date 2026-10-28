@@ -3,6 +3,7 @@
  * (no SessionStore / ManagedAgent).
  */
 
+import { errorMessage } from "@codent/core";
 import { Box, Text } from "ink";
 import { useEffect, useState } from "react";
 
@@ -44,7 +45,7 @@ export const SessionResumePicker = ({ session }: SessionResumePickerProps) => {
         setSessions(rows);
       } catch (err) {
         if (cancelled) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(errorMessage(err));
         useConfig.getActions().setConfig("resumeSession", "");
       }
     })();

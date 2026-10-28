@@ -45,6 +45,7 @@ import {
   registerCoreEnv,
   registerModelProvider,
   saveModelsConfig,
+  errorMessage,
 } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
 import { config as loadEnv } from "dotenv";
@@ -118,7 +119,7 @@ function parseArgsForHost(productName: string, argv: string[]): ParsedCliConfig 
     // help screen (which reads only host defaults, not the flags), not an error. `--version` is
     // already answered before any parsing.
     if (isHelpRequested(argv)) return parseCliArgs(["--help"]);
-    console.error(`[${productName}] ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`[${productName}] ${errorMessage(error)}`);
     process.exit(1);
   }
 }
@@ -267,7 +268,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       console.log(`[${options.productName}] Connected to remote CoreEnv: ${remoteEnv} (rootPath=${coreEnv.rootPath})`);
     } catch (err) {
       console.error(`[${options.productName}] Failed to connect to remote CoreEnv at ${remoteEnv}`);
-      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  ${errorMessage(err)}`);
       console.error(`  Make sure the server is running: pnpm start:server`);
       process.exit(1);
     }
@@ -284,7 +285,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       );
     } catch (err) {
       console.error(`[${options.productName}] Failed to connect to remote CoreEnv at ${remoteSession}`);
-      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  ${errorMessage(err)}`);
       console.error(`  Make sure the server is running: pnpm start:server`);
       process.exit(1);
     }
@@ -319,7 +320,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       console.log(`[${options.productName}] Using remote model provider: ${remoteProvider}`);
     } catch (err) {
       console.error(`[${options.productName}] Failed to connect to remote model provider at ${remoteProvider}`);
-      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  ${errorMessage(err)}`);
       process.exit(1);
     }
   } else {
@@ -510,10 +511,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       inkInstance = renderApp();
     })
     .catch((err) => {
-      console.error(
-        `[${options.productName}] Failed to initialize syntax highlighter:`,
-        err instanceof Error ? err.message : String(err)
-      );
+      console.error(`[${options.productName}] Failed to initialize syntax highlighter:`, errorMessage(err));
       process.exit(1);
     });
 

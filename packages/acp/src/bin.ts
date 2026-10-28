@@ -4,7 +4,7 @@
  * stdio. ACP clients spawn this as a child process.
  */
 
-import { installAgentLogProcessGuards, parseModelStyle } from "@codent/core";
+import { installAgentLogProcessGuards, parseModelStyle, errorMessage } from "@codent/core";
 import { createRequire } from "node:module";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 
@@ -165,6 +165,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`codent-acp: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`codent-acp: ${errorMessage(error)}\n`);
   process.exit(1);
 });

@@ -191,6 +191,22 @@ assert.equal(compactionController.isCurrent(reactiveLease), true);
 compactionController.finish(reactiveLease, { status: "skipped" });
 assert.equal(status, "running", "a skipped reactive compaction restores the run's status");
 
+// `release` is lease-checked. A superseded producer that unwinds late must NOT restore a status
+// over the compaction that legitimately owns it now — the exact hazard a lease-blind
+// `settle()` (force `compacting → running` from the status alone) would reintroduce.
+{
+  status = "running";
+  const stale = compactionController.begin("reactive");
+  const newer = compactionController.begin("auto");
+  assert.equal(compactionController.isCurrent(stale), false);
+  compactionController.release(stale);
+  assert.equal(status, "compacting", "a stale producer's release leaves the newer owner's status alone");
+  assert.equal(compactionController.isRunning(), true, "and does not drop the newer lease");
+  compactionController.finish(newer, { status: "completed" });
+  assert.equal(status, "running");
+  assert.equal(compactionController.isRunning(), false, "the newer owner closes normally");
+}
+
 console.log("reactive-compact validation passed");
 
 // ============================================================================
@@ -391,6 +407,7 @@ function oversizedWire() {
   assert.ok(kinds.includes("compaction:reactive-complete"), "the complete event must be emitted");
   assert.ok(!kinds.includes("compaction:reactive-error"), "a success must not emit an error event");
   assert.equal(status, "running", "the status must unwind off 'compacting' on success");
+  assert.equal(host.compactions.isRunning(), false, "and the lease is closed (no live compaction owner)");
 
   const appended = channel.getMessages();
   assert.equal(appended.length, 1, "exactly one summary checkpoint is appended");
@@ -465,6 +482,7 @@ for (const [label, error, expectSilent] of [
   const result = await handleManagedReactiveCompact(host, new Error("prompt_too_long"), manager);
   assert.equal(result, false, `${label}: an unsuccessful pass must report false`);
   assert.equal(status, "running", `${label}: the status must unwind off 'compacting'`);
+  assert.equal(host.compactions.isRunning(), false, `${label}: the lease is closed by the producer's finally`);
   assert.equal(channel.getMessages().length, 0, `${label}: the channel must be untouched`);
   const errored = events.some((e) => e.type === "compaction:reactive-error");
   if (expectSilent) {

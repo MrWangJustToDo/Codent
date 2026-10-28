@@ -75,13 +75,22 @@ const managed = {
   getSessionData: () => service.getSessionData(),
 };
 
+// Mirrors the real LifecycleCoordinator: `destroyAgent` is synchronous and starts an async
+// teardown whose FIRST persistence step is `session.close()`; `settleTeardowns` is what waits for
+// it. The host no longer closes the session itself (that made `session:shutdown` writes no-ops),
+// so the fixture must model the manager contract it relies on.
+let teardown = Promise.resolve();
 const manager = {
   runtime: { env },
   createManagedAgent: async () => managed,
   getAgents: () => [managed],
   getAgent: () => undefined,
-  destroyAgent: () => {},
-  settleTeardowns: async () => {},
+  destroyAgent: () => {
+    teardown = service.close();
+  },
+  settleTeardowns: async () => {
+    await teardown;
+  },
   releaseSessionOwnership: () => {},
 };
 

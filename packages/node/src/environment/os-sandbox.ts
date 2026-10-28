@@ -6,6 +6,7 @@
  */
 
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+import { errorMessage } from "@codent/core";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -141,9 +142,7 @@ export async function ensureOsSandbox(rootPath: string): Promise<boolean> {
     return true;
   } catch (err) {
     await SandboxManager.reset().catch(() => undefined);
-    warnSandboxDowngrade(
-      `OS sandbox initialization failed (${err instanceof Error ? err.message : String(err)}); shell commands run unsandboxed.`
-    );
+    warnSandboxDowngrade(`OS sandbox initialization failed (${errorMessage(err)}); shell commands run unsandboxed.`);
     return false;
   }
 }

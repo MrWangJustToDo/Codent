@@ -42,6 +42,13 @@ const planToolOutputSchema = z.object({
 
 export type CreatePlanToolDeps = {
   getPlanMode: () => PlanModeController;
+  /**
+   * End the plan through its coordinator (phase exit + the session write it implies). The
+   * controller's own `complete()` cannot persist the phase-off transition — no auto-mode change
+   * fires for it — so a direct call would leave the stored phase stale until the next write.
+   * Optional for callers that only build the authoring tools.
+   */
+  completePlan?: () => { ok: boolean; error?: string };
 };
 
 function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: CreatePlanToolDeps) {
@@ -171,7 +178,7 @@ export const createCompletePlanTool = (deps: CreatePlanToolDeps) => {
           return { ok: false, message: gate.error, error: gate.error };
         }
 
-        const result = planMode.complete();
+        const result = deps.completePlan ? deps.completePlan() : planMode.complete();
         if (!result.ok) {
           return { ok: false, message: result.error ?? "Failed to complete plan", error: result.error };
         }

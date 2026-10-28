@@ -1,3 +1,4 @@
+import { errorMessage } from "@codent/core";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { EDITOR_OPTIONS, definePlaygroundTheme } from "../editor/monaco-theme.js";
@@ -209,7 +210,7 @@ export const WorkspaceCodeTab = ({ wc, rootPath, refreshKey }: WorkspaceCodeTabP
         window.dispatchEvent(new CustomEvent("agent:action"));
         showToast(`Uploaded ${count} file${count > 1 ? "s" : ""}`, "success");
       } catch (err) {
-        showToast(`Upload failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        showToast(`Upload failed: ${errorMessage(err)}`, "error");
       } finally {
         setUploading(false);
       }
@@ -236,7 +237,7 @@ export const WorkspaceCodeTab = ({ wc, rootPath, refreshKey }: WorkspaceCodeTabP
         window.dispatchEvent(new CustomEvent("agent:action"));
         showToast(`Uploaded ${count} file${count > 1 ? "s" : ""}`, "success");
       } catch (err) {
-        showToast(`Upload failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        showToast(`Upload failed: ${errorMessage(err)}`, "error");
       } finally {
         setUploading(false);
       }

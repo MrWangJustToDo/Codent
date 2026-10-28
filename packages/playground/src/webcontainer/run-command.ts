@@ -1,4 +1,4 @@
-import { ExecutionError } from "@codent/core";
+import { ExecutionError, errorMessage } from "@codent/core";
 
 import { toWebContainerSpawnCwd } from "./workspace-path.js";
 
@@ -135,7 +135,7 @@ export async function runWebContainerCommand(
     options?.onChange?.();
     return {
       stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
+      stderr: errorMessage(err),
       exitCode: 1,
       durationMs: Date.now() - start,
     };
@@ -204,7 +204,7 @@ export async function execWebContainerCommand(
     options?.onChange?.();
     return {
       stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
+      stderr: errorMessage(err),
       code: 1,
     };
   }

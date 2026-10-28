@@ -5,6 +5,8 @@
  * Firefox on macOS, unlike the webkitdirectory file picker).
  */
 
+import { errorMessage } from "@codent/core";
+
 import type { WebContainer } from "@webcontainer/api";
 
 /**
@@ -38,7 +40,7 @@ export async function uploadEntryTree(
         await ensureParentDir(wc, destPath);
         await wc.fs.writeFile(destPath, content);
       } catch (err) {
-        throw new Error(`Failed to write "${destPath}": ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(`Failed to write "${destPath}": ${errorMessage(err)}`);
       }
       count += 1;
       onProgress?.(count);
@@ -61,7 +63,7 @@ export async function uploadEntryTree(
           }
         } while (batch.length > 0);
       } catch (err) {
-        throw new Error(`Failed to read directory "${nextDir}": ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(`Failed to read directory "${nextDir}": ${errorMessage(err)}`);
       }
     }
   }

@@ -72,8 +72,11 @@ export interface AgentEvents extends AgentEventPayloadMap {
   "session:summary": AgentStreamEvent;
   /** Derived agent mode (plan phase + auto mode). */
   "session:mode": { mode: AgentMode; autoMode: boolean };
-  /** Extension list snapshot. */
-  "session:extensions": { extensions: ExtensionInfo[] };
+  /** Extension list snapshot (per-extension claims + the live command set). */
+  "session:extensions": {
+    extensions: ExtensionInfo[];
+    commands: Array<{ name: string; description: string; hasOptions: boolean }>;
+  };
   /** Tool presentation catalog: serializable descriptors (no functions) for every known tool. */
   "session:tool-presentation": { descriptors: ToolPresentationInfo[] };
   /** Pending approvals / `ask_user` derived from the conversation. */

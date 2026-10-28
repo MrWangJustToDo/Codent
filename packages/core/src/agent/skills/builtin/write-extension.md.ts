@@ -142,7 +142,7 @@ export default {
         event.reason = "Blocked by my-ext";
         return;
       }
-      // event.modifiedArgs = { ... }            // or rewrite the arguments
+      // event.modifiedArgs = { ... }            // rewrite args (ignored for approval-gated tools)
     });
 
     // --- per-turn context the model sees ---------------------------------
@@ -236,7 +236,7 @@ Match is on the literal prefix, so \`tool:before:run_*\` works too.
 | \`session:start\` | \`{ cwd, sessionId }\` — fires once after bootstrap. |
 | \`session:shutdown\` | \`{ sessionId }\` — fires on teardown. |
 | \`before_agent_start\` | \`{ prompt, sessionId }\` — once per user turn, before turn context is collected. **Observe-only**: there is no field to append prompt or context here; use \`registerContextProvider\` for model-visible text. |
-| \`tool:before:<name>\` | \`{ toolName, args, sessionId }\`. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. |
+| \`tool:before:<name>\` | \`{ toolName, args, sessionId }\`. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
 | \`tool:after:<name>\` | \`{ toolName, args, result, durationMs }\`. Set \`event.payload.modifiedResult = …\` to replace the result the model receives. |
 | \`tool:error:<name>\` | \`{ toolName, args, error }\`. Observe-only; use it to log or alert. |
 

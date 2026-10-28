@@ -24,6 +24,7 @@ import {
   AcpProjector,
   approvalPolicyKey,
   bootstrapLocalAcp,
+  commandsFromSnapshot,
   createAcpAgent,
   mapPermissionOutcome,
   paginateSessions,
@@ -64,6 +65,35 @@ check("interaction timeout defaults to five minutes", DEFAULT_INTERACTION_TIMEOU
 check("tool status: input-streaming is pending, not executing", toolStatusFor("input-streaming", false) === "pending");
 check("tool status: input-complete is pending", toolStatusFor("input-complete", false) === "pending");
 check("tool status: approval-responded is in progress", toolStatusFor("approval-responded", false) === "in_progress");
+check(
+  "tool status: a cancel is a terminal non-success, never completed",
+  toolStatusFor("complete", true, true) === "failed"
+);
+
+{
+  // `commands` is the per-name live registration; flattening `extensions[].commands` used to
+  // advertise a shadowed name twice, one of which could never run. A built-in collision is
+  // filtered because dispatch resolves built-ins first.
+  const cmds = commandsFromSnapshot({
+    extensions: {
+      extensions: [{ commands: [{ name: "memory", description: "mem", hasOptions: false }] }],
+      commands: [
+        { name: "memory", description: "mem", hasOptions: false },
+        { name: "mode", description: "shadowed builtin", hasOptions: false },
+      ],
+    },
+  });
+  check(
+    "only the live extension command is advertised",
+    cmds.extension.some((c) => c.name === "memory")
+  );
+  check("an extension command shadowed by a builtin is not advertised", !cmds.extension.some((c) => c.name === "mode"));
+  check(
+    "commands include builtin + extension",
+    cmds.builtin.some((c) => c.name === "mode") && cmds.extension.some((c) => c.name === "memory")
+  );
+  check("UI-only commands are not advertised", !cmds.builtin.some((c) => c.name === "quit"));
+}
 
 {
   const diffs = toolDiffsFor(

@@ -12,7 +12,10 @@
  *    so the LLM will never see them again and their files become collectable.
  *    `cleanupOrphanedToolCache()` deletes those. It only *can* fire for sessions
  *    that actually compact, and only for files that session's wire referenced —
- *    a file no session references is never in its candidate set.
+ *    a file no session references is never in its candidate set. A referenced path
+ *    must also live under {@link TOOL_OUTPUT_CACHE_DIR}: the collection key is the
+ *    `cachedOutputPath` FIELD, which background job results use for their durable
+ *    log, so containment — not the field name — decides what this pass may delete.
  * 2. **Age-based — unconditional backstop.** `sweepStaleToolOutput()` deletes any
  *    cache file older than {@link TOOL_OUTPUT_MAX_AGE_MS}, regardless of
  *    references. Without it, every session that never compacted (and every file
@@ -219,6 +222,21 @@ export async function maybeCacheOutput(
 }
 
 /**
+ * A reference is collectable only when it points INSIDE the tool-output cache.
+ *
+ * The walker matches on the field NAME (`cachedOutputPath`), and background command results use
+ * that same field for their durable job log (`.agents/cache/command-jobs/<id>.log`). Matching the
+ * name alone meant a compaction deleted a finished job's log — that reference was never a cache
+ * reference, and the job's later appends recreated a file with no header and no history. The
+ * suffix check mirrors {@link toolOutputSweeper}, so both cleanup paths agree on what is
+ * collectable.
+ */
+function isToolOutputCachePath(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  return normalized.startsWith(`${TOOL_OUTPUT_CACHE_DIR}/`) && normalized.endsWith(CACHE_ENTRY_SUFFIX);
+}
+
+/**
  * Walk a tool message's `content` for the spill path.
  *
  * A model tool message's `content` is a JSON **string** or an array of **text** parts
@@ -276,7 +294,8 @@ export async function cleanupOrphanedToolCache(
     // `msg.content` is a JSON string or an array of text parts on the model wire; the walker
     // handles both (and a UI tool-result part, for callers that pass those).
     const path = extractCachedPathFromValue(msg.content);
-    if (path) pathsToDelete.add(path);
+    // Only cache-owned files: the field name is shared with background job logs.
+    if (path && isToolOutputCachePath(path)) pathsToDelete.add(path);
   }
 
   if (pathsToDelete.size === 0) return;

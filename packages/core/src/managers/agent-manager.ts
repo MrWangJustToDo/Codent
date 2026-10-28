@@ -12,6 +12,7 @@ import { SessionOwnership } from "./session-ownership.js";
 
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
+import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { SkillDirectory } from "../agent/skills/skill-registry.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { StreamChunk } from "@tanstack/ai";
@@ -97,6 +98,15 @@ export class AgentManager {
 
   /** Destroy/teardown cascade (recursive children + async flush chain). */
   private readonly lifecycle: LifecycleCoordinator;
+  /**
+   * Logs of agents that have LEFT the registry but whose teardown is still running.
+   *
+   * `destroy()` removes the registry entry synchronously, while `session:shutdown`,
+   * extension deactivation, and the final session write are async. Their failures are emitted on
+   * the bus and attributed by agent id — a resolver that only reads the registry dropped exactly
+   * the diagnostics that explain a bad shutdown.
+   */
+  private readonly teardownLogs = new Map<string, AgentLog>();
   /** Guards {@link dispose} against re-running and rejects construction after teardown. */
   private disposed = false;
 
@@ -104,9 +114,12 @@ export class AgentManager {
     this.runtime = runtime;
     this.busScope = new AgentEventBusScope({
       // Log on the agent that owns the scope the interceptor was registered on; root-scoped
-      // interceptors fall back to any agent with a log.
+      // interceptors fall back to any agent with a log. Retained teardown logs keep a scope
+      // resolvable after its registry entry is gone.
       resolveLog: (scopeId) =>
-        this.agents.get(scopeId)?.log ?? [...this.agents.values()].find((agent) => agent.log)?.log,
+        this.agents.get(scopeId)?.log ??
+        this.teardownLogs.get(scopeId) ??
+        [...this.agents.values()].find((agent) => agent.log)?.log,
     });
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
@@ -115,14 +128,17 @@ export class AgentManager {
       // Every event is attributed to its owning agent. A child that has already left the registry
       // must NOT fall back to the parent sink: late child events would then look like parent
       // content and violate the index-only contract. The parent index is written explicitly by
-      // `logSubagentLifecycle`.
-      resolveLog: (event) => this.agents.get(event.agentId)?.log ?? null,
+      // `logSubagentLifecycle`. A retained teardown log keeps the dying agent's own events
+      // attributable while its async teardown runs (they are dropped once it settles).
+      resolveLog: (event) => this.agents.get(event.agentId)?.log ?? this.teardownLogs.get(event.agentId) ?? null,
     });
     this.logExtension.start();
     this.lifecycle = new LifecycleCoordinator({
       registry: this.agents,
       ownership: this.sessionOwnership,
       clearAgentScope: (id) => this.busScope.delete(id),
+      retainLog: (id, log) => this.teardownLogs.set(id, log),
+      releaseLog: (id) => this.teardownLogs.delete(id),
     });
   }
 

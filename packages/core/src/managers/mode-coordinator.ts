@@ -63,6 +63,21 @@ export class ModeCoordinator {
     this.deps.persist();
   }
 
+  /**
+   * Finish plan mode (`/mode done`, `complete_plan`).
+   *
+   * The phase transition belongs to the controller (it emits `plan:complete` and resets every
+   * artifact), but the persist does not: a plan-off write fires no auto-mode change callback, so
+   * the session would keep reporting the old phase until the next unrelated write. This is the
+   * coordinator's counterpart to {@link enablePlan}, and it is what keeps `/mode done` from
+   * skipping the same arbitration `/mode plan` goes through.
+   */
+  completePlan(): { ok: boolean; error?: string } {
+    const result = this.deps.planMode.complete();
+    if (result.ok) this.deps.persist();
+    return result;
+  }
+
   setMode(mode: AgentMode): AgentMode {
     if (mode === "plan") {
       this.enablePlan();

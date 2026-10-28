@@ -23,12 +23,14 @@ export class AgentEventBusScope {
   private readonly parents = new Map<string, string | undefined>();
 
   constructor(private readonly deps: AgentEventBusScopeDeps) {
-    this.root = createAgentEventBus("root", ({ pattern, event, scopeId, error }) => {
-      this.deps.resolveLog(scopeId)?.warn("hooks", "interceptor threw; continuing without it", {
-        pattern,
-        event,
-        error: errorMessage(error),
-      });
+    this.root = createAgentEventBus("root", ({ pattern, event, scopeId, error, kind }) => {
+      this.deps
+        .resolveLog(scopeId)
+        ?.warn(
+          "hooks",
+          kind === "observer" ? "event observer threw; frame dropped" : "interceptor threw; continuing without it",
+          { pattern, event, error: errorMessage(error) }
+        );
     });
   }
 

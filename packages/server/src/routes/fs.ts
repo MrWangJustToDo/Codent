@@ -1,4 +1,4 @@
-import { FileError } from "@codent/core";
+import { FileError, errorMessage } from "@codent/core";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -31,7 +31,7 @@ function handleFsError(err: unknown): { body: Record<string, unknown>; status: 4
       };
     }
   }
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   return { body: { error: true, name: "Error", code: "unknown", message }, status: 500 };
 }
 

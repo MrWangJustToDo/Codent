@@ -103,7 +103,13 @@ export interface AgentSessionMcpSummary {
 }
 
 export interface AgentSessionExtensionsSummary {
+  /** What each extension claims, in dispatch order (management view — includes shadowed names). */
   extensions: ExtensionInfo[];
+  /**
+   * The command dispatch would run per name (highest-ranked registration). Hosts advertise this
+   * list, never a flatten of `extensions[].commands`: a shadowed claim is not reachable.
+   */
+  commands: Array<{ name: string; description: string; hasOptions: boolean }>;
 }
 
 /**

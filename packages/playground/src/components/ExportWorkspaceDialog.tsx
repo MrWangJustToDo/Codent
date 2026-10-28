@@ -1,3 +1,4 @@
+import { errorMessage } from "@codent/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useShellState } from "../hooks/use-shell-state.js";
@@ -45,7 +46,7 @@ export const ExportWorkspaceDialog = ({ onClose }: Props) => {
         const initial = new Set(listed.map((e) => e.path));
         setSelected(deselectByDirName(deselectByDirName(initial, listed, "node_modules"), listed, ".git"));
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(errorMessage(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -84,7 +85,7 @@ export const ExportWorkspaceDialog = ({ onClose }: Props) => {
       showToast(`Exported ${files.length} file${files.length === 1 ? "" : "s"}`, "success");
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     } finally {
       setExporting(false);
     }

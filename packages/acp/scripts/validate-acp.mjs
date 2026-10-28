@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 
 import {
   buildElicitationRequest,
-  commandsFromSnapshot,
   createAcpAgent,
   mapElicitationResponse,
   mapPermissionOutcome,
@@ -139,7 +138,10 @@ check("title includes the path", toolTitleFor("read_file", { path: "src/a.ts" })
 check("unknown tool yields no diff (no fabrication)", toolDiffFor("read_file", { path: "a.ts" }, "/ws") === undefined);
 check("tool status: complete → completed", toolStatusFor("complete", false) === "completed");
 check("tool status: error → failed", toolStatusFor("error", true) === "failed");
-
+check(
+  "tool status: cancelled is a terminal non-success, never completed",
+  toolStatusFor("complete", true, true) === "failed"
+);
 // --- permissions / elicitation --------------------------------------------
 {
   const opts = permissionOptions();
@@ -168,16 +170,6 @@ check(
   JSON.stringify(parseSlashCommand("/mode plan")) === JSON.stringify({ name: "mode", args: ["plan"], raw: "plan" })
 );
 check("plain text is not a command", parseSlashCommand("hello") === null);
-{
-  const cmds = commandsFromSnapshot({
-    extensions: { extensions: [{ commands: [{ name: "memory", description: "mem", hasOptions: false }] }] },
-  });
-  check(
-    "commands include builtin + extension",
-    cmds.builtin.some((c) => c.name === "mode") && cmds.extension.some((c) => c.name === "memory")
-  );
-  check("UI-only commands are not advertised", !cmds.builtin.some((c) => c.name === "quit"));
-}
 
 // --- session catalog mapping / paging (pure) --------------------------------
 {

@@ -35,6 +35,7 @@ import {
   type ModelsConfigEntry,
   type RawModelsConfig,
   type CoreEnv,
+  errorMessage,
 } from "@codent/core";
 import { toRaw } from "reactivity-store";
 
@@ -115,11 +116,11 @@ export async function applyModelsConfigEdit(
         ok: true,
         config: merged,
         loaded: null,
-        reloadError: reloadFailure instanceof Error ? reloadFailure.message : String(reloadFailure),
+        reloadError: errorMessage(reloadFailure),
       };
     }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, error: errorMessage(error) };
   }
 }
 

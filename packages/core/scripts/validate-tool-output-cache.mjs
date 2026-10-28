@@ -258,6 +258,31 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 }
 
 // ---------------------------------------------------------------------------
+// 4c. A `cachedOutputPath` outside the cache dir is not collectable
+//
+// Background command results use the SAME field for their durable job log
+// (`.agents/cache/command-jobs/<id>.log`). Matching the field name alone deleted a finished
+// job's log on the next compaction; its later appends then recreated a headerless file with no
+// history, while persisted messages still pointed at it.
+// ---------------------------------------------------------------------------
+{
+  const jobRel = ".agents/cache/command-jobs/job-1.log";
+  await fs.promises.mkdir(abs(path.dirname(jobRel)), { recursive: true });
+  await fs.promises.writeFile(abs(jobRel), "# sleep 1\noutput\n");
+  const inCache = await writeEntry("call_in_cache-stdout.txt");
+
+  const messages = [
+    { role: "tool", toolCallId: "call_job", content: JSON.stringify({ success: true, cachedOutputPath: jobRel }) },
+    { role: "tool", toolCallId: "call_cache", content: JSON.stringify({ success: true, cachedOutputPath: inCache }) },
+  ];
+  await cleanupOrphanedToolCache(getEnv(), messages, 2);
+
+  assert.equal(await exists(jobRel), true, "a background job log is not a cache entry and survives the GC");
+  assert.equal(await exists(inCache), false, "a real cache entry behind the cut is still collected");
+  console.log("compaction reference GC OK (job logs outside the cache are never deleted)");
+}
+
+// ---------------------------------------------------------------------------
 // 5. Degraded host: no CoreEnv → no throw, nothing removed
 // ---------------------------------------------------------------------------
 {

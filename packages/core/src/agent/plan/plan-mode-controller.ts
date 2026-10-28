@@ -396,13 +396,17 @@ export class PlanModeController {
   }
 
   /**
-   * Load markdown into plan state (enables planning first if off).
+   * Load markdown into the plan state.
+   *
+   * Entering plan mode is **not** done here: `ModeCoordinator.enablePlan()` is the only writer
+   * that also turns auto mode off (the two are mutually exclusive), and a phase started here
+   * bypassed that — leaving `auto` on while a plan phase was active, which re-enabled approval
+   * bypass during `planning` / `ready`. Callers that may start from `off` go through
+   * `ModeCoordinator` first (see `loadPlanFromWorkspace`).
+   *
    * Used by `/mode load`. Sets {@link planFilePath} when `relativePath` is provided.
    */
   async loadPlanMarkdown(markdown: string, options?: { relativePath?: string }): Promise<ApplyPlanResult> {
-    if (this.phase === "off") {
-      this.enable();
-    }
     if (this.phase !== "planning" && this.phase !== "ready") {
       return { ok: false, error: `Cannot load plan while phase is "${this.phase}"` };
     }

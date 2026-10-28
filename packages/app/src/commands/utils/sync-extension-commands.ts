@@ -59,13 +59,16 @@ function extensionSlashCommand(session: AgentSession, name: string, description:
 
 /**
  * Replace extension slash commands from the Session extensions snapshot.
+ *
+ * Reads `commands` (the live registration per name), not `extensions[].commands`: the latter is
+ * every extension's own claim, so a shadowed name was registered twice — the second `register`
+ * warned and dropped it, leaving the panel saying "registered" for a command the user cannot run.
  */
 export function syncExtensionCommands(session: AgentSession): void {
   clearExtensionCommands();
-  for (const ext of session.getSnapshot().extensions.extensions) {
-    if (!ext.enabled) continue;
-    for (const { name, hasOptions } of ext.commands) {
-      registerExtensionCommand(extensionSlashCommand(session, name, `${ext.name}: /${name}`, hasOptions));
-    }
+  for (const { name, description, hasOptions } of session.getSnapshot().extensions.commands) {
+    registerExtensionCommand(
+      extensionSlashCommand(session, name, description || `Extension command /${name}`, hasOptions)
+    );
   }
 }

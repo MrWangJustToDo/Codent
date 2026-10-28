@@ -232,6 +232,13 @@ export function buildAgentRunner(
       // A pre-forked `task` emits its own start on admission; skip the eager one so a
       // queued run does not time while it waits for a concurrency slot.
       isTaskToolStartDeferred: (toolCallId) => peekTaskPreforkCoordinator(managed)?.has(toolCallId) === true,
+      // The approval decision (and the command-safety analysis behind it) was computed from the
+      // ORIGINAL input before this hook, and an eagerly started `task` subagent already began on
+      // it. Neither can honour a rewritten argument list after the fact.
+      isApprovalGated: (toolName) => managed.isToolNeedsApproval(toolName),
+      onArgRewriteRefused: (toolName) => {
+        managed.log?.warn("hooks", "Ignored an extension argument rewrite on a gated tool call", { toolName });
+      },
       onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
     }),
     // TanStack batches TOOL_CALL_END until all tools finish; mirror each result into UI early.

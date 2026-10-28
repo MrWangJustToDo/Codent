@@ -1,3 +1,4 @@
+import { errorMessage } from "@codent/core";
 import { Box, Text, useApp, useIsScreenReaderEnabled } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -299,7 +300,7 @@ export const WorkspaceFileMode = () => {
         // The handoff never started (remote workspace, no local editor): drop the marker so a later
         // mount does not refresh for nothing, take the panel's screen back, and say why in the footer.
         useEditorHandoff.getActions().consumeRoundTrip();
-        useEditorHandoff.getActions().setNotice(error instanceof Error ? error.message : String(error));
+        useEditorHandoff.getActions().setNotice(errorMessage(error));
         setOptions({ isAlternateBufferEnabled: true });
       }
     },

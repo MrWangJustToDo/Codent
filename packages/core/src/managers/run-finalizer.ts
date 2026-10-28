@@ -2,8 +2,8 @@
  * End-of-run finalization: one place for outcome derivation, status application, pre-fork cleanup,
  * session persistence, turn finalization and the `turn:summary` payload.
  *
- * The sequence used to be copied across the chat pump, the subagent runner, the run skeleton's
- * optional outcome path and `ManagedAgent.syncRunStatusFromUIMessages`. The ordering is the asset:
+ * The sequence used to be copied across the chat pump, the subagent runner and the run
+ * skeleton's optional outcome path. The ordering is the asset:
  * `applyRunOutcome` before persistence, persistence before `finalizeRun`, and `turn:summary` last
  * (it must land while the run's **log scope** is still set; `finalizeRun` defers only
  * `log.setRun(null)` to a microtask). This class owns it so a new caller cannot reorder it by
@@ -146,7 +146,7 @@ export class RunFinalizer {
     this.deps.status.applyRunOutcome(outcome);
   }
 
-  /** Status-only snapshot reconcile (the old `syncRunStatusFromUIMessages`). */
+  /** Status-only snapshot reconcile (no chat turn summary; the run finalizer owns it). */
   finalizeSnapshot(messages: UIMessage[]): void {
     this.deps.status.applyRunOutcome({ kind: "finished", messages, path: "chat" });
   }

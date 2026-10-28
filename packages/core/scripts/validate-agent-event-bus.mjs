@@ -14,7 +14,8 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
 // 1. Observer: ordered, error-isolated
 // ============================================================================
 {
-  const bus = createAgentEventBus();
+  const reported = [];
+  const bus = createAgentEventBus("root", (info) => reported.push(info));
   const seen = [];
   bus.on("agent:state", () => {
     throw new Error("listener boom");
@@ -23,6 +24,9 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
 
   bus.emit("agent:state", { status: "idle", name: "n", error: "", pendingApprovalCount: 0 });
   assert.deepEqual(seen, ["idle"], "second observer still receives after first throws");
+  // The throw is contained, not lost: a silently dropped frame was the hardest failure to debug.
+  assert.equal(reported.length, 1, "the listener failure is reported");
+  assert.equal(reported[0].kind, "observer", "and attributed to the observer dispatch mode");
 }
 
 // ============================================================================

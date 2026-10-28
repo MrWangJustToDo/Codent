@@ -235,7 +235,14 @@ export class AgentLog {
     if (this.pendingEntries.length > 0) {
       const retained = this.pendingEntries;
       this.pendingEntries = [];
-      for (const entry of retained) sink.handleEntry(entry);
+      // The level is applied by whoever binds the persisted sink (the log extension calls
+      // `setMinLevel` immediately before this), so the drain must honour it too: entries accepted
+      // while the seam defaulted to `debug` used to land regardless of `AGENT_LOG_LEVEL`, making
+      // the one volume knob ineffective exactly for the bootstrap diagnostics it was meant to
+      // filter.
+      for (const entry of retained) {
+        if (this.shouldLog(entry.level)) sink.handleEntry(entry);
+      }
     }
     this.sinkEntry = sink.handleEntry;
     this.sinkFlush = sink.flush ?? null;

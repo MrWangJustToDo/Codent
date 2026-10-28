@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 
-import { AutoModeController, ModeCoordinator, PlanModeController } from "../dist/dev.mjs";
+import { AutoModeController, ModeCoordinator, PlanModeController, loadPlanFromWorkspace } from "../dist/dev.mjs";
 
 const plan = new PlanModeController({ getTodoManager: () => null, getCoreEnv: () => ({}) });
 const snapshots = [];
@@ -102,5 +102,61 @@ const beforeReset = persistCalls;
 mode.reset();
 assert.equal(mode.getMode(), "normal");
 assert.equal(persistCalls, beforeReset + 1, "only the auto onChange persist fires");
+
+// ---------------------------------------------------------------------------
+// 8. `/mode load` goes through the coordinator
+//
+// `loadPlanMarkdown` used to enable the phase itself, bypassing `ModeCoordinator.enablePlan()` —
+// the only writer that turns auto off. Auto then stayed on through `planning`/`ready`, where
+// `shouldAutoApprove()` bypasses every approval prompt. Entering is the coordinator's job; the
+// controller refuses to start from `off`.
+// ---------------------------------------------------------------------------
+mode.setMode("normal");
+
+const refusedLoad = await plan.loadPlanMarkdown("# Plan\n\n1. Explore\n");
+assert.equal(refusedLoad.ok, false, "loading cannot start a plan phase on its own");
+assert.equal(plan.getPhase(), "off", "the phase is untouched");
+
+const planMarkdown = "# Plan\n\n1. Explore the code\n2. Verify\n";
+const fakeEnv = {
+  rootPath: "/tmp/plan-load-test",
+  fs: {
+    readFile: async () => planMarkdown,
+    writeFile: async () => {},
+    mkdir: async () => {},
+  },
+};
+const host = {
+  planMode: plan,
+  mode,
+  getStatus: () => "idle",
+  getChatController: () => undefined,
+  getCoreEnv: () => fakeEnv,
+};
+
+mode.setAuto(true);
+assert.equal(mode.isAutoEnabled(), true);
+const loaded = await loadPlanFromWorkspace(host, "demo");
+assert.equal(loaded.ok, true);
+assert.equal(mode.getMode(), "plan");
+assert.equal(mode.isAutoEnabled(), false, "loading a plan turns auto off, it does not leave it on");
+assert.deepEqual(persisted(), { phase: "ready", auto: false });
+
+// A failed load must leave the session exactly as it was — including the user's auto mode.
+mode.setMode("normal");
+mode.setAuto(true);
+const badEnv = { ...fakeEnv, fs: { ...fakeEnv.fs, readFile: async () => "no plan here" } };
+const badLoad = await loadPlanFromWorkspace({ ...host, getCoreEnv: () => badEnv }, "broken");
+assert.equal(badLoad.ok, false, "a file without a ## Plan section is rejected");
+assert.equal(plan.getPhase(), "off", "and the phase is untouched");
+assert.equal(mode.isAutoEnabled(), true, "and auto is not consumed by the attempt");
+
+// Leaving plan persists: `planMode.complete()` exits the phase but fires no auto-change callback.
+assert.equal((await loadPlanFromWorkspace(host, "demo")).ok, true);
+const beforeComplete = persistCalls;
+assert.equal(mode.completePlan().ok, true);
+assert.equal(plan.getPhase(), "off");
+assert.equal(persistCalls, beforeComplete + 1, "leaving plan mode writes the session");
+assert.equal(mode.shouldAutoApprove(), false);
 
 console.log("mode-coordinator validation passed");

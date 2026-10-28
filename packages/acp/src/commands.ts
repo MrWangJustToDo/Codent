@@ -14,6 +14,7 @@ import {
   parseModeCommand,
   parseModelsCommand,
   resolveSessionRef,
+  errorMessage,
 } from "@codent/core";
 
 import { applyModel, applyThoughtLevel, THOUGHT_LEVEL_DEFAULT } from "./session-config-options.js";
@@ -251,7 +252,7 @@ async function dispatchModelsCommand(
   try {
     applied = await applyModel({ session, acpId: session.id }, value, read, currentEntryIndex);
   } catch (error) {
-    return { handled: true, message: error instanceof Error ? error.message : String(error) };
+    return { handled: true, message: errorMessage(error) };
   }
 
   const switched = applied.snapshot.model ?? intent.model;
@@ -269,7 +270,7 @@ async function dispatchModelsCommand(
   } catch (error) {
     return {
       handled: true,
-      message: `Switched to ${switched}, but ${error instanceof Error ? error.message : String(error)}`,
+      message: `Switched to ${switched}, but ${errorMessage(error)}`,
       ...entry,
     };
   }

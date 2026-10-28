@@ -33,6 +33,7 @@ function fakeAgent(id, parentId) {
     },
     flushLogOnDestroy: () => events.push(`flush:${id}`),
     emitEvent: (type, data) => events.push(`event:${id}:${type}:${data.subagentId}`),
+    log: { tag: `log-${id}` },
   };
 }
 
@@ -42,6 +43,11 @@ const lifecycle = new LifecycleCoordinator({
   registry,
   ownership,
   clearAgentScope: (id) => scopes.push(id),
+  // The registry entry is removed synchronously while teardown is async; the log has to stay
+  // resolvable for the whole chain (a `session:shutdown` / `agent:extension-error` row would
+  // otherwise be attributed to a missing agent and dropped).
+  retainLog: (id, log) => events.push(`retain:${id}:${log.tag}`),
+  releaseLog: (id) => events.push(`release:${id}`),
 });
 
 const root = fakeAgent("root");
@@ -70,6 +76,10 @@ for (const id of ["root", "child", "grandchild"]) {
 assert.ok(events.includes("event:child:subagent:destroyed:child"), "child destruction is reported");
 assert.ok(events.includes("event:grandchild:subagent:destroyed:grandchild"), "grandchild destruction is reported");
 assert.ok(!events.includes("event:root:subagent:destroyed:root"), "root has no parent event");
+for (const id of ["root", "child", "grandchild"]) {
+  assert.ok(events.includes(`retain:${id}:log-${id}`), `${id} log retained for teardown`);
+  assert.ok(!events.includes(`release:${id}`), `${id} log not released while teardown is still running`);
+}
 
 await lifecycle.settleTeardowns();
 assert.equal(ownership.ownerOf("ses-root"), undefined, "root claim released after teardown");
@@ -85,6 +95,12 @@ for (const id of ["root", "child", "grandchild"]) {
     shutdown >= 0 && destroyAll > shutdown && jobs > destroyAll && close > jobs && persist > close && flush > persist,
     `${id} teardown order`
   );
+}
+
+for (const id of ["root", "child", "grandchild"]) {
+  const flush = events.indexOf(`flush:${id}`);
+  const release = events.indexOf(`release:${id}`);
+  assert.ok(release > flush, `${id} log released only after its final flush`);
 }
 
 // A missing id is a no-op, and settle still resolves.

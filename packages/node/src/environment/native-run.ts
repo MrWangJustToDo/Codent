@@ -2,7 +2,7 @@
  * Native shell command execution (with optional OS sandbox wrapping).
  */
 
-import { ExecutionError } from "@codent/core";
+import { ExecutionError, errorMessage } from "@codent/core";
 
 import {
   annotateOsSandboxStderr,
@@ -169,7 +169,7 @@ export async function startNativeCommand(
       if (osSandbox) cleanupOsSandboxAfterCommand();
     })
     .catch((err) => {
-      options?.onStderr?.(err instanceof Error ? err.message : String(err));
+      options?.onStderr?.(errorMessage(err));
       options?.onExit?.(1);
       if (osSandbox) cleanupOsSandboxAfterCommand();
     });

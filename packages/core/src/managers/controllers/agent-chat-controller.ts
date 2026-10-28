@@ -190,8 +190,14 @@ export class AgentChatController {
     // and the cleared snapshot would otherwise be thrown away.
     if (!options.keepQueue) this.clearQueuedMessages();
     this.advanceLifecycleEpoch();
-    this.managed.statusController.onUserCancel();
+    // Abort BEFORE recording the new status. `abortManagedAgentRun` emits `agent:abort` only when
+    // the agent is still in an active status — that is its "a run was actually interrupted" test —
+    // so flipping the status first made the Esc path (the main cancel path) silent while parked
+    // agents, which `onUserCancel` does not touch, still reported. The exact inverse of the intent:
+    // the log bridge never wrote its abort row and `agent:abort` observers (memory selection
+    // discard) never ran on a real cancel.
     this.managed.abort(reason);
+    this.managed.statusController.onUserCancel();
     // Single owner of token invalidation + depth reset. The stale pump's finally
     // skips decrement when its token is not current (it holds a captured token),
     // so a subsequent sendMessage/forceSubmit is neither deferred by the stale
@@ -691,7 +697,14 @@ export class AgentChatController {
       // A non-current (interrupted/superseded) pump must not decrement: the
       // interrupt owner already reset depth to 0, and the decrement would
       // otherwise steal depth from a newer pump. No Math.max guard needed.
-      if (token.isCurrent) this.pumpDepth -= 1;
+      if (token.isCurrent) {
+        this.pumpDepth -= 1;
+        // The turn is over: no run is current any more. Without this the token stayed valid
+        // after a normal completion, so `forceSubmit`'s `isCurrentRunValid()` fallback treated
+        // an idle agent as running and aborted the settled turn's controller (cancelling the
+        // finalize-time memory extraction it was still using).
+        this.managed.run.invalidateCurrentRun();
+      }
     }
   }
 

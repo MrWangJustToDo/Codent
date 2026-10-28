@@ -250,6 +250,49 @@ const EXEMPT_SOURCE_LAYERS = new Set(["dev", "index"]);
 const IMPORT_RE =
   /(?:^|\s)(?:import|export)\s+(type\s+)?([\s\S]*?)\s+from\s*["']([^"']+)["']|(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)|(?:^|\s)import\s*["']([^"']+)["']/g;
 
+/**
+ * Side-effect `import "x"` on its own statement line.
+ *
+ * Extracted separately and blanked out before {@link IMPORT_RE} runs: that regex's first
+ * alternative is allowed to span lines (`import {\n a\n} from`), so
+ *
+ *     import "./a.js";
+ *     import { b } from "./b.js";
+ *
+ * matched as ONE import of `./b.js` starting at the first line — the side-effect edge vanished,
+ * and a runtime value cycle through it was invisible. Blanking preserves newlines, so line
+ * numbers stay correct.
+ */
+const SIDE_EFFECT_IMPORT_RE = /(?:^|\n)[ \t]*import\s*["']([^"']+)["'][ \t]*;?/g;
+
+/** Every import specifier in `text`, with the side-effect statements kept as their own entries. */
+function parseImportSpecifiers(text) {
+  const entries = [];
+  for (const match of text.matchAll(SIDE_EFFECT_IMPORT_RE)) {
+    entries.push({ specifier: match[1], typeOnly: false, index: match.index ?? 0 });
+  }
+  const blanked = text.replace(SIDE_EFFECT_IMPORT_RE, (statement) => statement.replace(/[^\n]/g, " "));
+  IMPORT_RE.lastIndex = 0;
+  let match;
+  while ((match = IMPORT_RE.exec(blanked)) !== null) {
+    const specifier = match[3] ?? match[4] ?? match[5];
+    if (specifier) entries.push({ specifier, typeOnly: Boolean(match[1]), index: match.index });
+  }
+  return entries;
+}
+
+// Canary: the core source has no bare side-effect imports today, so the split above would never
+// be exercised. If the regexes drift back into swallowing one, fail here instead of silently
+// losing an edge.
+{
+  const sample = 'import "./side.js";\nimport { a } from "./after.js";';
+  const parsed = parseImportSpecifiers(sample).map((entry) => entry.specifier);
+  if (!parsed.includes("./side.js") || !parsed.includes("./after.js")) {
+    console.error("layer-boundaries: import parser dropped a side-effect import:", parsed);
+    process.exit(1);
+  }
+}
+
 function walkTsFiles(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -293,19 +336,21 @@ function readImports(file) {
   /** @type {Set<string>} absolute paths this module imports for its runtime values. */
   const valueEdges = new Set();
 
-  IMPORT_RE.lastIndex = 0;
-  let match;
-  while ((match = IMPORT_RE.exec(text)) !== null) {
-    const specifier = match[3] ?? match[4] ?? match[5];
-    if (!specifier) continue;
-    const targetFile = resolveModule(file, specifier);
+  for (const entry of parseImportSpecifiers(text)) {
+    const targetFile = resolveModule(file, entry.specifier);
     if (!targetFile) continue;
-    const typeOnly = Boolean(match[1]);
+    const typeOnly = entry.typeOnly;
     if (!typeOnly && targetFile !== file) valueEdges.add(targetFile);
 
     const target = splitLayer(relative(srcRoot, targetFile));
     if (target.layer === source.layer) continue;
-    layerEdges.push({ source, target, typeOnly, specifier, line: text.slice(0, match.index).split("\n").length });
+    layerEdges.push({
+      source,
+      target,
+      typeOnly,
+      specifier: entry.specifier,
+      line: text.slice(0, entry.index).split("\n").length,
+    });
   }
 
   return { layerEdges, valueEdges };

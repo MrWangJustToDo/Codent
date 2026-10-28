@@ -48,9 +48,6 @@ const FORBIDDEN_IDENTIFIERS = [
  */
 const ALLOWED_PURE_IDENTIFIERS = new Set(["buildDefaultSystemPrompt", "resolveModelConfigFromProvider"]);
 
-const CORE_IMPORT_RE =
-  /(?:import\s+(?:type\s+)?(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+|import\s*\(\s*)["']@codent\/core(?:\/[^"']*)?["']/;
-
 function walkTsFiles(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
@@ -79,31 +76,60 @@ function extractNamedImports(line) {
     .filter(Boolean);
 }
 
-const violations = [];
-for (const file of walkTsFiles(srcRoot)) {
-  const rel = relative(srcRoot, file).replaceAll("\\", "/");
-  const text = readFileSync(file, "utf8");
+/** Forbidden named imports in one file's text, as `{ line, name }`. */
+function scanCoreImports(text) {
+  const found = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (!CORE_IMPORT_RE.test(line) && !line.includes("@codent/core")) continue;
-    // Multi-line import: check following lines until from "@codent/core"
+    // Statement start, not "a line that already names the module". The old gate tested the LINE
+    // for `@codent/core` (or the single-line import shape) before its multi-line branch could
+    // run, so `import {\n moduleA,\n} from "@codent/core";` was skipped entirely — 7 real
+    // multi-line imports went unparsed while the script printed a clean pass.
+    if (!/^\s*(?:import|export)\b/.test(line)) continue;
     let block = line;
-    if (line.includes("import") && line.includes("{") && !line.includes("}")) {
-      for (let j = i + 1; j < Math.min(i + 12, lines.length); j++) {
+    if (!/\bfrom\s*["']/.test(line)) {
+      // Accumulate the statement (named or default imports) until its `from "…"` clause.
+      for (let j = i + 1; j < Math.min(i + 30, lines.length); j++) {
         block += "\n" + lines[j];
-        if (lines[j].includes("}")) break;
+        if (/\bfrom\s*["']/.test(block)) break;
+        // A side-effect import (`import "x";`) has no from-clause; it cannot name a binding.
+        if (/^\s*import\s*["']/.test(line) || /;\s*$/.test(lines[j])) break;
       }
     }
     if (!block.includes("@codent/core")) continue;
 
-    const names = extractNamedImports(block);
-    for (const name of names) {
+    // A namespace import binds every export at once, so no named-import scan can see it.
+    if (/\bimport\s+\*\s+as\s+/.test(block)) {
+      found.push({ line: i + 1, name: "* as namespace" });
+      continue;
+    }
+
+    for (const name of extractNamedImports(block)) {
       if (ALLOWED_PURE_IDENTIFIERS.has(name)) continue;
       if (!FORBIDDEN_IDENTIFIERS.includes(name)) continue;
-      violations.push({ file: rel, line: i + 1, name });
+      found.push({ line: i + 1, name });
     }
   }
+  return found;
+}
+
+// Canary: the real tree may have no violating multi-line import (it does not today), so a
+// regression to the old line-gated scan would still print a clean pass. This pins the shape the
+// gate exists to see.
+{
+  const canary = 'import {\n  agentManager,\n} from "@codent/core";';
+  if (!scanCoreImports(canary).some((v) => v.name === "agentManager")) {
+    console.error("app core-imports: the scanner no longer sees a multi-line core import");
+    process.exit(1);
+  }
+}
+
+const violations = [];
+for (const file of walkTsFiles(srcRoot)) {
+  const rel = relative(srcRoot, file).replaceAll("\\", "/");
+  const text = readFileSync(file, "utf8");
+  for (const v of scanCoreImports(text)) violations.push({ ...v, file: rel });
 }
 
 if (violations.length > 0) {

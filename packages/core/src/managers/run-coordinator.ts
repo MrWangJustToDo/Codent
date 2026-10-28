@@ -236,6 +236,18 @@ export class RunCoordinator {
     return true;
   }
 
+  /**
+   * Whether a finalize for the current turn would be accepted, WITHOUT claiming it.
+   *
+   * `ManagedAgent.finalizeRun` writes run-scoped state before delegating (the reading must be
+   * captured while `iterationState` still holds it, and the status flip inside the finalize is
+   * what publishes it). A late caller — the idle `forceSubmit` path reached it — therefore used
+   * to corrupt `lastIteration` and the retained iteration channel before the claim rejected it.
+   */
+  canFinalizeTurn(): boolean {
+    return !this.turnLifecycleFinalized;
+  }
+
   getStreamStartedAt(): number {
     return this.streamStartedAt;
   }
