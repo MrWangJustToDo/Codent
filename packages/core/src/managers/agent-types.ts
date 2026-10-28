@@ -47,8 +47,8 @@ export const AgentConfigSchema = z.object({
     .optional()
     .describe("Max concurrent `task` subagents per parent (default 4; values below 1 treated as 1)"),
   maxTokens: z.number().int().min(1).optional().describe("Maximum tokens per response"),
-  // Sampling knobs, forwarded from `AgentSessionCreateOptions` / `CodentAgentDefaults` (no CLI
-  // flag). Consumed one layer down (`run-agent.ts` → `AgentRunner`).
+  // Sampling knobs, forwarded from `AgentSessionCreateOptions` (no CLI flag). Consumed one layer
+  // down (`run-agent.ts` → `AgentRunner`).
   temperature: z.number().min(0).max(2).optional().describe("Sampling temperature"),
   reasoningEffort: z
     .enum(REASONING_EFFORT_VALUES)

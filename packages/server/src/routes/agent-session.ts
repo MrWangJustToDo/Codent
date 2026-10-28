@@ -136,6 +136,12 @@ const createBodySchema = z.object({
   lazyToolsConfig: z.record(z.string(), z.unknown()).optional(),
   agentDocFilenames: z.array(z.string()).optional(),
   agentDocLoadOverride: z.boolean().optional(),
+  extensionLlm: z
+    .object({
+      callsPerRun: z.number().int().positive().optional(),
+      maxOutputTokens: z.number().int().positive().optional(),
+    })
+    .optional(),
   mcpConfigPath: z.string().optional(),
   mcpServers: z.record(z.string(), z.unknown()).optional(),
   extensionDirs: z.array(z.string()).optional(),
@@ -372,6 +378,7 @@ export const agentSessionRoutes = new Hono()
         : {}),
       ...(body.agentDocFilenames ? { agentDocFilenames: body.agentDocFilenames } : {}),
       ...(body.agentDocLoadOverride !== undefined ? { agentDocLoadOverride: body.agentDocLoadOverride } : {}),
+      ...(body.extensionLlm ? { extensionLlm: body.extensionLlm } : {}),
     });
     sessions.set(session.id, session);
     // Redact secrets: `body` now carries toolConfig (websearch API keys) alongside the model

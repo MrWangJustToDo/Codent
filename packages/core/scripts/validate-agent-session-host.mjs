@@ -379,6 +379,7 @@ const allOptions = await host.create({
   lazyToolsConfig: probeLazyTools,
   agentDocFilenames: ["PROBE.md"],
   agentDocLoadOverride: false,
+  extensionLlm: { callsPerRun: 5, maxOutputTokens: 512 },
 });
 const forwarded = {
   name: "all-options",
@@ -403,6 +404,7 @@ const forwarded = {
   lazyToolsConfig: probeLazyTools,
   agentDocFilenames: ["PROBE.md"],
   agentDocLoadOverride: false,
+  extensionLlm: { callsPerRun: 5, maxOutputTokens: 512 },
   lsp: false,
   skills: false,
   memory: false,

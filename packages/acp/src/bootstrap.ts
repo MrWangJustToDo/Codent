@@ -31,6 +31,7 @@ import {
   registerModelProviderForEntry,
   resolveModelConfig,
   resolveModelConfigFromProvider,
+  resolveModelConnectionFromEnv,
   websearchToolConfigFromEnv,
 } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
@@ -48,10 +49,6 @@ import type {
   LoadedModelEntry,
   SessionMeta,
 } from "@codent/core";
-
-function parseModelStyle(value: string | undefined): ModelStyle | undefined {
-  return value === "openai" || value === "anthropic" ? value : undefined;
-}
 
 /**
  * Explicit model connection for a directly-configured launch
@@ -245,12 +242,9 @@ export async function bootstrapLocalAcp(
     }
 
     if (!model) {
-      const { connection } = await resolveModelConfig({
-        model: process.env.MODEL ?? process.env.model ?? "",
-        style: parseModelStyle(process.env.MODEL_STYLE ?? process.env.STYLE),
-        baseURL: process.env.BASE_URL ?? process.env.MODEL_BASE_URL,
-        apiKey: process.env.API_KEY ?? "",
-      });
+      // Same mapping as the TUI: core parses `MODEL_STYLE` (trim + lowercase) instead of this file's
+      // old exact-match copy, which turned `Anthropic` into the default `openai` here only.
+      const connection = resolveModelConnectionFromEnv(process.env);
       if (connection.model?.trim()) {
         provider = createDirectModelProvider({
           model: connection.model,

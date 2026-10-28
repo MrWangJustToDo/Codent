@@ -30,9 +30,9 @@ import type { LazyToolsConfig, UIMessage } from "@tanstack/ai";
  *
  * Only `false` is meaningful here: `true` (or omission) keeps the built-in's default
  * configuration. The richer per-extension objects (`lsp: { enableAll }`, …) are a
- * `ManagedAgentConfig` detail and are NOT part of this contract — `CodentAgentDefaults.builtins`
- * uses this same boolean-only type, so a host that needs the object forms must construct the agent
- * directly (`createManagedAgent`) rather than through `createSession`.
+ * `ManagedAgentConfig` detail and are NOT part of this contract, so a host that needs the object
+ * forms must construct the agent directly (`createManagedAgent`) rather than through
+ * `createSession`.
  */
 export interface AgentSessionBuiltins {
   lsp?: boolean;
@@ -139,6 +139,14 @@ export interface AgentSessionCreateOptions {
   agentDocFilenames?: string[];
   /** Set `false` to disable instruction-file loading for this agent. */
   agentDocLoadOverride?: boolean;
+  /**
+   * Budget/cap for extension `ctx.llm` one-shot completions (same meaning as
+   * `ManagedAgentConfig.extensionLlm`): completions per user turn and the default output-token cap.
+   *
+   * No host exposes a flag for it — it is here so an embedder or the HTTP create body can start a
+   * session with a tighter budget than the built-in 20 calls / 4096 tokens.
+   */
+  extensionLlm?: { callsPerRun?: number; maxOutputTokens?: number };
 }
 
 /** Thin catalog row for live agents owned by a Host. */

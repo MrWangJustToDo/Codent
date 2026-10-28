@@ -1,7 +1,7 @@
 import {
   DEFAULT_AGENT_MAX_ITERATIONS,
   parseModelStyle,
-  resolveModelConnection,
+  resolveModelConnectionFromEnv,
   websearchToolConfigFromEnv,
 } from "@codent/core";
 import { createRequire } from "node:module";
@@ -106,13 +106,21 @@ function getFlagString(values: CliValues, defaultValue: string, ...keys: string[
   return typeof value === "string" ? value : defaultValue;
 }
 
-function getFlagNumber(values: CliValues, defaultValue: number, ...keys: string[]): number {
-  const value = getFlag(values, ...keys);
-  if (typeof value === "string") {
-    const num = parseInt(value, 10);
-    return isNaN(num) ? defaultValue : num;
+/**
+ * Read an integer flag; a non-integer is an ERROR, never the default.
+ *
+ * `parseInt` silently turned `--max-iterations 1.5` into `1` and `=abc` into "unset" here, while the
+ * ACP entry rejected the same input — two hosts, two answers for one flag. The message names the flag
+ * so the host can print it as-is (`[codent] …`).
+ */
+function getFlagNumber(values: CliValues, defaultValue: number, key: string): number {
+  const value = getFlag(values, key);
+  if (value === undefined) return defaultValue;
+  if (typeof value !== "string" || !/^-?\d+$/.test(value.trim())) {
+    const detail = typeof value === "string" ? `got "${value}"` : "got no value";
+    throw new Error(`--${key} must be an integer (${detail})`);
   }
-  return defaultValue;
+  return Number(value.trim());
 }
 
 function getFlagBoolean(values: CliValues, ...keys: string[]): boolean {
@@ -163,7 +171,6 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
   // silently falling back to the env/default.
   const sandboxFlag = getFlag(values, "sandbox");
 
-  const envModel = getEnv("MODEL") || getEnv("model");
   const envMaxIterations = getEnv("MAX_ITERATIONS") || getEnv("maxIterations");
   const envMaxIter = envMaxIterations ? parseInt(envMaxIterations, 10) : DEFAULT_AGENT_MAX_ITERATIONS;
   const envMaxConcurrentTasks = getEnv("MAX_CONCURRENT_TASKS") || getEnv("maxConcurrentTasks");
@@ -172,21 +179,19 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
   const cliBaseURL = getFlagString(values, "", "base-url", "baseURL", "url");
   const cliApiKey = getFlagString(values, "", "api-key");
 
-  const envModelId = getFlagString(values, envModel, "model");
   const cliModel = getFlagString(values, "", "model");
-  const envStyle = parseCliStyle(getEnv("MODEL_STYLE") || getEnv("STYLE") || undefined);
-  const envBaseURL = getEnv("BASE_URL") || getEnv("MODEL_BASE_URL") || undefined;
-  const envApiKey = getEnv("API_KEY") || undefined;
 
   // Any explicit model-related flag overrides the "defer to server" default for
   // remote sessions (`.env`-only values are treated as host defaults).
   const modelExplicit = Boolean(cliModel || cliStyle || cliBaseURL || cliApiKey);
 
-  const connection = resolveModelConnection({
-    model: envModelId,
-    style: cliStyle ?? envStyle,
-    baseURL: cliBaseURL || envBaseURL,
-    apiKey: cliApiKey || envApiKey,
+  // ONE env mapping (core), with the flags as overrides — the same helper the ACP bootstrap and the
+  // agent server use, so `MODEL_STYLE` is parsed identically everywhere.
+  const connection = resolveModelConnectionFromEnv(process.env, {
+    ...(cliModel ? { model: cliModel } : {}),
+    ...(cliStyle ? { style: cliStyle } : {}),
+    ...(cliBaseURL ? { baseURL: cliBaseURL } : {}),
+    ...(cliApiKey ? { apiKey: cliApiKey } : {}),
   });
 
   const modelInfo = connection.model

@@ -274,7 +274,8 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   /**
    * Extension model access limits (`ctx.llm`).
    *
-   * Completions are budgeted **per run**: the counter resets when the run's abort controller changes,
+   * Completions are budgeted **per user turn** (`currentRunId`), not per abort controller: a tool
+   * phase mints a new controller inside the same run. Budget:
    * so one runaway extension cannot spend a session's whole budget in a single turn. The refusal is
    * reported once per run as `agent:extension-error`.
    */

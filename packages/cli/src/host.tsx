@@ -159,7 +159,19 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // honour: the model connection, `--system`, `--max-iterations`, `--max-concurrent-tasks`,
   // `--extension-dirs`, `--mcp-config` and the host version. `--resume` / `--continue` are
   // protocol-driven in ACP (the client chooses the session), so they are not forwarded.
-  if (isAcpRequested(argv)) {
+  if (isAcpRequested(argv) && !isHelpRequested(argv)) {
+    // Flags this shell declares but the ACP host cannot honour: sessions, workspace roots and resume
+    // are negotiated by the ACP client, so forwarding them would be a silent drop — the same failure
+    // the parser now refuses for unknown flags.
+    const unsupported = argv
+      .slice(1)
+      .find((arg) => ["--remote-env", "-R", "--remote-session", "--continue", "-c", "--resume", "-r"].includes(arg));
+    if (unsupported) {
+      console.error(
+        `[${options.productName}] codent acp does not take ${unsupported}: sessions, workspace roots and resume are negotiated by the ACP client.`
+      );
+      process.exit(1);
+    }
     const acpConfig = parseArgsForHost(options.productName, argv.slice(1));
     assertMaxIterations(options.productName, acpConfig.maxIterations);
     const acpSandbox = resolveSandboxMode(options.productName, acpConfig.sandbox);
@@ -187,7 +199,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     );
   }
 
-  const appConfig = parseArgsForHost(options.productName, argv);
+  // Reached with a leading `acp` only via `codent acp --help` (the intercept above skips help): drop
+  // the subcommand so it does not become the initial prompt.
+  const appConfig = parseArgsForHost(options.productName, isAcpRequested(argv) ? argv.slice(1) : argv);
   assertMaxIterations(options.productName, appConfig.maxIterations);
   const sandboxMode = resolveSandboxMode(options.productName, appConfig.sandbox);
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */

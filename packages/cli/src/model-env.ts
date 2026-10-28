@@ -51,8 +51,18 @@ const pricingSchema = z.object({
 export const ModelEnvConfigSchema = z.object({
   /** Display name shown in the UI. Falls back to the model id. */
   name: z.string().min(1).optional(),
-  /** API style override for metadata. Falls back to connection style when unset. */
-  style: z.enum(["openai", "anthropic"]).optional(),
+  /**
+   * API style override for metadata. Falls back to connection style when unset.
+   *
+   * Trimmed + lowercased before the enum, like the shared connection parser: `MODEL_STYLE=Anthropic`
+   * used to throw here while the ACP entry silently resolved it to `openai`.
+   */
+  style: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .pipe(z.enum(["openai", "anthropic"]))
+    .optional(),
   /** Model string sent to the API (defaults to MODEL env value). */
   apiModel: z.string().optional(),
   /** Max input context window in tokens. */

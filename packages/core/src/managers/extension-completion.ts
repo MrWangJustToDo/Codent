@@ -25,7 +25,7 @@ export { ExtensionLlmError, type ExtensionLlmErrorCode } from "../agent/extensio
 
 /** Default output-token cap when the caller does not set one. */
 export const DEFAULT_EXTENSION_MAX_OUTPUT_TOKENS = 4096;
-/** Default completions allowed per run (reset when the run's abort controller changes). */
+/** Default completions allowed per user turn (keyed by `currentRunId`, not the abort controller). */
 export const DEFAULT_EXTENSION_CALLS_PER_RUN = 20;
 
 /** What the completion path needs from the agent. Structural so this module stays free of the class. */

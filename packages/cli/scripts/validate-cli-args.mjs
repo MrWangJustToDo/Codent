@@ -88,6 +88,10 @@ for (const [argv, why] of [
   [["--max-iteration", "30"], "a typo'd flag is unknown"],
   [["--bogus"], "an unknown flag is unknown"],
   [["--max-iterations", "-1"], "a leading `-` value is ambiguous, not the next flag"],
+  [["--max-iterations", "1.5"], "a non-integer budget is rejected, not truncated"],
+  [["--max-iterations=abc"], "a non-numeric budget is rejected, not defaulted"],
+  [["--max-iterations="], "an empty budget is rejected"],
+  [["--max-concurrent-tasks", "2.5"], "same rule for the concurrency cap"],
   [["--sandbox"], "a value-taking flag with no value"],
   [["--system"], "same for --system"],
 ]) {
@@ -169,6 +173,13 @@ assert.equal(parseCliArgs(["--remote-env", "http://flag"]).remoteEnv, "http://fl
 process.env.BRAVE_API_KEY = "env-brave";
 assert.equal(parseCliArgs([]).toolConfig?.websearch?.braveApiKey, "env-brave", "env websearch keys reach toolConfig");
 
+// The env→connection mapping is core's one helper now; its style parse is case-insensitive (the
+// ACP bootstrap used to have an exact-match copy, so `Anthropic` meant `openai` there only).
+process.env.MODEL_STYLE = "Anthropic";
+assert.equal(parseCliArgs([]).style, "anthropic", "MODEL_STYLE is parsed case-insensitively");
+assert.equal(parseCliArgs(["--style", "openai"]).style, "openai", "an explicit --style still wins");
+delete process.env.MODEL_STYLE;
+
 // ---------------------------------------------------------------------------
 // 9. The real bin: parser errors exit 1 BEFORE any TUI render
 // ---------------------------------------------------------------------------
@@ -197,6 +208,28 @@ for (const [argv, expected] of [
   });
   assert.equal(run.status, 1, `${argv.join(" ")} exits 1`);
   assert.match(run.stderr, expected, `${argv.join(" ")} prints the parser/host message`);
+}
+
+// `codent acp` refuses flags its host cannot honour instead of parsing and dropping them.
+for (const [argv, expected] of [
+  [["acp", "--remote-env", "http://x"], /does not take --remote-env/],
+  [["acp", "--resume"], /does not take --resume/],
+  [["acp", "--continue"], /does not take --continue/],
+]) {
+  const run = spawnSync(process.execPath, [bin, ...argv], { encoding: "utf8", timeout: 20_000, env: CHILD_ENV });
+  assert.equal(run.status, 1, `${argv.join(" ")} exits 1`);
+  assert.match(run.stderr, expected, `${argv.join(" ")} says why`);
+}
+
+// …and `--help` still wins over the subcommand (the ACP intercept is skipped for help).
+{
+  const run = spawnSync(process.execPath, [bin, "acp", "--help"], {
+    encoding: "utf8",
+    timeout: 30_000,
+    env: CHILD_ENV,
+  });
+  assert.equal(run.status, 0, "codent acp --help renders the help screen");
+  assert.match(run.stdout, /Codent/, "…instead of starting the stdio server");
 }
 
 // `--help` wins over an invalid command line (it reads host defaults, not the flags).

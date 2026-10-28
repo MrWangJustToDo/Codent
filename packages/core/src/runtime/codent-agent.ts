@@ -21,11 +21,7 @@ import { createDirectModelProvider } from "../provider/model-provider.js";
 import { AgentRuntime } from "./agent-runtime.js";
 
 import type { AgentRuntimeOptions } from "./agent-runtime.js";
-import type { CompactionConfigInput } from "../agent/compaction/types.js";
-import type { ExtensionFactory } from "../agent/extension/types.js";
-import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type {
-  AgentSessionBuiltins,
   AgentSessionCreateOptions,
   AgentSessionCreateResult,
   AgentSessionHost,
@@ -34,39 +30,8 @@ import type {
 import type { AgentSession } from "../agent-session/types.js";
 import type { CoreEnv, ResolvedCoreEnv } from "../env";
 import type { LoadedModelsState } from "../models/config/models-config.js";
-import type { ModelStyle, ReasoningEffort } from "../models/types.js";
+import type { ModelStyle } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
-import type { LazyToolsConfig } from "@tanstack/ai";
-
-/** Defaults merged into every {@link CodentAgent.createSession} call. */
-// TODO(core-init): a fully-declared, fully-unused surface. No in-repo caller passes `defaults` to
-// `CodentAgent.create` — the CLI adapter, both browser adapters, the ACP bootstrap and the server
-// runtime all omit it — so `createSession` merges `{}` and every session setting arrives per call
-// instead. Only `validate:agent-runtime-instances` exercises it. The mechanism is live (the spread
-// in `createSession` works), so this is "no host wires it", not "broken": the practical effect is
-// that a host cannot set one workspace-wide default and must repeat the options on every
-// `host.create` — which is exactly what `packages/app/src/adapter/session-bootstrap.ts` does.
-export interface CodentAgentDefaults {
-  systemPrompt?: string;
-  maxIterations?: number;
-  maxConcurrentTasks?: number;
-  mcpConfigPath?: string;
-  extensionDirs?: string[];
-  /** In-process extension factories applied to every session (local hosts only). */
-  extensions?: ExtensionFactory[];
-  /** Built-in extension switches applied to every session. */
-  builtins?: AgentSessionBuiltins;
-  toolConfig?: AgentToolConfig;
-  // Tuning knobs, same meaning as on `AgentSessionCreateOptions`:
-  temperature?: number;
-  maxTokens?: number;
-  reasoningEffort?: ReasoningEffort;
-  compaction?: CompactionConfigInput;
-  skillDirs?: string[];
-  lazyToolsConfig?: LazyToolsConfig;
-  agentDocFilenames?: string[];
-  agentDocLoadOverride?: boolean;
-}
 
 /**
  * What the runtime knows about models: the pipeline's entries (each with its selectable `models`, style and
@@ -104,8 +69,6 @@ export interface CodentAgentOptions {
    * Kept as an embedder label for a process holding several runtimes; nothing logs it today.
    */
   name?: string;
-  /** Defaults merged into every session created by this runtime. */
-  defaults?: CodentAgentDefaults;
   /** Advanced/test: inject a manager (must be bound to this runtime's env to isolate). */
   manager?: AgentManager;
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
@@ -131,7 +94,6 @@ export interface CodentAgentOptions {
 export class CodentAgent {
   private readonly runtime: AgentRuntime;
   private readonly manager?: AgentManager;
-  private readonly defaults: CodentAgentDefaults;
   private readonly models?: ModelCatalogRead;
   /** Agent ids this runtime created, and therefore owns for disposal. */
   private readonly ownedSessionIds = new Set<string>();
@@ -151,13 +113,11 @@ export class CodentAgent {
     runtime: AgentRuntime,
     host: AgentSessionHost,
     manager: AgentManager | undefined,
-    defaults: CodentAgentDefaults,
     models: ModelCatalogRead | undefined
   ) {
     this.runtime = runtime;
     this.host = host;
     this.manager = manager;
-    this.defaults = defaults;
     this.models = models;
   }
 
@@ -191,7 +151,7 @@ export class CodentAgent {
     const runtime = options.manager?.runtime ?? new AgentRuntime(runtimeOptions);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
     const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
-    return new CodentAgent(runtime, host, manager, options.defaults ?? {}, options.models);
+    return new CodentAgent(runtime, host, manager, options.models);
   }
 
   /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */
@@ -224,21 +184,14 @@ export class CodentAgent {
   }
 
   /**
-   * Create a root session, applying the runtime defaults.
+   * Create a root session through this runtime's host.
    *
-   * Unlike a direct {@link host.create}, the returned session is recorded as owned by
-   * this runtime and will be destroyed by {@link dispose}.
+   * The options are forwarded as given (the host owns builtins/alias mapping). Unlike a direct
+   * {@link host.create}, the returned session is recorded as owned by this runtime and will be
+   * destroyed by {@link dispose}.
    */
   async createSession(options: AgentSessionCreateOptions): Promise<AgentSessionCreateResult> {
-    // `builtins` is a group of independent switches: a per-session option must add to the
-    // runtime defaults rather than replace the whole group (a shallow spread of the outer
-    // objects would silently re-enable a default-disabled builtin).
-    const builtins = { ...this.defaults.builtins, ...options.builtins };
-    const result = await this.host.create({
-      ...this.defaults,
-      ...options,
-      ...(Object.keys(builtins).length > 0 ? { builtins } : {}),
-    });
+    const result = await this.host.create(options);
     this.ownedSessionIds.add(result.session.id);
     return result;
   }

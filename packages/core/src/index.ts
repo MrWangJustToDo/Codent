@@ -64,7 +64,7 @@ export {
 
 export { CodentAgent } from "./runtime/codent-agent.js";
 export type { ModelCatalogRead } from "./runtime/codent-agent.js";
-export type { CodentAgentOptions, CodentAgentDefaults } from "./runtime/codent-agent.js";
+export type { CodentAgentOptions } from "./runtime/codent-agent.js";
 
 export { agentManager, AgentManager } from "./managers/agent-manager.js";
 export type { AgentEvent, AgentEventListener, AgentEventType, RunAgentStreamInput } from "./managers/agent-manager.js";
@@ -230,6 +230,7 @@ export {
   registerModelProviderForEntry,
   resolveModelConfig,
   resolveModelConnection,
+  resolveModelConnectionFromEnv,
   resolveModelInfoFromModelsDev,
   resolveModelsConfig,
   resolveModelsConfigFromProvider,

@@ -97,6 +97,7 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           ...(createOptions.agentDocLoadOverride !== undefined
             ? { agentDocLoadOverride: createOptions.agentDocLoadOverride }
             : {}),
+          ...(createOptions.extensionLlm ? { extensionLlm: createOptions.extensionLlm } : {}),
         }),
       });
       if (!response.ok) {

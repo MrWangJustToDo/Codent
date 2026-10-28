@@ -70,6 +70,37 @@ export function resolveModelConnection(input: ResolveModelConfigInput = {}): Mod
   return { style, model, baseURL, apiKey };
 }
 
+/** Explicit overrides for {@link resolveModelConnectionFromEnv} (flags win over the record). */
+export interface ModelEnvOverrides {
+  model?: string;
+  style?: ModelStyle;
+  baseURL?: string;
+  apiKey?: string;
+}
+
+/**
+ * Resolve the model connection from an EXPLICIT environment record.
+ *
+ * The one env→connection mapping. The CLI (flags override), the ACP bootstrap (`.env` fallback) and
+ * the agent server all used to carry their own copy — they had already drifted on `||` vs `??` and
+ * the ACP copy parsed the style case-sensitively, so `MODEL_STYLE=Anthropic` meant `anthropic` in
+ * the TUI and the default `openai` over ACP.
+ *
+ * The caller supplies the record: core does not read the process environment here, so a runtime's
+ * own env (remote workspace, embedder) can be passed instead of the ambient one.
+ */
+export function resolveModelConnectionFromEnv(
+  env: Record<string, string | undefined>,
+  overrides: ModelEnvOverrides = {}
+): ModelConnection {
+  return resolveModelConnection({
+    model: overrides.model?.trim() || env.MODEL || env.model || "",
+    style: overrides.style ?? parseModelStyle(env.MODEL_STYLE ?? env.STYLE, "openai"),
+    baseURL: overrides.baseURL?.trim() || env.BASE_URL || env.MODEL_BASE_URL || undefined,
+    apiKey: overrides.apiKey || env.API_KEY || "",
+  });
+}
+
 function mergeModelInfo(base: ModelInfo | undefined, override: ModelInfo | undefined): ModelInfo | undefined {
   if (!base && !override) return undefined;
   if (!base) return override;

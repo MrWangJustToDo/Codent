@@ -132,6 +132,7 @@ const tuningRes = await fetch(`${baseUrl}/api/agent`, {
     lazyToolsConfig: { includeDescription: "full" },
     agentDocFilenames: ["PROBE.md"],
     agentDocLoadOverride: false,
+    extensionLlm: { callsPerRun: 5, maxOutputTokens: 512 },
   }),
 });
 assert.equal(tuningRes.status, 200, "create accepts every tuning knob");

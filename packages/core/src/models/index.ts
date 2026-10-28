@@ -17,6 +17,7 @@ export {
   parseModelStyle,
   resolveModelConfig,
   resolveModelConnection,
+  resolveModelConnectionFromEnv,
   type ModelConnection,
   type ResolveModelConfigInput,
   type ResolvedModelConfig,

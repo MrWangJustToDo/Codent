@@ -12,12 +12,38 @@ import {
   parseModelStyle,
   resolveModelConfig,
   resolveModelConnection,
+  resolveModelConnectionFromEnv,
 } from "../dist/index.mjs";
 
 assert.equal(parseModelStyle("anthropic"), "anthropic");
 assert.equal(parseModelStyle("openai"), "openai");
 assert.equal(parseModelStyle("ollama"), "openai");
 assert.equal(parseModelStyle(undefined), "openai");
+
+// ONE env → connection mapping (CLI / ACP / agent server). The ACP copy used to parse the style
+// case-sensitively, so `MODEL_STYLE=Anthropic` meant `anthropic` in the TUI and `openai` over ACP.
+{
+  const fromEnv = resolveModelConnectionFromEnv({
+    MODEL: "env-model",
+    MODEL_STYLE: "Anthropic",
+    BASE_URL: "https://env.example/v1",
+    API_KEY: "env-key",
+  });
+  assert.deepEqual(fromEnv, {
+    model: "env-model",
+    style: "anthropic",
+    baseURL: "https://env.example/v1",
+    apiKey: "env-key",
+  });
+
+  const overridden = resolveModelConnectionFromEnv(
+    { MODEL: "env-model", MODEL_STYLE: "anthropic" },
+    { model: "flag-model", style: "openai" }
+  );
+  assert.equal(overridden.model, "flag-model", "a flag wins over the record");
+  assert.equal(overridden.style, "openai", "a flag wins on the style too");
+  assert.equal(resolveModelConnectionFromEnv({}).model, "", "an empty record resolves an empty connection");
+}
 
 const openaiDefault = resolveModelConnection({ style: "openai", model: "gpt-4.1" });
 assert.equal(openaiDefault.baseURL, DEFAULT_BASE_URLS.openai);
