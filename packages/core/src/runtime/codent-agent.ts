@@ -21,6 +21,7 @@ import { createDirectModelProvider } from "../provider/model-provider.js";
 import { AgentRuntime } from "./agent-runtime.js";
 
 import type { AgentRuntimeOptions } from "./agent-runtime.js";
+import type { CompactionConfigInput } from "../agent/compaction/types.js";
 import type { ExtensionFactory } from "../agent/extension/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type {
@@ -33,8 +34,9 @@ import type {
 import type { AgentSession } from "../agent-session/types.js";
 import type { CoreEnv, ResolvedCoreEnv } from "../env";
 import type { LoadedModelsState } from "../models/config/models-config.js";
-import type { ModelStyle } from "../models/types.js";
+import type { ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
+import type { LazyToolsConfig } from "@tanstack/ai";
 
 /** Defaults merged into every {@link CodentAgent.createSession} call. */
 // TODO(core-init): a fully-declared, fully-unused surface. No in-repo caller passes `defaults` to
@@ -55,6 +57,15 @@ export interface CodentAgentDefaults {
   /** Built-in extension switches applied to every session. */
   builtins?: AgentSessionBuiltins;
   toolConfig?: AgentToolConfig;
+  // Tuning knobs, same meaning as on `AgentSessionCreateOptions`:
+  temperature?: number;
+  maxTokens?: number;
+  reasoningEffort?: ReasoningEffort;
+  compaction?: CompactionConfigInput;
+  skillDirs?: string[];
+  lazyToolsConfig?: LazyToolsConfig;
+  agentDocFilenames?: string[];
+  agentDocLoadOverride?: boolean;
 }
 
 /**

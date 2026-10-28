@@ -189,9 +189,8 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   /**
    * Auto-compaction settings, honoured by `agent-factory.ts` (`createCompactionConfig`).
    *
-   * TODO(core-init): no host can set it — `AgentSessionCreateOptions` has no `compaction` field,
-   * so the CLI / ACP / server / browser hosts always get the derived
-   * `{ tokenThreshold: min(contextWindow, 400_000) }`. Correct by default, unconfigurable above it.
+   * Reachable from hosts through `AgentSessionCreateOptions.compaction`. Omitted ⇒ the derived
+   * `{ tokenThreshold: min(contextWindow, 400_000) }` (root agents only).
    */
   compaction?: CompactionConfigInput;
   /**
@@ -211,14 +210,11 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   modelBaseURL?: string;
   modelApiKey?: string;
   /**
-   * Additional skill directories to scan (before defaults). Relative paths resolve
-   * against CoreEnv `rootPath`. When unset, defaults to `AGENT_SKILL_DIRS`,
-   * `~/.agents/skills`, and `.agents/skills`. e.g. add `.cursor/skills` or
-   * `.opencode/skills` to reuse skills written for other harnesses.
+   * Skill directories. Relative paths resolve against CoreEnv `rootPath`.
    *
-   * TODO(core-init): no host seam. `AgentSessionCreateOptions` has no `skillDirs` and no host
-   * parses a `--skill-dirs` flag, so the only routes are `AGENT_SKILL_DIRS` or a programmatic
-   * `createManagedAgent`.
+   * When SET, exactly these directories are scanned — the `AGENT_SKILL_DIRS` / `~/.agents/skills`
+   * / `.agents/skills` defaults are NOT added. When unset, those defaults apply. Reachable from
+   * hosts through `AgentSessionCreateOptions.skillDirs`; there is no CLI flag.
    */
   skillDirs?: string[];
   mcpConfigPath?: string;

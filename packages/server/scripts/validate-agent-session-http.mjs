@@ -112,6 +112,45 @@ const listResult = await host.list();
 assert.ok(Array.isArray(listResult));
 assert.ok(listResult.some((entry) => entry.agentId === snap.agentId));
 
+// ── 1b. Create-body tuning knobs reach the local host; bad values are 400 ──
+//
+// These are part of `AgentSessionCreateOptions` now. A remote-session client would otherwise set
+// them locally and have them silently dropped by the HTTP schema — the exact drift the local
+// `validate:agent-session-host` matrix guards on the other end of the wire.
+const model = process.env.MODEL || "test-model";
+const tuningRes = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    name: "tuning-agent",
+    model,
+    temperature: 0.2,
+    maxTokens: 128,
+    reasoningEffort: "high",
+    compaction: { tokenThreshold: 50_000, compactAtPercent: 70 },
+    skillDirs: [],
+    lazyToolsConfig: { includeDescription: "full" },
+    agentDocFilenames: ["PROBE.md"],
+    agentDocLoadOverride: false,
+  }),
+});
+assert.equal(tuningRes.status, 200, "create accepts every tuning knob");
+const tuning = await tuningRes.json();
+await fetch(`${baseUrl}/api/agent/${tuning.id}`, { method: "DELETE" });
+
+const badReasoning = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "bad-reasoning", model, reasoningEffort: "not-a-level" }),
+});
+assert.equal(badReasoning.status, 400, "an out-of-enum reasoning level is a client error, not a 500");
+const badTemperature = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "bad-temperature", model, temperature: 9 }),
+});
+assert.equal(badTemperature.status, 400, "an out-of-range temperature is a client error");
+
 // ── 2. Remount seed routes ──
 const summaryRes = await fetch(`${baseUrl}/api/agent/${snap.agentId}/summary-streams`);
 assert.equal(summaryRes.status, 200);

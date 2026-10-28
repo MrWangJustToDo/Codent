@@ -47,17 +47,16 @@ export const AgentConfigSchema = z.object({
     .optional()
     .describe("Max concurrent `task` subagents per parent (default 4; values below 1 treated as 1)"),
   maxTokens: z.number().int().min(1).optional().describe("Maximum tokens per response"),
-  // TODO(core-init): reachable only from a direct `createManagedAgent` caller (tests / embedders).
-  // `AgentSessionCreateOptions` has no `temperature` / `maxTokens` and no host parses a flag for
-  // them, so product hosts always run the provider defaults. They ARE consumed one layer down
-  // (`run-agent.ts` → `AgentRunner`): a missing host seam, not an inert field.
+  // Sampling knobs, forwarded from `AgentSessionCreateOptions` / `CodentAgentDefaults` (no CLI
+  // flag). Consumed one layer down (`run-agent.ts` → `AgentRunner`).
   temperature: z.number().min(0).max(2).optional().describe("Sampling temperature"),
   reasoningEffort: z
     .enum(REASONING_EFFORT_VALUES)
     .optional()
-    // Set at RUNTIME only (`effort.set`, `/models`, ACP's `thought_level`): the field is not on
-    // `AgentSessionCreateOptions`, so no host can choose a depth at creation. When unset,
-    // `run-agent.ts` applies the model metadata's `reasoningConfig.defaultEffort`.
+    // Settable at creation through `AgentSessionCreateOptions.reasoningEffort`; otherwise
+    // `run-agent.ts` applies the model metadata's `reasoningConfig.defaultEffort`. Runtime changes
+    // go through `effort.set` / `/models` (ACP's `thought_level`), and `setModel` drops a level the
+    // new model does not advertise.
     .describe("Reasoning effort level for reasoning-capable models"),
 });
 

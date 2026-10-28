@@ -82,6 +82,18 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           // Websearch keys / provider preference for the server-side agent loop. The
           // server's create schema accepts this field (write-only; never echoed back).
           ...(createOptions.toolConfig ? { toolConfig: createOptions.toolConfig } : {}),
+          // Tuning knobs the local host forwards too. `JSON.stringify` drops `undefined`, so an
+          // omitted option never reaches the server as an explicit null.
+          temperature: createOptions.temperature,
+          maxTokens: createOptions.maxTokens,
+          reasoningEffort: createOptions.reasoningEffort,
+          ...(createOptions.compaction ? { compaction: createOptions.compaction } : {}),
+          ...(createOptions.skillDirs ? { skillDirs: createOptions.skillDirs } : {}),
+          ...(createOptions.lazyToolsConfig ? { lazyToolsConfig: createOptions.lazyToolsConfig } : {}),
+          ...(createOptions.agentDocFilenames ? { agentDocFilenames: createOptions.agentDocFilenames } : {}),
+          ...(createOptions.agentDocLoadOverride !== undefined
+            ? { agentDocLoadOverride: createOptions.agentDocLoadOverride }
+            : {}),
         }),
       });
       if (!response.ok) {

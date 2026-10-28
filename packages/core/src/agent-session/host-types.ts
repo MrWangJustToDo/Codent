@@ -10,15 +10,16 @@
  */
 
 import type { AgentSession, DiskSessionId } from "./types.js";
+import type { CompactionConfigInput } from "../agent/compaction/types.js";
 import type { ExtensionFactory } from "../agent/extension/types.js";
 import type { McpServerConfig } from "../agent/mcp";
 import type { SessionMeta } from "../agent/persistence/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { CoreEnv } from "../env";
-import type { ModelInfo, ModelStyle } from "../models/types.js";
+import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
-import type { UIMessage } from "@tanstack/ai";
+import type { LazyToolsConfig, UIMessage } from "@tanstack/ai";
 
 // ============================================================================
 // Create options / list entries
@@ -42,21 +43,22 @@ export interface AgentSessionBuiltins {
 }
 
 /**
- * Reachability notes, so a reader can tell a live seam from a dead field. Only `extensions` is
- * truly unreachable from a product host today; the rest are wired somewhere.
+ * Every option here is forwarded to `ManagedAgentConfig` (see `toManagedConfig`; the local host
+ * forwards the object generically, so a new field cannot be silently dropped). What stays out:
  *
- * - `extensions` — local hosts only: in-process factories cannot cross HTTP, and the remote host
- *   rejects them loudly. No in-repo host passes them (the CLI/extension/playground adapters load
- *   from `extensionDirs`), so this is an embedder seam.
- * - `builtins` — booleans only (see {@link AgentSessionBuiltins}). The agent server accepts and
- *   forwards them from its create body; no client in this repo sets them.
- * - `providerMode` — the app passes the resolved provider mode. It does not affect create-time
- *   resolution (that already happened), but it is load-bearing on RESUME: `applyPersistedModel`
- *   uses it to decide whether to adopt the persisted model/style, and `--remote-provider` relies
- *   on `remote` there.
- * - `maxIterations` — bounded by `MAX_AGENT_ITERATIONS` in `AgentConfigSchema`; hosts pass a value
- *   only when the user set one, otherwise the schema default (`DEFAULT_AGENT_MAX_ITERATIONS`) is
- *   the single source.
+ * - `subagentTools` / `setUp` — NOT declared here: both are function values, and a function cannot
+ *   cross the HTTP create body. They stay `createManagedAgent` seams. (The local host forwards the
+ *   option object generically, so an untyped caller's extra key reaches the config locally — but a
+ *   remote session drops it, so do not rely on it.)
+ * - `toolsetProfile` / `profileId` / `initialSessionId` — host/manager identity: the local host
+ *   creates ROOT agents only, and mints the session id itself.
+ *
+ * Two fields have a non-create effect by design:
+ * - `providerMode` — create-time resolution has already happened. It is read on RESUME
+ *   (`applyPersistedModel`) to decide whether to adopt the persisted model/style, and
+ *   `--remote-provider` relies on `remote` there.
+ * - `maxIterations` — bounded by `MAX_AGENT_ITERATIONS` in `AgentConfigSchema`; omit for the one
+ *   default (`DEFAULT_AGENT_MAX_ITERATIONS`).
  */
 
 /**
@@ -109,6 +111,34 @@ export interface AgentSessionCreateOptions {
   resumeSessionId?: DiskSessionId;
   /** Explicit tool secrets / prefs (e.g. Brave websearch key). */
   toolConfig?: AgentToolConfig;
+  /** Sampling temperature (`0..2`). Omit for the provider default. */
+  temperature?: number;
+  /** Per-response output-token cap. Omit for the provider/model default. */
+  maxTokens?: number;
+  /**
+   * Initial reasoning depth. Omit to use the model metadata's `defaultEffort`.
+   *
+   * Unlike a runtime `effort.set`, this is not checked against the model's advertised levels at
+   * creation; a `setModel` switch drops a level the new model does not offer.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * Auto-compaction settings for this agent (root only).
+   *
+   * Omit to derive `{ tokenThreshold: min(contextWindow, 400_000) }` from the model metadata.
+   */
+  compaction?: CompactionConfigInput;
+  /**
+   * Skill directories. When set, EXACTLY these are scanned (the `AGENT_SKILL_DIRS` / home /
+   * project defaults are not added); omit to use those defaults.
+   */
+  skillDirs?: string[];
+  /** Lazy-tool catalog detail for top-level `lazy` tools (code mode / discovery). */
+  lazyToolsConfig?: LazyToolsConfig;
+  /** Instruction-file names to probe (default: `CLAUDE.md`, then `AGENTS.md`). */
+  agentDocFilenames?: string[];
+  /** Set `false` to disable instruction-file loading for this agent. */
+  agentDocLoadOverride?: boolean;
 }
 
 /** Thin catalog row for live agents owned by a Host. */

@@ -69,29 +69,27 @@ function toListEntry(managed: ManagedAgent): AgentSessionListEntry {
 }
 
 function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig {
+  // Forward every declared option generically. The old field-by-field copy silently dropped any
+  // option the host contract gained but this function did not (temperature / maxTokens /
+  // reasoningEffort / compaction / skillDirs / … did nothing through `host.create`).
+  //
+  // Only the host-owned keys are destructured out: `continueSession` / `resumeSessionId` are
+  // consumed by `create()` before this point, and `builtins` is an alias group for five
+  // `ManagedAgentConfig` keys.
+  const { builtins, continueSession: _continueSession, resumeSessionId: _resumeSessionId, ...forwarded } = options;
+  // `undefined` inside the alias group means "keep the built-in default", not "set undefined" —
+  // spreading it directly would overwrite a `false` that a runtime default merged in.
+  const { lsp, skills, memory, mcp, codeMode } = builtins ?? {};
   return {
-    name: options.name,
-    model: options.model,
+    ...forwarded,
     // `AgentConfig` types this as required (the schema's `.default()` makes the parsed output
     // non-optional), so the host materializes the ONE default constant rather than restating it.
     maxIterations: options.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS,
-    ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
-    ...(options.modelStyle ? { modelStyle: options.modelStyle } : {}),
-    ...(options.modelBaseURL ? { modelBaseURL: options.modelBaseURL } : {}),
-    ...(options.modelApiKey ? { modelApiKey: options.modelApiKey } : {}),
-    ...(options.modelInfo ? { modelInfo: options.modelInfo } : {}),
-    ...(options.providerMode ? { providerMode: options.providerMode } : {}),
-    ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
-    ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
-    ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
-    ...(options.extensionDirs?.length ? { extensionDirs: options.extensionDirs } : {}),
-    ...(options.extensions?.length ? { extensions: options.extensions } : {}),
-    ...(options.builtins?.lsp !== undefined ? { lsp: options.builtins.lsp } : {}),
-    ...(options.builtins?.skills !== undefined ? { skills: options.builtins.skills } : {}),
-    ...(options.builtins?.memory !== undefined ? { memory: options.builtins.memory } : {}),
-    ...(options.builtins?.mcp !== undefined ? { mcp: options.builtins.mcp } : {}),
-    ...(options.builtins?.codeMode !== undefined ? { codeMode: options.builtins.codeMode } : {}),
-    ...(options.toolConfig ? { toolConfig: options.toolConfig } : {}),
+    ...(lsp !== undefined ? { lsp } : {}),
+    ...(skills !== undefined ? { skills } : {}),
+    ...(memory !== undefined ? { memory } : {}),
+    ...(mcp !== undefined ? { mcp } : {}),
+    ...(codeMode !== undefined ? { codeMode } : {}),
   };
 }
 

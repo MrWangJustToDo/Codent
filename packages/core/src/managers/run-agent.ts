@@ -70,10 +70,13 @@ export async function resolveTextAdapterForManaged(managed: ManagedAgent): Promi
   if (cached) return cached;
 
   const { config } = managed;
-  const style = config.modelStyle;
+  // `modelStyle` is optional on the create contract because `modelInfo` carries the same fact. Fall
+  // back to it rather than failing a session whose connection was resolved but whose style flag was
+  // not repeated.
+  const style = config.modelStyle ?? managed.getModelInfo()?.style;
   if (!style) {
     throw new Error(
-      `Agent "${managed.id}" has no modelStyle configured. Set modelStyle, modelBaseURL, and modelApiKey on createManagedAgent().`
+      `Agent "${managed.id}" has no modelStyle configured. Set modelStyle (or pass modelInfo with a style) on create.`
     );
   }
 
@@ -300,6 +303,9 @@ function runnerConfigKey(managed: ManagedAgent): string {
     model: managed.config.model,
     maxIterations: managed.config.maxIterations,
     temperature: managed.config.temperature,
+    // A runtime `updateConfig({ maxTokens })` must rebuild the runner; the cap is baked into
+    // `AgentRunner` at construction. (Creation always builds after the config is parsed.)
+    maxTokens: managed.config.maxTokens,
     modelStyle: managed.config.modelStyle,
     modelBaseURL: managed.config.modelBaseURL,
     reasoningEffort: managed.config.reasoningEffort,

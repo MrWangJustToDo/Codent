@@ -13,6 +13,7 @@ import {
   UsageTracker,
   createLocalAgentSessionHost,
   registerCoreEnv,
+  resolveTextAdapterForManaged,
 } from "../dist/dev.mjs";
 
 registerCoreEnv({
@@ -332,6 +333,109 @@ assert.deepEqual(lastCreateConfig.memory, builtins.memory, "memory toggle reache
 assert.deepEqual(lastCreateConfig.mcp, builtins.mcp, "mcp toggle reaches ManagedAgentConfig");
 assert.deepEqual(lastCreateConfig.codeMode, builtins.codeMode, "codeMode toggle reaches ManagedAgentConfig");
 await host.destroy(withOptions.session.id);
+
+// --- EVERY AgentSessionCreateOptions field reaches ManagedAgentConfig --------
+//
+// `toManagedConfig` forwards the option object generically, so a new declared field cannot be
+// silently dropped. This table is the behavioural half: one fully-populated create, every value
+// read back. `continueSession` / `resumeSessionId` are consumed by `create()` itself and must NOT
+// leak into the agent config.
+const probeInfo = {
+  id: "probe-model",
+  name: "Probe model",
+  style: "anthropic",
+  apiModel: "probe-model",
+  capabilities: [],
+  contextWindow: 200_000,
+  defaultMaxTokens: 4096,
+};
+const probeToolConfig = { websearch: { provider: "brave" } };
+const probeCompaction = { tokenThreshold: 4321, compactAtPercent: 70 };
+const probeLazyTools = { includeDescription: "full" };
+const probeMcp = { probe: { command: "true" } };
+const allOptions = await host.create({
+  name: "all-options",
+  model: "probe-model",
+  modelStyle: "anthropic",
+  modelBaseURL: "https://probe.invalid/v1",
+  modelApiKey: "probe-key",
+  modelInfo: probeInfo,
+  providerMode: "remote",
+  systemPrompt: "PROBE SYSTEM PROMPT",
+  maxIterations: 7,
+  maxConcurrentTasks: 3,
+  mcpConfigPath: "/tmp/probe-mcp.json",
+  mcpServers: probeMcp,
+  extensionDirs: ["/tmp/probe-extensions"],
+  extensions: [extensionFactory],
+  builtins,
+  continueSession: false,
+  toolConfig: probeToolConfig,
+  temperature: 0.25,
+  maxTokens: 1234,
+  reasoningEffort: "high",
+  compaction: probeCompaction,
+  skillDirs: ["/tmp/probe-skills"],
+  lazyToolsConfig: probeLazyTools,
+  agentDocFilenames: ["PROBE.md"],
+  agentDocLoadOverride: false,
+});
+const forwarded = {
+  name: "all-options",
+  model: "probe-model",
+  modelStyle: "anthropic",
+  modelBaseURL: "https://probe.invalid/v1",
+  modelApiKey: "probe-key",
+  modelInfo: probeInfo,
+  providerMode: "remote",
+  systemPrompt: "PROBE SYSTEM PROMPT",
+  maxIterations: 7,
+  maxConcurrentTasks: 3,
+  mcpConfigPath: "/tmp/probe-mcp.json",
+  mcpServers: probeMcp,
+  extensionDirs: ["/tmp/probe-extensions"],
+  toolConfig: probeToolConfig,
+  temperature: 0.25,
+  maxTokens: 1234,
+  reasoningEffort: "high",
+  compaction: probeCompaction,
+  skillDirs: ["/tmp/probe-skills"],
+  lazyToolsConfig: probeLazyTools,
+  agentDocFilenames: ["PROBE.md"],
+  agentDocLoadOverride: false,
+  lsp: false,
+  skills: false,
+  memory: false,
+  mcp: false,
+  codeMode: false,
+};
+for (const [key, expected] of Object.entries(forwarded)) {
+  assert.deepEqual(lastCreateConfig[key], expected, `${key} reaches ManagedAgentConfig`);
+}
+assert.equal(lastCreateConfig.extensions?.[0], extensionFactory, "extensions reach ManagedAgentConfig");
+assert.equal(lastCreateConfig.continueSession, undefined, "continueSession stays host-owned");
+assert.equal(lastCreateConfig.resumeSessionId, undefined, "resumeSessionId stays host-owned");
+await host.destroy(allOptions.session.id);
+
+// --- modelStyle may come from modelInfo.style -------------------------------
+//
+// `modelStyle` is optional because `modelInfo` carries the same fact. A create that passes the
+// resolved metadata but not the flag must still build an adapter instead of failing the first run.
+{
+  let cached;
+  const stub = {
+    id: "style-probe",
+    config: { model: "probe-model", modelBaseURL: "https://probe.invalid/v1", modelApiKey: "probe-key" },
+    getModelInfo: () => ({ ...probeInfo }),
+    getTextAdapter: () => cached,
+    setTextAdapter: (value) => {
+      cached = value;
+    },
+  };
+  const adapter = await resolveTextAdapterForManaged(stub);
+  assert.equal(adapter.modelStyle, "anthropic", "modelStyle falls back to modelInfo.style");
+  assert.equal(cached, adapter, "the resolved adapter is cached on the agent");
+}
 
 const child = createFake("agent_child", session.id);
 agents.set(child.id, child);
