@@ -52,7 +52,7 @@ assert.equal(parseAgentSessionSseBlockForTests("event: ping\ndata: \n\n"), null)
     plan: {},
     autoMode: false,
     mcp: { servers: [] },
-    extensions: { extensions: [] },
+    extensions: { extensions: [], commands: [] },
     toolDescriptors: [],
     interactions: { approvals: [], askUser: [] },
     jobs: { jobs: [] },

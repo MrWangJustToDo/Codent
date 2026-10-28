@@ -235,9 +235,9 @@ export function buildAgentRunner(
       // The approval decision (and the command-safety analysis behind it) was computed from the
       // ORIGINAL input before this hook, and an eagerly started `task` subagent already began on
       // it. Neither can honour a rewritten argument list after the fact.
-      isApprovalGated: (toolName) => managed.isToolNeedsApproval(toolName),
+      isApprovalGated: (toolName) => deps.isToolNeedsApproval(toolName),
       onArgRewriteRefused: (toolName) => {
-        managed.log?.warn("hooks", "Ignored an extension argument rewrite on a gated tool call", { toolName });
+        deps.getLog().warn("hooks", "Ignored an extension argument rewrite on a gated tool call", { toolName });
       },
       onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
     }),

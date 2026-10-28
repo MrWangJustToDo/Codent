@@ -64,6 +64,12 @@ export interface AgentRunDeps {
   planMode: PlanModeController;
   /** Agent-local tool presentation, for plan-mode policy decisions. */
   resolveToolPresentation: (name: string) => ToolPresentation | undefined;
+  /**
+   * Whether a tool's calls are approval-gated (read live: an extension can add or shadow the tool
+   * while the cached runner stays alive). Used by the extensions middleware to refuse an argument
+   * rewrite after the approval was decided on the original input.
+   */
+  isToolNeedsApproval: (toolName: string) => boolean;
   /** Set-once in practice, but `setLog` is public — read live to be safe. */
   getLog: () => AgentLog;
   getTodoManager: () => TodoManager | null;
@@ -139,6 +145,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     run: managed.run,
     planMode: managed.planMode,
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
+    isToolNeedsApproval: (toolName) => managed.isToolNeedsApproval(toolName),
     getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),

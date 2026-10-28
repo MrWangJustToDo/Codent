@@ -202,7 +202,7 @@ assert.deepEqual(snap.messages, []);
 assert.ok(Array.isArray(snap.todos));
 assert.equal(snap.plan.phase, "off");
 assert.deepEqual(snap.mcp, { servers: [] });
-assert.deepEqual(snap.extensions, { extensions: [] });
+assert.deepEqual(snap.extensions, { extensions: [], commands: [] });
 assert.deepEqual(snap.subagents, []);
 
 const stopResult = await session.dispatch({ type: "stop" });

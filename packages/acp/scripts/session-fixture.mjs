@@ -45,7 +45,7 @@ export function baseSnapshot(id, overrides = {}) {
     },
     autoMode: false,
     mcp: { servers: [] },
-    extensions: { extensions: [] },
+    extensions: { extensions: [], commands: [] },
     toolDescriptors: [],
     interactions: { approvals: [], askUser: [] },
     iteration: { current: 1, max: 100 },

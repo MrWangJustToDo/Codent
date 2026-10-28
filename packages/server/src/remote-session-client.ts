@@ -72,7 +72,7 @@ function emptySnapshot(agentId: string): AgentSessionSnapshot {
     plan: { phase: "off" },
     autoMode: false,
     mcp: { servers: [] },
-    extensions: { extensions: [] },
+    extensions: { extensions: [], commands: [] },
     toolDescriptors: [],
     interactions: { approvals: [], askUser: [] },
     iteration: { current: 0, max: 0 },
