@@ -112,6 +112,7 @@ module.exports = [
       "packages/app/test/**",
       "packages/app/scripts/**",
       "packages/acp/scripts/**",
+      "packages/cli/scripts/**",
       "packages/codent/scripts/**",
       "packages/core/scripts/**",
       "packages/node/scripts/**",

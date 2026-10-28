@@ -6,6 +6,7 @@
 
 import { installAgentLogProcessGuards, parseModelStyle } from "@codent/core";
 import { createRequire } from "node:module";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
 import { runAcpAgentStdio } from "./stdio.js";
@@ -22,10 +23,32 @@ function acpVersion(): string {
 }
 
 /**
- * Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`,
- * `--api-key/-k`, `--remote-provider`, `--system/-s`, `--max-iterations`,
- * `--max-concurrent-tasks`, `--extension-dirs`, `--mcp-config`, `--sandbox`).
+ * Flags the standalone bin understands (`--model/-m`, `--style`, `--base-url/-u`, `--api-key/-k`,
+ * `--remote-provider`, `--system/-s`, `--max-iterations`, `--max-concurrent-tasks`,
+ * `--extension-dirs`, `--mcp-config`, `--sandbox`, `--client-env`).
+ *
+ * Parsed by Node's STRICT `util.parseArgs`: an unknown flag (or a missing value) is an error
+ * instead of a setting that is silently ignored. Positionals stay accepted and unused — an ACP
+ * client may append one and the bin never had a meaning for it.
  */
+const ACP_OPTIONS = {
+  model: { type: "string", short: "m" },
+  style: { type: "string" },
+  "base-url": { type: "string", short: "u" },
+  url: { type: "string" },
+  "api-key": { type: "string", short: "k" },
+  "remote-provider": { type: "string" },
+  system: { type: "string", short: "s" },
+  "max-iterations": { type: "string" },
+  "max-concurrent-tasks": { type: "string" },
+  "extension-dirs": { type: "string" },
+  /** Legacy singular spelling kept as an alias. */
+  "extension-dir": { type: "string" },
+  "mcp-config": { type: "string" },
+  sandbox: { type: "string" },
+  "client-env": { type: "boolean" },
+} as const satisfies NonNullable<ParseArgsConfig["options"]>;
+
 function parseFlags(argv: string[]): {
   model?: AcpModelOverride;
   systemPrompt?: string;
@@ -34,40 +57,23 @@ function parseFlags(argv: string[]): {
   extensionDirs?: string[];
   mcpConfigPath?: string;
   sandbox?: string;
+  clientEnv: boolean;
 } {
-  const flags = new Map<string, string>();
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg || !arg.startsWith("-")) continue;
-    const body = arg.replace(/^--?/, "");
-    // `--flag=value` is one token: the value never competes with the next argument, and an empty
-    // value stays "" so the validator can reject it instead of it silently meaning "not set".
-    const equals = body.indexOf("=");
-    if (equals >= 0) {
-      flags.set(body.slice(0, equals), body.slice(equals + 1));
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next && !next.startsWith("-")) {
-      flags.set(body, next);
-      i++;
-    }
-  }
-  const get = (...keys: string[]): string | undefined => {
-    for (const key of keys) {
-      const value = flags.get(key);
-      if (value) return value;
-    }
-    return undefined;
+  const { values } = parseArgs({ args: argv, options: ACP_OPTIONS, allowPositionals: true, strict: true });
+  // `!== undefined` rather than truthiness: `--sandbox=` must stay "" so it is rejected, not
+  // treated as "flag absent".
+  const get = (key: keyof typeof ACP_OPTIONS): string | undefined => {
+    const value = values[key];
+    return typeof value === "string" ? value : undefined;
   };
   const remoteProvider = get("remote-provider") || process.env.REMOTE_PROVIDER;
-  const model = get("model", "m");
-  const systemPrompt = get("system", "s");
+  const model = get("model");
+  const systemPrompt = get("system");
   const rawIterations = get("max-iterations");
   const maxIterations = rawIterations !== undefined ? Number(rawIterations) : undefined;
   const rawConcurrentTasks = get("max-concurrent-tasks");
   const maxConcurrentTasks = rawConcurrentTasks !== undefined ? Number(rawConcurrentTasks) : undefined;
-  const extensionDirs = get("extension-dirs", "extension-dir")
+  const extensionDirs = (get("extension-dirs") ?? get("extension-dir"))
     ?.split(",")
     .map((dir) => dir.trim())
     .filter((dir) => dir.length > 0);
@@ -79,8 +85,8 @@ function parseFlags(argv: string[]): {
           model: {
             ...(model ? { model } : {}),
             style: parseModelStyle(get("style")),
-            baseURL: get("base-url", "url", "u"),
-            apiKey: get("api-key", "k"),
+            baseURL: get("base-url") ?? get("url"),
+            apiKey: get("api-key"),
             ...(remoteProvider ? { remoteProvider } : {}),
           },
         }
@@ -90,7 +96,8 @@ function parseFlags(argv: string[]): {
     ...(maxConcurrentTasks !== undefined && Number.isFinite(maxConcurrentTasks) ? { maxConcurrentTasks } : {}),
     ...(extensionDirs?.length ? { extensionDirs } : {}),
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
-    ...(sandbox ? { sandbox } : {}),
+    ...(sandbox !== undefined ? { sandbox } : {}),
+    clientEnv: values["client-env"] === true,
   };
 }
 
@@ -103,17 +110,16 @@ async function main(): Promise<void> {
 
   const argv = process.argv.slice(2);
   const flags = parseFlags(argv);
-  // A valueless `--sandbox` (last arg) and `--sandbox=` both mean "no value" — never "default".
-  if (flags.sandbox === undefined && argv.some((arg) => arg === "--sandbox" || arg === "--sandbox=")) {
-    throw new Error(`--sandbox requires "local" (OS sandbox) or "native" (no OS sandbox)`);
-  }
+  // A valueless `--sandbox` is a parser error (`argument missing`); `--sandbox=` reaches here as ""
+  // and is rejected rather than silently meaning "default".
   if (flags.sandbox !== undefined && flags.sandbox !== "local" && flags.sandbox !== "native") {
-    throw new Error(`--sandbox must be "local" (OS sandbox) or "native" (no OS sandbox); got "${flags.sandbox}"`);
+    const detail = flags.sandbox === "" ? "requires a value" : `got "${flags.sandbox}"`;
+    throw new Error(`--sandbox must be "local" (OS sandbox) or "native" (no OS sandbox); ${detail}`);
   }
   const options = await bootstrapAcpAgent({
     ...(flags.model ? { model: flags.model } : {}),
     // Opt-in: without it the env planes are byte-for-byte what they were before this flag existed.
-    clientEnv: argv.includes("--client-env"),
+    clientEnv: flags.clientEnv,
     version: acpVersion(),
     ...(flags.sandbox ? { sandbox: flags.sandbox } : {}),
     ...(flags.systemPrompt ? { systemPrompt: flags.systemPrompt } : {}),

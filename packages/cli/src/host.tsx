@@ -52,7 +52,7 @@ import { render } from "ink";
 import { useEffect, useState } from "react";
 
 import { isAcpRequested, runAcpCommand } from "./acp-command.js";
-import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs } from "./args.js";
+import { cliVersion, isHelpRequested, isVersionRequested, parseCliArgs, type ParsedCliConfig } from "./args.js";
 import { readClipboardImage } from "./clipboard.js";
 import { launchEditor } from "./editor.js";
 import { LocalAgentAdapter } from "./local-adapter.js";
@@ -104,6 +104,25 @@ function resolveSandboxMode(productName: string, value: string | undefined): "lo
   return process.env.SANDBOX_ENV === "native" ? "native" : "local";
 }
 
+/**
+ * Parse the command line, or print the parser's one-line message and exit.
+ *
+ * The parser is strict (`util.parseArgs`), so an unknown flag or a missing value is an error
+ * instead of a silently ignored setting; this is the single place that turns it into a host error.
+ */
+function parseArgsForHost(productName: string, argv: string[]): ParsedCliConfig {
+  try {
+    return parseCliArgs(argv);
+  } catch (error) {
+    // `--help` wins over a broken command line: asking for help with a typo'd flag must render the
+    // help screen (which reads only host defaults, not the flags), not an error. `--version` is
+    // already answered before any parsing.
+    if (isHelpRequested(argv)) return parseCliArgs(["--help"]);
+    console.error(`[${productName}] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
 /** Reject an iteration budget the schema would reject, with the bound the user can act on. */
 function assertMaxIterations(productName: string, value: number): void {
   if (Number.isInteger(value) && value >= 1 && value <= MAX_AGENT_ITERATIONS) return;
@@ -141,7 +160,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // `--extension-dirs`, `--mcp-config` and the host version. `--resume` / `--continue` are
   // protocol-driven in ACP (the client chooses the session), so they are not forwarded.
   if (isAcpRequested(argv)) {
-    const acpConfig = parseCliArgs(argv.slice(1));
+    const acpConfig = parseArgsForHost(options.productName, argv.slice(1));
     assertMaxIterations(options.productName, acpConfig.maxIterations);
     const acpSandbox = resolveSandboxMode(options.productName, acpConfig.sandbox);
     await runAcpCommand(
@@ -156,7 +175,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
         : undefined,
       // `--client-env` opts into borrowing the client's fs/terminal per session.
       {
-        clientEnv: argv.includes("--client-env"),
+        clientEnv: acpConfig.clientEnv === true,
         version: cliVersion(),
         sandbox: acpSandbox,
         ...(acpConfig.systemPrompt ? { systemPrompt: acpConfig.systemPrompt } : {}),
@@ -168,7 +187,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
     );
   }
 
-  const appConfig = parseCliArgs(argv);
+  const appConfig = parseArgsForHost(options.productName, argv);
   assertMaxIterations(options.productName, appConfig.maxIterations);
   const sandboxMode = resolveSandboxMode(options.productName, appConfig.sandbox);
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */

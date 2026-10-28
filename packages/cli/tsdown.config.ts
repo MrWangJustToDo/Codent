@@ -20,11 +20,13 @@ const rewriteRendererSpecifiers = () => ({
 });
 
 export default defineConfig({
-  // Two entries: `index.tsx` is the bin (injects @codent/server factories);
+  // Three entries: `index.tsx` is the bin (injects @codent/server factories);
   // `host.tsx` is the server-free library entry the self-contained release host
   // (`codent-cli`) imports so it can inline the shared host logic without
-  // pulling in @codent/server.
-  entry: ["src/index.tsx", "src/host.tsx"],
+  // pulling in @codent/server; `args.ts` is emitted for `scripts/validate-cli-args.mjs`
+  // (the parser has no other owner-visible surface, and it is the seam that used to
+  // drop `--sandbox=native` silently).
+  entry: ["src/index.tsx", "src/host.tsx", "src/args.ts"],
   format: ["esm"],
   dts: true,
   clean: true,

@@ -56,6 +56,8 @@ export const Help = () => {
         </Text>
         <Box paddingLeft={2} flexDirection="column">
           <Text>{name} [options] [prompt]</Text>
+          {/* `--` is how a prompt may start with `-` now that the parser is strict. */}
+          <Text>{name} [options] -- [prompt starting with -]</Text>
           {acp && <Text>{name} acp - serve the agent over ACP on stdio (for editors / ACP clients)</Text>}
           <Text>{name} -h, --help</Text>
         </Box>
