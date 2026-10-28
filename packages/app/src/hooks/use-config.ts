@@ -1,4 +1,5 @@
 import {
+  DEFAULT_AGENT_MAX_ITERATIONS,
   DEFAULT_LOCAL_OPENAI_BASE_URL,
   buildDefaultSystemPrompt,
   loadModels,
@@ -19,7 +20,6 @@ import type { AppConfig } from "../adapter/types.js";
 // ============================================================================
 
 const DEFAULT_STYLE: ModelStyle = "openai";
-const DEFAULT_MAX_ITERATIONS = 50;
 
 // ============================================================================
 // State Hook
@@ -33,8 +33,7 @@ export const useConfig = createState(
       baseURL: DEFAULT_LOCAL_OPENAI_BASE_URL,
       systemPrompt: "",
       initialPrompt: "",
-      maxIterations: DEFAULT_MAX_ITERATIONS,
-      debug: false,
+      maxIterations: DEFAULT_AGENT_MAX_ITERATIONS,
       apiKey: "",
       mcpConfigPath: "",
       extensionDirs: [],
@@ -56,9 +55,8 @@ export const useConfig = createState(
         state.config.systemPrompt =
           config.systemPrompt || (config.remoteSession ? "" : await buildDefaultSystemPrompt());
         state.config.initialPrompt = config.initialPrompt || "";
-        state.config.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+        state.config.maxIterations = config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS;
         state.config.maxConcurrentTasks = config.maxConcurrentTasks;
-        state.config.debug = config.debug ?? false;
         state.config.apiKey = config.apiKey || "";
         state.config.mcpConfigPath = config.mcpConfigPath || "";
         state.config.extensionDirs = config.extensionDirs ?? [];
@@ -90,9 +88,10 @@ export const useConfig = createState(
           const loaded = skipModelsConfig ? null : await loadModels(source);
           if (loaded) {
             if (!config.remoteSession) {
-              // Apply the file's websearch toolConfig under the host value (per field): the
-              // CLI/env `toolConfig` wins, the file fills the gaps. Done here (before agent
-              // creation / `adapter.initialize`) so `Host.create` sees the merged result.
+              // `global` carries `toolConfig` only (see `ModelsConfigGlobal`). Apply it UNDER the
+              // host value (per field): the CLI/env `toolConfig` wins, the file fills the gaps.
+              // Done here (before agent creation / `adapter.initialize`) so `Host.create` sees the
+              // merged result. `codent acp` applies the same block in its bootstrap.
               const mergedToolConfig = mergeModelsConfigToolConfig(state.config.toolConfig, loaded.config.global);
               if (mergedToolConfig) state.config.toolConfig = mergedToolConfig;
 
@@ -123,9 +122,12 @@ export const useConfig = createState(
       },
 
       /**
-       * Select a model (by `/models`) and persist it as the new active entry so a
-       * restart resumes at it. Updates the in-memory modelsConfig.active and the
-       * config defaults used by agent creation.
+       * Select a model (by `/models`) for THIS process: it updates the in-memory
+       * `modelsConfig.active` and the config defaults the next agent creation uses.
+       *
+       * It does NOT write `models.json` (only the config editor's save path does), so a restart
+       * starts a NEW session from the file's last save. The session's own choice still survives a
+       * restart through `SessionData.model` (the session snapshot) when that session is resumed.
        *
        * Session entries (remote-session hosts) only update `modelsConfig.active`
        * and the display-only `config.serverModel`: the connection fields are
@@ -179,9 +181,8 @@ export const useConfig = createState(
         state.config.baseURL = DEFAULT_LOCAL_OPENAI_BASE_URL;
         state.config.systemPrompt = "";
         state.config.initialPrompt = "";
-        state.config.maxIterations = DEFAULT_MAX_ITERATIONS;
+        state.config.maxIterations = DEFAULT_AGENT_MAX_ITERATIONS;
         state.config.maxConcurrentTasks = undefined;
-        state.config.debug = false;
         state.config.apiKey = "";
         state.config.mcpConfigPath = "";
         state.config.extensionDirs = [];

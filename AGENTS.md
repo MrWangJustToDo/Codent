@@ -1101,7 +1101,7 @@ Runtime data under the project root is grouped under a single gitignored `.agent
 | `.agents/sessions/` | Session message log (`*.session.jsonl`, one line per message + state; timestamps live on the message) |
 | `.agents/logs/<sessionId>/` | AgentLog JSONL event timeline (`agent.log`, size-rotated; written by the built-in log extension) |
 | `.agents/usage/` | Global usage history (`usage-<year>.jsonl`, per-LLM-call records) |
-| `.agents/config/models.json` | Unified model config (global settings + provider entries) |
+| `.agents/config/models.json` | Model provider entries + `global.toolConfig` (websearch keys/provider). Runtime knobs (`maxIterations` / `mcpConfigPath` / `systemPrompt`) are flags/env, never this file |
 | `.agents/memory/` | Cross-session memory markdown + `MEMORY.md` |
 | `.agents/cache/tool-output/` | Large tool-output spill files (`*.txt`) — GC'd two ways: reference-based on compaction **and** a 7-day age sweep (`sweepStaleToolOutput`, lazy on first cache write of a process). The age sweep is the only thing that collects files from sessions that never compacted, and files no session ever referenced |
 | `.agents/cache/command-jobs/` | Background shell jobs: durable per-job logs (`.log`, 24 h sweep) + per-job records (`.json`, 7 days, scoped to the session that started the job). On resume, a `running` record is marked interrupted and an un-notified completion is re-delivered; a graceful quit keeps terminal un-notified records; the record keeps the status/tail after its log is swept |

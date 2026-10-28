@@ -78,7 +78,7 @@ try {
   assert.equal(w1.models[1].baseURL, "https://sibling.example/v1", "sibling untouched");
   assert.equal(w1.models[0].baseURL, "https://new.example", "edited entry rewritten");
   assert.equal(w1.models[0].style, "anthropic", "style follows the draft");
-  assert.equal(w1.global.maxIterations, 25, "global preserved");
+  assert.equal(w1.global.maxIterations, 25, "a hand-written global key is preserved by the raw write");
   assert.equal(w1.global.toolConfig.braveApiKey, "sk-brave-keep-me", "nested global preserved");
   assert.deepEqual(w1.active, { entryIndex: 0, model: "claude-x" }, "active follows the draft's models");
   assert.equal(first.loaded.entries.length, 2, "reloaded entry list");
@@ -140,7 +140,7 @@ try {
   const raw = JSON.parse(rawText);
   assert.equal(raw.$schema, "https://example.com/models.schema.json", "$schema survived the write");
   assert.equal(raw.global.futureSetting, "keep-me", "global unknown key survived the write");
-  assert.equal(raw.global.maxIterations, 25, "global known key survived");
+  assert.equal(raw.global.maxIterations, 25, "a hand-written global key survives (no longer schema-declared)");
   assert.deepEqual(raw.models[0].headers, { "X-Custom": "keep-me" }, "edited entry's unknown key survived");
   assert.equal(raw.models[0].label, "my-own-field", "edited entry's arbitrary key survived");
   assert.deepEqual(raw.models[1].headers, { "X-Sib": "keep" }, "untouched entry's unknown key survived");

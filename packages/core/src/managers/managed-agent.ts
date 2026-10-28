@@ -186,6 +186,22 @@ export type { AgentL1State, AgentMode } from "../runtime-types/session-payloads.
 
 export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   name: string;
+  /**
+   * Auto-compaction settings, honoured by `agent-factory.ts` (`createCompactionConfig`).
+   *
+   * TODO(core-init): no host can set it — `AgentSessionCreateOptions` has no `compaction` field,
+   * so the CLI / ACP / server / browser hosts always get the derived
+   * `{ tokenThreshold: min(contextWindow, 400_000) }`. Correct by default, unconfigurable above it.
+   */
+  compaction?: CompactionConfigInput;
+  /**
+   * Post-construction hook (`managed-agent.ts:736`: `return config.setUp(this)`).
+   *
+   * TODO(core-init): nothing in the repo sets it — no host, manager path, or validator. It works
+   * when passed; it simply has no producer, so a customisation here is unreachable from every
+   * product surface today.
+   */
+  setUp?: (instance: T) => T;
   /** Toolset family (root/explore/internal/general). */
   toolsetProfile?: AgentToolsetProfile;
   /** Profile id used for log/task attribution. */
@@ -194,19 +210,25 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   modelStyle?: ModelStyle;
   modelBaseURL?: string;
   modelApiKey?: string;
-  setUp?: (instance: T) => T;
   /**
    * Additional skill directories to scan (before defaults). Relative paths resolve
    * against CoreEnv `rootPath`. When unset, defaults to `AGENT_SKILL_DIRS`,
    * `~/.agents/skills`, and `.agents/skills`. e.g. add `.cursor/skills` or
    * `.opencode/skills` to reuse skills written for other harnesses.
+   *
+   * TODO(core-init): no host seam. `AgentSessionCreateOptions` has no `skillDirs` and no host
+   * parses a `--skill-dirs` flag, so the only routes are `AGENT_SKILL_DIRS` or a programmatic
+   * `createManagedAgent`.
    */
   skillDirs?: string[];
-  compaction?: CompactionConfigInput;
   mcpConfigPath?: string;
   /**
    * Explicit MCP servers for this agent, replacing the config file when non-empty.
    * See `AgentSessionCreateOptions.mcpServers` — this is the same option one layer down.
+   *
+   * TODO(core-init): reachable from ACP and the agent server only. Neither the CLI TUI nor the
+   * extension/playground adapters ever pass it (`session-bootstrap.ts` has no `mcpServers`), so
+   * those hosts always fall back to `.agents/mcp.json`.
    */
   mcpServers?: Record<string, McpServerConfig>;
   /**
@@ -222,6 +244,11 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    * Custom tools for subagents. When set, `spawnSubagent` will use these
    * instead of the default subagent tools. Pass `null` to clear all tools,
    * or omit to use the default read-only + web subagent tools.
+   *
+   * TODO(core-init): no host-level way to set this. `AgentSessionCreateOptions` has no
+   * `subagentTools`, so only a programmatic `createManagedAgent` / `spawnSubagent` caller can —
+   * in-repo that is the subagent runner's own override and tests. The DEFAULT set is built by
+   * `toolset-factory` (explore profile); `spawnSubagent` applies this override on top of it.
    */
   subagentTools?: ToolsRecord | null;
   /**

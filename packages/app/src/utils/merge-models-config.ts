@@ -24,6 +24,11 @@
  *   connection rather than jumping to entry 0, and the previous model is kept
  *   when the new entry still offers it.
  *
+ * NOTE: `global` survives a save but can never be EDITED by this path — it is carried across by
+ * reference (below) so a hand-written block is not destroyed. `global.toolConfig` (the only key the
+ * schema declares) is therefore invisible in the UI: a user cannot discover or change it from the
+ * app, only by editing the file.
+ *
  * Pure: no fs, no env, no validation. `parseModelsConfig` has already validated
  * the draft, so `draft.models` holds exactly one well-formed entry.
  */

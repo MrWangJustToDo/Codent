@@ -8,11 +8,19 @@
 
 import type { AcpModelOverride } from "@codent/acp";
 
-export async function runAcpCommand(model?: AcpModelOverride, options: { clientEnv?: boolean } = {}): Promise<never> {
+export async function runAcpCommand(
+  model?: AcpModelOverride,
+  options: { clientEnv?: boolean; systemPrompt?: string; maxIterations?: number } = {}
+): Promise<never> {
   const { bootstrapAcpAgent, runAcpAgentStdio } = await import("@codent/acp");
+  // The model connection, `--system` and `--max-iterations` are the settings `AcpAgentDefaults`
+  // can carry. Everything else a `codent` invocation parses (MCP config, extension dirs, resume
+  // flags) is client-owned in ACP: those arrive over the protocol, per session.
   const bootOptions = {
     ...(model ? { model } : {}),
     ...(options.clientEnv ? { clientEnv: true } : {}),
+    ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+    ...(options.maxIterations !== undefined ? { maxIterations: options.maxIterations } : {}),
   };
   const acpOptions = await bootstrapAcpAgent(bootOptions);
   const connection = runAcpAgentStdio(acpOptions);

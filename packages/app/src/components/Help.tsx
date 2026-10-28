@@ -1,4 +1,9 @@
-import { DEFAULT_BASE_URLS, DEFAULT_LOCAL_OPENAI_BASE_URL } from "@codent/core";
+import {
+  DEFAULT_AGENT_MAX_ITERATIONS,
+  DEFAULT_BASE_URLS,
+  DEFAULT_LOCAL_OPENAI_BASE_URL,
+  MAX_AGENT_ITERATIONS,
+} from "@codent/core";
 import { Box, Text } from "ink";
 import { useEffect } from "react";
 
@@ -18,10 +23,11 @@ export const Help = () => {
   const shortcutSections = getKeyboardShortcutSections();
   // Cosmetic host identity. `productName` is the host's own name (`codent` for
   // the bundled release host, `@codent/cli` for the development host), and
-  // `remotePlanes: false` hides the remote flags a host cannot honour.
+  // `remotePlanes: false` hides the remote WORKSPACE flags a host cannot honour
+  // (`--remote-env` / `--remote-session`; `--remote-provider` is core and always available).
   const name = config.productName || "codent";
   const remotePlanes = config.remotePlanes !== false;
-  // The ACP subcommand is wired only by the release host; `acp: true` opts in.
+  // `bootstrapCliHost` sets this because the shared CLI shell owns the `codent acp` intercept.
   const acp = config.acp === true;
 
   // `--help` used to render and then hang: nothing in this branch ever ended the
@@ -95,7 +101,7 @@ export const Help = () => {
             <Box width={24}>
               <Text color={COLORS.success}>--max-iterations</Text>
             </Box>
-            <Text>Max agent loop iterations (default: 50)</Text>
+            <Text>{`Max agent loop iterations (default: ${DEFAULT_AGENT_MAX_ITERATIONS}, max: ${MAX_AGENT_ITERATIONS})`}</Text>
           </Box>
           <Box>
             <Box width={24}>
@@ -113,12 +119,6 @@ export const Help = () => {
               </Box>
               <Box>
                 <Box width={24}>
-                  <Text color={COLORS.success}>--remote-provider</Text>
-                </Box>
-                <Text>Remote LLM provider URL (orthogonal to --remote-env)</Text>
-              </Box>
-              <Box>
-                <Box width={24}>
                   <Text color={COLORS.success}>--remote-session</Text>
                 </Box>
                 <Text>Remote Agent Session URL (orthogonal to --remote-env)</Text>
@@ -127,9 +127,9 @@ export const Help = () => {
           )}
           <Box>
             <Box width={24}>
-              <Text color={COLORS.success}>-d, --debug</Text>
+              <Text color={COLORS.success}>--remote-provider</Text>
             </Box>
-            <Text>Enable debug logging</Text>
+            <Text>Remote LLM provider URL (workspace-independent)</Text>
           </Box>
           <Box>
             <Box width={24}>
@@ -158,11 +158,11 @@ export const Help = () => {
             <Text color={COLORS.primary}>MODEL=anthropic/claude-3.5-sonnet</Text>
             <Text color={COLORS.primary}>BASE_URL=https://openrouter.ai/api/v1</Text>
             <Text color={COLORS.primary}>API_KEY=sk-or-v1-xxx</Text>
-            <Text color={COLORS.primary}>maxIterations=30</Text>
+            <Text color={COLORS.primary}>MAX_ITERATIONS=30</Text>
+            <Text color={COLORS.primary}>REMOTE_PROVIDER=http://localhost:3100</Text>
             {remotePlanes && (
               <>
                 <Text color={COLORS.primary}>REMOTE_ENV=http://localhost:3100</Text>
-                <Text color={COLORS.primary}>REMOTE_PROVIDER=http://localhost:3100</Text>
                 <Text color={COLORS.primary}>REMOTE_SESSION=http://localhost:3100</Text>
               </>
             )}

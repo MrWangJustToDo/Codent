@@ -57,6 +57,7 @@ import type {
   StopReason,
 } from "@agentclientprotocol/sdk";
 import type {
+  AgentToolConfig,
   McpServerConfig,
   AgentSession,
   AgentSessionHost,
@@ -179,6 +180,10 @@ export interface AcpAgentDefaults {
   modelBaseURL?: string;
   modelApiKey?: string;
   modelInfo?: ModelInfo;
+  /** Omit for core's `DEFAULT_AGENT_MAX_ITERATIONS` (the schema default). */
+  maxIterations?: number;
+  /** Websearch secrets / provider preference for every session (from models.json or an embedder). */
+  toolConfig?: AgentToolConfig;
   systemPrompt?: string;
 }
 
@@ -351,6 +356,9 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   };
 
   const sessionSystemPrompt = async (sessionRoot: string, runtime: SessionRuntime): Promise<string | undefined> => {
+    // A `--system` override is a per-ROOT decision: a session whose `cwd` differs rebuilds the
+    // built-in prompt from that workspace, so only the process root keeps the override. Carrying a
+    // customised prompt across roots would need a template/builder on `AcpAgentDefaults`.
     if (sessionRoot === rootPath) return options.defaults.systemPrompt;
     const env = runtime.host.getEnv?.();
     // A host that cannot expose its env (an embedder) cannot rebuild the prompt; the boot prompt is
@@ -737,6 +745,8 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ...(options.defaults.modelBaseURL ? { modelBaseURL: options.defaults.modelBaseURL } : {}),
       ...(options.defaults.modelApiKey ? { modelApiKey: options.defaults.modelApiKey } : {}),
       ...(options.defaults.modelInfo ? { modelInfo: options.defaults.modelInfo } : {}),
+      ...(options.defaults.maxIterations !== undefined ? { maxIterations: options.defaults.maxIterations } : {}),
+      ...(options.defaults.toolConfig ? { toolConfig: options.defaults.toolConfig } : {}),
       // A different `cwd` gets the default prompt built from ITS workspace (the boot prompt was
       // built from the process root, so reusing it would embed the wrong project instructions).
       ...(systemPrompt ? { systemPrompt } : {}),

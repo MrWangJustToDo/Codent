@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   AgentManager,
   AgentStreamHub,
+  DEFAULT_AGENT_MAX_ITERATIONS,
   TodoManager,
   UsageTracker,
   createLocalAgentSessionHost,
@@ -295,6 +296,8 @@ registerCoreEnv({
 });
 
 const { session } = await host.create({ name: "root", model: "test-model" });
+// The host materializes core's ONE default; it must not carry a second copy of the number.
+assert.equal(lastCreateConfig.maxIterations, DEFAULT_AGENT_MAX_ITERATIONS, "an omitted budget is the core default");
 assert.equal(session.getSnapshot().name, "root");
 assert.equal((await host.list()).length, 1);
 assert.equal((await host.list())[0].agentId, session.id);
@@ -317,9 +320,11 @@ const builtins = { lsp: false, skills: false, memory: false, mcp: false, codeMod
 const withOptions = await host.create({
   name: "with-options",
   model: "test-model",
+  maxIterations: 7,
   extensions: [extensionFactory],
   builtins,
 });
+assert.equal(lastCreateConfig.maxIterations, 7, "an explicit budget is passed through unchanged");
 assert.equal(lastCreateConfig.extensions?.[0], extensionFactory, "extension factories reach ManagedAgentConfig");
 assert.deepEqual(lastCreateConfig.lsp, builtins.lsp, "lsp toggle reaches ManagedAgentConfig");
 assert.deepEqual(lastCreateConfig.skills, builtins.skills, "skills toggle reaches ManagedAgentConfig");

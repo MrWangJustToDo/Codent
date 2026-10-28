@@ -77,8 +77,10 @@ export async function applyModelSelection(
     return { ok: false, error: result.error ?? "Failed to switch model" };
   }
 
-  // Keep the app config (footer / help / usage) and the active entry in sync so a
-  // restart resumes at this model.
+  // Keep the app config (footer / help / usage) and the in-memory active entry in sync for the
+  // rest of THIS process. Nothing here writes `models.json`: a restart resumes the model through
+  // the session snapshot (`SessionData.model`) when that session is resumed, and a brand-new
+  // session starts from the file's last save (see `ModelsConfigActive.model`).
   useConfig.getActions().selectModel(entryIndex, model, entry);
   return { ok: true };
 }

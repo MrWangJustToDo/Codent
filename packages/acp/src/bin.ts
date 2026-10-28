@@ -9,8 +9,15 @@ import { installAgentLogProcessGuards, parseModelStyle } from "@codent/core";
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
 import { runAcpAgentStdio } from "./stdio.js";
 
-/** Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`, `--api-key/-k`, `--remote-provider`). */
-function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
+/**
+ * Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`,
+ * `--api-key/-k`, `--remote-provider`, `--system/-s`, `--max-iterations`).
+ */
+function parseFlags(argv: string[]): {
+  model?: AcpModelOverride;
+  systemPrompt?: string;
+  maxIterations?: number;
+} {
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -31,13 +38,23 @@ function parseModelFlags(argv: string[]): AcpModelOverride | undefined {
   };
   const remoteProvider = get("remote-provider") || process.env.REMOTE_PROVIDER;
   const model = get("model", "m");
-  if (!model && !remoteProvider) return undefined;
+  const systemPrompt = get("system", "s");
+  const rawIterations = get("max-iterations");
+  const maxIterations = rawIterations !== undefined ? Number(rawIterations) : undefined;
   return {
-    ...(model ? { model } : {}),
-    style: parseModelStyle(get("style")),
-    baseURL: get("base-url", "url", "u"),
-    apiKey: get("api-key", "k"),
-    ...(remoteProvider ? { remoteProvider } : {}),
+    ...(model || remoteProvider
+      ? {
+          model: {
+            ...(model ? { model } : {}),
+            style: parseModelStyle(get("style")),
+            baseURL: get("base-url", "url", "u"),
+            apiKey: get("api-key", "k"),
+            ...(remoteProvider ? { remoteProvider } : {}),
+          },
+        }
+      : {}),
+    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(maxIterations !== undefined && Number.isFinite(maxIterations) ? { maxIterations } : {}),
   };
 }
 
@@ -49,10 +66,13 @@ async function main(): Promise<void> {
   installAgentLogProcessGuards();
 
   const argv = process.argv.slice(2);
+  const flags = parseFlags(argv);
   const options = await bootstrapAcpAgent({
-    model: parseModelFlags(argv),
+    ...(flags.model ? { model: flags.model } : {}),
     // Opt-in: without it the env planes are byte-for-byte what they were before this flag existed.
     clientEnv: argv.includes("--client-env"),
+    ...(flags.systemPrompt ? { systemPrompt: flags.systemPrompt } : {}),
+    ...(flags.maxIterations !== undefined ? { maxIterations: flags.maxIterations } : {}),
   });
   const connection = runAcpAgentStdio(options);
 

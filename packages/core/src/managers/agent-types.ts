@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { REASONING_EFFORT_VALUES } from "../models/types.js";
-import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
+import { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
 
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -9,10 +9,14 @@ import type { ModelMessage } from "@tanstack/ai";
 // Agent Config
 // ============================================================================
 
-/** Default maximum agentic-loop iterations for the main agent run loop (defined in runtime-types, re-exported for manager-side consumers). */
-export { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
+/** Agent-loop iteration limits (defined in runtime-types, re-exported for manager-side consumers). */
+export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
 
 export const AgentConfigSchema = z.object({
+  // The schema is where a config key becomes REAL: `ManagedAgent` re-parses every config through
+  // it, and a Zod object strips keys it does not declare. `ManagedAgentConfig`'s extras survive
+  // because the constructor spreads the raw config first; `updateConfig(Partial<AgentConfig>)`
+  // can only touch what is declared here.
   model: z.string().min(1).describe("Model name to use"),
   modelStyle: z.enum(["openai", "anthropic"]).optional().describe("API style (OpenAI-compatible or Anthropic)"),
   modelBaseURL: z.string().optional().describe("Base URL for the model API"),
@@ -28,7 +32,7 @@ export const AgentConfigSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(100)
+    .max(MAX_AGENT_ITERATIONS)
     .optional()
     .default(DEFAULT_AGENT_MAX_ITERATIONS)
     .describe("Maximum agentic loop iterations"),
@@ -43,10 +47,17 @@ export const AgentConfigSchema = z.object({
     .optional()
     .describe("Max concurrent `task` subagents per parent (default 4; values below 1 treated as 1)"),
   maxTokens: z.number().int().min(1).optional().describe("Maximum tokens per response"),
+  // TODO(core-init): reachable only from a direct `createManagedAgent` caller (tests / embedders).
+  // `AgentSessionCreateOptions` has no `temperature` / `maxTokens` and no host parses a flag for
+  // them, so product hosts always run the provider defaults. They ARE consumed one layer down
+  // (`run-agent.ts` → `AgentRunner`): a missing host seam, not an inert field.
   temperature: z.number().min(0).max(2).optional().describe("Sampling temperature"),
   reasoningEffort: z
     .enum(REASONING_EFFORT_VALUES)
     .optional()
+    // Set at RUNTIME only (`effort.set`, `/models`, ACP's `thought_level`): the field is not on
+    // `AgentSessionCreateOptions`, so no host can choose a depth at creation. When unset,
+    // `run-agent.ts` applies the model metadata's `reasoningConfig.defaultEffort`.
     .describe("Reasoning effort level for reasoning-capable models"),
 });
 

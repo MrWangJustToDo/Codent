@@ -13,11 +13,20 @@ export interface AppConfig {
   baseURL: string;
   apiKey: string;
   systemPrompt: string;
+  /**
+   * Positional CLI argument — sent as the first message once the session is ready.
+   *
+   * TODO(app-config): "once" is enforced by a `useRef` guard in
+   * `use-agent-input-controls.ts`, and it is per MOUNT, not per session. A runtime rebuild (the
+   * effect that depends on `systemPrompt` / `maxIterations` / `mcpConfigPath`) creates a fresh
+   * session but does NOT re-send it, whereas an unmount/remount (the editor handoff,
+   * `beginRuntimeSuspend`) DOES re-mount the hook and re-sends the prompt into the existing
+   * conversation. So the initial prompt can be delivered twice across an editor round-trip.
+   */
   initialPrompt: string;
   maxIterations: number;
   /** Max concurrent `task` subagents under this agent (core default 4). */
   maxConcurrentTasks?: number;
-  debug: boolean;
   mcpConfigPath: string;
   /**
    * Extra extension directories (comma-separated on CLI as `--extension-dirs`).
@@ -33,16 +42,21 @@ export interface AppConfig {
    */
   productName?: string;
   /**
-   * Whether this host can talk to the remote planes (`--remote-env` /
-   * `--remote-provider` / `--remote-session`). Undefined means yes — every
-   * development host has them. The bundled release host sets `false`, and the
-   * help screen then omits flags it cannot honour.
+   * Whether this host carries the remote WORKSPACE planes (`--remote-env` / `--remote-session`).
+   *
+   * `bootstrapCliHost` derives it from the injected `@codent/server/client` factories, so the
+   * bundled release host — which deliberately omits them — does not advertise flags that would only
+   * exit(1). `undefined` means "unknown host" (extension / playground) and keeps the flags visible.
+   *
+   * `--remote-provider` is NOT covered: `createRemoteProvider` lives in core (global fetch only), so
+   * it works in every host and is always shown.
    */
   remotePlanes?: boolean;
   /**
-   * Whether this host serves the Agent Client Protocol over stdio (`codent acp`) for
-   * editors / ACP clients. Undefined means no — only the release host wires the ACP
-   * subcommand, so the help screen omits it elsewhere.
+   * Whether this host serves the Agent Client Protocol over stdio (`codent acp`).
+   *
+   * The subcommand lives in the shared CLI shell, not in an injected factory, so
+   * `bootstrapCliHost` sets it for every host that runs this shell. `undefined` means no.
    */
   acp?: boolean;
   /**

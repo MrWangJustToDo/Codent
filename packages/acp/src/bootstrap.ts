@@ -24,6 +24,7 @@ import {
   createDirectModelProvider,
   getModelProvider,
   loadModels,
+  MAX_AGENT_ITERATIONS,
   registerCoreEnv,
   registerModelProvider,
   registerModelProviderForEntry,
@@ -39,6 +40,7 @@ import { resolveRoot } from "./paths.js";
 import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
 import type {
   AgentSessionHost,
+  AgentToolConfig,
   ModelProvider,
   ModelStyle,
   ModelCatalogRead,
@@ -95,10 +97,18 @@ export interface LocalAcpBootstrap {
 export async function bootstrapLocalAcp(
   options: {
     cwd?: string;
+    // TODO(acp-init): no entry point ever passes `sandbox` — `bin.ts` sends only `model` +
+    // `clientEnv`, and `cli/src/acp-command.ts` the same — so the ACP host always takes the
+    // `SANDBOX_ENV` env fallback below. There is no `--sandbox` flag, while the CLI TUI has the
+    // same env-only rule (`host.tsx`), so this is consistent but equally unconfigurable per launch.
     sandbox?: "local" | "native";
     model?: AcpModelOverride;
     /** `--client-env`: build each session's env from the ACP client's fs/terminal capabilities. */
     clientEnv?: boolean;
+    /** `--system` / `-s`: replaces the built-in prompt for this root (see `sessionSystemPrompt`). */
+    systemPrompt?: string;
+    /** `--max-iterations`: per-session agent-loop budget; default is core's schema default. */
+    maxIterations?: number;
   } = {}
 ): Promise<LocalAcpBootstrap> {
   // Normalized to absolute HERE, at the boundary that accepts a caller-supplied `cwd`: everything
@@ -116,6 +126,9 @@ export async function bootstrapLocalAcp(
   let baseURL: string | undefined;
   let apiKey: string | undefined;
   let modelInfo: AcpAgentDefaults["modelInfo"];
+  // `models.json` is the only plane that can carry global tool settings; the flag/`.env` planes
+  // deliberately skip that file, so this stays undefined there.
+  let fileToolConfig: AgentToolConfig | undefined;
   // Built only on the `models.json` path: the flags path deliberately skips that file, and the
   // `.env` fallback has no list at all — so neither can offer a choice.
   /** The one model CATALOG every plane produces; carried by the runtime and projected by the host. */
@@ -197,6 +210,11 @@ export async function bootstrapLocalAcp(
     try {
       const loaded = await loadModels({ kind: "file", env });
       if (loaded) {
+        // The file's `global.toolConfig` is this host's websearch configuration, the same role it
+        // plays in the TUI. Runtime knobs are NOT in the file (see `ModelsConfigGlobal`): the
+        // prompt comes from `--system`, the iteration budget from `--max-iterations`.
+        const globalToolConfig = loaded.config.global?.toolConfig;
+        if (globalToolConfig) fileToolConfig = { websearch: globalToolConfig };
         const entry = loaded.entries[loaded.active.entryIndex];
         const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
         if (entry && activeModel) {
@@ -253,6 +271,15 @@ export async function bootstrapLocalAcp(
     throw new Error(
       `ACP host requires a model — pass --model (with --base-url / --api-key), set \`${AGENT_DATA_DIR}/config/models.json\`, or set MODEL/BASE_URL/API_KEY in .env.`
     );
+  }
+
+  if (
+    options.maxIterations !== undefined &&
+    (!Number.isInteger(options.maxIterations) ||
+      options.maxIterations < 1 ||
+      options.maxIterations > MAX_AGENT_ITERATIONS)
+  ) {
+    throw new Error(`--max-iterations must be an integer between 1 and ${MAX_AGENT_ITERATIONS}.`);
   }
 
   const agent = await CodentAgent.create({
@@ -386,7 +413,12 @@ export async function bootstrapLocalAcp(
       ...(baseURL ? { modelBaseURL: baseURL } : {}),
       ...(apiKey ? { modelApiKey: apiKey } : {}),
       ...(modelInfo ? { modelInfo } : {}),
-      systemPrompt: await buildDefaultSystemPrompt(),
+      ...(options.maxIterations !== undefined ? { maxIterations: options.maxIterations } : {}),
+      ...(fileToolConfig ? { toolConfig: fileToolConfig } : {}),
+      // `--system` overrides the built-in prompt for the process root. A session whose `cwd`
+      // differs gets a prompt rebuilt from THAT workspace (see `sessionSystemPrompt`), which is
+      // why the override is carried here rather than as one string for every root.
+      systemPrompt: options.systemPrompt?.trim() ? options.systemPrompt : await buildDefaultSystemPrompt(),
     },
   };
 }
@@ -400,6 +432,10 @@ export async function bootstrapAcpAgent(
     model?: AcpModelOverride;
     /** `--client-env`: borrow the client's fs/terminal for each session. */
     clientEnv?: boolean;
+    /** `--system` / `-s`: overrides the built-in system prompt for the process root. */
+    systemPrompt?: string;
+    /** `--max-iterations`: per-session agent-loop budget (1..MAX_AGENT_ITERATIONS). */
+    maxIterations?: number;
   } = {}
 ): Promise<AcpAgentOptions> {
   const boot = await bootstrapLocalAcp(options);
@@ -409,6 +445,10 @@ export async function bootstrapAcpAgent(
     rootPath: boot.rootPath,
     ...(boot.models ? { models: boot.models } : {}),
     ...(boot.modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex: boot.modelsDefaultEntryIndex } : {}),
+    // TODO(acp-init): dead in practice — neither caller (`bin.ts`, `cli/src/acp-command.ts`) passes
+    // `version`, so `AcpAgentOptions.version` is always undefined and `agent.ts` falls back to the
+    // hard-coded `"0.0.1"` it reports as `agentInfo.version` to every ACP client. `cliVersion()`
+    // exists in `@codent/cli` and is exactly what should be forwarded here.
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
     ...(boot.listPersistedSessionsAt ? { listPersistedSessionsAt: boot.listPersistedSessionsAt } : {}),

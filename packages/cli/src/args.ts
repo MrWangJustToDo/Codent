@@ -1,4 +1,4 @@
-import { parseModelStyle, resolveModelConnection } from "@codent/core";
+import { DEFAULT_AGENT_MAX_ITERATIONS, parseModelStyle, resolveModelConnection } from "@codent/core";
 import { createRequire } from "node:module";
 
 import { parseModelInfoFromEnv } from "./model-env.js";
@@ -10,14 +10,27 @@ import type { ModelStyle } from "@codent/core";
 // Argument Parsing
 // ============================================================================
 
-/** Default max iterations for the CLI host agent loop. */
-export const CLI_DEFAULT_MAX_ITERATIONS = 50;
-
 interface ParsedArgs {
   positional: string[];
   flags: Record<string, string | boolean>;
 }
 
+/**
+ * TODO(cli-args): this hand-rolled parser DROPS input silently in three reachable shapes:
+ *
+ * 1. A value starting with `-` is consumed as the NEXT flag, not as a value. `--max-iterations -1`
+ *    parses as `max-iterations: true` plus a flag literally named `1`, so `getFlagNumber` falls
+ *    back to the default and the user's `-1` is gone with no error. Same for any model id, path or
+ *    prompt that starts with `-`.
+ * 2. A positional (the initial prompt) starting with `-` is swallowed as a flag too, so
+ *    `codent "--fix the bug"` sends no prompt at all — it just sets `true` under some key.
+ * 3. Unknown flags (`--max-iteration` typo, `--model=x` equals-form) are accepted into `flags`
+ *    and never read by anything. Nothing validates the flag set, so a typo is indistinguishable
+ *    from "accepted but ignored" and the default silently applies.
+ *
+ * Fix by using a real parser, or at minimum: treat a leading `-` as a flag only when it names a
+ * known flag, reject unknown flags, and support `--flag=value`.
+ */
 function parseArgs(args: string[]): ParsedArgs {
   const result: ParsedArgs = { positional: [], flags: {} };
   let i = 0;
@@ -93,6 +106,8 @@ const getEnv = (key: string, fallback: string = ""): string => process.env[key] 
 // ============================================================================
 
 export interface ParsedCliConfig extends Partial<AppConfig> {
+  /** Always resolved (flag > env > core default), so a host never has to re-apply a fallback. */
+  maxIterations: number;
   /** CoreEnv workspace remote URL (`--remote-env` / REMOTE_ENV). */
   remoteEnv?: string;
   /** Remote model provider URL (`--remote-provider` / REMOTE_PROVIDER). Orthogonal to CoreEnv. */
@@ -111,7 +126,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
 
   const envModel = getEnv("MODEL") || getEnv("model");
   const envMaxIterations = getEnv("MAX_ITERATIONS") || getEnv("maxIterations");
-  const envMaxIter = envMaxIterations ? parseInt(envMaxIterations, 10) : CLI_DEFAULT_MAX_ITERATIONS;
+  const envMaxIter = envMaxIterations ? parseInt(envMaxIterations, 10) : DEFAULT_AGENT_MAX_ITERATIONS;
   const envMaxConcurrentTasks = getEnv("MAX_CONCURRENT_TASKS") || getEnv("maxConcurrentTasks");
 
   const cliStyle = parseCliStyle(getFlagString(parsed, "", "style"));
@@ -187,16 +202,24 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     "max-concurrent-tasks"
   );
 
+  // NOTE: `codent acp` re-parses this same result but forwards only the settings its own host has
+  // a seam for (model connection + `--system` / `--max-iterations` / `--client-env`). The session
+  // library, MCP config, extension dirs and resume flags are ACP-client concerns; `host.tsx`
+  // documents the split.
   return {
     model: connection.model,
     style: connection.style,
     baseURL: connection.baseURL,
     apiKey: connection.apiKey,
+    // Runtime knobs are flag > env > default (no models.json copy — see `ModelsConfigGlobal`).
     systemPrompt: getFlagString(parsed, "", "system", "s"),
     initialPrompt: parsed.positional.join(" "),
-    maxIterations: getFlagNumber(parsed, isNaN(envMaxIter) ? CLI_DEFAULT_MAX_ITERATIONS : envMaxIter, "max-iterations"),
+    maxIterations: getFlagNumber(
+      parsed,
+      isNaN(envMaxIter) ? DEFAULT_AGENT_MAX_ITERATIONS : envMaxIter,
+      "max-iterations"
+    ),
     ...(Number.isFinite(maxConcurrentTasks) ? { maxConcurrentTasks } : {}),
-    debug: getFlagBoolean(parsed, "debug", "d"),
     mcpConfigPath: getFlagString(parsed, envMcpConfig, "mcp-config"),
     extensionDirs,
     continueSession: getFlagBoolean(parsed, "continue", "c"),

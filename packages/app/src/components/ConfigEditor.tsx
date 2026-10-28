@@ -30,6 +30,16 @@ import type { ModelsConfig, ModelsConfigEntry } from "@codent/core";
 //   current `models.json` and treats the form's output as the edited entry's
 //   connection (see `utils/merge-models-config.ts`), so the save keeps the rest
 //   of the file. The chrome drops the first-run framing.
+//
+// TODO(models-config): this wizard is the file's only UI, and it can only reach `models[i]`
+// (`style` / `baseURL` / `apiKey` / `models`). It has NO field for `global.toolConfig` (websearch
+// keys/provider), so that block is hand-edit-only; `firstRun` also writes a document with neither
+// `global` nor `active` (`parseDraft` below), so a fresh install has no place for it to live.
+//
+// It also only ever emits a `direct` entry, so the schema's other member — `remote-provider`
+// (`RemoteProviderConfigEntry`: a server URL that holds the keys) — has no UI at all and must be
+// hand-written. Same for adding a SECOND entry: the edit path replaces the active one
+// (`mergeModelsConfig`), so a multi-entry config is authored outside the app.
 // ============================================================================
 
 type StyleChoice = "openai" | "anthropic";
@@ -105,6 +115,9 @@ function parseDraft(draft: Draft, parse: ConfigEditorProps["parseModelsConfig"])
   if (models.length === 0) return null;
   if (!draft.baseURL.trim()) return null;
   try {
+    // Emits `{ models: [entry] }` only — no `global`, no `active`. Harmless on first run (there is
+    // nothing to lose); a first-run install simply has no `active.model` until a save through the
+    // edit path writes one, and the pipeline then starts at entry 0 / the entry's first id.
     return parse(
       JSON.stringify({
         models: [

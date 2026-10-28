@@ -40,6 +40,7 @@ import {
   createRemoteProvider,
   installAgentLogProcessGuards,
   loadModelsConfigFromFile,
+  MAX_AGENT_ITERATIONS,
   parseModelsConfig,
   registerCoreEnv,
   registerModelProvider,
@@ -92,6 +93,15 @@ function hideNativeCursor(): void {
   }
 }
 
+/** Reject an iteration budget the schema would reject, with the bound the user can act on. */
+function assertMaxIterations(productName: string, value: number): void {
+  if (Number.isInteger(value) && value >= 1 && value <= MAX_AGENT_ITERATIONS) return;
+  console.error(
+    `[${productName}] --max-iterations must be an integer between 1 and ${MAX_AGENT_ITERATIONS} (got ${value}).`
+  );
+  process.exit(1);
+}
+
 /**
  * Bootstrap the CLI host and render the TUI. Resolves once the TUI is mounted;
  * the process stays alive via the ink renderer and exits through the adapter's
@@ -114,8 +124,14 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // `codent acp` — headless Agent Client Protocol server. Intercepted before the
   // TUI boots: stdout must carry only JSON-RPC frames (never a rendered transcript).
   // Flags after the subcommand configure the model directly (`codent acp --model …`).
+  //
+  // The ACP host has its own session seam, so this branch forwards exactly the parsed settings it
+  // can honour: the model connection, `--system` and `--max-iterations`. The rest
+  // (`--mcp-config`, `--max-concurrent-tasks`, `--extension-dirs`, `--resume`, `--continue`) is
+  // client-owned in ACP — sessions, MCP servers and workspace roots arrive over the protocol.
   if (isAcpRequested(argv)) {
     const acpConfig = parseCliArgs(argv.slice(1));
+    assertMaxIterations(options.productName, acpConfig.maxIterations);
     await runAcpCommand(
       acpConfig.modelExplicit || acpConfig.remoteProvider
         ? {
@@ -127,17 +143,27 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
           }
         : undefined,
       // `--client-env` opts into borrowing the client's fs/terminal per session.
-      { clientEnv: argv.includes("--client-env") }
+      {
+        clientEnv: argv.includes("--client-env"),
+        ...(acpConfig.systemPrompt ? { systemPrompt: acpConfig.systemPrompt } : {}),
+        maxIterations: acpConfig.maxIterations,
+      }
     );
   }
 
   const appConfig = parseCliArgs(argv);
+  assertMaxIterations(options.productName, appConfig.maxIterations);
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */
   let inkInstance: Instance | undefined;
 
   // Cosmetic host identity — purely display: help screen + OSC-0 terminal title.
   appConfig.productName = options.productName;
+  // Capability-derived help gating. `acp` is truthful as a constant: the subcommand lives in this
+  // shell, not in an injected factory. The remote env/session planes need `@codent/server/client`,
+  // which the release host deliberately omits — advertising them there made `--help` list flags
+  // that immediately exit(1). `--remote-provider` is NOT gated: it lives in core (global fetch).
   appConfig.acp = true;
+  appConfig.remotePlanes = Boolean(options.server?.createRemoteEnv || options.server?.createRemoteAgentSessionHost);
 
   if (isHelpRequested(argv)) {
     useConfig.getActions().setHelpRequested(true);

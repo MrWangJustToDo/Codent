@@ -37,6 +37,13 @@ import type { ModelStyle } from "../models/types.js";
 import type { ModelProvider } from "../provider/model-provider.js";
 
 /** Defaults merged into every {@link CodentAgent.createSession} call. */
+// TODO(core-init): a fully-declared, fully-unused surface. No in-repo caller passes `defaults` to
+// `CodentAgent.create` — the CLI adapter, both browser adapters, the ACP bootstrap and the server
+// runtime all omit it — so `createSession` merges `{}` and every session setting arrives per call
+// instead. Only `validate:agent-runtime-instances` exercises it. The mechanism is live (the spread
+// in `createSession` works), so this is "no host wires it", not "broken": the practical effect is
+// that a host cannot set one workspace-wide default and must repeat the options on every
+// `host.create` — which is exactly what `packages/app/src/adapter/session-bootstrap.ts` does.
 export interface CodentAgentDefaults {
   systemPrompt?: string;
   maxIterations?: number;
@@ -60,16 +67,32 @@ export interface CodentAgentDefaults {
 export type ModelCatalogRead = Pick<LoadedModelsState, "entries">;
 
 export interface CodentAgentOptions {
-  /** Workspace runtime (filesystem, shell, fetch). Required. */
+  /**
+   * Workspace runtime (filesystem, shell, fetch). Required.
+   *
+   * TODO(core-init): this options type has no `providerMode`. The mode is a MODEL-provider concept,
+   * and `CodentAgent.create` accepts `provider` only, so a host that builds the provider itself
+   * (every host does) cannot declare "this provider is remote" — the mode travels back out of
+   * `provider.getConnection()` and is re-read by `resolveModelConfigFromProvider`. Noted only
+   * because the two names read alike: nothing here is inert, and the `mode` on the provider is the
+   * single source.
+   */
   env: CoreEnv;
   /** LLM plane. Omit for `--remote-session` (the agent loop runs server-side). */
   provider?: ModelProvider;
   /** Convenience: build a direct provider from these fields. Ignored when `provider` is set. */
+  // TODO(core-init): unused by every in-repo caller (each passes `provider`). Only
+  // `validate:agent-runtime-instances` uses it. Kept as sugar — but note the "ignored when
+  // `provider` is set" rule is silent: passing both drops `direct` with no warning.
   direct?: { model: string; style?: ModelStyle; baseURL?: string; apiKey?: string };
-  /** Human label for the runtime (defaults to the workspace root's basename). */
+  /**
+   * Human label for the runtime (defaults to the workspace root's basename).
+   *
+   * TODO(core-init): no production reader. It lands on `AgentRuntime.name`, whose only consumer is
+   * `CodentAgent.getName()` — and no host calls that (only `validate:agent-runtime-instances`).
+   * Kept as an embedder label for a process holding several runtimes; nothing logs it today.
+   */
   name?: string;
-  /** Display/log root override (env carries the real root). */
-  rootPath?: string;
   /** Defaults merged into every session created by this runtime. */
   defaults?: CodentAgentDefaults;
   /** Advanced/test: inject a manager (must be bound to this runtime's env to isolate). */
@@ -140,7 +163,6 @@ export class CodentAgent {
       env: options.env,
       ...(provider ? { modelProvider: provider } : {}),
       ...(options.name ? { name: options.name } : {}),
-      ...(options.rootPath ? { rootPath: options.rootPath } : {}),
       ...(options.ownsEnv !== undefined ? { ownsEnv: options.ownsEnv } : {}),
       // The catalog travels with the runtime as well as with this handle: agents consult it when
       // they adopt a model they did not choose themselves (resume), and `readModels()` stays the

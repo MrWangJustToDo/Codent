@@ -10,6 +10,7 @@
 
 import { SessionStore } from "../agent/persistence/session-store.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
+import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 
 import { createLocalAgentSession } from "./local-agent-session.js";
 
@@ -67,14 +68,13 @@ function toListEntry(managed: ManagedAgent): AgentSessionListEntry {
   };
 }
 
-/** Default max iterations for the Local AgentSessionHost bootstrap. */
-const SESSION_HOST_DEFAULT_MAX_ITERATIONS = 100;
-
 function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig {
   return {
     name: options.name,
     model: options.model,
-    maxIterations: options.maxIterations ?? SESSION_HOST_DEFAULT_MAX_ITERATIONS,
+    // `AgentConfig` types this as required (the schema's `.default()` makes the parsed output
+    // non-optional), so the host materializes the ONE default constant rather than restating it.
+    maxIterations: options.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS,
     ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
     ...(options.modelStyle ? { modelStyle: options.modelStyle } : {}),
     ...(options.modelBaseURL ? { modelBaseURL: options.modelBaseURL } : {}),

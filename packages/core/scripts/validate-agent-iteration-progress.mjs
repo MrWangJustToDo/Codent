@@ -11,12 +11,40 @@ import assert from "node:assert/strict";
 
 import {
   AGENT_EVENT_META,
+  AgentConfigSchema,
   AgentLog,
+  DEFAULT_AGENT_MAX_ITERATIONS,
   DEFAULT_AGENT_SESSION_CHANNELS,
+  MAX_AGENT_ITERATIONS,
   ManagedAgent,
   createAgentEventBus,
   createLifecycleMiddleware,
 } from "../dist/dev.mjs";
+
+// --- ONE iteration default and ONE ceiling ----------------------------------
+//
+// The budget used to be restated in four places (core schema 10, session host 100, CLI 50, app 50).
+// The schema default IS the product default now; hosts omit the option when the user set nothing,
+// and every validator/CLI/help string reads these constants instead of a literal.
+assert.equal(
+  AgentConfigSchema.parse({ model: "m" }).maxIterations,
+  DEFAULT_AGENT_MAX_ITERATIONS,
+  "the schema default is the single agent-loop default"
+);
+assert.ok(
+  Number.isInteger(MAX_AGENT_ITERATIONS) && MAX_AGENT_ITERATIONS >= DEFAULT_AGENT_MAX_ITERATIONS,
+  "the ceiling is a real upper bound"
+);
+assert.equal(
+  AgentConfigSchema.parse({ model: "m", maxIterations: MAX_AGENT_ITERATIONS }).maxIterations,
+  MAX_AGENT_ITERATIONS,
+  "the ceiling itself is accepted"
+);
+assert.throws(
+  () => AgentConfigSchema.parse({ model: "m", maxIterations: MAX_AGENT_ITERATIONS + 1 }),
+  /Too big/i,
+  "one above the ceiling is rejected, not clamped"
+);
 
 // --- channel / meta wiring ---------------------------------------------------
 

@@ -68,7 +68,6 @@ const AgentBootstrap = () => {
         style,
         baseURL,
         apiKey,
-        debug: false,
       });
       if (currentInitId !== initIdRef.current) return;
 

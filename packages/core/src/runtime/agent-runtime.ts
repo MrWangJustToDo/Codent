@@ -26,8 +26,6 @@ export interface AgentRuntimeOptions {
   modelProvider?: ModelProvider;
   /** Human label; defaults to the workspace root's basename. */
   name?: string;
-  /** Override the workspace root used for display/naming (env carries the real root). */
-  rootPath?: string;
   /**
    * Whether this runtime owns the env lifecycle. Default `false`: the host that built the
    * env (a borrowed remote env for `--remote-env` / `--remote-session`, or a host-supplied
@@ -60,7 +58,9 @@ export class AgentRuntime {
     // Resolve defaults once so tools read a fully-formed env off the runtime.
     this.env = resolveCoreEnv(options.env);
     this.modelProvider = options.modelProvider;
-    this.rootPath = options.rootPath ?? this.env.rootPath;
+    // The workspace root is the env's: an option here could only rename a display value while the
+    // tools kept using `env.rootPath`, which is a trap rather than a feature.
+    this.rootPath = this.env.rootPath;
     this.name = options.name?.trim() || basename(this.rootPath) || "agent";
     this.ownsEnv = options.ownsEnv ?? false;
     this.models = options.models;

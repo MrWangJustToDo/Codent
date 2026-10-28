@@ -292,7 +292,13 @@ export const agentSessionRoutes = new Hono()
   })
   .post("/", async (c) => {
     const body = createBodySchema.parse(await c.req.json());
-    const { buildDefaultSystemPrompt, createLocalAgentSessionHost, resolveModelConfig } = await loadCore();
+    const { buildDefaultSystemPrompt, createLocalAgentSessionHost, MAX_AGENT_ITERATIONS, resolveModelConfig } =
+      await loadCore();
+    // Bounded where the request enters, so an out-of-range budget is a 400 with the bound instead
+    // of a create-time schema failure. The bound itself is core's single `MAX_AGENT_ITERATIONS`.
+    if (body.maxIterations !== undefined && body.maxIterations > MAX_AGENT_ITERATIONS) {
+      return c.json({ error: true, message: `maxIterations must be between 1 and ${MAX_AGENT_ITERATIONS}.` }, 400);
+    }
     // Explicit client model wins; otherwise use the server's own `.env` provider
     // so a `--remote-session` client can leave model configuration on the server.
     const explicitModel = body.model?.trim();
@@ -325,7 +331,14 @@ export const agentSessionRoutes = new Hono()
     const { session }: { session: SessionWithErasedSnapshot } = await host.create({
       name: body.name || "remote",
       model: connection.model,
+      // Every session setting comes from the REQUEST body or the built-in default. The server's
+      // own `.agents/config/models.json` supplies provider entries (via `loadServerModelsConfig`,
+      // for the `/models` plane) — not session config: a server serves many clients, so its file
+      // must not decide their prompts or budgets.
       systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt(undefined, getServerEnv())),
+      // No `providerMode` in the body: the server owns the connection, so `applyPersistedModel`
+      // takes the non-remote branch and adopts a resumed session's persisted model — which the
+      // server itself wrote through `model.set`, so that is the intended choice.
       maxIterations: body.maxIterations,
       ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
       mcpConfigPath: body.mcpConfigPath,

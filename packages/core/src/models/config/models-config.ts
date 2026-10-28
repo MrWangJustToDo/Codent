@@ -3,9 +3,13 @@
  *
  * A `models.json` file lives at `.agents/config/models.json` and has
  * two sections:
- * - `global`: runtime-only settings (maxIterations, mcpConfigPath, systemPrompt,
- *   toolConfig). Pure environment / server items (SERVER_PORT, ROOT_PATH, ...)
- *   stay in `.env`.
+ * - `global`: runtime-wide settings. Today that is `toolConfig` only (websearch secrets and the
+ *   preferred provider), applied when a file-backed host creates an agent. Runtime knobs such as
+ *   `maxIterations` / `mcpConfigPath` / `systemPrompt` are NOT read from this file — they belong to
+ *   the CLI/env plane (`--max-iterations` / `--mcp-config` / `--system`, `MAX_ITERATIONS`, …).
+ *   They used to be declared here and were silently ignored; they are gone from the schema so a
+ *   user cannot write a setting that does nothing. Pure environment / server items (SERVER_PORT,
+ *   ROOT_PATH, ...) stay in `.env`.
  * - `models[]`: a list of provider entries. Two kinds:
  *   - `direct`      — local keys + baseURL + optional `models[]` id list
  *   - `remote-provider` — a single server URL that holds keys / proxies traffic
@@ -49,9 +53,6 @@ export const MODELS_CONFIG_FILE = "models.json";
 const modelStyleSchema = z.enum(["openai", "anthropic"]);
 
 const globalSchema = z.object({
-  maxIterations: z.number().int().positive().optional(),
-  mcpConfigPath: z.string().min(1).optional(),
-  systemPrompt: z.string().optional(),
   toolConfig: z
     .object({
       braveApiKey: z.string().optional(),
@@ -94,13 +95,16 @@ const modelsConfigSchema = z.object({
 // ============================================================================
 
 export interface ModelsConfigGlobal {
-  maxIterations?: number;
-  mcpConfigPath?: string;
-  systemPrompt?: string;
   /**
    * Websearch secrets / preference, applied to the agent's `AgentToolConfig` at creation.
    * `provider` is the preferred provider name; `websearchProvider` is the legacy spelling
    * and is mapped onto `provider` on read (see {@link normalizeGlobalToolConfig}).
+   *
+   * Consumers: the TUI config load merges it UNDER the CLI/env value
+   * (`packages/app/src/hooks/use-config.ts`), and `codent acp` uses it as its session defaults
+   * (`packages/acp/src/bootstrap.ts`). The remote-session server deliberately does not read it —
+   * its sessions are configured by the create request body (or its own `.env`) — and it strips the
+   * block from `/api/provider/info` because it holds secrets.
    */
   toolConfig?: {
     braveApiKey?: string;
@@ -131,7 +135,14 @@ export type ModelsConfigEntry = DirectModelsConfigEntry | RemoteProviderConfigEn
 export interface ModelsConfigActive {
   /** Index into `models[]` of the last-used entry. */
   entryIndex: number;
-  /** Last-used model id within that entry. */
+  /**
+   * Last-selected model id within that entry.
+   *
+   * Written by the config editor's save path only. `/models` updates the in-memory selection (and
+   * the SESSION's persisted `model`) without rewriting this file, so after a restart a NEW session
+   * starts from the file's last save rather than the last `/models` choice. That is the current
+   * behaviour; persisting the selection would need a new writer.
+   */
   model?: string;
 }
 

@@ -28,9 +28,10 @@ import type { UIMessage } from "@tanstack/ai";
  * Per-session switches for core's built-in extensions.
  *
  * Only `false` is meaningful here: `true` (or omission) keeps the built-in's default
- * configuration, while the richer per-extension objects remain a `ManagedAgentConfig`
- * detail. A host that needs that level of tuning can still create a runtime with
- * defaults, but the session contract must cover the common "turn this off" case.
+ * configuration. The richer per-extension objects (`lsp: { enableAll }`, …) are a
+ * `ManagedAgentConfig` detail and are NOT part of this contract — `CodentAgentDefaults.builtins`
+ * uses this same boolean-only type, so a host that needs the object forms must construct the agent
+ * directly (`createManagedAgent`) rather than through `createSession`.
  */
 export interface AgentSessionBuiltins {
   lsp?: boolean;
@@ -39,6 +40,24 @@ export interface AgentSessionBuiltins {
   mcp?: boolean;
   codeMode?: boolean;
 }
+
+/**
+ * Reachability notes, so a reader can tell a live seam from a dead field. Only `extensions` is
+ * truly unreachable from a product host today; the rest are wired somewhere.
+ *
+ * - `extensions` — local hosts only: in-process factories cannot cross HTTP, and the remote host
+ *   rejects them loudly. No in-repo host passes them (the CLI/extension/playground adapters load
+ *   from `extensionDirs`), so this is an embedder seam.
+ * - `builtins` — booleans only (see {@link AgentSessionBuiltins}). The agent server accepts and
+ *   forwards them from its create body; no client in this repo sets them.
+ * - `providerMode` — the app passes the resolved provider mode. It does not affect create-time
+ *   resolution (that already happened), but it is load-bearing on RESUME: `applyPersistedModel`
+ *   uses it to decide whether to adopt the persisted model/style, and `--remote-provider` relies
+ *   on `remote` there.
+ * - `maxIterations` — bounded by `MAX_AGENT_ITERATIONS` in `AgentConfigSchema`; hosts pass a value
+ *   only when the user set one, otherwise the schema default (`DEFAULT_AGENT_MAX_ITERATIONS`) is
+ *   the single source.
+ */
 
 /**
  * Options for {@link AgentSessionHost.create}.
@@ -54,6 +73,7 @@ export interface AgentSessionCreateOptions {
   /** `remote` = a provider server owns the model (never overridden locally). */
   providerMode?: "direct" | "remote";
   systemPrompt?: string;
+  /** 1..`MAX_AGENT_ITERATIONS` (checked by `AgentConfigSchema`); omit for `DEFAULT_AGENT_MAX_ITERATIONS`. */
   maxIterations?: number;
   /** Max concurrent `task` subagents under this agent (default 4). */
   maxConcurrentTasks?: number;
