@@ -135,6 +135,52 @@ assert.equal(snap.fingerprints.length, 2);
   );
 }
 
+// ---------------------------------------------------------------------------
+// A tool rewriting its own output must register as a change
+// ---------------------------------------------------------------------------
+// The fingerprint used to record only "output exists". The cancelled-call fallback written by the
+// framework is later replaced by the tool's own partial output (same part, same state), and an LSP
+// `modifiedResult`/decorator does the same — none of it reached disk, so a resume showed the
+// placeholder result forever.
+{
+  const settled = {
+    id: "a4",
+    role: "assistant",
+    parts: [
+      {
+        type: "tool-call",
+        id: "call_4",
+        name: "run_command",
+        arguments: "{}",
+        state: "complete",
+        output: { success: false, error: "Cancelled by user.", cancelled: true },
+      },
+    ],
+  };
+  const rewritten = {
+    ...settled,
+    parts: [
+      {
+        ...settled.parts[0],
+        output: { success: true, stdout: "the real partial output", exitCode: 0 },
+      },
+    ],
+  };
+
+  const outputTracker = createSessionSyncTracker();
+  outputTracker.markPersisted([settled]);
+  assert.equal(
+    outputTracker.shouldPersist([settled], { reason: "pump-complete" }),
+    false,
+    "unchanged output is a no-op"
+  );
+  assert.equal(
+    outputTracker.shouldPersist([rewritten], { reason: "pump-complete" }),
+    true,
+    "an output-only tool rewrite must trigger a persist"
+  );
+}
+
 // A part type this switch does not know must still be content-sensitive, or a
 // future part type would never be written (its content change looked like no-op).
 // Role `user` deliberately: an assistant message whose only part is unknown is

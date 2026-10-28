@@ -173,11 +173,12 @@ async function testRestoreReportsMediaMissing() {
     {
       getToolCompactCache: () => ({ clear: () => {} }),
       session: {
-        restoreFromStore: async (_id, input) => {
+        readSessionForRestore: async (_id, input) => {
           input.onMissingMedia?.({ ref: "media://a.png", reason: "not-found", path: "content" });
           input.onMissingMedia?.({ ref: "media://b.png", reason: "not-found", path: "tool-result" });
-          return restored;
+          return { session: restored, uiMessages: restored.uiMessages };
         },
+        adoptRestoredSession: () => {},
       },
       usage: fakeUsage(),
       getTodoManager: () => null,
@@ -208,7 +209,10 @@ async function testRestoreReportsMediaMissing() {
   await restoreManagedSession(
     {
       getToolCompactCache: () => ({ clear: () => {} }),
-      session: { restoreFromStore: async () => restored },
+      session: {
+        readSessionForRestore: async () => ({ session: restored, uiMessages: restored.uiMessages }),
+        adoptRestoredSession: () => {},
+      },
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },

@@ -12,6 +12,7 @@ import {
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
 import {
+  hasPendingAskUser,
   hasPendingInteraction,
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
@@ -384,6 +385,11 @@ export class AgentChatController {
 
   addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<void> {
     this.channel.addToolResult(toolCallId, output);
+    // The client tool's result IS the end of the wait — but only when it was the LAST pending one
+    // (a host could settle a different tool while an `ask_user` is still open). Clearing it here
+    // rather than in each host is what lets the resumed pump leave `awaiting_user`; see
+    // `prepareRunPhase`.
+    if (!hasPendingAskUser(this.channel.getMessages())) this.managed.setClientToolWaiting(false);
     return this.enqueueRunOnce();
   }
 
@@ -670,13 +676,12 @@ export class AgentChatController {
       onEmpty: (message) => {
         if (!token.isCurrent || this.managed.getStatus() === "error") return;
         this.managed.statusController.onRunError(message);
-        this.managed.log?.error("agent", message);
       },
-      onError: (message, error) => {
+      onError: (message) => {
         if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
-        // Surface stream failures in status + agent:stream-error (not silent Completed).
+        // Surface stream failures in status + `agent:stream-error` (not silent Completed). The event
+        // is the single record: its log rule writes the error row, so logging here duplicated it.
         this.managed.statusController.onRunError(message);
-        this.managed.log?.error("agent", "Stream execution failed", error);
       },
     });
 

@@ -48,6 +48,24 @@ const CACHE_ENTRY_SUFFIX = ".txt";
 /** Content length threshold to trigger disk caching (~2.5k tokens) */
 export const CACHE_THRESHOLD = 10000;
 
+/**
+ * Per-process suffix for spill file names.
+ *
+ * The name used to be `<toolCallId>` alone. Provider tool ids are scoped to a REQUEST (`call_0` is
+ * the common shape), so two sessions could write the same file — the later one silently overwrote
+ * the earlier one's spill, and `cleanupOrphanedToolCache` could then delete a file another session
+ * still referenced through its `cachedOutputPath`. The id stays in the name (readable, and it is the
+ * key the reference collector matches), the suffix only makes the write unique. A re-run of the same
+ * call leaves the previous file to the age sweep instead of clobbering it.
+ */
+let cacheFileSeq = 0;
+const cacheProcessToken = Date.now().toString(36);
+
+function uniqueCacheEntryName(id: string): string {
+  cacheFileSeq += 1;
+  return `${id}-${cacheProcessToken}${cacheFileSeq.toString(36)}`;
+}
+
 /** Number of lines to show from the start of the output */
 const DEFAULT_HEAD_LINES = 200;
 
@@ -75,7 +93,7 @@ export const TOOL_OUTPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export async function cacheToolOutput(env: ResolvedCoreEnv, content: string, id: string): Promise<string> {
   await sweepStaleToolOutput(env);
-  const filePath = `${TOOL_OUTPUT_CACHE_DIR}/${id}${CACHE_ENTRY_SUFFIX}`;
+  const filePath = `${TOOL_OUTPUT_CACHE_DIR}/${uniqueCacheEntryName(id)}${CACHE_ENTRY_SUFFIX}`;
   await env.fs.writeFile(filePath, content);
   return filePath;
 }

@@ -138,8 +138,11 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         await rotate();
       }
       await appendFile(filePath, content);
-    } catch {
-      // Non-fatal: log persistence must never break agent execution.
+    } catch (error) {
+      // Non-fatal, but not silent: put the batch back at the HEAD so the next flush retries in
+      // order, and say why. A failed append used to vanish with no trace at all.
+      buffer = [...lines, ...buffer];
+      console.error(`[agent] log batch write failed: ${errorMessage(error)}`);
     } finally {
       flushInFlight = false;
     }
@@ -200,9 +203,12 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
    */
   const flushSync = (): void => {
     if (buffer.length === 0) return;
-    // An async batch already owns the write path. Let `flush()` queue this buffer after it
-    // instead of writing newer lines first and letting the older batch land last.
-    if (flushInFlight) return;
+    // An async batch may own the write path. Skipping here (the old behaviour) meant an exit during
+    // that window dropped the buffer entirely — including the `Fatal …` line the exit guard writes.
+    // At exit the in-flight batch is not guaranteed to land at all, so landing the newer lines
+    // synchronously is the only way not to lose them. The trade-off is that on a DESTROY (process
+    // survives) the still-in-flight older batch can land after these newer lines; losing entries
+    // silently is worse than a rare ordering inversion in a crash log.
     const appendFileSync = envFs.appendFileSync;
     if (!appendFileSync) {
       void flush();

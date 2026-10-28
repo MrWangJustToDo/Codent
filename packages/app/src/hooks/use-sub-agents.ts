@@ -34,6 +34,10 @@ export const useSubAgents = ({ taskId }: { taskId: string }) => {
             event.payload.type === "subagent:started" ||
             event.payload.type === "subagent:phase" ||
             event.payload.type === "subagent:completed" ||
+            // A failed/cancelled task is re-published through this event (task-result.ts), so
+            // leaving it out kept the row showing its last active phase until an unrelated state
+            // event happened to arrive.
+            event.payload.type === "subagent:error" ||
             event.payload.type === "subagent:destroyed"
           ) {
             setSubagent(findSubagentByTask(taskId));

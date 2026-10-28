@@ -105,9 +105,15 @@ export class AgentStatusController {
     if (countPendingToolApprovals(messages) > 0) return;
 
     const status = this.deps.getStatus();
-    if (status === "awaiting_user") return;
+    // `awaiting_user` is a wait on a CLIENT tool. Once its result is in the transcript the wait is
+    // over: returning here unconditionally left the resume pump under `awaiting_user`, so
+    // `applyChunkStatus` ignored every status beat, `isAgentLoading` stayed false, and new input
+    // was queued as if the session were still paused. Only an unanswered question keeps the wait.
+    if (status === "awaiting_user" && hasPendingAskUser(messages)) return;
     if (
       status === "waiting" ||
+      // Reachable only when the question above was ANSWERED (the pending case returned early).
+      status === "awaiting_user" ||
       status === "idle" ||
       status === "completed" ||
       status === "error" ||

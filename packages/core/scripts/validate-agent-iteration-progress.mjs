@@ -215,6 +215,43 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   );
 }
 
+// --- `turn:end` closes only a turn that was OPENED --------------------------
+//
+// A chat can end before its first model call (early termination, a pending tool phase, a failed
+// start). It never emitted `turn:start`, so closing it reported the PREVIOUS turn's index (0 for the
+// first chat) with no matching open.
+{
+  const events = [];
+  const mw = createLifecycleMiddleware({
+    usage: {},
+    getPricing: () => null,
+    maxIterations: 7,
+    getRunToken: () => "run-early",
+    emitEvent: (type, data) => events.push({ type, data }),
+  });
+
+  await mw.onStart?.({ model: "m", messages: [] });
+  await mw.onChunk?.({}, { type: "RUN_FINISHED", finishReason: "stop" });
+  assert.equal(
+    events.some((e) => e.type === "turn:end"),
+    false,
+    "a chat that never iterated closes no turn"
+  );
+
+  // A normal chat still opens and closes exactly once, with the same index.
+  await mw.onStart?.({ model: "m", messages: [] });
+  await mw.onIteration?.({}, { iteration: 0, messageId: "m" });
+  await mw.onChunk?.({}, { type: "RUN_FINISHED", finishReason: "stop" });
+  assert.deepEqual(
+    events.filter((e) => e.type === "turn:start" || e.type === "turn:end").map((e) => [e.type, e.data.index]),
+    [
+      ["turn:start", 1],
+      ["turn:end", 1],
+    ],
+    "one open, one close, same index"
+  );
+}
+
 // --- a terminal run clears the retained iteration progress ------------------
 {
   const managed = new ManagedAgent(

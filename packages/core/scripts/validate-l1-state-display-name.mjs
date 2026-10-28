@@ -135,7 +135,10 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
   await restoreManagedSession(
     {
       getToolCompactCache: () => ({ clear: () => {} }),
-      session: { restoreFromStore: async () => restored },
+      session: {
+        readSessionForRestore: async () => ({ session: restored, uiMessages: restored.uiMessages }),
+        adoptRestoredSession: () => {},
+      },
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },

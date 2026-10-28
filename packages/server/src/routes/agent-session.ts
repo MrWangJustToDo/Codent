@@ -75,14 +75,11 @@ function pruneDeadSessions(): void {
  * pump drains and the disk session ownership lock is releasable again.
  */
 const SSE_STOP_GRACE_MS = 30_000;
-const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "running",
-  "thinking",
-  "responding",
-  "waiting",
-  "awaiting_user",
-  "compacting",
-]);
+// Statuses that still have a PRODUCER to release. A parked run (`waiting` / `awaiting_user`) has
+// none: its only producer is the user, so an idle SSE timeout used to `stop` it and persist the
+// pending approval as "Cancelled by user." — a 30s network blip silently answered a question the
+// user never saw.
+const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["running", "thinking", "responding", "compacting"]);
 const sseClients = new Map<string, number>();
 const sseStopTimers = new Map<string, ReturnType<typeof setTimeout>>();
 

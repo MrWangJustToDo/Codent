@@ -97,6 +97,48 @@ assert.equal(managed.getStatus(), "completed");
   assert.equal(setStatusCalls, 1); // false path still transitions awaiting_user → completed
 }
 
+// An answered client tool ends the `awaiting_user` wait, so the resume pump can start.
+//
+// `prepareRunPhase` used to return for `awaiting_user` unconditionally. The terminal gate
+// (`countPendingToolApprovals`) only counts approvals, so a session resumed after answering
+// `ask_user` came back as `awaiting_user` — `applyChunkStatus` ignored every status beat and new
+// input was queued as if the question were still open.
+{
+  let status = "awaiting_user";
+  const transitions = [];
+  const controller = createAgentStatusController({
+    getStatus: () => status,
+    setStatus: (next, trigger) => {
+      transitions.push([next, trigger]);
+      status = next;
+    },
+    getError: () => "",
+    setError: () => {},
+    setPendingApprovalCount: () => {},
+    emitEvent: () => {},
+  });
+  const askUserMessage = (output) => ({
+    id: "a1",
+    role: "assistant",
+    parts: [
+      {
+        type: "tool-call",
+        id: "call_ask",
+        name: "ask_user",
+        arguments: '{"questions":[]}',
+        state: output === undefined ? "input-complete" : "complete",
+        ...(output === undefined ? {} : { output }),
+      },
+    ],
+  });
+
+  controller.prepareRunPhase([askUserMessage(undefined)]);
+  assert.equal(status, "awaiting_user", "an unanswered client tool keeps the wait");
+
+  controller.prepareRunPhase([askUserMessage({ answers: [{ id: "q1", value: "yes" }] })]);
+  assert.deepEqual(transitions.at(-1), ["running", "run-prepare"], "an answered client tool starts the run");
+}
+
 // The run's finish reason rides the state payload; the ACP host maps `length` → max_tokens from it.
 {
   let reason;

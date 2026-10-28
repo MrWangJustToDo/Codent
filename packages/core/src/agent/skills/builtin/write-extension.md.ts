@@ -224,8 +224,9 @@ const off = ctx.registerInterceptor("tool:after:edit_file", async (event, ctx) =
 // off() unregisters just this handler.
 \`\`\`
 
-\`handler\` may be sync or async; returning \`false\` (or setting \`event.skipDefault = true\`)
-stops the remaining handlers **and** the default action.
+\`handler\` may be sync or async; returning \`false\` (or setting \`event.skipDefault = true\`) stops
+the REMAINING handlers only. To deny a tool call, set \`event.skip = true\` — that is the tool gate;
+a \`return false\` that relies on stopping the default action silently lets the tool run.
 
 Hook names support a \`prefix:*\` wildcard: \`tool:before:*\` observes **every** tool call.
 Match is on the literal prefix, so \`tool:before:run_*\` works too.

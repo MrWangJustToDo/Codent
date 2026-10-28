@@ -457,6 +457,13 @@ export class RemoteSessionClient implements AgentSession {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private snapshot: AgentSessionSnapshot;
+  /**
+   * Bumped on every SSE application. `doResync` snapshots it before its HTTP round-trip and only
+   * replaces the live state when nothing arrived meanwhile: events applied during that round-trip
+   * are NEWER than the response, so overwriting would roll the client back and drop the last
+   * messages patch (the server's delta baseline has already advanced, so it is never re-sent).
+   */
+  private snapshotVersion = 0;
   /** When the snapshot was last (re)hydrated in full; 0 = never (shell only). */
   private lastSyncAt = 0;
   /** Shared in-flight resync so concurrent callers fetch the transcript once. */
@@ -597,14 +604,21 @@ export class RemoteSessionClient implements AgentSession {
   }
 
   private async doResync(): Promise<void> {
+    const versionAtRequest = this.snapshotVersion;
     const snapRes = await this.fetchImpl(joinUrl(this.baseUrl, `/api/agent/${this.id}/snapshot`));
     if (snapRes.status === 404) {
       this.markTerminated("Session not found on server");
       throw new Error("Session not found on server (404)");
     }
-    this.snapshot = await readJson<AgentSessionSnapshot>(snapRes);
-    reviveMessageTimestamps(this.snapshot.messages);
-    this.setToolDescriptors(this.snapshot.toolDescriptors);
+    const snapshot = await readJson<AgentSessionSnapshot>(snapRes);
+    // SSE applied a newer event while the snapshot was in flight: keep the live state. Replacing it
+    // would lose that patch (the server will not resend it) and roll `state` back until the next
+    // periodic full resync.
+    if (this.snapshotVersion === versionAtRequest) {
+      this.snapshot = snapshot;
+      reviveMessageTimestamps(this.snapshot.messages);
+      this.setToolDescriptors(this.snapshot.toolDescriptors);
+    }
     this.lastSyncAt = Date.now();
 
     try {
@@ -732,11 +746,13 @@ export class RemoteSessionClient implements AgentSession {
                   }
                   if (result.messages !== this.snapshot.messages) {
                     this.snapshot = { ...this.snapshot, messages: result.messages };
+                    this.snapshotVersion += 1;
                   }
                   handler({ ...event, payload: this.snapshot.messages });
                   continue;
                 }
                 this.snapshot = applyEvent(this.snapshot, event, this.summaryCache, this.toolBufferCache);
+                this.snapshotVersion += 1;
                 if (event.channel === "tool-presentation") {
                   this.setToolDescriptors(this.snapshot.toolDescriptors);
                 }

@@ -170,7 +170,10 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 
   resetToolOutputSweepForTesting();
   const written = await cacheToolOutput(getEnv(), "hello\n", "call_wiring-grep");
-  assert.equal(written, `${TOOL_OUTPUT_CACHE_DIR}/call_wiring-grep.txt`, "path shape unchanged");
+  assert.ok(
+    written.startsWith(`${TOOL_OUTPUT_CACHE_DIR}/call_wiring-grep-`) && written.endsWith(".txt"),
+    `the id stays in the name and the write is unique-suffixed (got ${written})`
+  );
   assert.equal(await exists(written), true, "cache write landed");
   assert.equal(
     await exists(stale),
@@ -186,13 +189,31 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 {
   const small = await maybeCacheOutput(getEnv(), "small\n", "call_small-grep");
   assert.deepEqual(small, { content: "small\n", cachedOutputPath: null }, "below threshold → no cache, no path");
-  assert.equal(await exists(`${TOOL_OUTPUT_CACHE_DIR}/call_small-grep.txt`), false, "nothing written below threshold");
+  {
+    const entries = await getEnv().fs.readdir(TOOL_OUTPUT_CACHE_DIR);
+    assert.equal(
+      entries.some((entry) => entry.name.startsWith("call_small-grep-")),
+      false,
+      "nothing written below threshold"
+    );
+  }
 
   const body = "y".repeat(CACHE_THRESHOLD + 10);
   const big = await maybeCacheOutput(getEnv(), body, "call_big-grep");
-  assert.equal(big.cachedOutputPath, `${TOOL_OUTPUT_CACHE_DIR}/call_big-grep.txt`, "above threshold → path returned");
+  assert.ok(
+    big.cachedOutputPath.startsWith(`${TOOL_OUTPUT_CACHE_DIR}/call_big-grep-`),
+    "above threshold → path returned"
+  );
   assert.equal(big.content.includes("Full output saved to:"), true, "preview references the cache path");
   assert.equal(await exists(big.cachedOutputPath), true, "a returned path always exists on disk");
+
+  // The same tool-call id from another session (a provider's `call_0` is request-scoped) must not
+  // overwrite the first spill — the file name has to be unique, not just id-derived.
+  const body2 = "z".repeat(CACHE_THRESHOLD + 10);
+  const second = await maybeCacheOutput(getEnv(), body2, "call_big-grep");
+  assert.notEqual(second.cachedOutputPath, big.cachedOutputPath, "a re-used id gets its own file");
+  assert.equal(await exists(big.cachedOutputPath), true, "the earlier spill still exists");
+  assert.equal(await fs.promises.readFile(path.join(getEnv().rootPath, second.cachedOutputPath), "utf8"), body2);
   console.log("maybeCacheOutput threshold contract OK");
 }
 

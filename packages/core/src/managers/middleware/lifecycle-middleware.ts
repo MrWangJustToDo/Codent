@@ -94,6 +94,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
   let turnIndex = 0;
   let turnToolCalls = 0;
   let turnClosed = false;
+  /** Whether `turn:start` was emitted for the current chat (it is emitted per model call). */
+  let turnOpen = false;
   let runFirstOutput = false;
   let runToken: unknown;
   let messageStarted = false;
@@ -132,6 +134,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         runFirstOutput = false;
       }
       deps.emitEvent?.("turn:start", { index, max: deps.maxIterations ?? 0 });
+      turnOpen = true;
     },
     onStart: (ctx) => {
       thinkingEmitted = false;
@@ -215,7 +218,12 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         // A turn paused for approval / `ask_user` gets a second, interrupt-shaped RUN_FINISHED for the
         // same iteration. Closing twice would report a suspended turn as finished.
         if (turnClosed) return chunk;
+        // A chat can end before its first model call (early termination, a pending tool phase, a
+        // failed start). It never opened a turn, so there is nothing to close — emitting here used
+        // the PREVIOUS turn's index (0 for the first) and produced a `turn:end` with no `turn:start`.
+        if (!turnOpen) return chunk;
         turnClosed = true;
+        turnOpen = false;
         const finishReason = (chunk as { finishReason?: string }).finishReason ?? null;
         deps.emitEvent?.("turn:end", { index: turnIndex, finishReason, toolCalls: turnToolCalls });
         if (messageStarted) {

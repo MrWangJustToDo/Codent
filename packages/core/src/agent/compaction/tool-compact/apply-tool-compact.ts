@@ -28,6 +28,13 @@ export interface ApplyToolCompactOptions {
   config?: Partial<CompactionConfig>;
   registry: Pick<ToModelOutputRegistry, "get">;
   cache: ToolCompactCache;
+  /**
+   * Report a tool whose `toModelOutput` (or a `registerToolOutputDecorator` chained onto it) threw.
+   *
+   * A formatter is arbitrary host code; without this the throw escaped `onConfig` and failed every
+   * model call of the session. The raw result is used instead and cached, so the wire stays stable.
+   */
+  onProjectionError?: (toolName: string, error: unknown) => void;
 }
 
 // ============================================================================
@@ -129,11 +136,19 @@ export async function applyToolCompact(
     const toModelOutput = options.registry.get(toolName);
     if (!toModelOutput) continue;
     const input = toolInputMap.get(target.toolCallId);
-    const transformed = await toModelOutput({
-      toolCallId: target.toolCallId,
-      input,
-      output: rawOutput,
-    });
+    let transformed: unknown;
+    try {
+      transformed = await toModelOutput({
+        toolCallId: target.toolCallId,
+        input,
+        output: rawOutput,
+      });
+    } catch (error) {
+      // Contain it to this result: the raw output is what the model saw before projection existed,
+      // and caching it keeps the prefix stable instead of retrying a broken formatter every call.
+      options.onProjectionError?.(toolName, error);
+      transformed = rawOutput;
+    }
 
     const normalized = normalizeModelToolContent(transformed);
     cache.set(target.toolCallId, normalized);

@@ -208,7 +208,9 @@ setupEnv({ failMediaWrites: true });
     }) + "\n"
   );
 
-  const restored = await service.restoreFromStore(id, { usage: new UsageTracker(), todoManager: null });
+  const restoredRead = await service.readSessionForRestore(id);
+  service.adoptRestoredSession(restoredRead, { usage: new UsageTracker(), todoManager: null });
+  const restored = { ...restoredRead.session, uiMessages: restoredRead.uiMessages };
   assert.equal(restored.uiMessages.length, 1, "restore completes despite the media write failure");
 }
 

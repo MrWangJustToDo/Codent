@@ -58,6 +58,12 @@ export class LocalAgentAdapter implements AgentAdapter {
 
   async initialize(config: AppConfig): Promise<InitResult> {
     const { createAgentSessionFromConfig } = await import("@codent/app");
+    // A second `initialize` can start while the first is still building (the config effect re-runs
+    // on `systemPrompt` / `maxIterations` / …). Overwriting `this.agent` leaked the previous runtime,
+    // and with `--remote-session` its agent stayed on the server with nothing left to DELETE.
+    const previous = this.agent;
+    this.agent = null;
+    if (previous) await previous.dispose();
     // Session-plane wiring is host-process owned: a local manager, or a remote HTTP
     // host when --remote-session is configured (agent loop runs server-side). Both
     // are held by one CodentAgent so the provider/env planes resolve per runtime.

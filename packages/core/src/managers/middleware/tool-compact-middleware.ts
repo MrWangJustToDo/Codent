@@ -1,4 +1,5 @@
 import { applyToolCompact } from "../../agent/compaction/tool-compact/apply-tool-compact.js";
+import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
@@ -46,6 +47,11 @@ export function createToolCompactMiddleware(deps: ToolCompactMiddlewareDeps): Ch
           config: deps.getCompactionConfig() ?? undefined,
           registry,
           cache: deps.getToolCompactCache(),
+          onProjectionError: (toolName, error) =>
+            deps.getManagedAgent().log?.warn("tool", "toModelOutput failed", {
+              tool: toolName,
+              error: errorMessage(error),
+            }),
         }),
       };
     },

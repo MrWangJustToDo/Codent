@@ -102,6 +102,10 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     reason: abortReason ?? subagentManaged.getAbortSignal()?.reason,
   });
   const outcomeKind = aborted ? "aborted" : failed ? "error" : "finished";
+  // Read the engine's own turn count BEFORE finalizing: `finalizeDetached` clears the retained
+  // iteration progress, so reading it afterwards always returned 0 and the stats fell back to the
+  // message-derived count — which undercounts a final text-only turn and can hide a budget cutoff.
+  const observedIterations = subagentManaged.readIteration();
   subagentManaged.runFinalizer.finalizeDetached({
     kind: outcomeKind,
     messages: previewMessages,
@@ -122,7 +126,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     output: finalOutput,
     aborted,
     status: subagentManaged.getStatus(),
-    observedIterations: subagentManaged.readIteration(),
+    observedIterations,
   });
   const statusFlags = {
     iterations: runStats.iterations,

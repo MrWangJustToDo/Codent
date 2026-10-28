@@ -49,6 +49,26 @@ function stableMediaSummary(value: string): string {
   return `${value.slice(0, 64)}...${value.length}`;
 }
 
+/**
+ * Cheap, stable summary of a tool output for the persist fingerprint.
+ *
+ * The fingerprint used to record only "output exists". A tool that rewrote its own result after the
+ * first save (the cancelled-call fallback replaced by the real partial output, an LSP
+ * `modifiedResult`, a decorator) therefore never reached disk: the message fingerprint matched, the
+ * store skipped it, and a resume showed the placeholder result forever. Large outputs are summarized
+ * by length + head/tail so the check stays cheap.
+ */
+function stableOutputSummary(output: unknown): string {
+  if (output === undefined) return "";
+  let text: string;
+  try {
+    text = JSON.stringify(output) ?? String(output);
+  } catch {
+    text = String(output);
+  }
+  return text.length <= 256 ? text : `${text.length}:${text.slice(0, 128)}:${text.slice(-64)}`;
+}
+
 function fingerprintPart(part: UIMessage["parts"][number]): string {
   switch (part.type) {
     case "text":
@@ -77,7 +97,7 @@ function fingerprintPart(part: UIMessage["parts"][number]): string {
         // legacy one is stamped with the save time — either way the fingerprint
         // moves when the decision time appears.
         (part.approval as { updatedAt?: number } | undefined)?.updatedAt ? "stamped" : "",
-        part.output !== undefined ? "out" : "",
+        stableOutputSummary(part.output),
       ].join(":");
     case "tool-result":
       return [
