@@ -307,6 +307,18 @@ export interface CoreEnv {
   rootPath: string;
 
   /**
+   * True when this env's filesystem and commands live in ANOTHER process/machine (`createRemoteEnv`).
+   *
+   * A capability marker, not a mode: it exists for the one class of work that mixes the two
+   * machines. Disk extension discovery reads files through this env's `fs` (`rootPath`-relative,
+   * server paths) and then `import()`s them in the CLIENT process, so on a remote workspace every
+   * file resolves to ENOENT — or, when the client happens to have the same path, to an unrelated
+   * local file. `loadExtensions` therefore skips disk discovery for a remote env (in-process
+   * `config.extensions` and the built-ins still load). Local envs leave this unset.
+   */
+  readonly remote?: boolean;
+
+  /**
    * The directory commands run in by default (absolute).
    *
    * Semantics are "the default cwd for command execution in this env", not "the process's

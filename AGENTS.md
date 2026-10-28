@@ -85,6 +85,10 @@ interface CoreEnv {
   //   locateTreeSitterGrammar,
   //   createMCPStdioTransport, getMCPTransportProcess, createLspConnection,
   //   createIsolateDriver (code-mode TS sandbox backend)
+  // Capability marker (not a feature): `remote?: boolean` — true when fs/commands live in another
+  // process (`createRemoteEnv`). `loadExtensions` skips DISK discovery for it, because those files
+  // are discovered through the remote fs and then `import()`ed in the client process; in-process
+  // `config.extensions` and the built-ins still load.
 }
 ```
 

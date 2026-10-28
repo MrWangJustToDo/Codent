@@ -233,24 +233,37 @@ export class AgentBootstrap {
     );
     const codeModeLazyNames = [...CODE_MODE_LAZY_TOOL_NAMES];
 
-    const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, env);
-    log.debug("system", "Extension search directories", { dirs: extensionDirs });
+    // Disk extensions are process-local code (`import()` in THIS process) discovered through this
+    // env's fs (paths on the WORKSPACE machine). With a remote workspace those are two different
+    // machines, so every discovered file is ENOENT — or, if the client happens to have the same
+    // path, an unrelated local file runs while the workspace is elsewhere. Skip discovery rather
+    // than report a pile of phantom load failures. In-process extensions still load below.
+    if (env.remote === true) {
+      log.warn(
+        "system",
+        "Skipping disk extension discovery: a remote workspace's extension files cannot be imported in the " +
+          "client process. Load extensions in-process (config.extensions) instead."
+      );
+    } else {
+      const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, env);
+      log.debug("system", "Extension search directories", { dirs: extensionDirs });
 
-    const fromDisk = await extensionLoader.loadFromDirectories(extensionDirs);
-    for (const err of fromDisk.errors) {
-      recordExtensionError(report, "disk", err);
-      log.warn("system", err.message);
-    }
-    for (const api of fromDisk.loaded) {
-      const instance = await extensionRunner.loadExtension(api);
-      // Keep this row: bootstrap runs BEFORE the log extension starts, so the runner's
-      // `agent:extension-error` emit has no bus subscriber yet and the failure would be invisible
-      // in the persisted timeline (a later reload is covered by that event instead).
-      if (!recordExtensionResult(report, api.id, instance)) {
-        log.warn(
-          "system",
-          `Extension failed to activate from disk "${api.id}": ${instance.error?.message ?? "unknown"}`
-        );
+      const fromDisk = await extensionLoader.loadFromDirectories(extensionDirs);
+      for (const err of fromDisk.errors) {
+        recordExtensionError(report, "disk", err);
+        log.warn("system", err.message);
+      }
+      for (const api of fromDisk.loaded) {
+        const instance = await extensionRunner.loadExtension(api);
+        // Keep this row: bootstrap runs BEFORE the log extension starts, so the runner's
+        // `agent:extension-error` emit has no bus subscriber yet and the failure would be invisible
+        // in the persisted timeline (a later reload is covered by that event instead).
+        if (!recordExtensionResult(report, api.id, instance)) {
+          log.warn(
+            "system",
+            `Extension failed to activate from disk "${api.id}": ${instance.error?.message ?? "unknown"}`
+          );
+        }
       }
     }
 

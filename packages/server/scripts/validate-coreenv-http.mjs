@@ -39,6 +39,7 @@ assert.equal(health.rootPath, ws);
 
 const env = await createRemoteEnv(baseUrl);
 assert.equal(env.rootPath, ws);
+assert.equal(env.remote, true, "a remote env is marked remote (disk-extension discovery stands down)");
 assert.equal(await env.getPlatform(), process.platform);
 const homedir = await env.homedir();
 assert.ok(homedir.length > 0);

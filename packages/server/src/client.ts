@@ -293,6 +293,11 @@ export async function createRemoteEnv(serverUrl: string): Promise<CoreEnv> {
   return {
     rootPath: info.rootPath,
 
+    // This env's filesystem and commands live on another machine. Process-local features that
+    // discover files THROUGH this env and then execute them locally (disk extensions) must not
+    // run — see `CoreEnv.remote`.
+    remote: true,
+
     path,
 
     getPlatform: async () => info.platform,
