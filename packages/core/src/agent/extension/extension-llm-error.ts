@@ -5,7 +5,7 @@
  * implemented) because both the extension context and its callers branch on it, and `agent` must not
  * import `managers`.
  */
-export type ExtensionLlmErrorCode = "no-adapter" | "unknown-model" | "budget-exceeded" | "bad-request";
+export type ExtensionLlmErrorCode = "no-adapter" | "unknown-model" | "budget-exceeded" | "bad-request" | "revoked";
 
 export class ExtensionLlmError extends Error {
   readonly code: ExtensionLlmErrorCode;

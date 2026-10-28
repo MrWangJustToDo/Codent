@@ -358,6 +358,82 @@ assert.ok(renamed, `rename must propagate via state channel (got "${session.getS
   assert.ok(!JSON.stringify(payload).includes("sk-must-not-leak"), "no apiKey either");
 }
 
+// ── 5c. A model named without a USABLE connection is resolved by the server ──
+//
+// `--remote-session --model X` still pushes the model id, but the client's `resolveModelConnection`
+// ALWAYS fills the provider default baseURL (`https://api.openai.com/v1`). So "the request has a
+// baseURL" cannot mean "the user chose a connection": with no local key, that default shipped an
+// empty credential to the server and overrode the server's own provider — a 401 on the first
+// request. A default URL with no apiKey is the client's env default; a key, or a URL the user
+// actually typed, is a direct-provider client and must win.
+{
+  const DEFAULT_OPENAI = "https://api.openai.com/v1";
+  const createAgent = async (body) => {
+    const res = await fetch(`${baseUrl}/api/agent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: body.name, ...body }),
+    });
+    // Read the body only on failure: `assert.equal(res.status, 200, await res.text())` evaluated the
+    // message eagerly and consumed the stream, so the success path's `res.json()` threw.
+    if (res.status !== 200) {
+      assert.fail(`create "${body.name}" failed: ${res.status} ${await res.text()}`);
+    }
+    const { id } = await res.json();
+    const agent = getServerManager().getAgent(id);
+    assert.ok(agent, "the created agent is in the server manager");
+    return agent;
+  };
+
+  // A live agent's IDLE session is an empty, unreserved file once anything persists it; `create()`
+  // used to adopt it as "the latest empty session" and then fail the ownership check with a 500.
+  const liveSessionIds = new Set(
+    getServerManager()
+      .getAgents()
+      .map((agent) => agent.getSessionData()?.id)
+  );
+  assert.ok(liveSessionIds.size > 0, "the leftover live agent is what makes the reuse path reachable");
+  // (i) the client's DEFAULT url + no key → the server's models.json entry and its key
+  const fromServer = await createAgent({
+    name: "default-conn",
+    model: "other-model",
+    baseURL: DEFAULT_OPENAI,
+    apiKey: "",
+  });
+  assert.equal(
+    fromServer.config.modelBaseURL,
+    "https://upstream.example.com/v1",
+    "a default URL with no key is not a connection: the server's own provider wins"
+  );
+  assert.equal(fromServer.config.modelApiKey, "sk-must-not-leak", "…and so does its key");
+  assert.ok(
+    !liveSessionIds.has(fromServer.getSessionData()?.id),
+    "and a fresh create gets its own session instead of a live agent's empty one"
+  );
+
+  // (ii) a real client key still wins — the documented "--model pushes local LLM settings" case
+  const fromClient = await createAgent({
+    name: "client-key",
+    model: "other-model",
+    baseURL: DEFAULT_OPENAI,
+    apiKey: "sk-client",
+  });
+  assert.equal(fromClient.config.modelApiKey, "sk-client", "a supplied key is a deliberate direct-provider client");
+  assert.equal(fromClient.config.modelBaseURL, DEFAULT_OPENAI, "and its connection is kept");
+
+  // (iii) a non-default URL with no key is a local provider (ollama et al.) and is kept
+  const fromLocal = await createAgent({
+    name: "local-provider",
+    model: "other-model",
+    baseURL: "http://localhost:11434/v1",
+  });
+  assert.equal(
+    fromLocal.config.modelBaseURL,
+    "http://localhost:11434/v1",
+    "a URL the user chose is not the provider default, so it is theirs"
+  );
+}
+
 // ── 6. Destroy ──
 await host.destroy(snap.agentId);
 const gone = await fetch(`${baseUrl}/api/agent/${snap.agentId}/snapshot`);

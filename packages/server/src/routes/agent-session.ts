@@ -179,37 +179,34 @@ async function loadCore() {
 }
 
 /**
- * Resolve the server-side connection for a remote `model.set` command.
+ * Resolve a model against the **server's** own connection.
  *
- * A `--remote-session` client dispatches `model.set` WITHOUT `modelBaseURL`/
- * `modelApiKey` — upstream credentials never leave the server. The server picks
- * the connection from its own models.json (the direct entry containing the
- * model) or falls back to its `.env` provider; `modelInfo` comes from the same
- * resolveModelConfig pipeline used at session creation. Commands that DO carry
- * explicit connection fields pass through unchanged.
+ * `--remote-session` clients never send upstream credentials — the server picks the connection from
+ * its own models.json (the direct entry containing the model) or falls back to its `.env` provider.
+ *
+ * Shared by session creation and `model.set`, which used to disagree: creation trusted whatever
+ * connection the request carried, so `--model X` alone (no `--base-url` / `--api-key`) sent the
+ * client's resolved defaults — `https://api.openai.com/v1` with an empty key — and overrode the
+ * server's provider. That is a 401 at best and the client's own key in plaintext at worst, and it is
+ * the exact inverse of what `model.set` documented.
  */
+async function resolveServerModelConnection(model: string, style?: "openai" | "anthropic") {
+  const { resolveModelConfig } = await loadCore();
+  const config = await loadServerModelsConfig();
+  const entry = (config?.models ?? []).find(
+    (e): e is Extract<ModelsConfigEntry, { type: "direct" }> => e.type === "direct" && !!e.models?.includes(model)
+  );
+  return entry
+    ? await resolveModelConfig({ model, style: entry.style, baseURL: entry.baseURL, apiKey: entry.apiKey })
+    : await resolveModelConfig({ ...readServerModelEnv(), model, ...(style ? { style } : {}) });
+}
+
 async function resolveServerModelSetCommand(command: AgentSessionCommand): Promise<AgentSessionCommand> {
   if (command.type !== "model.set" || !command.model?.trim()) return command;
   if (command.modelBaseURL || command.modelApiKey) return command;
 
-  const { resolveModelConfig } = await loadCore();
-  const config = await loadServerModelsConfig();
-  const model = command.model;
-  const entry = (config?.models ?? []).find(
-    (e): e is Extract<ModelsConfigEntry, { type: "direct" }> => e.type === "direct" && !!e.models?.includes(model)
-  );
-  const { connection, modelInfo } = entry
-    ? await resolveModelConfig({
-        model,
-        style: entry.style,
-        baseURL: entry.baseURL,
-        apiKey: entry.apiKey,
-      })
-    : await resolveModelConfig({
-        ...readServerModelEnv(),
-        model,
-        ...(command.modelStyle ? { style: command.modelStyle } : {}),
-      });
+  const style = command.modelStyle === "openai" || command.modelStyle === "anthropic" ? command.modelStyle : undefined;
+  const { connection, modelInfo } = await resolveServerModelConnection(command.model, style);
   if (!connection.baseURL) return command;
   return {
     ...command,
@@ -296,25 +293,50 @@ export const agentSessionRoutes = new Hono()
   })
   .post("/", async (c) => {
     const body = createBodySchema.parse(await c.req.json());
-    const { buildDefaultSystemPrompt, createLocalAgentSessionHost, MAX_AGENT_ITERATIONS, resolveModelConfig } =
-      await loadCore();
+    const {
+      buildDefaultSystemPrompt,
+      createLocalAgentSessionHost,
+      MAX_AGENT_ITERATIONS,
+      resolveModelConfig,
+      resolveModelConnection,
+    } = await loadCore();
     // The bound is core's single `MAX_AGENT_ITERATIONS`. This check exists for the MESSAGE (it
     // names the bound); every other schema violation — here, in `AgentConfigSchema`, or in the
     // compaction schema — is a 400 through the app's one `ZodError` boundary.
     if (body.maxIterations !== undefined && body.maxIterations > MAX_AGENT_ITERATIONS) {
       return c.json({ error: true, message: `maxIterations must be between 1 and ${MAX_AGENT_ITERATIONS}.` }, 400);
     }
-    // Explicit client model wins; otherwise use the server's own `.env` provider
-    // so a `--remote-session` client can leave model configuration on the server.
+    // Where the connection comes from, in order of authority:
+    //   1. a USABLE connection in the request — an apiKey, or a baseURL the user actually chose.
+    //      A `--remote-session --model X` client with local keys is a direct-provider client by
+    //      design, so it keeps them;
+    //   2. the SERVER's provider for a named model that arrived without one — the case above when
+    //      the client has NO key: `resolveModelConnection` always fills the provider DEFAULT
+    //      (`https://api.openai.com/v1` for openai style), so "no apiKey + a default URL" is not a
+    //      connection the user made, it is the client's env default. Trusting it produced a 401 on
+    //      the first request and overrode the server's own provider;
+    //   3. the server's `.env` provider when the client named no model at all.
     const explicitModel = body.model?.trim();
-    const { connection, modelInfo } = explicitModel
-      ? await resolveModelConfig({
-          model: body.model,
-          style: body.style as "openai" | "anthropic" | undefined,
-          baseURL: body.baseURL,
-          apiKey: body.apiKey,
-        })
-      : await resolveModelConfig(readServerModelEnv());
+    const clientStyle = body.style as "openai" | "anthropic" | undefined;
+    const clientBaseURL = body.baseURL?.trim();
+    // The default for the client's style, read from core's one env→connection mapping rather than a
+    // copied URL table, so a new provider default cannot silently become "user-supplied".
+    const defaultBaseURL = clientBaseURL
+      ? resolveModelConnection({ style: clientStyle ?? "openai", model: explicitModel ?? "" }).baseURL
+      : undefined;
+    const clientBaseURLKey = clientBaseURL?.replace(/\/+$/, "");
+    const clientSuppliedConnection =
+      Boolean(body.apiKey?.trim()) || (clientBaseURLKey !== undefined && clientBaseURLKey !== defaultBaseURL);
+    const { connection, modelInfo } = !explicitModel
+      ? await resolveModelConfig(readServerModelEnv())
+      : clientSuppliedConnection
+        ? await resolveModelConfig({
+            model: body.model,
+            style: clientStyle,
+            baseURL: body.baseURL,
+            apiKey: body.apiKey,
+          })
+        : await resolveServerModelConnection(explicitModel, clientStyle);
     if (!connection.model?.trim()) {
       return c.json(
         {

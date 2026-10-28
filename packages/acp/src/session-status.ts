@@ -12,13 +12,6 @@ import type { SessionConfigOption, SessionMode, SessionModeState, StopReason } f
 import type { AgentMode, AgentSession, AgentSessionSnapshot, ModelCatalogRead } from "@codent/core";
 
 /**
- * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
- *
- * The spec says agents with mode-like configuration SHOULD send both: `configOptions` for clients
- * that understand it, `modes` for those that only read the older API. The mode vocabulary itself
- * lives in `session-config-options.ts` (one home, shared with the `category: "mode"` option).
- */
-/**
  * The `modes` + `configOptions` pair every session-creating response carries.
  *
  * `new`, `load`, `resume` and `fork` all answer the same question — "which mode and model may this
@@ -54,6 +47,13 @@ export function sessionSelectorsFor(
   return sessionSelectors(bridge.session.getSnapshot(), read, bridge.selectedModelEntryIndex);
 }
 
+/**
+ * The legacy `modes` field, kept alongside `configOptions` during the protocol's transition.
+ *
+ * The spec says agents with mode-like configuration SHOULD send both: `configOptions` for clients
+ * that understand it, `modes` for those that only read the older API. The mode vocabulary itself
+ * lives in `session-config-options.ts` (one home, shared with the `category: "mode"` option).
+ */
 export function sessionModes(current: AgentMode): SessionModeState {
   const availableModes: SessionMode[] = MODE_IDS.map((id) => ({ id, ...MODE_META[id] }));
   return { currentModeId: current, availableModes };

@@ -29,6 +29,12 @@ export function createCodeRewriteTool(deps: CodeRewriteToolDeps) {
   return {
     name: "code_rewrite",
     present: { category: "edits" as const },
+    // Applying a rewrite mutates the workspace, so this tool is approval-gated as a whole — the same
+    // contract `write_file` / `edit_file` / `delete_file` keep. The flag is static (the approval
+    // decision is made before `execute` can look at `dry_run`), which means a preview asks too; that
+    // is the deliberate trade: the alternative is a bulk, multi-file write the model performs with
+    // no prompt at all. Plan mode already treats this tool as an editing tool and withholds it.
+    needsApproval: true,
     description:
       "Transform code matching a structural pattern into a replacement. Use $NAME to capture and reuse single nodes, $$$NAME for sequences. Defaults to dry-run mode (preview only). Set dry_run=false to apply changes. For symbol renames, prefer lsp_rename instead (semantically correct).",
     inputSchema: {

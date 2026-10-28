@@ -74,12 +74,6 @@ export function isClientOwnedApproval(
 }
 
 /**
- * The pending call's parsed input, read from the session's messages.
- *
- * Read from the session rather than tracked here: the approval and the call it belongs to arrive
- * on different channels, and the session's message tree is the only place that pairs them.
- */
-/**
  * Whether to answer this approval here instead of asking the client.
  *
  * The whole rule in one function, so the branch in the ACP host stays a call and the policy stays
@@ -132,6 +126,12 @@ export function toolPartFor(
   return undefined;
 }
 
+/**
+ * The pending call's parsed input, read from the session's messages.
+ *
+ * Read from the session rather than tracked here: the approval and the call it belongs to arrive
+ * on different channels, and the session's message tree is the only place that pairs them.
+ */
 export function toolInputFor(
   messages: ReadonlyArray<{ parts?: ReadonlyArray<unknown> }>,
   toolCallId: string

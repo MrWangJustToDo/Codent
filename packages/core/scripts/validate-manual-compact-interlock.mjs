@@ -11,7 +11,9 @@
  *      `compacting`, so `followUp` → `sendMessage` opened a turn while the checkpoint was still
  *      being written: the summary landed inside the new turn (the next model call projects from a
  *      prefix that was replaced mid-turn) and `applyCompactionResult` reset the window usage the
- *      new turn was accumulating.
+ *      new turn was accumulating. `forceSubmit` (Option/Ctrl+Enter) reached the same defect through
+ *      a different door: its "is a run active?" test was pump-based, so it started a turn BESIDE
+ *      the summarizer. It now degrades to a queued follow-up while a compaction owns the agent.
  *
  * What this locks down:
  *   1. The routing decision (`shouldDeferMidRunQueue` also pinned in `validate-pump-continuation`).
@@ -21,6 +23,7 @@
  *   4. Input typed during the compaction is released when it ends — and starts the turn it was
  *      always meant to start. (Before: it started that turn immediately.)
  *   5. Esc drops that queued input, exactly as it does for a run.
+ *   6. `forceSubmit` during a compaction queues, never opens a second turn.
  *
  * Run: pnpm --filter @codent/core run validate:manual-compact-interlock
  */
@@ -282,6 +285,54 @@ function observeRunEvents(events) {
   assert.equal(events.aborts, 0);
   assert.equal(events.stops, 0);
   assert.equal(managed.getStatus(), before, "and must not change the status");
+  dispose();
+  manager.destroyAgent(managed.id);
+}
+
+// ============================================================================
+// 5. Option/Ctrl+Enter during the compaction queues instead of opening a second turn
+// ============================================================================
+//
+// `forceSubmit` interrupted "only when a run is active" — and a manual compaction has no pump, so
+// that test said no and the message started a pump BESIDE the summarizer: the checkpoint landed in
+// a half-finished turn and the window usage the new turn was accumulating was reset underneath it.
+{
+  const { managed, chat } = await makeAgent("manual-compact-force-submit");
+  const { calls, config } = makeCapturingAdapter();
+  managed.setTextAdapter(config);
+  const events = { agentId: managed.id, aborts: 0, stops: 0, manualStarts: 0, autoStarts: 0, reactiveStarts: 0 };
+  const dispose = observeRunEvents(events);
+
+  const compacting = managed.compact();
+  assert.equal(
+    chat.isRunActive(),
+    true,
+    "a manual compaction is active work — it has no pump, which is exactly why the old test missed it"
+  );
+
+  chat.forceSubmit("forced during compaction");
+
+  assert.equal(
+    hasUserText(chat, "forced during compaction"),
+    false,
+    "force-submit must not open a turn while the checkpoint is still being written"
+  );
+  assert.deepEqual(
+    chat.getQueuedMessages().followUp.map((content) => (typeof content === "string" ? content : "")),
+    ["forced during compaction"],
+    "it degrades to a queued follow-up instead"
+  );
+  assert.equal(events.aborts, 0, "and aborts nothing: there was no run to interrupt");
+
+  const result = await compacting;
+  assert.equal(result.ok, true, "the short transcript is a no-op compaction, not a failure");
+  assert.equal(hasUserText(chat, "forced during compaction"), true, "the queued message is released");
+  assert.equal(chat.getQueuedMessages().followUp.length, 0, "and the queue is empty");
+
+  await chat.runChain;
+  assert.ok(calls.length >= 1, "it starts the turn it was always meant to start");
+  assert.equal(managed.getStatus(), "completed", "which settles like any other turn");
+
   dispose();
   manager.destroyAgent(managed.id);
 }

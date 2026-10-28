@@ -111,7 +111,16 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
  */
 async function resolveBootstrapSessionId(
   options: AgentSessionCreateOptions,
-  env: ResolvedCoreEnv
+  env: ResolvedCoreEnv,
+  /**
+   * Whether a disk session is already being run by a live agent in this manager.
+   *
+   * An IDLE agent's session is an empty, unreserved file as soon as anything persists it (a rename
+   * is enough), so `getLatestEmpty()` used to hand that file to the next `create()` — which then hit
+   * the ownership table and failed with a 500 ("already active in another live session") instead of
+   * starting the fresh session the caller asked for. The reuse is for a session NOBODY is running.
+   */
+  isTaken: (sessionId: string) => boolean = () => false
 ): Promise<string | undefined> {
   if (options.resumeSessionId) return options.resumeSessionId;
   try {
@@ -120,7 +129,7 @@ async function resolveBootstrapSessionId(
       return (await store.getLatest())?.id;
     }
     const empty = await store.getLatestEmpty();
-    if (!empty) return undefined;
+    if (!empty || isTaken(empty.id)) return undefined;
     await store.reserveSession(empty.id);
     return empty.id;
   } catch {
@@ -140,7 +149,9 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // Resolve the reuse/resume target up front and pass it through as
     // `initialSessionId`, so the managed agent's session id (and thus the
     // session-scoped log sink) is correct before any bootstrap log entry.
-    const targetSessionId = await resolveBootstrapSessionId(options, this.storeEnv);
+    const targetSessionId = await resolveBootstrapSessionId(options, this.storeEnv, (sessionId) =>
+      this.manager.getAgents().some((agent) => agent.getSessionData?.()?.id === sessionId)
+    );
     let managed: ManagedAgent | undefined;
     try {
       managed = await this.manager.createManagedAgent(

@@ -165,20 +165,10 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
   const fallbackCounts = { localOnlyPath: 0, localNoCapability: 0, other: 0 };
 
   /**
-   * Record a locally-served request.
+   * Reasons whose path never leaves this process (`.agents/**`, outside the root).
    *
-   * The two counters mean different things and must not be merged: `localOnlyPath` counts paths
-   * this env refuses to send (`.agents/**`, outside the root), while `localNoCapability` counts
-   * requests the client *could* have served but did not — either because the capability is
-   * missing, or because the session does not exist yet. Deliberate local routes (byte reads,
-   * free-text commands) are neither: they are already in an "other" bucket, because reporting them
-   * as a missing capability would make the matrix read as if the client were less capable than it
-   * is.
-   */
-  /**
-   * `no-session-yet` sits in `localNoCapability`, not in `localOnlyPath`, because the reason is
-   * *when* the request happened, not *where* it pointed: the path would have gone to the client a
-   * moment later. Filing it under the path bucket would make a startup read look like a guard hit.
+   * They are counted in `localOnlyPath` — not in `localNoCapability`, and not as a "capability gap"
+   * line — because the client was never the intended route.
    */
   const PATHS_WE_NEVER_SEND = ["local-only-path"];
   /**
@@ -200,6 +190,21 @@ export function createAcpClientEnv(options: AcpClientEnvOptions): AcpClientEnv {
     "no-capability:writeTextFile",
     "no-capability:terminal",
   ];
+  /**
+   * Record a locally-served request: bucket it, then log only what a user can act on.
+   *
+   * The two counters mean different things and must not be merged: `localOnlyPath` counts paths
+   * this env refuses to send (`.agents/**`, outside the root), while `localNoCapability` counts
+   * requests the client *could* have served but did not — either because the capability is
+   * missing, or because the session does not exist yet. Deliberate local routes (byte reads,
+   * free-text commands) are neither: they are already in an "other" bucket, because reporting them
+   * as a missing capability would make the matrix read as if the client were less capable than it
+   * is.
+   *
+   * `no-session-yet` sits in `localNoCapability`, not in `localOnlyPath`, because the reason is
+   * *when* the request happened, not *where* it pointed: the path would have gone to the client a
+   * moment later. Filing it under the path bucket would make a startup read look like a guard hit.
+   */
   const note = (reason: string): void => {
     if (PATHS_WE_NEVER_SEND.includes(reason)) fallbackCounts.localOnlyPath += 1;
     else if (NO_CAPABILITY_REASONS.includes(reason)) fallbackCounts.localNoCapability += 1;

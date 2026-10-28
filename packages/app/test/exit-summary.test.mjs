@@ -31,7 +31,9 @@ assert.equal(formatDuration(Number.NaN), "0s", "NaN must not leak into the line"
 assert.equal(formatCost(0), "$0.00");
 assert.equal(formatCost(-1), "$0.00");
 assert.equal(formatCost(0.0042), "$0.0042", "sub-cent costs keep enough precision to be meaningful");
+assert.equal(formatCost(0.5), "$0.500", "a sub-dollar amount keeps three decimals here AND in the footer");
 assert.equal(formatCost(1.234), "$1.23");
+assert.equal(formatCost(Number.NaN), "$0.00", "a missing cost must not print $NaN");
 
 // ---------------------------------------------------------------------------
 // buildExitSummaryLines — the empty case

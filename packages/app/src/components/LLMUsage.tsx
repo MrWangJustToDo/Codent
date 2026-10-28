@@ -3,14 +3,9 @@ import { Box, Text } from "ink";
 import { useAgentUsage } from "../hooks/use-agent-usage";
 import { COLORS } from "../theme/colors.js";
 import { formatContextUsage } from "../utils/format-usage.js";
+import { formatCost } from "../utils/format.js";
 
 import { AnimateNumber } from "./AnimateNumber";
-
-function formatCost(cost: number): string {
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  if (cost < 1) return `$${cost.toFixed(3)}`;
-  return `$${cost.toFixed(2)}`;
-}
 
 /**
  * Footer usage: lifetime in/out (billing) · context fill · cost.

@@ -1,5 +1,10 @@
 import { getCliElapsedMs } from "./cli-session-start.js";
 import { formatCompactNumber } from "./format-usage.js";
+import { formatCost } from "./format.js";
+
+// Kept exported from this module (the exit summary's own test imports it here); the definition is
+// `./format.ts`, shared with the footer and `/usage`.
+export { formatCost };
 
 /**
  * The exit summary, rendered as plain text: session identity, what it cost, and how to come back.
@@ -37,13 +42,6 @@ export function formatDuration(ms: number): string {
   if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
   if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
   return `${seconds}s`;
-}
-
-/** `$1.23`, `$0.0042`, `$0.00` — more precision the smaller the number gets. */
-export function formatCost(cost: number): string {
-  if (!Number.isFinite(cost) || cost <= 0) return "$0.00";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
 }
 
 /** Cost trend for the whole run: no cost, or generation that never ran, both report `-`. */

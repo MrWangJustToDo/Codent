@@ -118,19 +118,6 @@ function thoughtLevelConfigOption(snapshot: AgentSessionSnapshot): SessionConfig
 }
 
 /**
- * The catalog entry a session's current model's connection belongs to.
- *
- * `selectedEntryIndex` is the entry the connection was actually taken from — recorded by whoever
- * switched it ({@link applyModel}) and seeded at `session/new` from the config's active entry. It is
- * consulted FIRST because a model id is only unique within an entry: with `shared` in two entries,
- * first-match resolution names entry 0 for a session running on entry 1's connection, and
- * re-selecting that advertised value would then dispatch entry 0's credentials.
- *
- * First-match stays as the fallback for a session whose entry was never recorded in this process —
- * a resumed session: its snapshot carries the model id but not the connection, so this is the best
- * available answer rather than a claim.
- */
-/**
  * The read → the entry list this module projects. The read is the runtime's (`readModels()`, one
  * `loadModels` result); index = position, which is exactly what `encodeModelChoice` encodes.
  */
@@ -144,6 +131,19 @@ function entriesOf(read: ModelCatalogRead | undefined): AcpModelCatalogEntry[] |
   }));
 }
 
+/**
+ * The catalog entry a session's current model's connection belongs to.
+ *
+ * `selectedEntryIndex` is the entry the connection was actually taken from — recorded by whoever
+ * switched it ({@link applyModel}) and seeded at `session/new` from the config's active entry. It is
+ * consulted FIRST because a model id is only unique within an entry: with `shared` in two entries,
+ * first-match resolution names entry 0 for a session running on entry 1's connection, and
+ * re-selecting that advertised value would then dispatch entry 0's credentials.
+ *
+ * First-match stays as the fallback for a session whose entry was never recorded in this process —
+ * a resumed session: its snapshot carries the model id but not the connection, so this is the best
+ * available answer rather than a claim.
+ */
 function resolveCurrentEntry(
   catalog: AcpModelCatalogEntry[],
   current: string,

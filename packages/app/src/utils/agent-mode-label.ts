@@ -1,4 +1,4 @@
-import { formatPlanModeFooterLabel, todoProgressFromItems } from "./plan-footer-label.js";
+import { formatPlanModeFooterLabel, todoProgressFromItems } from "@codent/core";
 
 import type { AgentMode, AgentSessionSnapshot } from "@codent/core";
 

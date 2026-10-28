@@ -196,4 +196,72 @@ const toolDef = (name) => ({
   assert.equal(tools.has("second-tool"), true);
 }
 
+// ============================================================================
+// 5. The lease covers the two side-effecting surfaces: ctx.llm and ctx.events.emit
+// ============================================================================
+//
+// Both were outside it. `ctx.llm.complete` had no `isLive` check at all, so an extension that kept a
+// timer (the documented pattern) could spend the user's tokens and the session's budget after the
+// panel said "disabled". `ctx.events.emit` could still drive OTHER extensions' interceptors. Neither
+// reaches the host's own state (`emit` goes to interception only, never to observers/retained), so
+// the fix is a refusal, not a rollback.
+{
+  const tools = new Map();
+  const runner = new ExtensionRunner({
+    onRegisterTool: (def, ownerId) => tools.set(def.name, { ownerId, def }),
+    onUnregisterTool: (name, ownerId) => {
+      if (tools.get(name)?.ownerId === ownerId) tools.delete(name);
+    },
+    log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    // A runtime is required for the live path to succeed; without it the assertion below would pass
+    // for the wrong reason (the "no-adapter" rejection).
+    getRuntime: () => ({ complete: async () => ({ text: "ok" }) }),
+  });
+
+  let fired = 0;
+  let live;
+  let revoked;
+  await runner.loadExtension({
+    id: "interceptor",
+    name: "interceptor",
+    activate(ctx) {
+      live = ctx;
+      ctx.registerInterceptor("test:lease-probe", () => {
+        fired += 1;
+        return false;
+      });
+    },
+  });
+  await runner.loadExtension({
+    id: "caller",
+    name: "caller",
+    activate(ctx) {
+      revoked = ctx;
+    },
+  });
+
+  assert.deepEqual(await revoked.llm.complete({ prompt: "hi" }), { text: "ok" }, "a live extension may call the model");
+  await revoked.events.emit({ type: "test:lease-probe", payload: {} });
+  assert.equal(fired, 1, "a live extension's emit reaches another extension's interceptor");
+  assert.equal(revoked.events.hasInterceptors("test:lease-probe"), true);
+
+  await runner.setEnabled("caller", false);
+
+  await assert.rejects(
+    () => revoked.llm.complete({ prompt: "hi" }),
+    (error) => error?.code === "revoked",
+    "a revoked extension's completion is refused (it must not spend tokens)"
+  );
+  await revoked.events.emit({ type: "test:lease-probe", payload: {} });
+  assert.equal(fired, 1, "and its emit no longer reaches anyone");
+  assert.equal(revoked.events.hasInterceptors("test:lease-probe"), false, "nor does it advertise interceptors");
+
+  // The live extension is unaffected — this is a lease, not a global switch.
+  assert.equal(live.events.hasInterceptors("test:lease-probe"), true);
+  await live.events.emit({ type: "test:lease-probe", payload: {} });
+  assert.equal(fired, 2);
+
+  await runner.destroyAll();
+}
+
 console.log("\nvalidate-extension-lifecycle-lease: all assertions passed");

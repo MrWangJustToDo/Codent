@@ -78,6 +78,14 @@ export { isActiveStatus } from "./runtime-types/agent-status.js";
 export type { AgentStatus } from "./runtime-types/agent-status.js";
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "./managers/controllers/agent-chat-controller.js";
 export type { PlanModePhase, PlanModeState, BeginPlanExecutionResult } from "./agent/plan/plan-mode-controller.js";
+// The footer label is a pure projection of the plan phase (+ todo progress), and the TUI is not its
+// only possible consumer: keeping the one definition in core is what stops a host copy drifting from
+// the phase machine it describes (the app carried a byte-identical copy that only its tests missed).
+export {
+  formatPlanModeFooterLabel,
+  todoProgressFromItems,
+  type PlanTodoProgress,
+} from "./agent/plan/plan-footer-label.js";
 export type { QueueMode } from "./agent/queue/pending-message-queue.js";
 
 // ============================================================================

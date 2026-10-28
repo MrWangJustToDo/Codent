@@ -53,8 +53,10 @@ export interface ChildProjectorOptions {
 }
 
 export interface ChildProjectorHandle {
-  /** Attach to the child session. `replay` sends its retained transcript (a newly announced child); */
-  /** `false` attaches without history (a parent `load`/`resume`). */
+  /**
+   * Attach to the child session. `replay` sends its retained transcript (a newly announced child);
+   * `false` attaches without history (a parent `load`/`resume`).
+   */
   start(options: { replay: boolean }): void;
   stop(): void;
 }

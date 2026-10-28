@@ -449,6 +449,28 @@ export class RemoteSessionClient implements AgentSession {
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+    /**
+     * Deliver one frame to the subscriber **without letting it kill the stream**.
+     *
+     * A subscriber is host code (a store setter, a UI update). It used to be called directly from
+     * the reader loop, so a throw propagated into the transport catch and read as a dead
+     * connection: the client resynced (`:467`) and reconnected every backoff interval, while the
+     * event had ALREADY been applied to `this.snapshot` — the UI stayed stale and the two
+     * diverged. One bad setter became a resync storm. Local sessions drop the same failure (their
+     * `Emitter` isolates it), so this is also what makes the two planes behave the same.
+     */
+    let subscriberErrors = 0;
+    const deliver = (event: AgentSessionEvent): void => {
+      try {
+        handler(event);
+      } catch (error) {
+        subscriberErrors += 1;
+        if (subscriberErrors === 1) {
+          console.error("[RemoteSessionClient] session subscriber threw; the event was dropped", error);
+        }
+      }
+    };
+
     const connectLoop = async (): Promise<void> => {
       let firstConnect = true;
       while (!stopped && !stopController.signal.aborted) {
@@ -514,7 +536,7 @@ export class RemoteSessionClient implements AgentSession {
                     this.snapshot = { ...this.snapshot, messages: result.messages };
                     this.snapshotVersion += 1;
                   }
-                  handler({ ...event, payload: this.snapshot.messages });
+                  deliver({ ...event, payload: this.snapshot.messages });
                   continue;
                 }
                 this.snapshot = applyEvent(this.snapshot, event, this.summaryCache, this.toolBufferCache);
@@ -522,7 +544,7 @@ export class RemoteSessionClient implements AgentSession {
                 if (event.channel === "tool-presentation") {
                   this.setToolDescriptors(this.snapshot.toolDescriptors);
                 }
-                handler(event);
+                deliver(event);
               }
             }
           } finally {

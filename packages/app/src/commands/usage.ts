@@ -7,6 +7,7 @@ import { useConfig } from "../hooks/use-config.js";
 import { useSize } from "../hooks/use-size.js";
 import { BG } from "../theme/colors.js";
 import { formatCompactNumber } from "../utils/format-usage.js";
+import { formatCost } from "../utils/format.js";
 import { usageHeatmapWindow } from "../utils/usage-heatmap.js";
 
 import { registerBuiltinCommand } from "./utils/registry.js";
@@ -37,13 +38,6 @@ function fmt(n: number): string {
   // here had drifted to different precision (`1.0k` where the footer printed `1.00k`), so the
   // same number read differently in the `/usage` block and the footer above it.
   return formatCompactNumber(n);
-}
-
-function formatCost(cost: number): string {
-  if (cost <= 0) return "$0.00";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  if (cost < 1) return `$${cost.toFixed(3)}`;
-  return `$${cost.toFixed(2)}`;
 }
 
 function pct(part: number, total: number): string {

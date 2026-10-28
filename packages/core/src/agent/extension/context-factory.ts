@@ -15,6 +15,7 @@
 
 import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
 
+import { ExtensionLlmError } from "./extension-llm-error.js";
 import { z } from "./extension-zod.js";
 
 import type { DispatchRank } from "../dispatch-order.js";
@@ -140,7 +141,19 @@ export function createExtensionContext(
     // Overloads cannot be expressed by an object literal, so the single runtime entry point is
     // cast to the public shape; the implementation narrows on presence of `schema`.
     llm: {
-      complete: (request: ExtensionLlmRequest) => host.completeLlm(api.id, request),
+      // A lease like every `register*`: a retained timer or promise continuation must not spend the
+      // user's tokens after the panel says "disabled". `complete` is async by contract, so a revoked
+      // call REJECTS with a typed error instead of throwing synchronously — the caller's `try/catch`
+      // or `.catch` sees the same shape as any other failure.
+      complete: (request: ExtensionLlmRequest) =>
+        host.isLive(context)
+          ? host.completeLlm(api.id, request)
+          : Promise.reject(
+              new ExtensionLlmError(
+                "revoked",
+                `Extension "${api.id}" is no longer active; its \`ctx.llm.complete\` call was refused.`
+              )
+            ),
     } as ExtensionLlm,
 
     registerTool: (def: ExtensionToolDefinition) => {
@@ -265,8 +278,14 @@ export function createExtensionContext(
       // Delegate interception to the shared facade and add this extension's
       // observer accessors. Not a spread: `BusExtensionEventBus` keeps its
       // methods on the prototype, so spreading the instance would drop them.
-      emit: (event) => host.eventBus.emit(event),
-      hasInterceptors: (type) => host.eventBus.hasInterceptors(type),
+      //
+      // Both of these are leases too, for a different reason than `register*`: an interceptor event
+      // drives OTHER extensions' handlers. Observer dispatch and retained state are not reachable
+      // from here (the facade only calls `intercept`), but a retained callback could still make
+      // someone else's `tool:before:*` / `before_agent_start` handler run — and `hasInterceptors` is
+      // a fast-path guard whose whole contract is "will anything receive this".
+      emit: (event) => (host.isLive(context) ? host.eventBus.emit(event) : Promise.resolve(undefined)),
+      hasInterceptors: (type) => host.isLive(context) && host.eventBus.hasInterceptors(type),
       // The `ctx.events.on` accessor is an interceptor registration equivalent to
       // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension
       // ordering itself with `order` would get its declared position through one entry point

@@ -153,15 +153,21 @@ export class AgentChatController {
 
   /**
    * Whether a pump is executing or queued, OR the run is parked on a user interaction (tool
-   * approval / `ask_user`).
+   * approval / `ask_user`), OR a manual `/compact` owns the agent.
    *
    * The parked case matters: `pumpDepth` is 0 and nothing is queued while the agent waits, yet
    * the turn is still open. `/compact` inside that window appended a checkpoint in front of a
    * tool loop that had not finished, and `/clone` / `/fork` dehydrated a branch whose last turn
    * can never complete.
+   *
+   * The compaction term matters for the same reason one level up: a manual `/compact` is a real
+   * summarizer call running with **no pump**, so every check keyed on the pump reported "idle".
+   * Anything that promises "the transcript is settled" (`/clone`, `/fork`) must see it.
    */
   isRunActive(): boolean {
-    return this.isPumpLive() || hasPendingInteraction(this.channel.getMessages());
+    return (
+      this.isPumpLive() || hasPendingInteraction(this.channel.getMessages()) || this.managed.compactions.isRunning()
+    );
   }
 
   /**
@@ -344,6 +350,14 @@ export class AgentChatController {
    */
   forceSubmit(content: string | ContentPart[]): void {
     assertNotCompactionSummaryInput(content);
+    // A manual `/compact` is work in flight with NO pump, so there is nothing to interrupt: the
+    // message would start a pump beside the summarizer, appending the checkpoint inside a
+    // half-finished turn and resetting the window usage the new turn is accumulating. Queue it —
+    // `resumeAfterCompaction()` releases exactly like a follow-up when the compaction ends.
+    if (this.managed.compactions.isRunning()) {
+      this.followUp(content);
+      return;
+    }
     // Only a live run is interrupted. On an idle agent `interruptCurrentRun` emitted `agent:abort`
     // and finalized an "aborted" turn that never existed (`agent:stop` with no `turn:start`), which
     // inflates any consumer that counts runs by `agent:stop`.

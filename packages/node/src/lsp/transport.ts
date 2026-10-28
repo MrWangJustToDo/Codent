@@ -30,10 +30,6 @@ import type {
 } from "vscode-languageserver-protocol";
 
 /**
- * Create an LSP connection that spawns `config.command` as a child process and
- * performs the LSP `initialize` handshake over its stdio.
- */
-/**
  * How long a request may wait for a response before the host cancels it.
  *
  * Generous on purpose: a cold language server can take seconds to answer its first request while it
@@ -42,6 +38,10 @@ import type {
  */
 export const DEFAULT_LSP_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Create an LSP connection that spawns `config.command` as a child process and
+ * performs the LSP `initialize` handshake over its stdio.
+ */
 export function createLspConnection(config: LspServerConfig): LspConnection {
   return new NodeLspConnection(config);
 }

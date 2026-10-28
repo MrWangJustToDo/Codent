@@ -1,22 +1,23 @@
 /**
- * File-size guard for every package's `src`.
+ * File-size guard for every package's source.
  *
  * The design guideline is 400 lines (`.cursor/rules/040`); the enforced ceiling is 800
  * (`eslint max-lines` with `skipBlankLines`). This guard counts the SAME metric (non-blank lines),
  * so the two cannot disagree — the old raw-line count made `server/remote-session-client.ts` fail
  * here while passing ESLint, and it only scanned `packages/core/src`, so the ceiling did not exist
- * for any other package. Keep every file above the ceiling in the allowlist with a written reason;
- * fail any new one, and fail an allowlisted file that drops back under (a stale exemption).
+ * for any other package. A package with no `src` (the WXT extension) is walked from its root rather
+ * than skipped — the earlier `catch { continue; }` claimed a coverage it did not have.
+ * Keep every file above the ceiling in the allowlist with a written reason; fail any new one, and
+ * fail an allowlisted file that drops back under (a stale exemption).
  *
  * Run: pnpm --filter @codent/core run validate:file-size
  */
 
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
-const PACKAGES = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+import { collectPackageSources, packageNames } from "./helpers/package-sources.mjs";
+
 const MAX_LINES = 800;
 
 /** Existing over-ceiling files (`<package>/<path under src>`). Every entry must still exceed it. */
@@ -39,39 +40,20 @@ const ALLOWLIST = new Map([
   ],
 ]);
 
-async function collect(dir) {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const out = [];
-  for (const entry of entries) {
-    const absolute = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...(await collect(absolute)));
-    // `.tsx` too: ESLint's `max-lines` applies to JSX files, and leaving them out of this scan let
-    // a file be red in `pnpm lint` and green here — the guard inverted.
-    else if (entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))) out.push(absolute);
-  }
-  return out;
-}
-
-const packages = (await readdir(PACKAGES, { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name)
-  .sort();
-
 const over = [];
 const seen = new Set();
 let scanned = 0;
+const packages = await packageNames();
 for (const pkg of packages) {
-  const srcDir = join(PACKAGES, pkg, "src");
   let files;
   try {
-    files = await collect(srcDir);
+    files = await collectPackageSources(pkg);
   } catch {
-    continue; // package without a src tree
+    continue; // unreadable package (no source tree at all)
   }
-  for (const file of files) {
+  for (const { absolute, relative } of files) {
     scanned += 1;
-    const relative = `${pkg}/${file.slice(srcDir.length + 1).replaceAll("\\", "/")}`;
-    const source = await readFile(file, "utf8");
+    const source = await readFile(absolute, "utf8");
     // SAME metric as `eslint max-lines` + `skipBlankLines`.
     const lines = source.split("\n").filter((line) => line.trim().length > 0).length;
     if (lines > MAX_LINES) {

@@ -139,13 +139,12 @@ export interface AcpProjectorOptions {
   /** Pending approvals / ask_user, forwarded from the `interaction` channel. */
   onInteraction?: (payload: unknown) => void;
   /**
-   * Every lifecycle event, before compaction handling.
+   * The raw `state` payload, before projection — every lifecycle frame, before compaction handling.
    *
-   * The ACP host uses this to remember the run's finish reason (`llm:response`), which is what
-   * distinguishes a `max_tokens` stop from a natural end — core carries it on this channel rather
-   * than in the session snapshot.
+   * The ACP host uses it to remember the run's finish reason (`llm:response`), which is what
+   * distinguishes a `max_tokens` stop from a natural end: core carries it on the state channel
+   * rather than in the session snapshot.
    */
-  /** The raw `state` payload, before projection (used for the run's finish reason). */
   onState?: (state: AgentL1State) => void;
   /** Read a workspace file, for `write_file`'s real `oldText` on an overwrite. */
   readFile?: (absolutePath: string) => Promise<string | null>;
@@ -1118,13 +1117,6 @@ export class AcpProjector {
   }
 
   /**
-   * The `summary` channel: the compact summarizer's own stream.
-   *
-   * A task summary is not ours to project (its row is the `task` tool call), so only `compact` is
-   * followed. `reset` opens the row, `append` streams it, `end` closes it — which is the protocol's
-   * `compaction_summary_chunk` contract verbatim ("a first-seen id creates an in-progress compaction").
-   */
-  /**
    * Project a `subagents` snapshot: announce first sighting, patch changed rows, forget removed ones.
    *
    * The row list includes internal workers (compaction / memory summarizers); `diffSubagents`
@@ -1181,6 +1173,14 @@ export class AcpProjector {
     return undefined;
   }
 
+  /**
+   * The `summary` channel: the compact summarizer's own stream.
+   *
+   * A task summary is not ours to project (its row is the `task` tool call), so only `compact` is
+   * followed. `reset` opens the row, `append` streams it, `end` closes it — which is the protocol's
+   * `compaction_summary_chunk` contract verbatim ("a first-seen id creates an in-progress compaction").
+   * Task streams are keyed separately by `task:<toolCallId>` and update that row instead.
+   */
   private onSummary(event: AgentStreamEvent): void {
     if (event.type === "reset") {
       // A task summary is the PARENT-facing result stream for one task tool call. It is not a

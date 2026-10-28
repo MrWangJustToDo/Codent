@@ -70,15 +70,11 @@ export interface LocalAcpBootstrap {
   host: AgentSessionHost;
   defaults: AcpAgentDefaults;
   rootPath: string;
-  /**
-   * The selectable models from `.agents/config/models.json`, when that file was the source.
-   *
-   * Absent on the explicit-flags path (`--model …`) and on the `.env` fallback, which is what
-   * makes the ACP model selector disappear there: a selector offering exactly one value would be
-   * a fake choice. The list is process-wide (one config file), while the *current* model is
-   * per-session — see `sessionConfigOptions` in `agent.ts`.
-   */
-  /** The runtime's model read (the ONE `loadModels` result) — the host projects it. */
+  /** The runtime's model read (the ONE `loadModels` result) — the host projects it. Absent on the
+   *  explicit-flags path (`--model …`) and on the `.env` fallback, which is what makes the ACP model
+   *  selector disappear there: a selector offering exactly one value would be a fake choice. The list
+   *  is process-wide (one config file), while the *current* model is per-session — see
+   *  `sessionConfigOptions` in `agent.ts`. */
   models?: ModelCatalogRead;
   /** The entry the resolved default model came from — seeds a new session's recorded entry. */
   modelsDefaultEntryIndex?: number;

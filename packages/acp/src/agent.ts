@@ -1118,13 +1118,6 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
   });
 
   /**
-   * Apply a mode to a live session — the ONE place a mode change happens.
-   *
-   * ACP reaches this by two routes (`session/set_mode`, and `session/set_config_option` via the
-   * `mode` config option it advertises), and they must not grow into two mode systems: the
-   * dispatch, the re-read and the follow-up update are all one behaviour.
-   */
-  /**
    * Re-advertise the WHOLE option set, but only when the value actually changed.
    *
    * The protocol's `ConfigOptionUpdate` carries `configOptions` and has no incremental form, so a
@@ -1191,6 +1184,13 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
     effort: bridge.lastAdvertisedConfigEffort,
   });
 
+  /**
+   * Apply a mode to a live session — the ONE place a mode change happens.
+   *
+   * ACP reaches this by two routes (`session/set_mode`, and `session/set_config_option` via the
+   * `mode` config option it advertises), and they must not grow into two mode systems: the
+   * dispatch, the re-read and the follow-up update are all one behaviour.
+   */
   app.onRequest(methods.agent.session.setMode, async (ctx) => {
     const bridge = findBridge(ctx.params.sessionId);
     // Reject, like every other handler that must CHANGE something: reporting success for a session

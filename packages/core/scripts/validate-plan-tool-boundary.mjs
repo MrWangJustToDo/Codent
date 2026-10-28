@@ -170,4 +170,28 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
   );
 }
 
+// ============================================================================
+// 3. Editing tools are approval-gated, not just plan-mode-gated
+// ============================================================================
+//
+// Plan mode withholding a write tool protects the PLANNING phase. Outside it, the user still has to
+// be asked, and that is `needsApproval` — a separate declaration. `code_rewrite` (category `edits`,
+// writes with `dry_run: false`) had neither: plan mode withheld it after the boundary was made
+// declarative, but with no approval it applied multi-file rewrites with no prompt at all.
+//
+// Source-level because the LSP tool is a plain object built from live deps (a grammar locator and
+// manager), while the fs tools are instantiable — both are `defineServerTool` declarations, so the
+// literal is the contract in each case.
+{
+  const read = (relative) => readFileSync(join(SRC, relative), "utf8");
+  assert.match(
+    read("agent/lsp/tools/code-rewrite.ts"),
+    /needsApproval:\s*true/,
+    "code_rewrite declares `edits` and can write, so it must be approval-gated"
+  );
+  for (const tool of [createWriteFileTool(), createEditFileTool(), createDeleteFileTool()]) {
+    assert.equal(tool.needsApproval, true, `${tool.name}: a workspace-mutating tool must declare needsApproval`);
+  }
+}
+
 console.log("plan-tool-boundary validation passed");

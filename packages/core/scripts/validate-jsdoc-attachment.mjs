@@ -15,15 +15,16 @@
  * from the first declaration's doc is normal and is not reported. A plain block comment
  * (for example an `eslint-disable` directive) is not JSDoc and never counts as the first block.
  *
+ * Scanned across EVERY package's source (not just core): the abandoned-doc shape is a refactor
+ * artifact, and hosts refactor at least as much as core does.
+ *
  * Run: pnpm --filter @codent/core run validate:jsdoc-attachment
  */
 
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
+import { collectPackageSources, packageNames } from "./helpers/package-sources.mjs";
 
 /**
  * 1-based line numbers whose JSDoc block closes immediately above another JSDoc block.
@@ -85,21 +86,12 @@ for (const [name, source, expected] of SELF_CHECKS) {
   assert.deepEqual(stackedJsDocLines(source), expected, `scanner self-check failed: ${name}`);
 }
 
-async function collect(dir) {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const out = [];
-  for (const entry of entries) {
-    const absolute = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...(await collect(absolute)));
-    else if (entry.isFile() && entry.name.endsWith(".ts")) out.push(absolute);
-  }
-  return out;
-}
-
 const violations = [];
-for (const file of await collect(SRC)) {
-  for (const line of stackedJsDocLines(await readFile(file, "utf8"))) {
-    violations.push(`${relative(SRC, file).replaceAll("\\", "/")}:${line}`);
+for (const pkg of await packageNames()) {
+  for (const { absolute, relative } of await collectPackageSources(pkg)) {
+    for (const line of stackedJsDocLines(await readFile(absolute, "utf8"))) {
+      violations.push(`${relative}:${line}`);
+    }
   }
 }
 
