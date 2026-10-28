@@ -22,7 +22,15 @@ export function createPlanModeMiddleware(deps: PlanModeMiddlewareDeps): ChatMidd
       if (!reason) return;
       return {
         type: "skip",
-        result: { error: reason },
+        // The shared denial marker, not a bare `{ error }`: `getUiToolState` reads no `success`
+        // from the bare shape, so a plan-blocked tool rendered as a GREEN success with no body,
+        // while an extension refusal with the marker renders as denied. One refusal, one look.
+        result: {
+          success: false,
+          cancelled: false,
+          denied: true,
+          error: reason,
+        },
       };
     },
   });

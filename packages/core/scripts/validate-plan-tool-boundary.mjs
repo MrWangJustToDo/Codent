@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   BUILTIN_PRESENTATION,
+  createPlanModeMiddleware,
+  formatToolOutput,
   PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES,
   createDeleteFileTool,
   createEditFileTool,
@@ -31,6 +33,28 @@ import {
   isPlanModeForbiddenTool,
   isWorkspaceEditingTool,
 } from "../dist/dev.mjs";
+
+// A plan refusal is a DENIAL, not a tool failure (and definitely not a success).
+//
+// It used to return a bare `{ error }`: the UI reads no `success` from that shape, so a blocked
+// tool rendered as a green success row with no body while the extension refusal (which carries
+// `denied: true`) rendered as denied. One refusal, two looks — and this one looked successful.
+{
+  const middleware = createPlanModeMiddleware({
+    getPlanMode: () => ({ isRestrictingTools: () => true }),
+  });
+  const action = await middleware.onBeforeToolCall?.({}, { toolName: "write_file", args: {} });
+  assert.equal(action?.type, "skip", "plan mode skips a blocked tool");
+  assert.equal(action.result.success, false, "…with the shared denial marker");
+  assert.equal(action.result.denied, true);
+  assert.equal(action.result.cancelled, false);
+  assert.match(String(action.result.error), /blocked while planning/);
+  assert.match(
+    formatToolOutput(action.result, "write_file"),
+    /Denied/,
+    "the row says denied instead of rendering as a successful empty result"
+  );
+}
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 

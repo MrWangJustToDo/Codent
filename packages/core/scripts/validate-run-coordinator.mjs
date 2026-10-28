@@ -44,4 +44,30 @@ assert.equal(compaction.getMaxReactiveCompactRetries() > 0, true);
   assert.equal(pending.signal.aborted, true);
 }
 
+// An abort that lands in a LATER task must target the run it belongs to. The timer used to read
+// `this.currentAbortController` when it fired, so a run prepared in between was aborted instead.
+{
+  const late = new RunCoordinator();
+  const external = new AbortController();
+  late.setupAbortController(external.signal, { onAborted: () => {} });
+  const first = late.currentAbortController;
+
+  // This aborts the first run's external signal: the listener schedules a `setTimeout` for it.
+  external.abort("user-cancelled");
+
+  // A new run starts before that timer fires.
+  let secondAborted = false;
+  late.setupAbortController(undefined, {
+    onAborted: () => {
+      secondAborted = true;
+    },
+  });
+  const second = late.currentAbortController;
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(first.signal.aborted, true, "the first run's controller is the one the timer aborts");
+  assert.equal(second.signal.aborted, false, "a late abort timer must not abort the next run");
+  assert.equal(secondAborted, false, "…nor trip its aborted listener");
+}
+
 console.log("run-coordinator validation passed");

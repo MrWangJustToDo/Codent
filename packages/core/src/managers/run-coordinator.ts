@@ -37,7 +37,8 @@ export class RunCoordinator {
 
   setupAbortController(abortSignal: AbortSignal | undefined, setup: AbortControllerSetup): void {
     this.cancelAbortController();
-    this.currentAbortController = new AbortController();
+    const controller = new AbortController();
+    this.currentAbortController = controller;
 
     const abortListener = () => setup.onAborted();
     this.currentAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -57,7 +58,9 @@ export class RunCoordinator {
           item.abort(abortSignal.reason);
           item = this.pendingAbortControllers.pop();
         }
-        setTimeout(() => this.currentAbortController?.abort(abortSignal.reason));
+        // Captured, not read off the field: this timer lands after the current task, and a new run
+        // can have replaced `currentAbortController` by then — reading it would abort the NEXT run.
+        setTimeout(() => controller.abort(abortSignal.reason));
       } else {
         // The listener's argument is the abort **Event**, not the reason — forwarding it as
         // one (the old signature read `(reason: Event)`) put an Event object on the internal
@@ -71,7 +74,8 @@ export class RunCoordinator {
             item.abort(reason);
             item = this.pendingAbortControllers.pop();
           }
-          setTimeout(() => this.currentAbortController?.abort(reason));
+          // Same capture as above: this run's controller, never whatever is current when it fires.
+          setTimeout(() => controller.abort(reason));
         };
         abortSignal.addEventListener("abort", listener);
         this.externalAbortSignal = abortSignal;

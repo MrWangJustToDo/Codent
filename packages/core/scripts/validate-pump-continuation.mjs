@@ -83,4 +83,50 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   assert.equal(pumps, 1, "only the fresh epoch's pump may run");
 }
 
+// A pump queued while another was live must not start a model call over a settled turn.
+//
+// An approval answered during `applyCommandSafetyPolicy` (an awaited CoreEnv call), or a late
+// auto-mode batch, enqueues a pump even though the LIVE pump is about to finish the turn itself.
+// The queued pump used to run `executeStream` unconditionally: `completed` became `running` again
+// and a whole model call was spent re-asking a transcript that already had its answer.
+{
+  const managed = new ManagedAgent(
+    { name: "pump-admission", model: "test-model" },
+    { log: new AgentLog(), tools: {}, todoManager: null }
+  );
+  const chat = managed.initChat({});
+  const channel = chat.getUIChannel();
+  let streams = 0;
+  chat.executeStream = async () => {
+    streams += 1;
+  };
+
+  channel.setMessages([
+    { id: "u1", role: "user", parts: [{ type: "text", content: "run it" }] },
+    {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "call_1",
+          name: "run_command",
+          arguments: "{}",
+          state: "complete",
+          output: { success: true, stdout: "ok", exitCode: 0 },
+        },
+      ],
+    },
+    { id: "a2", role: "assistant", parts: [{ type: "text", content: "done" }] },
+  ]);
+
+  await chat.pumpToolPhases?.();
+  assert.equal(streams, 0, "nothing left to continue ⇒ no model call");
+  assert.equal(managed.getStatus(), "idle", "…and the turn is not reopened");
+
+  channel.addUserMessage("next");
+  await chat.pumpToolPhases?.();
+  assert.equal(streams, 1, "a user message still starts the model call");
+}
+
 console.log("validate:pump-continuation passed");

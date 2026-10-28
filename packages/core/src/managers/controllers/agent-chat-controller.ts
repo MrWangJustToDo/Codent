@@ -2,7 +2,6 @@ import { assertNotCompactionSummaryInput } from "../../agent/compaction";
 import { shouldDeferMidRunQueue } from "../../agent/queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../../agent/queue/pending-message-queue.js";
 import { runManagedSpan } from "../../agent/run/managed-span.js";
-import { formatAgentStreamError } from "../../agent/stream/assert-async-iterable.js";
 import { stripEmptyAssistantShells } from "../../agent/stream/empty-assistant-shell.js";
 import { extractAssistantText } from "../../agent/stream/extract-assistant-text.js";
 import {
@@ -506,6 +505,18 @@ export class AgentChatController {
   }
 
   private async pumpToolPhases(options: { startsNewTurn?: boolean } = {}): Promise<void> {
+    // Admission. A pump queued while another one was live can arrive AFTER that pump finished the
+    // turn — an approval answered during `applyCommandSafetyPolicy` (an awaited CoreEnv call), or
+    // an auto-mode batch landing late. Starting it anyway flips `completed` back to `running` and
+    // spends a whole model call re-asking a transcript that already has its answer.
+    //
+    // Skip only a SETTLED transcript: one that ends in the model's reply. Everything that
+    // legitimately continues passes — a new user message (the transcript ends with it), a settled
+    // tool turn with no reply or a deferred/answered tool (`shouldKeepPumping`), any queued input
+    // (`hasQueuedMessages`), and a wake (no prompt, so it passes by flag).
+    const transcript = this.channel.getMessages();
+    const settled = transcript.at(-1)?.role === "assistant";
+    if (!options.startsNewTurn && settled && !this.shouldKeepPumping(transcript)) return;
     const epoch = this.lifecycleEpoch;
     const token = this.managed.run.beginRun();
     this.currentToken = token;
