@@ -109,6 +109,12 @@ export const Help = () => {
             </Box>
             <Text>Max concurrent task subagents (default: 4)</Text>
           </Box>
+          <Box>
+            <Box width={24}>
+              <Text color={COLORS.success}>--sandbox</Text>
+            </Box>
+            <Text>local (OS sandbox, default) or native (no OS sandbox)</Text>
+          </Box>
           {remotePlanes && (
             <>
               <Box>
@@ -159,6 +165,7 @@ export const Help = () => {
             <Text color={COLORS.primary}>BASE_URL=https://openrouter.ai/api/v1</Text>
             <Text color={COLORS.primary}>API_KEY=sk-or-v1-xxx</Text>
             <Text color={COLORS.primary}>MAX_ITERATIONS=30</Text>
+            <Text color={COLORS.primary}>SANDBOX_ENV=local</Text>
             <Text color={COLORS.primary}>REMOTE_PROVIDER=http://localhost:3100</Text>
             {remotePlanes && (
               <>

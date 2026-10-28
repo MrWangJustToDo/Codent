@@ -49,9 +49,30 @@ export { getServerManager, hasServerRuntime } from "./server-runtime.js";
 // Configuration
 // ============================================================================
 
+/**
+ * `--sandbox <local|native>` (also `--sandbox=native`) for a one-off launch; `SANDBOX_ENV` is the
+ * fallback and stays the service-friendly route. Validated here so a typo cannot silently mean
+ * "local" (the env fallback treats anything other than `native` as sandboxed).
+ */
+function readSandboxArg(argv: readonly string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--sandbox") return argv[i + 1] ?? "";
+    if (arg.startsWith("--sandbox=")) return arg.slice("--sandbox=".length);
+  }
+  return undefined;
+}
+
+const sandboxArg = readSandboxArg(process.argv.slice(2));
+if (sandboxArg !== undefined && sandboxArg !== "local" && sandboxArg !== "native") {
+  const detail = sandboxArg === "" ? "requires a value" : `got "${sandboxArg}"`;
+  console.error(`[server] --sandbox must be "local" (OS sandbox) or "native" (no OS sandbox); ${detail}.`);
+  process.exit(1);
+}
+
 const PORT = parseInt(process.env.SERVER_PORT || "3100", 10);
 const ROOT_PATH = process.env.ROOT_PATH || process.cwd();
-const SANDBOX_ENV = process.env.SANDBOX_ENV || "local";
+const SANDBOX_ENV = sandboxArg ?? process.env.SANDBOX_ENV ?? "local";
 const REMOTE_ENV = process.env.REMOTE_ENV;
 
 let coreEnv: CoreEnv;

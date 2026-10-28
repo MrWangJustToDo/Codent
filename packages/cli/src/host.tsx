@@ -93,6 +93,17 @@ function hideNativeCursor(): void {
   }
 }
 
+/** Resolve the launch sandbox: explicit flag > `SANDBOX_ENV` > `local` (OS sandbox). */
+function resolveSandboxMode(productName: string, value: string | undefined): "local" | "native" {
+  if (value !== undefined && value !== "local" && value !== "native") {
+    const detail = value === "" ? "requires a value" : `got "${value}"`;
+    console.error(`[${productName}] --sandbox must be "local" (OS sandbox) or "native" (no OS sandbox); ${detail}.`);
+    process.exit(1);
+  }
+  if (value) return value;
+  return process.env.SANDBOX_ENV === "native" ? "native" : "local";
+}
+
 /** Reject an iteration budget the schema would reject, with the bound the user can act on. */
 function assertMaxIterations(productName: string, value: number): void {
   if (Number.isInteger(value) && value >= 1 && value <= MAX_AGENT_ITERATIONS) return;
@@ -132,6 +143,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   if (isAcpRequested(argv)) {
     const acpConfig = parseCliArgs(argv.slice(1));
     assertMaxIterations(options.productName, acpConfig.maxIterations);
+    const acpSandbox = resolveSandboxMode(options.productName, acpConfig.sandbox);
     await runAcpCommand(
       acpConfig.modelExplicit || acpConfig.remoteProvider
         ? {
@@ -146,6 +158,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       {
         clientEnv: argv.includes("--client-env"),
         version: cliVersion(),
+        sandbox: acpSandbox,
         ...(acpConfig.systemPrompt ? { systemPrompt: acpConfig.systemPrompt } : {}),
         maxIterations: acpConfig.maxIterations,
         ...(acpConfig.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: acpConfig.maxConcurrentTasks } : {}),
@@ -157,6 +170,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
 
   const appConfig = parseCliArgs(argv);
   assertMaxIterations(options.productName, appConfig.maxIterations);
+  const sandboxMode = resolveSandboxMode(options.productName, appConfig.sandbox);
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */
   let inkInstance: Instance | undefined;
 
@@ -242,8 +256,7 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       process.exit(1);
     }
   } else {
-    const useOsSandbox = (process.env.SANDBOX_ENV || "local") !== "native";
-    coreEnv = createNodeEnv({ rootPath: process.cwd(), sandbox: useOsSandbox });
+    coreEnv = createNodeEnv({ rootPath: process.cwd(), mode: sandboxMode === "native" ? "native" : "os" });
     registerCoreEnv(coreEnv);
   }
 

@@ -1113,14 +1113,15 @@ Runtime data under the project root is grouped under a single gitignored `.agent
 
 ## Sandbox Environment Configuration
 
-Configure via `SANDBOX_ENV` environment variable or programmatically.
+Configure via `--sandbox <local|native>` (CLI and ACP), `SANDBOX_ENV`, or programmatically.
+Precedence: explicit flag > env > default.
 
 | Value | Description |
 |-------|-------------|
 | `local` | (default) Real bash + OS sandbox via `@anthropic-ai/sandbox-runtime` |
 | `native` | Real bash and Node.js fs, no OS sandbox |
 
-Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. Env var: `SANDBOX_ENV=local` in `.env` (see README).
+Programmatic equivalent: `createNodeEnv({ rootPath, mode: "os" | "native" })`. Env var: `SANDBOX_ENV=local` in `.env` (see README). The CLI TUI, both ACP entry points (`codent acp`, `codent-acp`) and the server entry accept the flag (`SANDBOX_ENV` stays the service-friendly route).
 
 ## Tool Output Truncation
 

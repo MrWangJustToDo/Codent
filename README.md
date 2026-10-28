@@ -314,13 +314,14 @@ API_KEY=sk-your-key-here
 MODEL=deepseek-v4-flash
 
 # Optional: unified model config (.agents/config/models.json) replaces the
-# MODEL_* env vars — global settings + multiple provider entries + active
-# selection; /models switches the active entry/model at runtime.
+# MODEL_* env vars — provider entries + active selection (+ global websearch
+# toolConfig); /models switches the active entry/model at runtime.
 
 # Optional MODEL_* metadata overrides (name, context window, pricing, capabilities, …)
 # See packages/cli/src/model-env.ts
 
 # Sandbox: native (no sandbox) | local (OS sandbox)
+# `codent --sandbox native` wins over this env var.
 SANDBOX_ENV=native
 
 # Optional websearch (no key required — free providers are used and spread by session)

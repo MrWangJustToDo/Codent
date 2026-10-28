@@ -46,7 +46,8 @@ sudo apt-get install -y bubblewrap socat    # Debian / Ubuntu / WSL
 Without them `codent` starts normally but prints
 `OS sandbox initialization failed (Sandbox dependencies not available: …); shell commands run unsandboxed.`
 and every command runs **unsandboxed** — the agent still works, but commands are no longer
-restricted to the workspace. Set `SANDBOX_ENV=native` to skip the attempt and the warning.
+restricted to the workspace. Set `SANDBOX_ENV=native` (or launch with `--sandbox native`) to skip
+the attempt and the warning.
 
 ## Configure
 

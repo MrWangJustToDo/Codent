@@ -24,7 +24,7 @@ function acpVersion(): string {
 /**
  * Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`,
  * `--api-key/-k`, `--remote-provider`, `--system/-s`, `--max-iterations`,
- * `--max-concurrent-tasks`, `--extension-dirs`, `--mcp-config`).
+ * `--max-concurrent-tasks`, `--extension-dirs`, `--mcp-config`, `--sandbox`).
  */
 function parseFlags(argv: string[]): {
   model?: AcpModelOverride;
@@ -33,6 +33,7 @@ function parseFlags(argv: string[]): {
   maxConcurrentTasks?: number;
   extensionDirs?: string[];
   mcpConfigPath?: string;
+  sandbox?: string;
 } {
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
@@ -64,6 +65,7 @@ function parseFlags(argv: string[]): {
     .map((dir) => dir.trim())
     .filter((dir) => dir.length > 0);
   const mcpConfigPath = get("mcp-config");
+  const sandbox = get("sandbox");
   return {
     ...(model || remoteProvider
       ? {
@@ -81,6 +83,7 @@ function parseFlags(argv: string[]): {
     ...(maxConcurrentTasks !== undefined && Number.isFinite(maxConcurrentTasks) ? { maxConcurrentTasks } : {}),
     ...(extensionDirs?.length ? { extensionDirs } : {}),
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
+    ...(sandbox ? { sandbox } : {}),
   };
 }
 
@@ -93,11 +96,18 @@ async function main(): Promise<void> {
 
   const argv = process.argv.slice(2);
   const flags = parseFlags(argv);
+  if (argv.some((arg) => arg === "--sandbox") && !flags.sandbox) {
+    throw new Error(`--sandbox requires "local" (OS sandbox) or "native" (no OS sandbox)`);
+  }
+  if (flags.sandbox !== undefined && flags.sandbox !== "local" && flags.sandbox !== "native") {
+    throw new Error(`--sandbox must be "local" (OS sandbox) or "native" (no OS sandbox); got "${flags.sandbox}"`);
+  }
   const options = await bootstrapAcpAgent({
     ...(flags.model ? { model: flags.model } : {}),
     // Opt-in: without it the env planes are byte-for-byte what they were before this flag existed.
     clientEnv: argv.includes("--client-env"),
     version: acpVersion(),
+    ...(flags.sandbox ? { sandbox: flags.sandbox } : {}),
     ...(flags.systemPrompt ? { systemPrompt: flags.systemPrompt } : {}),
     ...(flags.maxIterations !== undefined ? { maxIterations: flags.maxIterations } : {}),
     ...(flags.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: flags.maxConcurrentTasks } : {}),

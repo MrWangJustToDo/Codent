@@ -35,9 +35,10 @@ below are the other two ways in.
 Launch flags reach `AcpAgentDefaults` and apply to every session this host creates (session-specific
 values still arrive over the protocol): `--model` / `--style` / `--base-url` / `--api-key` /
 `--remote-provider` (the model connection), `--system` / `-s` (prompt for the process root),
-`--max-iterations`, `--max-concurrent-tasks`, `--extension-dirs` and `--mcp-config`. `--resume` /
-`--continue` do not apply: the ACP client chooses the session. Both entry points also report their
-own package version as `agentInfo.version`.
+`--max-iterations`, `--max-concurrent-tasks`, `--extension-dirs`, `--mcp-config` and `--sandbox`
+(`local` = OS sandbox, `native` = none; `SANDBOX_ENV` is the fallback). `--resume` / `--continue` do
+not apply: the ACP client chooses the session. Both entry points also report their own package
+version as `agentInfo.version`.
 
 The workspace root for a session is the ACP request's **`cwd`** (`session/new`, `load`, `resume`
 and `fork` carry one; when absent it falls back to the process root). It is normalized and must be

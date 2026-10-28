@@ -90,8 +90,8 @@ Important consequences for IM:
 Session settings that are not part of the model planes are forwarded from the command line:
 `--system` / `-s` replaces the built-in prompt for the process root (a session whose `cwd` differs
 rebuilds the prompt from that workspace), `--max-iterations` sets the per-session agent-loop budget
-(1..100), and `--max-concurrent-tasks` / `--extension-dirs` / `--mcp-config` become per-session
-defaults. The standalone `codent-acp` bin accepts the same flags; `--resume` / `--continue` are
+(1..100), `--max-concurrent-tasks` / `--extension-dirs` / `--mcp-config` become per-session
+defaults, and `--sandbox local|native` chooses the OS sandbox (`SANDBOX_ENV` is the fallback). The standalone `codent-acp` bin accepts the same flags; `--resume` / `--continue` are
 protocol-driven (the client selects the session). `global.toolConfig` in `models.json` supplies the
 websearch keys for either entry point.
 

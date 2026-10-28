@@ -108,6 +108,11 @@ const getEnv = (key: string, fallback: string = ""): string => process.env[key] 
 export interface ParsedCliConfig extends Partial<AppConfig> {
   /** Always resolved (flag > env > core default), so a host never has to re-apply a fallback. */
   maxIterations: number;
+  /**
+   * Raw `--sandbox` value. `parseCliArgs` stays pure (no process/env side effects); the host
+   * validates it and applies flag > `SANDBOX_ENV` > `local`.
+   */
+  sandbox?: string;
   /** CoreEnv workspace remote URL (`--remote-env` / REMOTE_ENV). */
   remoteEnv?: string;
   /** Remote model provider URL (`--remote-provider` / REMOTE_PROVIDER). Orthogonal to CoreEnv. */
@@ -123,6 +128,9 @@ export interface ParsedCliConfig extends Partial<AppConfig> {
 
 export function parseCliArgs(argv: string[]): ParsedCliConfig {
   const parsed = parseArgs(argv);
+  // `--sandbox` without a value is a flag with `true`; keep it as an empty string so the host's
+  // resolver rejects it instead of silently falling back to the env/default.
+  const sandboxFlag = getFlag(parsed, "sandbox");
 
   const envModel = getEnv("MODEL") || getEnv("model");
   const envMaxIterations = getEnv("MAX_ITERATIONS") || getEnv("maxIterations");
@@ -213,6 +221,7 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     apiKey: connection.apiKey,
     // Runtime knobs are flag > env > default (no models.json copy — see `ModelsConfigGlobal`).
     systemPrompt: getFlagString(parsed, "", "system", "s"),
+    sandbox: typeof sandboxFlag === "string" ? sandboxFlag : sandboxFlag === true ? "" : undefined,
     initialPrompt: parsed.positional.join(" "),
     maxIterations: getFlagNumber(
       parsed,

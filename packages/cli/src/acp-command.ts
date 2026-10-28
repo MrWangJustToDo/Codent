@@ -13,6 +13,7 @@ export async function runAcpCommand(
   options: {
     clientEnv?: boolean;
     version?: string;
+    sandbox?: "local" | "native";
     systemPrompt?: string;
     maxIterations?: number;
     maxConcurrentTasks?: number;
@@ -27,6 +28,7 @@ export async function runAcpCommand(
     ...(model ? { model } : {}),
     ...(options.clientEnv ? { clientEnv: true } : {}),
     ...(options.version ? { version: options.version } : {}),
+    ...(options.sandbox ? { sandbox: options.sandbox } : {}),
     ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
     ...(options.maxIterations !== undefined ? { maxIterations: options.maxIterations } : {}),
     ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
