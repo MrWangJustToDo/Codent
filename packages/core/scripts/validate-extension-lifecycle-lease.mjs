@@ -18,8 +18,11 @@
  * What this pins:
  *   1. After a disable, late tool registrations are refused (and the refusal is logged once, not
  *      once per tick).
- *   2. A toggle during activation fails honestly instead of lying; the activation then completes.
- *   3. `destroyAll()` during activation leaves no artifacts and no instance.
+ *   2. Disabling during activation is honored: the lease is revoked, nothing lands, and the
+ *      activation ends inactive. (A hung activation must not make the extension impossible to
+ *      turn off — that is the one remedy a broken extension needs.)
+ *   3. `destroyAll()` during activation leaves no artifacts, no instance, and releases resources
+ *      the rest of `activate` acquired after the teardown's `deactivate` ran.
  *   4. Re-enabling hands out a fresh context — a stale `ctx` from the previous incarnation is dead,
  *      which is what closes the "leaked timer fires after re-enable" variant.
  *
@@ -105,7 +108,7 @@ const toolDef = (name) => ({
 }
 
 // ============================================================================
-// 2. Toggling during activation fails honestly, then the activation completes
+// 2. Disabling during activation revokes it, then the activation lands inactive
 // ============================================================================
 {
   const { runner } = makeRunner();
@@ -124,17 +127,13 @@ const toolDef = (name) => ({
   await tick();
 
   const during = await runner.setEnabled("slow", false);
-  assert.equal(during.ok, false, "a toggle during activation must not claim success");
-  assert.match(during.message, /activating/i, "and must say why");
+  assert.equal(during.ok, true, "disabling during activation is honored, not refused");
+  assert.match(during.message, /revoked/i, "and says the activation was revoked");
 
   finishActivate();
   await loading;
-  assert.equal(runner.getExtensionInfos()[0].state, "active", "the activation itself still completes");
-  assert.deepEqual(
-    runner.getTools().map((def) => def.name),
-    ["slow-tool"],
-    "and its registration lands"
-  );
+  assert.equal(runner.getExtensionInfos()[0].state, "inactive", "a revoked activation must not become active");
+  assert.deepEqual(runner.getTools(), [], "and its registration is refused");
 }
 
 // ============================================================================
@@ -143,6 +142,7 @@ const toolDef = (name) => ({
 {
   const { runner, tools } = makeRunner();
   let finishActivate;
+  let deactivations = 0;
   const activationGate = new Promise((resolve) => {
     finishActivate = resolve;
   });
@@ -152,6 +152,9 @@ const toolDef = (name) => ({
     async activate(ctx) {
       await activationGate;
       ctx.registerTool(toolDef("doomed-tool"));
+    },
+    async deactivate() {
+      deactivations += 1;
     },
   });
   await tick();
@@ -163,6 +166,12 @@ const toolDef = (name) => ({
   assert.deepEqual(runner.getTools(), [], "a destroyed runner must not gain a tool afterwards");
   assert.equal(tools.size, 0, "the host registry stays empty");
   assert.deepEqual(runner.getExtensionInfos(), [], "and no instance is resurrected");
+  assert.equal(
+    deactivations,
+    2,
+    "the revoke branch releases again — the teardown's deactivate ran before activate returned, " +
+      "so resources acquired afterwards had no other owner"
+  );
 }
 
 // ============================================================================

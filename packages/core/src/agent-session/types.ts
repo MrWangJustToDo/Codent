@@ -96,6 +96,10 @@ export const DEFAULT_AGENT_SESSION_CHANNELS: readonly AgentSessionChannel[] = [
   // `mcp` is a retained projection (see `session:mcp`); it gets no explicit
   // `channels:[...]` opt-in from any host, so without this it is never delivered.
   "mcp",
+  // Tool descriptors (which tools exist and how their rows render). Like `jobs`/`subagents`:
+  // an `extension.toggle` can add or remove a tool, and a client that had to opt in explicitly
+  // would keep rendering the pre-toggle catalog until a reconnect.
+  "tool-presentation",
 ];
 
 export interface AgentSessionMcpSummary {

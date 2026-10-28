@@ -416,6 +416,38 @@ await runCase("in-place mutation of a content PART does not reach the caller's m
   assert.equal(out[0].content.length, 3);
 });
 
+await runCase("a NESTED ARRAY's element is copied, not shared", async () => {
+  const bus = createAgentEventBus();
+  const runner = makeRunner(bus);
+  await runner.loadExtension(
+    extension("inplace-nested-array", (ctx) => {
+      ctx.registerMessageTransformer((c) => {
+        const part = c.messages[0].content[0];
+        // `output` is an array of objects (MCP content / tool results); a shallow array copy left
+        // its elements shared with the channel, so this edit reached the persisted transcript.
+        part.output[0].text = "MUTATED";
+        part.metadata.tags.push("MUTATED");
+        return undefined;
+      });
+    })
+  );
+
+  const original = {
+    role: "user",
+    content: [{ type: "text", text: "original", output: [{ type: "text", text: "inner" }], metadata: { tags: [] } }],
+  };
+  const out = await runner.applyMessageTransformers({
+    extensionId: "",
+    agentId: "x",
+    phase: "init",
+    messages: [original],
+  });
+
+  assert.equal(out[0].content[0].output[0].text, "MUTATED", "the transformer edits the wire it owns");
+  assert.equal(original.content[0].output[0].text, "inner", "the array element is a copy, not the caller's");
+  assert.deepEqual(original.content[0].metadata.tags, [], "a nested array inside an object is copied too");
+});
+
 await runCase("a cached array is transformed again on every call", async () => {
   const bus = createAgentEventBus();
   const runner = makeRunner(bus);

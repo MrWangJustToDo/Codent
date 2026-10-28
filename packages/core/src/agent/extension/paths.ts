@@ -16,10 +16,14 @@ export const EXTENSION_DIRS_ENV_VAR = "AGENT_EXTENSION_DIRS";
  * Default extension directories to discover.
  *
  * Load order (later registrations with the same id win):
- * 1. `extraDirs` (caller / `ManagedAgentConfig.extensionDirs` / CLI `--extension-dirs`)
- * 2. `AGENT_EXTENSION_DIRS` (comma-separated env via CoreEnv)
- * 3. Project: `.agents/extension`
- * 4. User home: `~/.agents/extension`
+ * 1. User home: `~/.agents/extension`
+ * 2. Project: `.agents/extension`
+ * 3. `AGENT_EXTENSION_DIRS` (comma-separated env via CoreEnv)
+ * 4. `extraDirs` (caller / `ManagedAgentConfig.extensionDirs` / CLI `--extension-dirs`)
+ *
+ * Project beats user: the directory a repository carries is the one that describes that project,
+ * while the global copy is usually an older install. Explicit directories beat both — the caller
+ * asked for them by name. (Skills resolve the same precedence; only their tie-break is first-wins.)
  *
  * Project-specific demo dirs (e.g. `examples/extensions`) are **not** included —
  * pass them via `extraDirs`, CLI `--extension-dirs`, or `AGENT_EXTENSION_DIRS`.
@@ -28,12 +32,9 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env
   const e = env ?? getEnv();
   const dirs: string[] = [];
 
-  if (extraDirs) {
-    for (const dir of extraDirs) {
-      const trimmed = dir.trim();
-      if (trimmed) dirs.push(trimmed);
-    }
-  }
+  // Lowest priority first: discovery keeps the LAST file seen for a duplicate id.
+  dirs.push(e.path.join(await e.homedir(), AGENT_DATA_DIR, "extension"));
+  dirs.push(DEFAULT_EXTENSION_DIR);
 
   const runEnv = await e.getEnv();
   const envDirs = runEnv[EXTENSION_DIRS_ENV_VAR];
@@ -45,8 +46,12 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env
     dirs.push(...parsedDirs);
   }
 
-  dirs.push(DEFAULT_EXTENSION_DIR);
-  dirs.push(e.path.join(await e.homedir(), AGENT_DATA_DIR, "extension"));
+  if (extraDirs) {
+    for (const dir of extraDirs) {
+      const trimmed = dir.trim();
+      if (trimmed) dirs.push(trimmed);
+    }
+  }
 
   return dirs;
 }

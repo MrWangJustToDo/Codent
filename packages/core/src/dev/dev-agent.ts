@@ -156,7 +156,7 @@ export { CodentAgent } from "../runtime/codent-agent.js";
 export { createListFileTool } from "../agent/tools/builtin/fs/list-file-tool.js";
 export { createTreeTool } from "../agent/tools/builtin/fs/tree-tool.js";
 export { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "../agent-session/session-summary-prompt.js";
-export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache } from "../agent/compaction";
+export { assertNotCompactionSummaryInput, applyToolCompact, ToolCompactCache, toolCompactCacheKey } from "../agent/compaction";
 export {
   buildCompactionPrompt,
   buildSegmentedConversationText,

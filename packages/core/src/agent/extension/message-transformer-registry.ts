@@ -21,14 +21,16 @@
  *      silently become a no-op on the second call.
  *
  * So ownership is granted structurally: a fresh outer array, fresh message objects, and fresh
- * content containers — the `content` array, each part object, and one level of nested object
- * inside a part (an image `source`, for example). A transformer that mutates `part.text`, pushes
- * a part, or rewrites `part.source.data` therefore edits its own copy; without the part-level
- * copies those edits wrote through to the objects the channel and the persistence path share
- * (the durability rule every wire transform is required to follow).
+ * content containers, recursing a few levels through arrays and plain objects (enough for every
+ * shape the wire uses: `part → nested container → array element → its own containers`). A
+ * transformer that mutates `part.text`, pushes a part, rewrites `part.source.data`, or edits an
+ * element of `part.output[]` therefore edits its own copy; without this the edits wrote through to
+ * the objects the channel and the persistence path share (the durability rule every wire transform
+ * is required to follow).
  *
  * Primitive values (including base64 strings) are shared, not re-allocated: they are immutable,
- * and copying them would duplicate every image on every model call.
+ * and copying them would duplicate every image on every model call. Exotic objects (a `Date`, a
+ * `Map`, a class instance) are kept by reference rather than flattened into a plain object.
  */
 
 import { compareDispatchRank } from "../dispatch-order.js";
@@ -59,21 +61,38 @@ function describeValue(value: unknown): string {
 }
 
 /**
- * Copy one content part's own containers.
+ * How many containers below a part are copied.
  *
- * Part objects are flat data with at most one nested object (an image/document `source`), so one
- * level is enough to make an in-place edit local; going deeper would start copying payload
- * strings, which are immutable and can be large.
+ * Four levels covers every shape the wire carries — part → `content`/`source` → array element →
+ * that element's own object — without turning into a deep clone of arbitrary tool output. Going
+ * deeper would start copying payload strings, which are immutable and can be large.
  */
-function cloneContentPart(part: unknown): unknown {
-  if (!part || typeof part !== "object") return part;
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(part as Record<string, unknown>)) {
-    if (Array.isArray(value)) copy[key] = [...value];
-    else if (value && typeof value === "object") copy[key] = { ...(value as Record<string, unknown>) };
-    else copy[key] = value;
+const OWNERSHIP_CLONE_DEPTH = 4;
+
+/**
+ * Copy one value's own containers down to {@link OWNERSHIP_CLONE_DEPTH}.
+ *
+ * Plain objects and arrays are re-created (elements included, which the old shallow array copy
+ * missed: `part.output[0].text = …` reached the channel). Primitives are returned as-is — sharing
+ * a string is safe because it is immutable — and exotic objects are kept by reference rather than
+ * silently flattened into `{}`.
+ */
+function cloneOwnedValue(value: unknown, depth: number): unknown {
+  if (depth <= 0) return value;
+  if (Array.isArray(value)) return value.map((entry) => cloneOwnedValue(entry, depth - 1));
+  if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const copy: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) copy[key] = cloneOwnedValue(entry, depth - 1);
+    return copy;
   }
-  return copy;
+  return value;
+}
+
+/** Ownership copy for one content part — see the note at the top of this file. */
+function cloneContentPart(part: unknown): unknown {
+  return cloneOwnedValue(part, OWNERSHIP_CLONE_DEPTH);
 }
 
 /** Ownership copy for one model message — see the note at the top of this file. */

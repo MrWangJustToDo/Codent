@@ -337,6 +337,76 @@ function observeRunEvents(events) {
   manager.destroyAgent(managed.id);
 }
 
+// ============================================================================
+// 6. The interlock still holds AFTER a completed turn
+// ============================================================================
+//
+// `shouldDeferQueue` short-circuits while a stale (superseded) pump is unwinding, so new input is
+// not swallowed by a run that is already gone. That token used to survive the pump's exit: after
+// the first completed turn the field stayed non-current forever, the shortcut fired before the
+// `compacting` check, and the next `/compact` was raced by a real turn — the exact defect cases 2
+// and 5 fix, reintroduced one turn later. The fixture never ran a turn, which is why it passed.
+{
+  const { managed, chat } = await makeAgent("manual-compact-after-turn");
+  const { calls, config } = makeCapturingAdapter();
+  managed.setTextAdapter(config);
+
+  await chat.sendMessage("first turn");
+  await chat.runChain;
+  assert.equal(managed.getStatus(), "completed", "the first turn settles normally");
+  const callsAfterFirstTurn = calls.length;
+  assert.ok(callsAfterFirstTurn >= 1, "the first turn reached the model");
+
+  const compacting = managed.compact();
+  chat.followUp("typed after a completed turn");
+
+  assert.equal(
+    hasUserText(chat, "typed after a completed turn"),
+    false,
+    "a completed turn must not disable the compaction interlock for the rest of the session"
+  );
+  assert.deepEqual(
+    chat.getQueuedMessages().followUp.map((content) => (typeof content === "string" ? content : "")),
+    ["typed after a completed turn"],
+    "the message queues until the compaction ends"
+  );
+
+  const result = await compacting;
+  assert.equal(result.ok, true, "the short transcript is a no-op compaction, not a failure");
+  assert.equal(hasUserText(chat, "typed after a completed turn"), true, "the queued message is released");
+
+  await chat.runChain;
+  assert.ok(calls.length > callsAfterFirstTurn, "and starts a turn of its own");
+  assert.equal(managed.getStatus(), "completed", "which settles like any other turn");
+
+  manager.destroyAgent(managed.id);
+}
+
+// ============================================================================
+// 7. Stopping producers (session switch) must not leave `compacting` behind
+// ============================================================================
+//
+// `stopForSessionSwitch` is a public entry that only stops producers, unlike `reset()`. Dropping
+// the compaction lease was enough for the producer to become a no-op, but nothing restored the
+// status: `isRunActive()` stayed true, so `/compact` and `/clone` were refused and input queued
+// with no drainer.
+{
+  const { managed, chat } = await makeAgent("manual-compact-stop-for-switch");
+  const compacting = managed.compact();
+  assert.equal(managed.getStatus(), "compacting", "fixture: the compaction owns the status");
+
+  managed.stopForSessionSwitch("session-switch");
+  assert.notEqual(managed.getStatus(), "compacting", "stopping producers must restore the status it replaced");
+  assert.equal(managed.compactions.isRunning(), false, "and release the lease");
+  assert.equal(chat.isRunActive(), false, "so the agent no longer reports active work");
+
+  const result = await compacting;
+  assert.equal(result.ok, false, "the aborted compaction reports failure");
+  assert.notEqual(managed.getStatus(), "compacting", "and its late teardown must not put it back");
+
+  manager.destroyAgent(managed.id);
+}
+
 clearCoreEnv();
 fs.rmSync(rootPath, TEMP_RM_OPTIONS);
 console.log("\nvalidate-manual-compact-interlock: all assertions passed");

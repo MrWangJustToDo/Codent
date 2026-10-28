@@ -14,6 +14,7 @@ import {
   createWriteFileTool,
   getToolMetadata,
   ToolCompactCache,
+  toolCompactCacheKey,
 } from "../dist/dev.mjs";
 
 const cache = new ToolCompactCache();
@@ -95,7 +96,11 @@ assert.match(String(oldest.content), /alpha/);
 const newest = compacted.find((m) => m.role === "tool" && m.toolCallId === "call-3");
 assert.ok(newest);
 assert.match(String(newest.content), /gamma/);
-assert.equal(cache.has("call-3"), true);
+assert.equal(
+  cache.has(toolCompactCacheKey("call-3", 2, messages[2].content)),
+  true,
+  "the cache key carries position + content, not the bare provider id"
+);
 
 const replay = structuredClone(messages);
 const replayed = await applyToolCompact(replay, {
@@ -107,6 +112,78 @@ const replayed = await applyToolCompact(replay, {
 const replayNewest = replayed.find((m) => m.role === "tool" && m.toolCallId === "call-3");
 assert.ok(replayNewest);
 assert.equal(replayNewest.content, newest.content);
+
+// ---------------------------------------------------------------------------
+// Provider tool ids are scoped to a REQUEST, so the SAME id later in a session
+// must project the new result — not the one cached under that id earlier.
+// ---------------------------------------------------------------------------
+{
+  const reuseCache = new ToolCompactCache();
+  const wire = (id, content) => [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        { id, type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "a.ts" }) } },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId: id,
+      content: JSON.stringify({
+        type: "text",
+        path: "a.ts",
+        content,
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        truncated: false,
+      }),
+    },
+  ];
+  const toolText = (out) => String(out.find((m) => m.role === "tool").content);
+
+  const firstCall = await applyToolCompact(wire("call_0", "first-result"), {
+    config: {},
+    registry,
+    cache: reuseCache,
+  });
+  assert.match(toolText(firstCall), /first-result/);
+
+  const secondCall = await applyToolCompact(wire("call_0", "second-result"), {
+    config: {},
+    registry,
+    cache: reuseCache,
+  });
+  assert.match(toolText(secondCall), /second-result/, "a reused provider id projects its own result");
+  assert.doesNotMatch(toolText(secondCall), /first-result/, "instead of serving the earlier request's content");
+
+  // A transformed (e.g. redacted) result is already model-facing: the cache must not revert it.
+  const transformed = wire("call_0", "unused");
+  transformed[1].content = "[redacted by transformer]";
+  const transformedOut = await applyToolCompact(transformed, {
+    config: {},
+    registry,
+    cache: reuseCache,
+  });
+  assert.equal(
+    toolText(transformedOut),
+    "[redacted by transformer]",
+    "an edited result misses the cache instead of being overwritten with the stale projection"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The projection cache is bounded: eviction costs a re-projection, never an error.
+// ---------------------------------------------------------------------------
+{
+  const bounded = new ToolCompactCache(2);
+  bounded.set("a", { source: "a", projected: "1" });
+  bounded.set("b", { source: "b", projected: "2" });
+  bounded.set("c", { source: "c", projected: "3" });
+  assert.equal(bounded.has("a"), false, "the oldest projection is evicted at the cap");
+  assert.equal(bounded.has("c"), true, "the newest stays");
+}
 
 const pendingApproval = [
   {
@@ -244,6 +321,59 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
     );
     assert.equal(JSON.stringify(wire), before, `${label}: the input wire is not mutated`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// The fingerprint is only a candidate filter: an exact-source mismatch must
+// re-project rather than serve the stale content (same id, index, length and
+// sampled windows — a real same-length file edit).
+// ---------------------------------------------------------------------------
+{
+  const collisionCache = new ToolCompactCache();
+  const a = "A".repeat(120);
+  const content1 = `${a}M${a}`;
+  const content2 = `${"A".repeat(60)}B${"A".repeat(59)}M${a}`;
+  const raw = (content) =>
+    JSON.stringify({
+      type: "text",
+      path: "a.ts",
+      content,
+      totalLines: 1,
+      startLine: 1,
+      endLine: 1,
+      truncated: false,
+    });
+  const raw1 = raw(content1);
+  const raw2 = raw(content2);
+  assert.equal(raw1.length, raw2.length, "the fixtures are the same length");
+  assert.equal(
+    toolCompactCacheKey("call_0", 1, raw1),
+    toolCompactCacheKey("call_0", 1, raw2),
+    "and collide on the cheap fingerprint — which is exactly why the entry compares its source"
+  );
+
+  const wire = (content) => [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        {
+          id: "call_0",
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: "a.ts" }) },
+        },
+      ],
+    },
+    { role: "tool", toolCallId: "call_0", content: raw(content) },
+  ];
+
+  await applyToolCompact(wire(content1), { config: {}, registry, cache: collisionCache });
+  const edited = await applyToolCompact(wire(content2), { config: {}, registry, cache: collisionCache });
+  assert.match(
+    String(edited.find((m) => m.role === "tool").content),
+    /B/,
+    "a near-miss re-projects the new result instead of returning the cached one"
+  );
 }
 
 console.log("tool-compact validation passed");

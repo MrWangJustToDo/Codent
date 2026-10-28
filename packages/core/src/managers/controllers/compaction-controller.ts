@@ -18,8 +18,8 @@
  * - `finish` — terminal, emits `compaction:<kind>-complete|error` and restores the status.
  * - `release` — terminal but silent (a cancel is not a failure; an unexpected throw still restores).
  * - `cancel` — the user's Esc on a manual compaction: status `aborted`, summarizer aborted.
- * - `abortForTeardown` — session switch / agent destroy: invalidate and abort, leave the status to
- *   the caller (the lifecycle resets it).
+ * - `abortForTeardown` — session switch / agent destroy: invalidate and abort, restore the status
+ *   it replaced (the reset paths overwrite it before the new session is adopted).
  *
  * Only `manual` refuses a second `begin`: a second `/compact` must not replace the first lease and
  * orphan its abort controller. The automatic kinds may claim at any time — that is how a stale
@@ -207,14 +207,21 @@ export class CompactionController {
   }
 
   /**
-   * Invalidate and abort whatever is running, without touching the status.
+   * Invalidate and abort whatever is running on a teardown, restoring the status it replaced.
    *
-   * Session switch / agent destroy: the lifecycle resets the status itself, and a stale producer
-   * must not restore anything onto the session that replaced it.
+   * Session switch / agent destroy: a stale producer must not restore anything onto the session
+   * that replaced it, so the controller restores BEFORE the caller adopts the new session. The
+   * reset paths (`reset()`, new/resume) overwrite this immediately; a host that only stops
+   * producers (`stopForSessionSwitch`) used to be left in `compacting` forever — no run exists to
+   * restore it, `isRunActive()` stays true, `/compact` and `/clone` are refused, and input queues
+   * with nothing to drain it.
    */
   abortForTeardown(reason: string): void {
     if (!this.active) return;
+    const { kind } = this.active.lease;
+    const { previousStatus } = this.active;
     this.abortActive(reason);
+    this.restoreStatusFor(kind, previousStatus);
   }
 
   /** Whether any compaction currently owns the agent. */
@@ -240,10 +247,13 @@ export class CompactionController {
   }
 
   private restoreStatus(kind: CompactionKind): void {
+    this.restoreStatusFor(kind, this.active?.previousStatus);
+  }
+
+  private restoreStatusFor(kind: CompactionKind, previous: AgentStatus | undefined): void {
     // Only an owner may restore, and only from the status it published. A cancel (aborted), a
     // session switch (reset) or a newer run (running) already moved on.
     if (this.deps.getStatus() !== "compacting") return;
-    const previous = this.active?.previousStatus;
     if (kind === "manual" && previous !== undefined && previous !== "compacting") {
       this.deps.setStatus(previous, "compaction-end");
       return;

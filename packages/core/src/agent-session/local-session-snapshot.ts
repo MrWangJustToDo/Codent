@@ -38,7 +38,11 @@ export function readLocalAgentSessionSnapshot(
     ...(l1.model ? { model: l1.model } : {}),
     ...(l1.modelInfo ? { modelInfo: l1.modelInfo } : {}),
     ...(l1.reasoningEffort ? { reasoningEffort: l1.reasoningEffort } : {}),
-    messages: chat?.getMessages() ?? managed.getUI()?.getMessages() ?? [],
+    // A projection, not the channel's internal array: a host that pushes or splices a snapshot
+    // must not edit the transcript (the remote plane gets a JSON copy for the same reason).
+    // Element objects stay shared — the snapshot is read-only by contract; deep-cloning every
+    // message on each snapshot would copy the whole session.
+    messages: [...(chat?.getMessages() ?? managed.getUI()?.getMessages() ?? [])],
     queues: chat?.getQueuedMessages() ?? { steer: [], followUp: [] },
     usage: managed.usage.getChangeSnapshot(),
     todos: todos?.getItems() ?? [],

@@ -32,6 +32,15 @@ export const DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_LOG_MAX_FILES = 5;
 /** Coalesce writes for this long before flushing (ms). */
 export const DEFAULT_LOG_FLUSH_INTERVAL_MS = 250;
+/**
+ * Cap on the failed-batch retry buffer.
+ *
+ * The failure path puts the batch back at the HEAD and retries on the next tick. Without a bound,
+ * a directory that stays unwritable (read-only, disk full, deleted) requeued every batch forever:
+ * the log then grew without limit in memory — the one thing a non-fatal log write must not do —
+ * and the run died from logging. Oldest lines are dropped first and the loss is reported.
+ */
+const MAX_RETRY_BUFFER_LINES = 2_000;
 /** Default log file name inside the bound directory. */
 export const DEFAULT_LOG_FILENAME = "agent.log";
 
@@ -142,7 +151,15 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       // Non-fatal, but not silent: put the batch back at the HEAD so the next flush retries in
       // order, and say why. A failed append used to vanish with no trace at all.
       buffer = [...lines, ...buffer];
-      console.error(`[agent] log batch write failed: ${errorMessage(error)}`);
+      let dropped = 0;
+      if (buffer.length > MAX_RETRY_BUFFER_LINES) {
+        dropped = buffer.length - MAX_RETRY_BUFFER_LINES;
+        buffer = buffer.slice(dropped);
+      }
+      console.error(
+        `[agent] log batch write failed: ${errorMessage(error)}` +
+          (dropped > 0 ? ` (dropped ${dropped} oldest buffered lines)` : "")
+      );
     } finally {
       flushInFlight = false;
     }

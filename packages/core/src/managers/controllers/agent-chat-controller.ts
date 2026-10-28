@@ -719,6 +719,12 @@ export class AgentChatController {
         // finalize-time memory extraction it was still using).
         this.managed.run.invalidateCurrentRun();
       }
+      // Forget the token this pump began. `shouldDeferQueue` reads a stale token as "a pump is
+      // still unwinding" and short-circuits before the queued-pump / `compacting` / `waiting`
+      // checks — correct only until this pump exits. Leaving the field set made that shortcut
+      // permanent after the first turn, so a message typed during a later manual `/compact`
+      // opened a turn beside the summarizer. Identity-checked: a newer pump may already own it.
+      if (this.currentToken === token) this.currentToken = null;
     }
   }
 

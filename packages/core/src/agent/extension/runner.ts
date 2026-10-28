@@ -486,6 +486,15 @@ export class ExtensionRunner {
     // `setEnabled(id, false)` always targets the first one, leaving a permanently "on" copy.
     const duplicate = this.extensions.find((entry) => entry.api.id === api.id);
     if (duplicate) {
+      // Two files can declare the same id (the loader dedupes by basename, the module owns the
+      // id). Replacing is the defined behaviour, but it must not be silent: the earlier instance
+      // is torn down, and anyone looking at the panel otherwise sees one extension where two
+      // files were loaded.
+      this.writeExtensionLog(
+        "warn",
+        api.id,
+        `duplicate extension id — replacing the earlier instance (${duplicate.api.name ?? "unnamed"})`
+      );
       await this.destroyExtension(duplicate);
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
       this.ranks.delete(api.id);
@@ -543,6 +552,11 @@ export class ExtensionRunner {
       // A teardown during activation (destroyAll) revokes the context; the activation must not
       // resurrect the instance afterwards.
       if (!this.isContextLive(ctx)) {
+        // `destroyExtension` ran `deactivate` BEFORE this promise resolved, so anything the rest of
+        // `activate` acquired after the revoke has no other owner: release it here (the extension
+        // contract makes teardown idempotent) and drop any artifact that still landed on a race.
+        await this.deactivateExtension(instance);
+        this.unregisterInstanceArtifacts(instance);
         instance.state = "inactive";
         return instance;
       }
@@ -695,7 +709,21 @@ export class ExtensionRunner {
     // Refuse while an activation is in flight instead of answering from a state that is about to
     // change: the old check read `state === "inactive"` (the state an activation starts from) and
     // returned a success "already disabled" for an extension that went on to become active.
+    //
+    // Disabling is the exception: a hung activation must not make the extension impossible to turn
+    // off (the one remedy a broken extension needs). Revoke the lease first — everything the
+    // activation tries from here on is refused — drop what it already registered, and let the
+    // revoke branch release its resources if/when it resolves.
     if (this.activating.has(id)) {
+      if (!enabled) {
+        const instance = this.extensions.find((e) => e.api.id === id);
+        if (instance) {
+          this.contexts.delete(id);
+          this.unregisterInstanceArtifacts(instance);
+          instance.state = "inactive";
+          return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
+        }
+      }
       return { ok: false, message: `Extension "${id}" is still activating — try again when it finishes` };
     }
     this.pendingToggles.add(id);
@@ -736,7 +764,11 @@ export class ExtensionRunner {
       try {
         await instance.api.activate(context);
         if (!this.isContextLive(context)) {
-          // Revoked while activating (destroyAll): stay inactive, register nothing further.
+          // Revoked while activating (destroyAll): stay inactive, register nothing further — and
+          // release whatever the rest of `activate` acquired after the revoke, which the teardown
+          // could not have seen (deactivate is idempotent by contract).
+          await this.deactivateExtension(instance);
+          this.unregisterInstanceArtifacts(instance);
           instance.state = "inactive";
           return { ok: false, message: `Extension "${id}" was disabled while activating` };
         }

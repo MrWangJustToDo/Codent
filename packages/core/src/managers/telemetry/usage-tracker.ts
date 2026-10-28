@@ -304,6 +304,9 @@ export class UsageTracker {
 
   setPricing(pricing: ModelPricing | null): void {
     this.pricing = pricing;
+    // Pricing is part of the snapshot (`cost`): a model switch must reach the footer/view that
+    // renders it, not wait for the next LLM call.
+    this.emitChange();
   }
 
   getPricing(): ModelPricing | null {
@@ -333,6 +336,10 @@ export class UsageTracker {
 
   setTokenLimit(limit: number): void {
     this.tokenLimit = limit;
+    // `percent` and `tokenLimit` are read by the footer's context bar. Switching to a model with a
+    // smaller window changes this without an LLM call, so the reading would otherwise show the old
+    // model's budget until the next response.
+    this.emitChange();
   }
 
   getTokenLimit(): number {

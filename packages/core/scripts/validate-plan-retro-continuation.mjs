@@ -217,6 +217,7 @@ function runnerToolNames(controller) {
 {
   const controllerSource = readFileSync(join(srcRoot, "agent/plan/plan-mode-controller.ts"), "utf8");
   const managedSource = readFileSync(join(srcRoot, "managers/managed-agent.ts"), "utf8");
+  const restoreSource = readFileSync(join(srcRoot, "managers/managed-agent-session.ts"), "utf8");
 
   assert.ok(
     !controllerSource.includes("onEnterRetro"),
@@ -229,7 +230,49 @@ function runnerToolNames(controller) {
       "delivers complete_plan in the same run."
   );
 
+  // Wiring pin: the repair only works if it runs AFTER the adoption (which is what overwrote it).
+  const adoptAt = restoreSource.indexOf("adoptRestoredSession(restored");
+  const reapplyAt = restoreSource.indexOf("reapplyTodoBinding?.()");
+  assert.ok(adoptAt >= 0, "fixture: the restore path still adopts the session");
+  assert.ok(reapplyAt > adoptAt, "managed-agent-session must re-assert the plan binding after adoption");
+
   console.log("removal: no retro steer hook or message remains");
+}
+
+// ---------------------------------------------------------------------------
+// 3b. A restore re-asserts the plan binding AFTER the todo list is adopted
+// ---------------------------------------------------------------------------
+//
+// `mode.restore` runs before `adoptRestoredSession` (the commit must be last), so its
+// `setPlanBound(true)` was overwritten by `restoreTodos(planBound: session.todoPlanBound)`. An
+// `executing` session whose persisted flag was false (the legacy mismatch the repair exists for)
+// then never reached `retro`, and `complete_plan` stayed hidden.
+{
+  const todoManager = new TodoManager();
+  const controller = new PlanModeController({ getTodoManager: () => todoManager });
+  controller.enable();
+  await controller.applyStructuredPlan({
+    goal: "Restore binding",
+    steps: ["One", "Two"],
+    keyFiles: ["src/index.ts"],
+  });
+  controller.beginExecution();
+
+  const items = todoManager.getItems().map((item) => ({ ...item, status: "completed" }));
+  // Exactly what adoption does: the persisted flag wins over the repair `restoreState` made.
+  todoManager.restoreTodos(items, { planBound: false });
+  assert.equal(todoManager.getSource(), "agent", "fixture: adoption overwrote the plan binding");
+  assert.equal(controller.getPhase(), "executing", "fixture: the session is still executing");
+
+  controller.reapplyTodoBinding();
+  assert.equal(todoManager.getSource(), "plan", "reapply restores plan ownership of the adopted list");
+  assert.equal(
+    controller.getPhase(),
+    "retro",
+    "a completed plan must reach retro after a restore — otherwise complete_plan is unreachable"
+  );
+
+  console.log("restore: plan binding re-applied after adoption, retro reachable");
 }
 
 console.log("\nplan retro continuation validation passed");

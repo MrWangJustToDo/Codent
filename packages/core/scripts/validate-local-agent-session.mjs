@@ -199,6 +199,10 @@ assert.equal(snap.status, "idle");
 assert.equal(snap.mode, "normal");
 assert.equal(snap.lastStreamDurationMs, 0);
 assert.deepEqual(snap.messages, []);
+// The snapshot is a projection, not the channel's live array: a host that pushes into it must
+// not edit the transcript (the remote plane gets a JSON copy for the same reason).
+snap.messages.push({ id: "forged", role: "user", parts: [] });
+assert.equal(session.getSnapshot().messages.length, 0, "mutating the snapshot array leaves the transcript alone");
 assert.ok(Array.isArray(snap.todos));
 assert.equal(snap.plan.phase, "off");
 assert.deepEqual(snap.mcp, { servers: [] });

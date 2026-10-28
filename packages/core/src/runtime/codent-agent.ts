@@ -71,6 +71,12 @@ export interface CodentAgentOptions {
   name?: string;
   /** Advanced/test: inject a manager (must be bound to this runtime's env to isolate). */
   manager?: AgentManager;
+  /**
+   * Whether this runtime owns an **injected** manager's lifecycle (dispose destroys every root
+   * agent on it). Default `false` for `options.manager` — the injector keeps ownership — and
+   * `true` for the manager this runtime builds itself.
+   */
+  ownsManager?: boolean;
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
   host?: AgentSessionHost;
   /**
@@ -94,6 +100,8 @@ export interface CodentAgentOptions {
 export class CodentAgent {
   private readonly runtime: AgentRuntime;
   private readonly manager?: AgentManager;
+  /** Whether {@link dispose} destroys {@link manager}. An injected manager stays its owner's. */
+  private readonly ownsManager: boolean;
   private readonly models?: ModelCatalogRead;
   /** Agent ids this runtime created, and therefore owns for disposal. */
   private readonly ownedSessionIds = new Set<string>();
@@ -113,12 +121,14 @@ export class CodentAgent {
     runtime: AgentRuntime,
     host: AgentSessionHost,
     manager: AgentManager | undefined,
-    models: ModelCatalogRead | undefined
+    models: ModelCatalogRead | undefined,
+    ownsManager: boolean
   ) {
     this.runtime = runtime;
     this.host = host;
     this.manager = manager;
     this.models = models;
+    this.ownsManager = ownsManager;
   }
 
   /**
@@ -151,7 +161,10 @@ export class CodentAgent {
     const runtime = options.manager?.runtime ?? new AgentRuntime(runtimeOptions);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
     const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
-    return new CodentAgent(runtime, host, manager, options.models);
+    // A manager we built is ours to tear down; an injected one belongs to the injector, and
+    // disposing it here would destroy every root agent another runtime is using.
+    const ownsManager = options.ownsManager ?? options.manager === undefined;
+    return new CodentAgent(runtime, host, manager, options.models, ownsManager);
   }
 
   /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */
@@ -242,12 +255,15 @@ export class CodentAgent {
       }
     }
 
-    try {
-      // A local runtime owns its manager (sessions, log extension and its sinks).
-      // Remote-session runtimes have no manager; their host is the server's.
-      await this.manager?.dispose();
-    } catch (error) {
-      firstError ??= error;
+    if (this.ownsManager) {
+      try {
+        // A local runtime owns the manager it built (sessions, log extension and its sinks).
+        // Remote-session runtimes have no manager; an INJECTED manager belongs to the injector
+        // (`ownsManager`), because disposing it destroys every root agent on it.
+        await this.manager?.dispose();
+      } catch (error) {
+        firstError ??= error;
+      }
     }
 
     try {

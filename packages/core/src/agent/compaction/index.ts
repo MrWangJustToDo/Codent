@@ -64,7 +64,7 @@ export {
 } from "./keep-policy.js";
 
 export { applyToolCompact, type ApplyToolCompactOptions } from "./tool-compact";
-export { ToolCompactCache } from "./tool-compact/tool-compact-cache.js";
+export { ToolCompactCache, toolCompactCacheKey } from "./tool-compact/tool-compact-cache.js";
 
 // Message-chain projection (summary-first wire)
 export {

@@ -9,7 +9,7 @@
  * so the marker and the implementation cannot drift.
  */
 
-import { toError } from "../../utils/errors.js";
+import { eventError } from "./event-error.js";
 
 import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent } from "../agent-event-bus";
@@ -122,9 +122,9 @@ function logCompactionAutoError(log: AgentLog, event: AgentEvent): void {
     entry(log, event, "warn", "compaction", "Auto-compact cache cleanup failed", { error });
     return;
   }
-  // `toError` keeps a non-Error payload (a plain string is what a provider often throws) from
-  // losing its message when the log entry is built.
-  entry(log, event, "error", "compaction", `Auto-compact failed: ${error}`, undefined, toError(error));
+  // The payload carries the message, not the exception: `eventError` keeps the text without
+  // inventing a stack at the logger (which would point every reader at this file).
+  entry(log, event, "error", "compaction", `Auto-compact failed: ${error}`, undefined, eventError(error));
 }
 
 // A manual `/compact` is the user's own action, so its lines say so — borrowing the "Auto-" prefix
@@ -150,7 +150,7 @@ function logCompactionManualError(log: AgentLog, event: AgentEvent): void {
     entry(log, event, "warn", "compaction", "Manual compact cache cleanup failed", { error });
     return;
   }
-  entry(log, event, "error", "compaction", `Manual compact failed: ${error}`, undefined, toError(error));
+  entry(log, event, "error", "compaction", `Manual compact failed: ${error}`, undefined, eventError(error));
 }
 
 const HANDLERS = {

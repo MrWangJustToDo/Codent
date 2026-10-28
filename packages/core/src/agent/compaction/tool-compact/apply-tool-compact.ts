@@ -8,8 +8,8 @@ import {
   normalizeModelToolContent,
   parseToolMessageOutput,
 } from "./parse-tool-message.js";
+import { toolCompactCacheKey, type ToolCompactCache } from "./tool-compact-cache.js";
 
-import type { ToolCompactCache } from "./tool-compact-cache.js";
 import type { ToModelOutputRegistry } from "./types.js";
 import type { CompactionConfig } from "../types.js";
 import type { ContentPart, ModelMessage } from "@tanstack/ai";
@@ -73,7 +73,8 @@ function findToolResultMessages(messages: ModelMessage[]): ToolResultRef[] {
 /**
  * Transform tool results for the LLM path.
  *
- * Only {@link toModelOutput} formatting runs (cached per `toolCallId`).
+ * Only {@link toModelOutput} formatting runs (cached per `toolCallId` + position + content
+ * fingerprint — see `toolCompactCacheKey`).
  *
  * **Returns a new array / new message objects and never edits its input.**
  * The array handed in may be the one `WireProjectionCache` retains and hands back by
@@ -113,10 +114,18 @@ export async function applyToolCompact(
     if (!message || message.role !== "tool") continue;
 
     // Cache first: a hit is the steady state after the first turn, and parsing here
-    // would redo work whose only consumer is the probes below.
-    const cached = cache.get(target.toolCallId);
-    if (cached !== undefined) {
-      setContent(target.messageIndex, cached);
+    // would redo work whose only consumer is the probes below. The key is not the bare
+    // `toolCallId`: provider ids are scoped to a request and get reused, so keying by id
+    // alone served a later call the earlier call's projection (see `toolCompactCacheKey`).
+    // The key is only a candidate filter — `source` is compared exactly, so a near-miss
+    // re-projects instead of answering with stale content.
+    const cacheKey = toolCompactCacheKey(target.toolCallId, target.messageIndex, message.content);
+    const cached = cache.get(cacheKey);
+    if (cached && cached.source === message.content) {
+      // Only rewrite when the projection actually differs. A projection that returns its
+      // input (or the same string) must leave the message shared, so the caller's array
+      // identity survives and `replaced.size` stays zero.
+      if (cached.projected !== message.content) setContent(target.messageIndex, cached.projected);
       continue;
     }
 
@@ -128,16 +137,19 @@ export async function applyToolCompact(
 
     if (isToolErrorResult(rawOutput)) {
       const normalized = normalizeModelToolContent(formatToolErrorForModel(rawOutput));
-      cache.set(target.toolCallId, normalized);
+      cache.set(cacheKey, { source: message.content, projected: normalized });
       setContent(target.messageIndex, normalized);
       continue;
     }
 
-    const toModelOutput = options.registry.get(toolName);
-    if (!toModelOutput) continue;
     const input = toolInputMap.get(target.toolCallId);
     let transformed: unknown;
     try {
+      // Resolve inside the guard too: `registry.get` touches the live tool service, which can
+      // refuse a replaced tools record. A resolver failure is the same class of fault as a
+      // formatter failure — contain it to this result instead of failing every model call.
+      const toModelOutput = options.registry.get(toolName);
+      if (!toModelOutput) continue;
       transformed = await toModelOutput({
         toolCallId: target.toolCallId,
         input,
@@ -151,7 +163,7 @@ export async function applyToolCompact(
     }
 
     const normalized = normalizeModelToolContent(transformed);
-    cache.set(target.toolCallId, normalized);
+    cache.set(cacheKey, { source: message.content, projected: normalized });
     setContent(target.messageIndex, normalized);
   }
 

@@ -335,7 +335,18 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
           handleToolLifecycleEvent(payload);
         }
       },
-      { channels: ["messages", "queues", "state", "todos", "lifecycle", "interaction", "extensions"] }
+      {
+        channels: [
+          "messages",
+          "queues",
+          "state",
+          "todos",
+          "lifecycle",
+          "interaction",
+          "extensions",
+          "tool-presentation",
+        ],
+      }
     );
 
     return () => {

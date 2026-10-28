@@ -225,6 +225,11 @@ export async function restoreManagedSession(
   // must not report the load as failed (the caller's rollback would release a session it is using).
   // ---------------------------------------------------------------------------
   try {
+    // `mode.restore` ran before the adoption (the commit must be last), so `restoreTodos` overwrote
+    // the plan-bound repair with the persisted value. Re-assert it now that the target's list is in
+    // place; otherwise an `executing` session with `todoPlanBound: false` can never reach `retro`
+    // and `complete_plan`'s verification gate is unreachable.
+    host.planMode.reapplyTodoBinding?.();
     // The persisted model is not the bootstrap one, so its metadata was never resolved: capabilities
     // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
     // unset (compaction trigger loses its clamp).

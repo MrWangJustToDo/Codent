@@ -1,6 +1,7 @@
 import { utf8ByteLength } from "../../utils/bytes.js";
 import { truncateText } from "../../utils/text-truncation.js";
 
+import { eventError } from "./event-error.js";
 import { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG, type EventLogRule } from "./event-log-rules.js";
 import { SPECIALIZED_EVENT_LOG_HANDLERS } from "./event-log-specialized.js";
 
@@ -121,7 +122,7 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
       return;
     }
     const errorMessage = (p(event).error as string | undefined) ?? message;
-    log.eventEntry("error", rule.category, event.type, message, data, new Error(errorMessage));
+    log.eventEntry("error", rule.category, event.type, message, data, eventError(errorMessage));
     return;
   }
   log.eventEntry(rule.level, rule.category, event.type, message, data);

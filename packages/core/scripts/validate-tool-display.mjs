@@ -51,6 +51,16 @@ for (const [name, output] of [
 assert.doesNotThrow(() => core.formatToolOutput({ source: "plan" }, "todo"));
 assert.equal(core.formatToolOutput({ source: "plan" }, "todo"), "Updated plan todos");
 
+// A host-side descriptor is a stub (`presentationFromInfo` cannot carry renderers across
+// processes, so `text` returns undefined), and a real formatter may return undefined for a shape
+// it does not know. An empty row hides that the tool ran; the generic preview is the fallback.
+{
+  const stubPresentation = () => ({ text: () => undefined });
+  const rendered = core.formatToolOutput({ ok: true, value: 7 }, "ext_host_stub", stubPresentation);
+  assert.notEqual(rendered, "", "a stub descriptor must not render an empty body");
+  assert.match(rendered, /value/, "the preview carries the stored payload");
+}
+
 // A successful command has nothing the host cannot compute itself (it owns a detailed
 // block, rendered locally from the stored output), so no payload is attached.
 assert.equal(

@@ -28,12 +28,12 @@ Extensions run in-process, so they are trusted code — they can read files and 
 
 ## Where the file goes
 
-Core scans these directories in order, later ids winning:
+Core scans these directories in order, later ids winning — so the most specific source wins:
 
-1. \`--extension-dirs <dir>\` (CLI flag) / \`extensionDirs\` config — extras first
-2. \`AGENT_EXTENSION_DIRS\` (comma-separated env var)
-3. \`${AGENT_DATA_DIR}/extension\`      (project)
-4. \`~/${AGENT_DATA_DIR}/extension\`    (user home)
+1. \`~/${AGENT_DATA_DIR}/extension\`    (user home — lowest priority)
+2. \`${AGENT_DATA_DIR}/extension\`      (project)
+3. \`AGENT_EXTENSION_DIRS\` (comma-separated env var)
+4. \`--extension-dirs <dir>\` (CLI flag) / \`extensionDirs\` config — highest priority
 
 Each **file** in those directories is one extension (not a subdirectory), matched by
 \`.mjs\` / \`.js\` / \`.cjs\` / \`.ts\`. The id defaults to the file's basename, so

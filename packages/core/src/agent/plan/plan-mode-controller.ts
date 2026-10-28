@@ -189,6 +189,27 @@ export class PlanModeController {
     this.notifyChange();
   }
 
+  /**
+   * Re-assert plan ownership of the todo list after a restore ADOPTED the list.
+   *
+   * The restore order is `mode.restore` first, `adoptRestoredSession` (the commit) last, because a
+   * load that fails must leave the current session coherent. That means `setPlanBound(true)` here was
+   * overwritten by `restoreTodos({ planBound: session.todoPlanBound })`, and an `executing` session
+   * whose persisted binding was false (the legacy mismatch this repair exists for) could never reach
+   * `retro` — `complete_plan` stays hidden, so the verification gate is unreachable. It also fixes
+   * the retro evaluation itself: `applyRestoredState` ran it against the session being left, before
+   * the target's items existed.
+   */
+  reapplyTodoBinding(): void {
+    if (this.phase !== "executing" && this.phase !== "retro" && this.phase !== "ready" && this.phase !== "planning") {
+      return;
+    }
+    if (!this.todosSeeded) return;
+    this.setPlanTodoAutoClear(false);
+    this.deps.getTodoManager()?.setPlanBound(true);
+    if (this.phase === "executing") this.maybeEnterRetro();
+  }
+
   enable(): void {
     if (this.phase !== "off") return;
     this.resetPlanState("planning", Date.now());

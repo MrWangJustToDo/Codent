@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
+  AgentManager,
   AgentRuntime,
   clearCoreEnv,
   CodentAgent,
@@ -105,6 +106,31 @@ const fakeEnv = (root) => ({
 
   await a.dispose();
   await b.dispose();
+}
+
+// ---------------------------------------------------------------------------
+// 2a. An INJECTED manager belongs to the injector: dispose must not destroy it
+// ---------------------------------------------------------------------------
+//
+// `dispose()` used to tear down `options.manager` unconditionally. That manager can hold other
+// runtimes' root agents (the documented advanced/test injection), so disposing one runtime
+// destroyed sessions it never created. `ownsManager` defaults to false for an injected manager.
+{
+  const env = fakeEnv("/tmp/injected-manager");
+  const runtime = new AgentRuntime({ env });
+  const manager = new AgentManager(runtime);
+  let managerDisposals = 0;
+  manager.dispose = async () => {
+    managerDisposals += 1;
+  };
+
+  const agent = await CodentAgent.create({ env, manager });
+  await agent.dispose();
+  assert.equal(managerDisposals, 0, "dispose must not tear down a manager it did not build");
+
+  const owned = await CodentAgent.create({ env, ownsManager: true, manager });
+  await owned.dispose();
+  assert.equal(managerDisposals, 1, "an explicit ownsManager: true keeps the old ownership");
 }
 
 // ---------------------------------------------------------------------------
