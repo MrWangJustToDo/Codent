@@ -11,6 +11,7 @@
 import { z } from "zod";
 
 import { FileError } from "../../../../env/types";
+import { headDisplayLines } from "../../../../utils/display-lines.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
@@ -30,6 +31,21 @@ const MAX_LIMIT = 200;
 const MAX_MESSAGE_CHARS = 8000;
 /** The omission marker for a message cut at {@link MAX_MESSAGE_CHARS}. */
 const MESSAGE_TRUNCATION_MARKER = "…[truncated]";
+
+/** Session-page lines the transcript shows; the model still receives the whole page. */
+const SESSION_READ_DISPLAY_LINES = 15;
+
+/**
+ * Result body for the transcript: the rendered page, bounded.
+ *
+ * `session_read` declared only a fold category, so its body was invisible in the TUI even though
+ * `toModelOutput` handed the model the whole page.
+ */
+function formatSessionReadDisplay(output: unknown): string | undefined {
+  const out = output as { content?: unknown } | undefined;
+  if (!out || typeof out.content !== "string" || out.content.trim().length === 0) return undefined;
+  return headDisplayLines(out.content, SESSION_READ_DISPLAY_LINES);
+}
 
 /** Render one message as a text block (role + time, then text and a tool summary line). */
 function renderMessage(message: SessionMessage): string {
@@ -78,7 +94,7 @@ export type SessionReadOutput = z.infer<typeof sessionReadOutputSchema>;
 export const createSessionReadTool = () => {
   return defineServerTool({
     name: "session_read",
-    present: { category: "reads" },
+    present: { category: "reads", text: formatSessionReadDisplay },
     description: `Read a past session's messages as text, one window at a time.
 
 Use after \`session_search\` returns a \`sessionId\` you want to read in full. A page is bounded by

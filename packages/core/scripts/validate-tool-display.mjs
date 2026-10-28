@@ -390,3 +390,52 @@ const shippedRow = {
 assert.equal(core.shouldKeepToolRow(shippedRow), true, "a row with shipped text keeps its row");
 
 console.log("validate-tool-display: hydration fidelity ok");
+
+// --- 13. Result bodies for tools that had none --------------------------------
+// `tree`, `session_read` and `session_search` returned a real result with no renderer and no
+// `formatToolOutput` case, so `ToolOutputView` printed the row header only: the model saw the
+// output, the user saw that a tool ran. Each now declares `present.text`.
+const presentOf = (tool) => dev.getToolMetadata(tool)?.present;
+
+const treeTool = dev.createTreeTool();
+const treeText = presentOf(treeTool)?.text;
+assert.equal(typeof treeText, "function", "tree declares a result renderer");
+const treeBody = treeText({ tree: "src\n  a.ts\n  b.ts", totalEntries: 3 });
+assert.match(treeBody, /^3 entries\nsrc/, `tree body (${treeBody})`);
+assert.equal(
+  treeText({ tree: "", totalEntries: 0, cancelled: true }),
+  "Cancelled by user.",
+  "a cancelled walk is not an empty directory"
+);
+assert.equal(treeText({ tree: "", totalEntries: 0, cancelled: false }), "Empty directory");
+const longTree = treeText({ tree: Array.from({ length: 30 }, (_, i) => `l${i}`).join("\n"), totalEntries: 30 });
+assert.equal(longTree.split("\n").length, 17, "tree body keeps 15 lines + the count + the drop marker");
+assert.match(longTree, /\.\.\. \(15 more lines\)$/, "the drop count is stated");
+
+const readText = presentOf(dev.createSessionReadTool())?.text;
+assert.equal(typeof readText, "function", "session_read declares a result renderer");
+assert.match(
+  readText({ content: "Session ses_1 (messages 0–1 of 2):\n\nhello" }),
+  /Session ses_1/,
+  "the page is shown"
+);
+
+const searchText = presentOf(dev.createSessionSearchTool())?.text;
+assert.equal(typeof searchText, "function", "session_search declares a result renderer");
+const searchBody = searchText({
+  query: "plan",
+  matches: [{ sessionId: "ses_1", messageIndex: 4, snippet: "we chose plan mode" }],
+  total: 1,
+});
+assert.match(searchBody, /^1 matches for "plan":\n {2}ses_1 #4: /, `search body (${searchBody})`);
+assert.match(
+  searchText({ query: "plan", matches: [], total: 0 }),
+  /^No matches for "plan"$/,
+  "no hits says so instead of rendering an empty block"
+);
+
+// A renderer that is pure + bounded is what makes the payload safe to persist (see the header):
+// the same output must render the same body every time.
+assert.equal(treeText({ tree: "a\nb", totalEntries: 2 }), treeText({ tree: "a\nb", totalEntries: 2 }));
+
+console.log("validate-tool-display: result bodies ok");

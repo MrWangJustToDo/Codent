@@ -32,3 +32,21 @@ export function splitDisplayLines(text: string, options: SplitDisplayLinesOption
   }
   return lines;
 }
+
+/**
+ * Keep the first `maxLines` display lines and say how many were dropped.
+ *
+ * Result renderers (`present.text`) print a body under the row header, and several tools return
+ * whole-file-shaped text (a directory tree, a diagnostics list, a session page). Unbounded, the
+ * `tree` tool alone can own the transcript for a hundred rows. The TAIL is what is dropped: the
+ * head carries the answer (the structure's top levels, the first hits), and the same
+ * `... (N more lines)` marker is already what `formatTaskOutput` prints.
+ *
+ * The model is unaffected — it reads `toModelOutput`, not this.
+ */
+export function headDisplayLines(text: string, maxLines: number): string {
+  const lines = splitDisplayLines(text);
+  if (lines.length <= maxLines) return lines.join("\n");
+  const hidden = lines.length - maxLines;
+  return [...lines.slice(0, maxLines), `... (${hidden} more line${hidden === 1 ? "" : "s"})`].join("\n");
+}

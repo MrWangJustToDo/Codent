@@ -3,7 +3,9 @@ import { z } from "zod";
 import { getEnv, type CoreEnvFs } from "../../../../env";
 import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
+import { headDisplayLines } from "../../../../utils/display-lines.js";
 import { toPosixPath, toPosixPathKey } from "../../../../utils/posix-path.js";
+import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { OUTPUT_LIMITS, truncateString } from "../../shared/output-limits.js";
@@ -18,6 +20,9 @@ const MAX_TREE_CHARS = OUTPUT_LIMITS.MAX_CONTENT_CHARS;
 
 /** Maximum entries to show in tree */
 const MAX_TREE_ENTRIES = OUTPUT_LIMITS.MAX_ARRAY_ITEMS;
+
+/** Tree lines the transcript shows; the model still receives the whole (budgeted) tree. */
+const TREE_DISPLAY_LINES = 15;
 
 /** Options for the native directory walk used when no `tree` binary is available. */
 export interface WalkTreeOptions {
@@ -129,6 +134,24 @@ function matchesGlobPattern(name: string, pattern: string): boolean {
 }
 
 /**
+ * Result body for the transcript: the entry count plus the top of the formatted tree.
+ *
+ * `tree` had only a fold category, so `formatToolOutput` (no case for it) and
+ * `ToolOutputView` (no renderer to authorize a block) both produced nothing — the row header
+ * was the entire visible result of a structure overview.
+ */
+function formatTreeDisplay(output: unknown): string | undefined {
+  const out = output as { tree?: unknown; totalEntries?: unknown; cancelled?: unknown } | undefined;
+  if (!out || typeof out.tree !== "string") return undefined;
+  if (out.tree.trim().length === 0) {
+    // A cancelled walk read nothing; it is not a directory that happens to be empty.
+    return out.cancelled === true ? TOOL_CANCELLED_MESSAGE : "Empty directory";
+  }
+  const count = typeof out.totalEntries === "number" ? `${out.totalEntries} entries\n` : "";
+  return `${count}${headDisplayLines(out.tree, TREE_DISPLAY_LINES)}`;
+}
+
+/**
  * Creates a tree tool for displaying directory structure.
  *
  * This tool displays the directory tree structure in a hierarchical format.
@@ -137,7 +160,7 @@ function matchesGlobPattern(name: string, pattern: string): boolean {
 export const createTreeTool = () => {
   return defineServerTool({
     name: "tree",
-    present: { category: "reads" },
+    present: { category: "reads", text: formatTreeDisplay },
     description:
       "Shows a hierarchical directory tree (structure overview). Prefer over list_file when you need depth/layout; use list_file for one-level detail with sizes/dates; use glob to find paths by pattern.",
     inputSchema: z.object({

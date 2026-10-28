@@ -174,6 +174,30 @@ assert.ok(
 assert.notEqual(registeredTools.find((t) => t.name === "memory_read").lazy, true, "memory_read stays eager");
 assert.notEqual(registeredTools.find((t) => t.name === "memory_write").lazy, true, "memory_write stays eager");
 
+// The three tools' result bodies reach the transcript. They declared only a fold category, so the
+// TUI showed a bare row while the model read the result through `toModelOutput`.
+const displayOf = (name) => registeredTools.find((tool) => tool.name === name)?.present?.text;
+for (const name of ["memory_list", "memory_read", "memory_write"]) {
+  assert.equal(typeof displayOf(name), "function", `${name} declares a result renderer`);
+}
+assert.match(
+  displayOf("memory_list")({
+    memories: [{ name: "user-prefers-tabs", type: "user", description: "Prefers tabs" }],
+    count: 1,
+  }),
+  /^Available memories:\n {2}\[user\] user-prefers-tabs: Prefers tabs$/
+);
+assert.equal(displayOf("memory_list")({ memories: [], count: 0 }), "No memories stored.");
+assert.match(
+  displayOf("memory_read")({ content: '<memory name="user-prefers-tabs" type="user">\nAlways use tabs.\n</memory>' }),
+  /Always use tabs/,
+  "memory_read shows the body"
+);
+assert.equal(
+  displayOf("memory_write")({ filename: "user-prefers-tabs.md", ok: true }),
+  "Memory saved to user-prefers-tabs.md"
+);
+
 assert.ok(contextProvider, "registers a context provider");
 const section = (name) => contextProvider.sections?.find((entry) => entry.name === name);
 const indexSection = section("index");

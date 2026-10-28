@@ -1,7 +1,7 @@
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { getSyntaxErrors } from "../tree-sitter/symbol-extractor.js";
 
-import { lspTextToModelOutput } from "./shared/tool-output.js";
+import { lspTextToDisplay, lspTextToModelOutput } from "./shared/tool-output.js";
 import { createCodeActionsTool } from "./tools/code-actions.js";
 import { createCodeOverviewTool } from "./tools/code-overview.js";
 import { createCodeRewriteTool } from "./tools/code-rewrite.js";
@@ -188,7 +188,15 @@ function proxyManager(getManager: () => LspManager): LspManager {
 }
 
 function withLspTextOutput(def: ExtensionToolDefinition): ExtensionToolDefinition {
-  return { ...def, toModelOutput: lspTextToModelOutput };
+  return {
+    ...def,
+    toModelOutput: lspTextToModelOutput,
+    // The same `{ text }` contract one level down: the model gets the whole text, the transcript a
+    // bounded head. Without a `text` renderer the TUI showed the ROW HEADER ONLY for all eleven
+    // lsp_* / tree-sitter tools — `formatToolOutput` has no case for them, and a non-detailed tool
+    // renders its block only when it owns a renderer.
+    present: { ...def.present, text: lspTextToDisplay },
+  };
 }
 
 /** Mark a tool as lazy so it is discovered on demand. */

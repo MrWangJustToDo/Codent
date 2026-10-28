@@ -79,10 +79,17 @@ export const BUILTIN_TOOL_NAMES = {
 } as const;
 
 /**
- * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`.
+ * Tools the CLIENT answers — the UI supplies the result instead of a server `execute`. A name
+ * table over the built-ins, kept beside them so the pump predicate can recognize a client tool
+ * instead of treating it as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
  *
- * A classification over the registry, kept beside it so the pump predicate can recognize a client
- * tool instead of treating it as a server tool waiting to execute (`stream/tool-phase-utils.ts`).
+ * Deliberately a static set: the alternative is threading the registry's `present.clientSide`
+ * flags into the pump predicate, which only matters for a host that injects its own client tool
+ * programmatically (`createManagedAgent({ subagentTools })`). Such a tool has an `execute` the
+ * server cannot run, so `hasDeferredToolExecution` reads its unanswered call as pending and the
+ * tool phase does not converge. No shipped host does that — the hosted client tool is `ask_user`,
+ * which is here — so this is an embedder boundary, not a bug to paper over with a permissive
+ * "no output ⇒ done" rule (that would also swallow a genuinely pending server tool).
  */
 export const CLIENT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAMES.askUser]);
 

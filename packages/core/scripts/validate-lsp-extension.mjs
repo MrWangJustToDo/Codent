@@ -133,6 +133,21 @@ const missingTools = expectedTools.filter((t) => !toolNames.includes(t));
 record("11 tools registered (8 LSP + 3 tree-sitter)", missingTools.length === 0, `${toolNames.length} tools`);
 if (missingTools.length) record("missing tools", false, missingTools.join(", "));
 
+// Every `{ text }` tool owns a result renderer. Without one the transcript showed the ROW HEADER
+// ONLY: `formatToolOutput` has no case for these names, and a non-detailed tool renders a block
+// only when `present.text` exists.
+const noRenderer = registeredTools.filter((tool) => typeof tool.present?.text !== "function");
+record("every LSP tool renders a result body", noRenderer.length === 0, noRenderer.map((t) => t.name).join(", "));
+const diagDisplay = registeredTools.find((t) => t.name === "lsp_diagnostics").present.text;
+const diagBody = diagDisplay({ text: "1 error(s)\n\nsrc/a.ts:1:1 error: boom", count: 1, errors: 1, warnings: 0 });
+record("the result body is the tool's own text", diagBody.includes("error: boom"), diagBody.split("\n")[0]);
+const tallBody = diagDisplay({ text: Array.from({ length: 40 }, (_, i) => `d${i}`).join("\n") });
+record(
+  "a long result body is bounded",
+  tallBody.split("\n").length === 13 && tallBody.includes("(28 more lines)"),
+  `${tallBody.split("\n").length} lines`
+);
+
 // ---- 3. Commands registered ----
 const cmdNames = registeredCommands.map((c) => c.name).sort();
 const expectedCmds = ["lsp", "lsp-restart", "lsp-config"].sort();

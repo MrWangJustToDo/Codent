@@ -27,6 +27,7 @@
 
 import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 
+import { headDisplayLines } from "../../utils/display-lines.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
 
@@ -95,6 +96,41 @@ export function createMemoryExtension(options: CreateMemoryExtensionOptions): Ex
   };
 }
 
+/** Memories the transcript lists; the model still receives every entry. */
+const MEMORY_LIST_DISPLAY_ITEMS = 10;
+/** Lines of one memory body the transcript shows. */
+const MEMORY_READ_DISPLAY_LINES = 12;
+
+/**
+ * Result bodies for the transcript. The three memory tools declared only a fold category, so
+ * `formatToolOutput` (no case) and `ToolOutputView` (no renderer) left their rows body-less in the
+ * TUI — the model saw the results, the user did not.
+ */
+function formatMemoryListDisplay(output: unknown): string | undefined {
+  const list = output as { memories?: Array<{ name?: string; type?: string; description?: string }> } | undefined;
+  const memories = list?.memories;
+  if (!Array.isArray(memories)) return undefined;
+  if (memories.length === 0) return "No memories stored.";
+  const lines = memories
+    .slice(0, MEMORY_LIST_DISPLAY_ITEMS)
+    .map((memory) => `  [${memory.type ?? "?"}] ${memory.name ?? "?"}: ${memory.description ?? ""}`);
+  if (memories.length > MEMORY_LIST_DISPLAY_ITEMS) {
+    lines.push(`  ... and ${memories.length - MEMORY_LIST_DISPLAY_ITEMS} more`);
+  }
+  return `Available memories:\n${lines.join("\n")}`;
+}
+
+function formatMemoryReadDisplay(output: unknown): string | undefined {
+  const memory = output as { content?: unknown } | undefined;
+  if (!memory || typeof memory.content !== "string" || memory.content.trim().length === 0) return undefined;
+  return headDisplayLines(memory.content, MEMORY_READ_DISPLAY_LINES);
+}
+
+function formatMemoryWriteDisplay(output: unknown): string | undefined {
+  const result = output as { filename?: unknown } | undefined;
+  return typeof result?.filename === "string" ? `Memory saved to ${result.filename}` : undefined;
+}
+
 async function activateMemory(
   ctx: ExtensionContext,
   memoryManager: MemoryManager,
@@ -106,7 +142,7 @@ async function activateMemory(
   if (config?.toolsDisabled !== true) {
     ctx.registerTool({
       name: "memory_list",
-      present: { category: "searches" as const },
+      present: { category: "searches" as const, text: formatMemoryListDisplay },
       // Lazy: the <memory_index> in turn context already carries name + type +
       // description for every memory, so the eager schema was ~471 bytes of prompt
       // per turn restating what the model can already read. Measured over 195 root
@@ -155,7 +191,7 @@ This is a lazy tool: discover it via ${DISCOVERY_TOOL_NAME} before calling.`,
 
     ctx.registerTool({
       name: "memory_read",
-      present: { category: "reads" as const },
+      present: { category: "reads" as const, text: formatMemoryReadDisplay },
       description: `Read the full content of a memory by name or filename.
 
 Use after memory_list (or the <memory_index>) to load the full body of a specific
@@ -195,7 +231,7 @@ memory. Returns the memory wrapped in <memory> tags.`,
 
     ctx.registerTool({
       name: "memory_write",
-      present: { category: "edits" as const },
+      present: { category: "edits" as const, text: formatMemoryWriteDisplay },
       description: `Write a durable memory to persist knowledge across sessions.
 
 Use for user preferences, corrections, project facts, decisions, and external

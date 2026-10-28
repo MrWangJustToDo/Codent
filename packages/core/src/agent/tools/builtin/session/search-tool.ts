@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 
+import { truncateText } from "../../../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { toolOutputBaseSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
@@ -60,6 +61,35 @@ export const sessionSearchOutputSchema = z.object({
 
 export type SessionSearchOutput = z.infer<typeof sessionSearchOutputSchema>;
 
+/** Match lines the transcript shows; the model still receives every returned match. */
+const SEARCH_DISPLAY_MATCHES = 6;
+/** Maximum snippet width per displayed match. */
+const SEARCH_DISPLAY_SNIPPET_CHARS = 120;
+
+/**
+ * Result body for the transcript: the match count plus the newest hits.
+ *
+ * `session_search` declared only a fold category, so the TUI showed a bare row even though the
+ * model got the parsed matches. Same shape as `formatGrepOutput`: a few hits, then a drop count.
+ */
+function formatSessionSearchDisplay(output: unknown): string | undefined {
+  const out = output as { query?: unknown; matches?: unknown; total?: unknown } | undefined;
+  if (!out || !Array.isArray(out.matches)) return undefined;
+  const matches = out.matches as SessionSearchOutput["matches"];
+  const query = typeof out.query === "string" ? out.query : "";
+  if (matches.length === 0) return query ? `No matches for "${query}"` : "No matches";
+
+  const shown = matches.slice(0, SEARCH_DISPLAY_MATCHES).map((match) => {
+    const where = `${match.sessionId}${match.messageIndex !== undefined ? ` #${match.messageIndex}` : ""}`;
+    return `  ${where}: ${truncateText(match.snippet, SEARCH_DISPLAY_SNIPPET_CHARS)}`;
+  });
+  if (matches.length > SEARCH_DISPLAY_MATCHES) {
+    shown.push(`  ... and ${matches.length - SEARCH_DISPLAY_MATCHES} more matches`);
+  }
+  const total = typeof out.total === "number" ? out.total : matches.length;
+  return `${total} matches for "${query}":\n${shown.join("\n")}`;
+}
+
 /**
  * Create the `session_search` tool.
  *
@@ -69,7 +99,7 @@ export type SessionSearchOutput = z.infer<typeof sessionSearchOutputSchema>;
 export const createSessionSearchTool = ({ context }: { context?: AgentToolContext } = {}) => {
   return defineServerTool({
     name: "session_search",
-    present: { category: "searches" },
+    present: { category: "searches", text: formatSessionSearchDisplay },
     description: `Search past conversations in this workspace (earlier sessions from the same project).
 
 Use when the task depends on something discussed before — a decision, a constraint, or a detail no longer in context. Returns parsed matches from the session logs — the complete conversation, including parts the current context has compacted away. Results are newest-session-first, not ranked by relevance.
