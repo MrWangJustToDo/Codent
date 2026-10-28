@@ -17,7 +17,12 @@ export interface ToolCompactMiddlewareDeps {
 }
 
 /**
- * Per-tool LLM shaping via `toModelOutput` and recent-window placeholders.
+ * Per-tool LLM shaping via `toModelOutput` (tool-compact).
+ *
+ * Applies to ROOT and CHILD runs alike. `toModelOutput` is the only projection that turns a stored
+ * tool result into model-facing content — media parts, error text, a `run_command` summary — so a
+ * child that returned its wire untouched sent `read_file` images as base64 JSON text, repeated
+ * `grep`/`glob` content alongside the matches, and dropped the cancellation notice.
  *
  * Placement: this runs BEFORE `wire-recovery`, because it is what turns a tool result
  * into real content parts — see the placement contract on that middleware. A capability
@@ -34,22 +39,15 @@ export function createToolCompactMiddleware(deps: ToolCompactMiddlewareDeps): Ch
     name: "tool-compact",
     onConfig: async (_ctx, config) => {
       const messages = config.messages as ModelMessage[];
-
-      const parentId = deps.getManagedAgent().parentId;
-
-      if (!parentId) {
-        // `applyToolCompact` is pure — it returns replacements instead of editing the
-        // array it is handed, which may be the one `WireProjectionCache` retains.
-        return {
-          messages: await applyToolCompact(messages, {
-            config: deps.getCompactionConfig() ?? undefined,
-            registry,
-            cache: deps.getToolCompactCache(),
-          }),
-        };
-      }
-
-      return { messages };
+      // `applyToolCompact` is pure — it returns replacements instead of editing the
+      // array it is handed, which may be the one `WireProjectionCache` retains.
+      return {
+        messages: await applyToolCompact(messages, {
+          config: deps.getCompactionConfig() ?? undefined,
+          registry,
+          cache: deps.getToolCompactCache(),
+        }),
+      };
     },
   });
 }

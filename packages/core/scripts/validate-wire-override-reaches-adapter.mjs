@@ -261,7 +261,9 @@ function makeRunner(channel, run, { parentId } = {}) {
     createToolCompactMiddleware({
       getCompactionConfig: () => ({}),
       getToolCompactCache: () => new ToolCompactCache(),
-      // A subagent skips the tool-output projection, so its tool result stays JSON text.
+      // `parentId` marks a CHILD run. Tool-compact projects for both root and child runs now, so
+      // this option no longer selects a "no projection" path — the fixture below that needs the
+      // raw string uses a tool with no registered `toModelOutput` instead.
       getManagedAgent: () => ({
         parentId,
         getToolModelOutput: (name) => (name === "read_file" ? getToolMetadata(readFileTool)?.toModelOutput : undefined),
@@ -392,13 +394,20 @@ function stringifiedPartsImage() {
 }
 
 /**
+ * A tool with no registered `toModelOutput`, i.e. the only way a string result still reaches the
+ * strip unparsed now that projection runs for child runs too.
+ */
+const UNPROJECTED_TOOL = "render_widget";
+
+/**
  * A channel with one user turn plus a `read_file` tool turn that returned an image.
  *
  * `content` defaults to the raw result object (what the projection consumes). Pass
- * {@link stringifiedPartsImage} for the string form — the one that survives to the wire when
- * nothing re-parses it, which is the only form whose media the strip has to reach itself.
+ * {@link stringifiedPartsImage} plus `toolName: UNPROJECTED_TOOL` for the string form — the one that
+ * survives to the wire when nothing re-parses it, which is the only form whose media the strip has
+ * to reach itself.
  */
-function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
+function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput()), { toolName = "read_file" } = {}) {
   const channel = new AgentUIChannel();
   channel.addUserMessage("read the screenshot");
   channel.setMessages([
@@ -410,7 +419,7 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
         {
           type: "tool-call",
           id: "call-img",
-          name: "read_file",
+          name: toolName,
           arguments: JSON.stringify({ path: "shot.png" }),
           state: "complete",
           output: rawImageReadOutput(),
@@ -453,6 +462,22 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
   );
 }
 
+// The same end-to-end rule for a CHILD run: `tool-compact` projects there too, so the media is an
+// image part and only the strip can remove it. Before that projection reached children this block
+// passed vacuously — the raw JSON text carried no media part for the strip to drop.
+{
+  const channel = makeToolMediaChannel();
+  const run = new TestRun();
+  run.setWireDropPartTypes(new Set(["image"]));
+
+  const { runner, calls } = makeRunner(channel, run, { parentId: "parent-agent" });
+  await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
+
+  assert.ok(calls.length > 0, "the adapter must be called for a child run");
+  assert.equal(wireHasImage(calls[0]), false, "a CHILD run's projected tool image is stripped for a blind model");
+  assert.ok(JSON.stringify(calls[0]).includes(MULTIMODAL_OMITTED_PLACEHOLDER), "…and replaced by the placeholder");
+}
+
 // The other half of that rule: a capable model still receives the projected tool media.
 // A fix that dropped it unconditionally would read as correct in the block above.
 {
@@ -471,14 +496,14 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
 //
 // Chat Completions accepts only string `tool` content, so TanStack stringifies an array result —
 // and that string is what the adapter's lift re-parses, after every middleware, without consulting
-// the drop set. The fixture drives the no-projection half (`parentId` set) so the string survives to
-// the seam unchanged: that is the form whose media only the strip can reach, because nothing
-// upstream turns it into a part. (A subagent's raw result object, by contrast, is NOT a parts array
-// and carries no media part at all — the lift ignores it, and base64-as-text is accepted.) The
-// rewrite must stay a STRING: that is the only thing this wire format accepts.
+// the drop set. This fixture drives the case where nothing upstream turns it into a part: its tool
+// has NO registered `toModelOutput`, so `tool-compact` leaves the string alone and the media is only
+// reachable here. (A projected result — every built-in tool, on root AND child runs — arrives as a
+// parts array instead; that shape is covered by 1a/1b and by `validate:tool-compact`.) The rewrite
+// must stay a STRING: that is the only thing this wire format accepts.
 
 {
-  const channel = makeToolMediaChannel(stringifiedPartsImage());
+  const channel = makeToolMediaChannel(stringifiedPartsImage(), { toolName: UNPROJECTED_TOOL });
   const run = new TestRun();
   run.setWireDropPartTypes(new Set(["image"]));
 
@@ -486,7 +511,7 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
   await drain(runner.run({ agentId: "wire-override-agent", messages: channel.getMessages(), detached: true }));
 
   const wire = calls[0];
-  assert.equal(wireHasImage(wire), false, "a subagent's tool image must not reach a model without vision");
+  assert.equal(wireHasImage(wire), false, "an unprojected tool image must not reach a model without vision");
   assert.ok(
     JSON.stringify(wire).includes(MULTIMODAL_OMITTED_PLACEHOLDER),
     "the stringified tool result must be rewritten with the placeholder, not passed through"
@@ -506,7 +531,7 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput())) {
 // The capable-model half again: with nothing armed the stringified result is untouched, so the
 // adapter's lift can still revive it.
 {
-  const channel = makeToolMediaChannel(stringifiedPartsImage());
+  const channel = makeToolMediaChannel(stringifiedPartsImage(), { toolName: UNPROJECTED_TOOL });
   const run = new TestRun();
 
   const { runner, calls } = makeRunner(channel, run, { parentId: "parent-agent" });

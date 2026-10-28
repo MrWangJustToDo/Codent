@@ -10,6 +10,7 @@ import {
   applyToolCompact,
   createReadFileTool,
   createRunCommandTool,
+  createToolCompactMiddleware,
   createWriteFileTool,
   getToolMetadata,
   ToolCompactCache,
@@ -183,5 +184,66 @@ const errorText =
       : String(errorTool.content);
 assert.match(errorText, /Error: File already exists/);
 assert.doesNotMatch(errorText, /Overwrote file: undefined/);
+
+// ---------------------------------------------------------------------------
+// A CHILD run projects too (the middleware is not root-only)
+// ---------------------------------------------------------------------------
+//
+// The middleware used to return the wire untouched when `parentId` was set. `toModelOutput` is the
+// only projection point (the `config` option is unused), so an explore subagent's `read_file` of an
+// image put the base64 JSON into its context instead of an image part — and `run_command`'s
+// cancellation text / `grep`'s dedupe were lost the same way.
+{
+  const imageOutput = { type: "image", path: "shot.png", base64: "AAAA", size: 4, mimeType: "image/png" };
+  const imageWire = () => [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        {
+          id: "call-img",
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: "shot.png" }) },
+        },
+      ],
+    },
+    { role: "tool", toolCallId: "call-img", content: JSON.stringify(imageOutput) },
+  ];
+
+  const middlewareFor = (parentId) =>
+    createToolCompactMiddleware({
+      getCompactionConfig: () => null,
+      getToolCompactCache: () => new ToolCompactCache(),
+      getManagedAgent: () => ({
+        parentId,
+        getToolModelOutput: (name) => getToolMetadata(tools[name])?.toModelOutput,
+      }),
+    });
+
+  for (const [label, parentId] of [
+    ["root", undefined],
+    ["child", "parent-1"],
+  ]) {
+    const wire = imageWire();
+    const before = JSON.stringify(wire);
+    const middleware = middlewareFor(parentId);
+    assert.equal(typeof middleware.onConfig, "function", `${label}: tool-compact runs onConfig`);
+
+    const out = await middleware.onConfig({}, { messages: wire });
+    const projected = out.messages.find((m) => m.role === "tool" && m.toolCallId === "call-img");
+    assert.ok(projected, `${label}: the tool result survives`);
+    assert.ok(Array.isArray(projected.content), `${label}: projected to content parts, not raw JSON text`);
+    assert.ok(
+      projected.content.some((part) => part.type === "image"),
+      `${label}: media is an image part the provider can use`
+    );
+    assert.match(
+      String(projected.content[0]?.content),
+      /Image read: shot\.png/,
+      `${label}: the text line describes it`
+    );
+    assert.equal(JSON.stringify(wire), before, `${label}: the input wire is not mutated`);
+  }
+}
 
 console.log("tool-compact validation passed");

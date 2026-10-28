@@ -84,11 +84,10 @@ export interface WireRecoveryMiddlewareDeps {
  * Chat Completions accepts only string `tool` content, so TanStack persists an array result with
  * `JSON.stringify` — and in that form the media is not a content part at all until something
  * re-parses it. The two readers that do are the tool-output projection (skipped when the tool has no
- * registered `toModelOutput`, and never run for a subagent) and the adapter's
- * `liftToolMediaForChatCompletions`, which runs after every middleware and does not consult the drop
- * set. So this seam has to handle the string form itself, or a model without vision is sent the tool's
- * image anyway — on the one path where the widened retry cannot help, because the same string comes
- * back on every call.
+ * registered `toModelOutput`) and the adapter's `liftToolMediaForChatCompletions`, which runs after
+ * every middleware and does not consult the drop set. So this seam has to handle the string form
+ * itself, or a model without vision is sent the tool's image anyway — on the one path where the
+ * widened retry cannot help, because the same string comes back on every call.
  *
  * The recognition lives here, not in the strip module: the parser is `agent/media/`'s and `models/`
  * must not import upward (`validate:layer-boundaries`). What a dropped part becomes stays with the
