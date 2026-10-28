@@ -125,10 +125,10 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // TUI boots: stdout must carry only JSON-RPC frames (never a rendered transcript).
   // Flags after the subcommand configure the model directly (`codent acp --model …`).
   //
-  // The ACP host has its own session seam, so this branch forwards exactly the parsed settings it
-  // can honour: the model connection, `--system` and `--max-iterations`. The rest
-  // (`--mcp-config`, `--max-concurrent-tasks`, `--extension-dirs`, `--resume`, `--continue`) is
-  // client-owned in ACP — sessions, MCP servers and workspace roots arrive over the protocol.
+  // The ACP host has its own session seam, so this branch forwards the launch settings it can
+  // honour: the model connection, `--system`, `--max-iterations`, `--max-concurrent-tasks`,
+  // `--extension-dirs`, `--mcp-config` and the host version. `--resume` / `--continue` are
+  // protocol-driven in ACP (the client chooses the session), so they are not forwarded.
   if (isAcpRequested(argv)) {
     const acpConfig = parseCliArgs(argv.slice(1));
     assertMaxIterations(options.productName, acpConfig.maxIterations);
@@ -145,8 +145,12 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
       // `--client-env` opts into borrowing the client's fs/terminal per session.
       {
         clientEnv: argv.includes("--client-env"),
+        version: cliVersion(),
         ...(acpConfig.systemPrompt ? { systemPrompt: acpConfig.systemPrompt } : {}),
         maxIterations: acpConfig.maxIterations,
+        ...(acpConfig.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: acpConfig.maxConcurrentTasks } : {}),
+        ...(acpConfig.extensionDirs?.length ? { extensionDirs: acpConfig.extensionDirs } : {}),
+        ...(acpConfig.mcpConfigPath ? { mcpConfigPath: acpConfig.mcpConfigPath } : {}),
       }
     );
   }

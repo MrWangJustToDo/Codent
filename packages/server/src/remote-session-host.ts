@@ -77,6 +77,9 @@ export function createRemoteAgentSessionHost(options: RemoteAgentSessionHostOpti
           extensionDirs: createOptions.extensionDirs,
           ...(createOptions.builtins ? { builtins: createOptions.builtins } : {}),
           ...(createOptions.modelInfo ? { modelInfo: createOptions.modelInfo } : {}),
+          // `providerMode` is deliberately not forwarded: it is a LOCAL decision about whether the
+          // runtime adopts a resumed session's persisted model/style, and the agent server owns its
+          // own provider (`POST /api/agent` documents the same choice).
           continueSession: createOptions.continueSession,
           resumeSessionId: createOptions.resumeSessionId,
           // Websearch keys / provider preference for the server-side agent loop. The

@@ -16,12 +16,9 @@ export interface AppConfig {
   /**
    * Positional CLI argument — sent as the first message once the session is ready.
    *
-   * TODO(app-config): "once" is enforced by a `useRef` guard in
-   * `use-agent-input-controls.ts`, and it is per MOUNT, not per session. A runtime rebuild (the
-   * effect that depends on `systemPrompt` / `maxIterations` / `mcpConfigPath`) creates a fresh
-   * session but does NOT re-send it, whereas an unmount/remount (the editor handoff,
-   * `beginRuntimeSuspend`) DOES re-mount the hook and re-sends the prompt into the existing
-   * conversation. So the initial prompt can be delivered twice across an editor round-trip.
+   * Consumed on send (`use-agent-input-controls.ts` clears it in the store), so "once" holds per
+   * launch: an editor-handoff remount re-mounts the hook but sees an empty value, and a runtime
+   * rebuild / `session.new` does not re-send it either. A new process re-initializes it from argv.
    */
   initialPrompt: string;
   maxIterations: number;

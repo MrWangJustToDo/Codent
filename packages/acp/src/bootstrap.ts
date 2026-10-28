@@ -97,10 +97,9 @@ export interface LocalAcpBootstrap {
 export async function bootstrapLocalAcp(
   options: {
     cwd?: string;
-    // TODO(acp-init): no entry point ever passes `sandbox` — `bin.ts` sends only `model` +
-    // `clientEnv`, and `cli/src/acp-command.ts` the same — so the ACP host always takes the
-    // `SANDBOX_ENV` env fallback below. There is no `--sandbox` flag, while the CLI TUI has the
-    // same env-only rule (`host.tsx`), so this is consistent but equally unconfigurable per launch.
+    // TODO(acp-init): neither entry point passes `sandbox`, and there is no `--sandbox` flag, so
+    // the ACP host always takes the `SANDBOX_ENV` env fallback below. The CLI TUI has the same
+    // env-only rule (`host.tsx`): consistent, but unconfigurable per launch.
     sandbox?: "local" | "native";
     model?: AcpModelOverride;
     /** `--client-env`: build each session's env from the ACP client's fs/terminal capabilities. */
@@ -109,6 +108,12 @@ export async function bootstrapLocalAcp(
     systemPrompt?: string;
     /** `--max-iterations`: per-session agent-loop budget; default is core's schema default. */
     maxIterations?: number;
+    /** `--max-concurrent-tasks`: cap on parallel `task` subagents per session. */
+    maxConcurrentTasks?: number;
+    /** `--extension-dirs`: extra extension directories for every session. */
+    extensionDirs?: string[];
+    /** `--mcp-config`: MCP config file for every session. */
+    mcpConfigPath?: string;
   } = {}
 ): Promise<LocalAcpBootstrap> {
   // Normalized to absolute HERE, at the boundary that accepts a caller-supplied `cwd`: everything
@@ -414,6 +419,9 @@ export async function bootstrapLocalAcp(
       ...(apiKey ? { modelApiKey: apiKey } : {}),
       ...(modelInfo ? { modelInfo } : {}),
       ...(options.maxIterations !== undefined ? { maxIterations: options.maxIterations } : {}),
+      ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
+      ...(options.extensionDirs?.length ? { extensionDirs: options.extensionDirs } : {}),
+      ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
       ...(fileToolConfig ? { toolConfig: fileToolConfig } : {}),
       // `--system` overrides the built-in prompt for the process root. A session whose `cwd`
       // differs gets a prompt rebuilt from THAT workspace (see `sessionSystemPrompt`), which is
@@ -436,6 +444,12 @@ export async function bootstrapAcpAgent(
     systemPrompt?: string;
     /** `--max-iterations`: per-session agent-loop budget (1..MAX_AGENT_ITERATIONS). */
     maxIterations?: number;
+    /** `--max-concurrent-tasks`: cap on parallel `task` subagents per session. */
+    maxConcurrentTasks?: number;
+    /** `--extension-dirs`: extra extension directories for every session. */
+    extensionDirs?: string[];
+    /** `--mcp-config`: MCP config file for every session. */
+    mcpConfigPath?: string;
   } = {}
 ): Promise<AcpAgentOptions> {
   const boot = await bootstrapLocalAcp(options);
@@ -445,10 +459,8 @@ export async function bootstrapAcpAgent(
     rootPath: boot.rootPath,
     ...(boot.models ? { models: boot.models } : {}),
     ...(boot.modelsDefaultEntryIndex !== undefined ? { modelsDefaultEntryIndex: boot.modelsDefaultEntryIndex } : {}),
-    // TODO(acp-init): dead in practice — neither caller (`bin.ts`, `cli/src/acp-command.ts`) passes
-    // `version`, so `AcpAgentOptions.version` is always undefined and `agent.ts` falls back to the
-    // hard-coded `"0.0.1"` it reports as `agentInfo.version` to every ACP client. `cliVersion()`
-    // exists in `@codent/cli` and is exactly what should be forwarded here.
+    // Both entry points forward their own package version, so `agentInfo.version` is the real
+    // host version instead of the `"0.0.1"` fallback.
     ...(options.version ? { version: options.version } : {}),
     ...(boot.createSessionHost ? { createSessionHost: boot.createSessionHost } : {}),
     ...(boot.listPersistedSessionsAt ? { listPersistedSessionsAt: boot.listPersistedSessionsAt } : {}),

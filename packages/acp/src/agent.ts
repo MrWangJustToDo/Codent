@@ -182,8 +182,14 @@ export interface AcpAgentDefaults {
   modelInfo?: ModelInfo;
   /** Omit for core's `DEFAULT_AGENT_MAX_ITERATIONS` (the schema default). */
   maxIterations?: number;
+  /** Max concurrent `task` subagents per session (core default 4). */
+  maxConcurrentTasks?: number;
   /** Websearch secrets / provider preference for every session (from models.json or an embedder). */
   toolConfig?: AgentToolConfig;
+  /** Extra extension dirs for every session (the workspace `.agents/extension` is still scanned). */
+  extensionDirs?: string[];
+  /** Override the MCP config file (`.agents/mcp.json` by default). */
+  mcpConfigPath?: string;
   systemPrompt?: string;
 }
 
@@ -746,7 +752,12 @@ export function createAcpAgent(options: AcpAgentOptions): AgentApp {
       ...(options.defaults.modelApiKey ? { modelApiKey: options.defaults.modelApiKey } : {}),
       ...(options.defaults.modelInfo ? { modelInfo: options.defaults.modelInfo } : {}),
       ...(options.defaults.maxIterations !== undefined ? { maxIterations: options.defaults.maxIterations } : {}),
+      ...(options.defaults.maxConcurrentTasks !== undefined
+        ? { maxConcurrentTasks: options.defaults.maxConcurrentTasks }
+        : {}),
       ...(options.defaults.toolConfig ? { toolConfig: options.defaults.toolConfig } : {}),
+      ...(options.defaults.extensionDirs?.length ? { extensionDirs: options.defaults.extensionDirs } : {}),
+      ...(options.defaults.mcpConfigPath ? { mcpConfigPath: options.defaults.mcpConfigPath } : {}),
       // A different `cwd` gets the default prompt built from ITS workspace (the boot prompt was
       // built from the process root, so reusing it would embed the wrong project instructions).
       ...(systemPrompt ? { systemPrompt } : {}),

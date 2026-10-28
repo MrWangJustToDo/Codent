@@ -5,18 +5,34 @@
  */
 
 import { installAgentLogProcessGuards, parseModelStyle } from "@codent/core";
+import { createRequire } from "node:module";
 
 import { bootstrapAcpAgent, type AcpModelOverride } from "./bootstrap.js";
 import { runAcpAgentStdio } from "./stdio.js";
 
+const requireFromBin = createRequire(import.meta.url);
+
+/** The standalone bin's own package version, reported as `agentInfo.version`. */
+function acpVersion(): string {
+  try {
+    return (requireFromBin("../package.json") as { version: string }).version;
+  } catch {
+    return "0.0.1";
+  }
+}
+
 /**
  * Minimal flag reader for the standalone bin (`--model/-m`, `--style`, `--base-url/-u`,
- * `--api-key/-k`, `--remote-provider`, `--system/-s`, `--max-iterations`).
+ * `--api-key/-k`, `--remote-provider`, `--system/-s`, `--max-iterations`,
+ * `--max-concurrent-tasks`, `--extension-dirs`, `--mcp-config`).
  */
 function parseFlags(argv: string[]): {
   model?: AcpModelOverride;
   systemPrompt?: string;
   maxIterations?: number;
+  maxConcurrentTasks?: number;
+  extensionDirs?: string[];
+  mcpConfigPath?: string;
 } {
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
@@ -41,6 +57,13 @@ function parseFlags(argv: string[]): {
   const systemPrompt = get("system", "s");
   const rawIterations = get("max-iterations");
   const maxIterations = rawIterations !== undefined ? Number(rawIterations) : undefined;
+  const rawConcurrentTasks = get("max-concurrent-tasks");
+  const maxConcurrentTasks = rawConcurrentTasks !== undefined ? Number(rawConcurrentTasks) : undefined;
+  const extensionDirs = get("extension-dirs", "extension-dir")
+    ?.split(",")
+    .map((dir) => dir.trim())
+    .filter((dir) => dir.length > 0);
+  const mcpConfigPath = get("mcp-config");
   return {
     ...(model || remoteProvider
       ? {
@@ -55,6 +78,9 @@ function parseFlags(argv: string[]): {
       : {}),
     ...(systemPrompt ? { systemPrompt } : {}),
     ...(maxIterations !== undefined && Number.isFinite(maxIterations) ? { maxIterations } : {}),
+    ...(maxConcurrentTasks !== undefined && Number.isFinite(maxConcurrentTasks) ? { maxConcurrentTasks } : {}),
+    ...(extensionDirs?.length ? { extensionDirs } : {}),
+    ...(mcpConfigPath ? { mcpConfigPath } : {}),
   };
 }
 
@@ -71,8 +97,12 @@ async function main(): Promise<void> {
     ...(flags.model ? { model: flags.model } : {}),
     // Opt-in: without it the env planes are byte-for-byte what they were before this flag existed.
     clientEnv: argv.includes("--client-env"),
+    version: acpVersion(),
     ...(flags.systemPrompt ? { systemPrompt: flags.systemPrompt } : {}),
     ...(flags.maxIterations !== undefined ? { maxIterations: flags.maxIterations } : {}),
+    ...(flags.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: flags.maxConcurrentTasks } : {}),
+    ...(flags.extensionDirs ? { extensionDirs: flags.extensionDirs } : {}),
+    ...(flags.mcpConfigPath ? { mcpConfigPath: flags.mcpConfigPath } : {}),
   });
   const connection = runAcpAgentStdio(options);
 

@@ -8,6 +8,7 @@ import { getActiveHost, getActiveSession } from "../utils/session-resolve.js";
 
 import { useAutocomplete } from "./use-autocomplete.js";
 import { useCommandOutput } from "./use-command-output.js";
+import { useConfig } from "./use-config.js";
 import { useInputMode } from "./use-input-mode.js";
 import { useSelect } from "./use-select.js";
 import { useUserInput } from "./use-user-input.js";
@@ -168,10 +169,14 @@ export function useAgentInputControls({
   }, [inputActions, modeActions, pendingAskUser, selectActions]);
 
   useEffect(() => {
-    if (isReady && initialPrompt && !hasInitRef.current) {
-      hasInitRef.current = true;
-      sendMessage(initialPrompt);
-    }
+    if (!isReady || !initialPrompt || hasInitRef.current) return;
+    hasInitRef.current = true;
+    // Consume the positional prompt: the ref is per MOUNT, so an editor-handoff remount would
+    // otherwise send it a second time into the same conversation. Clearing the store value makes
+    // "once" hold per launch — a new process re-initializes it from the CLI argument, and neither
+    // a runtime rebuild nor `session.new` (both keep the empty value) re-sends it.
+    useConfig.getActions().updateConfig({ initialPrompt: "" });
+    sendMessage(initialPrompt);
   }, [isReady, initialPrompt, sendMessage]);
 
   useEffect(() => {

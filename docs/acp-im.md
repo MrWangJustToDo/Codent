@@ -87,11 +87,13 @@ Important consequences for IM:
   information (which model is running), not a choice.
 - Alternatively pass credentials through `env = { ... }` under `[projects.agent.options]`.
 
-Two session settings are not part of the model planes and are forwarded from the command line:
+Session settings that are not part of the model planes are forwarded from the command line:
 `--system` / `-s` replaces the built-in prompt for the process root (a session whose `cwd` differs
-rebuilds the prompt from that workspace), and `--max-iterations` sets the per-session agent-loop
-budget (1..100). The standalone `codent-acp` bin accepts both; `global.toolConfig` in `models.json`
-supplies the websearch keys for either entry point.
+rebuilds the prompt from that workspace), `--max-iterations` sets the per-session agent-loop budget
+(1..100), and `--max-concurrent-tasks` / `--extension-dirs` / `--mcp-config` become per-session
+defaults. The standalone `codent-acp` bin accepts the same flags; `--resume` / `--continue` are
+protocol-driven (the client selects the session). `global.toolConfig` in `models.json` supplies the
+websearch keys for either entry point.
 
 On the ACP side, `session/load` and `session/resume` return `modes` + `configOptions`, so a client
 that reads them keeps the selectors across a restart. cc-connect, as reviewed, only consumes the

@@ -17,7 +17,7 @@ Shared UI layer (CLI + extension). Agent control is **Session-only**: hooks, lay
 | Status helpers | `isActiveStatus` |
 | Presentation registry | `getToolPresentation` / `registerToolPresentation` / `describeToolPresentations` (tools declare a single `present` descriptor in core; the UI reads it) |
 | CoreEnv plane | `CoreEnv` type, `FileEntry`, … — the env itself reaches the app through `CoreEnvProvider` / `useCoreEnv` (host-supplied) and is passed explicitly into the workspace utils; never ambient `getEnv()` |
-| Model types | `DEFAULT_BASE_URLS`, `DEFAULT_LOCAL_OPENAI_BASE_URL`, `ModelStyle` / `ModelInfo` / `ModelCapability` / `ModelPricing` / `ReasoningConfig` |
+| Model types | `DEFAULT_BASE_URLS`, `DEFAULT_LOCAL_OPENAI_BASE_URL`, `ModelStyle` / `ModelInfo` / `ModelCapability` / `ModelPricing` / `ReasoningConfig`; iteration limits `DEFAULT_AGENT_MAX_ITERATIONS` / `MAX_AGENT_ITERATIONS` (single source for the CLI/app default and help text) |
 | Summary stream protocol | `agentStreamKey`, display-window helpers, `AgentStreamEvent` types |
 | Edit preview (CoreEnv) | `previewEdit` (workspace read; no ManagedAgent) |
 
