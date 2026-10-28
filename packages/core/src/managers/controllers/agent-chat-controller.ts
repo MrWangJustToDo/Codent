@@ -662,7 +662,9 @@ export class AgentChatController {
       onAbort: () => this.applyCancelledIncompleteTools(true),
       onAbortError: (message) => {
         if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
-        this.managed.statusController.onExternalError(message, true);
+        // Abort-shaped does NOT mean the user aborted: `isAbortedNow` already ruled out our
+        // signal/status, so this turn failed and must finalize as `error` (no memory extraction).
+        this.managed.statusController.onExternalError(message);
         this.applyCancelledIncompleteTools(true);
       },
       onEmpty: (message) => {

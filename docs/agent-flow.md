@@ -46,7 +46,7 @@ pump），只有 `finalizeRun` 才写 `agent:stop`。
 | run token | 有（`RunCoordinator.beginRun`，唯一调用点 `agent-chat-controller.ts:504`） | 无；靠自身 abort signal + status |
 | 结束判定 | 循环读消息链（`shouldContinueAgentPump`）+ 队列 | 一次流结束即结束 |
 | `flagEmptyStream` | 开（空流=错误）(`agent-chat-controller.ts:660`) | 关（空流按正常结束）(`run-subagent.ts:279`) |
-| abort 形状的异常 | 保留错误文本（`abortErrorAsCancel: false`） | 视为取消（`abortErrorAsCancel: true`，`run-subagent.ts:282`） |
+| abort 形状的异常 | 保留为失败回合：status `error` + 文本（`abortErrorAsCancel: false`，`onExternalError` 是终态） | 视为取消（`abortErrorAsCancel: true`，`run-subagent.ts:282`） |
 | finalize | `finalizeChat` → `finalizeRun(kind)`（`waiting` 除外） | `finalizeDetached(kind)` |
 | extensions / memory / todo / session store | 有（仅 root 装配，`agent-factory.ts:125-172`） | 无（`agent-factory.ts` 的 `!parentId` 分支之外全不装配；`MemoryService.runExtraction` 因无 manager 直接返回，`memory-service.ts:166-167`） |
 | session 级自动压缩 | 有（`agent-factory.ts:138` 设 compaction 配置） | 不触发（`compaction-middleware.ts:86` 的 `!isSubagent` 条件） |
@@ -520,7 +520,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 |---|---|---|---|---|
 | provider `RUN_ERROR`（可恢复） | `run-stream-recovery.ts:258-268` | §5.1 阶梯 | `agent:retry` + state `retry`（`retry.attempt/maxAttempts/strategy`） | **重试同一次尝试**，不换 turn |
 | provider `RUN_ERROR`（不可恢复） | 同上 → `terminalError` throw（`:290`） | `runManagedSpan` catch → `onError` | `agent:stream-error`、status `error`、error 文本 | **终止**：`finalizeChat(error)` → `agent:stop("error")` |
-| 流外抛错（含 abort 形状） | `managed-span.ts:89-103` | 根：保留错误文本（`onAbortError` 只写 error 不改 status，`agent-status-controller.ts:163-168`），后续 `reconcileAfterRun` 据 error 文本落 `error`；子：`abortErrorAsCancel` → 视为取消 | 错误文本 / 取消 | 根：终止；子：`aborted` |
+| 流外抛错（含 abort 形状） | `managed-span.ts:89-103` | 根：`onAbortError` → `onExternalError` 直接置 status `error`（+ 文本，`agent-status-controller.ts:163-179`），不依赖 `reconcileAfterRun` 补状态；子：`abortErrorAsCancel` → 视为取消 | 错误文本 / 取消 | 根：`error` 终止（不跑记忆抽取）；子：`aborted` |
 | 空模型流（HTTP 200 但零 chunk） | `managed-span.ts:75-85` + `empty-model-stream.ts:61`，**仅 root**（`agent-chat-controller.ts:660`） | `onEmpty` → `onRunError(EMPTY_MODEL_STREAM_MESSAGE)` + log | 明确提示"检查 provider URL / API key / 网络"（`empty-model-stream.ts:10`） | **终止**（error）；subagent 不判空 |
 | 工具执行报错 | `extensions-middleware.ts:116-127` | `agent:tool-error`（warn，带 `cancelled` 判定）；错误结果照常进 wire | 工具行错误 | **继续**：模型看到失败结果，可能自己换方案 |
 | 工具被 abort（execute 没返回） | `incomplete-tool-calls.ts:241-250` | 框架兜底写 `{success:false,error,cancelled:true}`，part state `complete` | 中性 ⚠（不是故障） | 随 run 结束；不再被下一次 `chat()` 重试 |

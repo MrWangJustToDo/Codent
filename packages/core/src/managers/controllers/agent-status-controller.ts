@@ -160,11 +160,20 @@ export class AgentStatusController {
     }
   }
 
-  onExternalError(message: string, isAbort: boolean): void {
+  /**
+   * A failure that reached the run from OUTSIDE the stream — a transport/SDK abort-shaped error
+   * whose signal is NOT this run's, an external fault.
+   *
+   * Always terminal: this is not the user's abort (`onRunAbort` owns that), so the turn failed. It
+   * used to take an `isAbort` flag that recorded the message WITHOUT the status, which made the
+   * pump derive `finished` (its only failure signal is `status === "error"`), run post-run memory
+   * extraction, emit `agent:stop{finished}` / `turn:summary{finished}`, and then have
+   * `reconcileAfterRun` flip the status to `error` from the leftover text — two conclusions for
+   * one run.
+   */
+  onExternalError(message: string): void {
     this.deps.setError(message);
-    if (!isAbort) {
-      this.deps.setStatus("error", "external-error");
-    }
+    this.deps.setStatus("error", "external-error");
   }
 
   onUserCancel(): void {

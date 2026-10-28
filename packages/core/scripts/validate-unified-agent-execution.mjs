@@ -74,6 +74,11 @@ assert.match(
   "root keeps abort-shaped errors as errors"
 );
 assert.match(
+  read("managers/controllers/agent-chat-controller.ts"),
+  /onExternalError\(message\)/,
+  "the root's abort-shaped error is terminal (status error), not text-only"
+);
+assert.match(
   read("agent/subagent/run-subagent.ts"),
   /abortErrorAsCancel: true/,
   "child keeps abort-shaped errors as cancels"

@@ -24,7 +24,7 @@ export interface RunManagedSpanOptions extends RunAgentOnceOptions {
   onAbort?: (messages: UIMessage[]) => void;
   /** Called for a non-abort stream failure. The helper still returns the normalized message. */
   onError?: (message: string, error: Error) => void;
-  /** Called for an abort-shaped error when `abortErrorAsCancel` is false (root keeps error text). */
+  /** Called for an abort-shaped error when `abortErrorAsCancel` is false (root keeps it an error). */
   onAbortError?: (message: string, error: Error) => void;
   /** Called when `flagEmptyStream` detects no output. */
   onEmpty?: (message: string) => void;
@@ -93,8 +93,8 @@ export async function runManagedSpan(
     const error = toError(err);
     const message = formatAgentStreamError(error).message;
     if (managed.isAbortError(err)) {
-      // The run is not marked aborted (status/signal), but the failure IS the abort: a child
-      // worker treats it as a cancellation; the root keeps the error text for the user.
+      // The run is not marked aborted (status/signal), but the failure is abort-SHAPED: a child
+      // worker treats it as a cancellation; the root keeps it a failed turn (status error + text).
       if (abortErrorAsCancel) return abortedSpan(messages);
       onAbortError?.(message, error);
       return { messages, aborted: false, errorMessage: message, channel };

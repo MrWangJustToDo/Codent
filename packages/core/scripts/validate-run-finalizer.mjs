@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { RunFinalizer, countToolCalls } from "../dist/dev.mjs";
+import { RunFinalizer, countToolCalls, createAgentStatusController } from "../dist/dev.mjs";
 
 const messages = [
   { id: "u1", role: "user", parts: [{ type: "text", content: "do work" }] },
@@ -348,6 +348,74 @@ function makeFinalizer({ status = "running", error = "", total } = {}) {
   const outcome = { kind: "waiting", messages, path: "chat" };
   ctrl.finalizer.applyOutcome(outcome);
   assert.deepEqual(ctrl.calls, [{ op: "apply", outcome }], "applyOutcome only touches status");
+}
+
+// ---------------------------------------------------------------------------
+// 5. An abort-shaped EXTERNAL failure is a failed turn, not a silent finish
+// ---------------------------------------------------------------------------
+//
+// The root's `onAbortError` used to record the message without the status (an `isAbort` flag on
+// `onExternalError`). The pump's only failure signal is `status === "error"`, so the turn derived
+// `finished`: post-run memory extraction ran, `agent:stop{finished}` / `turn:summary{finished}`
+// were emitted, and `reconcileAfterRun` then flipped the status to `error` from the leftover text.
+// `onExternalError` is now always terminal.
+{
+  let status = "running";
+  let error = "";
+  const transitions = [];
+  const controller = createAgentStatusController({
+    getStatus: () => status,
+    setStatus: (next, trigger) => {
+      transitions.push([next, trigger]);
+      status = next;
+    },
+    getError: () => error,
+    setError: (next) => {
+      error = next;
+    },
+    setPendingApprovalCount: () => {},
+    setFinishReason: () => {},
+    emitEvent: () => {},
+  });
+
+  const calls = [];
+  const finalizer = new RunFinalizer({
+    status: controller,
+    getStatus: () => status,
+    getError: () => error,
+    finalizeRun: (reason) => calls.push({ op: "finalize", reason }),
+    discardPreforkRuns: () => {},
+    emitEvent: (type, data) => calls.push({ op: "event", type, data }),
+    usage: {
+      getTotal: () => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }),
+      getTotalCostUsd: () => 0,
+    },
+  });
+
+  // What `agent-chat-controller.onAbortError` does for an AbortError whose run signal is NOT ours.
+  controller.onExternalError("AbortError: the operation was aborted");
+  assert.deepEqual(transitions, [["error", "external-error"]], "the external failure is terminal");
+  assert.equal(error, "AbortError: the operation was aborted");
+
+  const hasError = status === "error";
+  const kind = finalizer.deriveChatOutcome({ hasError, waitingForUser: false });
+  assert.equal(kind, "error", "an abort-shaped external failure derives error, never finished");
+  assert.equal(
+    finalizer.finalizeChat({
+      kind,
+      messages,
+      waitingForUser: false,
+      phases: 1,
+      turnStartedAt: Date.now(),
+      ...FROM_ZERO,
+      persist: () => {},
+    }),
+    "error"
+  );
+  const finalize = calls.find((call) => call.op === "finalize");
+  assert.equal(finalize?.reason, "error", "finalizeRun(error) → no post-run memory extraction");
+  const summary = calls.find((call) => call.op === "event" && call.type === "turn:summary");
+  assert.equal(summary?.data.outcome, "error");
 }
 
 console.log("run-finalizer validation passed");
