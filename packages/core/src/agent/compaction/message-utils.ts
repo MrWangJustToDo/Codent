@@ -7,7 +7,7 @@
  * - text parts use the `content` field (not legacy `text`)
  */
 
-import { convertMessagesToModelMessages, type ContentPart, type ModelMessage, type UIMessage } from "@tanstack/ai";
+import { type ContentPart, type ModelMessage, type UIMessage } from "@tanstack/ai";
 
 /** Build toolCallId → tool name from assistant `toolCalls`. */
 export function buildToolCallNameMap(messages: ModelMessage[]): Map<string, string> {

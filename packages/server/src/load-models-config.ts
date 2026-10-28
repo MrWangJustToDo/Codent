@@ -1,3 +1,5 @@
+import type { ModelsConfig } from "@codent/core";
+
 /**
  * The server's own `models.json` (`.agents/config/models.json`), read on demand.
  *
@@ -11,7 +13,7 @@ async function loadCore() {
   return import("@codent/core");
 }
 
-export async function loadServerModelsConfig(): Promise<import("@codent/core").ModelsConfig | null> {
+export async function loadServerModelsConfig(): Promise<ModelsConfig | null> {
   const { loadModelsConfigFromFile } = await loadCore();
   try {
     return await loadModelsConfigFromFile();

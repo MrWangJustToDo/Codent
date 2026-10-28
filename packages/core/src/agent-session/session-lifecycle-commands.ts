@@ -10,7 +10,7 @@ import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 import { errorMessage, toError } from "../utils/errors.js";
 
-import { PR_SUMMARY_SYSTEM_PROMPT, TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
+import { TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
 
 import type { ManagedAgent } from "../managers/managed-agent.js";
 import type { UIMessage } from "@tanstack/ai";

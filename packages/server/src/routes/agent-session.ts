@@ -28,7 +28,6 @@ import type {
   AgentSessionCreateOptions,
   McpServerConfig,
   ModelInfo,
-  ModelsConfig,
   ModelsConfigEntry,
 } from "@codent/core";
 
