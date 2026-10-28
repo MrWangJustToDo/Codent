@@ -292,6 +292,17 @@ export type AgentEventPayloadMap = {
     phase?: string;
     error?: string;
   };
+  "compaction:manual-start": {
+    tokensBefore?: number;
+  };
+  "compaction:manual-complete": {
+    tokensBefore?: number;
+    tokensAfter?: number;
+  };
+  "compaction:manual-error": {
+    phase?: string;
+    error?: string;
+  };
   "compaction:reactive-start": {
     retry?: number;
     maxRetries?: number;

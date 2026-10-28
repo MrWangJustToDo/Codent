@@ -16,7 +16,7 @@ import {
   attachRunErrorCode,
   attachRunErrorRetryAfterMs,
   throwOnRunError,
-  createAgentStatusController,
+  CompactionController,
   reactiveCompact,
   handleManagedReactiveCompact,
   AgentUIChannel,
@@ -154,18 +154,20 @@ assert.equal(extractRunErrorMessage({ type: "RUN_ERROR", error: { message: "too 
 const events = [];
 let status = "running";
 
-const statusController = createAgentStatusController({
+const compactionController = new CompactionController({
   getStatus: () => status,
   setStatus: (next) => {
     status = next;
   },
-  getError: () => "",
-  setError: () => {},
-  setPendingApprovalCount: () => {},
+  onUserCancel: () => {
+    status = "aborted";
+  },
   emitEvent: (type, data) => events.push({ type, data }),
 });
 
-statusController.beginCompaction("auto");
+// Ownership — status + start-event naming — lives on the compaction controller now.
+const autoLease = compactionController.begin("auto");
+assert.ok(autoLease, "auto compaction claims a lease");
 assert.equal(status, "compacting");
 assert.deepEqual(
   events.map((e) => e.type),
@@ -174,7 +176,8 @@ assert.deepEqual(
 
 events.length = 0;
 status = "running";
-statusController.beginCompaction("reactive", { retry: 1, maxRetries: 1 });
+const reactiveLease = compactionController.begin("reactive", { retry: 1, maxRetries: 1 });
+assert.ok(reactiveLease, "reactive compaction claims a lease");
 assert.equal(status, "compacting");
 assert.deepEqual(
   events.map((e) => e.type),
@@ -182,6 +185,11 @@ assert.deepEqual(
 );
 assert.equal(events[0].data?.retry, 1);
 assert.ok(!events.some((e) => e.type === "compaction:auto-start"));
+// A newer claim supersedes the older lease: only the current owner may apply or restore.
+assert.equal(compactionController.isCurrent(autoLease), false, "the superseded auto lease lost ownership");
+assert.equal(compactionController.isCurrent(reactiveLease), true);
+compactionController.finish(reactiveLease, { status: "skipped" });
+assert.equal(status, "running", "a skipped reactive compaction restores the run's status");
 
 console.log("reactive-compact validation passed");
 
@@ -303,14 +311,14 @@ function oversizedWire() {
     getUI: () => channel,
     usage,
     getCompaction: () => compaction,
-    statusController: createAgentStatusController({
+    compactions: new CompactionController({
       getStatus: () => status,
       setStatus: (next) => {
         status = next;
       },
-      getError: () => "",
-      setError: () => {},
-      setPendingApprovalCount: () => {},
+      onUserCancel: () => {
+        status = "aborted";
+      },
       emitEvent: (type, data) => events.push({ type, data }),
     }),
     getCanonicalFromUI: () => [],
@@ -423,14 +431,14 @@ for (const [label, error, expectSilent] of [
     getUI: () => channel,
     usage,
     getCompaction: () => compaction,
-    statusController: createAgentStatusController({
+    compactions: new CompactionController({
       getStatus: () => status,
       setStatus: (next) => {
         status = next;
       },
-      getError: () => "",
-      setError: () => {},
-      setPendingApprovalCount: () => {},
+      onUserCancel: () => {
+        status = "aborted";
+      },
       emitEvent: (type, data) => events.push({ type, data }),
     }),
     getCanonicalFromUI: () => [],

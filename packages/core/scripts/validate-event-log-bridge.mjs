@@ -131,6 +131,61 @@ assert.match(reactiveEntry.message, /9000→2100 tokens/);
 assert.ok(!reactiveEntry.message.includes("?→?"));
 
 // ---------------------------------------------------------------------------
+// A manual `/compact` must not read as the loop compacting itself.
+//
+// Both paths went through `beginCompaction`, whose default kind was `auto`, so the user's own
+// command wrote "Auto-compacting context..." — indistinguishable in the timeline from the agent
+// compacting itself. The kind now owns its events, and the wording follows the event.
+// ---------------------------------------------------------------------------
+
+entries = await emitAndRead({
+  type: "compaction:manual-start",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: {},
+});
+const manualStartEntry = entries.find((entry) => entry.event === "compaction:manual-start");
+assert.ok(manualStartEntry, "manual-start is bridged");
+assert.equal(manualStartEntry.level, "info");
+assert.match(manualStartEntry.message, /manual/i, "the line says the user asked for it");
+assert.doesNotMatch(manualStartEntry.message, /^Auto-/, "and is not mistaken for the automatic path");
+
+entries = await emitAndRead({
+  type: "compaction:manual-complete",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { tokensBefore: 12_000, tokensAfter: 3_000 },
+});
+const manualCompleteEntry = entries.find((entry) => entry.event === "compaction:manual-complete");
+assert.ok(manualCompleteEntry, "manual-complete is bridged");
+assert.match(manualCompleteEntry.message, /Manual compact:/);
+assert.match(manualCompleteEntry.message, /12000→3000 tokens/);
+
+entries = await emitAndRead({
+  type: "compaction:manual-error",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { error: "summarizer returned nothing" },
+});
+const manualErrorEntry = entries.find((entry) => entry.event === "compaction:manual-error");
+assert.ok(manualErrorEntry, "manual-error is bridged");
+assert.equal(manualErrorEntry.level, "error");
+assert.match(manualErrorEntry.message, /Manual compact failed: summarizer returned nothing/);
+
+// The automatic wording is unchanged — the two must stay distinguishable in both directions.
+entries = await emitAndRead({
+  type: "compaction:auto-complete",
+  ts: Date.now(),
+  agentId: "agent-1",
+  payload: { tokensBefore: 5_000, tokensAfter: 1_000 },
+});
+const autoCompleteEntry = entries.find(
+  (entry) => entry.event === "compaction:auto-complete" && entry.message.includes("5000→1000")
+);
+assert.ok(autoCompleteEntry);
+assert.match(autoCompleteEntry.message, /^Auto-compact:/, "the automatic path keeps its own wording");
+
+// ---------------------------------------------------------------------------
 // A cancel must not read as a fault in the log.
 //
 // Two events carry a user-cancel verdict on a payload whose `error` field holds

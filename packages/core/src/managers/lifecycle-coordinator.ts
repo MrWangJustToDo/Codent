@@ -8,6 +8,7 @@
  * flush is the last step, never the first.
  */
 
+import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
@@ -47,6 +48,14 @@ export class LifecycleCoordinator {
     // Remove from the tree before deleting the registry entry.
     if (managedAgent.parentId) {
       this.deps.registry.unlinkChild(managedAgent.parentId, id);
+      // The row is gone from the parent's task list (the emit below), so its phase record has no
+      // reader. Children are NOT destroyed at task end by default (`autoDestroy: false`, the preview
+      // stays), which is why the phase usually lives until the session switch — but a host that does
+      // destroy one must not leave the record behind.
+      if (managedAgent.parentTaskId) {
+        const parent = this.deps.registry.get(managedAgent.parentId);
+        if (parent) clearTaskRuns(parent, managedAgent.parentTaskId);
+      }
       managedAgent.emitEvent(
         "subagent:destroyed",
         { subagentId: id, parentTaskToolCallId: managedAgent.parentTaskId },

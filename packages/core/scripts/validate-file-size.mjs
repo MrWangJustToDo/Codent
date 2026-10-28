@@ -45,7 +45,9 @@ async function collect(dir) {
   for (const entry of entries) {
     const absolute = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...(await collect(absolute)));
-    else if (entry.isFile() && entry.name.endsWith(".ts")) out.push(absolute);
+    // `.tsx` too: ESLint's `max-lines` applies to JSX files, and leaving them out of this scan let
+    // a file be red in `pnpm lint` and green here — the guard inverted.
+    else if (entry.isFile() && (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx"))) out.push(absolute);
   }
   return out;
 }

@@ -10,21 +10,34 @@ export type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 /** Minimal surface for unified agent telemetry emission. */
 export interface AgentTelemetryEmitter {
   readonly id: string;
+  /** Present on a subagent: its events carry the parent link without every call site passing it. */
+  readonly parentId?: string;
   dispatchEvent?: (event: AgentEvent) => void;
   getSessionData?(): { id: string } | null;
+  /**
+   * Session id an event from this agent should carry, when it is not `getSessionData()`.
+   *
+   * A subagent has no session of its own (it runs inside the parent's), so the owner resolves the
+   * parent's id here. Returning undefined means "unknown" — the envelope then omits `sessionId`.
+   */
+  getEventSessionId?(): string | undefined;
 }
 
 export interface EmitAgentTelemetryOptions {
   /** Override agentId (default: emitter.id) */
   agentId?: string;
   parentId?: string;
-  /** Override sessionId (default: getSessionData()?.id ?? emitter.id) */
+  /** Override sessionId (default: `getEventSessionId()` / `getSessionData()?.id`, omitted when unknown) */
   sessionId?: string;
 }
 
 /** Bind {@link emitAgentTelemetry} to a managed agent or other emitter. */
 export function createEmitTelemetryFn(emitter: AgentTelemetryEmitter): EmitAgentTelemetryFn {
-  return (type, payload) => emitAgentTelemetry(emitter, type, payload);
+  // The parent link travels with the emitter: middleware and domain objects receive this bound fn
+  // (`deps.emitEvent`), and a child's compaction/tool events must carry the parent too.
+  const parentId = emitter.parentId;
+  return (type, payload) =>
+    emitAgentTelemetry(emitter, type, payload, parentId !== undefined ? { parentId } : undefined);
 }
 
 /**
@@ -39,7 +52,10 @@ export function emitAgentTelemetry<T extends TelemetryEventType>(
 ): void {
   if (!emitter.dispatchEvent) return;
 
-  const sessionId = options?.sessionId ?? emitter.getSessionData?.()?.id ?? emitter.id;
+  // Never fall back to the agent id: `sessionId` and `agentId` are different identifier spaces, and
+  // stamping the agent id made a subagent's events claim a session that does not exist. Unknown is
+  // reported as absent.
+  const sessionId = options?.sessionId ?? emitter.getEventSessionId?.() ?? emitter.getSessionData?.()?.id;
   const body = (payload ?? {}) as AgentEventPayloadMap[T];
 
   emitter.dispatchEvent({
@@ -47,7 +63,7 @@ export function emitAgentTelemetry<T extends TelemetryEventType>(
     ts: Date.now(),
     agentId: options?.agentId ?? emitter.id,
     parentId: options?.parentId,
-    sessionId,
+    ...(sessionId !== undefined ? { sessionId } : {}),
     payload: body,
   } as AgentEvent);
 }

@@ -166,6 +166,33 @@ check(
   [false]
 );
 
+// --- DIRECTORY OPERANDS CARRIED BY OPTIONS ----------------------------------
+// `git -C /etc log` and `grep -f /etc/passwd …` read outside the workspace while the command text
+// looks like an ordinary read-only invocation. The analyzer used to drop those values (git was not
+// a path command at all; `grep -f FILE` had its FILE discarded as "the pattern"), so both were
+// auto-approved. Each pair below is the assertion: the external form must ask/deny, the in-root
+// form must stay on the fast path.
+for (const [label, cmd, external] of [
+  ["git -C <outside>", "git -C /etc log", true],
+  ["git -C <inside>", "git -C src log", false],
+  ["git --git-dir=<outside>", "git --git-dir=/etc/.git log", true],
+  ["git --work-tree <outside>", "git --work-tree /etc status", true],
+  ["git plain", "git log --oneline", false],
+  ["grep -f <outside>", "grep -f /etc/passwd src/index.ts", true],
+  ["grep --file=<outside>", "grep --file=/etc/passwd src/index.ts", true],
+  ["grep -e <pattern> <outside>", "grep -e TODO /etc/passwd", true],
+  ["grep plain", "grep TODO src/index.ts", false],
+  ["grep -rn inside", "grep -rn TODO src", false],
+]) {
+  const report = await posix(cmd);
+  check(`posix: ${label} external`, report.anyExternalDir, external);
+  check(
+    `posix: ${label} verdict`,
+    evaluateCommandApproval(report, { agentKind: external ? "subagent" : "root" }).action,
+    external ? "deny" : "allow"
+  );
+}
+
 // --- FALLBACK FAIL-SAFE INVARIANT (task 4.4) -------------------------------
 // Same checks under a shell with no grammar — the fallback path.
 const fallback = async (cmd) => analyzeCommand(cmd, { ...ctx, path: defaultPath, shellKind: "powershell" });

@@ -45,6 +45,14 @@ export interface AgentL1State {
    */
   lastFinishReason: string | null;
   /**
+   * The last FINALIZED turn's iteration reading (`iteration` resets to `{current: 0}` at finalize).
+   *
+   * A turn can end exactly at its budget, and the live `iteration` channel is cleared on the way
+   * out — so a consumer that classifies the stop reason from the snapshot after the turn (ACP's
+   * `max_turn_requests`) would always read `0` and report a budget cutoff as a natural end.
+   */
+  lastIteration: AgentIterationState | null;
+  /**
    * Wall-clock duration of the last completed run, in ms (0 before any run finishes).
    *
    * Travels here for the same reason `model` and `reasoningEffort` do: a remote client caches a

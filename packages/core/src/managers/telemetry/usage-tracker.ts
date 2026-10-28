@@ -134,14 +134,31 @@ export class UsageTracker {
   }
 
   /**
+   * Restore lifetime totals from a persisted session.
+   *
+   * `billedInputTokens` is the exact per-sample sum the session accumulated (persisted beside the
+   * aggregate). Re-deriving it from `usage` applies {@link promptTokensOf} to the AGGREGATE, which
+   * is only right while every sample used the same convention — one session can hold rows from both
+   * (a gateway switched mid-run), and `resume` then reported a different cache-hit ratio than the
+   * live run. Older sessions have no such field: `undefined` falls back to the aggregate reading,
+   * i.e. the previous behaviour, rather than failing to restore.
+   *
+   * Cost is not priced here: the persisted `cost` is authoritative and set by the caller.
+   */
+  restoreTotals(usage: TokenUsage, billedInputTokens?: number): void {
+    this.accumulateTotal(usage, null, billedInputTokens);
+    this.emitChange();
+  }
+
+  /**
    * Add usage plus a precomputed cost to lifetime totals without re-pricing.
    * Used when aggregating a subagent's totals into its parent: the subagent
    * already computed each call's cost with its own model's pricing, so the
    * parent must carry the cost over instead of re-computing it at the parent's
    * (possibly different) rate.
    */
-  addTotalWithCost(usage: TokenUsage, costUsd: number): void {
-    this.accumulateTotal(usage, null);
+  addTotalWithCost(usage: TokenUsage, costUsd: number, billedInputTokens?: number): void {
+    this.accumulateTotal(usage, null, billedInputTokens);
     this.totalCostUsd += Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
     this.lastCallCostUsd = 0;
     this.emitChange();
@@ -170,8 +187,15 @@ export class UsageTracker {
     return this.totalLlmOutputTokens;
   }
 
-  private accumulateTotal(usage: TokenUsage, pricing: ModelPricing | null | undefined): number {
-    this.billedInputTotal += promptTokensOf(usage);
+  private accumulateTotal(
+    usage: TokenUsage,
+    pricing: ModelPricing | null | undefined,
+    billedInputTokens?: number
+  ): number {
+    // `billedInputTokens` is supplied when the caller has the EXACT per-sample sum (a restored
+    // session, a child's aggregate). Re-deriving it from `usage` applies `promptTokensOf` to an
+    // aggregate, which only agrees while every sample used the same convention.
+    this.billedInputTotal += billedInputTokens ?? promptTokensOf(usage);
     this.total = {
       inputTokens: this.total.inputTokens + usage.inputTokens,
       outputTokens: this.total.outputTokens + usage.outputTokens,

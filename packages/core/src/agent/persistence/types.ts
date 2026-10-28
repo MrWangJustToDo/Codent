@@ -190,6 +190,15 @@ export interface SessionData {
   usage: TokenUsage;
   /** Session cost in USD */
   cost?: number;
+  /**
+   * Lifetime billed prompt, summed per sample (`promptTokensOf`).
+   *
+   * Persisted because it CANNOT be recovered from {@link usage}: under an exclusive upstream
+   * `usage.inputTokens` is a cache-miss sum, and a session that saw both conventions has no single
+   * aggregate reading. Without it a resume re-derived the value and `/usage`'s cache-hit ratio
+   * changed (old sessions omit it and fall back to the aggregate reading).
+   */
+  billedInputTokens?: number;
   /** Last SDK-reported input tokens (actual context window fill for percentage display) */
   contextTokens?: number;
   /** Active todos */

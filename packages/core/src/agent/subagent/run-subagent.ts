@@ -15,9 +15,9 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { captureStreamFinishReason } from "./run-stats.js";
 import { EMPTY_SUMMARY } from "./subagent-output.js";
+import { beginTaskRun, enterTaskPhase } from "./subagent-runs.js";
 import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
 import { finalizeSubagentTask, subagentPreviewOutput } from "./task-result.js";
-import { beginTaskRun, enterTaskPhase } from "./task-run-state.js";
 import { SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
 
 import type { SubagentConfig, SubagentResult, SubagentRunDeps } from "./types.js";

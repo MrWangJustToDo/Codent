@@ -412,77 +412,12 @@ export class TaskPreforkCoordinator {
   }
 }
 
-const coordinators = new WeakMap<ManagedAgent, TaskPreforkCoordinator>();
-
 /**
- * Resolve a parent's concurrent-task cap: a finite integer `>= 1`, else the
- * default. A missing/0/negative/fractional/NaN value must not stall admission.
+ * Resolve a parent's concurrent-task cap: a finite integer `>= 1`, else the default.
+ * A missing/0/negative/fractional/NaN value must not stall admission.
  */
 export function resolveMaxConcurrentTasks(parentManaged: ManagedAgent): number {
   const configured = parentManaged.config?.maxConcurrentTasks;
   if (typeof configured !== "number" || !Number.isFinite(configured)) return MAX_ACTIVE_TASK_PREFORKS;
   return Math.max(1, Math.floor(configured));
-}
-
-/** Get (or lazily create) the pre-fork coordinator for a parent agent. */
-export function getTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator {
-  let coordinator = coordinators.get(parentManaged);
-  if (!coordinator) {
-    // Read the cap through the parent so an `updateConfig` after creation is honored.
-    coordinator = new TaskPreforkCoordinator(() => resolveMaxConcurrentTasks(parentManaged));
-    coordinators.set(parentManaged, coordinator);
-  }
-  return coordinator;
-}
-
-/**
- * The pre-fork coordinator for a parent, or `undefined` when none exists yet.
- *
- * Non-creating, unlike {@link getTaskPreforkCoordinator}: a reader that only
- * wants to know whether a call is already pre-forked (the extensions middleware
- * deferring its eager `agent:tool-start`) must not bring a coordinator into
- * existence for an agent that never pre-forked anything.
- */
-export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator | undefined {
-  return coordinators.get(parentManaged);
-}
-
-/**
- * Discard every registered pre-fork, and report each one to the log bridge.
- *
- * The one place registered runs may be thrown away, so every producer of a discard goes through it.
- * The seats are listed here as one inventory because they do not share a call path:
- *
- * - the stream boundaries `onFinish` (only when nothing is pending) / `onAbort` / `onError`;
- * - `ManagedAgent.abort()` — every run abort funnels through it (Esc, force-submit, a host stop,
- *   destroy), and a session switch reaches it too while PAUSED, via `stopIfActive`'s guard;
- * - `ManagedAgent.discardPreforkRuns("run-finish")` — the pump finalizing a turn whose only pending
- *   call could not run, i.e. the case `onFinish` deferred to a join that never came;
- * - `ManagedAgent.reset()` — a session switch or `/new` rewinds the run state without an agent abort;
- * - the restart-style recovery path (which ends the attempt that spawned them — see
- *   `prepareRestartStyleRetry`).
- *
- * The agent-level seats exist because PAUSED is the state a stream hook cannot describe: a wait ends
- * the `chat()` invocation, so `onAbort` never fires for a run abandoned in that window.
- *
- * Two ways this has been called too eagerly. Both orphan a HEALTHY run — the aborted subagent stays
- * in the catalog while the tool phase, finding nothing registered, spawns a second one for the same
- * call id:
- *
- * - on `RUN_STARTED`, which fires once per model **iteration**: iteration N+1's boundary aborted a
- *   pre-fork that iteration N's tool phase was about to join;
- * - on an `onFinish` that merely ends a PAUSING invocation. An approval or client-tool wait ends the
- *   `chat()` invocation and the controller re-pumps after it, so the joining tool phase is still
- *   coming. The caller must therefore ask `hasPendingRunContinuation` first and reach this function
- *   only when nothing is pending. The abandonment boundaries (`onAbort`/`onError`) need no such
- *   check: there the pump is genuinely not coming.
- */
-export function discardRegisteredPrefork(
-  managed: ManagedAgent,
-  cause: PreforkDiscardCause,
-  emit: (discard: PreforkDiscard) => void = () => {}
-): void {
-  for (const discard of getTaskPreforkCoordinator(managed).abortAll(cause)) {
-    emit(discard);
-  }
 }

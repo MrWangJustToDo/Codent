@@ -12,6 +12,12 @@ export function shouldDeferMidRunQueue(options: { pumpDepth: number; status: Age
   if (options.pumpDepth > 0) return true;
   const { status } = options;
   if (status === "waiting" || status === "awaiting_user") return true;
-  // Stale "running/thinking/responding" with pumpDepth 0 — allow sendMessage to resume.
+  // A manual `/compact` runs with no pump, but it is still work the user's next message must not
+  // race: starting a turn here appends the summary checkpoint inside a half-finished turn (the
+  // next model call then projects from a prefix that was replaced mid-turn) and resets the window
+  // usage the new turn is accumulating. Auto-compaction is already covered by `pumpDepth > 0`;
+  // this is the idle-manual case. Stale "running/thinking/responding" stays unqueued — a finished
+  // pump can leave those behind, and queueing there would trap the message forever.
+  if (status === "compacting") return true;
   return false;
 }

@@ -27,7 +27,7 @@ import { toolOutputBaseSchema } from "../tools/shared/schemas.js";
 import { withDuration } from "../tools/shared/tool-result.js";
 
 import { runSubagent } from "./run-subagent.js";
-import { getTaskPreforkCoordinator } from "./task-prefork.js";
+import { getTaskPreforkCoordinator } from "./subagent-runs.js";
 import { SUBAGENT_NO_TRUNCATE } from "./types.js";
 
 import type { AgentManager } from "../../runtime-types/hosts.js";

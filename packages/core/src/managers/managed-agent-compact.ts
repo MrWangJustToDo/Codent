@@ -15,7 +15,7 @@ import { toError } from "../utils/errors.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ResolvedCoreEnv } from "../env";
-import type { AgentStatusController } from "./controllers/agent-status-controller.js";
+import type { CompactionController, CompactionLease } from "./controllers/compaction-controller.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -23,7 +23,6 @@ import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { CompactionConfig } from "../agent/compaction/types.js";
 import type { TodoManager } from "../agent/todo";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
-import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type { ModelMessage, UIMessage as TanStackUIMessage } from "@tanstack/ai";
 
 export interface ReactiveCompactHost {
@@ -32,7 +31,8 @@ export interface ReactiveCompactHost {
   getUI: () => AgentUIChannel | undefined;
   usage: UsageTracker;
   getCompaction(): CompactionService;
-  statusController: AgentStatusController;
+  /** Compaction ownership (leases, status, start/complete/error events). */
+  compactions: CompactionController;
   getCanonicalFromUI: () => ModelMessage[];
   getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
   emitEvent: EmitAgentTelemetryFn;
@@ -43,9 +43,6 @@ export interface ReactiveCompactHost {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
-  /** Shared compaction ownership generation (manual/auto/reactive). */
-  beginCompactionGeneration?: () => number;
-  isCompactionCurrent?: (generation: number | undefined) => boolean;
 }
 
 export async function handleManagedReactiveCompact(
@@ -64,14 +61,16 @@ export async function handleManagedReactiveCompact(
   if (!channel) return false;
 
   const retry = host.getCompaction().recordReactiveCompactRetry();
-  const generation = host.beginCompactionGeneration?.();
-  const current = () => host.isCompactionCurrent?.(generation) !== false;
+  // Ownership is a lease from the controller: it publishes `compacting` + the start event and is
+  // the one place a superseded attempt stops being able to apply its tail or restore the status.
+  const lease = host.compactions.begin("reactive", {
+    retry,
+    maxRetries: host.getCompaction().getMaxReactiveCompactRetries(),
+  });
+  if (!lease) return false;
+  const current = () => host.compactions.isCurrent(lease);
 
   try {
-    host.statusController.beginCompaction("reactive", {
-      retry,
-      maxRetries: host.getCompaction().getMaxReactiveCompactRetries(),
-    });
     const canon = host.getCanonicalFromUI();
     const llmMessages = host.getMessagesForLLM(canon);
     const abortSignal = host.getAbortSignal?.();
@@ -102,27 +101,26 @@ export async function handleManagedReactiveCompact(
 
     if (!current()) return false;
 
-    host.emitEvent("compaction:reactive-complete", {
+    host.compactions.finish(lease, {
+      status: "completed",
       originalCount: llmMessages.length,
       compactedCount: compactedMessages.length,
       tokensBefore,
       tokensAfter: host.usage.getContextFillTokens(),
     });
-
-    if (current()) host.statusController.endCompaction();
     return true;
   } catch (err) {
     if (!current()) return false;
-    host.statusController.endCompaction();
-    // A user cancel is not a reactive-compaction failure — stay silent.
+    // A user cancel is not a reactive-compaction failure — stay silent, but give the status back.
     if (isAbortError(err)) {
+      host.compactions.release(lease);
       return false;
     }
     const compactError = toError(err);
-    host.emitEvent("compaction:reactive-error", { error: compactError.message });
-    // Restore the status after beginCompaction above — otherwise the agent would
-    // stay stuck in "compacting" (onRecoveryRetry only unwinds "error"), blocking
-    // the stream-recovery loop's other strategies (capability / transient).
+    // `finish` restores the status as part of the terminal outcome; without that the agent would
+    // stay stuck in "compacting" (onRecoveryRetry only unwinds "error"), blocking the stream-recovery
+    // loop's other strategies (capability / transient).
+    host.compactions.finish(lease, { status: "failed", error: compactError.message });
     return false;
   }
 }
@@ -133,12 +131,12 @@ export async function handleManagedReactiveCompact(
 
 export interface ManualCompactHost {
   id: string;
-  getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: string) => void;
   getUI: () => AgentUIChannel | undefined;
   usage: UsageTracker;
   getTodoManager: () => TodoManager | null;
-  statusController: AgentStatusController;
+  /** Compaction ownership: the lease created for THIS `/compact`. */
+  compactions: CompactionController;
+  lease: CompactionLease;
   compactionConfig: CompactionConfig | null;
   /** Model input context window in tokens, if known (drives the keep policy). */
   getContextWindow: () => number | undefined;
@@ -148,10 +146,6 @@ export interface ManualCompactHost {
   persistSession: () => void;
   maybeSaveSessionUIMessages: (messages: TanStackUIMessage[], reason: "force") => void;
   getLog?: () => AgentLog | null;
-  /** Current run abort signal, so a cancel also cancels the summarizer. */
-  getAbortSignal?: () => AbortSignal | undefined;
-  /** Owner generation check; false means a session switch/reset superseded this compaction. */
-  isCurrent?: () => boolean;
 }
 
 export type ManualCompactResult =
@@ -191,16 +185,14 @@ export async function runManualCompact(
     priority: t.priority as "high" | "medium" | "low",
   }));
 
-  const previousStatus = host.getStatus();
   const tokensBeforeEstimate = estimateTokens(messages);
   const actualTokens = host.usage.getContextFillTokens();
-  const abortSignal = host.getAbortSignal?.();
+  const abortSignal = host.lease.signal;
+  const owned = () => host.compactions.isCurrent(host.lease);
 
-  // Check ownership before publishing `compacting`; a stale caller must not leave that status
-  // behind on a run that never starts.
-  if (host.isCurrent?.() === false) return { ok: false, error: "Compaction aborted" };
-
-  host.statusController.beginCompaction();
+  // The lease was claimed (status published) before this function was entered; a stale caller must
+  // not apply anything to the transcript that replaced the one it started on.
+  if (!owned()) return { ok: false, error: "Compaction aborted" };
 
   try {
     const result = await autoCompact(messages, host.compactionConfig || {}, host.id, manager, {
@@ -213,7 +205,10 @@ export async function runManualCompact(
 
     // The session may have switched while the summarizer was finishing. Do not apply a summary
     // to the transcript that replaced the one this compaction started on.
-    if (host.isCurrent?.() === false || abortSignal?.aborted) return { ok: false, error: "Compaction aborted" };
+    if (!owned() || abortSignal?.aborted) {
+      host.compactions.release(host.lease);
+      return { ok: false, error: "Compaction aborted" };
+    }
 
     const applied = applyCompactionResult(host.getCoreEnv(), allModelMessages, channel, host.usage, result, {
       ...keepOptions,
@@ -224,11 +219,15 @@ export async function runManualCompact(
 
     if (!applied) {
       if (abortSignal?.aborted) {
+        host.compactions.release(host.lease);
         return { ok: false, error: "Compaction aborted" };
       }
       if (result.error) {
+        host.compactions.finish(host.lease, { status: "failed", error: result.error });
         return { ok: false, error: result.error };
       }
+      // No progress: restore the status, but report nothing (a no-op is not a completion).
+      host.compactions.finish(host.lease, { status: "skipped" });
       return {
         ok: true,
         message:
@@ -238,7 +237,10 @@ export async function runManualCompact(
 
     // An abort can land between apply and persistence; the new session must not receive the old
     // compaction's checkpoint or state write.
-    if (host.isCurrent?.() === false || abortSignal?.aborted) return { ok: false, error: "Compaction aborted" };
+    if (!owned() || abortSignal?.aborted) {
+      host.compactions.release(host.lease);
+      return { ok: false, error: "Compaction aborted" };
+    }
 
     host.resetSystemPrompt();
     host.persistSession();
@@ -249,6 +251,7 @@ export async function runManualCompact(
     const compressionRatio = tokensBefore > 0 ? Math.round((1 - tokensAfter / tokensBefore) * 100) : 0;
     const todoNote = incompleteTodos.length > 0 ? ` (${incompleteTodos.length} todos preserved)` : "";
 
+    host.compactions.finish(host.lease, { status: "completed", tokensBefore, tokensAfter });
     return {
       ok: true,
       message: `Compacted: ${tokensBefore} → ${tokensAfter} tokens (${compressionRatio}% reduction)${todoNote}`,
@@ -257,20 +260,14 @@ export async function runManualCompact(
     };
   } catch (error) {
     if (isAbortError(error)) {
+      // A cancel already took the status (and invalidated the lease); `release` is the no-op case
+      // where the summarizer itself threw an abort without one.
+      host.compactions.release(host.lease);
       return { ok: false, error: "Compaction aborted" };
     }
     const err = toError(error);
+    // A cancel is silent (the auto path does the same); a real failure is not.
+    host.compactions.finish(host.lease, { status: "failed", error: err.message });
     return { ok: false, error: `Compaction failed: ${err.message}` };
-  } finally {
-    // A session switch may have reset the status while this (aborted) compaction was unwinding.
-    // Only the compaction that still owns the current generation/status may restore it, or an old
-    // run writes its previous status (e.g. `waiting`) onto the new session.
-    if (host.isCurrent?.() !== false && host.getStatus() === "compacting") {
-      if (previousStatus === "compacting") {
-        host.statusController.endCompaction();
-      } else {
-        host.setStatus(previousStatus);
-      }
-    }
   }
 }

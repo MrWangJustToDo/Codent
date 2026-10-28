@@ -38,6 +38,7 @@ import {
   SessionService,
   SessionStore,
   UsageTracker,
+  promptTokensOf,
   clearCoreEnv,
   createSessionSyncTracker,
   registerCoreEnv,
@@ -469,6 +470,52 @@ function newService() {
     (await store.load(data.id)).uiMessages.map((m) => m.id),
     ["m1"],
     "the existing file keeps its transcript"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. A resume keeps the EXACT lifetime cache-hit ratio (per-sample billed prompt)
+//
+// `billedInputTotal` is summed per sample. Re-deriving it from the aggregate at restore time
+// applies the convention heuristic to totals, which only agrees while every sample used the same
+// convention — one session can hold both (a gateway switched mid-run), and `/usage`'s cache hit
+// then changed across a resume. The exact count is persisted beside the aggregate.
+// ---------------------------------------------------------------------------
+{
+  setupEnv();
+  const { service } = newService();
+  const live = new UsageTracker();
+  // inclusive sample (cache ⊆ input), then an exclusive one (disjoint).
+  live.updateWindowUsage({ inputTokens: 1000, outputTokens: 10, totalTokens: 0, cacheReadTokens: 400 });
+  live.updateWindowUsage({ inputTokens: 100, outputTokens: 10, totalTokens: 0, cacheReadTokens: 900 });
+
+  await service.persistSession({
+    usage: live,
+    getTodoManager: () => null,
+    uiMessages: [textMessage("m1", "hi")],
+  });
+  const persisted = service.getSessionData();
+  assert.equal(
+    persisted.billedInputTokens,
+    live.getBilledInputTokens(),
+    "the exact per-sample billed prompt is persisted"
+  );
+
+  const resumed = new UsageTracker();
+  service.adoptRestoredSession({ session: persisted, uiMessages: [] }, { usage: resumed, todoManager: null });
+  assert.equal(resumed.getBilledInputTokens(), live.getBilledInputTokens(), "restore carries it over");
+  assert.equal(resumed.getCacheHitRatio(), live.getCacheHitRatio(), "…so the cache hit is identical after a resume");
+
+  // An old session (persisted before the field existed) still restores, degrading to the aggregate
+  // reading instead of failing.
+  const legacy = { ...persisted };
+  delete legacy.billedInputTokens;
+  const legacyUsage = new UsageTracker();
+  service.adoptRestoredSession({ session: legacy, uiMessages: [] }, { usage: legacyUsage, todoManager: null });
+  assert.equal(
+    legacyUsage.getBilledInputTokens(),
+    promptTokensOf(legacy.usage),
+    "an old session falls back to the aggregate reading"
   );
 }
 

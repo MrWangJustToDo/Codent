@@ -7,7 +7,8 @@
  * reconstructs the session: `state` = the newest line's snapshot, `uiMessages` =
  * message lines folded by id (later line wins, first-seen position).
  *
- * A torn trailing line (crash mid-append) is skipped on read.
+ * A torn trailing line (crash mid-append) is skipped on read, and is terminated with a newline
+ * before the next append — otherwise the next save would be glued onto the fragment and lost.
  */
 
 import { writeFileAtomic } from "../../utils/atomic-write.js";
@@ -26,18 +27,33 @@ export function getJournalPath(id: string): string {
 }
 
 /**
- * Append `lines` to the log as JSONL. Returns false (no-op) when the env fs does
- * not implement `appendFile`. Saves are serialized per session by
- * {@link SessionStore}, so this cannot race another append.
+/**
+ * Append `lines` to the log as JSONL.
+ *
+ * `tailTerminated` comes from the last {@link readLog} (or from this process's own writes, which
+ * always end with a newline). It exists because a crash during an earlier append leaves a partial
+ * line with no trailing newline: appending straight onto it glues the new JSON to the fragment, so
+ * the merged line fails to parse and the save that just completed is dropped on the next load —
+ * while the delta baseline in `SessionStore` has already recorded it as persisted, so it is never
+ * retried. Terminating the fragment first costs one byte.
+ *
+ * Returns false only when the env fs has no `appendFile`; the caller then rewrites atomically, so a
+ * save is never lost.
  */
-export async function appendLogLines(fs: CoreEnvFs, path: string, lines: SessionLogLine[]): Promise<boolean> {
+export async function appendLogLines(
+  fs: CoreEnvFs,
+  path: string,
+  lines: SessionLogLine[],
+  options: { tailTerminated: boolean }
+): Promise<boolean> {
   if (lines.length === 0) return true;
   if (!fs.appendFile) return false;
   // Ensure the file exists before appending (some fs impls create it on append).
   if (!(await fs.exists(path))) {
     await fs.writeFile(path, "");
   }
-  await fs.appendFile(path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  const separator = options.tailTerminated ? "" : "\n";
+  await fs.appendFile(path, separator + lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
   return true;
 }
 
@@ -53,16 +69,28 @@ function parseLine(raw: string): SessionLogLine | null {
   }
 }
 
-/** Read all valid log lines in file order. Torn/corrupt lines are skipped. */
-export async function readLog(fs: CoreEnvFs, path: string): Promise<SessionLogLine[]> {
-  if (!(await fs.exists(path))) return [];
+/**
+ * Read all valid log lines in file order. Torn/corrupt lines are skipped.
+ *
+ * `tailTerminated` reports whether the raw file's last byte is a newline, which is the append
+ * path's precondition: appending onto a fragment (crash mid-write) glues the new JSON to it and
+ * loses BOTH lines. It is derived from the same read so a load never pays a second pass.
+ */
+export interface SessionLogRead {
+  lines: SessionLogLine[];
+  tailTerminated: boolean;
+}
+
+export async function readLog(fs: CoreEnvFs, path: string): Promise<SessionLogRead> {
+  if (!(await fs.exists(path))) return { lines: [], tailTerminated: true };
   const content = await fs.readFile(path);
+  const tailTerminated = content.length === 0 || content.endsWith("\n");
   const lines: SessionLogLine[] = [];
   for (const raw of content.split("\n")) {
     const parsed = parseLine(raw);
     if (parsed) lines.push(parsed);
   }
-  return lines;
+  return { lines, tailTerminated };
 }
 
 /**

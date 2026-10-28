@@ -263,11 +263,18 @@ export class DefaultAgentEventBus implements AgentEventBus {
     payload: AgentEvent<T>["payload"],
     meta?: AgentEventMetaInput
   ): AgentEvent<T> {
+    // A scope under another AGENT is a child scope; a scope under the synthetic root node is a root
+    // agent (`AgentEventBusScope.of` scopes parent-less agents directly on the root bus). Deriving
+    // it here is what makes EVERY emitter carry the parent — including the domain objects that
+    // emit straight on the bus (`usage` / `todo` / `ui` / `stream-hub` / `plan`), which used to
+    // produce child events with only `agentId`.
+    const parentNode = this.node.parent;
+    const parentId = meta?.parentId ?? (parentNode && parentNode.parent !== null ? parentNode.id : undefined);
     return {
       type,
       ts: Date.now(),
       agentId: meta?.agentId ?? this.node.id,
-      ...(meta?.parentId !== undefined ? { parentId: meta.parentId } : {}),
+      ...(parentId !== undefined ? { parentId } : {}),
       ...(meta?.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
       payload,
     } as AgentEvent<T>;

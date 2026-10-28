@@ -16,7 +16,7 @@
  */
 /* eslint-disable no-undef */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -366,6 +366,26 @@ assert.equal(postUnsub, countAfterUnsub, "unsubscribed handler must not receive 
   );
   assert.deepEqual(ids(snapshot), ["sub-agent-2"], "destroyed removes the row");
   console.log("lifecycle projection: id + unambiguous task fallback + no generation bleed — ok");
+}
+
+// ── the reducer must cover EVERY channel, and stay exhaustive ──
+//
+// The per-channel assertions above only prove the channels someone thought to test. A new
+// `AGENT_SESSION_CHANNELS` entry used to fall into `default: return snapshot`, so the remote
+// snapshot silently stopped updating (that is exactly how `lastIteration` would have been missed)
+// while every listed channel stayed green. The reducer now ends in `never` (a compile error when a
+// channel is unhandled); this pins both halves from the outside.
+{
+  const { AGENT_SESSION_CHANNELS } = await import(new URL("../../core/dist/index.mjs", import.meta.url).href);
+  const source = readFileSync(new URL("../src/remote-session-reducer.ts", import.meta.url), "utf8");
+  const missing = AGENT_SESSION_CHANNELS.filter((channel) => !source.includes(`case "${channel}":`));
+  assert.deepEqual(missing, [], `remote reducer has no case for: ${missing.join(", ")}`);
+  assert.match(
+    source,
+    /const uncovered: never = event;/,
+    "the reducer must keep its exhaustiveness guard (a dropped channel has to fail to compile)"
+  );
+  console.log(`reducer covers all ${AGENT_SESSION_CHANNELS.length} channels — ok`);
 }
 
 unsub();

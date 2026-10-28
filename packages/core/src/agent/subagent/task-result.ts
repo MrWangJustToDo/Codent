@@ -201,7 +201,13 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
   const usageCurrent = !taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration);
 
   if (aggregateUsageToParent && usageCurrent) {
-    parentManaged.usage.addTotalWithCost(usage, subagentManaged.usage.getTotalCostUsd());
+    // The child's billed-prompt sum travels with its totals: the parent cannot recover it from the
+    // aggregate (the same reason `restoreTotals` takes it explicitly).
+    parentManaged.usage.addTotalWithCost(
+      usage,
+      subagentManaged.usage.getTotalCostUsd(),
+      subagentManaged.usage.getBilledInputTokens()
+    );
   }
 
   subagentManaged.emitEvent(

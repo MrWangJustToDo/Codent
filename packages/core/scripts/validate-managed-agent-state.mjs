@@ -218,22 +218,21 @@ registerCoreEnv({
   reset.parent.reset();
   assert.equal(reset.child.getStatus(), "aborted", "reset cascades to a running child before clearAll()");
 
-  // A manual compaction's controller is aborted by abort(), but retained until compact()'s own
-  // finally releases it so a second compact cannot overlap the aborted run's teardown.
+  // A manual compaction is cancelled by abort() and its LEASE is invalidated immediately: the
+  // unwinding producer is no longer current, so it cannot apply a checkpoint or restore a status.
+  // (The old shape kept the controller until `compact()`'s finally, which is why a second
+  // `/compact` could not overlap the teardown — leases make that unnecessary: a new claim simply
+  // supersedes the old identity.)
   const compacting = new ManagedAgent(
     { name: "switch-compact", model: "test-model" },
     { log: new AgentLog(), tools: {}, todoManager: null }
   );
-  const compactController = new AbortController();
-  compacting.compactAbortController = compactController;
+  const lease = compacting.compactions.begin("manual");
+  assert.ok(lease?.signal, "a manual lease carries its own abort signal (it has no run to ride)");
   compacting.abort("session-switch");
-  assert.equal(compactController.signal.aborted, true, "abort() cancels a manual compaction");
-  assert.equal(
-    compacting.compactAbortController,
-    compactController,
-    "the controller stays owned until compact()'s finally releases it"
-  );
-  compacting.compactAbortController = undefined;
+  assert.equal(lease.signal.aborted, true, "abort() cancels a manual compaction");
+  assert.equal(compacting.compactions.isCurrent(lease), false, "the aborted lease can no longer apply");
+  assert.equal(compacting.compactions.isRunning(), false, "the teardown releases ownership");
 }
 
 console.log("managed-agent-state validation passed");

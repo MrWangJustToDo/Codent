@@ -2,6 +2,7 @@ import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
+import type { CompactionController } from "./controllers/compaction-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import type { AgentLog } from "../agent/agent-log";
@@ -56,6 +57,8 @@ export interface AgentRunDeps {
   session: SessionService;
   usageHistory: UsageHistoryService;
   statusController: AgentStatusController;
+  /** Compaction ownership (leases, status, start/complete/error events). */
+  compactions: CompactionController;
   approvals: ToolApprovalTable;
   run: RunCoordinator;
   planMode: PlanModeController;
@@ -131,6 +134,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     session: managed.session,
     usageHistory: managed.usageHistory,
     statusController: managed.statusController,
+    compactions: managed.compactions,
     approvals: managed.getApprovals(),
     run: managed.run,
     planMode: managed.planMode,

@@ -741,6 +741,11 @@ export interface ExtensionInstance {
   error?: Error;
   /** Artifacts this extension registered (used by enable/disable). */
   registrations: ExtensionRegistrations;
+  /**
+   * The config handed to `activate`, kept so a re-enable can build a fresh context for the new
+   * incarnation (the context is the registration lease — see `ExtensionRunner.isContextLive`).
+   */
+  config?: ExtensionConfig;
 }
 
 /** Public, read-only description of a loaded extension (for management commands). */

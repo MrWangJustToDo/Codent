@@ -5,6 +5,8 @@
  * Output format matches LSP DocumentSymbol shape for compatibility.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import type { Node, Tree } from "web-tree-sitter";
 
 /** web-tree-sitter types children as nullable; runtime never returns null. */
@@ -337,7 +339,7 @@ export function getSyntaxErrors(tree: Tree): Array<{
         character: node.startPosition.column,
         endLine: node.endPosition.row,
         endCharacter: node.endPosition.column,
-        message: `Syntax error: unexpected "${node.text.slice(0, 50)}${node.text.length > 50 ? "..." : ""}"`,
+        message: `Syntax error: unexpected "${truncateText(node.text, 50)}"`,
       });
     } else if (node.isMissing) {
       errors.push({

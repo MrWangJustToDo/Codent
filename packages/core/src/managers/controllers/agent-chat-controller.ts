@@ -17,7 +17,7 @@ import {
   needsToolPhaseContinue,
   shouldContinueAgentPump,
 } from "../../agent/stream/tool-phase-utils.js";
-import { peekTaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
+import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
@@ -132,6 +132,15 @@ export class AgentChatController {
   }
 
   stop(): void {
+    // A manual `/compact` has no pump, but it is still the user's Esc target: the summarizer is a
+    // real model call. Aborting it must stop BOTH the summary and anything queued behind it — the
+    // same verdict an Esc reaches on the auto path (where the pump is live, so it lands below).
+    // Without this branch the guard below returned early and Esc did nothing at all.
+    if (this.managed.compactions.ownsManual()) {
+      this.clearQueuedMessages();
+      this.managed.compactions.cancel("user-cancelled");
+      return;
+    }
     // An idle stop is not a run: it must not abort a completed turn's controller (that signal is
     // still held by finalize-time memory extraction, and aborting it cancelled work the run had
     // already started), nor emit `agent:abort` for a run that does not exist. A run PARKED on an
@@ -261,6 +270,23 @@ export class AgentChatController {
   }
 
   /**
+   * Release input that queued while a manual `/compact` held the agent.
+   *
+   * A manual compaction runs with no pump (`pumpDepth === 0`), so `shouldDeferMidRunQueue` now
+   * queues the user's message instead of starting a second turn over a half-finished compaction.
+   * Nothing would ever drain that queue — the queue drains inside a pump — so the compaction's
+   * completion has to hand the message over and start the turn it was always meant to start.
+   *
+   * A CANCELLED compaction is a different outcome: `stop()` clears the queue first (Esc aborts and
+   * drops pending input, exactly as it does for a run), so this is a no-op there.
+   */
+  resumeAfterCompaction(): void {
+    if (!this.hasQueuedMessages()) return;
+    const drained = this.drainSteerIntoChannel() || this.drainFollowUpIntoChannel();
+    if (drained) void this.enqueueRunOnce();
+  }
+
+  /**
    * Queue a mid-run correction. Delivered after the current assistant turn / tool batch.
    * When idle, behaves like {@link sendMessage}.
    *
@@ -312,7 +338,12 @@ export class AgentChatController {
    */
   forceSubmit(content: string | ContentPart[]): void {
     assertNotCompactionSummaryInput(content);
-    this.interruptCurrentRun("force-submit", { keepQueue: true });
+    // Only a live run is interrupted. On an idle agent `interruptCurrentRun` emitted `agent:abort`
+    // and finalized an "aborted" turn that never existed (`agent:stop` with no `turn:start`), which
+    // inflates any consumer that counts runs by `agent:stop`.
+    if (this.isRunActive() || this.managed.run.isCurrentRunValid()) {
+      this.interruptCurrentRun("force-submit", { keepQueue: true });
+    }
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
     this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");

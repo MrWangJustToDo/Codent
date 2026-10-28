@@ -43,6 +43,14 @@ export interface ObserverSurfaceDeps {
    * (no runner) calls handlers with the event alone.
    */
   getContext?: () => ExtensionContext | undefined;
+  /**
+   * Whether the owning extension may still register. Optional (a standalone surface is always
+   * live). When it returns false the accessors are inert, so a disabled extension's leaked
+   * callback cannot keep observing events for the rest of the session.
+   */
+  isLive?: () => boolean;
+  /** Called once when a registration is refused (the runner logs a single warning per revoke). */
+  onRefused?: () => void;
 }
 
 /**
@@ -58,6 +66,13 @@ export function createObserverSurface(
   const track = (unsub: () => void): (() => void) => {
     registrations?.unsubObservers.push(unsub);
     return unsub;
+  };
+
+  /** Refuse a post-disable registration before it reaches the bus. */
+  const refused = (): boolean => {
+    if (!deps.isLive || deps.isLive()) return false;
+    deps.onRefused?.();
+    return true;
   };
 
   /** Keep the handler's return, but surface a rejection as a contained failure. */
@@ -79,13 +94,16 @@ export function createObserverSurface(
     };
 
   return {
-    observe: (type, handler, options) =>
-      track(
+    observe: (type, handler, options) => {
+      if (refused()) return () => {};
+      return track(
         deps.bus.on(type, contained(handler) as AgentEventListener<typeof type>, {
           replay: options?.replay ?? defaultReplay("observe", options),
         })
-      ),
+      );
+    },
     observeAny: (handler, options) => {
+      if (refused()) return () => {};
       const listener = contained(handler);
       // No `"*"`: expand the declared observable set so internal events are not delivered and
       // the wildcard-consumer invariant holds.
@@ -98,7 +116,7 @@ export function createObserverSurface(
         for (const unsub of unsubs) unsub();
       });
     },
-    retained: (type) => deps.bus.retainedValue(type),
+    retained: (type) => (refused() ? undefined : deps.bus.retainedValue(type)),
   };
 }
 

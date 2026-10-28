@@ -35,6 +35,10 @@ function usage() {
     getTotal: () => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
     getTotalCostUsd: () => 0,
     getContextFillTokens: () => 0,
+    // Persist records the exact per-sample billed prompt; restore takes it back.
+    getBilledInputTokens: () => 0,
+    restoreTotals: () => {},
+    reset: () => {},
   };
 }
 

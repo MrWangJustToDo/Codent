@@ -18,7 +18,7 @@ import type { ManagedAgent } from "../managed-agent.js";
  */
 async function finalizeReactiveCompactRetry(managed: ManagedAgent): Promise<boolean> {
   if (!managed.getUI()) return false;
-  managed.statusController.endCompaction();
+  managed.compactions.settle();
   managed.setError("");
   return true;
 }

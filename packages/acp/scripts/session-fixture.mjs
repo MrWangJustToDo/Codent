@@ -49,6 +49,8 @@ export function baseSnapshot(id, overrides = {}) {
     toolDescriptors: [],
     interactions: { approvals: [], askUser: [] },
     iteration: { current: 1, max: 100 },
+    // Only filled once a turn finalizes; `iteration` is reset at that moment.
+    lastIteration: null,
     subagents: [],
     ...overrides,
   };

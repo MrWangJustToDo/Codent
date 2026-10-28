@@ -20,7 +20,8 @@ export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";
 export { createGlobTool } from "./agent/tools/builtin/fs/glob-tool.js";
 export { createGrepTool } from "./agent/tools/builtin/fs/grep-tool.js";
 export { createReadFileTool } from "./agent/tools/builtin/fs/read-file-tool.js";
-export { createTreeTool } from "./agent/tools/builtin/fs/tree-tool.js";
+// `createTreeTool` / `createRunCommandTool` come through `./dev/dev-agent.js`; re-exporting them
+// here as well is a duplicate export (and lint catches it).
 // The remaining projection-declaring factories: `validate:model-output-idempotency` drives every
 // registered projection, and it can only cover the ones this surface can create.
 export { createGetCommandOutputTool } from "./agent/tools/builtin/shell/get-command-output-tool.js";
@@ -49,11 +50,18 @@ export {
   evaluateCommandApproval,
   SUBAGENT_DENY_MESSAGE,
 } from "./agent/tools/builtin/shell/safety/command-approval-policy.js";
+export {
+  envOverrideKeys,
+  executionSelectingEnvKeys,
+  envOverrideApprovalReason,
+  subagentEnvOverrideMessage,
+} from "./agent/tools/builtin/shell/safety/env-override-safety.js";
 export { commandPrefix, normalizedCommand } from "./agent/tools/builtin/shell/safety/command-arity.js";
 export { defaultPath } from "./env";
 
 // Root-level modules
 export { Emitter } from "./utils/emitter.js";
+export { createEmitTelemetryFn } from "./managers/telemetry/emit-agent-telemetry.js";
 export {
   AGENT_SESSION_CHANNELS,
   DEFAULT_AGENT_SESSION_CHANNELS,

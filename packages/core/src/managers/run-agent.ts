@@ -4,7 +4,7 @@ import {
   PLAN_COMPLETION_TOOL_NAMES,
 } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
-import { peekTaskPreforkCoordinator } from "../agent/subagent/task-prefork.js";
+import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
 import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime/tool-sets.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
@@ -183,9 +183,8 @@ export function buildAgentRunner(
       getUsage: () => usage,
       getTodoManager: deps.getTodoManager,
       shouldTriggerAutoCompact: deps.shouldTriggerAutoCompact,
-      status: statusController,
+      compactions: deps.compactions,
       log: deps.getLog(),
-      emitEvent,
       getWireProjectionCache: deps.getWireProjectionCache,
     }),
     // Extension message transformers. Sits right after `compaction` so it sees the

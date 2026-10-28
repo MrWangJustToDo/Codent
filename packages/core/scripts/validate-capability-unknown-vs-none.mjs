@@ -25,82 +25,89 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-import { UsageTracker, clearCoreEnv, registerCoreEnv, resolveModelConfig } from "../dist/dev.mjs";
+import { UsageTracker, clearCoreEnv, defaultPath, registerCoreEnv, resolveModelConfig } from "../dist/dev.mjs";
 
-// `resolveModelConfig` reads the models.dev CACHE through CoreEnv, so without an env it returns
-// `modelInfo: null` and every merge assertion below would pass trivially — the merge would never
-// run, and "the override survived" would prove nothing. A real (read-only) env is required for
-// these checks to have teeth; the suite skips rather than pretend otherwise.
-const CACHE = path.resolve(process.cwd(), "../../.agents/cache/models-dev.json");
-const hasCorpus = fs.existsSync(CACHE);
+import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
-if (hasCorpus) {
-  registerCoreEnv({
-    rootPath: path.resolve(process.cwd(), "../.."),
-    getPlatform: async () => "linux",
-    getArch: async () => "arm64",
-    getEnv: async () => ({}),
-    homedir: async () => path.resolve(process.cwd(), "../.."),
-    path: {
-      join: (...parts) => parts.join("/"),
-      dirname: (p) => {
-        const i = p.lastIndexOf("/");
-        return i <= 0 ? "/" : p.slice(0, i);
-      },
-      basename: (p, ext) => {
-        const base = p.split("/").pop() ?? p;
-        return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
-      },
-      extname: (p) => {
-        const base = p.split("/").pop() ?? p;
-        const i = base.lastIndexOf(".");
-        return i < 0 ? "" : base.slice(i);
-      },
-      resolve: (...parts) => parts.join("/"),
-      normalize: (p) => p.replace(/\/+/g, "/"),
-      isAbsolute: (p) => p.startsWith("/"),
-      getSep: () => "/",
-      parse: (p) => {
-        const base = p.split("/").pop() ?? p;
-        const i = base.lastIndexOf(".");
-        return {
-          root: "/",
-          dir: p.slice(0, p.lastIndexOf("/")) || "/",
-          base,
-          ext: i < 0 ? "" : base.slice(i),
-          name: i < 0 ? base : base.slice(0, i),
-        };
+// `resolveModelConfig` reads the models.dev CACHE through CoreEnv, so without a reachable catalog
+// it returns `modelInfo: null` and every merge assertion below would pass trivially — the merge
+// would never run, and "the override survived" would prove nothing.
+//
+// A workspace cache is the wrong source for that: whether `.agents/cache/models-dev.json` exists
+// depends on a human having run the CLI, so this file used to *skip* three of its ten assertions in
+// CI while still exiting 0 (and the suite counted it as `passed`). A temp root with a
+// stale-but-readable fixture makes the merge path run everywhere, offline, and deterministically.
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "capability-unknown-vs-none-"));
+const fixtureCacheDir = path.join(fixtureRoot, ".agents", "cache");
+const CACHE = path.join(fixtureCacheDir, "models-dev.json");
+fs.mkdirSync(fixtureCacheDir, { recursive: true });
+fs.writeFileSync(
+  CACHE,
+  JSON.stringify({
+    openai: {
+      id: "openai",
+      name: "OpenAI",
+      api: "https://api.openai.com/v1",
+      npm: "@ai-sdk/openai",
+      env: ["OPENAI_API_KEY"],
+      models: {
+        "gpt-4o": {
+          id: "gpt-4o",
+          name: "GPT-4o",
+          // `modalities.input` is what `deriveCapabilities` reads for `vision`; the assertion
+          // "omitting capabilities does not manufacture an empty declaration" depends on it.
+          modalities: { input: ["text", "image"], output: ["text"] },
+          tool_call: true,
+          limit: { context: 128000, output: 16384 },
+          cost: { input: 2.5, output: 10, cache_read: 1.25 },
+        },
       },
     },
-    fs: {
-      readFile: async (p) => fs.readFileSync(p, "utf8"),
-      writeFile: async () => {
-        throw new Error("read-only");
-      },
-      appendFile: async () => {
-        throw new Error("read-only");
-      },
-      mkdir: async () => {},
-      exists: async (p) => fs.existsSync(p),
-      readdir: async (p) =>
-        fs
-          .readdirSync(p, { withFileTypes: true })
-          .map((d) => ({ name: d.name, type: d.isFile() ? "file" : "directory" })),
-      remove: async () => {
-        throw new Error("read-only");
-      },
-      stat: async (p) => {
-        const st = fs.statSync(p);
-        return { size: st.size, isFile: st.isFile(), isDirectory: st.isDirectory() };
-      },
+  })
+);
+
+registerCoreEnv({
+  rootPath: fixtureRoot,
+  getPlatform: async () => "linux",
+  getArch: async () => "arm64",
+  getEnv: async () => ({}),
+  homedir: async () => fixtureRoot,
+  path: defaultPath,
+  fs: {
+    readFile: async (p) => fs.readFileSync(p, "utf8"),
+    writeFile: async () => {
+      throw new Error("read-only");
     },
-    runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
-    fetch: async () => new Response("", { status: 200 }),
-  });
-}
+    appendFile: async () => {
+      throw new Error("read-only");
+    },
+    mkdir: async () => {},
+    exists: async (p) => fs.existsSync(p),
+    readdir: async (p) =>
+      fs
+        .readdirSync(p, { withFileTypes: true })
+        .map((d) => ({ name: d.name, type: d.isFile() ? "file" : "directory" })),
+    remove: async () => {
+      throw new Error("read-only");
+    },
+    stat: async (p) => {
+      const st = fs.statSync(p);
+      // An ancient mtime keeps the cache "stale", so `fetchModelsDev` takes the blocking path and
+      // falls straight through to the disk cache when the network call below fails. That avoids the
+      // fire-and-forget revalidation the fresh path starts, which would leave a live request behind.
+      return { size: st.size, isFile: st.isFile(), isDirectory: st.isDirectory(), mtime: new Date(0) };
+    },
+  },
+  runCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+  exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+  // Offline by construction: `fetchModelsDev` catches this and serves the fixture instead.
+  fetch: async () => {
+    throw new Error("offline fixture: models.dev must not be fetched by this validator");
+  },
+});
 
 const failures = [];
 
@@ -114,18 +121,15 @@ async function check(name, fn) {
   }
 }
 
-/** Guard against a green-but-empty run: the merge checks need the catalog to be reachable. */
+/** Guard against a green-but-empty run: the merge checks need the fixture catalog to be reachable. */
 async function checkMerge(name, fn) {
-  if (!hasCorpus) {
-    console.log(`  skip ${name} (no .agents/cache/models-dev.json — run the CLI once to populate)`);
-    return;
-  }
   // Prove the merge is actually reachable before asserting anything about it, so a broken env
-  // stub cannot silently turn these into no-op passes.
+  // stub cannot silently turn these into no-op passes. The fixture above makes this deterministic;
+  // there is no "no corpus" branch to skip through.
   const probe = await resolveModelConfig({ model: "gpt-4o" });
   if (!probe.modelInfo) {
     failures.push({ name, err: new Error("merge unreachable: resolveModelConfig returned no modelInfo") });
-    console.log(`  FAIL ${name}: merge unreachable (models.dev lookup did not run)`);
+    console.log(`  FAIL ${name}: merge unreachable (the models.dev fixture was not served)`);
     return;
   }
   await check(name, fn);
@@ -314,7 +318,10 @@ console.log("");
 if (failures.length > 0) {
   console.error(`capability-unknown-vs-none validation FAILED (${failures.length} check(s))`);
   for (const f of failures) console.error(`  - ${f.name}: ${f.err?.message ?? f.err}`);
+  clearCoreEnv();
+  fs.rmSync(fixtureRoot, TEMP_RM_OPTIONS);
   process.exit(1);
 }
 clearCoreEnv();
+fs.rmSync(fixtureRoot, TEMP_RM_OPTIONS);
 console.log("capability-unknown-vs-none validation passed");

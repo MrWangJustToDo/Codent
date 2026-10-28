@@ -98,7 +98,10 @@ export function stopReasonFor(bridge: {
   // `max_turn_requests` — the old rule reported the budget every time the counter matched.
   if (bridge.lastFinishReason === "length") return "max_tokens";
   if (bridge.lastFinishReason === "content_filter" || bridge.lastFinishReason === "refusal") return "refusal";
-  const { iteration } = snapshot;
+  // `iteration` itself is cleared when the turn finalizes (the retained channel must not report
+  // progress for a finished run), so the verdict reads the reading kept for the turn that just
+  // ended. Without it every budget cutoff reported `end_turn`.
+  const iteration = snapshot.lastIteration ?? snapshot.iteration;
   if (iteration.max > 0 && iteration.current >= iteration.max && bridge.lastFinishReason === "tool_calls") {
     return "max_turn_requests";
   }

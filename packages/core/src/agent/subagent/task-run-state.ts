@@ -17,11 +17,9 @@
  * `reachedLimit` from the message-derived stats, so `limit` is absent in that
  * case rather than wrong.
  *
- * Registries are keyed by parent ManagedAgent (WeakMap) and indexed by
- * parentTaskToolCallId, mirroring how the UI addresses tasks.
+ * The registry that holds these instances (and the pre-fork seats for the same calls) lives in
+ * `subagent-runs.ts`: one per-parent owner, so a session switch clears both halves in one call.
  */
-
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 export type TaskRunPhase = "running" | "summary" | "limit";
 
@@ -50,68 +48,4 @@ export class TaskRunState {
     }
     return false;
   }
-}
-
-type Registry = Map<string, TaskRunState>;
-
-const registries = new WeakMap<ManagedAgent, Registry>();
-
-function registryFor(parentManaged: ManagedAgent): Registry {
-  let registry = registries.get(parentManaged);
-  if (!registry) {
-    registry = new Map();
-    registries.set(parentManaged, registry);
-  }
-  return registry;
-}
-
-/** Get the state machine for a task call, if one was registered. */
-export function getTaskRunState(parentManaged: ManagedAgent, toolCallId: string): TaskRunState | undefined {
-  return registryFor(parentManaged).get(toolCallId);
-}
-
-/** Register (or fetch) the state machine for a task call in the `running` phase. */
-export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): TaskRunState {
-  const registry = registryFor(parentManaged);
-  const existing = registry.get(toolCallId);
-  if (existing) return existing;
-  const state = new TaskRunState(toolCallId);
-  registry.set(toolCallId, state);
-  return state;
-}
-
-/**
- * Move a task to its terminal phase (`summary` | `limit`). Returns true when this
- * call performed the transition (callers emit telemetry only then).
- */
-export function enterTaskPhase(parentManaged: ManagedAgent, toolCallId: string, phase: TaskRunTerminalPhase): boolean {
-  if (!toolCallId) return false;
-  return beginTaskRun(parentManaged, toolCallId).enterPhase(phase);
-}
-
-/**
- * Move a task to the `summary` phase (the subagent is writing its own report).
- * Kept as the named entry point for the `begin_summary` call site.
- */
-export function enterTaskSummaryPhase(parentManaged: ManagedAgent, toolCallId: string): boolean {
-  return enterTaskPhase(parentManaged, toolCallId, "summary");
-}
-
-/** Move a task to the `limit` phase (budget cutoff; report comes from the fallback). */
-export function enterTaskLimitPhase(parentManaged: ManagedAgent, toolCallId: string): boolean {
-  return enterTaskPhase(parentManaged, toolCallId, "limit");
-}
-
-/** Read the current phase (default `running` for unknown tasks). */
-export function readTaskRunPhase(parentManaged: ManagedAgent, toolCallId: string | undefined): TaskRunPhase {
-  if (!toolCallId) return "running";
-  return registryFor(parentManaged).get(toolCallId)?.phase ?? "running";
-}
-
-/** Drop finished bookkeeping (per task, or all tasks of the parent). */
-export function clearTaskRuns(parentManaged: ManagedAgent, toolCallId?: string): void {
-  const registry = registries.get(parentManaged);
-  if (!registry) return;
-  if (toolCallId) registry.delete(toolCallId);
-  else registry.clear();
 }

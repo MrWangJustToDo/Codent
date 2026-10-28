@@ -25,7 +25,9 @@ The system SHALL emit `agent:tool-start` before each tool invocation and SHALL e
 
 ### Requirement: Compaction start events match compaction kind
 
-The system SHALL emit `compaction:auto-start` only for auto-compaction and `compaction:reactive-start` only for reactive compaction. A reactive compact attempt MUST NOT also emit `compaction:auto-start`.
+The system SHALL emit `compaction:auto-start` only for auto-compaction, `compaction:reactive-start` only for reactive compaction, and `compaction:manual-start` only for a user-invoked `/compact`. A reactive compact attempt MUST NOT also emit `compaction:auto-start`; a manual one MUST NOT emit either automatic name.
+
+Completion and failure use the same kind prefix (`compaction:<kind>-complete` / `compaction:<kind>-error`), so every compaction line in the timeline can be attributed to the path that started it. A cancelled compaction (the user's Esc) emits neither: a cancel is not a failure, and the status already reports `aborted`.
 
 #### Scenario: Auto compact start
 - **WHEN** auto-compaction begins because the token threshold is exceeded
@@ -34,6 +36,11 @@ The system SHALL emit `compaction:auto-start` only for auto-compaction and `comp
 #### Scenario: Reactive compact start
 - **WHEN** reactive compaction begins after a context-overflow recovery path (classified by the provider's stable `code` first, prose fallback)
 - **THEN** the AgentEventBus emits `compaction:reactive-start` exactly once for that attempt and does not emit `compaction:auto-start`
+
+#### Scenario: Manual compact start
+- **WHEN** the user runs `/compact` while no run is in flight
+- **THEN** the AgentEventBus emits `compaction:manual-start` and emits neither `compaction:auto-start` nor `compaction:reactive-start`
+- **AND** the session log distinguishes it from the automatic path ("Compacting context (manual)..." / "Manual compact: …")
 
 ### Requirement: Session restore and subagent destroy emit lifecycle events
 

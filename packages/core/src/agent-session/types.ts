@@ -145,6 +145,14 @@ export interface AgentSessionSnapshot {
   lastStreamDurationMs: number;
   /** The last run's model finish reason, or null before one. */
   lastFinishReason: string | null;
+  /**
+   * The last finalized turn's iteration reading (`iteration` is reset at finalize).
+   *
+   * Needed for stop-reason classification: a turn can end exactly at its budget, and the live
+   * counter is cleared on the way out, so a consumer reading `iteration` after the turn always
+   * sees `0`.
+   */
+  lastIteration: AgentIterationState | null;
   /** Model name (informational). */
   model?: string;
   /** Model metadata (incl. reasoningConfig / effortValues) for UI display. */

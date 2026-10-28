@@ -44,7 +44,7 @@ export interface ExtensionUiBridge {
   /** Retained slots (surface → key → payload) for late-subscriber reconciliation. */
   getSlots(): Readonly<Record<string, Record<string, ExtensionRenderPayload>>>;
   /** The view one extension sees: renders attributed to it, subscriptions contained and tracked. */
-  wrap(ownerId: string, registrations?: ExtensionRegistrations): ExtensionUI;
+  wrap(ownerId: string, registrations?: ExtensionRegistrations, isLive?: () => boolean): ExtensionUI;
   /** Drop every slot rendered by one extension (disable / destroy). */
   clearOwner(ownerId: string): void;
   /** Drop every slot (full teardown). */
@@ -110,9 +110,15 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
     ui,
     getContext: () => buildContext(),
     getSlots: () => ui.getSlots(),
-    wrap: (ownerId, registrations) => ({
-      notify: (message, level) => ui.notify(message, level),
+    wrap: (ownerId, registrations, isLive) => ({
+      notify: (message, level) => {
+        if (isLive && !isLive()) return;
+        ui.notify(message, level);
+      },
       subscribe: (type, handler) => {
+        // A disabled extension's late `subscribe` must not keep a listener alive for the session:
+        // the same lease every other registration checks.
+        if (isLive && !isLive()) return () => {};
         // Containment first: `Emitter` swallows only synchronous throws, so an `async` handler's
         // rejection would escape to `unhandledRejection` — and the CLI's process guards turn that
         // into `exit(1)`. Tracking second: an untracked subscription keeps delivering to a disabled
@@ -133,7 +139,10 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
         registrations?.unsubObservers.push(unsub);
         return unsub;
       },
-      render: (surface, key, payload) => ui.render(surface, key, payload, ownerId),
+      render: (surface, key, payload) => {
+        if (isLive && !isLive()) return;
+        ui.render(surface, key, payload, ownerId);
+      },
       getContext: () => ui.getContext(),
     }),
     clearOwner: (ownerId) => ui.clearSlotsByOwner(ownerId),

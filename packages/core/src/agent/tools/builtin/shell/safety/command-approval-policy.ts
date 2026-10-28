@@ -8,7 +8,7 @@
  * `agentKind === "subagent"`.
  *
  * Built-in default: project-internal read-only commands are auto-approved;
- * any write operation, external path, or parse failure requires approval.
+ * any write operation, external path, `env` override, or parse failure requires approval.
  * Optional `rules` (allow/deny normalized-prefix patterns) override the
  * default and are reserved for future persisted rule files.
  *
@@ -27,6 +27,8 @@
  * granted for a recognized, non-writing, project-internal command, so an unrecognised command
  * still cannot be allowed.
  */
+
+import { envOverrideApprovalReason, envOverrideKeys, subagentEnvOverrideMessage } from "./env-override-safety.js";
 
 import type { CommandSafetyReport } from "./command-analyzer.js";
 
@@ -86,22 +88,48 @@ function matchesRules(patterns: string[] | undefined, normalized: string): boole
   });
 }
 
+export interface CommandApprovalOptions {
+  agentKind: "root" | "subagent";
+  rules?: CommandApprovalRules;
+  /**
+   * The call's model-supplied `env`, if any.
+   *
+   * Any non-empty override requires approval: the keys are not part of the command text, and an
+   * override can select a different program than the one written (`PATH`, `LD_PRELOAD`, …). The
+   * class is open-ended, so the rule is "any", not a deny-list — see `env-override-safety.ts`.
+   */
+  envOverrides?: Record<string, string>;
+}
+
 /**
  * Evaluate an approval decision for a command safety report.
  *
- * Rule order: explicit deny > explicit allow > built-in default. The default
- * auto-approves only when every command is read-only and no file path escapes
- * the project root; anything else asks (root) or denies (subagent).
+ * Rule order: explicit deny > env override > explicit allow > built-in default. The default
+ * auto-approves only when every command is read-only and no file path escapes the project root;
+ * anything else asks (root) or denies (subagent).
  */
 export function evaluateCommandApproval(
   report: CommandSafetyReport,
-  options: { agentKind: "root" | "subagent"; rules?: CommandApprovalRules }
+  options: CommandApprovalOptions
 ): CommandApprovalDecision {
-  const { rules, agentKind } = options;
+  const { rules, agentKind, envOverrides } = options;
 
   // Explicit deny rules take priority.
   if (rules?.deny && report.commands.some((c) => matchesRules(rules.deny, c.normalized))) {
     return { action: "deny", reason: "This command is denied by approval rules." };
+  }
+
+  // Env overrides sit between deny and allow on purpose: an explicit allow pattern names a
+  // command, not the environment it runs in. `PATH=… ls` matches the pattern for `ls` while
+  // executing something else, and nothing downstream can recover the difference.
+  //
+  // "Any override", not a key list: the dangerous-key class is open-ended, and a deny-list fails
+  // open on the first key nobody listed. An empty map is not an override and keeps the fast path.
+  const envKeys = envOverrideKeys(envOverrides);
+  if (envKeys.length > 0) {
+    return agentKind === "subagent"
+      ? { action: "deny", reason: subagentEnvOverrideMessage(envKeys) }
+      : { action: "ask", reason: envOverrideApprovalReason(envKeys) };
   }
 
   // Explicit allow rules apply when every command matches.

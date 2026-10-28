@@ -27,7 +27,9 @@ function fakeUsage() {
     getTotalCostUsd: () => 0,
     getWindowUsage: () => ({ inputTokens: 0 }),
     getContextFillTokens: () => 0,
+    getBilledInputTokens: () => 0,
     addTotal: () => {},
+    restoreTotals: () => {},
   };
 }
 

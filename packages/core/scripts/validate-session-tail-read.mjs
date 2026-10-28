@@ -17,6 +17,8 @@
  *   2. A range-less env yields the identical answer (the degrade path).
  *   3. Range and full reads agree FIELD BY FIELD on a real-shaped log.
  *   4. A torn trailing line is skipped, not returned as garbage.
+ *   4b. A save AFTER a torn tail is still readable — the load-derived tail flag terminates the
+ *      fragment before appending (with and without `readFileRange`).
  *   5. A state line sitting beyond the window falls back and is still found (the correctness
  *      case the fast path must not get wrong).
  *   6. A single-line file larger than the window still resolves.
@@ -86,6 +88,13 @@ function makeEnv({ withRange = true, rootPath } = {}) {
       rename: async (from, to) => fs.promises.rename(toAbs(root, from), toAbs(root, to)),
       remove: async (p) => fs.promises.rm(toAbs(root, p), { force: true }),
       mkdir: async (p) => fs.mkdirSync(toAbs(root, p), { recursive: true }),
+      // Present so a save takes the APPEND path (the one that can meet a torn tail) instead of
+      // degrading to a full rewrite, which would hide the case below.
+      appendFile: async (p, content) => {
+        const abs = toAbs(root, p);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.appendFileSync(abs, content);
+      },
     },
   };
   if (withRange) {
@@ -100,11 +109,11 @@ function makeEnv({ withRange = true, rootPath } = {}) {
 }
 
 /** One log line: `t: "message"`, a message (nullable), and the state snapshot `list()` needs. */
-function logLine({ name, updatedAt, message = null }) {
+function logLine({ id = "ses_x", name, updatedAt, message = null }) {
   return JSON.stringify({
     t: "message",
     message,
-    state: { id: "ses_x", name, version: 7, modelStyle: "openai", model: "test-model", updatedAt },
+    state: { id, name, version: 7, modelStyle: "openai", model: "test-model", updatedAt },
   });
 }
 
@@ -184,6 +193,57 @@ const { SessionStore } = await import("../dist/dev.mjs");
   assert.equal(metas.length, 1, "a torn tail must not hide the session");
   assert.equal(metas[0].name, "torn", "the last COMPLETE line's state is the answer");
   assert.equal(metas[0].updatedAt, 42, "and it must be that line's state, not a partial parse");
+}
+
+// ============================================================================
+// 4b: a save AFTER a torn tail must be readable (the fragment is terminated first)
+//
+// The read side always skipped the fragment, which is why this looked handled. But `appendFile`
+// used to write straight onto it: the new JSON was glued to the fragment, the merged line failed
+// to parse, and the save that had just completed vanished on the next load — while the in-memory
+// delta baseline already recorded it as persisted, so it was never retried.
+//
+// `load` now records whether the raw tail is terminated (from the bytes it already reads), and the
+// next append uses it. Both hosts must recover — the one with `readFileRange` and the one without,
+// because the flag comes from the full read, not from a second probe.
+// ============================================================================
+for (const withRange of [true, false]) {
+  const { env } = makeEnv({ withRange });
+  const rootPath = env.rootPath;
+  const id = "ses_resume";
+  const file = path.join(rootPath, ".agents", "sessions", `${id}.session.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    logLine({ id, name: "resumed", updatedAt: 42 }) + "\n" + '{"t":"message","message":{"id":"partial"' // no newline
+  );
+  registerCoreEnv(env);
+
+  const store = new SessionStore(env);
+  const loaded = await store.load(id);
+  assert.ok(loaded, `[range=${withRange}] the complete line must still load`);
+  loaded.uiMessages.push({
+    id: "msg_after_crash",
+    role: "user",
+    parts: [{ type: "text", text: "typed after the crash" }],
+  });
+  await store.save(loaded);
+
+  const reread = await store.load(id);
+  assert.ok(
+    reread?.uiMessages.some((message) => message.id === "msg_after_crash"),
+    `[range=${withRange}] a save after a torn tail must survive the reload`
+  );
+  assert.equal(reread?.name, "resumed", `[range=${withRange}] the state snapshot must survive too`);
+
+  // The fragment itself is still unparseable (nothing to recover) — only the NEW line had to be
+  // addressable. Assert the new line is a whole line, so a future "fix" that merely sorts the
+  // bytes differently cannot pass.
+  const raw = fs.readFileSync(file, "utf8");
+  assert.ok(
+    raw.split("\n").some((line) => line.includes("msg_after_crash") && line.trim().startsWith("{")),
+    `[range=${withRange}] the appended line must start at a line boundary`
+  );
 }
 
 // ============================================================================

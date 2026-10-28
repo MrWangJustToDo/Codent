@@ -33,8 +33,21 @@ export interface ApprovalDecisionCoordinatorDeps {
   /** Join a queued pump; exactly one call per user/auto-mode decision batch. */
   enqueueRun: () => Promise<void>;
   getCoreEnv: () => ResolvedCoreEnv;
-  /** Test/alternate-host seam; defaults to the tree-sitter command policy. */
-  evaluateCommandSafety?: (command: string) => Promise<CommandApprovalDecision>;
+  /**
+   * Test/alternate-host seam. Receives every part of the call that decides the verdict
+   * (`command` / `cwd` / `env`) — not just the text, because an `env` override can execute a
+   * different program than the text names. Defaults to the tree-sitter command policy.
+   */
+  evaluateCommandSafety?: (input: RunCommandApprovalInput) => Promise<CommandApprovalDecision>;
+}
+
+/** The parts of a `run_command` call that decide its approval verdict. */
+export interface RunCommandApprovalInput {
+  command: string;
+  /** Workspace-relative working directory, as the tool will run it. */
+  cwd?: string;
+  /** Model-supplied environment overrides, as the host will merge them. */
+  env?: Record<string, string>;
 }
 
 export class ApprovalDecisionCoordinator {
@@ -134,10 +147,11 @@ export class ApprovalDecisionCoordinator {
       if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
       if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
       const approvalId = toolCall.approval.id;
-      const command = parseToolCallInput(toolCall)?.command;
-      if (!approvalId || !command) continue;
+      const input = parseToolCallInput(toolCall);
+      const command = input?.command;
+      if (!approvalId || !command || !input) continue;
 
-      const decision = await this.evaluateCommand(command);
+      const decision = await this.evaluateCommand({ ...input, command });
       if (decision.action === "allow") {
         this.recordDecision({
           approvalId,
@@ -186,23 +200,40 @@ export class ApprovalDecisionCoordinator {
     this.deps.persist();
   }
 
-  private async evaluateCommand(command: string): Promise<CommandApprovalDecision> {
-    if (this.deps.evaluateCommandSafety) return this.deps.evaluateCommandSafety(command);
-    const ctx = await createAnalysisContext(this.deps.getCoreEnv());
-    const report = await analyzeCommand(command, ctx);
-    return evaluateCommandApproval(report, { agentKind: "root" });
+  private async evaluateCommand(input: RunCommandApprovalInput): Promise<CommandApprovalDecision> {
+    if (this.deps.evaluateCommandSafety) return this.deps.evaluateCommandSafety(input);
+    const env = this.deps.getCoreEnv();
+    // One basis for analysis and execution. `cwd` decides whether a relative path is inside the
+    // workspace, and the tool runs the command from it — analysing from `rootPath` instead made
+    // `run_command({ command: "cat ../README.md", cwd: "src" })` ask as an external read even
+    // though the same call was allowed on the subagent path (which already resolved it this way).
+    const cwd = input.cwd ? env.path.resolve(env.rootPath, input.cwd) : undefined;
+    const ctx = await createAnalysisContext(env, cwd ? { cwd } : undefined);
+    const report = await analyzeCommand(input.command, ctx);
+    return evaluateCommandApproval(report, { agentKind: "root", envOverrides: input.env });
   }
 }
 
 /** Safely extract a tool-call's parsed input, falling back to the raw `arguments` JSON string. */
-function parseToolCallInput(toolCall: ToolCallPart): { command?: string } | undefined {
-  if (toolCall.input) {
-    return toolCall.input as { command?: string };
+function parseToolCallInput(
+  toolCall: ToolCallPart
+): { command?: string; cwd?: string; env?: Record<string, string> } | undefined {
+  let raw: unknown = toolCall.input;
+  if (!raw) {
+    try {
+      raw = JSON.parse(toolCall.arguments ?? "{}");
+    } catch {
+      return undefined;
+    }
   }
-  try {
-    const parsed = JSON.parse(toolCall.arguments ?? "{}") as { command?: string };
-    return parsed && typeof parsed === "object" ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  if (!raw || typeof raw !== "object") return undefined;
+  const { command, cwd, env } = raw as { command?: unknown; cwd?: unknown; env?: unknown };
+  return {
+    ...(typeof command === "string" ? { command } : {}),
+    ...(typeof cwd === "string" && cwd ? { cwd } : {}),
+    // Only the KEY SET matters to the override rule, so a non-string value cannot hide a key.
+    // (A malformed `env` is already rejected by `inputSchema` before approval; this is the
+    // defensive read.)
+    ...(env && typeof env === "object" && !Array.isArray(env) ? { env: env as Record<string, string> } : {}),
+  };
 }

@@ -33,6 +33,7 @@ export function readLocalAgentSessionSnapshot(
     mode: managed.getAgentMode(),
     lastStreamDurationMs: l1.lastStreamDurationMs,
     lastFinishReason: l1.lastFinishReason,
+    lastIteration: l1.lastIteration,
     ...(l1.model ? { model: l1.model } : {}),
     ...(l1.modelInfo ? { modelInfo: l1.modelInfo } : {}),
     ...(l1.reasoningEffort ? { reasoningEffort: l1.reasoningEffort } : {}),

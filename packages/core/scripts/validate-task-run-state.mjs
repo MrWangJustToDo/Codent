@@ -8,8 +8,17 @@ import assert from "node:assert/strict";
 
 import { TaskRunState } from "../dist/dev.mjs";
 
-const { beginTaskRun, clearTaskRuns, enterTaskLimitPhase, enterTaskSummaryPhase, getTaskRunState, readTaskRunPhase } =
-  await import("../dist/dev.mjs");
+const {
+  beginTaskRun,
+  clearSubagentRuns,
+  clearTaskRuns,
+  countSubagentRuns,
+  enterTaskLimitPhase,
+  enterTaskSummaryPhase,
+  getTaskRunState,
+  peekTaskPreforkCoordinator,
+  readTaskRunPhase,
+} = await import("../dist/dev.mjs");
 
 // --- defaults ---
 
@@ -86,5 +95,31 @@ beginTaskRun(parent, "drop-me");
 clearTaskRuns(parent, "drop-me");
 assert.ok(getTaskRunState(parent, "keep-me"));
 assert.equal(getTaskRunState(parent, "drop-me"), undefined);
+
+// --- one owner: the task phase lives in the SAME per-parent registry as the pre-fork seats ---
+//
+// They used to be two independent WeakMaps, so nothing could clear "this parent's task state" in one
+// call — and the phase map was never cleared at all: every task id stayed for the life of the agent,
+// across `/new` and `/resume`.
+{
+  const parent = {};
+  beginTaskRun(parent, "t-a");
+  beginTaskRun(parent, "t-b");
+  assert.equal(countSubagentRuns(parent), 2, "one record per task call");
+  assert.ok(
+    peekTaskPreforkCoordinator(parent),
+    "the phase record and the pre-fork seats share one registry (a session clear drops both)"
+  );
+
+  clearSubagentRuns(parent);
+  assert.equal(countSubagentRuns(parent), 0, "a session switch drops every task record");
+  assert.equal(readTaskRunPhase(parent, "t-a"), "running", "and the phases are gone");
+
+  // Non-creating: clearing an agent that never ran a task must not allocate a registry.
+  const untouched = {};
+  clearSubagentRuns(untouched);
+  assert.equal(countSubagentRuns(untouched), 0);
+  assert.equal(peekTaskPreforkCoordinator(untouched), undefined, "no registry is created just to clear it");
+}
 
 console.log("task-run-state validation passed");

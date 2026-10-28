@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 // The render-layer readers are public (`@codent/core`) — a host uses them to render a part it
 // was handed; the producers and the projection registry are internal (`dev.mjs`).
 import {
+  BUILTIN_TOOL_NAMES,
   TOOL_CANCELLED_MESSAGE,
   applySubagentStopNotice,
   cancelInFlightToolCalls,
@@ -290,20 +291,146 @@ const CATCHER_TOOLS = [
   },
 ];
 
-/** Every other built-in tool, with the reason it needs no marker field. */
+/**
+ * Every other built-in tool: the file that defines it, and why a cancel needs no marker field.
+ *
+ * `file` is explicit because the alternative — deriving it from the source — is what made the
+ * previous version miss 21 of the 41 registered tools (constant names, one-line definitions and
+ * shared factories were invisible). The marker-freeness assertion below reads that exact file.
+ */
 const NO_MARKER_REASON = {
-  read_file: "no partial output worth keeping; the fallback marks the row",
-  list_file: "no partial output worth keeping; the fallback marks the row",
-  get_command_output: "background-job poll; a cancel leaves the job running, nothing to report",
-  kill_command: "background-job control; synchronous",
-  write_file: "synchronous and short; cannot be interrupted mid-write",
-  edit_file: "synchronous and short; cannot be interrupted mid-write",
-  delete_file: "synchronous and short; cannot be interrupted mid-write",
-  todo: "local state mutation; nothing to report when cut short",
-  complete_plan: "local state mutation; nothing to report when cut short",
-  ask_user: "blocks on the user, not on the run; a cancel is the interaction layer's story",
-  session_search: "read-only history scan; no partial output worth keeping, the fallback marks the row",
-  session_read: "read-only history render; no partial output worth keeping, the fallback marks the row",
+  read_file: {
+    file: "agent/tools/builtin/fs/read-file-tool.ts",
+    why: "no partial output worth keeping; the fallback marks the row",
+  },
+  list_file: {
+    file: "agent/tools/builtin/fs/list-file-tool.ts",
+    why: "directory listing; one atomic read, nothing partial to report",
+  },
+  get_command_output: {
+    file: "agent/tools/builtin/shell/get-command-output-tool.ts",
+    why: "background-job poll; a cancel leaves the job running, nothing to report",
+  },
+  kill_command: {
+    file: "agent/tools/builtin/shell/kill-command-tool.ts",
+    why: "background-job control; synchronous",
+  },
+  write_file: {
+    file: "agent/tools/builtin/fs/write-file-tool.ts",
+    why: "synchronous and short; cannot be interrupted mid-write",
+  },
+  edit_file: {
+    file: "agent/tools/builtin/fs/edit-file-tool.ts",
+    why: "synchronous and short; cannot be interrupted mid-write",
+  },
+  delete_file: {
+    file: "agent/tools/builtin/fs/delete-file-tool.ts",
+    why: "synchronous and short; cannot be interrupted mid-write",
+  },
+  todo: {
+    file: "agent/todo/todo-tool.ts",
+    why: "local state mutation; nothing to report when cut short",
+  },
+  create_plan: {
+    file: "agent/plan/create-plan-tool.ts",
+    why: "plan authoring writes local state; a cancel writes nothing",
+  },
+  update_plan: {
+    file: "agent/plan/create-plan-tool.ts",
+    why: "plan authoring writes local state; a cancel writes nothing",
+  },
+  complete_plan: {
+    file: "agent/plan/create-plan-tool.ts",
+    why: "local state mutation; nothing to report when cut short",
+  },
+  ask_user: {
+    file: "agent/tools/builtin/interaction/ask-user-tool.ts",
+    why: "blocks on the user, not on the run; a cancel is the interaction layer's story",
+  },
+  session_search: {
+    file: "agent/tools/builtin/session/search-tool.ts",
+    why: "read-only history scan; no partial output worth keeping",
+  },
+  session_read: {
+    file: "agent/tools/builtin/session/read-tool.ts",
+    why: "read-only history render; no partial output worth keeping",
+  },
+  list_skills: {
+    file: "agent/skills/extension.ts",
+    why: "local skill index read; instant, nothing partial",
+  },
+  load_skill: {
+    file: "agent/skills/extension.ts",
+    why: "one local file read; instant, nothing partial",
+  },
+  memory_read: {
+    file: "agent/memory/extension.ts",
+    why: "local memory file read; instant, nothing partial",
+  },
+  memory_write: {
+    file: "agent/memory/extension.ts",
+    why: "local memory file write; synchronous, nothing partial to report",
+  },
+  memory_list: {
+    file: "agent/memory/extension.ts",
+    why: "local memory index read; instant, nothing partial",
+  },
+  lsp_diagnostics: {
+    file: "agent/lsp/tools/diagnostics.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_hover: {
+    file: "agent/lsp/tools/hover.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_definition: {
+    file: "agent/lsp/tools/definition.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_references: {
+    file: "agent/lsp/tools/references.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_symbols: {
+    file: "agent/lsp/tools/symbols.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_completions: {
+    file: "agent/lsp/tools/completions.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  lsp_rename: {
+    file: "agent/lsp/tools/rename.ts",
+    why: "language-server preview; it never applies the edit, so a cancel changes nothing",
+  },
+  lsp_code_actions: {
+    file: "agent/lsp/tools/code-actions.ts",
+    why: "language-server request; aborting drops the response, no partial result",
+  },
+  ast_search: {
+    file: "agent/lsp/tools/code-search.ts",
+    why: "tree-sitter query over a file; the result is all-or-nothing",
+  },
+  code_rewrite: {
+    file: "agent/lsp/tools/code-rewrite.ts",
+    why: "tree-sitter rewrite; it writes only after a complete run, so a cancel writes nothing",
+  },
+  code_overview: {
+    file: "agent/lsp/tools/code-overview.ts",
+    why: "tree-sitter outline; the result is all-or-nothing",
+  },
+  execute_typescript: {
+    file: "agent/code-mode/extension.ts",
+    why: "sandbox call; aborting discards the isolate result rather than returning a partial one",
+  },
+  discover_tools: {
+    file: "agent/code-mode/extension.ts",
+    why: "static catalog lookup; no side effect to interrupt",
+  },
+  begin_summary: {
+    file: "agent/subagent/begin-summary-tool.ts",
+    why: "marker tool that only flips the task phase; the fallback marks the row",
+  },
 };
 
 function walk(dir) {
@@ -314,49 +441,58 @@ function walk(dir) {
 }
 
 {
-  // Every `defineServerTool` / `defineClientTool` definition site, by source.
-  const defined = [];
-  for (const file of walk(join(SRC, "agent"))) {
-    const src = readFileSync(file, "utf8");
-    if (!/define(?:Server|Client)Tool\(/.test(src)) continue;
-    // `\r?\n`, not `\n`: a Windows checkout has CRLF, and a literal `\n` matches nothing
-    // there — which silently reported "found 0" tool definitions.
-    for (const match of src.matchAll(/\bname: "([a-z_]+)",\r?\n/g)) defined.push({ name: match[1], file });
-  }
-  const names = defined.map((d) => d.name);
-  assert.ok(names.length >= 12, `expected the built-in tool set, found ${names.length}: ${names.join(",")}`);
-  for (const required of ["run_command", "task", "grep", "read_file", "todo", "webfetch"]) {
-    assert.ok(names.includes(required), `${required} must be part of the enumerated tool set`);
-  }
+  // Every built-in tool must answer "can Esc cut this short?" — either by declaring the marker it
+  // writes (CATCHER_TOOLS) or by saying why it needs none (NO_MARKER_REASON).
+  //
+  // Names come from the REGISTRY, not from a source regex. The previous `/name: "([a-z_]+)",\n/`
+  // scan only saw tools that spell a lowercase literal there, so a tool whose name is a constant
+  // (`BEGIN_SUMMARY_TOOL_NAME`), sits on one line, or is defined through a shared factory was
+  // simply skipped — the "enforced against the source" claim was false for 21 of the 41 built-ins.
+  const registry = Object.values(BUILTIN_TOOL_NAMES);
+  assert.ok(registry.length >= 30, `the built-in registry must be populated (saw ${registry.length})`);
 
   const catcherNames = new Set(CATCHER_TOOLS.map((t) => t.name));
-  for (const { name, file } of defined) {
-    if (catcherNames.has(name)) continue;
+  for (const name of registry) {
     assert.ok(
-      name in NO_MARKER_REASON,
-      `${name} (${file.replace(SRC, "")}): unclassified — every tool must answer whether Esc can cut it ` +
-        `short. Add it to CATCHER_TOOLS (it declares the marker it writes) or NO_MARKER_REASON (with why ` +
+      catcherNames.has(name) || name in NO_MARKER_REASON,
+      `${name}: unclassified — every built-in tool must answer whether Esc can cut it short. ` +
+        `Add it to CATCHER_TOOLS (it declares the marker it writes) or NO_MARKER_REASON (with why ` +
         `it declares none).`
-    );
-    assert.ok(NO_MARKER_REASON[name]?.trim().length > 10, `${name}: the no-marker reason must say something real`);
-    // The two answers are exclusive: a tool that declares no marker must not write one.
-    const src = readFileSync(file, "utf8");
-    assert.ok(
-      !/\bcancelled: true\b|\baborted: true\b/.test(src),
-      `${name}: claims no cancel marker but writes one — the tables disagree with the source`
     );
   }
 
-  // A stale entry is an error too: the two tables must describe the tool set exactly.
-  for (const name of Object.keys(NO_MARKER_REASON)) {
-    assert.ok(names.includes(name), `NO_MARKER_REASON.${name} is stale — no such tool definition site`);
+  // A stale entry is an error too: the two tables must describe the registered tool set exactly.
+  for (const name of catcherNames) {
+    assert.ok(registry.includes(name), `${name}: CATCHER_TOOLS entry has no matching built-in`);
   }
+  for (const name of Object.keys(NO_MARKER_REASON)) {
+    assert.ok(registry.includes(name), `${name}: NO_MARKER_REASON entry has no matching built-in`);
+  }
+
   for (const { file, name, evidence } of CATCHER_TOOLS) {
-    assert.ok(names.includes(name), `CATCHER_TOOLS.${name} is stale — no such tool definition site`);
     const src = readFileSync(join(SRC, file), "utf8");
     for (const [pattern, why] of evidence) {
       assert.ok(pattern.test(src), `${name}: ${why}`);
     }
+  }
+
+  // The two answers are exclusive: a tool that declares no marker must not write one. Checked in
+  // the file the table names, so a doc mention elsewhere cannot mask (or fake) the result.
+  for (const [name, entry] of Object.entries(NO_MARKER_REASON)) {
+    assert.ok(entry.why.trim().length > 10, `${name}: the no-marker reason must say something real`);
+    const src = readFileSync(join(SRC, entry.file), "utf8");
+    assert.ok(
+      !/\bcancelled: true\b|\baborted: true\b/.test(src),
+      `${name}: claims no cancel marker but ${entry.file} writes one — the tables disagree with the source`
+    );
+  }
+
+  // Registry ↔ source: every registered name must be spelled somewhere under `src/agent`, so the
+  // tables above cannot describe a tool that no longer exists (or one nobody implements).
+  const sourceFiles = walk(join(SRC, "agent"));
+  const sourceText = sourceFiles.map((file) => readFileSync(file, "utf8")).join("\n");
+  for (const name of registry) {
+    assert.ok(sourceText.includes(`"${name}"`), `${name}: the registry names a tool no source file spells`);
   }
 
   // The subagent side of the task tool: a cancel is recognized there, not in the tool.

@@ -186,7 +186,13 @@ export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): v
   // relabel the run-lifecycle reset (a restart) as an operator cancel — the misattribution
   // this wiring removes; the actual Esc path passes `"user-cancelled"` explicitly.
   const effectiveReason = reason ?? "(no reason)";
-  host.emitEvent("agent:abort", { reason: effectiveReason });
+  // An abort is only a fact when a run (or a turn parked on the user) exists. Destroying an idle
+  // agent used to write `agent:abort` anyway: every normal shutdown produced a `warn` row
+  // ("Agent aborted (Agent destroyed)") that read as a fault, and it dwarfed real cancels
+  // (measured: 459 rows across 390 logs vs 58 `user-cancelled`). The signal is still aborted below
+  // — that is what cancels in-flight work such as memory extraction.
+  const hadRun = isActiveStatus(host.getStatus());
+  if (hadRun) host.emitEvent("agent:abort", { reason: effectiveReason });
   host.run.abort(effectiveReason);
   // The status flip normally already happened in the abort listener above (it fires
   // synchronously inside `run.abort()`). This remainder covers the no-controller path: an

@@ -20,8 +20,8 @@ import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TodoManager } from "../../agent/todo";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ResolvedCoreEnv } from "../../env";
-import type { AgentManager, AgentStatusController, UsageTracker } from "../../runtime-types";
-import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
+import type { AgentManager, UsageTracker } from "../../runtime-types";
+import type { CompactionController } from "../controllers/compaction-controller.js";
 
 export { projectWireFromChannel, type WireProjectionSource } from "../../agent/compaction/wire-projection.js";
 
@@ -37,9 +37,9 @@ export interface CompactionMiddlewareDeps {
   getUsage: () => UsageTracker;
   getTodoManager: () => TodoManager | null;
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
-  status: AgentStatusController;
+  /** Compaction ownership (status, generation, start/complete/error events). */
+  compactions: CompactionController;
   log: AgentLog | null;
-  emitEvent?: EmitAgentTelemetryFn;
   /**
    * Wire-projection cache to use. Supplied by the agent so that `getMessagesForLLM`
    * (manual `/compact`, reactive compact, memory extraction) and this middleware share
@@ -91,10 +91,9 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           return { messages: llmMessages };
         }
 
-        const compactionGeneration = managed?.beginCompactionGeneration();
+        const lease = deps.compactions.begin("auto", { tokensBefore: fillBefore });
+        if (!lease) return { messages: llmMessages };
         try {
-          deps.status.beginCompaction("auto");
-
           const incompleteTodos = deps.getTodoManager()?.getIncompleteTodos() ?? [];
           const todos = incompleteTodos.map((t) => ({
             content: t.content,
@@ -116,9 +115,9 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             ...(runAbortSignal ? { abortSignal: runAbortSignal } : {}),
           });
 
-          // A manual compaction (or a session switch) can claim the status while the auto
+          // A manual compaction (or a session switch) can claim ownership while the auto
           // summarizer is finishing. Do not apply its checkpoint or report completion in that case.
-          if (managed && !managed.isCompactionCurrent(compactionGeneration)) {
+          if (!deps.compactions.isCurrent(lease)) {
             return { messages: llmMessages };
           }
 
@@ -126,10 +125,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             applyCompactionResult(deps.getCoreEnv(), fromChannel, channel, usage, result, {
               ...keepPolicyProjectionOptions(resolveKeepPolicy(compactionConfig ?? {}, contextWindow)),
               onCacheCleanupError: (err) => {
-                deps.emitEvent?.("compaction:auto-error", {
-                  phase: "cache-cleanup",
-                  error: err.message,
-                });
+                deps.compactions.finish(lease, { status: "failed", phase: "cache-cleanup", error: err.message });
               },
             })
           ) {
@@ -139,7 +135,8 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
 
           if (result.compacted) {
             failedAtFill = null;
-            deps.emitEvent?.("compaction:auto-complete", {
+            deps.compactions.finish(lease, {
+              status: "completed",
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
             });
@@ -147,17 +144,21 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             // No progress (empty summary, summarizer no-op): remember where we tried so the
             // next model call does not start the same summarization again.
             failedAtFill = fillBefore;
+            deps.compactions.finish(lease, { status: "skipped" });
           }
         } catch (err) {
-          // A user cancel is not a compaction failure — stay silent.
-          if (!isAbortError(err) && (!managed || managed.isCompactionCurrent(compactionGeneration))) {
+          // A user cancel is not a compaction failure — stay silent (but give the status back).
+          if (isAbortError(err)) {
+            deps.compactions.release(lease);
+          } else if (deps.compactions.isCurrent(lease)) {
             const error = toError(err);
             failedAtFill = fillBefore;
-            deps.emitEvent?.("compaction:auto-error", { error: error.message });
+            deps.compactions.finish(lease, { status: "failed", error: error.message });
           }
         } finally {
-          // Only the owner that still holds the compaction generation may restore status.
-          if (!managed || managed.isCompactionCurrent(compactionGeneration)) deps.status.endCompaction();
+          // Idempotent: `finish`/`release` above already ended it. This covers a throw out of the
+          // catch block itself, so the agent cannot stay stuck in `compacting`.
+          deps.compactions.release(lease);
         }
       }
 

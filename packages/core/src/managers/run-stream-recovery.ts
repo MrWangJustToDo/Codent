@@ -1,6 +1,6 @@
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
 import { readRetryAfterMs, runErrorFromChunk } from "../agent/stream/stream-errors.js";
-import { discardRegisteredPrefork } from "../agent/subagent/task-prefork.js";
+import { discardRegisteredPrefork } from "../agent/subagent/subagent-runs.js";
 import { toError } from "../utils/errors.js";
 
 import { armCapabilityStrip, tryCapabilitySanitizeRetry } from "./stream-recovery/capability-sanitize.js";
@@ -124,12 +124,9 @@ async function attemptErrorRecovery(
     // RUN_ERROR falls back to header/message scraping.
     const errorRetryAfterMs = readRetryAfterMs(error);
     const retryAfterSeconds = errorRetryAfterMs != null ? errorRetryAfterMs / 1000 : extractRetryAfterSeconds(error);
-    options.managed.log?.debug("agent", "Transient provider error — retrying with backoff", {
-      attempt: recoveryAttempts + 1,
-      maxAttempts: MAX_RECOVERY_ATTEMPTS,
-      retryAfterSeconds,
-      error: errorFromUnknown(error).message,
-    });
+    // One writer for a retry: `recordRetry` below emits `agent:retry`, which the log bridge writes
+    // (with the same attempt/delay/error data). A second debug row here made one retry read as three
+    // lines in the timeline — and its `attempt` was pre-increment, contradicting the "1/3" beside it.
     options.managed.setError("");
     return {
       multimodalStripAttempted,
@@ -344,11 +341,6 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
     });
     clearRetryOnNextChunk = !truncationDetected;
 
-    options.managed.log?.debug("agent", "Backoff before retry", {
-      attempt: recoveryAttempts,
-      delayMs: Math.round(delay),
-      retryAfterSeconds,
-    });
     await abortableDelay(delay, options.signal);
     // Cancelled during backoff — do not issue the (doomed) retry stream, and do
     // not leave the recorded retry surfaced: this return skips both the recovery

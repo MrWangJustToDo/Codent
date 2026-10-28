@@ -66,6 +66,11 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "compaction:auto-start": { mode: "emit" },
   "compaction:auto-complete": { mode: "emit", channel: "lifecycle" },
   "compaction:auto-error": { mode: "emit", channel: "lifecycle" },
+  // A manual `/compact` gets its own name rather than borrowing the auto one: the log line is how
+  // the user tells "the loop compacted itself" from "I asked for this".
+  "compaction:manual-start": { mode: "emit" },
+  "compaction:manual-complete": { mode: "emit", channel: "lifecycle" },
+  "compaction:manual-error": { mode: "emit", channel: "lifecycle" },
   "compaction:reactive-start": { mode: "emit" },
   "compaction:reactive-complete": { mode: "emit", channel: "lifecycle" },
   "compaction:reactive-error": { mode: "emit", channel: "lifecycle" },

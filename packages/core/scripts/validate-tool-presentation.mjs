@@ -59,7 +59,10 @@ function collectDeclarations() {
 
 function parseEntries(body) {
   const entry = {};
-  for (const [, key, value] of body.matchAll(/(\w+):\s*("([a-z]+)"|true|false)/g)) {
+  // Keys are identifiers; values are strings or booleans. The old `"([a-z]+)"` value pattern
+  // silently dropped any value with a dot or an uppercase letter (`labelKey: "tool.read"`), so
+  // such an entry was compared with a missing field instead of the real one.
+  for (const [, key, value] of body.matchAll(/([A-Za-z_$][\w$]*):\s*("([^"]*)"|true|false)/g)) {
     entry[key] = value.startsWith('"') ? value.replaceAll('"', "") : value === "true";
   }
   return entry;

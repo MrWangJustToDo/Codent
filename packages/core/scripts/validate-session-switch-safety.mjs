@@ -59,7 +59,15 @@ first.name = "first";
 first.uiMessages = [{ id: "a1", role: "user", parts: [] }];
 existing.add(first.id);
 
-const usage = { getTotal: () => ({}), getTotalCostUsd: () => 0, getContextFillTokens: () => 0 };
+const usage = {
+  getTotal: () => ({}),
+  getTotalCostUsd: () => 0,
+  getContextFillTokens: () => 0,
+  // `persistSession` records the exact billed prompt; `adoptRestoredSession` resets and restores it.
+  getBilledInputTokens: () => 0,
+  restoreTotals: () => {},
+  reset: () => {},
+};
 const host = {
   session: service,
   usage,
@@ -171,6 +179,7 @@ assert.equal(
     resetTurnContext: markReset("turnContext"),
     resetSessionSyncTracker: markReset("syncTracker"),
     resetIterationProgress: markReset("iteration"),
+    clearTaskRuns: markReset("taskRuns"),
     resetCommandJobs: markReset("commandJobs"),
     emitSessionSwitch: () => {},
     refreshState: () => {},
@@ -210,6 +219,7 @@ assert.equal(
     "streamHub",
     "turnContext",
     "iteration",
+    "taskRuns",
     "commandJobs",
   ]) {
     assert.equal(resetCalls.includes(name), true, `resume must clear volatile state: ${name}`);
@@ -229,6 +239,7 @@ assert.equal(
   let released;
   let adopted;
   let transcriptCleared = false;
+  let taskRunsCleared = false;
   let persistDrains = 0;
   const newTarget = { id: "ses_new", name: "New Session", uiMessages: [], model: "m", modelStyle: "openai" };
   const newSessionLifecycle = new SessionLifecycleService({
@@ -268,6 +279,9 @@ assert.equal(
     resetTurnContext: () => {},
     resetSessionSyncTracker: () => {},
     resetIterationProgress: () => {},
+    clearTaskRuns: () => {
+      taskRunsCleared = true;
+    },
     resetCommandJobs: () => {},
     emitSessionNew: () => {},
     refreshState: () => {},
@@ -287,6 +301,7 @@ assert.equal(
   assert.equal(adopted, newTarget, "the new session is adopted");
   assert.equal(persistDrains, 1, "newSession drains queued persists before rotating");
   assert.equal(transcriptCleared, true, "the live transcript is reset for the new session");
+  assert.equal(taskRunsCleared, true, "the previous conversation's task records are dropped");
   assert.equal(released, "ses_old", "the previous session's ownership is released after adoption");
 }
 

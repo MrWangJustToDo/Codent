@@ -494,6 +494,11 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
    （abort + 清 controller）、`resetTurnLifecycle`、status → `idle`、`memory.resetState`、
    `streamHub.clearAll`、`resetTurnContext`、`resetIterationProgress`…
    `resume` 不碰 mode/approvals/usage/todos——恢复失败时不能把当前会话的这些值清掉。
+7. **切换会终止本会话的后台作业**（by design，不是泄漏）：`resetTransientState` →
+   `host.resetCommandJobs()` → `registry.destroyAll()` 会 kill 运行中的进程，并删掉
+   `.agents/cache/command-jobs/` 下该会话的记录与日志；只有"已终态且未通知"的记录被保留给
+   下次恢复。所以后台作业的 *durable* 指的是**跨进程重启**，不跨会话切换——切换即视为
+   "这个会话的工作结束了"。模型在切回来之后查不到旧 job 是预期行为。
 
 ---
 

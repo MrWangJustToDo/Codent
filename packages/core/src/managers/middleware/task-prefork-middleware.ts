@@ -38,10 +38,7 @@ import {
   discardRegisteredPrefork,
   getTaskPreforkCoordinator,
   peekTaskPreforkCoordinator,
-  type PreforkDiscard,
-  type PreforkDiscardCause,
-  type TaskPreforkCoordinator,
-} from "../../agent/subagent/task-prefork.js";
+} from "../../agent/subagent/subagent-runs.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { generateId } from "../../utils/generate-id.js";
@@ -49,6 +46,7 @@ import { generateId } from "../../utils/generate-id.js";
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
+import type { PreforkDiscard, PreforkDiscardCause, TaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
 import type { AgentUIChannel, ManagedAgent, AgentManager } from "../../runtime-types";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware } from "@tanstack/ai";

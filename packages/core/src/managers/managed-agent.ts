@@ -64,12 +64,12 @@ import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
-import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import {
-  type PreforkDiscardCause,
+  clearSubagentRuns,
   discardRegisteredPrefork,
   peekTaskPreforkCoordinator,
-} from "../agent/subagent/task-prefork.js";
+} from "../agent/subagent/subagent-runs.js";
+import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
@@ -88,6 +88,7 @@ import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
+import { CompactionController, type CompactionLease } from "./controllers/compaction-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
@@ -121,7 +122,6 @@ import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
-import type { ResolvedCoreEnv } from "../env";
 import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
@@ -151,12 +151,14 @@ import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
 import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
+import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";
 import type { TodoManager } from "../agent/todo";
 import type { ToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { ToModelOutputFn } from "../agent/tools/runtime/contract.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
+import type { ResolvedCoreEnv } from "../env";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
 import type { ModelInfo } from "../models/types.js";
@@ -365,6 +367,8 @@ export class ManagedAgent {
   private pendingApprovalCount: number;
   /** Agent-loop progress for the current run; null until the first iteration. */
   private iterationState: AgentIterationState | null = null;
+  /** The last finalized turn's reading, kept across the terminal reset (see `finalizeRun`). */
+  private lastIterationState: AgentIterationState | null = null;
   /** Live LLM retry visibility (set by stream recovery; cleared when the stream recovers). */
   private retryInfo: AgentRetryState | null = null;
   /** Session-transition state coalescing: publish one L1 frame after unload/load commits. */
@@ -451,13 +455,13 @@ export class ManagedAgent {
   private readonly streamHub: AgentStreamHub;
   private chatController?: AgentChatController;
   /**
-   * Abort controller for a manual `/compact` run. Manual compaction is not a chat pump, so it has
-   * no `RunCoordinator.currentAbortController`; without its own controller a session switch could
-   * clear the stream hub while the next compaction segment was still about to start.
+   * Compaction ownership: the single home for the current compaction's generation, its status
+   * (`compacting` and what it returns to), its start/complete/error events, and the manual
+   * summarizer's `AbortController`. Auto / reactive / manual all go through it, so a producer
+   * cannot bump ownership without also owning the restore — which is how the agent used to get
+   * stuck in `compacting`.
    */
-  private compactAbortController?: AbortController;
-  /** Owner generation for the current manual compaction; bumped whenever it is cancelled. */
-  private compactGeneration = 0;
+  readonly compactions: CompactionController;
   /** Per-agent background work ownership (registry + durable restore + turn-context pointer). */
   private commandService?: AgentCommandService;
   /** Set by AgentManager to route events to listeners. */
@@ -588,6 +592,12 @@ export class ManagedAgent {
       },
       emitEvent: (type, data) => this.emitEvent(type, data),
     });
+    this.compactions = new CompactionController({
+      getStatus: () => this.getStatus(),
+      setStatus: (status, trigger) => this.setStatus(status, trigger),
+      onUserCancel: () => this.statusController.onUserCancel(),
+      emitEvent: (type, data) => this.emitEvent(type, data),
+    });
     this.runFinalizer = new RunFinalizer({
       status: this.statusController,
       getStatus: () => this.getStatus(),
@@ -707,7 +717,7 @@ export class ManagedAgent {
       streamHub: this.streamHub,
       getTodoManager: () => this.getTodoManager(),
       stopActiveRun: (reason) => this.stopActiveRun(reason),
-      abortManualCompaction: (reason) => this.abortManualCompaction(reason),
+      abortManualCompaction: (reason) => this.compactions.abortForTeardown(reason),
       cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
       discardPreforkRuns: () => this.discardPreforkRuns(),
       clearErrorAndRetry: () => {
@@ -721,6 +731,8 @@ export class ManagedAgent {
       resetTurnContext: () => this.turnContext.resetTurnState(),
       resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
       resetIterationProgress: () => this.resetIterationProgress(),
+      // Task phase records and pre-fork seats belong to the conversation being left.
+      clearTaskRuns: () => clearSubagentRuns(this),
       resetCommandJobs: (reason) => {
         const service = this.commandService;
         this.commandService = undefined;
@@ -908,6 +920,7 @@ export class ManagedAgent {
       modelInfo: this.modelInfo,
       reasoningEffort: this.config.reasoningEffort ?? null,
       lastFinishReason: this.lastFinishReason,
+      lastIteration: this.lastIterationState,
       // Set at the end of a run, so it has to ride the state event that follows the status flip.
       lastStreamDurationMs: this.getLastStreamDurationMs(),
     };
@@ -983,6 +996,7 @@ export class ManagedAgent {
    */
   resetRunOutcome(): void {
     this.lastFinishReason = null;
+    this.lastIterationState = null;
     this.run.resetLastStreamDuration();
   }
 
@@ -1023,6 +1037,21 @@ export class ManagedAgent {
     // Approvals / ask_user pause also surface through emitStateChange (status +
     // pending-count transitions), so keep the retained interaction snapshot fresh.
     this.eventBus?.emit("session:interaction", this.readInteractions());
+  }
+
+  /**
+   * Session id an event from this agent should carry.
+   *
+   * A subagent has no session data of its own — it runs inside the parent's session and log dir —
+   * so the parent's id is the truthful answer. The old fallback stamped the CHILD'S AGENT ID into
+   * `sessionId` (two different identifier spaces), which made a subagent's events claim a session
+   * that does not exist. `undefined` (bootstrap, before a session is minted) omits the field.
+   */
+  getEventSessionId(): string | undefined {
+    const own = this.getSessionData()?.id;
+    if (own) return own;
+    const parent = this.parentId ? this.manager?.getAgent(this.parentId) : undefined;
+    return parent?.getSessionData()?.id;
   }
 
   emitEvent<T extends AgentEventType>(
@@ -1516,6 +1545,9 @@ export class ManagedAgent {
    * Memory extraction runs only when `reason === "finished"`. Idempotent per turn until {@link resetTurnLifecycle}.
    */
   finalizeRun(reason: RunFinalizeReason): void {
+    // Keep the reading before the reset: the turn may have ended exactly at its budget, and the
+    // stop reason is classified AFTER finalize (ACP). Clearing both would make that unanswerable.
+    this.lastIterationState = this.iterationState;
     // A terminal turn (or an abort) must not leave the retained `iteration` channel
     // reporting the last model turn of the run.
     this.resetIterationProgress();
@@ -2032,23 +2064,6 @@ export class ManagedAgent {
   }
 
   /**
-   * Claim compaction status ownership.
-   *
-   * Auto, manual, and reactive compaction share one generation: only the owner that still holds
-   * the current generation may restore `compacting` / `previousStatus`. A session switch bumps the
-   * generation through {@link abortManualCompaction}.
-   */
-  beginCompactionGeneration(): number {
-    this.compactGeneration += 1;
-    return this.compactGeneration;
-  }
-
-  /** Whether a compaction generation still owns the current status. */
-  isCompactionCurrent(generation: number | undefined): boolean {
-    return generation === undefined || generation === this.compactGeneration;
-  }
-
-  /**
    * Register a tool-scoped AbortController so {@link abort} cancels in-flight
    * HTTP work (e.g. webfetch / websearch) alongside the main run controller.
    */
@@ -2066,7 +2081,7 @@ export class ManagedAgent {
    * any pending tool controllers.
    */
   abort(reason?: string): void {
-    this.abortManualCompaction(reason ?? "aborted");
+    this.compactions.abortForTeardown(reason ?? "aborted");
     abortManagedAgentRun(this, reason);
     // A stopped run must not keep pumping: `pumpToolPhases` only checks `token.isCurrent` after
     // the stream, so without this an aborted/destroyed agent still ran plan sync, auto-approve and
@@ -2193,6 +2208,13 @@ export class ManagedAgent {
   /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).
+   *
+   * The lease is claimed here and released in the `finally`; the status, the events and the
+   * summarizer's abort signal all belong to {@link CompactionController}. A user Esc arrives
+   * through `compactions.cancel(...)` (see `AgentChatController.stop`).
+   *
+   * Input typed while it runs queues (`shouldDeferMidRunQueue`); the `finally` releases it through
+   * {@link AgentChatController.resumeAfterCompaction}.
    */
   async compact(options?: { focus?: string; messages?: TanStackUIMessage[] }): Promise<
     | {
@@ -2207,20 +2229,21 @@ export class ManagedAgent {
     if (!manager) {
       return { ok: false, error: "AgentManager required for compact" };
     }
-    if (this.compactAbortController) {
+    const lease = this.compactions.begin("manual");
+    if (!lease) {
       return { ok: false, error: "Compaction already in progress" };
     }
-    const controller = new AbortController();
-    const generation = this.beginCompactionGeneration();
-    this.compactAbortController = controller;
     try {
-      return await runManualCompact(
-        createManualCompactHost(this, controller.signal, () => this.compactGeneration === generation),
-        manager,
-        options
-      );
+      return await runManualCompact(createManualCompactHost(this, lease), manager, options);
     } finally {
-      if (this.compactAbortController === controller) this.compactAbortController = undefined;
+      // Idempotent: the producer already finished/released on every normal path. This is the safety
+      // net for a throw between `begin` and the producer's own terminal call, so the agent cannot be
+      // left in `compacting`.
+      this.compactions.release(lease);
+      // Input typed during the compaction queued (see `shouldDeferMidRunQueue`); hand it to the
+      // pump now, or it would wait for another keystroke. A cancelled compaction cleared its queue
+      // in `stop()`, so this is a no-op there.
+      this.getChatController()?.resumeAfterCompaction();
     }
   }
 
@@ -2339,18 +2362,6 @@ export class ManagedAgent {
     this.sessionLifecycle.stop(reason);
   }
 
-  /**
-   * Cancel the current manual compaction, if any.
-   *
-   * Keep the controller until {@link compact}'s own `finally` releases it: while the aborted
-   * `runManualCompact` is still unwinding (status restoration, persistence), a new `/compact`
-   * must not be admitted and overlap that teardown.
-   */
-  private abortManualCompaction(reason: string): void {
-    this.compactGeneration += 1;
-    this.compactAbortController?.abort(reason);
-  }
-
   reset(reason: SessionLifecycleReason = "session-switch"): void {
     this.log?.info("agent", "Resetting agent", {
       reason,
@@ -2407,19 +2418,14 @@ export class ManagedAgent {
 }
 
 /** Build the {@link ManualCompactHost} adapter for one agent. */
-export function createManualCompactHost(
-  managed: ManagedAgent,
-  abortSignal?: AbortSignal,
-  isCurrent?: () => boolean
-): ManualCompactHost {
+export function createManualCompactHost(managed: ManagedAgent, lease: CompactionLease): ManualCompactHost {
   return {
     id: managed.id,
-    getStatus: () => managed.getStatus(),
-    setStatus: (status, trigger) => managed.setStatus(status, trigger ?? "manual-compact"),
     getUI: () => managed.getUI(),
     usage: managed.usage,
     getTodoManager: () => managed.getTodoManager(),
-    statusController: managed.statusController,
+    compactions: managed.compactions,
+    lease,
     compactionConfig: managed.getCompaction().getConfig(),
     getContextWindow: () => managed.getContextWindow(),
     getCoreEnv: () => managed.getCoreEnv(),
@@ -2427,7 +2433,5 @@ export function createManualCompactHost(
     persistSession: () => managed.persistSession(),
     maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     getLog: () => managed.log,
-    getAbortSignal: () => abortSignal ?? managed.getAbortSignal(),
-    ...(isCurrent ? { isCurrent } : {}),
   };
 }

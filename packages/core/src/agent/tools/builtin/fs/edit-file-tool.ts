@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { truncateText } from "../../../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { editFileOutputSchema } from "../../shared/schemas.js";
 import { getFile, withDuration } from "../../shared/tool-result.js";
@@ -101,7 +102,7 @@ export const createEditFileTool = () => {
 
             if (isErrorResult(match)) {
               throw new Error(
-                `edit_file failed, no changes were written: "${edit.oldString.substring(0, 100)}": ${match.error}`
+                `edit_file failed, no changes were written: "${truncateText(edit.oldString, 100)}": ${match.error}`
               );
             }
 
@@ -109,8 +110,8 @@ export const createEditFileTool = () => {
             const actualLine = findLineNumber(content, match.index);
 
             results.push({
-              oldString: edit.oldString.substring(0, 50) + (edit.oldString.length > 50 ? "..." : ""),
-              newString: edit.newString.substring(0, 50) + (edit.newString.length > 50 ? "..." : ""),
+              oldString: truncateText(edit.oldString, 50),
+              newString: truncateText(edit.newString, 50),
               found: true,
               replaced: true,
               count: match.occurrences,

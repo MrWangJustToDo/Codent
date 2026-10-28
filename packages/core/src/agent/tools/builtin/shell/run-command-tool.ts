@@ -174,7 +174,9 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
         const ctx = await createAnalysisContext(coreEnv);
         const absoluteCwd = cwd ? ctx.path.resolve(ctx.rootPath, cwd) : ctx.cwd;
         const report = await analyzeCommand(command, { ...ctx, cwd: absoluteCwd });
-        const decision = evaluateCommandApproval(report, { agentKind: "subagent" });
+        // The env map is part of the command here too: a `PATH`/`LD_PRELOAD` override would run a
+        // program the text never named, and a subagent has no approval UI to catch it.
+        const decision = evaluateCommandApproval(report, { agentKind: "subagent", envOverrides: env });
         if (decision.action !== "allow") {
           throw new Error(decision.reason ?? "Command denied by safety policy.");
         }

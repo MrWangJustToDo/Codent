@@ -26,7 +26,7 @@
 
 import assert from "node:assert/strict";
 
-import { UsageTracker } from "../dist/dev.mjs";
+import { UsageTracker, promptTokensOf } from "../dist/dev.mjs";
 
 const LIMIT = 400_000;
 const mk = () => {
@@ -167,6 +167,44 @@ const mk = () => {
     "restore must reproduce the live fill (persisted `contextTokens` is written from it)"
   );
   assert.equal(restored.getTokenLimitPercent(), live.getTokenLimitPercent(), "and therefore the same percent");
+
+  // --- the LIFETIME cache-hit ratio survives a resume, including across conventions ---
+  //
+  // `billedInputTotal` is a per-sample sum. Re-deriving it from the aggregate applies the convention
+  // heuristic to totals, which only agrees while every sample used the same convention — one
+  // session can hold rows from both (a gateway switched mid-run), and `resume` then reported a
+  // different "/usage Cache hit" than the live run. The persisted exact count is what fixes it.
+  const mixed = mk();
+  // inclusive sample: cache is part of input.
+  mixed.updateWindowUsage({ inputTokens: 1000, outputTokens: 10, totalTokens: 0, cacheReadTokens: 400 });
+  // exclusive sample: input is the cache-miss part only.
+  mixed.updateWindowUsage({ inputTokens: 100, outputTokens: 10, totalTokens: 0, cacheReadTokens: 900 });
+  const liveRatio = mixed.getCacheHitRatio();
+  const liveBilled = mixed.getBilledInputTokens();
+
+  const resumed = mk();
+  resumed.restoreTotals(mixed.getTotal(), liveBilled);
+  assert.equal(resumed.getBilledInputTokens(), liveBilled, "the exact billed prompt is carried over");
+  assert.equal(resumed.getCacheHitRatio(), liveRatio, "…so the lifetime cache hit is identical after a resume");
+
+  // Non-vacuous: the aggregate reading really does disagree on this fixture.
+  const derived = mk();
+  derived.restoreTotals(mixed.getTotal());
+  assert.notEqual(
+    derived.getCacheHitRatio(),
+    liveRatio,
+    "re-deriving from the aggregate drifts (why the field exists)"
+  );
+
+  // Backward compatibility: a session persisted before the field existed still restores, using the
+  // old aggregate reading instead of failing.
+  const legacy = mk();
+  legacy.restoreTotals(mixed.getTotal());
+  assert.equal(
+    legacy.getBilledInputTokens(),
+    promptTokensOf(mixed.getTotal()),
+    "an old session falls back to the aggregate reading"
+  );
 }
 
 // ---------------------------------------------------------------------------

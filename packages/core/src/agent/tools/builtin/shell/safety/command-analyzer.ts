@@ -136,6 +136,16 @@ const WRITE_OPS = new Set([
 /** All commands whose arguments are file paths (path-external analysis applies). */
 const FILE_COMMANDS = new Set([...CWD_COMMANDS, ...READ_FILE_COMMANDS, ...WRITE_OPS]);
 
+/**
+ * Commands whose operands are paths but whose names are not "file commands".
+ *
+ * `git` is here because its *global options* take directories: `git -C /etc log` and
+ * `git --git-dir=/etc/.git log` read outside the workspace while the command text looks read-only.
+ * Without the name in this set, `pathArgs` never ran for git at all, so the analyzer returned an
+ * auto-approved read. (The subcommand itself stays classified by the read-only table.)
+ */
+const PATH_OPERAND_COMMANDS = new Set(["git"]);
+
 // ============================================================================
 // Path argument expansion (opencode unquote/home/envValue/expand/prefix)
 // ============================================================================
@@ -248,8 +258,74 @@ function pathArgs(tokens: string[]): string[] {
     if (name === "chmod" && item.startsWith("+")) return false;
     return true;
   });
-  if (PATTERN_FIRST_COMMANDS.has(name)) return args.slice(1);
+
+  if (PATH_OPERAND_COMMANDS.has(name)) {
+    return Array.from(new Set([...args, ...gitDirectoryOperands(tokens)]));
+  }
+
+  if (PATTERN_FIRST_COMMANDS.has(name)) {
+    // The first positional is the PATTERN only when the pattern is not supplied by an option.
+    // `grep -f /etc/passwd src/index.ts` used to drop `/etc/passwd` as "the pattern" and approve the
+    // read; with `-e`/`-f` every positional is a file.
+    const positional = grepPatternFromOption(tokens) ? args : args.slice(1);
+    // Attached short/`--file=` values are inside a dash token, so the filter above dropped them.
+    return Array.from(new Set([...positional, ...grepAttachedFileValues(tokens)]));
+  }
+
   return args;
+}
+
+/**
+ * Directories carried by git's global options: `-C <dir>`, `--git-dir[=]<dir>`,
+ * `--work-tree[=]<dir>`.
+ *
+ * `-C`'s value is also a plain positional (so it is already in `args`); the `=` forms and the
+ * separate `--git-dir <dir>` value are not, because the dash filter drops the option token.
+ */
+function gitDirectoryOperands(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token === "-C" || token === "--git-dir" || token === "--work-tree") {
+      const value = tokens[i + 1];
+      if (value !== undefined && !value.startsWith("-")) out.push(value);
+    } else if (token.startsWith("--git-dir=") || token.startsWith("--work-tree=")) {
+      out.push(token.slice(token.indexOf("=") + 1));
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether a `grep`-family invocation takes its pattern from an option (`-e` / `-f` and their long
+ * forms, including attached values and short-flag clusters).
+ */
+function grepPatternFromOption(tokens: string[]): boolean {
+  return tokens.some(
+    (token, index) =>
+      index > 0 &&
+      (token === "-e" ||
+        token === "--regexp" ||
+        token.startsWith("--regexp=") ||
+        token === "-f" ||
+        token === "--file" ||
+        token.startsWith("--file=") ||
+        /^-[A-Za-z]*[ef]/.test(token))
+  );
+}
+
+/** Paths carried INSIDE a `-f` cluster (`-fFILE`, `-rfFILE`) or `--file=FILE`. */
+function grepAttachedFileValues(tokens: string[]): string[] {
+  const out: string[] = [];
+  for (const token of tokens.slice(1)) {
+    if (token.startsWith("--file=")) {
+      out.push(token.slice("--file=".length));
+      continue;
+    }
+    const match = /^-[A-Za-z]*f(.+)$/.exec(token);
+    if (match) out.push(match[1]!);
+  }
+  return out;
 }
 
 /**
@@ -311,12 +387,22 @@ function hasWriteRedirection(source: string): boolean {
  * These names are otherwise pure stdin→stdout transforms, which is why they appear all over
  * read-only inspection pipelines (`grep … | sed -n '1,20p' | head`). Their whole-command
  * read-only status is therefore conditional: `sed -i` edits in place, `sort -o` writes a file,
- * and `awk` can shell out. A name-only allowlist would have granted write access to all three,
- * so the flag is part of the classification.
+ * `sort --compress-program` executes a program, and `awk` can shell out. A name-only allowlist
+ * would have granted write/execute access to all of them, so the flag is part of the
+ * classification.
  */
 const MUTATING_FILTER_FLAGS: Record<string, (token: string) => boolean> = {
   sed: (token) => token === "-i" || token.startsWith("-i") || token === "--in-place" || token.startsWith("--in-place"),
-  sort: (token) => token === "-o" || token.startsWith("-o") || token === "--output" || token.startsWith("--output"),
+  // `sort -o file` writes a file; `--compress-program=CMD` RUNS CMD over its temporary files
+  // (`sort -S 1M --compress-program=./evil big.txt` executes `evil`), which made sort an
+  // executor reachable through a name that the read-only table admitted without a prompt.
+  sort: (token) =>
+    token === "-o" ||
+    token.startsWith("-o") ||
+    token === "--output" ||
+    token.startsWith("--output") ||
+    token === "--compress-program" ||
+    token.startsWith("--compress-program="),
   // `awk` may run arbitrary commands from its program: `awk 'BEGIN{system("rm -rf x")}'`.
   // `print > "file"` is caught separately by the write-redirection scan.
   awk: (token) => /system\s*\(/.test(token),
@@ -700,7 +786,7 @@ function analyzeParsedCommands(
     const isReadOnly = harmless && classifyReadOnly(name, prefix, normalized, cmd.tokens, ctx);
 
     const fileOps: FileOpAnalysis[] = [];
-    if (FILE_COMMANDS.has(name)) {
+    if (FILE_COMMANDS.has(name) || PATH_OPERAND_COMMANDS.has(name)) {
       for (const rawArg of pathArgs(cmd.tokens)) {
         const expanded = expandArg(rawArg, ctx);
         const globbed = globPrefix(expanded);

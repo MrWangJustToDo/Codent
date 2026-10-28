@@ -294,7 +294,7 @@ export async function readSessionMessages(env: ResolvedCoreEnv, sessionId: strin
   try {
     path = getJournalPath(sessionId);
     if (!(await env.fs.exists(path))) return [];
-    const lines = await readLog(env.fs, path);
+    const { lines } = await readLog(env.fs, path);
     const { uiMessages } = foldLog(lines);
     const summaryIndex = latestSummaryIndex(uiMessages as PersistedUIMessage[]);
     return uiMessages.map((message, index) =>

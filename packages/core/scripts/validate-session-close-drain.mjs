@@ -39,6 +39,10 @@ const usage = {
   getTotal: () => ({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
   getTotalCostUsd: () => 0,
   getContextFillTokens: () => 2,
+  // The persist path also records the exact per-sample billed prompt (`SessionData.billedInputTokens`).
+  getBilledInputTokens: () => 0,
+  restoreTotals: () => {},
+  reset: () => {},
 };
 
 const service = new SessionService();

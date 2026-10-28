@@ -1,26 +1,26 @@
-/* eslint-disable max-lines -- the extension runner co-locates activation, dispatch ordering, registration rollback, and context construction; splitting it would duplicate the shared registration lifecycle. */
+/* eslint-disable max-lines -- lifecycle engine: load/activate/toggle/destroy, instance state and the host notifications that follow from them. The three self-contained surfaces are separate modules now — `context-factory.ts` (the `ctx` an extension registers through, including the registration lease), `registration-stacks.ts` (per-name tool/command ownership) and `turn-context.ts` (per-turn sections, providers and disabled notices) — so what remains here is the state machine that sequences them. */
 import { getEnv, hasCoreEnv } from "../../env";
 // The extension exit-flush registry lives with the other process-exit guards, so a hard exit runs
 // it on the same two hooks (fatal handler + `exit`) that already land the active logs.
 import { errorMessage, toError } from "../../utils/errors.js";
 import { createAgentEventBus } from "../agent-event-bus";
-import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
-import { compareDispatchRank, pickTopByRank, resolveExtensionOrder, sortByDispatchRank } from "../dispatch-order.js";
+import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
 
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
+import { createExtensionContext, type ContextFactoryHost } from "./context-factory.js";
 import { ExtensionLlmError } from "./extension-llm-error.js";
 import { createExtensionUiBridge } from "./extension-ui-bridge.js";
-import { z } from "./extension-zod.js";
 import { MessageTransformerRegistry } from "./message-transformer-registry.js";
 import { createObserverSurface } from "./observer-surface.js";
 import { scopeExtensionOwnerId } from "./owner-id.js";
+import { ExtensionRegistrationStacks } from "./registration-stacks.js";
+import { ExtensionTurnContext } from "./turn-context.js";
 
 import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionUiBridge } from "./extension-ui-bridge.js";
 import type {
   ExtensionInstance,
   ExtensionRuntimeAccess,
-  ExtensionLlm,
   ExtensionLlmRequest,
   ExtensionLlmResult,
   ExtensionAPI,
@@ -33,17 +33,12 @@ import type {
   ExtensionEventBus,
   ExtensionObserverSurface,
   ExtensionUI,
-  BeforeAgentStartEvent,
   ExtensionPromptAppends,
-  ExtensionTurnContextSection,
-  ExtensionContextProvider,
-  ExtensionContextSectionProvider,
   ExtensionRegistrations,
   ExtensionInfo,
   ExtensionRenderPayload,
   ExtensionUiContext,
   MessageTransformContext,
-  MessageTransformer,
 } from "./types.js";
 import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
@@ -63,7 +58,6 @@ import type { ModelMessage } from "@tanstack/ai";
  * splitting on whitespace, so anything outside this set (a space, a quote, `>`) corrupts the
  * envelope and breaks per-kind admission.
  */
-const SECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9._-]*$/;
 
 /**
  * Extension ids additionally allow `/` — `author/name` is a common namespacing convention, and a
@@ -72,7 +66,6 @@ const SECTION_NAME_RE = /^[A-Za-z][A-Za-z0-9._-]*$/;
 const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 
 /** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
-const EXTENSION_KIND_PREFIX = "ext:";
 
 export interface ExtensionRunnerOptions {
   /**
@@ -162,25 +155,25 @@ export class ExtensionRunner {
   /** Extension ids with an in-flight `setEnabled` call (a toggle is not re-entrant). */
   private readonly pendingToggles = new Set<string>();
   /**
-   * Per name, the extension tools registered with their owner and rank — bookkeeping that mirrors
-   * what the host holds. The authoritative tool stack (which entry is live) lives in the host's
-   * `ExtensionRegistryService`, which receives the same rank through `onRegisterTool`.
+   * Per-name tool/command registrations, with owner and rank.
+   *
+   * Resolution is one rule: the highest dispatch rank owns the name, so disabling an owner restores
+   * whatever the name meant before it (an earlier extension's entry) instead of deleting it. The
+   * stacks are pure bookkeeping — this runner owns the host notifications; see
+   * {@link ExtensionRegistrationStacks}.
    */
-  private toolStacks = new Map<string, Array<{ ownerId: string; def: ExtensionToolDefinition; rank: DispatchRank }>>();
+  private readonly stacks = new ExtensionRegistrationStacks();
   /** Extension ids currently inside activate(); runtime registrations publish immediately. */
   private readonly activating = new Set<string>();
   /**
-   * Per name, the commands registered with their owner and rank. Resolution is the same reading of
-   * dispatch order as tool stacks: the highest rank owns the name, so disabling the owner restores
-   * whatever the name meant before it (an earlier extension's command) instead of deleting it.
+   * Extensions already warned about a registration attempted after being disabled.
+   *
+   * One row per revoke: a leaked timer that registers on every tick would otherwise fill the log
+   * with the same sentence. Cleared when the extension is activated again.
    */
-  private commandStacks = new Map<string, Array<{ ownerId: string; cmd: ExtensionCommand; rank: DispatchRank }>>();
-  /** Per-extension context injection (extension id → provider and its rank). */
-  private contextProviders = new Map<string, { provider: ExtensionContextProvider; rank: DispatchRank }>();
+  private readonly refusedRegistrations = new Set<string>();
   /** Live context per active extension — the object handed to every handler of that extension. */
   private contexts = new Map<string, ExtensionContext>();
-  /** Providers already warned about a bad/duplicate section name (one row, not one per turn). */
-  private warnedSectionProviders = new WeakSet<object>();
   /**
    * Wrapped interceptor per (handler, extension). `ctx.events.off(handler)` must unregister the
    * wrapper that was actually registered, not the caller's original function.
@@ -194,20 +187,23 @@ export class ExtensionRunner {
     reportTransformerFailure: (extensionId, err) => this.reportTransformerFailure(extensionId, err),
     getContext: (extensionId) => this.contexts.get(extensionId),
   });
-  /**
-   * Persistent "this extension is disabled" notices keyed by extension id
-   * (captured from a provider's `disabledContent` at disable time, since destroy
-   * unsubscribes the provider). Cleared when the extension is re-enabled.
-   */
-  private disabledExtensionNotices = new Map<string, string>();
-  /** Disabled notices for named sections, keyed by the section kind, stamped with its owner. */
-  private disabledSectionNotices = new Map<string, { extensionId: string; content: string }>();
   private eventBus: BusExtensionEventBus;
   /** Raw scoped bus (interception + telemetry) behind the extension-facing facade. */
   private readonly rawBus: AgentEventBus;
   /** Per-extension view of the shared UI plus the context snapshot (see `extension-ui-bridge.ts`). */
   private readonly uiBridge: ExtensionUiBridge;
   private options: ExtensionRunnerOptions;
+  /**
+   * Operations the context factory builds an extension's `ctx` from.
+   *
+   * A narrow interface instead of passing `this`: the factory (a separate module) can then be read
+   * as "the surface an extension author sees", and the runner stays the lifecycle engine. Built once
+   * — every member reads live state (`rankOf`, `isLive`, the stacks), so activation-time capture
+   * would be wrong.
+   */
+  private readonly contextHost: ContextFactoryHost;
+  /** Per-turn extension context sections, their providers and the disabled notices. */
+  private readonly turnContextSections: ExtensionTurnContext;
 
   constructor(options: ExtensionRunnerOptions) {
     this.options = options;
@@ -221,6 +217,90 @@ export class ExtensionRunner {
       getSessionName: () => options.getRuntime?.()?.sessionName() ?? null,
       reportFailure: (extensionId, err, source) => this.reportObserverFailure(extensionId, err, source),
     });
+
+    this.turnContextSections = new ExtensionTurnContext({
+      getSessionId: () => this.options.getRuntime?.()?.sessionId() ?? null,
+      getContext: (extensionId) => this.contexts.get(extensionId),
+      emitBeforeAgentStart: async (event) => {
+        // Awaited, not fired-and-forgotten: a handler that warms an index or reads the transcript
+        // must finish before the first model call. Rejections are contained by the bus.
+        await this.eventBus.emit(event);
+      },
+      reportFailure: (extensionId, phase, error) =>
+        this.rawBus.emit("agent:extension-error", { extensionId, phase, error }),
+      log: (level, extensionId, message) => this.writeExtensionLog(level, extensionId, message),
+    });
+
+    this.contextHost = {
+      agentId: options.agentId ?? "standalone",
+      cwd: options.cwd ?? "",
+      getRuntime: () => this.options.getRuntime?.(),
+      getCoreEnv: () => this.resolveCoreEnv(),
+      extensionEnv: (config) => this.extensionEnv(config),
+      completeLlm: (extensionId, request) => this.completeViaRuntime(extensionId, request),
+      log: (level, extensionId, message, category) => this.writeExtensionLog(level, extensionId, message, category),
+
+      isLive: (context) => this.isContextLive(context),
+      refuse: (extensionId, operation) => this.refuseRegistration(extensionId, operation),
+
+      rankOf: (extensionId) => this.rankOf(extensionId),
+      registerTool: (extensionId, def, rank) => {
+        this.stacks.registerTool(extensionId, def, rank);
+        // The rank travels with the registration: the authoritative tool stack (which entry is
+        // live) lives in the host's registry, which cannot see the extension's own order.
+        this.options.onRegisterTool?.(def, extensionId, rank);
+        // Activation publishes one catalog after ALL tools are in. A runtime registration has no
+        // such batch boundary, so publish immediately after it lands.
+        if (!this.activating.has(extensionId)) this.options.onToolRegistrationComplete?.();
+      },
+      registerToolOutputDecorator: (extensionId, toolName, decorator) => {
+        const ownerId = scopeExtensionOwnerId(this.options.agentId ?? "standalone", extensionId);
+        return (
+          this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId) ??
+          (() => this.options.onRemoveToolOutputDecoratorOwner?.(ownerId))
+        );
+      },
+      registerCommand: (extensionId, cmd, rank) => {
+        const displaced = this.stacks.registerCommand(extensionId, cmd, rank);
+        if (displaced) {
+          this.writeExtensionLog(
+            "warn",
+            extensionId,
+            `Command "/${cmd.name}" is already registered by "${displaced}" — dispatch order decides which runs`
+          );
+        }
+        // Notified only when this registration is the live one: a host observer maintaining a map
+        // of commands must end up with what dispatch would run, not with every claim ever made.
+        if (this.stacks.commandOwner(cmd.name) === extensionId) this.options.onRegisterCommand?.(cmd);
+      },
+      registerInterceptor: (extensionId, eventType, handler, rank) =>
+        this.eventBus.on(
+          eventType,
+          this.wrapInterceptor(extensionId, eventType, handler as EventInterceptor<InterceptableEvent>),
+          rank
+        ),
+      offInterceptor: (extensionId, eventType, handler) => {
+        this.eventBus.off(
+          eventType,
+          this.wrapInterceptor(extensionId, eventType, handler as EventInterceptor<InterceptableEvent>)
+        );
+      },
+      registerContextProvider: (extensionId, provider, rank) =>
+        this.turnContextSections.register(extensionId, provider, rank),
+      registerMessageTransformer: (extensionId, transformer, rank) => {
+        this.messageTransformers.register(extensionId, transformer, rank);
+      },
+      disposeMessageTransformer: (extensionId, transformer) => {
+        this.messageTransformers.dispose(extensionId, transformer);
+      },
+      eventBus: {
+        emit: (event) => this.eventBus.emit(event),
+        hasInterceptors: (type) => this.eventBus.hasInterceptors(type),
+      },
+      observerSurface: (extensionId, registrations, getContext) =>
+        this.createObserverSurface(extensionId, registrations, getContext),
+      ui: (extensionId, registrations, getContext) => this.wrapUi(extensionId, registrations, getContext),
+    };
   }
 
   getEventBus(): ExtensionEventBus {
@@ -278,22 +358,41 @@ export class ExtensionRunner {
    * that extension (used to clear its slots when it is disabled). Every other
    * member (notify / subscribe / getContext) is shared.
    */
-  private wrapUi(ownerId: string, registrations?: ExtensionRegistrations): ExtensionUI {
-    return this.uiBridge.wrap(ownerId, registrations);
+  private wrapUi(
+    ownerId: string,
+    registrations?: ExtensionRegistrations,
+    getContext?: () => ExtensionContext
+  ): ExtensionUI {
+    return this.uiBridge.wrap(ownerId, registrations, getContext ? () => this.isContextLive(getContext()) : undefined);
   }
 
   /**
    * Build the observer half of one extension's event surface (`observe` /
    * `observeAny` / `retained`). See {@link createObserverSurface} for what it adds on top of
    * the bus's observer dispatch mode.
+   *
+   * `getContext` is a thunk because the context object is still being constructed when this is
+   * called (the surface is a field of that same literal).
    */
-  private createObserverSurface(ownerId: string, registrations?: ExtensionRegistrations): ExtensionObserverSurface {
+  private createObserverSurface(
+    ownerId: string,
+    registrations?: ExtensionRegistrations,
+    getContext?: () => ExtensionContext
+  ): ExtensionObserverSurface {
     return createObserverSurface(
       {
         bus: this.rawBus,
         reportFailure: (err, eventType) => this.reportObserverFailure(ownerId, err, eventType),
         // Looked up per dispatch: the context is registered right after construction and reads live.
         getContext: () => this.contexts.get(ownerId),
+        // Same lease as every other registration: a disabled extension's observer must not keep
+        // receiving events for the rest of the session.
+        ...(getContext
+          ? {
+              isLive: () => this.isContextLive(getContext()),
+              onRefused: () => this.refuseRegistration(ownerId, "events.observe"),
+            }
+          : {}),
       },
       registrations
     );
@@ -365,83 +464,20 @@ export class ExtensionRunner {
   /** The extension tools this runner still holds, one per name — a mirror of what the host holds,
    * re-derived from each stack's highest rank (the resolution reading of dispatch order). */
   getTools(): ExtensionToolDefinition[] {
-    return Array.from(this.toolStacks.values(), (stack) => pickTopByRank(stack).def);
+    return this.stacks.allTools();
   }
 
   getCommands(): ExtensionCommand[] {
-    return Array.from(this.commandStacks.values(), (stack) => pickTopByRank(stack).cmd);
+    return this.stacks.allCommands();
   }
 
   getTool(name: string): ExtensionToolDefinition | undefined {
-    const stack = this.toolStacks.get(name);
-    return stack && stack.length > 0 ? pickTopByRank(stack).def : undefined;
+    return this.stacks.tool(name);
   }
 
-  /**
-   * Emit `before_agent_start` to each interceptor (observable event), then run
-   * registered context providers. Returns per-extension turn-context sections.
-   */
+  /** Collect this turn's extension sections — see {@link ExtensionTurnContext.collect}. */
   async collectBeforeAgentStart(prompt: string, agentId: string): Promise<ExtensionPromptAppends> {
-    // Dispatch through intercept (shared mutable event, ordered, awaited);
-    // handlers that append turn context do so on the event without cancelling.
-    const liveSessionId = this.options.getRuntime?.()?.sessionId() ?? null;
-    const event: BeforeAgentStartEvent = {
-      type: "before_agent_start",
-      payload: { prompt, agentId, ...(liveSessionId ? { sessionId: liveSessionId } : {}) },
-      defaultReturn: undefined,
-    };
-    await this.eventBus.emit(event);
-
-    // Each enabled extension with content becomes its own section (kind = id), ordered by
-    // declared dispatch order so the section sequence is declarable rather than load-determined.
-    const turnContextSections: ExtensionTurnContextSection[] = [];
-    const orderedProviders = sortByDispatchRank(Array.from(this.contextProviders, ([id, entry]) => ({ id, ...entry })));
-    for (const { id, provider } of orderedProviders) {
-      const ctx = this.contexts.get(id);
-      try {
-        const value = await provider.content?.(ctx);
-        if (value?.trim()) turnContextSections.push({ id: this.sectionKind(id), content: value.trim() });
-      } catch (err) {
-        const message = errorMessage(err);
-        // Converge into the agent log via the existing `agent:extension-error`
-        // rule (error/system) rather than a bare console write; console stays
-        // as a fallback for standalone runners without an injected bus.
-        this.rawBus.emit("agent:extension-error", {
-          extensionId: id,
-          phase: "turn-context",
-          error: message,
-        });
-      }
-
-      // Named sections: each is its own `<ctx kind="<id>:<name>">` block, so a change in one never
-      // re-injects another. A failing producer is contained to its own section.
-      const byName = this.normalizeContextSections(provider, id);
-      for (const [name, section] of byName) {
-        try {
-          const body = await section.content?.(ctx);
-          if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
-        } catch (err) {
-          const message = errorMessage(err);
-          this.rawBus.emit("agent:extension-error", {
-            extensionId: id,
-            phase: "turn-context",
-            error: `section "${name}": ${message}`,
-          });
-        }
-      }
-    }
-    // Surface runtime-disabled extensions under the same tag so the model knows
-    // their tools are gone (symmetric to the enable-side section). A disabled
-    // extension's providers were already unsubscribed on destroy, so its id never
-    // also appears above.
-    for (const [extensionId, notice] of this.disabledExtensionNotices) {
-      if (notice?.trim()) turnContextSections.push({ id: this.sectionKind(extensionId), content: notice.trim() });
-    }
-    for (const [id, notice] of this.disabledSectionNotices) {
-      if (notice.content.trim()) turnContextSections.push({ id, content: notice.content.trim() });
-    }
-
-    return { turnContextSections };
+    return this.turnContextSections.collect(prompt, agentId);
   }
 
   async loadExtension(api: ExtensionAPI, config?: ExtensionConfig): Promise<ExtensionInstance> {
@@ -453,8 +489,7 @@ export class ExtensionRunner {
       await this.destroyExtension(duplicate);
       this.extensions = this.extensions.filter((entry) => entry !== duplicate);
       this.ranks.delete(api.id);
-      this.disabledExtensionNotices.delete(api.id);
-      this.clearSectionNotices(api.id);
+      this.turnContextSections.clearNotices(api.id);
     }
 
     const registrations: ExtensionRegistrations = {
@@ -496,13 +531,21 @@ export class ExtensionRunner {
       context: ctx,
       state: "inactive",
       registrations,
+      ...(config ? { config } : {}),
     };
 
     this.extensions.push(instance);
     this.activating.add(api.id);
+    this.refusedRegistrations.delete(api.id);
 
     try {
       await api.activate(ctx);
+      // A teardown during activation (destroyAll) revokes the context; the activation must not
+      // resurrect the instance afterwards.
+      if (!this.isContextLive(ctx)) {
+        instance.state = "inactive";
+        return instance;
+      }
       instance.state = "active";
       this.options.onToolRegistrationBatchComplete?.();
     } catch (err) {
@@ -587,12 +630,9 @@ export class ExtensionRunner {
       await this.destroyExtension(instance);
     }
     this.extensions = [];
-    this.toolStacks.clear();
-    this.commandStacks.clear();
-    this.contextProviders.clear();
+    this.stacks.clear();
+    this.turnContextSections.clear();
     this.messageTransformers.clearAll();
-    this.disabledExtensionNotices.clear();
-    this.disabledSectionNotices.clear();
     this.uiBridge.clearAll();
     this.uiBridge.dispose();
   }
@@ -621,7 +661,7 @@ export class ExtensionRunner {
         // This extension's OWN definition (not the live one): the panel describes what each
         // extension registers, and a shadowed command is still this extension's command.
         commands: instance.registrations.commands.map((name) => {
-          const own = this.commandStacks.get(name)?.find((entry) => entry.ownerId === instance.api.id)?.cmd;
+          const own = this.stacks.ownerCommand(name, instance.api.id);
           return {
             name,
             hasOptions: Boolean(own?.getOptions),
@@ -633,8 +673,7 @@ export class ExtensionRunner {
 
   /** The command dispatch would run for a name (the highest-ranked registration). */
   private liveCommand(name: string): ExtensionCommand | undefined {
-    const stack = this.commandStacks.get(name);
-    return stack && stack.length > 0 ? pickTopByRank(stack).cmd : undefined;
+    return this.stacks.liveCommand(name);
   }
 
   /** The resolved dispatch position for an extension id, defaulting for an unloaded id. */
@@ -653,6 +692,12 @@ export class ExtensionRunner {
     if (this.pendingToggles.has(id)) {
       return { ok: false, message: `Extension "${id}" is already being toggled` };
     }
+    // Refuse while an activation is in flight instead of answering from a state that is about to
+    // change: the old check read `state === "inactive"` (the state an activation starts from) and
+    // returned a success "already disabled" for an extension that went on to become active.
+    if (this.activating.has(id)) {
+      return { ok: false, message: `Extension "${id}" is still activating — try again when it finishes` };
+    }
     this.pendingToggles.add(id);
     try {
       return await this.applyEnabled(id, enabled);
@@ -667,7 +712,12 @@ export class ExtensionRunner {
 
     const already = instance.state === "active";
     if (enabled && already) return { ok: true, message: `Extension "${id}" already enabled` };
-    if (!enabled && instance.state === "inactive") return { ok: true, message: `Extension "${id}" already disabled` };
+    // "Already disabled" must also mean "nothing of it is still registered". A late registration
+    // used to land while the state said inactive, and this short-circuit then refused the only
+    // cleanup path — the tool stayed live for the rest of the session.
+    if (!enabled && instance.state === "inactive" && !this.hasLiveArtifacts(instance)) {
+      return { ok: true, message: `Extension "${id}" already disabled` };
+    }
 
     if (enabled && !EXTENSION_ID_RE.test(instance.api.id)) {
       return { ok: false, message: `Extension "${id}" has an invalid id and cannot be enabled` };
@@ -675,16 +725,24 @@ export class ExtensionRunner {
 
     if (enabled) {
       this.activating.add(instance.api.id);
-      // `unregisterInstanceArtifacts` drops the context on disable; re-activation must put the same
-      // object back, or every per-dispatch lookup (tools, commands, sections, observers, interceptors)
-      // silently receives `undefined` for the rest of the session.
-      this.contexts.set(instance.api.id, instance.context);
+      // A fresh context per activation: the context IS the registration lease (see
+      // `isContextLive`), so a callback retained from the previous incarnation cannot land its
+      // tool/transformer in this one. The registrations object is shared on purpose — it is this
+      // instance's bookkeeping, not the incarnation's.
+      const context = this.createContext(instance.api, instance.config, instance.registrations);
+      instance.context = context;
+      this.contexts.set(instance.api.id, context);
+      this.refusedRegistrations.delete(instance.api.id);
       try {
-        await instance.api.activate(instance.context);
+        await instance.api.activate(context);
+        if (!this.isContextLive(context)) {
+          // Revoked while activating (destroyAll): stay inactive, register nothing further.
+          instance.state = "inactive";
+          return { ok: false, message: `Extension "${id}" was disabled while activating` };
+        }
         instance.state = "active";
         instance.error = undefined;
-        this.disabledExtensionNotices.delete(instance.api.id);
-        this.clearSectionNotices(instance.api.id);
+        this.turnContextSections.clearNotices(instance.api.id);
         this.options.onToolRegistrationBatchComplete?.();
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
@@ -705,27 +763,27 @@ export class ExtensionRunner {
     // Capture the provider's disabledContent BEFORE destroy (destroy unsubscribes
     // it). Undefined/absent falls back to a generic notice so non-customizing
     // extensions stay informative; an empty string explicitly opts out.
-    const provider = this.contextProviders.get(instance.api.id)?.provider;
+    const provider = this.turnContextSections.providerOf(instance.api.id);
     const ctxForDisable = this.contexts.get(instance.api.id);
     // A broken extension is the one that most needs disabling, so its own notice producer must
     // not be able to block the disable: a throw used to reject `setEnabled`, leaving the
     // extension active with no rollback — the remedy unreachable through the path that needs it.
-    const custom = await this.captureDisabledNotice(
+    const custom = await this.turnContextSections.captureDisabledNotice(
       instance.api.id,
       "context provider",
       provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined
     );
     const sectionNotices: Array<[string, string]> = [];
     const disabledSections = provider
-      ? this.normalizeContextSections(provider, instance.api.id)
-      : new Map<string, ExtensionContextSectionProvider>();
-    for (const section of disabledSections.values()) {
-      const body = await this.captureDisabledNotice(
+      ? this.turnContextSections.normalizeSections(provider, instance.api.id)
+      : undefined;
+    for (const section of disabledSections?.values() ?? []) {
+      const body = await this.turnContextSections.captureDisabledNotice(
         instance.api.id,
         `section "${section.name}"`,
         section.disabledContent ? () => section.disabledContent!(ctxForDisable) : undefined
       );
-      if (body?.trim()) sectionNotices.push([this.sectionKind(instance.api.id, section.name), body.trim()]);
+      if (body?.trim()) sectionNotices.push([section.name, body.trim()]);
     }
 
     await this.destroyExtension(instance);
@@ -733,12 +791,31 @@ export class ExtensionRunner {
       custom === undefined
         ? `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`
         : custom.trim();
-    if (notice) this.disabledExtensionNotices.set(instance.api.id, notice);
-    else this.disabledExtensionNotices.delete(instance.api.id);
-    for (const [key, body] of sectionNotices) {
-      this.disabledSectionNotices.set(key, { extensionId: instance.api.id, content: body });
+    this.turnContextSections.setDisabledNotice(instance.api.id, notice);
+    for (const [name, body] of sectionNotices) {
+      this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
     return { ok: true, message: `Extension "${id}" disabled` };
+  }
+
+  /**
+   * Whether anything this extension registered is still live.
+   *
+   * The "already disabled" fast path used to key on `state` alone; a late registration could land
+   * while the state said inactive, and that fast path then refused the only cleanup path.
+   */
+  private hasLiveArtifacts(instance: ExtensionInstance): boolean {
+    return (
+      this.contexts.has(instance.api.id) ||
+      this.turnContextSections.hasProvider(instance.api.id) ||
+      instance.registrations.tools.length > 0 ||
+      instance.registrations.commands.length > 0 ||
+      instance.registrations.unsubInterceptors.length > 0 ||
+      instance.registrations.unsubObservers.length > 0 ||
+      instance.registrations.unsubTurnContext.length > 0 ||
+      instance.registrations.messageTransformers.length > 0 ||
+      instance.registrations.toolOutputDecoratorDisposers.length > 0
+    );
   }
 
   /**
@@ -752,27 +829,18 @@ export class ExtensionRunner {
     // answers "is this still mine?" itself, the same way whether this owner was on top or buried.
     // The mirror goes first because the callback may read `getTools()`.
     for (const name of instance.registrations.tools) {
-      const stack = this.toolStacks.get(name);
-      if (stack) {
-        const remaining = stack.filter((entry) => entry.ownerId !== instance.api.id);
-        if (remaining.length === 0) this.toolStacks.delete(name);
-        else this.toolStacks.set(name, remaining);
-      }
+      this.stacks.removeTool(name, instance.api.id);
       this.options.onUnregisterTool?.(name, instance.api.id);
     }
     for (const name of instance.registrations.commands) {
-      const stack = this.commandStacks.get(name);
-      if (!stack) continue;
-      const remaining = stack.filter((entry) => entry.ownerId !== instance.api.id);
-      if (remaining.length === 0) {
-        this.commandStacks.delete(name);
+      const { existed, live } = this.stacks.removeCommand(name, instance.api.id);
+      if (!existed) continue;
+      if (live === undefined) {
         this.options.onUnregisterCommand?.(name);
       } else {
-        this.commandStacks.set(name, remaining);
         // A survivor becomes live: tell the observer the same way a fresh registration would, so
         // "the command is now X" has one shape whether it came from load or from a disable.
-        const live = pickTopByRank(remaining);
-        if (live.ownerId !== instance.api.id) this.options.onRegisterCommand?.(live.cmd);
+        this.options.onRegisterCommand?.(live);
       }
     }
     for (const unsub of instance.registrations.unsubInterceptors) {
@@ -812,82 +880,6 @@ export class ExtensionRunner {
     instance.registrations.exitFlush = null;
   }
 
-  /**
-   * Validate and dedupe a provider's named sections. One implementation for both the enable path
-   * (`collectBeforeAgentStart`) and the disable path (`setEnabled`): the disable path used to
-   * interpolate `section.name` verbatim, so an invalid name produced a `<ctx kind="id:bad name>x">`
-   * shell whose identity recovery split on whitespace, and a `>` in the name closed the tag early.
-   */
-  private normalizeContextSections(
-    provider: ExtensionContextProvider,
-    extensionId: string
-  ): Map<string, ExtensionContextSectionProvider> {
-    const byName = new Map<string, ExtensionContextSectionProvider>();
-    for (const section of provider.sections ?? []) {
-      // The name is interpolated into the `<ctx kind="id:name">` shell, whose identity recovery
-      // splits on whitespace — so an unconstrained name silently breaks independent admission.
-      if (!SECTION_NAME_RE.test(section.name)) {
-        this.warnSectionOnce(provider, extensionId, `invalid context section name "${section.name}" — skipped`);
-        continue;
-      }
-      if (byName.has(section.name)) {
-        this.warnSectionOnce(provider, extensionId, `duplicate context section "${section.name}" — the last one wins`);
-      }
-      byName.set(section.name, section);
-    }
-    return byName;
-  }
-
-  /** One warning per provider, not one per turn (a duplicate name would otherwise log every turn). */
-  private warnSectionOnce(provider: object, extensionId: string, message: string): void {
-    if (this.warnedSectionProviders.has(provider)) return;
-    this.warnedSectionProviders.add(provider);
-    this.writeExtensionLog("warn", extensionId, message);
-  }
-
-  /**
-   * Capture a disabled notice without letting a failing producer block the disable.
-   * The failure is reported (log + `agent:extension-error`) and the generic notice is used instead.
-   */
-  private async captureDisabledNotice(
-    extensionId: string,
-    source: string,
-    produce: (() => Promise<string | undefined> | string | undefined) | undefined
-  ): Promise<string | undefined> {
-    if (!produce) return undefined;
-    try {
-      return (await produce()) ?? undefined;
-    } catch (err) {
-      const message = errorMessage(err);
-      this.writeExtensionLog("warn", extensionId, `${source} disabledContent failed: ${message}`);
-      this.rawBus.emit("agent:extension-error", {
-        extensionId,
-        phase: "disable-notice",
-        error: message,
-      });
-      return undefined;
-    }
-  }
-
-  /** Drop every disabled notice belonging to one extension's named sections. */
-  private clearSectionNotices(extensionId: string): void {
-    for (const [key, entry] of this.disabledSectionNotices) {
-      if (entry.extensionId === extensionId) this.disabledSectionNotices.delete(key);
-    }
-  }
-
-  /**
-   * The context kind of one extension section: `ext:<extensionId>` for the base section,
-   * `ext:<extensionId>:<sectionName>` for a named one.
-   *
-   * The prefix keeps extension kinds out of the core catalog's namespace: an extension whose id
-   * happens to be `current_date` used to publish the *same* admission slot as the core date section,
-   * so the two replaced one another every turn and one producer silently never persisted.
-   */
-  private sectionKind(extensionId: string, name?: string): string {
-    return name ? `${EXTENSION_KIND_PREFIX}${extensionId}:${name}` : `${EXTENSION_KIND_PREFIX}${extensionId}`;
-  }
-
   /** The live context of an active extension, for dispatch sites outside the runner. */
   contextFor(extensionId: string): ExtensionContext | undefined {
     return this.contexts.get(extensionId);
@@ -895,8 +887,8 @@ export class ExtensionRunner {
 
   /** The live context that owns a registered command (commands are dispatched by the session). */
   contextForCommand(name: string): ExtensionContext | undefined {
-    const stack = this.commandStacks.get(name);
-    return stack && stack.length > 0 ? this.contexts.get(pickTopByRank(stack).ownerId) : undefined;
+    const owner = this.stacks.commandOwner(name);
+    return owner === undefined ? undefined : this.contexts.get(owner);
   }
 
   /**
@@ -957,215 +949,39 @@ export class ExtensionRunner {
     return runtime.complete(extensionId, request);
   }
 
+  /** Build one activation's context — see {@link createExtensionContext}. */
   private createContext(
     api: ExtensionAPI,
     config?: ExtensionConfig,
     registrations?: ExtensionRegistrations
   ): ExtensionContext {
-    const runtime = () => this.options.getRuntime?.();
+    return createExtensionContext(this.contextHost, api, config, registrations);
+  }
 
-    return {
-      id: api.id,
-      agentId: this.options.agentId ?? "standalone",
-      env: this.extensionEnv(config?.config),
-      z,
-      cwd: this.options.cwd ?? "",
-      coreEnv: this.resolveCoreEnv(),
+  /**
+   * Whether a registration may still land.
+   *
+   * The context IS the lease. Exactly one context per instance incarnation is registered on the
+   * runner (`contexts`), disabling/destroying deletes it, and re-enabling hands the extension a NEW
+   * context. A callback retained from a previous incarnation (a timer, a promise continuation, a
+   * cached `ctx`) therefore holds a context that is no longer registered, and is refused — before
+   * this, such a call re-created the tool/transformer after the panel said "disabled", with no path
+   * to clean it up: `unregisterInstanceArtifacts` had already cleared the registrations list, so a
+   * later disable could not even find it.
+   */
+  private isContextLive(context: ExtensionContext): boolean {
+    return this.contexts.get(context.id) === context;
+  }
 
-      // Live facts: read through the runtime on every access, never captured. A handler that runs
-      // after a session switch must see the new session, not the activation-time one.
-      get sessionId() {
-        return runtime()?.sessionId() ?? null;
-      },
-      isIdle: () => runtime()?.isIdle() ?? true,
-      get mode() {
-        return runtime()?.mode() ?? "normal";
-      },
-      get model() {
-        return runtime()?.model();
-      },
-      get signal() {
-        return runtime()?.signal();
-      },
-      getContextUsage: () => runtime()?.contextUsage(),
-      getSystemPrompt: () => runtime()?.systemPrompt() ?? "",
-      getMessages: () => runtime()?.messages() ?? [],
-      // Overloads cannot be expressed by an object literal, so the single runtime entry point is
-      // cast to the public shape; the implementation narrows on presence of `schema`.
-      llm: {
-        complete: (request: ExtensionLlmRequest) => this.completeViaRuntime(api.id, request),
-      } as ExtensionLlm,
-      registerTool: (def: ExtensionToolDefinition) => {
-        const rank = this.rankOf(api.id);
-        const stack = this.toolStacks.get(def.name);
-        if (!stack) this.toolStacks.set(def.name, [{ ownerId: api.id, def, rank }]);
-        else {
-          const own = stack.findIndex((entry) => entry.ownerId === api.id);
-          if (own === -1) stack.push({ ownerId: api.id, def, rank });
-          else stack[own] = { ownerId: api.id, def, rank };
-        }
-        registrations?.tools.push(def.name);
-        // The rank travels with the registration: the authoritative tool stack (which entry is
-        // live) lives in the host's registry, which cannot see the extension's own order.
-        this.options.onRegisterTool?.(def, api.id, rank);
-        // Activation publishes one catalog after ALL tools are in. A runtime registration has no
-        // such batch boundary, so publish immediately after it lands.
-        if (!this.activating.has(api.id)) this.options.onToolRegistrationComplete?.();
-      },
-
-      registerToolOutputDecorator: (toolName, decorator) => {
-        const ownerId = scopeExtensionOwnerId(this.options.agentId ?? "standalone", api.id);
-        const disposeOwned =
-          this.options.onRegisterToolOutputDecorator?.(toolName, decorator, ownerId) ??
-          (() => this.options.onRemoveToolOutputDecoratorOwner?.(ownerId));
-        let active = true;
-        const dispose = () => {
-          if (!active) return;
-          active = false;
-          const index = registrations?.toolOutputDecoratorDisposers.indexOf(dispose) ?? -1;
-          if (index >= 0) registrations!.toolOutputDecoratorDisposers.splice(index, 1);
-          disposeOwned();
-        };
-        registrations?.toolOutputDecoratorDisposers.push(dispose);
-        return dispose;
-      },
-
-      registerCommand: (cmd: ExtensionCommand) => {
-        const rank = this.rankOf(api.id);
-        const stack = this.commandStacks.get(cmd.name);
-        if (!stack) {
-          this.commandStacks.set(cmd.name, [{ ownerId: api.id, cmd, rank }]);
-        } else {
-          const live = pickTopByRank(stack);
-          if (live.ownerId !== api.id) {
-            this.writeExtensionLog(
-              "warn",
-              api.id,
-              `Command "/${cmd.name}" is already registered by "${live.ownerId}" — dispatch order decides which runs`
-            );
-          }
-          const own = stack.findIndex((entry) => entry.ownerId === api.id);
-          if (own === -1) stack.push({ ownerId: api.id, cmd, rank });
-          else stack[own] = { ownerId: api.id, cmd, rank };
-        }
-        registrations?.commands.push(cmd.name);
-        // Notified only when this registration is the live one: a host observer maintaining a map
-        // of commands must end up with what dispatch would run, not with every claim ever made.
-        if (pickTopByRank(this.commandStacks.get(cmd.name)!).ownerId === api.id) {
-          this.options.onRegisterCommand?.(cmd);
-        }
-      },
-
-      registerInterceptor: <T extends InterceptableEvent>(
-        eventType: string,
-        handler: EventInterceptor<T>
-      ): (() => void) => {
-        // The context is looked up at dispatch time: it is registered on the runner right after
-        // construction, and activation (where handlers are declared) happens after that.
-        const unsub = this.eventBus.on(
-          eventType,
-          this.wrapInterceptor(
-            api.id,
-            eventType,
-            handler as EventInterceptor<InterceptableEvent>
-          ) as EventInterceptor<T>,
-          this.rankOf(api.id)
-        );
-        registrations?.unsubInterceptors.push(unsub);
-        return unsub;
-      },
-
-      registerContextProvider: (provider: ExtensionContextProvider): (() => void) => {
-        this.contextProviders.set(api.id, { provider, rank: this.rankOf(api.id) });
-        const unsub = () => {
-          if (this.contextProviders.get(api.id)?.provider === provider) this.contextProviders.delete(api.id);
-        };
-        registrations?.unsubTurnContext.push(unsub);
-        return unsub;
-      },
-
-      registerFlush: (flush: (ctx?: ExtensionContext) => Promise<void> | void): (() => void) => {
-        if (!registrations) return () => {};
-        registrations.flush = flush;
-        // Identity-checked: a stale disposer from a replaced flush must not clear
-        // the newer registration (mirrors `registerContextProvider` above).
-        return () => {
-          if (registrations.flush === flush) registrations.flush = null;
-        };
-      },
-
-      registerExitFlush: (flush: () => void): (() => void) => {
-        if (!registrations) return () => {};
-        registrations.exitFlush = flush;
-        // Release the replaced registration first: it stays in the process-exit registry otherwise,
-        // so a re-registering extension runs its OLD flush at exit (through state it already freed)
-        // and every re-enable adds another.
-        registrations.exitFlushRef?.();
-        // Also registered process-wide: an exit with a live session never runs agent teardown,
-        // and that is exactly the case where the final batch matters most.
-        const ref = registerExtensionExitFlush(flush);
-        registrations.exitFlushRef = ref;
-        return () => {
-          if (registrations.exitFlush === flush) registrations.exitFlush = null;
-          // Identity-checked like `registerFlush` / `registerContextProvider`: a disposer held
-          // across a replacement must not unregister the LIVE flush. The field guard alone was not
-          // enough — the call below ran unconditionally and removed the newer registration.
-          if (registrations.exitFlushRef === ref) {
-            ref();
-            registrations.exitFlushRef = null;
-          }
-        };
-      },
-
-      registerMessageTransformer: (transformer: MessageTransformer): (() => void) => {
-        this.messageTransformers.register(api.id, transformer, this.rankOf(api.id));
-        if (registrations && !registrations.messageTransformers.includes(api.id)) {
-          registrations.messageTransformers.push(api.id);
-        }
-        // Identity-checked: a stale disposer from a replaced transformer must not
-        // clear the newer registration (mirrors `registerContextProvider` above).
-        return () => {
-          this.messageTransformers.dispose(api.id, transformer);
-        };
-      },
-
-      events: {
-        // Delegate interception to the shared facade and add this extension's
-        // observer accessors. Not a spread: `BusExtensionEventBus` keeps its
-        // methods on the prototype, so spreading the instance would drop them.
-        emit: (event) => this.eventBus.emit(event),
-        hasInterceptors: (type) => this.eventBus.hasInterceptors(type),
-        // The `ctx.events.on` accessor is an interceptor registration equivalent to
-        // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension
-        // ordering itself with `order` would get its declared position through one entry point
-        // and the default through the other.
-        on: (type, handler) => {
-          const unsub = this.eventBus.on(
-            type,
-            this.wrapInterceptor(api.id, type, handler as EventInterceptor<InterceptableEvent>) as typeof handler,
-            this.rankOf(api.id)
-          );
-          // Same bookkeeping as `registerInterceptor`: without it, an interceptor registered through
-          // this entry point kept firing (and cancelling tools) after the extension was disabled.
-          registrations?.unsubInterceptors.push(unsub);
-          return unsub;
-        },
-        off: (type, handler) =>
-          this.eventBus.off(
-            type,
-            this.wrapInterceptor(api.id, type, handler as EventInterceptor<InterceptableEvent>) as typeof handler
-          ),
-        ...this.createObserverSurface(api.id, registrations),
-      },
-      ui: this.wrapUi(api.id, registrations),
-
-      logger: {
-        info: (msg: string) => this.writeExtensionLog("info", api.id, msg),
-        warn: (msg: string) => this.writeExtensionLog("warn", api.id, msg),
-        error: (msg: string) => this.writeExtensionLog("error", api.id, msg),
-        log: (level, category, msg) => this.writeExtensionLog(level, api.id, msg, category),
-      },
-    };
+  /** Refuse a post-disable registration: one warning per revoke, then silence. */
+  private refuseRegistration(extensionId: string, operation: string): void {
+    if (this.refusedRegistrations.has(extensionId)) return;
+    this.refusedRegistrations.add(extensionId);
+    this.writeExtensionLog(
+      "warn",
+      extensionId,
+      `${operation}() after the extension was disabled — ignored (the context it holds is no longer live)`
+    );
   }
 
   /**

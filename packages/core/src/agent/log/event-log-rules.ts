@@ -316,6 +316,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   "compaction:auto-start": SPECIALIZED_EVENT_LOG,
   "compaction:auto-complete": SPECIALIZED_EVENT_LOG,
   "compaction:auto-error": SPECIALIZED_EVENT_LOG,
+  "compaction:manual-start": SPECIALIZED_EVENT_LOG,
+  "compaction:manual-complete": SPECIALIZED_EVENT_LOG,
+  "compaction:manual-error": SPECIALIZED_EVENT_LOG,
   "compaction:reactive-start": {
     level: "info",
     category: "compaction",

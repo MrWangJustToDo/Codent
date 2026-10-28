@@ -139,6 +139,7 @@ export {
   readTruncationProgress,
 } from "../managers/stream-recovery/max-tokens-continue.js";
 export { createAgentStatusController, AgentStatusController } from "../managers/controllers/agent-status-controller.js";
+export { CompactionController } from "../managers/controllers/compaction-controller.js";
 // The `ManagedAgent` end of the reactive path (gates, retry budget, event pair, status
 // unwind). `validate:reactive-compact` drives this against a fake host, because the
 // helper-only coverage it had before could not see a broken gate or a stuck status.

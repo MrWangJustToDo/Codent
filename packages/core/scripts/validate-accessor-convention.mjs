@@ -26,6 +26,7 @@
  * Run: pnpm --filter @codent/core run validate:accessor-convention
  */
 
+import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import process from "node:process";
@@ -46,16 +47,24 @@ const srcRoot = join(scriptDir, "../src");
 const METHOD_ONLY_CLASSES = new Set(["ManagedAgent"]);
 
 /**
- * `get foo()` declarations inside a class body, with or without a return type.
+ * `get foo()` declarations inside a class body, with or without a return type and with any
+ * member modifiers.
  *
- * The type-less form (`\(\)` then `{`) missed every getter that annotates its type — i.e. all of
- * them — so both rules below were vacuous (0 getters seen while the tree has a dozen).
+ * The original `^\s{2}get` form matched almost nothing: a real getter is either indented deeper
+ * (object literal, nested class) or carries `private`/`static`. A gate that sees zero getters
+ * cannot fail — which is worse than no gate at all, because it reports "passed".
+ *
+ * Capture groups: 1 = indentation, 2 = modifiers, 3 = name.
  */
-const GETTER_RE = /^\s{2}get ([A-Za-z_$][\w$]*)\(\)\s*(?::[^{;]+)?\{/;
-/** Method declarations: `foo(...)` or `getFoo()` at class-body indentation. */
-const METHOD_RE = /^\s{2}([A-Za-z_$][\w$]*)\([^)]*\)\s*(?::[^{;]+)?\{/;
+const GETTER_RE =
+  /^(\s+)((?:(?:public|private|protected|static|readonly|override|declare)\s+)*)get\s+([A-Za-z_$][\w$]*)\(\)\s*(?::[^{;]+)?\{/;
+/** Method declarations `foo(...)` / `getFoo()` with optional modifiers. Groups: 1 = indent, 2 = name. */
+const METHOD_RE =
+  /^(\s+)(?:(?:public|private|protected|static|readonly|override|declare|async)\s+)*([A-Za-z_$][\w$]*)\([^)]*\)\s*(?::[^{;]+)?\{/;
 /** `class X {` / `export class X {` — including `abstract`/generics. */
 const CLASS_RE = /^\s*(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+
+const indentOf = (line) => line.length - line.trimStart().length;
 
 function walkTsFiles(dir) {
   const out = [];
@@ -69,30 +78,48 @@ function walkTsFiles(dir) {
 }
 
 /**
- * Parse class bodies shallowly: collect getters and methods per class. Nesting is
- * not tracked — a nested class is rare enough here that attributing its members to
- * the outer class only ever over-reports, which is the safe direction for a gate
- * (it still names the file and line).
+ * Parse class bodies shallowly: collect getters and methods per class.
+ *
+ * Nesting is tracked by a stack of (class, indentation): a member belongs to the innermost class
+ * that starts before it. The previous version kept a single `current` pointer, so a nested class
+ * silently took ownership of every outer member that followed it (the members were then compared
+ * against the wrong method list — a false negative for the outer class and a false positive for
+ * the inner one).
  */
 function collectClasses(file) {
   const lines = readFileSync(file, "utf8").split("\n");
   const classes = [];
-  let current = null;
+  /** @type {Array<{ node: object, indent: number }>} */
+  const stack = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     const classMatch = CLASS_RE.exec(line);
     if (classMatch) {
-      current = { name: classMatch[1], line: i + 1, getters: [], methods: [], underscored: [] };
-      classes.push(current);
+      const indent = indentOf(line);
+      while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
+      const node = { name: classMatch[1], line: i + 1, getters: [], methods: [], underscored: [] };
+      stack.push({ node, indent });
+      classes.push(node);
       continue;
+    }
+    if (stack.length === 0) continue;
+
+    const indent = indentOf(line);
+    // Innermost class that starts before this line's own indentation (a top-level line has none).
+    let current = null;
+    for (let s = stack.length - 1; s >= 0; s--) {
+      if (stack[s].indent < indent) {
+        current = stack[s].node;
+        break;
+      }
     }
     if (!current) continue;
 
     const getter = GETTER_RE.exec(line);
     if (getter) {
-      current.getters.push({ name: getter[1], line: i + 1 });
+      current.getters.push({ name: getter[3], line: i + 1, hasModifier: getter[2].trim().length > 0 });
       continue;
     }
 
@@ -102,7 +129,7 @@ function collectClasses(file) {
 
     const method = METHOD_RE.exec(line);
     if (method) {
-      const name = method[1];
+      const name = method[2];
       // Control flow inside a method body can look like a call at this indent;
       // exclude the obvious keywords rather than tracking brace depth.
       if (!["if", "for", "while", "switch", "catch", "return", "else", "do"].includes(name)) {
@@ -116,10 +143,16 @@ function collectClasses(file) {
 
 const violations = [];
 const methodOnlyViolations = [];
+let getterTotal = 0;
+let getterWithModifier = 0;
+let classTotal = 0;
 
 for (const file of walkTsFiles(srcRoot)) {
   const rel = relative(join(scriptDir, ".."), file);
   for (const cls of collectClasses(file)) {
+    classTotal += 1;
+    getterTotal += cls.getters.length;
+    getterWithModifier += cls.getters.filter((g) => g.hasModifier).length;
     const methodNames = new Set(cls.methods.map((m) => m.name));
 
     for (const member of cls.underscored) {
@@ -160,6 +193,15 @@ for (const file of walkTsFiles(srcRoot)) {
 }
 
 const all = [...violations, ...methodOnlyViolations];
+
+// A gate that parses zero getters passes for the wrong reason, and that is exactly how this file
+// spent its life before the regex was fixed. Pin the non-vacuity of the scan itself.
+assert.ok(classTotal > 20, `the class scan must find the tree's classes (saw ${classTotal})`);
+assert.ok(getterTotal >= 10, `the getter scan must see real getters, not zero (saw ${getterTotal})`);
+assert.ok(
+  getterWithModifier >= 1,
+  "modifier-prefixed getters must be parsed — that shape (`private get x()`) used to be invisible"
+);
 
 if (all.length > 0) {
   console.error("accessor convention violated:\n");

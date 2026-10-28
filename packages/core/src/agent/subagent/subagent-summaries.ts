@@ -17,7 +17,7 @@
  * two can never disagree about what a row contains.
  */
 
-import { readTaskRunPhase } from "./task-run-state.js";
+import { readTaskRunPhase } from "./subagent-runs.js";
 
 import type { ManagedAgent } from "../../runtime-types/hosts.js";
 import type { AgentSessionSubagentSummary, UsageChangeSnapshot } from "../../runtime-types/session-payloads.js";

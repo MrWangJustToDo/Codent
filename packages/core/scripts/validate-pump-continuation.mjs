@@ -10,6 +10,11 @@ import { AgentLog, ManagedAgent, shouldDeferMidRunQueue } from "../dist/dev.mjs"
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 1, status: "running" }), true, "active pump defers");
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "waiting" }), true, "approval wait defers");
 assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "awaiting_user" }), true, "ask_user defers");
+// A manual `/compact` has no pump, so `pumpDepth` cannot cover it. Starting a turn here appends the
+// summary checkpoint inside a half-finished turn and resets the window usage the new turn is
+// accumulating — the message must queue until the compaction ends.
+assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "compacting" }), true, "manual compaction defers");
+assert.equal(shouldDeferMidRunQueue({ pumpDepth: 1, status: "compacting" }), true, "auto compaction defers too");
 
 assert.equal(
   shouldDeferMidRunQueue({ pumpDepth: 0, status: "running" }),

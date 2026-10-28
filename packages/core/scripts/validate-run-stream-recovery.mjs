@@ -189,11 +189,20 @@ function makeRunCoordinatorStub() {
   };
 }
 
+/** Direct log rows the recovery loop writes itself (must stay empty — see the assertion below). */
+const directRetryLogs = [];
+
 const managed = {
   parentId: "sub-agent",
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  log: {
+    warn() {},
+    debug(_category, message) {
+      directRetryLogs.push(message);
+    },
+    error() {},
+  },
   getUI: () => undefined,
   setError() {},
   setRetry(state) {
@@ -259,6 +268,10 @@ assert.equal(retryStates[1], null);
 assert.equal(retryEvents.length, 1);
 assert.equal(retryEvents[0].strategy, "transient");
 assert.equal(retryEvents[0].attempt, 1);
+// ONE retry = ONE row. The loop used to write a "Transient provider error — retrying" debug row and
+// a "Backoff before retry" row (with a pre-increment `attempt`, contradicting the "1/3" beside it)
+// on top of the `agent:retry` event — three lines for one fact, one of them self-contradictory.
+assert.deepEqual(directRetryLogs, [], "the retry loop writes no rows of its own — `agent:retry` is the writer");
 
 // --- the SDK-normalized `retryAfterMs` on a RUN_ERROR drives the backoff --------
 //

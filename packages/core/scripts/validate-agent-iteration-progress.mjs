@@ -267,6 +267,15 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("iteration"), true);
   managed.finalizeRun("aborted");
   assert.deepEqual(managed.readIteration(), { current: 0, max: 7 }, "a terminal run resets iteration to idle");
   assert.deepEqual(seen.at(-1), { current: 0, max: 7 }, "the retained channel is republished with idle progress");
+  // The turn's own reading survives the reset on the snapshot: a turn can end exactly at its
+  // budget, and the stop reason is classified AFTER finalize (ACP `max_turn_requests`).
+  assert.deepEqual(
+    managed.getL1State().lastIteration,
+    { current: 3, max: 7 },
+    "the finalized turn's iteration is kept for stop-reason classification"
+  );
+  managed.resetRunOutcome();
+  assert.equal(managed.getL1State().lastIteration, null, "a session reset clears it with the rest of the run outcome");
 }
 
 console.log("agent-iteration-progress validation passed");

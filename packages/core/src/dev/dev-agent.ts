@@ -119,26 +119,30 @@ export {
 export { AGENT_PROFILE_IDS } from "../runtime-types/agent-profile.js";
 export { runManagedSpan } from "../agent/run/managed-span.js";
 export {
-  discardRegisteredPrefork,
-  getTaskPreforkCoordinator,
   MAX_ACTIVE_TASK_PREFORKS,
-  peekTaskPreforkCoordinator,
   resolveMaxConcurrentTasks,
   TaskPreforkCoordinator,
 } from "../agent/subagent/task-prefork.js";
+export {
+  countSubagentRuns,
+  discardRegisteredPrefork,
+  getTaskPreforkCoordinator,
+  peekTaskPreforkCoordinator,
+} from "../agent/subagent/subagent-runs.js";
 // `createTaskPreforkMiddleware` and `RunCoordinator` (the middleware factory, and the run's abort
 // surface the pre-fork registers its controller on) already reach validators through the
 // `dev-managers` re-export — do not add a second export of either here.
 export {
   beginTaskRun,
   clearTaskRuns,
+  clearSubagentRuns,
   enterTaskLimitPhase,
   enterTaskPhase,
   enterTaskSummaryPhase,
   getTaskRunState,
   readTaskRunPhase,
-  TaskRunState,
-} from "../agent/subagent/task-run-state.js";
+} from "../agent/subagent/subagent-runs.js";
+export { TaskRunState } from "../agent/subagent/task-run-state.js";
 export {
   consumeAgentStream,
   ensureUIChannel,

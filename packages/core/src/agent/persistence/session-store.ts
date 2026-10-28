@@ -111,6 +111,15 @@ export class SessionStore {
   /** Last durable write per session — drives delta computation and no-op dedupe. */
   private lastSaved: Map<string, LastSaved> = new Map();
 
+  /**
+   * Whether each loaded session log ends with a newline.
+   *
+   * Seeded by `load` from the bytes it already read, and set to `true` after every successful
+   * write (both the append and the rewrite end with one). The append path needs it to terminate a
+   * torn fragment before writing — appending onto one loses the new line as well.
+   */
+  private tailTerminated: Map<string, boolean> = new Map();
+
   /** Known approval decision times per session (approvalId → epoch ms). */
   private statusStamps: Map<string, Record<string, number>> = new Map();
 
@@ -237,7 +246,7 @@ export class SessionStore {
     if (deletedSessionPaths.has(this.getLogKey(id))) return null;
     if (!(await this.fs.exists(logPath))) return null;
 
-    const lines = await readLog(this.fs, logPath);
+    const { lines, tailTerminated } = await readLog(this.fs, logPath);
     if (lines.length === 0) return null;
 
     const { state, uiMessages, approvalAt } = foldLog(lines);
@@ -255,6 +264,9 @@ export class SessionStore {
     // Prime the delta baseline so the first save after a resume appends only
     // what actually changed instead of re-appending the whole history.
     this.primeCache(data);
+    // The append path must know whether the file's last line is terminated: a crash mid-write
+    // leaves a fragment, and appending onto it loses the new line too.
+    this.tailTerminated.set(id, tailTerminated);
     return data;
   }
 
@@ -502,7 +514,9 @@ export class SessionStore {
         if (last) lines.push(buildLine(last, stateFields, snapshot));
       }
       if (lines.length > 0) {
-        const appended = await appendLogLines(this.fs, this.getLogPath(session.id), lines);
+        const appended = await appendLogLines(this.fs, this.getLogPath(session.id), lines, {
+          tailTerminated: this.tailTerminated.get(session.id) ?? true,
+        });
         if (!appended) {
           // Env fs has no `appendFile` (optional primitive). Degrade to a full
           // rewrite so this save is not silently lost — otherwise the delta
@@ -512,6 +526,9 @@ export class SessionStore {
       }
     }
 
+    // Every write path ends with a newline (append adds one; the rewrite writes one per line), so
+    // the next append may trust the tail.
+    this.tailTerminated.set(session.id, true);
     this.lastSaved.set(session.id, { ids, fingerprints, signature, stamps });
   }
 

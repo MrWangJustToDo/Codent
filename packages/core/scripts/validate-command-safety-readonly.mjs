@@ -11,6 +11,8 @@
  * - `sed` — read-only unless its *script* contains `w` / `W` / `r` / `R` / `e` (or the existing
  *   `-i` flag is present). Letters inside a pattern/replacement (`s/world/earth/`) must NOT count.
  * - `git diff` / `log` / `show` — `--output[=]` writes a file; `--output-indicator-*` does not.
+ * - `sort` — read-only as a filter, but `-o` writes a file and `--compress-program` EXECUTES the
+ *   program it names (the caller's temp-file compressor).
  *
  * The second half covers the invocation-level table (`readonly-rules.ts`): every command newly
  * admitted without a prompt is paired with the form that WOULD write, and that form must still
@@ -232,6 +234,8 @@ const admitted = [
   ["df", "df -h"],
   ["tr", "tr a-z A-Z"],
   ["jq", "jq '.a' f"],
+  ["sort", "sort f"],
+  ["sort -n", "sort -n f"],
   ["column", "column -t f"],
   ["md5sum", "md5sum f"],
   ["base64", "base64 f"],
@@ -288,6 +292,12 @@ const writeForms = [
   ["rg --pager", "rg --pager less foo"],
   ["jq -i", "jq -i '.a=1' f"],
   ["jq --in-place", "jq --in-place '.a=1' f"],
+
+  // `sort` is read-only as a filter, but two of its flags are not: `-o` writes a file and
+  // `--compress-program` EXECUTES the program it names (the caller's temp-file compressor).
+  ["sort -o", "sort -o out.txt f"],
+  ["sort --compress-program=", "sort --compress-program=/tmp/evil f"],
+  ["sort --compress-program", "sort --compress-program /tmp/evil f"],
 
   // The `uniq` hole this change closes: the SECOND operand is an output file.
   ["uniq two operands", "uniq in.txt out.txt"],

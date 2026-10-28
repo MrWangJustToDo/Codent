@@ -189,25 +189,6 @@ export class AgentStatusController {
     }
   }
 
-  beginCompaction(
-    kind: "auto" | "reactive" = "auto",
-    data?: { retry?: number; maxRetries?: number; tokensBefore?: number }
-  ): void {
-    this.deps.setStatus("compacting", `compaction:${kind}`);
-    if (kind === "reactive") {
-      this.deps.emitEvent?.("compaction:reactive-start", data);
-    } else {
-      this.deps.emitEvent?.("compaction:auto-start", data);
-    }
-  }
-
-  endCompaction(): void {
-    const status = this.deps.getStatus();
-    if (status === "compacting") {
-      this.deps.setStatus("running", "compaction-end");
-    }
-  }
-
   syncApprovals(needsApproval: ToolPhaseCompleteInfo["needsApproval"]): void {
     const count = needsApproval.length;
     this.deps.setPendingApprovalCount(count);

@@ -63,6 +63,8 @@ export interface SessionLifecycleHost {
   resetTurnContext(): void;
   resetSessionSyncTracker(): void;
   resetIterationProgress(): void;
+  /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
+  clearTaskRuns(): void;
   resetCommandJobs(reason: string): void;
 }
 
@@ -161,6 +163,10 @@ export class SessionLifecycleService {
     this.host.resetTurnContext();
     if (full) this.host.resetSessionSyncTracker();
     this.host.resetIterationProgress();
+    // Session-scoped, like the iteration progress above: a completed task keeps its row for the
+    // preview, but the conversation it belonged to is gone — and the registry used to keep every
+    // task id for the life of the agent, across `/new` and `/resume`.
+    this.host.clearTaskRuns();
     this.host.resetRunOutcome?.();
     this.host.resetCommandJobs(reason);
   }

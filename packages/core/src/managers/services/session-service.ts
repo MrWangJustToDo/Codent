@@ -392,6 +392,8 @@ export class SessionService {
     }
     data.usage = { ...usage.getTotal() };
     data.cost = usage.getTotalCostUsd();
+    // Exact per-sample sum; see `SessionData.billedInputTokens` for why it is not derivable.
+    data.billedInputTokens = usage.getBilledInputTokens();
     data.contextTokens = usage.getContextFillTokens();
 
     if (todoManager) {
@@ -572,7 +574,9 @@ export class SessionService {
 
     usage.reset();
     if (session.usage) {
-      usage.addTotal(session.usage);
+      // Carry the persisted exact count: re-deriving it from the aggregate changed the cache-hit
+      // ratio across a resume (see `UsageTracker.restoreTotals`).
+      usage.restoreTotals(session.usage, session.billedInputTokens);
     }
     if (session.contextTokens) {
       // Set (do not accumulate) the window: the restored fill is already part of the

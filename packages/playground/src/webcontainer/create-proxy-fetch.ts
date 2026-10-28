@@ -25,20 +25,63 @@ export function getFetchProxyUrl(): string {
   return proxyUrl;
 }
 
-/** Resolve proxy endpoint: settings → VITE_FETCH_PROXY_URL → local Vite middleware (dev only). */
-export function resolveFetchProxyUrl(configured?: string): string {
-  const fromSettings = configured?.trim();
+/** Where a resolved proxy endpoint comes from, in priority order. */
+export interface FetchProxySources {
+  /** User setting (settings panel / persisted config). */
+  configured?: string;
+  /** Build-time `VITE_FETCH_PROXY_URL`. */
+  envUrl?: string;
+  /** True when a Vite middleware proxy exists (`vite` / `vite preview`), false on static hosting. */
+  dev: boolean;
+  /** `window.location.origin`; required only when `dev`. */
+  origin?: string;
+}
+
+/**
+ * Pure priority table: settings → build-time env → dev middleware → none.
+ *
+ * Split out of {@link resolveFetchProxyUrl} because the real priority lives here: the wrapper only
+ * reads `import.meta.env` / `window`, neither of which exists under Node, so a validator that
+ * wanted to cover the table had to re-implement it (and drifted — the copy took four arguments and
+ * tested a function production never had).
+ */
+export function pickFetchProxyUrl(sources: FetchProxySources): string {
+  const fromSettings = sources.configured?.trim();
   if (fromSettings) return fromSettings;
 
-  const fromEnv = (import.meta.env.VITE_FETCH_PROXY_URL as string | undefined)?.trim();
+  const fromEnv = sources.envUrl?.trim();
   if (fromEnv) return fromEnv;
 
-  // Vite middleware exists only for `vite` / `vite preview` — NOT on GitHub Pages.
-  if (import.meta.env.DEV) {
-    return new URL("/__fetch_proxy", window.location.origin).href;
+  if (sources.dev) {
+    if (!sources.origin) throw new Error("fetch proxy: dev mode requires an origin");
+    return new URL("/__fetch_proxy", sources.origin).href;
   }
 
   return "";
+}
+
+/**
+ * Read the build-time proxy inputs.
+ *
+ * `import.meta.env` exists only under Vite. A plain Node import of this module (a validator, or
+ * any SSR/tooling path) has no bundler define, so reading it unguarded threw before the priority
+ * table could even run — which is how the previous validator ended up re-implementing the table
+ * instead of calling it.
+ */
+function readBuildProxySources(): Omit<FetchProxySources, "configured"> {
+  const meta = import.meta as ImportMeta & {
+    env?: { VITE_FETCH_PROXY_URL?: string; DEV?: boolean };
+  };
+  return {
+    envUrl: meta.env?.VITE_FETCH_PROXY_URL,
+    dev: meta.env?.DEV === true,
+    origin: typeof window === "undefined" ? undefined : window.location.origin,
+  };
+}
+
+/** Resolve proxy endpoint: settings → VITE_FETCH_PROXY_URL → local Vite middleware (dev only). */
+export function resolveFetchProxyUrl(configured?: string): string {
+  return pickFetchProxyUrl({ configured, ...readBuildProxySources() });
 }
 
 function resolveUrl(input: string | URL | Request): string {

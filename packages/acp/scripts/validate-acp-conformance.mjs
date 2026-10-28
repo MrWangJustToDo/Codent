@@ -397,7 +397,15 @@ for (const [label, finishReason, iteration, expected] of [
       id: `stop-${label}`,
       onCommand: async (command, api) => {
         if (command.type === "send") {
-          api.setSnapshot({ status: "completed", iteration, lastFinishReason: finishReason });
+          // The REAL post-finalize shape: `iteration` is cleared, and the turn's reading survives on
+          // `lastIteration`. The old fixture hand-built `completed + iteration 100/100` — a shape
+          // core never produces — which is how the dead `max_turn_requests` branch stayed green.
+          api.setSnapshot({
+            status: "completed",
+            iteration: { current: 0, max: iteration.max },
+            lastIteration: iteration,
+            lastFinishReason: finishReason,
+          });
           api.emit("state", api.snapshot);
         }
         return { ok: true };

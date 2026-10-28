@@ -33,8 +33,9 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ============================================================================
@@ -119,6 +120,26 @@ export function repoRootIdentifiers(source) {
 }
 
 /**
+ * Files allowed to read the workspace's optional corpora, with the reason the read is safe.
+ *
+ * The guard exists because a validator that reads `.agents/` breaks on a fresh clone. These two
+ * read the models.dev cache as an *optional* corpus for real-metadata invariants: absence is
+ * handled (the corpus section prints its own notice and the rest of the file still runs), and a
+ * fixture cannot substitute — the assertion is about the shipped dataset. They are not allowed to
+ * become the model for new fixtures.
+ */
+const OPTIONAL_CORPUS_READERS = new Map([
+  [
+    "packages/core/scripts/validate-model-capabilities.mjs",
+    "optional models.dev corpus; absence is announced and the mapping assertions still run",
+  ],
+  [
+    "packages/core/scripts/validate-models-dev-lookup.mjs",
+    "optional models.dev corpus; the synthetic fixture stands alone when it is absent",
+  ],
+]);
+
+/**
  * Whether a validator actually *reads* a repo-relative untracked path.
  *
  * Deliberately conservative, because a guard that cries wolf gets switched off. A bare
@@ -128,7 +149,6 @@ export function repoRootIdentifiers(source) {
  */
 export function readsUntrackedRepoPath(source) {
   const repoRoots = repoRootIdentifiers(source);
-  if (repoRoots.size === 0) return null;
 
   for (const rawLine of source.split("\n")) {
     const line = rawLine.trim();
@@ -144,6 +164,14 @@ export function readsUntrackedRepoPath(source) {
         const interpolated = new RegExp(`\\$\\{\\s*${name}\\s*\\}[\\/\\\\]${segment}[\\/\\\\]`);
         if (joined.test(line) || interpolated.test(line)) return prefix;
       }
+
+      // A repo-root expression used DIRECTLY, with no binding to match: this is the shape
+      // `path.resolve(process.cwd(), "../../.agents/cache/…")` has, and the two patterns above
+      // cannot see it because there is no identifier to look up. Without this branch the guard
+      // passed a validator that read the workspace cache and silently skipped assertions when it
+      // was absent (`validate-capability-unknown-vs-none`).
+      const mentionsRepoRoot = line.includes("process.cwd()") || [...repoRoots].some((name) => line.includes(name));
+      if (mentionsRepoRoot && new RegExp(`["'\`][^"'\`]*${segment}[/\\\\]`).test(line)) return prefix;
     }
   }
   return null;
@@ -257,9 +285,12 @@ async function runPackageValidators({ scriptsDir, concurrency, timeoutMs, quiet 
 
   // Guards reject before running, so a violation is attributed to the source rather than
   // surfacing as a confusing runtime failure on a fresh clone (or as a flake on a slow runner).
+  const repoRoot = resolve(scriptsDir, "../../..");
   for (const file of files) {
     const source = await readFile(join(scriptsDir, file), "utf8");
-    const prefix = readsUntrackedRepoPath(source);
+    const repoRelative = relative(repoRoot, join(scriptsDir, file)).split(sep).join("/");
+    const allowed = OPTIONAL_CORPUS_READERS.has(repoRelative);
+    const prefix = allowed ? null : readsUntrackedRepoPath(source);
     if (prefix) summary.guardViolations.push({ file, kind: "untracked", detail: prefix });
     if (mutatesWritableFsWithoutRename(source)) {
       summary.guardViolations.push({ file, kind: "fs-mock", detail: "SessionStore fs mock lacks `rename`" });
@@ -329,7 +360,7 @@ async function runPackageValidators({ scriptsDir, concurrency, timeoutMs, quiet 
         console.log(
           `[validators]   ${v.file}: ${v.detail} — ` +
             "the store then rewrites the log in place, so a concurrent `load()` can read a truncated file.\n" +
-            '[validators]   Add `rename: async (from, to) => fs.promises.rename(from, to)` to the fs mock.'
+            "[validators]   Add `rename: async (from, to) => fs.promises.rename(from, to)` to the fs mock."
         );
       }
     }
@@ -394,6 +425,18 @@ async function main() {
 
   let anyBad = false;
   const grand = { passed: 0, failed: 0, skipped: 0, timeout: 0 };
+
+  // An allowlist entry that no longer matches a file is a silent exemption for a file that was
+  // renamed or deleted — the reason has to be re-examined, so it fails instead of rotting.
+  for (const [repoRelative, reason] of OPTIONAL_CORPUS_READERS) {
+    if (!existsSync(resolve(workspaceRoot, repoRelative))) {
+      console.log(`[validators] STALE allowlist entry: ${repoRelative} does not exist`);
+      anyBad = true;
+    } else if (!reason.trim()) {
+      console.log(`[validators] allowlist entry ${repoRelative} has no reason`);
+      anyBad = true;
+    }
+  }
 
   for (const scriptsDir of targets) {
     const summary = await runPackageValidators({ scriptsDir, concurrency, timeoutMs, quiet });
