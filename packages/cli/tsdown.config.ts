@@ -28,7 +28,10 @@ export default defineConfig({
   // drop `--sandbox=native` silently).
   entry: ["src/index.tsx", "src/host.tsx", "src/args.ts"],
   format: ["esm"],
-  dts: true,
+  // `args.ts` is emitted for `validate:cli-args` only (it is not an exported subpath). Generating
+  // its declaration makes the DTS pass inline `@codent/app` types, which drags in the unresolved
+  // `highlight.js` `LanguageFn` type edge (see `packages/app/tsdown.shared.ts` TYPES_EXTERNAL).
+  dts: { entry: ["src/index.tsx", "src/host.tsx"] },
   clean: true,
   shims: true,
   plugins: [rewriteRendererSpecifiers()],
