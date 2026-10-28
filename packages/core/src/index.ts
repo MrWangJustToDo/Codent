@@ -272,6 +272,7 @@ export type {
   ResolveModelConfigInput,
   ResolvedModelConfig,
 } from "./models";
+export { mergeModelsConfigToolConfig, websearchToolConfigFromEnv } from "./agent/tools/tool-config.js";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
 export {
   isReasoningEffort,

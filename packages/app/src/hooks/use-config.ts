@@ -3,6 +3,7 @@ import {
   DEFAULT_LOCAL_OPENAI_BASE_URL,
   buildDefaultSystemPrompt,
   loadModels,
+  mergeModelsConfigToolConfig,
   registerModelProviderForEntry,
   type LoadedModelEntry,
   type LoadedModelsState,
@@ -11,7 +12,6 @@ import {
 import { createState } from "reactivity-store";
 
 import { applyOptionalAppConfig, clearOptionalAppConfig } from "../utils/apply-app-config.js";
-import { mergeModelsConfigToolConfig } from "../utils/merge-tool-config.js";
 
 import type { AppConfig } from "../adapter/types.js";
 

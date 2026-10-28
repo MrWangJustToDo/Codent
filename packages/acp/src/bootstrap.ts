@@ -25,11 +25,13 @@ import {
   getModelProvider,
   loadModels,
   MAX_AGENT_ITERATIONS,
+  mergeModelsConfigToolConfig,
   registerCoreEnv,
   registerModelProvider,
   registerModelProviderForEntry,
   resolveModelConfig,
   resolveModelConfigFromProvider,
+  websearchToolConfigFromEnv,
 } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
 import { stat as statPath } from "node:fs/promises";
@@ -40,7 +42,6 @@ import { resolveRoot } from "./paths.js";
 import type { AcpAgentDefaults, AcpAgentOptions, AcpSessionRuntime, AcpClientEnvFactoryContext } from "./agent.js";
 import type {
   AgentSessionHost,
-  AgentToolConfig,
   ModelProvider,
   ModelStyle,
   ModelCatalogRead,
@@ -97,9 +98,10 @@ export interface LocalAcpBootstrap {
 export async function bootstrapLocalAcp(
   options: {
     cwd?: string;
-    // TODO(acp-init): neither entry point passes `sandbox`, and there is no `--sandbox` flag, so
-    // the ACP host always takes the `SANDBOX_ENV` env fallback below. The CLI TUI has the same
-    // env-only rule (`host.tsx`): consistent, but unconfigurable per launch.
+    /**
+     * `--sandbox`: the launch mode, already resolved by the entry point (flag > `SANDBOX_ENV` >
+     * `local`). Omitted ⇒ the same env fallback here, so an embedder keeps the old behaviour.
+     */
     sandbox?: "local" | "native";
     model?: AcpModelOverride;
     /** `--client-env`: build each session's env from the ACP client's fs/terminal capabilities. */
@@ -121,8 +123,10 @@ export async function bootstrapLocalAcp(
   // `toWirePath` resolve against `process.cwd()` — the very fallback that file forbids. The other
   // boundary that takes a root is `createAcpAgent({ rootPath })`, which uses the same helper.
   const rootPath = resolveRoot(options.cwd);
+  // The FLAG vocabulary is `local|native` (what a user types); the CoreEnv mode is `os|native`.
   const sandboxMode = options.sandbox ?? (process.env.SANDBOX_ENV === "native" ? "native" : "local");
-  const env = createNodeEnv({ rootPath, sandbox: sandboxMode !== "native" });
+  const sandboxEnvMode = sandboxMode === "native" ? "native" : "os";
+  const env = createNodeEnv({ rootPath, mode: sandboxEnvMode });
   registerCoreEnv(env);
 
   let provider: ModelProvider | undefined;
@@ -131,9 +135,10 @@ export async function bootstrapLocalAcp(
   let baseURL: string | undefined;
   let apiKey: string | undefined;
   let modelInfo: AcpAgentDefaults["modelInfo"];
-  // `models.json` is the only plane that can carry global tool settings; the flag/`.env` planes
-  // deliberately skip that file, so this stays undefined there.
-  let fileToolConfig: AgentToolConfig | undefined;
+  // Websearch secrets come from BOTH planes, exactly as in the TUI: `.env` (mapped once, in
+  // core) wins per field, and the workspace file's `global.toolConfig` fills the gaps. Keeping the
+  // raw `global` block here lets the shared merge helper read it at the end of this function.
+  let fileToolGlobal: { toolConfig?: { provider?: string; [key: string]: unknown } } | undefined;
   // Built only on the `models.json` path: the flags path deliberately skips that file, and the
   // `.env` fallback has no list at all — so neither can offer a choice.
   /** The one model CATALOG every plane produces; carried by the runtime and projected by the host. */
@@ -215,11 +220,11 @@ export async function bootstrapLocalAcp(
     try {
       const loaded = await loadModels({ kind: "file", env });
       if (loaded) {
-        // The file's `global.toolConfig` is this host's websearch configuration, the same role it
-        // plays in the TUI. Runtime knobs are NOT in the file (see `ModelsConfigGlobal`): the
-        // prompt comes from `--system`, the iteration budget from `--max-iterations`.
-        const globalToolConfig = loaded.config.global?.toolConfig;
-        if (globalToolConfig) fileToolConfig = { websearch: globalToolConfig };
+        // The file's `global.toolConfig` fills the gaps left by `.env` (see the merge below), the
+        // same precedence the TUI applies. Runtime knobs are NOT in the file (see
+        // `ModelsConfigGlobal`): the prompt comes from `--system`, the budget from
+        // `--max-iterations`.
+        if (loaded.config.global?.toolConfig) fileToolGlobal = loaded.config.global;
         const entry = loaded.entries[loaded.active.entryIndex];
         const activeModel = loaded.active.model ?? entry?.models[0] ?? "";
         if (entry && activeModel) {
@@ -325,7 +330,7 @@ export async function bootstrapLocalAcp(
       options.clientEnv && isDefaultRoot
         ? undefined
         : await CodentAgent.create({
-            env: createNodeEnv({ rootPath: context.rootPath, sandbox: sandboxMode !== "native" }),
+            env: createNodeEnv({ rootPath: context.rootPath, mode: sandboxEnvMode }),
             ...(provider ? { provider } : {}),
             ...(models ? { models } : {}),
             ownsEnv: true,
@@ -389,7 +394,7 @@ export async function bootstrapLocalAcp(
   const listPersistedSessionsAt = agent.host.listPersistedSessions
     ? async (root: string): Promise<SessionMeta[]> => {
         if (root === rootPath) return (await agent.host.listPersistedSessions?.()) ?? [];
-        const rootEnv = createNodeEnv({ rootPath: root, sandbox: sandboxMode !== "native" });
+        const rootEnv = createNodeEnv({ rootPath: root, mode: sandboxEnvMode });
         const rootAgent = await CodentAgent.create({
           env: rootEnv,
           ...(provider ? { provider } : {}),
@@ -403,6 +408,9 @@ export async function bootstrapLocalAcp(
         }
       }
     : undefined;
+
+  // Websearch config for every session: `.env` (per-field winner) over the workspace file.
+  const toolConfig = mergeModelsConfigToolConfig(websearchToolConfigFromEnv(process.env), fileToolGlobal);
 
   return {
     host: agent.host,
@@ -422,7 +430,7 @@ export async function bootstrapLocalAcp(
       ...(options.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: options.maxConcurrentTasks } : {}),
       ...(options.extensionDirs?.length ? { extensionDirs: options.extensionDirs } : {}),
       ...(options.mcpConfigPath ? { mcpConfigPath: options.mcpConfigPath } : {}),
-      ...(fileToolConfig ? { toolConfig: fileToolConfig } : {}),
+      ...(toolConfig ? { toolConfig } : {}),
       // `--system` overrides the built-in prompt for the process root. A session whose `cwd`
       // differs gets a prompt rebuilt from THAT workspace (see `sessionSystemPrompt`), which is
       // why the override is carried here rather than as one string for every root.

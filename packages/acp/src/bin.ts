@@ -39,10 +39,17 @@ function parseFlags(argv: string[]): {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg || !arg.startsWith("-")) continue;
-    const key = arg.replace(/^--?/, "");
+    const body = arg.replace(/^--?/, "");
+    // `--flag=value` is one token: the value never competes with the next argument, and an empty
+    // value stays "" so the validator can reject it instead of it silently meaning "not set".
+    const equals = body.indexOf("=");
+    if (equals >= 0) {
+      flags.set(body.slice(0, equals), body.slice(equals + 1));
+      continue;
+    }
     const next = argv[i + 1];
     if (next && !next.startsWith("-")) {
-      flags.set(key, next);
+      flags.set(body, next);
       i++;
     }
   }
@@ -96,7 +103,8 @@ async function main(): Promise<void> {
 
   const argv = process.argv.slice(2);
   const flags = parseFlags(argv);
-  if (argv.some((arg) => arg === "--sandbox") && !flags.sandbox) {
+  // A valueless `--sandbox` (last arg) and `--sandbox=` both mean "no value" — never "default".
+  if (flags.sandbox === undefined && argv.some((arg) => arg === "--sandbox" || arg === "--sandbox=")) {
     throw new Error(`--sandbox requires "local" (OS sandbox) or "native" (no OS sandbox)`);
   }
   if (flags.sandbox !== undefined && flags.sandbox !== "local" && flags.sandbox !== "native") {

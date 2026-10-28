@@ -628,7 +628,7 @@ The `@codent/server` package exposes CoreEnv APIs over HTTP using Hono RPC for e
 | `/api/mcp/:id` | DELETE | Clean up an MCP stdio process session |
 | `/api/agent` | GET | Catalog list (mirrors `AgentSessionHost.list()`) |
 | `/api/agent/models` | GET | Selectable model list for remote-session clients (`/models` command) |
-| `/api/agent` | POST | Create/bind AgentSession (full create options incl. maxIterations/mcp/toolConfig/resume) |
+| `/api/agent` | POST | Create/bind AgentSession (full create options incl. maxIterations/mcp/toolConfig/resume). Any `ZodError` — the request schema, `AgentConfigSchema`, the compaction schema — is a 400 via the app's one error boundary |
 | `/api/agent/:id/snapshot` | GET | AgentSession snapshot (root or subagent id) |
 | `/api/agent/:id/command` | POST | `dispatch(command)` |
 | `/api/agent/:id/events` | GET | SSE session channels (+ 15s heartbeat ping frames) |
@@ -1101,7 +1101,7 @@ Runtime data under the project root is grouped under a single gitignored `.agent
 | `.agents/sessions/` | Session message log (`*.session.jsonl`, one line per message + state; timestamps live on the message) |
 | `.agents/logs/<sessionId>/` | AgentLog JSONL event timeline (`agent.log`, size-rotated; written by the built-in log extension) |
 | `.agents/usage/` | Global usage history (`usage-<year>.jsonl`, per-LLM-call records) |
-| `.agents/config/models.json` | Model provider entries + `global.toolConfig` (websearch keys/provider). Runtime knobs (`maxIterations` / `mcpConfigPath` / `systemPrompt`) are flags/env, never this file |
+| `.agents/config/models.json` | Model provider entries + `global.toolConfig` (websearch keys/provider). The TUI **and** `codent acp` merge that block UNDER their env-derived value (`BRAVE_API_KEY` / `EXA_API_KEY` / `PARALLEL_API_KEY` / `TAVILY_API_KEY` / `WEBSEARCH_PROVIDER`, via `websearchToolConfigFromEnv`). Runtime knobs (`maxIterations` / `mcpConfigPath` / `systemPrompt`) are flags/env, never this file |
 | `.agents/memory/` | Cross-session memory markdown + `MEMORY.md` |
 | `.agents/cache/tool-output/` | Large tool-output spill files (`*.txt`) — GC'd two ways: reference-based on compaction **and** a 7-day age sweep (`sweepStaleToolOutput`, lazy on first cache write of a process). The age sweep is the only thing that collects files from sessions that never compacted, and files no session ever referenced |
 | `.agents/cache/command-jobs/` | Background shell jobs: durable per-job logs (`.log`, 24 h sweep) + per-job records (`.json`, 7 days, scoped to the session that started the job). On resume, a `running` record is marked interrupted and an un-notified completion is re-delivered; a graceful quit keeps terminal un-notified records; the record keeps the status/tail after its log is swept |

@@ -151,6 +151,28 @@ const badTemperature = await fetch(`${baseUrl}/api/agent`, {
 });
 assert.equal(badTemperature.status, 400, "an out-of-range temperature is a client error");
 
+// The REQUEST schema's own failures must be 400 too. These used to escape the route's local
+// try/catch (the parse happens before it) and came back as a 500 with a stack trace.
+const badBudgetLow = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "bad-budget-low", model, maxIterations: 0 }),
+});
+assert.equal(badBudgetLow.status, 400, "a below-range iteration budget is a client error, not a 500");
+const badBudgetHigh = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "bad-budget-high", model, maxIterations: 10_000 }),
+});
+assert.equal(badBudgetHigh.status, 400, "an above-range iteration budget names the bound");
+assert.match(await badBudgetHigh.text(), /between 1 and \d+/, "the rejection carries the real bound");
+const badTemperatureType = await fetch(`${baseUrl}/api/agent`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "bad-temperature-type", model, temperature: "hot" }),
+});
+assert.equal(badTemperatureType.status, 400, "a wrongly typed request field is a client error");
+
 // ── 2. Remount seed routes ──
 const summaryRes = await fetch(`${baseUrl}/api/agent/${snap.agentId}/summary-streams`);
 assert.equal(summaryRes.status, 200);

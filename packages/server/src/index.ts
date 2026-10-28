@@ -6,8 +6,10 @@ import { serve } from "@hono/node-server";
 import "dotenv/config";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 import { networkInterfaces } from "os";
 import { pathToFileURL } from "url";
+import { z } from "zod";
 
 import { REMOTE_PROVIDER_API_KEY } from "./provider-constants.js";
 import { agentSessionRoutes } from "./routes/agent-session.js";
@@ -138,6 +140,26 @@ export type AppType = typeof api;
 // ============================================================================
 
 const app = new Hono();
+
+/**
+ * ONE error boundary for every route.
+ *
+ * A `ZodError` is a CLIENT error wherever it is thrown: a request body that fails the route's own
+ * schema (`maxIterations: 0`, `temperature: "hot"`) and a config value that only fails later inside
+ * core (`AgentConfigSchema`, `createCompactionConfig`) are the same mistake. Mapping it per handler
+ * left the earlier one — thrown by `createBodySchema.parse` — as a 500 with a stack trace.
+ */
+app.onError((err, c) => {
+  if (err instanceof HTTPException) return err.getResponse();
+  if (err instanceof z.ZodError) {
+    const message = err.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+    return c.json({ error: true, message }, 400);
+  }
+  // Same visibility the default handler had (a silent 500 is worse than a noisy one), but with a
+  // response shape callers can read instead of the plain-text default.
+  console.error(err);
+  return c.json({ error: true, message: "Internal Server Error" }, 500);
+});
 
 app.use(
   "*",

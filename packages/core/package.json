@@ -202,6 +202,7 @@
     "validate:generate-id": "pnpm run build && node scripts/validate-generate-id.mjs",
     "validate:find-edit-match": "pnpm run build && node scripts/validate-find-edit-match.mjs",
     "validate:websearch-providers": "pnpm run build && node scripts/validate-websearch-providers.mjs",
+    "validate:websearch-tool-config": "pnpm run build && node scripts/validate-websearch-tool-config.mjs",
     "validate:media-store": "pnpm run build && node scripts/validate-media-store.mjs",
     "validate:session-persist-media-failure": "pnpm run build && node scripts/validate-session-persist-media-failure.mjs",
     "validate:session-persist-integrity": "pnpm run build && node scripts/validate-session-persist-integrity.mjs",

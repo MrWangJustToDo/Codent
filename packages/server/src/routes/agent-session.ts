@@ -305,8 +305,9 @@ export const agentSessionRoutes = new Hono()
     const body = createBodySchema.parse(await c.req.json());
     const { buildDefaultSystemPrompt, createLocalAgentSessionHost, MAX_AGENT_ITERATIONS, resolveModelConfig } =
       await loadCore();
-    // Bounded where the request enters, so an out-of-range budget is a 400 with the bound instead
-    // of a create-time schema failure. The bound itself is core's single `MAX_AGENT_ITERATIONS`.
+    // The bound is core's single `MAX_AGENT_ITERATIONS`. This check exists for the MESSAGE (it
+    // names the bound); every other schema violation — here, in `AgentConfigSchema`, or in the
+    // compaction schema — is a 400 through the app's one `ZodError` boundary.
     if (body.maxIterations !== undefined && body.maxIterations > MAX_AGENT_ITERATIONS) {
       return c.json({ error: true, message: `maxIterations must be between 1 and ${MAX_AGENT_ITERATIONS}.` }, 400);
     }
@@ -336,58 +337,45 @@ export const agentSessionRoutes = new Hono()
     // Annotated deliberately: `host.create()` returns the real `AgentSession`, and leaving that
     // inferred would make this route object's type unnameable without `@tanstack/ai`
     // (see SessionWithErasedSnapshot).
-    let session: SessionWithErasedSnapshot;
-    try {
-      ({ session } = await host.create({
-        name: body.name || "remote",
-        model: connection.model,
-        // Every session setting comes from the REQUEST body or the built-in default. The server's
-        // own `.agents/config/models.json` supplies provider entries (via `loadServerModelsConfig`,
-        // for the `/models` plane) — not session config: a server serves many clients, so its file
-        // must not decide their prompts or budgets.
-        systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt(undefined, getServerEnv())),
-        // No `providerMode` in the body: the server owns the connection, so `applyPersistedModel`
-        // takes the non-remote branch and adopts a resumed session's persisted model — which the
-        // server itself wrote through `model.set`, so that is the intended choice.
-        maxIterations: body.maxIterations,
-        ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
-        mcpConfigPath: body.mcpConfigPath,
-        ...(body.mcpServers ? { mcpServers: body.mcpServers as Record<string, McpServerConfig> } : {}),
-        extensionDirs: body.extensionDirs,
-        ...(body.builtins ? { builtins: body.builtins } : {}),
-        modelStyle: connection.style,
-        modelBaseURL: connection.baseURL,
-        modelApiKey: connection.apiKey,
-        modelInfo: (body.modelInfo as ModelInfo | undefined) ?? modelInfo,
-        continueSession: body.continueSession,
-        resumeSessionId: body.resumeSessionId,
-        ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
-        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-        ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
-        ...(body.reasoningEffort
-          ? { reasoningEffort: body.reasoningEffort as AgentSessionCreateOptions["reasoningEffort"] }
-          : {}),
-        ...(body.compaction
-          ? { compaction: body.compaction as NonNullable<AgentSessionCreateOptions["compaction"]> }
-          : {}),
-        ...(body.skillDirs ? { skillDirs: body.skillDirs } : {}),
-        ...(body.lazyToolsConfig
-          ? { lazyToolsConfig: body.lazyToolsConfig as NonNullable<AgentSessionCreateOptions["lazyToolsConfig"]> }
-          : {}),
-        ...(body.agentDocFilenames ? { agentDocFilenames: body.agentDocFilenames } : {}),
-        ...(body.agentDocLoadOverride !== undefined ? { agentDocLoadOverride: body.agentDocLoadOverride } : {}),
-      }));
-    } catch (error) {
-      // `host.create` validates through `AgentConfigSchema`; a bad tuning value is a client error,
-      // not a server fault, so surface the issues instead of a 500.
-      if (error instanceof z.ZodError) {
-        return c.json(
-          { error: true, message: error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") },
-          400
-        );
-      }
-      throw error;
-    }
+    const { session }: { session: SessionWithErasedSnapshot } = await host.create({
+      name: body.name || "remote",
+      model: connection.model,
+      // Every session setting comes from the REQUEST body or the built-in default. The server's
+      // own `.agents/config/models.json` supplies provider entries (via `loadServerModelsConfig`,
+      // for the `/models` plane) — not session config: a server serves many clients, so its file
+      // must not decide their prompts or budgets.
+      systemPrompt: body.systemPrompt || (await buildDefaultSystemPrompt(undefined, getServerEnv())),
+      // No `providerMode` in the body: the server owns the connection, so `applyPersistedModel`
+      // takes the non-remote branch and adopts a resumed session's persisted model — which the
+      // server itself wrote through `model.set`, so that is the intended choice.
+      maxIterations: body.maxIterations,
+      ...(body.maxConcurrentTasks !== undefined ? { maxConcurrentTasks: body.maxConcurrentTasks } : {}),
+      mcpConfigPath: body.mcpConfigPath,
+      ...(body.mcpServers ? { mcpServers: body.mcpServers as Record<string, McpServerConfig> } : {}),
+      extensionDirs: body.extensionDirs,
+      ...(body.builtins ? { builtins: body.builtins } : {}),
+      modelStyle: connection.style,
+      modelBaseURL: connection.baseURL,
+      modelApiKey: connection.apiKey,
+      modelInfo: (body.modelInfo as ModelInfo | undefined) ?? modelInfo,
+      continueSession: body.continueSession,
+      resumeSessionId: body.resumeSessionId,
+      ...(body.toolConfig ? { toolConfig: body.toolConfig } : {}),
+      ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+      ...(body.maxTokens !== undefined ? { maxTokens: body.maxTokens } : {}),
+      ...(body.reasoningEffort
+        ? { reasoningEffort: body.reasoningEffort as AgentSessionCreateOptions["reasoningEffort"] }
+        : {}),
+      ...(body.compaction
+        ? { compaction: body.compaction as NonNullable<AgentSessionCreateOptions["compaction"]> }
+        : {}),
+      ...(body.skillDirs ? { skillDirs: body.skillDirs } : {}),
+      ...(body.lazyToolsConfig
+        ? { lazyToolsConfig: body.lazyToolsConfig as NonNullable<AgentSessionCreateOptions["lazyToolsConfig"]> }
+        : {}),
+      ...(body.agentDocFilenames ? { agentDocFilenames: body.agentDocFilenames } : {}),
+      ...(body.agentDocLoadOverride !== undefined ? { agentDocLoadOverride: body.agentDocLoadOverride } : {}),
+    });
     sessions.set(session.id, session);
     // Redact secrets: `body` now carries toolConfig (websearch API keys) alongside the model
     // apiKey, so never stringify the whole payload — only its non-secret shape.

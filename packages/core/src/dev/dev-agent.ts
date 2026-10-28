@@ -40,6 +40,10 @@ export {
 } from "../agent/stream/stream-errors.js";
 export { AgentConfigSchema } from "../managers/agent-types.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
+export {
+  mergeModelsConfigToolConfig,
+  websearchToolConfigFromEnv,
+} from "../agent/tools/tool-config.js";
 export { formatReadFileToolResult } from "../agent/tools/builtin/fs/read/format-result.js";
 // Code-mode's `execute_typescript` projection: a script that returns a media result from an
 // `external_*` binding must reach the model as multimodal parts, not base64 text.

@@ -100,11 +100,15 @@ export interface ModelsConfigGlobal {
    * `provider` is the preferred provider name; `websearchProvider` is the legacy spelling
    * and is mapped onto `provider` on read (see {@link normalizeGlobalToolConfig}).
    *
-   * Consumers: the TUI config load merges it UNDER the CLI/env value
-   * (`packages/app/src/hooks/use-config.ts`), and `codent acp` uses it as its session defaults
-   * (`packages/acp/src/bootstrap.ts`). The remote-session server deliberately does not read it —
-   * its sessions are configured by the create request body (or its own `.env`) — and it strips the
-   * block from `/api/provider/info` because it holds secrets.
+   * Two hosts read it, and both merge it UNDER their own env-derived value with one shared helper
+   * (`mergeModelsConfigToolConfig` over `websearchToolConfigFromEnv`, `agent/tools/tool-config.ts`):
+   * the TUI config load (`packages/app/src/hooks/use-config.ts`) and `codent acp`
+   * (`packages/acp/src/bootstrap.ts`). The env spelling is the same list in both hosts
+   * (`BRAVE_API_KEY` / `EXA_API_KEY` / `PARALLEL_API_KEY` / `TAVILY_API_KEY` /
+   * `WEBSEARCH_PROVIDER`); a per-host copy is how a key that worked in one stayed dead in the other.
+   * The remote-session server deliberately does not read this block — its sessions are configured
+   * by the create request body (or its own `.env`) — and it strips the block from
+   * `/api/provider/info` because it holds secrets.
    */
   toolConfig?: {
     braveApiKey?: string;

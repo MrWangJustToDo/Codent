@@ -1,4 +1,9 @@
-import { DEFAULT_AGENT_MAX_ITERATIONS, parseModelStyle, resolveModelConnection } from "@codent/core";
+import {
+  DEFAULT_AGENT_MAX_ITERATIONS,
+  parseModelStyle,
+  resolveModelConnection,
+  websearchToolConfigFromEnv,
+} from "@codent/core";
 import { createRequire } from "node:module";
 
 import { parseModelInfoFromEnv } from "./model-env.js";
@@ -24,36 +29,36 @@ interface ParsedArgs {
  *    prompt that starts with `-`.
  * 2. A positional (the initial prompt) starting with `-` is swallowed as a flag too, so
  *    `codent "--fix the bug"` sends no prompt at all — it just sets `true` under some key.
- * 3. Unknown flags (`--max-iteration` typo, `--model=x` equals-form) are accepted into `flags`
- *    and never read by anything. Nothing validates the flag set, so a typo is indistinguishable
- *    from "accepted but ignored" and the default silently applies.
+ * 3. Unknown flags (`--max-iteration` typo) are accepted into `flags` and never read by anything.
+ *    Nothing validates the flag set, so a typo is indistinguishable from "accepted but ignored"
+ *    and the default silently applies.
  *
- * Fix by using a real parser, or at minimum: treat a leading `-` as a flag only when it names a
- * known flag, reject unknown flags, and support `--flag=value`.
+ * `--flag=value` IS supported (`parseArgs` splits the first `=`); that matters because the
+ * validators read the value, and an ignored `--sandbox=native` used to mean "silently keep the
+ * default". Fix the rest by using a real parser, or at minimum: treat a leading `-` as a flag only
+ * when it names a known flag, and reject unknown flags.
  */
 function parseArgs(args: string[]): ParsedArgs {
   const result: ParsedArgs = { positional: [], flags: {} };
   let i = 0;
   while (i < args.length) {
     const arg = args[i];
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const nextArg = args[i + 1];
-      if (nextArg && !nextArg.startsWith("-")) {
-        result.flags[key] = nextArg;
-        i += 2;
-      } else {
-        result.flags[key] = true;
+    if (arg.startsWith("--") || (arg.startsWith("-") && arg.length > 1)) {
+      const body = arg.startsWith("--") ? arg.slice(2) : arg.slice(1);
+      // `--flag=value` / `-f=value`: the value is part of THIS token, so it never competes with
+      // the next one (and an empty value stays "" rather than becoming a boolean).
+      const equals = body.indexOf("=");
+      if (equals >= 0) {
+        result.flags[body.slice(0, equals)] = body.slice(equals + 1);
         i += 1;
+        continue;
       }
-    } else if (arg.startsWith("-") && arg.length > 1) {
-      const key = arg.slice(1);
       const nextArg = args[i + 1];
       if (nextArg && !nextArg.startsWith("-")) {
-        result.flags[key] = nextArg;
+        result.flags[body] = nextArg;
         i += 2;
       } else {
-        result.flags[key] = true;
+        result.flags[body] = true;
         i += 1;
       }
     } else {
@@ -162,19 +167,9 @@ export function parseCliArgs(argv: string[]): ParsedCliConfig {
     ? parseModelInfoFromEnv(process.env, connection.model, connection.style === "anthropic" ? "anthropic" : "openai")
     : undefined;
 
-  const braveApiKey = getEnv("BRAVE_API_KEY") || undefined;
-  const exaApiKey = getEnv("EXA_API_KEY") || undefined;
-  const parallelApiKey = getEnv("PARALLEL_API_KEY") || undefined;
-  const tavilyApiKey = getEnv("TAVILY_API_KEY") || undefined;
-  const websearchProvider = getEnv("WEBSEARCH_PROVIDER") || undefined;
-  const websearchConfig = {
-    ...(braveApiKey ? { braveApiKey } : {}),
-    ...(exaApiKey ? { exaApiKey } : {}),
-    ...(parallelApiKey ? { parallelApiKey } : {}),
-    ...(tavilyApiKey ? { tavilyApiKey } : {}),
-    ...(websearchProvider ? { provider: websearchProvider } : {}),
-  };
-  const toolConfig = Object.keys(websearchConfig).length > 0 ? { websearch: websearchConfig } : undefined;
+  // ONE env→toolConfig mapping, shared with the ACP bootstrap (`websearchToolConfigFromEnv`): a
+  // host-specific copy is how a key that worked here stayed dead over ACP.
+  const toolConfig = websearchToolConfigFromEnv(process.env);
 
   let resumeSession = "";
   const resumeFlag = getFlag(parsed, "resume", "r");
