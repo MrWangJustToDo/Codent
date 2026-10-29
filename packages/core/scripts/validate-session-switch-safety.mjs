@@ -7,7 +7,12 @@
 
 import assert from "node:assert/strict";
 
-import { SessionLifecycleService, SessionPersistence, SessionService } from "../dist/dev.mjs";
+import {
+  SessionLifecycleService,
+  SessionPersistence,
+  SessionService,
+  dispatchLocalAgentSessionCommand,
+} from "../dist/dev.mjs";
 
 const saves = [];
 const existing = new Set();
@@ -384,6 +389,39 @@ assert.equal(
   assert.equal(adopted?.id, "ses_flag_new_1", "both transitions committed");
   assert.equal(transcriptCleared, true);
   assert.equal(lifecycle.isTransitioning(), false, "the flag clears once every admitted transition settles");
+}
+
+// An interaction offered inside the switch window is REFUSED, not silently accepted: the chat
+// controller drops it (the text belongs to neither transcript), and a host that only receives
+// `{ok:true}` clears the user's input on a message nothing accepted. Every entry point must say so.
+{
+  const refused = {
+    sendMessage: async () => "dropped",
+    steer: () => false,
+    followUp: () => false,
+    forceSubmit: () => false,
+    respondToToolApproval: async () => false,
+    addToolResult: async () => false,
+  };
+  const managed = { parentId: undefined, getChatController: () => refused };
+  const cases = [
+    { type: "send", content: "hello" },
+    { type: "steer", content: "hello" },
+    { type: "followUp", content: "hello" },
+    { type: "forceSubmit", content: "hello" },
+    { type: "respondApproval", approvalId: "a1", approved: true },
+    { type: "addToolResult", toolCallId: "t1", output: {} },
+  ];
+  for (const command of cases) {
+    const result = await dispatchLocalAgentSessionCommand(managed, {}, command);
+    assert.equal(result.ok, false, `"${command.type}" must refuse while switching`);
+    assert.match(String(result.error), /switching/i, `"${command.type}" must explain the refusal`);
+  }
+
+  // A queued send is still a success: it was accepted, just not delivered yet.
+  const queued = { ...managed, getChatController: () => ({ ...refused, sendMessage: async () => "queued" }) };
+  const queuedResult = await dispatchLocalAgentSessionCommand(queued, {}, { type: "send", content: "hello" });
+  assert.deepEqual(queuedResult, { ok: true }, "a queued message is accepted");
 }
 
 console.log("session-switch-safety validation passed");

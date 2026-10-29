@@ -36,6 +36,11 @@ export interface ReactiveCompactHost {
   getCanonicalFromUI: () => ModelMessage[];
   getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
   emitEvent: EmitAgentTelemetryFn;
+  /**
+   * Optional override for the regular compaction config. Production hosts omit it: the live
+   * config is read from {@link getCompaction} (a `ManagedAgent` has no such field, and reading
+   * only the override made `keepRecentTokens` inert on this path).
+   */
   compactionConfig?: { keepRecentTokens?: number } | null;
   /** Model input context window in tokens, if known (drives the reactive tail budget). */
   getContextWindow: () => number | undefined;
@@ -77,10 +82,13 @@ export async function handleManagedReactiveCompact(
   try {
     const canon = host.getCanonicalFromUI();
     const llmMessages = host.getMessagesForLLM(canon);
+    // The live compaction config is the source of truth. `host.compactionConfig` is an override
+    // for tests/embeds; the production host (`ManagedAgent`) has no such field, so reading the
+    // override alone silently dropped the user's `keepRecentTokens` on the reactive path — the
+    // one place an overflowing window most needs it.
+    const compactionConfig = host.compactionConfig ?? host.getCompaction().getConfig() ?? null;
     const compactedMessages = await reactiveCompact(llmMessages, host.id, manager, {
-      ...(host.compactionConfig?.keepRecentTokens != null
-        ? { keepRecentTokens: host.compactionConfig.keepRecentTokens }
-        : {}),
+      ...(compactionConfig?.keepRecentTokens != null ? { keepRecentTokens: compactionConfig.keepRecentTokens } : {}),
       ...(host.getContextWindow() && host.getContextWindow()! > 0 ? { contextWindow: host.getContextWindow() } : {}),
       ...(abortSignal ? { abortSignal } : {}),
     });
@@ -93,7 +101,7 @@ export async function handleManagedReactiveCompact(
     const tokensBefore = host.usage.getContextFillTokens();
 
     const applied = applyReactiveCompactionResult(host.getCoreEnv(), canon, channel, host.usage, compactedMessages, {
-      ...keepPolicyProjectionOptions(resolveKeepPolicy(host.compactionConfig ?? {}, host.getContextWindow())),
+      ...keepPolicyProjectionOptions(resolveKeepPolicy(compactionConfig ?? {}, host.getContextWindow())),
       onCacheCleanupError: (err) => {
         // A cache-cleanup failure is not a failed compaction: emitting `compaction:reactive-error`
         // here rendered as "Reactive compact failed" even though the summary had been applied.

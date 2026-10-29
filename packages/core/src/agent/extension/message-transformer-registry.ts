@@ -33,6 +33,7 @@
  * `Map`, a class instance) are kept by reference rather than flattened into a plain object.
  */
 
+import { cloneOwnedValue, MODEL_MESSAGE_OWNERSHIP_DEPTH } from "../../utils/model-messages.js";
 import { compareDispatchRank } from "../dispatch-order.js";
 
 import type { DispatchRank } from "../dispatch-order.js";
@@ -61,47 +62,14 @@ function describeValue(value: unknown): string {
 }
 
 /**
- * How many containers below a MESSAGE are copied.
- *
- * Six, because the message level costs one that the old part-rooted clone did not pay: at five the
- * per-part depth was one less than before, so `part.output[0].content` (and its elements) were
- * shared with the UI channel and a transformer pushing into them reached the persisted transcript.
- * Six keeps the part depth the durability invariant was written for while also covering the
- * message's own fields (`toolCalls`, `metadata`, `structuredOutput`). Payload strings stay shared:
- * they are immutable (and can be large).
- */
-const OWNERSHIP_CLONE_DEPTH = 6;
-
-/**
- * Copy one value's own containers down to {@link OWNERSHIP_CLONE_DEPTH}.
- *
- * Plain objects and arrays are re-created (elements included, which the old shallow array copy
- * missed: `part.output[0].text = …` reached the channel). Primitives are returned as-is — sharing
- * a string is safe because it is immutable — and exotic objects are kept by reference rather than
- * silently flattened into `{}`.
- */
-function cloneOwnedValue(value: unknown, depth: number): unknown {
-  if (depth <= 0) return value;
-  if (Array.isArray(value)) return value.map((entry) => cloneOwnedValue(entry, depth - 1));
-  if (value && typeof value === "object") {
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) return value;
-    const copy: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) copy[key] = cloneOwnedValue(entry, depth - 1);
-    return copy;
-  }
-  return value;
-}
-
-/**
  * Ownership copy for one model message — see the note at the top of this file.
  *
- * The whole message is copied, not just `content`: the wire conversion shares `metadata`,
- * `structuredOutput` and the `toolCalls` array with the UI channel, so an edit to any of them used
- * to reach the persisted transcript (or the retained wire) just like a part edit did.
+ * The clone itself lives in `utils/model-messages.ts`: `ctx.getMessages()` hands the same wire to
+ * an extension, and two copies of "how deep is a copy" is how one of them ends up shallower than
+ * the durability invariant it claims.
  */
 function cloneModelMessage(message: ModelMessage): ModelMessage {
-  return cloneOwnedValue(message, OWNERSHIP_CLONE_DEPTH) as ModelMessage;
+  return cloneOwnedValue(message, MODEL_MESSAGE_OWNERSHIP_DEPTH) as ModelMessage;
 }
 
 export interface MessageTransformerRegistryHost {

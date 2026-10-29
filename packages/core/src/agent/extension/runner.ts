@@ -810,6 +810,13 @@ export class ExtensionRunner {
         this.uiBridge.clearOwner(instance.api.id);
         instance.state = "error";
         instance.error = error;
+        // `clearNotices` ran at activation START (so a stale "disabled" notice could not sit
+        // beside a live section). On failure there is no section either, so without this the
+        // model sees the extension's tools simply vanish with no explanation.
+        this.turnContextSections.setDisabledNotice(
+          instance.api.id,
+          `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
+        );
         return { ok: false, message: `Failed to enable "${id}": ${error.message}` };
       } finally {
         this.activating.delete(instance.api.id);
@@ -888,6 +895,9 @@ export class ExtensionRunner {
       this.stacks.removeTool(name, instance.api.id);
       this.options.onUnregisterTool?.(name, instance.api.id);
     }
+    // One catalog publish for the whole removal batch: the per-name path is told not to publish,
+    // and disabling an extension with N tools used to re-serialize every descriptor N times.
+    if (instance.registrations.tools.length > 0) this.options.onToolRegistrationBatchComplete?.();
     for (const name of instance.registrations.commands) {
       const { existed, live } = this.stacks.removeCommand(name, instance.api.id);
       if (!existed) continue;
@@ -908,8 +918,9 @@ export class ExtensionRunner {
     for (const unsub of instance.registrations.unsubTurnContext) {
       unsub();
     }
-    // Transformer slot is keyed by owner id, so only clear it when this extension
-    // still holds it — a re-registered instance may have replaced the entry.
+    // The transformer slot is keyed by OWNER id with at most one entry per extension, so clearing
+    // by id releases exactly this extension's slot (there is no per-incarnation identity to check,
+    // and a re-registration under the same id is this extension's own newest claim).
     for (const id of instance.registrations.messageTransformers) {
       this.messageTransformers.clearExtension(id);
     }

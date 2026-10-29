@@ -210,6 +210,37 @@ assert.ok(rotated.length >= 1, `expected >=1 rotated segment, got ${entries.join
 console.log("rotation OK:", entries.join(", "));
 
 // ----------------------------------------------------------------------------
+// 2b. `maxFiles: 1` keeps ONE file: the generic shift still wrote `agent.log.1`
+//     (its `oldest` was `.0` and its loop did not run), so a host that asked for a
+//     single file silently retained two.
+// ----------------------------------------------------------------------------
+{
+  const oneDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-one-"));
+  const oneLog = new AgentLog();
+  const oneDetach = oneLog.attachFileSink({
+    dir: oneDir,
+    filename: "agent.log",
+    maxBytes: 300,
+    maxFiles: 1,
+    flushIntervalMs: 10,
+  });
+  for (let batch = 0; batch < 6; batch++) {
+    for (let i = 0; i < 3; i++) oneLog.info("system", `one-${batch}-${i}-` + "y".repeat(60));
+    await oneLog.flush();
+  }
+  await oneDetach();
+  const oneEntries = (await fs.promises.readdir(oneDir)).sort();
+  assert.ok(oneEntries.includes("agent.log"), `active file present, got ${oneEntries}`);
+  assert.deepEqual(
+    oneEntries.filter((e) => /^agent\.log\.\d+$/.test(e)),
+    [],
+    `maxFiles: 1 must not create a rotated segment, got ${oneEntries.join(", ")}`
+  );
+  await fs.promises.rm(oneDir, TEMP_RM_OPTIONS);
+  console.log("maxFiles: 1 keeps one file OK");
+}
+
+// ----------------------------------------------------------------------------
 // 3. Silent degradation: fs without appendFile must not write nor throw.
 // ----------------------------------------------------------------------------
 {

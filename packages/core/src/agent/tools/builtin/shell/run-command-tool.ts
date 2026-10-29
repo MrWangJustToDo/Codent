@@ -81,7 +81,6 @@ export function buildTimedOutCommandResult(params: {
 }
 
 export const createRunCommandTool = (options?: { subagentSafe?: boolean; context?: AgentToolContext }) => {
-  const commandService = options?.context?.getCommandService();
   const subagentSafe = options?.subagentSafe ?? false;
   const streamSink = options?.context?.getStreamSink();
   // `RUN_COMMAND_TIMEOUT_MS` is resolved once per tool instance: the env is stable for the session,
@@ -183,6 +182,12 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
       }
 
       if (run_in_background) {
+        // Resolve per call, never at construction: the tool set is built once per agent, but a
+        // session switch (`/new`, `/resume`) closes the command service and drops the field
+        // (`resetCommandJobs`). A captured instance kept accepting `startBackground` on a CLOSED
+        // service, so every background command failed after the first switch while
+        // `get_command_output` / `kill_command` — which resolve lazily — kept working.
+        const commandService = options?.context?.getCommandService();
         if (!commandService) {
           throw new Error("Background commands require an AgentToolContext with an AgentCommandService.");
         }

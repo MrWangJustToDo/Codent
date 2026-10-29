@@ -158,7 +158,7 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       const detach = (): void => {
         if (sinks.get(log) !== detach) return; // superseded — nothing of ours to release
         sinks.delete(log);
-        sink.detach();
+        void sink.detach();
         // Conditional: a superseded handle must not unbind the live binding (the `sinks.get` check
         // above covers this registry, the seam guard covers the seam itself).
         log.detachSink(sink.handleEntry);

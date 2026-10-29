@@ -207,7 +207,8 @@ export class AgentBootstrap {
     };
     const extensionRunner = new ExtensionRunner({
       onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank, { publishCatalog: false }),
-      onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
+      // The batch callback below publishes the catalog once, so per-name removal must not.
+      onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId, { publishCatalog: false }),
       // Live run/session facts and one-shot model access for extensions (`ctx.signal`,
       // `ctx.getMessages()`, `ctx.llm`). A function because every fact is per run.
       getRuntime: () => managed.getExtensionRuntime(),

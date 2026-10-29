@@ -1,3 +1,9 @@
+/* eslint-disable max-lines -- Chat run orchestration. One loop owns admission, the mid-run queue
+   (steer / follow-up / force-submit), the switch refusal contract, approval answering and
+   stream-outcome finalization; those are separate protocols but their ORDER is the invariant, so
+   moving one out would separate a decision from the loop that enforces it. The refusal gate and
+   the queue drain helpers are the next extracted unit; the `SendMessageOutcome` contract added here
+   is what pushed the file over the ceiling. */
 import { assertNotCompactionSummaryInput } from "../../agent/compaction";
 import { shouldDeferMidRunQueue } from "../../agent/queue/defer-mid-run-queue.js";
 import { PendingMessageQueue, type QueueMode } from "../../agent/queue/pending-message-queue.js";
@@ -35,6 +41,15 @@ const MAX_TOOL_PHASES = 40;
 
 /** Statuses a background completion may wake (see {@link AgentChatController.wakeForBackgroundCompletion}). */
 const WAKEABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(["idle", "completed"]);
+
+/**
+ * What happened to a submitted message.
+ *
+ * `dropped` is a REFUSAL, not a silent success: a session switch (unload → load) is in flight, so
+ * the text belongs to neither the transcript being replaced nor the target the user has not seen
+ * yet. Hosts must report it back to the user instead of clearing their input on a false `ok`.
+ */
+export type SendMessageOutcome = "sent" | "queued" | "dropped";
 
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 
@@ -320,17 +335,18 @@ export class AgentChatController {
    * `steer` is kept for programmatic use where you want the message to be
    * delivered within the same turn (before the next LLM call).
    */
-  steer(content: QueuedMessageContent): void {
+  steer(content: QueuedMessageContent): boolean {
     // The message belongs to the transcript that is being replaced. Do not queue it: the unload
     // half clears the queues, and re-targeting it at the session the user has not seen yet would
     // deliver input they wrote about the old conversation.
-    if (this.dropIfSwitching("steer")) return;
+    if (this.dropIfSwitching("steer")) return false;
     if (!this.shouldDeferQueue()) {
       void this.sendMessage(content);
-      return;
+      return true;
     }
     this.steeringQueue.enqueue(content);
     this.notifyQueueListeners();
+    return true;
   }
 
   /**
@@ -341,19 +357,20 @@ export class AgentChatController {
    * the message is delivered only after the current turn completes, then
    * starts a new LLM turn.
    */
-  followUp(content: QueuedMessageContent): void {
+  followUp(content: QueuedMessageContent): boolean {
     // Reject forged compaction markers before they can be queued or land on
     // the channel (marker matching drives compaction checkpoint detection).
     assertNotCompactionSummaryInput(content);
     // Same policy as `steer`: input offered mid-switch is dropped, not queued for a transcript
     // the unload half is about to clear.
-    if (this.dropIfSwitching("follow-up")) return;
+    if (this.dropIfSwitching("follow-up")) return false;
     if (!this.shouldDeferQueue()) {
       void this.sendMessage(content);
-      return;
+      return true;
     }
     this.followUpQueue.enqueue(content);
     this.notifyQueueListeners();
+    return true;
   }
 
   /**
@@ -365,19 +382,22 @@ export class AgentChatController {
    * Anything already queued is KEPT and delivered after this message, in the order it was written — the
    * interrupt stops the run, not the user's other input.
    */
-  forceSubmit(content: string | ContentPart[]): void {
+  forceSubmit(content: string | ContentPart[]): boolean {
     assertNotCompactionSummaryInput(content);
     // A switch is unload → load. The message is about the session being left, so it is dropped
     // here — queueing it would either be cleared by the unload or delivered to a transcript the
     // user has not seen yet.
-    if (this.dropIfSwitching("force-submit")) return;
+    if (this.dropIfSwitching("force-submit")) return false;
     // A manual `/compact` is work in flight with NO pump, so there is nothing to interrupt: the
     // message would start a pump beside the summarizer, appending the checkpoint inside a
     // half-finished turn and resetting the window usage the new turn is accumulating. Queue it —
     // `resumeAfterCompaction()` releases exactly like a follow-up when the compaction ends.
-    if (this.managed.compactions.isRunning()) {
+    //
+    // `ownsManual()`, not `isRunning()`: auto/reactive compaction runs INSIDE a live pump, and
+    // there the interrupt is exactly what the user asked for (`isRunActive()` below handles it).
+    if (this.managed.compactions.ownsManual()) {
       this.followUp(content);
-      return;
+      return true;
     }
     // Only a live run is interrupted. On an idle agent `interruptCurrentRun` emitted `agent:abort`
     // and finalized an "aborted" turn that never existed (`agent:stop` with no `turn:start`), which
@@ -389,32 +409,36 @@ export class AgentChatController {
     this.persistMessages("user-message");
     this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run");
     void this.enqueueRunOnce();
+    return true;
   }
 
-  async sendMessage(content: string | ContentPart[]): Promise<void> {
+  async sendMessage(content: string | ContentPart[]): Promise<SendMessageOutcome> {
     // User-authored text must not forge compaction checkpoint markers (see
     // assertNotCompactionSummaryInput in agent/compaction).
     assertNotCompactionSummaryInput(content);
     // A resume/new is unload → load. Input offered inside that window belongs to neither session:
     // writing it would target the one being left, and replaying it into the target would attach a
-    // message to a transcript the user has not seen yet. Drop it (and say so in the log).
-    if (this.dropIfSwitching("send")) return;
+    // message to a transcript the user has not seen yet. Report the refusal — a host that only
+    // sees `ok` would clear the user's input on a message nothing accepted.
+    if (this.dropIfSwitching("send")) return "dropped";
     if (this.shouldDeferQueue()) {
-      await this.steer(content);
-      return;
+      this.steer(content);
+      return "queued";
     }
     // Only strips truncated/invalid leftover tools — never approval-responded / valid queues.
     this.applyCancelledIncompleteTools();
     this.channel.addUserMessage(content);
     this.persistMessages("user-message");
-    return this.enqueueRunOnce();
+    await this.enqueueRunOnce();
+    return "sent";
   }
 
-  respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<void> {
+  async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<boolean> {
     // The pending question belongs to the turn being unloaded. Answering it now would settle a
     // tool row in the leaving transcript (and could start a pump after the target is adopted).
-    if (this.dropIfSwitching("respond-approval")) return Promise.resolve();
-    return this.approvalDecisions.respondToToolApproval(approvalId, approved, reason);
+    if (this.dropIfSwitching("respond-approval")) return false;
+    await this.approvalDecisions.respondToToolApproval(approvalId, approved, reason);
+    return true;
   }
 
   /**
@@ -465,16 +489,17 @@ export class AgentChatController {
     return this.approvalDecisions.approvePendingApprovals();
   }
 
-  addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<void> {
+  async addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<boolean> {
     // A client-tool answer (`ask_user`) belongs to the question the leaving turn asked.
-    if (this.dropIfSwitching("add-tool-result")) return Promise.resolve();
+    if (this.dropIfSwitching("add-tool-result")) return false;
     this.channel.addToolResult(toolCallId, output);
     // The client tool's result IS the end of the wait — but only when it was the LAST pending one
     // (a host could settle a different tool while an `ask_user` is still open). Clearing it here
     // rather than in each host is what lets the resumed pump leave `awaiting_user`; see
     // `prepareRunPhase`.
     if (!hasPendingAskUser(this.channel.getMessages())) this.managed.setClientToolWaiting(false);
-    return this.enqueueRunOnce();
+    await this.enqueueRunOnce();
+    return true;
   }
 
   /**
@@ -620,21 +645,33 @@ export class AgentChatController {
     const token = this.managed.run.beginRun();
     this.currentToken = token;
     const turnStart = Date.now();
-    this.pumpDepth += 1;
-    // Baselines for `turn:summary`: the summary reports THIS pump's work, not the session totals.
-    const usageAtStart = this.managed.usage.snapshotTotal();
-    const costAtStart = this.managed.usage.getTotalCostUsd();
-    const toolCallsAtStart = countToolCalls(this.channel.getMessages());
 
+    // Defaults, because the baselines below now live inside the guard: if one throws before it
+    // assigns, the catch still finalizes with a zero baseline instead of skipping the turn.
+    let usageAtStart: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+    } = { inputTokens: 0, outputTokens: 0 };
+    let costAtStart = 0;
+    let toolCallsAtStart = 0;
     let hasError = false;
     let toolPhases = 0;
     let finalized = false;
 
-    // Everything that can throw belongs INSIDE the guard. A throw from the setup below used to
-    // skip the `finally` entirely — `pumpDepth` stuck above 0, the token still valid, every later
-    // message queued with nothing to drain it — and surfaced as an unhandled rejection from
+    // Everything that can throw belongs INSIDE the guard — including the depth bookkeeping and the
+    // `turn:summary` baselines, not just the phases. A throw from the setup below used to skip the
+    // `finally` entirely — `pumpDepth` stuck above 0, the token still valid, every later message
+    // queued with nothing to drain it — and surfaced as an unhandled rejection from
     // `enqueueRunOnce` (which callers fire with `void`). The catch then finalizes as `error`.
     try {
+      this.pumpDepth += 1;
+      // Baselines for `turn:summary`: the summary reports THIS pump's work, not the session totals.
+      usageAtStart = this.managed.usage.snapshotTotal();
+      costAtStart = this.managed.usage.getTotalCostUsd();
+      toolCallsAtStart = countToolCalls(this.channel.getMessages());
+
       this.managed.resetTurnLifecycle();
       this.managed.clearPrepareAsContinuation();
       // A stale wake mark must not survive a pump that ends before its first model call.

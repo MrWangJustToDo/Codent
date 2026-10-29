@@ -68,10 +68,21 @@ export class AgentLogBinding {
     detach?.();
   }
 
-  /** Destroy-time: land buffered entries, release the sink, then unregister the guard. */
-  flushOnDestroy(): void {
+  /**
+   * Destroy-time: land buffered entries, release the sink, then unregister the guard.
+   *
+   * Awaitable: a runtime without sync fs (remote CoreEnv) can only write its final batch
+   * asynchronously, so the caller must await this before the process exits. `AgentLog.flush()`
+   * is a no-op when no sink is attached.
+   */
+  async flushOnDestroy(): Promise<void> {
     const log = this.deps.getLog();
     log.flushSync();
+    try {
+      await log.flush();
+    } catch {
+      // A failed final write must not block releasing the sink.
+    }
     this.detach();
     unregisterActiveAgentLog(log);
   }

@@ -525,13 +525,17 @@ await runCase("a cached array is transformed again on every call", async () => {
 
 console.log("middleware contract");
 
-await runCase("placement: message-transform sits immediately after compaction", async () => {
+await runCase("placement: message-transform sits after compaction + tool-compact", async () => {
   const idx = CANONICAL_MIDDLEWARE_ORDER.indexOf("message-transform");
   assert.notEqual(idx, -1, "registered in the canonical order");
   assert.equal(
-    CANONICAL_MIDDLEWARE_ORDER.indexOf("compaction") + 1,
+    CANONICAL_MIDDLEWARE_ORDER.indexOf("tool-compact") + 1,
     idx,
-    "adjacent to compaction — otherwise the channel projection discards its output"
+    "after tool-compact — otherwise the tool's own projection overwrites a rewrite of a tool result"
+  );
+  assert.ok(
+    idx > CANONICAL_MIDDLEWARE_ORDER.indexOf("compaction"),
+    "after compaction — otherwise the channel projection discards its output"
   );
 });
 
@@ -820,8 +824,8 @@ await runCase("pipeline assembles with the new middleware in canonical order", a
     createApprovalResumeMiddleware(stub),
     createLifecycleMiddleware(stub),
     createCompactionMiddleware(stub),
-    createMessageTransformMiddleware(stub),
     createToolCompactMiddleware(stub),
+    createMessageTransformMiddleware(stub),
     createWireRecoveryMiddleware(stub),
     createTurnContextMiddleware(stub),
     createExtensionsMiddleware(stub),

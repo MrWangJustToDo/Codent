@@ -75,8 +75,8 @@ const FACTORIES = [
   createApprovalResumeMiddleware,
   createLifecycleMiddleware,
   createCompactionMiddleware,
-  createMessageTransformMiddleware,
   createToolCompactMiddleware,
+  createMessageTransformMiddleware,
   createWireRecoveryMiddleware,
   createTurnContextMiddleware,
   createExtensionsMiddleware,
@@ -160,21 +160,25 @@ assert.notEqual(compactionIdx, -1, "compaction middleware must be present in the
 assert.notEqual(transformIdx, -1, "message-transform middleware must be present in the assembled pipeline");
 assert.notEqual(toolCompactIdx, -1, "tool-compact middleware must be present in the assembled pipeline");
 assert.notEqual(wireRecoveryIdx, -1, "wire-recovery middleware must be present in the assembled pipeline");
-assert.equal(
-  transformIdx,
-  compactionIdx + 1,
-  `message-transform must RUN immediately after compaction, or the channel projection discards ` +
-    `its output. Assembled order: ${liveNames.join(", ")}`
-);
 // The capability strip replaces media parts with a placeholder, so it has to run after
 // the extension transform or an extension could never see a real attachment on a model
 // that lacks vision. Both of those orderings have been broken by relocation before.
 assert.equal(
   toolCompactIdx,
-  transformIdx + 1,
-  `tool-compact must RUN immediately after message-transform — it is the stage that turns a tool ` +
-    `result into real content parts, and wire-recovery has to run after it. ` +
+  compactionIdx + 1,
+  `tool-compact must RUN immediately after compaction — it projects each tool result through ` +
+    `its own toModelOutput, and running before the channel projection means it is wiped. ` +
     `Assembled order: ${liveNames.join(", ")}`
+);
+// The transform must see the FINAL wire: `tool-compact` re-projects tool results from the
+// channel, so a transform running before it had its rewrite of a tool message silently
+// replaced on the same call (a media-to-text transform was even re-materialized back to an
+// image, which is a leak on a text-only model).
+assert.equal(
+  transformIdx,
+  toolCompactIdx + 1,
+  `message-transform must RUN immediately after tool-compact, so a transform's edit of a tool ` +
+    `result is not overwritten by the tool's own projection. Assembled order: ${liveNames.join(", ")}`
 );
 // ...and after `tool-compact`, because that is what materializes TOOL media: the channel
 // stores the result object, so the wire carries JSON text until the tool's `toModelOutput`
@@ -182,10 +186,10 @@ assert.equal(
 // tool's image went out untouched and the widened retry re-materialized it every call.
 assert.equal(
   wireRecoveryIdx,
-  toolCompactIdx + 1,
-  `wire-recovery must RUN immediately after tool-compact: before it, a capability strip cannot ` +
-    `reach media that only exists once the tool result has been projected; before message-transform, ` +
-    `the strip would hide the real media part from an extension transformer; before compaction, the ` +
+  transformIdx + 1,
+  `wire-recovery must RUN immediately after message-transform: before it, a capability strip would ` +
+    `hide the real media part from an extension transformer; before tool-compact, the strip cannot ` +
+    `reach media that only exists once the tool result has been projected; before compaction, the ` +
     `channel projection would discard the strip. Assembled order: ${liveNames.join(", ")}`
 );
 

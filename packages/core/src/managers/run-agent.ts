@@ -187,8 +187,15 @@ export function buildAgentRunner(
       log: deps.getLog(),
       getWireProjectionCache: deps.getWireProjectionCache,
     }),
-    // Extension message transformers. Sits right after `compaction` so it sees the
-    // channel-projected wire — running earlier would be discarded by that projection.
+    createToolCompactMiddleware({
+      getCompactionConfig: deps.getCompactionConfig,
+      getToolCompactCache: deps.getToolCompactCache,
+      getManagedAgent: () => managed,
+    }),
+    // Extension message transformers. Sits after `compaction` (that projection rebuilds the wire
+    // from the channel, discarding earlier edits) and after `tool-compact` (the stage that
+    // projects a tool result through its own `toModelOutput`: running before it meant a
+    // transformer's rewrite of a tool message was re-projected over on the same call).
     createMessageTransformMiddleware({
       agentId: deps.agentId,
       getExtensionRunner: deps.getExtensionRunner,
@@ -196,11 +203,6 @@ export function buildAgentRunner(
       // Read live, not captured: a rejection can widen the run's drop set mid-run.
       getWireDropPartTypes: () => run.getWireDropPartTypes(),
       getAbortSignal: () => run.currentAbortController?.signal,
-    }),
-    createToolCompactMiddleware({
-      getCompactionConfig: deps.getCompactionConfig,
-      getToolCompactCache: deps.getToolCompactCache,
-      getManagedAgent: () => managed,
     }),
     // Per-run wire overrides that must outlive the channel projection (capability
     // strip + `max_tokens` continuation). Sits after `tool-compact` — the stage that

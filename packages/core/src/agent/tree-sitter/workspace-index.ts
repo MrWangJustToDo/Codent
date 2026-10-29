@@ -30,7 +30,7 @@ export class WorkspaceIndex {
   private built = false;
   private building: Promise<void> | null = null;
   /**
-   * Bumped whenever the index is reset. An in-flight `_build()` from the previous root must not
+   * Bumped whenever the index is reset. An in-flight `buildLocked()` from the previous root must not
    * land entries into the new one, so every async step checks the generation it started with.
    */
   private generation = 0;
@@ -49,7 +49,7 @@ export class WorkspaceIndex {
       return;
     }
     const generation = this.generation;
-    this.building = this._build(generation);
+    this.building = this.buildLocked(generation);
     await this.building;
     if (generation === this.generation) this.built = true;
     if (generation === this.generation) this.building = null;
@@ -70,7 +70,7 @@ export class WorkspaceIndex {
     this.building = null;
   }
 
-  private async _build(generation: number): Promise<void> {
+  private async buildLocked(generation: number): Promise<void> {
     const files = await this.collectFiles(this.rootDir);
     const batchSize = 50;
     for (let i = 0; i < files.length; i += batchSize) {
@@ -106,7 +106,7 @@ export class WorkspaceIndex {
     return collected;
   }
 
-  /** Index (or re-index) a single file. `generation` is set only by an in-flight `_build`. */
+  /** Index (or re-index) a single file. `generation` is set only by an in-flight `buildLocked`. */
   async indexFile(filePath: string, generation?: number): Promise<void> {
     const absPath = this.env.resolve(filePath);
 

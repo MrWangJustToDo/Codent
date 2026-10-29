@@ -162,4 +162,5 @@ export type {
 } from "../managers/agent-run-outcome.js";
 export { whenClearForReconcilePolicy } from "../managers/agent-run-outcome.js";
 export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../managers/managed-agent-session.js";
+export { dispatchLocalAgentSessionCommand } from "../agent-session/local-session-dispatch.js";
 export { SKILL_DIRS_ENV_VAR, getDefaultSkillDirs } from "../managers/agent-manager.js";

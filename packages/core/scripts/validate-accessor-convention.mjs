@@ -124,7 +124,12 @@ function collectClasses(file) {
     }
 
     // Underscore-prefixed members are banned (the file's own rule, previously unchecked).
-    const underscored = /^\s+(?:private|protected|public)?\s*(?:readonly\s+)?(_[A-Za-z_$][\w$]*)\s*[:(=;]/.exec(line);
+    // The modifier list is a free sequence, not a fixed shape: `private async _build` slipped
+    // through the old `(private|protected|public)? readonly?` prefix and stayed undetected.
+    const underscored =
+      /^\s+(?:(?:private|protected|public|static|override|async|declare|abstract|readonly)\s+)*(_[A-Za-z_$][\w$]*)\s*[:(=;]/.exec(
+        line
+      );
     if (underscored) current.underscored.push({ name: underscored[1], line: i + 1 });
 
     const method = METHOD_RE.exec(line);

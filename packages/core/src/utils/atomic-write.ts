@@ -24,6 +24,20 @@ export interface AtomicWriteFs {
 
 let tempSequence = 0;
 
+/**
+ * Per-process tag in the temp name.
+ *
+ * The in-process counter restarts at 1 in every process, so two processes writing the same target
+ * in the same millisecond produced the SAME temp path: the second body overwrote the first, one
+ * rename succeeded and the other hit ENOENT and fell back to an in-place write. A random tag costs
+ * nothing and makes the name unique across writers, which is what the comment above promises.
+ */
+function processTag(): string {
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") return cryptoApi.randomUUID().slice(0, 8);
+  return Math.random().toString(36).slice(2, 10);
+}
+
 export async function writeFileAtomic(fs: AtomicWriteFs, path: string, content: string): Promise<void> {
   if (!fs.rename) {
     await fs.writeFile(path, content);
@@ -32,7 +46,7 @@ export async function writeFileAtomic(fs: AtomicWriteFs, path: string, content: 
 
   // Unique per attempt: two concurrent writers to the same target (models.json is not
   // serialized) must not share one temp file and rename each other's body.
-  const tmpPath = `${path}.${Date.now().toString(36)}-${++tempSequence}.tmp`;
+  const tmpPath = `${path}.${processTag()}-${Date.now().toString(36)}-${++tempSequence}.tmp`;
   try {
     await fs.writeFile(tmpPath, content);
     await fs.rename(tmpPath, path);

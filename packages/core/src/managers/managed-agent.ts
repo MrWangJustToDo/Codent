@@ -1507,8 +1507,8 @@ export class ManagedAgent {
   }
 
   /** Land buffered entries, release the sink, then unregister the process guard. */
-  flushLogOnDestroy(): void {
-    this.logBinding.flushOnDestroy();
+  async flushLogOnDestroy(): Promise<void> {
+    await this.logBinding.flushOnDestroy();
   }
 
   getTodoManager(): TodoManager | null {
@@ -1806,7 +1806,7 @@ export class ManagedAgent {
    * it shadowed. One code path covers both "this extension owned it" and "this extension was
    * buried under a newer one", which is why the runner needs no ownership test of its own.
    */
-  unregisterExtensionTool(name: string, extensionId = this.id): void {
+  unregisterExtensionTool(name: string, extensionId = this.id, options: { publishCatalog?: boolean } = {}): void {
     this.extensions.unregisterExtensionTool(name, {
       tools: this.tools,
       ownerId: this.scopedOwnerId(extensionId),
@@ -1816,7 +1816,9 @@ export class ManagedAgent {
         this.toolCompactCache.clear();
       },
     });
-    this.publishToolPresentationCatalog();
+    // Batch point: disabling one extension unregisters N tools, and a catalog publish each time
+    // re-serialized every descriptor N times. The caller publishes once when it owns the batch.
+    if (options.publishCatalog !== false) this.publishToolPresentationCatalog();
   }
 
   /**
@@ -1934,7 +1936,7 @@ export class ManagedAgent {
     try {
       // Flush and unregister the active log guard, not just detach the seam: a
       // half-released binding leaves the process-exit flush pointing at a dead sink.
-      this.flushLogOnDestroy();
+      await this.flushLogOnDestroy();
     } catch {
       // Best-effort teardown.
     }

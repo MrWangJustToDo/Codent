@@ -29,17 +29,24 @@ export const CANONICAL_MIDDLEWARE_ORDER = [
   "approval-resume",
   "lifecycle",
   "compaction",
-  // MUST stay adjacent to `compaction`: it transforms the channel-projected wire
-  // that `compaction` produces, and that projection discards any earlier edit.
-  "message-transform",
+  // MUST stay after `compaction` (that projection rebuilds the wire from the channel and
+  // discards anything applied before it) and BEFORE `message-transform`: it is what turns a
+  // tool result into the model-visible shape via the tool's `toModelOutput`, so a transform
+  // running first would have its edit silently re-projected over.
   "tool-compact",
+  // MUST stay after `compaction` AND `tool-compact`: the wire this seam rewrites has to be the
+  // final one, or a transformer's redaction/summary of a tool result is undone by the tool's own
+  // projection (and a media replacement it made is re-materialized). MUST stay before
+  // `wire-recovery`, which strips unavailable media: a strip running first would hide the real
+  // attachment from the transformer.
+  "message-transform",
   // MUST stay after `tool-compact`: a capability strip replaces media parts with a
   // placeholder, and for a TOOL result the media part does not exist until
   // `tool-compact` projects the result through the tool's `toModelOutput`. Sitting
   // before it left tool media unreachable (the strip saw JSON text and passed it
   // through), so a model without vision was still sent the image — and the widened
   // retry could not help, because the projection re-materializes it on every call.
-  // MUST stay after `message-transform` (a strip running first would hide the real
+  // MUST also stay after `message-transform` (a strip running first would hide the real
   // attachment from an extension transformer) and after `compaction` (the channel
   // projection discards anything applied before it).
   "wire-recovery",

@@ -123,6 +123,10 @@ export interface MessageTransformContext extends ModelCapabilityFlags {
    * Model messages produced by the channel-anchored wire projection, exclusively
    * owned by the transformer for the duration of this call.
    *
+   * Tool results have already been projected through their tool's `toModelOutput`
+   * (`tool-compact` runs BEFORE this seam), so rewriting a tool message here is
+   * final for this call instead of being re-projected over.
+   *
    * Returning a new array replaces them for this call only; mutating in place also
    * works but is not required (see {@link MessageTransformer}). Mutation can never
    * reach a shared cache while a transformer is registered.

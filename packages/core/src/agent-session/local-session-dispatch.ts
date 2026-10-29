@@ -10,6 +10,14 @@ import type { AgentSessionCommand, AgentSessionCommandResult } from "./types.js"
 import type { ManagedAgent } from "../managers/managed-agent.js";
 
 /**
+ * Refusal for an interaction offered while a session switch (unload → load) is in flight.
+ *
+ * The chat controller drops these on purpose (the text belongs to neither transcript). Reporting
+ * a failure is what lets a host keep the user's input instead of clearing it on a false `ok`.
+ */
+const SESSION_SWITCHING_ERROR = "Session is switching — try again when it finishes";
+
+/**
  * Commands allowed on subagent sessions (preview / stop / light housekeeping).
  * Chat send and plan/MCP/extension management stay root-only.
  */
@@ -41,17 +49,18 @@ export async function dispatchLocalAgentSessionCommand(
     switch (command.type) {
       case "send": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        await chat.sendMessage(command.content);
+        const outcome = await chat.sendMessage(command.content);
+        if (outcome === "dropped") return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "steer": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        chat.steer(command.content);
+        if (!chat.steer(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "followUp": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        chat.followUp(command.content);
+        if (!chat.followUp(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "queue.pop": {
@@ -60,7 +69,7 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "forceSubmit": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        chat.forceSubmit(command.content);
+        if (!chat.forceSubmit(command.content)) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "stop": {
@@ -73,12 +82,14 @@ export async function dispatchLocalAgentSessionCommand(
       }
       case "respondApproval": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        await chat.respondToToolApproval(command.approvalId, command.approved, command.reason);
+        const accepted = await chat.respondToToolApproval(command.approvalId, command.approved, command.reason);
+        if (!accepted) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "addToolResult": {
         if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-        await chat.addToolResult(command.toolCallId, command.output);
+        const accepted = await chat.addToolResult(command.toolCallId, command.output);
+        if (!accepted) return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
         return { ok: true };
       }
       case "setClientToolWaiting": {
@@ -199,7 +210,9 @@ export async function dispatchLocalAgentSessionCommand(
           const inject = await cmd.injectMessage(args, message, commandContext);
           if (inject && inject.trim().length > 0) {
             if (!chat) return { ok: false, code: "failed", error: "Chat controller not initialized" };
-            await chat.sendMessage(inject);
+            if ((await chat.sendMessage(inject)) === "dropped") {
+              return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+            }
           }
         }
         return { ok: true, data: message ? { message } : undefined };

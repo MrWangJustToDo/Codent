@@ -289,7 +289,7 @@ export class AgentLog {
     const sink = createJsonlFileSink(options);
     this.attachSink(sink);
     return () => {
-      sink.detach();
+      void sink.detach();
       this.detachSink(sink.handleEntry);
     };
   }

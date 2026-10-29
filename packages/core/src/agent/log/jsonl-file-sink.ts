@@ -52,8 +52,13 @@ export interface LogFileSink {
   flush: () => Promise<void>;
   /** Best-effort synchronous flush for exit paths that cannot await. */
   flushSync: () => void;
-  /** Land the pending batch and stop the timer. Idempotent. */
-  detach: () => void;
+  /**
+   * Land the pending batch and stop the timer. Idempotent.
+   *
+   * Awaitable on purpose: on a runtime without sync fs (a remote CoreEnv) the final batch can only
+   * be written asynchronously, so a teardown that fires `detach()` and returns loses the tail.
+   */
+  detach: () => Promise<void>;
   /** Directory written to — **absent** on an inert sink, so callers never record a dead path. */
   dir?: string;
 }
@@ -61,7 +66,7 @@ export interface LogFileSink {
 /** A sink that does nothing — used when the environment cannot write. */
 function inertSink(): LogFileSink {
   const noop = (): void => {};
-  return { handleEntry: noop, flush: async () => {}, flushSync: noop, detach: noop };
+  return { handleEntry: noop, flush: async () => {}, flushSync: noop, detach: async () => {} };
 }
 
 /** Build a JSONL file sink writing to `options.dir`. */
@@ -99,6 +104,13 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
 
   /** Shift segments `{file}.{maxFiles-1}` → drop, ..., `{file}` → `{file}.1`, then truncate. */
   const rotate = async (): Promise<void> => {
+    // `maxFiles: 1` means "keep only the active file". The generic shift still wrote
+    // `agent.log.1` (its `oldest` was `.0` and its loop did not run), so a host that asked for
+    // one file silently kept two.
+    if (maxFiles <= 1) {
+      await envFs.writeFile(filePath, "");
+      return;
+    }
     const oldest = `${filePath}.${maxFiles - 1}`;
     if (await envFs.exists(oldest)) await envFs.remove(oldest);
     for (let i = maxFiles - 2; i >= 1; i--) {
@@ -312,16 +324,17 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     flush,
     flushSync,
     dir,
-    detach: () => {
+    detach: async () => {
       disposed = true;
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
       // If an async batch is in flight, leave the buffer for the queued flush. Otherwise land
-      // it synchronously, then queue any remainder (a sync-unaware runtime).
+      // it synchronously, then await the remainder (a sync-unaware runtime — a remote CoreEnv —
+      // has no other way to get its final lines out).
       if (!flushInFlight) flushSync();
-      void flush();
+      await flush();
     },
   };
 }

@@ -28,6 +28,8 @@ const KEEP_FIELD_RE =
 
 const PREVIEW_MAX_CHARS = 200;
 const KEEP_STRING_MAX_CHARS = 120;
+/** Upper bound for an entry's human-readable message (the `data` previews are bounded separately). */
+const MAX_LOG_MESSAGE_CHARS = 400;
 const KEEP_STRING_HARD_MAX_CHARS = 500;
 
 function asText(value: unknown): string {
@@ -109,6 +111,11 @@ function resolveRule(type: AgentEventType, policy?: EventLogPolicy): EventLogRul
 
 function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message: string): void {
   const data = summarizePayload(p(event));
+  // `data` strings are bounded; `message` was not. Several rules interpolate a raw provider error
+  // (`Stream error: ${error}`), and a gateway that answers with an HTML/JSON body turned one log
+  // line into an arbitrarily long blob. Truncated here so EVERY rule is covered at once (the full
+  // text, when it matters, is already in `data.error` under the same 500-char cap).
+  message = truncateText(message, MAX_LOG_MESSAGE_CHARS);
 
   // A `cancelled` payload is not a fault, so it must not be written through the error
   // path: that attaches the payload's `error` text as a synthesized `Error` — for a

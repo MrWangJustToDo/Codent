@@ -124,8 +124,9 @@ export class LifecycleCoordinator {
       }
 
       try {
-        // Land buffered teardown/abort entries before the sink is dropped.
-        managedAgent.flushLogOnDestroy();
+        // Land buffered teardown/abort entries before the sink is dropped. Awaited: on a
+        // remote CoreEnv the final batch can only be written asynchronously.
+        await managedAgent.flushLogOnDestroy();
       } catch {
         // The process is going away; a failed flush cannot be retried here.
       } finally {

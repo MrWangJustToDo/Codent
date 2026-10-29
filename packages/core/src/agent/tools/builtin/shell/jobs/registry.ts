@@ -488,6 +488,10 @@ export class CommandJobRegistry {
     status: CommandJobRecord["status"],
     options: { exitCode?: number | null; errorText?: string } = {}
   ): void {
+    // One terminal transition per job. `markFailed`/`markKilled` had no `running` guard of their
+    // own, so a late failure after `onExit` already reported rewrote an `exited` job (and fired a
+    // SECOND `finished` notification, which wakes an idle agent for a result it already got).
+    if (job.status !== "running") return;
     if (options.errorText) {
       job.stderr += (job.stderr ? "\n" : "") + options.errorText;
       this.logs.get(job.id)?.appendStderr(`${options.errorText}\n`);

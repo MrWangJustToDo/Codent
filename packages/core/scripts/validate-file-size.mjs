@@ -31,6 +31,10 @@ const ALLOWLIST = new Map([
     "Extension registration/lifecycle orchestrator. The UI/context bridge, default renderer, observer surface, message-transformer registry, dispatch order and owner-id rule are already separate modules; what remains is the registration lifecycle itself, which the rollback paths require to stay in one class.",
   ],
   [
+    "core/managers/controllers/agent-chat-controller.ts",
+    "Chat run orchestration: pump admission/continuation, mid-run queue, session-switch refusal contract, approval answering, stream-outcome finalization. Their ORDER is the invariant, so a split has to carry it; the refusal gate and queue drain helpers are the next unit.",
+  ],
+  [
     "acp/agent.ts",
     "ACP agent surface: one handler per protocol method plus the session runtime and config-option advertisement. The projector, child projector, interactions and session config options are already separate modules.",
   ],

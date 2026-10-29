@@ -26,6 +26,8 @@
  * auto attempt is invalidated when a newer one starts.
  */
 
+import { isTerminalStatus } from "../../runtime-types/agent-status.js";
+
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
@@ -259,7 +261,10 @@ export class CompactionController {
     // session switch (reset) or a newer run (running) already moved on.
     if (this.deps.getStatus() !== "compacting") return;
     if (kind === "manual" && previous !== undefined && previous !== "compacting") {
-      this.deps.setStatus(previous, "compaction-end");
+      // A terminal status is not state to restore. `/compact` is allowed after a failed or
+      // aborted turn, and writing `error`/`aborted` back after a SUCCESSFUL compaction made the
+      // session look broken and contradicted the `compaction:manual-complete` that just fired.
+      this.deps.setStatus(isTerminalStatus(previous) ? "idle" : previous, "compaction-end");
       return;
     }
     // Auto/reactive continue the run they interrupted; a manual compaction that replaced another
