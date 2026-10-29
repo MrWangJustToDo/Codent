@@ -1,6 +1,8 @@
 import { createSequentialIdGenerator } from "../../utils/generate-id.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
 
+import { configuredLogLevel } from "./log-level-env.js";
+
 import type { AgentLogFileSinkOptions, LogCategory, LogEntry, LogLevel, LogScope } from "./types.js";
 
 // ============================================================================
@@ -248,22 +250,28 @@ export class AgentLog {
       this.pendingDropped = 0;
       // Say that the buffer overflowed BEFORE replaying it: the dropped entries are the oldest,
       // so the marker is the first line the reader sees and explains the gap that follows.
-      if (dropped > 0) {
+      //
+      // The marker needs a slot of its own, so the oldest SURVIVING entry goes too. That entry is
+      // part of the gap the reader is being told about, and reporting only `dropped` made the count
+      // disagree with the first id that actually survived. The marker is a `warn` like any other
+      // entry, so the level knob applies to it (writing it unfiltered put a warn line in a file the
+      // operator asked to contain only errors); when it is filtered out, no slot is consumed.
+      const markerSlot = retained.length > 0 ? 1 : 0;
+      const lostTotal = dropped + markerSlot;
+      if (dropped > 0 && this.shouldLog("warn")) {
         sink.handleEntry({
           scope: { ...this.scope },
           id: generateLogId(),
           timestamp: Date.now(),
           level: "warn",
           category: "system",
-          message: `Log buffer overflowed before the session sink was bound; ${dropped} earliest ${
-            dropped === 1 ? "entry was" : "entries were"
+          message: `Log buffer overflowed before the session sink was bound; ${lostTotal} earliest ${
+            lostTotal === 1 ? "entry was" : "entries were"
           } dropped (cap ${MAX_PENDING_LOG_ENTRIES}).`,
-          data: { dropped, cap: MAX_PENDING_LOG_ENTRIES },
+          data: { dropped: lostTotal, cap: MAX_PENDING_LOG_ENTRIES },
           tags: ["log-buffer"],
         });
-        // The marker occupies one of the cap's slots: trim the oldest entry from the replay so the
-        // bound still holds exactly (the marker already accounts for what was dropped).
-        retained.shift();
+        if (markerSlot > 0) retained.shift();
       }
       // The level is applied by whoever binds the persisted sink (the log extension calls
       // `setMinLevel` immediately before this), so the drain must honour it too: entries accepted
@@ -314,8 +322,15 @@ export class AgentLog {
    * what keeps the 76 call sites and the log validators independent of the extension wiring.
    * Prefer `createLogExtension(...).attachSink(log, options)` in production paths, which also
    * records the sink for teardown.
+   *
+   * Applies `AGENT_LOG_LEVEL` exactly like the extension path: this is the documented fallback for
+   * embedded hosts without an agent manager, and leaving the level out here made the one volume
+   * knob silently ineffective for them (every debug row landed). A later explicit `setMinLevel`
+   * still wins.
    */
   attachFileSink(options: AgentLogFileSinkOptions): () => void {
+    const level = configuredLogLevel();
+    if (level) this.setMinLevel(level);
     const sink = createJsonlFileSink(options);
     this.attachSink(sink);
     return () => {

@@ -70,6 +70,14 @@ export type CompactionOutcome =
 export interface CompactionControllerDeps {
   getStatus: () => AgentStatus;
   setStatus: (status: AgentStatus, trigger?: string) => void;
+  /**
+   * Clear the last error when a compaction restores a terminal status to `idle`.
+   *
+   * `setStatus` moves the status only, so a successful `/compact` after a failed turn produced the
+   * one combination no other writer makes — `idle` with the old error still set — and hosts that
+   * render `error` keep showing a failure beside a `compaction:manual-complete` that succeeded.
+   */
+  setError?: (error: string) => void;
   /** `AgentStatusController.onUserCancel` — the one "the user cancelled" verdict. */
   onUserCancel: () => void;
   emitEvent: EmitAgentTelemetryFn;
@@ -264,7 +272,14 @@ export class CompactionController {
       // A terminal status is not state to restore. `/compact` is allowed after a failed or
       // aborted turn, and writing `error`/`aborted` back after a SUCCESSFUL compaction made the
       // session look broken and contradicted the `compaction:manual-complete` that just fired.
-      this.deps.setStatus(isTerminalStatus(previous) ? "idle" : previous, "compaction-end");
+      if (isTerminalStatus(previous)) {
+        // The error belonged to that failed turn: leaving it set is the only way `idle` and a
+        // non-empty `error` can coexist.
+        this.deps.setError?.("");
+        this.deps.setStatus("idle", "compaction-end");
+        return;
+      }
+      this.deps.setStatus(previous, "compaction-end");
       return;
     }
     // Auto/reactive continue the run they interrupted; a manual compaction that replaced another

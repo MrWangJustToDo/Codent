@@ -2,13 +2,13 @@
  * Session-side helpers for rename / new-session commands (Host process only).
  */
 
-import { extractTextFromContent } from "../agent/compaction/message-utils.js";
 import { dehydrateUIMessages } from "../agent/media/media-utils.js";
 import { partTextContent } from "../agent/stream/message-parts.js";
 import { isContextUIMessage } from "../agent/turn-context";
 import { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 import { runSideTextQuery } from "../models/adapter/side-text-query.js";
 import { errorMessage, toError } from "../utils/errors.js";
+import { extractTextFromContent } from "../utils/message-content.js";
 
 import { TITLE_SYSTEM_PROMPT } from "./session-summary-prompt.js";
 

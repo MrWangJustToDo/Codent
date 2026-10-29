@@ -354,6 +354,19 @@ export class ExtensionRunner {
   }
 
   /**
+   * Drop every retained render slot.
+   *
+   * Slots are conversation-scoped content (a plan board, a file tree, a task list) that extensions
+   * publish for the CURRENT transcript. A session switch replaces that transcript, so keeping the
+   * slots alive showed the previous conversation's panel in the new one and replayed it to every
+   * host that subscribed afterwards. Called by the session lifecycle on `/new` and `/resume`;
+   * extension disable/destroy still clears its own owner's slots.
+   */
+  clearUISlots(): void {
+    this.uiBridge.clearAll();
+  }
+
+  /**
    * Wrap the shared UI for a single extension so render slots are attributed to
    * that extension (used to clear its slots when it is disabled). Every other
    * member (notify / subscribe / getContext) is shared.
@@ -737,9 +750,13 @@ export class ExtensionRunner {
           await this.deactivateExtension(instance);
           this.unregisterInstanceArtifacts(instance);
           instance.state = "inactive";
-          // `activating` is intentionally NOT cleared: a re-enable must stay refused while the
-          // old `activate` is still running (two activations would register two copies). Disable
-          // is the remedy, and it now runs the full teardown.
+          // The marker is cleared too: it exists to stop a SECOND activation from registering a
+          // duplicate, and the revoke above already refused this one's lease. Keeping it forever
+          // (for an activation that may never settle) left the extension impossible to re-enable
+          // for the life of the process. The activation that is still running is fenced instead:
+          // it checks `instance.context === context` before it touches any shared state, so if a
+          // new activation owns the instance by the time it resolves, it stands down.
+          this.activating.delete(instance.api.id);
           return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
         }
       }
@@ -787,13 +804,20 @@ export class ExtensionRunner {
       try {
         await instance.api.activate(context);
         if (!this.isContextLive(context)) {
-          // Revoked while activating (destroyAll): stay inactive, register nothing further — and
-          // release whatever the rest of `activate` acquired after the revoke, which the teardown
-          // could not have seen (deactivate is idempotent by contract).
-          await this.deactivateExtension(instance);
-          this.unregisterInstanceArtifacts(instance);
-          this.uiBridge.clearOwner(instance.api.id);
-          instance.state = "inactive";
+          // Revoked while activating (a disable, or `destroyAll`): stay inactive, register nothing
+          // further — and release whatever the rest of `activate` acquired after the revoke, which
+          // the teardown could not have seen (deactivate is idempotent by contract).
+          //
+          // Only while this context still owns the instance: if a re-enable already created a new
+          // one, the teardown below would release the NEW incarnation's registrations and mark it
+          // inactive. This activation is a dead incarnation; the revoke path has already cleaned
+          // what it had registered.
+          if (instance.context === context) {
+            await this.deactivateExtension(instance);
+            this.unregisterInstanceArtifacts(instance);
+            this.uiBridge.clearOwner(instance.api.id);
+            instance.state = "inactive";
+          }
           return { ok: false, message: `Extension "${id}" was disabled while activating` };
         }
         instance.state = "active";
@@ -802,24 +826,27 @@ export class ExtensionRunner {
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
         const error = toError(err);
-        // A retry of an errored instance must release whatever the failed attempt acquired
-        // before rolling back its registrations; otherwise each retry stacks another copy.
-        await this.deactivateExtension(instance);
-        // Roll back any artifacts registered before the failure.
-        this.unregisterInstanceArtifacts(instance);
-        this.uiBridge.clearOwner(instance.api.id);
-        instance.state = "error";
-        instance.error = error;
-        // `clearNotices` ran at activation START (so a stale "disabled" notice could not sit
-        // beside a live section). On failure there is no section either, so without this the
-        // model sees the extension's tools simply vanish with no explanation.
-        this.turnContextSections.setDisabledNotice(
-          instance.api.id,
-          `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
-        );
+        if (instance.context === context) {
+          // A retry of an errored instance must release whatever the failed attempt acquired
+          // before rolling back its registrations; otherwise each retry stacks another copy.
+          await this.deactivateExtension(instance);
+          // Roll back any artifacts registered before the failure.
+          this.unregisterInstanceArtifacts(instance);
+          this.uiBridge.clearOwner(instance.api.id);
+          instance.state = "error";
+          instance.error = error;
+          // `clearNotices` ran at activation START (so a stale "disabled" notice could not sit
+          // beside a live section). On failure there is no section either, so without this the
+          // model sees the extension's tools simply vanish with no explanation.
+          this.turnContextSections.setDisabledNotice(
+            instance.api.id,
+            `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
+          );
+        }
         return { ok: false, message: `Failed to enable "${id}": ${error.message}` };
       } finally {
-        this.activating.delete(instance.api.id);
+        // Identity-checked: a superseded activation must not clear the marker a newer one owns.
+        if (instance.context === context) this.activating.delete(instance.api.id);
       }
     }
 
@@ -1037,6 +1064,13 @@ export class ExtensionRunner {
    * this, such a call re-created the tool/transformer after the panel said "disabled", with no path
    * to clean it up: `unregisterInstanceArtifacts` had already cleared the registrations list, so a
    * later disable could not even find it.
+   *
+   * Scope, precisely: the lease covers the **registration** surface and the **model** surface
+   * (`register*`, `ctx.llm.complete`, `ctx.events.*`, `ctx.ui.*`, flush hooks). It cannot revoke a
+   * capability the context handed out by value — `ctx.coreEnv`, `ctx.logger`, and the read-only
+   * facts (`getMessages`, `getSystemPrompt`, `mode`, `signal`) stay callable, because they are the
+   * environment and the agent, not this extension's registrations. A retained timer must not be the
+   * only thing holding those, which is what the `isLive` checks above are for.
    */
   private isContextLive(context: ExtensionContext): boolean {
     return this.contexts.get(context.id) === context;

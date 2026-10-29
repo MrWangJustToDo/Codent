@@ -110,6 +110,11 @@ export class AgentToolService {
     return this.registry.list();
   }
 
+  /** Whether the live tool under `name` is still the seeded built-in (not an extension's). */
+  isIncumbent(name: string): boolean {
+    return this.registry.isIncumbent(name);
+  }
+
   catalog(): ToolPresentationInfo[] {
     return describeToolPresentations(
       this.registry.list().map((entry) => entry.name),

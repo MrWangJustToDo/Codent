@@ -161,10 +161,12 @@ console.log("pre-attach retention + JSONL OK:", lines.length, "lines");
   const last = JSON.parse(capLines[capLines.length - 1]).message;
   assert.equal(last, `pending-${overflow - 1}`, "newest entry is retained (oldest dropped at the cap)");
   // The overflow is recorded first, so a reader can tell "the log starts mid-bootstrap" from
-  // "nothing went wrong". It occupies one slot of the same cap, hence the +2 below.
+  // "nothing went wrong". It occupies one slot of the same cap, so the reported loss is the
+  // trimmed 25 PLUS the oldest surviving entry displaced by the marker itself (26), which is what
+  // makes the count agree with the first id that survived below.
   assert.match(
     first.message,
-    /^Log buffer overflowed .* 25 earliest entries were dropped/,
+    /^Log buffer overflowed .* 26 earliest entries were dropped/,
     `the cap reports what it dropped, got: ${first.message}`
   );
   assert.equal(

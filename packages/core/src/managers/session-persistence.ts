@@ -69,6 +69,16 @@ export class SessionPersistence {
   }
 
   /**
+   * Give up a restore stand-in after a failed load.
+   *
+   * Without this the refusal in {@link SessionService.setSessionDataPlaceholder} outlives the failed
+   * switch and every later write on this agent is dropped.
+   */
+  clearRestorePlaceholder(): void {
+    this.host.session.clearRestorePlaceholder();
+  }
+
+  /**
    * Backstop for fire-and-forget persists. Without it a rejected persist (e.g. a
    * media/dehydrate IO error thrown outside `saveToStore`) becomes an unhandled
    * rejection — and there is no global `unhandledRejection` handler, so the host

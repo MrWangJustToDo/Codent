@@ -20,7 +20,7 @@
  * compaction, restore and session switches need no remembered hash table or reset path.
  */
 
-import { extractTextFromContent } from "../compaction/message-utils.js";
+import { extractTextFromContent } from "../../utils/message-content.js";
 
 import type { ModelMessage, UIMessage } from "@tanstack/ai";
 

@@ -375,6 +375,9 @@ export function formatToolOutput(
       case BUILTIN_TOOL_NAMES.websearch: {
         const results = Array.isArray(out.results) ? out.results : [];
         const query = typeof out.query === "string" ? out.query : "";
+        // See {@link formatGlobOutput}: a stopped search is not a search that found nothing, and
+        // only the marker-only shape is replaced (results already returned still render).
+        if (out.cancelled === true && results.length === 0) return TOOL_CANCELLED_MESSAGE;
         if (results.length === 0) return query ? `No results for ${query}` : "No results";
         const lines = results.slice(0, 5).map((r) => {
           const row = r as { title?: string; url?: string };
@@ -385,6 +388,10 @@ export function formatToolOutput(
       case BUILTIN_TOOL_NAMES.webfetch: {
         const url = typeof out.url === "string" ? out.url : "";
         const content = typeof out.content === "string" ? out.content : "";
+        // A fetch the run stopped returns `cancelled: true` with whatever body it had read. Report
+        // the cancel instead of a bare URL when there is no body to show; a partial body still
+        // renders, because the user watched it arrive.
+        if (out.cancelled === true && !content) return TOOL_CANCELLED_MESSAGE;
         const preview = truncateText(content, 400);
         return url ? `${url}\n${preview}` : preview;
       }

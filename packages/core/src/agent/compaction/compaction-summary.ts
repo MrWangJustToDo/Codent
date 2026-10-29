@@ -18,9 +18,8 @@
  * compaction run (formatted by {@link formatCompactionSummaryContent}).
  */
 
+import { extractTextFromContent } from "../../utils/message-content.js";
 import { isContextUIMessage } from "../turn-context/turn-context-message.js";
-
-import { extractTextFromContent } from "./message-utils.js";
 
 import type { ContentPart, ModelMessage, UIMessage } from "@tanstack/ai";
 

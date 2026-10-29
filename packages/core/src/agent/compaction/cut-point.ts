@@ -6,6 +6,7 @@
  * boundaries so tool call/result pairs are never split.
  */
 
+import { extractTextFromContent } from "../../utils/message-content.js";
 import { isContextModelMessage } from "../turn-context/turn-context-message.js";
 
 import {
@@ -14,7 +15,6 @@ import {
   isCompactionSummaryModelMessage,
   isCompactionSummaryText,
 } from "./compaction-summary.js";
-import { extractTextFromContent } from "./message-utils.js";
 import { estimateMessageTokens } from "./token-estimator.js";
 
 import type { ModelMessage } from "@tanstack/ai";

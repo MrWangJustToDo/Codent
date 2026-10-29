@@ -20,7 +20,7 @@
  *    says which cycle/chain it counts and `episode` counts admissions within it.
  */
 
-import { extractTextFromContent } from "../../compaction/message-utils.js";
+import { extractTextFromContent } from "../../../utils/message-content.js";
 import {
   extractContextSection,
   formatSectionTag,

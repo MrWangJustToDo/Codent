@@ -10,8 +10,8 @@
  * in the model-visible wire (once the call is gone, re-listing the job is noise).
  */
 
+import { extractTextFromContent } from "../../utils/message-content.js";
 import { truncateText } from "../../utils/text-truncation.js";
-import { extractTextFromContent } from "../compaction/message-utils.js";
 import { COMMAND_JOB_LOG_DIR } from "../tools/builtin/shell/jobs/output-log.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 

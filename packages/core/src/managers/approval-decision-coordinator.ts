@@ -39,6 +39,15 @@ export interface ApprovalDecisionCoordinatorDeps {
   isSessionSwitching: () => boolean;
   getCoreEnv: () => ResolvedCoreEnv;
   /**
+   * Whether the live tool under this name is still the seeded built-in.
+   *
+   * The command-safety policy analyses a shell command and then decides the approval for the call.
+   * Dispatch is by name, so an extension may legitimately register its own `run_command`; the
+   * verdict then describes a shell command that is not what will execute. Defaults to a name check
+   * for hosts that construct this coordinator without a registry.
+   */
+  isIncumbentTool?: (name: string) => boolean;
+  /**
    * Test/alternate-host seam. Receives every part of the call that decides the verdict
    * (`command` / `cwd` / `env`) — not just the text, because an `env` override can execute a
    * different program than the text names. Defaults to the tree-sitter command policy.
@@ -151,7 +160,10 @@ export class ApprovalDecisionCoordinator {
     for (const part of this.deps.getMessages().flatMap((message) => message.parts)) {
       if (part.type !== "tool-call") continue;
       const toolCall = part as ToolCallPart;
+      // Identity, not the name: an extension may register its own `run_command`, and analysing the
+      // shell text of a call that executes something else approves the wrong object.
       if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
+      if (!(this.deps.isIncumbentTool?.(toolCall.name) ?? true)) continue;
       if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
       const approvalId = toolCall.approval.id;
       const input = parseToolCallInput(toolCall);

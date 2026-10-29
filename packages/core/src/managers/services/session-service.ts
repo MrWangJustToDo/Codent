@@ -103,6 +103,11 @@ export class SessionService {
    * session file that `deleteSession` just removed.
    */
   private closed = false;
+  /**
+   * Stand-in session used while a target is being restored (see {@link setSessionDataPlaceholder}).
+   * Present ⇒ writes are refused: the transcript it stands for is not loaded yet.
+   */
+  private restorePlaceholder: SessionData | null = null;
   /** In-flight {@link saveToStore} writes, including the async title write that bypasses the queue. */
   private readonly pendingSaves = new Set<Promise<boolean>>();
   setStore(store: SessionStore, config: { modelStyle: string; model: string }): void {
@@ -157,6 +162,34 @@ export class SessionService {
 
   setSessionData(data: SessionData): void {
     this.data = data;
+    // Adopting any other session ends a restore placeholder's life (see
+    // {@link setSessionDataPlaceholder}).
+    if (this.restorePlaceholder && this.restorePlaceholder !== data) this.restorePlaceholder = null;
+  }
+
+  /**
+   * Adopt a stand-in for a session that is about to be restored.
+   *
+   * Bootstrap needs the id before the transcript is loaded: the log sink binds to
+   * `.agents/logs/<id>/` while extensions are still being activated, and the session is read once the
+   * runtime exists. The stand-in carries only the id and the creation-time model — it is NOT a
+   * persistable target, and every write dispatched while it is active is refused.
+   *
+   * That refusal is the structural guarantee behind the restore ordering: the state carried over
+   * before adoption (`/models`-style model, reasoning effort, plan phase, approvals) must reach the
+   * *target*, and the target still has to be read. Writing at that moment used to be harmless only
+   * because the write path also happened to compare session ids and object identity, which holds
+   * exactly as long as nothing between the read and the adoption awaits. Any `await` added there
+   * turned the stand-in into "the leaving session with an empty transcript".
+   */
+  setSessionDataPlaceholder(data: SessionData): void {
+    this.data = data;
+    this.restorePlaceholder = data;
+  }
+
+  /** Give up the stand-in without adopting anything (a failed restore). */
+  clearRestorePlaceholder(): void {
+    this.restorePlaceholder = null;
   }
 
   getSessionData(): SessionData | null {
@@ -241,6 +274,8 @@ export class SessionService {
     // A queued persist was admitted before `close()`; it must still land. Direct writers
     // (the async title save) are not admitted and must stop once the writer is closed.
     if ((this.closed && !options.admitted) || !store) return false;
+    // Same rule for a restore stand-in: it is never a save target (see setSessionDataPlaceholder).
+    if (this.restorePlaceholder && data === this.restorePlaceholder) return false;
     if (store.isDeleted?.(data.id) === true) return false;
     // Track the direct write too: `generateSessionTitle` calls this outside `persistQueue`, and
     // `close()` must be able to wait for it before the log is deleted.
@@ -282,6 +317,10 @@ export class SessionService {
     options: { coalesceUiMessages?: boolean } = {}
   ): Promise<boolean> {
     if (this.closed) return false;
+    // Refuse at DISPATCH, not at execution: the writes that ride a restore are admitted here, and
+    // the queue would run them after adoption (when they look harmless). A placeholder means the
+    // target's transcript is not loaded yet, so nothing this session writes can be its truth.
+    if (this.restorePlaceholder) return false;
     const resolveInput = typeof input === "function" ? input : () => input;
 
     // State-only writes keep their own turn: they carry no transcript, so folding them into a

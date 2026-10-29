@@ -375,6 +375,17 @@ export class ManagedAgent {
   private lastFinishReason: string | null = null;
   /** Tools awaiting user approval in the current run (set by approval middleware). */
   private pendingApprovalCount: number;
+  /**
+   * Channel revision the retained `interaction` snapshot was last derived from.
+   *
+   * Pending approvals / `ask_user` live in the transcript, so the snapshot can only change with it.
+   * Recomputing on every state transition walked every message part twice, several times per turn —
+   * the most expensive thing a status change did on a long session, and it could not observe a new
+   * answer anyway. `-1` (no UI channel yet) always recomputes.
+   */
+  private interactionsRevision = -1;
+  /** Set by {@link markDestroyed}: late async continuations must not start work on a dead runtime. */
+  private destroyed = false;
   /** Agent-loop progress for the current run; null until the first iteration. */
   private iterationState: AgentIterationState | null = null;
   /** The last finalized turn's reading, kept across the terminal reset (see `finalizeRun`). */
@@ -614,6 +625,7 @@ export class ManagedAgent {
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
+      setError: (error) => this.setError(error),
       onUserCancel: () => this.statusController.onUserCancel(),
       emitEvent: (type, data) => this.emitEvent(type, data),
     });
@@ -749,6 +761,7 @@ export class ManagedAgent {
       },
       resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       resetTurnContext: () => this.turnContext.resetTurnState(),
+      clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
       resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
       resetIterationProgress: () => this.resetIterationProgress(),
       // Task phase records and pre-fork seats belong to the conversation being left.
@@ -1060,8 +1073,13 @@ export class ManagedAgent {
     // no row rebuild.
     if (this.parentId) this.manager?.getAgent(this.parentId)?.refreshSubagents();
     // Approvals / ask_user pause also surface through emitStateChange (status +
-    // pending-count transitions), so keep the retained interaction snapshot fresh.
-    this.eventBus?.emit("session:interaction", this.readInteractions());
+    // pending-count transitions), so keep the retained interaction snapshot fresh — but only when
+    // the transcript it is derived from moved. See {@link interactionsRevision}.
+    const revision = this.getUI()?.getRevision();
+    if (revision === undefined || revision !== this.interactionsRevision) {
+      this.interactionsRevision = revision ?? -1;
+      this.eventBus?.emit("session:interaction", this.readInteractions());
+    }
   }
 
   /**
@@ -1560,6 +1578,19 @@ export class ManagedAgent {
   }
 
   /**
+   * Adopt the stand-in for a session that is about to be restored.
+   *
+   * Same as {@link setSessionData} for identity/log routing, but every persist dispatched while it is
+   * active is refused — the transcript it stands for has not been read yet, so it is not a save
+   * target. @internal Used by the agent factory.
+   */
+  setSessionDataPlaceholder(data: SessionData): void {
+    const previousId = this.getSessionData()?.id;
+    this.session.setSessionDataPlaceholder(data);
+    if (this.manager && data.id && data.id !== previousId) this.bindSessionLogSink(data.id);
+  }
+
+  /**
    * Persist `uiMessages` when an explicit trigger fires and the fingerprint changed.
    * Reasons: `user-message` | `pump-complete` | `force` (via {@link saveSessionUIMessages}).
    * Fire-and-forget — dehydrate + disk write happen in the background.
@@ -1971,8 +2002,13 @@ export class ManagedAgent {
    * A live pump or a session parked on the user keeps the old behavior — the notification rides
    * along with the next model call of that same turn (`wakeForBackgroundCompletion` answers
    * false). Never for a subagent: it has no user, and a worker turn belongs to its parent.
+   *
+   * Called from two places, because the finish can land in either window: the jobs registry's
+   * change notification (idle), and the chat pump's exit (a job that ended after that pump's last
+   * model call — otherwise nothing would ever re-check and the result waited for the user to type).
+   * Both paths peek only; delivery stays the middleware's.
    */
-  private async wakeForBackgroundJobs(): Promise<void> {
+  async wakeForBackgroundJobs(): Promise<void> {
     if (this.parentId) return;
     const chat = this.chatController;
     // The service that reported this finish — never re-created here: a session switch sets the
@@ -2268,6 +2304,20 @@ export class ManagedAgent {
   }
 
   /**
+   * Mark this runtime as torn down. @internal Called by `LifecycleCoordinator.destroy` before the
+   * abort, so a producer that is unwinding asynchronously (a compaction's `finally`, a queued pump)
+   * can tell "the user stopped this run" from "there is no runtime to resume".
+   */
+  markDestroyed(): void {
+    this.destroyed = true;
+  }
+
+  /** Whether {@link markDestroyed} ran. */
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
+  /**
    * Manual context compaction (AgentSession `compact` / `/compact`).
    * Requires {@link manager} to be set (bootstrap always attaches it for root agents).
    *
@@ -2310,8 +2360,11 @@ export class ManagedAgent {
       this.compactions.release(lease);
       // Input typed during the compaction queued (see `shouldDeferMidRunQueue`); hand it to the
       // pump now, or it would wait for another keystroke. A cancelled compaction cleared its queue
-      // in `stop()`, so this is a no-op there.
-      this.getChatController()?.resumeAfterCompaction();
+      // in `stop()`, so this is a no-op there. A destroyed runtime has no pump to hand it to: the
+      // abort above drops this lease, so without this guard teardown would drain the queue and
+      // start a turn on an agent that is no longer registered (status `running` → `error`, and a
+      // write attempted against the session that was just closed).
+      if (!this.destroyed) this.getChatController()?.resumeAfterCompaction();
     }
   }
 

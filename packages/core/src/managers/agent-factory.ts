@@ -167,7 +167,9 @@ export async function buildManagedAgent({
           model: restConfig.model,
         });
         placeholder.id = initialSessionId;
-        managed.setSessionData(placeholder);
+        // Placeholder semantics, not a plain adoption: writes are refused until the transcript is
+        // adopted, so a state write that rides the restore can never land on the stand-in.
+        managed.setSessionDataPlaceholder(placeholder);
       }
     }
 

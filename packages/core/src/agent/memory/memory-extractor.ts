@@ -22,7 +22,7 @@
 import { z } from "zod";
 
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
-import { extractTextFromContent } from "../compaction/message-utils.js";
+import { extractTextFromContent } from "../../utils/message-content.js";
 
 import { isExpiredMemory } from "./memory-expiry.js";
 import { DEFAULT_HARD_MAX_MEMORIES, memoryTypeSchema } from "./types.js";

@@ -66,6 +66,8 @@ export interface SessionLifecycleHost {
   clearPendingApprovals(): void;
   resetMediaHydrationMisses(): void;
   resetTurnContext(): void;
+  /** Drop extension render slots: they describe the conversation being replaced. */
+  clearExtensionUi?(): void;
   resetSessionSyncTracker(): void;
   resetIterationProgress(): void;
   /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
@@ -184,6 +186,10 @@ export class SessionLifecycleService {
     }
     this.host.streamHub.clearAll();
     this.host.resetTurnContext();
+    // Extension render slots describe the conversation, not the agent: a plan board or file tree
+    // published for the old transcript must not survive into the new one (and must not be replayed
+    // to a later subscriber as that session's initial state).
+    this.host.clearExtensionUi?.();
     if (full) this.host.resetSessionSyncTracker();
     this.host.resetIterationProgress();
     // Session-scoped, like the iteration progress above: a completed task keeps its row for the
@@ -360,6 +366,10 @@ export class SessionLifecycleService {
       // No commit ⇒ the leaving session is still the active one. Give the target claim back and
       // re-point the log sink at whatever session is active. A post-commit failure keeps the switch
       // (the state is already coherent); it simply surfaces.
+      //
+      // A bootstrap stand-in must be dropped too: it refuses every write by design, so leaving it
+      // behind after a failed load would turn one failed resume into a silently unsaved session.
+      this.host.sessionPersistence.clearRestorePlaceholder();
       if (this.host.getSessionData()?.id !== sessionId) {
         this.host.releaseSessionOwnership(sessionId);
         this.host.bindSessionLogSink();

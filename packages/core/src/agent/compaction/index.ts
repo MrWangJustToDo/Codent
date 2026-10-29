@@ -35,8 +35,8 @@ export {
   splitMessagesByTokenBudget,
 } from "./summarization-budget.js";
 
-// Message content helpers
-export { extractTextFromContent, getFirstTextPartContent } from "./message-utils.js";
+// Message content helpers (`extractTextFromContent` lives in `utils/message-content.ts`)
+export { getFirstUserInput } from "./message-utils.js";
 
 // Compaction prompt
 export {

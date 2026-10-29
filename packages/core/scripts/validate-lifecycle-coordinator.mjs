@@ -21,6 +21,7 @@ function fakeAgent(id, parentId) {
     childIds: [],
     updatedAt: 0,
     getMcpManager: () => ({ forceKill: () => events.push(`mcp:${id}`) }),
+    markDestroyed: () => events.push(`destroyed:${id}`),
     abort: (reason) => events.push(`abort:${id}:${reason}`),
     getExtensionRunner: () => ({
       emitSessionShutdown: async (agentId) => events.push(`shutdown:${agentId}`),
@@ -116,6 +117,7 @@ await lifecycle.settleTeardowns();
     childIds: [],
     updatedAt: 0,
     getMcpManager: () => null,
+    markDestroyed: () => {},
     abort: () => {},
     getExtensionRunner: () => null,
     destroyCommandService: async () => {

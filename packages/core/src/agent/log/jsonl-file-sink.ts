@@ -102,7 +102,33 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
    * caller asked for a continuation (a temporary re-point), so no divider is ever written. */
   let boundaryWritten = options.sessionBoundary === false;
 
-  /** Shift segments `{file}.{maxFiles-1}` → drop, ..., `{file}` → `{file}.1`, then truncate. */
+  /**
+   * Move one log segment.
+   *
+   * `rename` is atomic and — the reason it matters here — never truncates a path another writer may
+   * be appending to. The copy path (read → write → remove) is the fallback for hosts whose CoreEnv
+   * has no `rename`; it is equivalent for the shifted segments, which nothing else writes.
+   */
+  const moveSegment = async (from: string, to: string): Promise<void> => {
+    if (envFs.rename) {
+      await envFs.rename(from, to);
+      return;
+    }
+    const content = await envFs.readFile(from);
+    await envFs.writeFile(to, content);
+    await envFs.remove(from);
+  };
+  /**
+   * Shift segments `{file}.{maxFiles-1}` → drop, ..., `{file}` → `{file}.1`.
+   *
+   * The active file is MOVED, not read + truncated. The old tail (`writeFile(filePath, "")`) is what
+   * made a concurrent `flushSync` lose its batch: an exit-path append landing between the read and
+   * the truncate was wiped. With a move, an append that lands before the rename is preserved in the
+   * rotated segment and one that lands after creates a fresh active file — neither is lost.
+   *
+   * `maxFiles === 1` means "keep only the active file", so there is no segment to preserve; that case
+   * still truncates in place (a host that asked for one file has accepted rotation by discard).
+   */
   const rotate = async (): Promise<void> => {
     // `maxFiles: 1` means "keep only the active file". The generic shift still wrote
     // `agent.log.1` (its `oldest` was `.0` and its loop did not run), so a host that asked for
@@ -115,18 +141,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     if (await envFs.exists(oldest)) await envFs.remove(oldest);
     for (let i = maxFiles - 2; i >= 1; i--) {
       const from = `${filePath}.${i}`;
-      const to = `${filePath}.${i + 1}`;
-      if (await envFs.exists(from)) {
-        const content = await envFs.readFile(from);
-        await envFs.writeFile(to, content);
-        await envFs.remove(from);
-      }
+      if (await envFs.exists(from)) await moveSegment(from, `${filePath}.${i + 1}`);
     }
-    if (await envFs.exists(filePath)) {
-      const content = await envFs.readFile(filePath);
-      await envFs.writeFile(`${filePath}.1`, content);
-    }
-    await envFs.writeFile(filePath, "");
+    if (await envFs.exists(filePath)) await moveSegment(filePath, `${filePath}.1`);
   };
 
   const flushBatch = async (): Promise<void> => {

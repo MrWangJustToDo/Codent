@@ -35,6 +35,7 @@
 
 import { createAgentEventBus } from "../agent-event-bus";
 import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
+import { configuredLogLevel } from "../agent-log/log-level-env.js";
 
 import { bridgeTelemetryToAgentLog } from "./event-log-bridge.js";
 import { createJsonlFileSink } from "./jsonl-file-sink.js";
@@ -44,7 +45,7 @@ import { createJsonlFileSink } from "./jsonl-file-sink.js";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { EventLogPolicy, EventLogResolver } from "./event-log-bridge.js";
 import type { AgentLog } from "../agent-log/agent-log.js";
-import type { AgentLogFileSinkOptions, LogLevel } from "../agent-log/types.js";
+import type { AgentLogFileSinkOptions } from "../agent-log/types.js";
 
 export type { EventLogPolicy, EventLogResolver, EventLogRule } from "./event-log-bridge.js";
 
@@ -84,37 +85,12 @@ export interface LogExtension {
   dispose(): void;
 }
 
-/** Parsed once per process after the first VALID value: `attachSink` runs for the root AND every subagent. */
-let cachedLogLevel: LogLevel | undefined;
-/** Last invalid raw value already warned about, so a typo does not warn per sink. */
-let warnedInvalidLogLevel: string | null = null;
-
 /**
  * `AGENT_LOG_LEVEL=debug|info|warn|error` — the one volume knob for the persisted timeline.
  *
- * The seam defaults to `debug`, so every level reached disk with no way to quieten a workspace (a
- * busy session wrote ~1200 debug rows of ~1600). This is process-level policy, not workspace
- * config: it belongs to the policy owner (this extension), not to `AgentLog`, which must also work
- * before an extension is loaded.
+ * Parsed by `agent-log/log-level-env.ts` (shared with `AgentLog.attachFileSink`, the embedded-host
+ * fallback, so the knob cannot apply on one binding path and not the other).
  */
-function configuredLogLevel(): LogLevel | undefined {
-  if (cachedLogLevel) return cachedLogLevel;
-  const raw = process.env.AGENT_LOG_LEVEL?.trim().toLowerCase();
-  // Unset is not cached: a library host may load `.env` after the runtime was built, and the first
-  // subagent's `attachSink` happens before that. Re-reading `process.env` per sink is cheap.
-  if (!raw) return undefined;
-  if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") {
-    cachedLogLevel = raw;
-    return raw;
-  }
-  // A typo used to fall through to the seam default (the noisiest level) with no signal at all,
-  // so a user trying to quieten a workspace got the opposite. Say it once per bad value.
-  if (warnedInvalidLogLevel !== raw) {
-    console.warn(`[agent] ignoring AGENT_LOG_LEVEL="${raw}" (expected debug | info | warn | error; using the default)`);
-    warnedInvalidLogLevel = raw;
-  }
-  return undefined;
-}
 
 /**
  * Create the built-in log extension.

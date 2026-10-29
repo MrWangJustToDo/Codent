@@ -1,9 +1,3 @@
-export {
-  bridgeExternalToolToClient,
-  bridgeExternalToolToServer,
-  type ExternalBridgedTool,
-} from "./bridge-external-tool.js";
-
 export { defineClientTool, defineServerTool, type ToolExecuteCtx, type ToolMetadata } from "./define-tool.js";
 export type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator, ToModelOutputFn } from "./contract.js";
 

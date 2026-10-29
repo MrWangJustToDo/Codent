@@ -197,6 +197,8 @@ assert.equal(
         return { ...target, id: sessionId };
       },
       resetTracker: () => {},
+      // A failed load must drop the bootstrap stand-in that refuses writes; the double has none.
+      clearRestorePlaceholder: () => {},
     },
   };
   const lifecycle = new SessionLifecycleService(lifecycleHost);

@@ -49,6 +49,20 @@ export class AgentToolRegistry {
     return false;
   }
 
+  /**
+   * Whether the LIVE tool under `name` is the one the agent was seeded with (a built-in), rather
+   * than a tool an extension registered under the same name.
+   *
+   * Dispatch is by name, so a shadowing tool keeps the built-in's name and nothing in the tool call
+   * distinguishes them. Policies keyed on a built-in's *semantics* (command analysis, plan-mode
+   * gating) must therefore ask this, not compare the name string: analysing
+   * `run_command({ command })` and then running an extension's unrelated `execute` is a decision
+   * made about the wrong object.
+   */
+  isIncumbent(name: string): boolean {
+    return this.resolve(name)?.ownerId === INCUMBENT_TOOL_OWNER;
+  }
+
   /** Seed a built-in/existing tool without claiming extension ownership. */
   seed(name: string, tool: unknown): void {
     if (this.stacks.has(name)) return;

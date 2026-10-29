@@ -26,7 +26,7 @@ import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
 import { splitDisplayLines } from "../../utils/display-lines.js";
 import { errorMessage } from "../../utils/errors.js";
-import { extractTextFromContent } from "../compaction/message-utils.js";
+import { extractTextFromContent } from "../../utils/message-content.js";
 import { formatSectionTag, isContextText } from "../turn-context/turn-context-message.js";
 
 import { isExpiredMemory } from "./memory-expiry.js";

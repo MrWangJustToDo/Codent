@@ -114,6 +114,7 @@ export class AgentChatController {
       enqueueRun: () => this.enqueueRunOnce(),
       isSessionSwitching: () => this.managed.isSessionSwitching(),
       getCoreEnv: () => this.managed.getCoreEnv(),
+      isIncumbentTool: (name) => this.managed.toolService.isIncumbent(name),
     });
   }
 
@@ -807,6 +808,12 @@ export class AgentChatController {
         // an idle agent as running and aborted the settled turn's controller (cancelling the
         // finalize-time memory extraction it was still using).
         this.managed.run.invalidateCurrentRun();
+        // A background job that finished between this pump's last `onConfig` and here had no model
+        // call left to ride along with, and the registry's notification was refused ("a live pump
+        // delivers it"). Re-check now that the pump is gone; the wake is refused again if the turn
+        // ended parked on the user (`waiting` / `awaiting_user`), where delivery belongs to the
+        // resume pump. No service yet ⇒ nothing running ⇒ the check is a no-op.
+        void this.managed.wakeForBackgroundJobs();
       }
       // Forget the token this pump began. `shouldDeferQueue` reads a stale token as "a pump is
       // still unwinding" and short-circuits before the queued-pump / `compacting` / `waiting`

@@ -8,7 +8,7 @@
  */
 
 import { registerActiveAgentLog, unregisterActiveAgentLog } from "../agent/agent-log";
-import { AGENT_LOG_DIR } from "../agent/persistence/types.js";
+import { AGENT_LOG_DIR, isSafeSessionId } from "../agent/persistence/types.js";
 
 import type { AgentLog } from "../agent/agent-log";
 import type { AgentLogFileSinkOptions } from "../agent/agent-log/types.js";
@@ -37,7 +37,12 @@ export class AgentLogBinding {
     if (this.deps.getParentId()) return;
 
     const resolved = sessionId ?? this.deps.getSessionId() ?? this.deps.getAgentId();
-    const dir = `${AGENT_LOG_DIR}/${resolved}`;
+    // The log directory is `AGENT_LOG_DIR/<id>`, so the id is a path segment. `SessionStore` refuses
+    // an unsafe id, but `bind` runs BEFORE the store's restore validates it (resume binds the sink,
+    // then loads), so an id from an external entry point (`session/load`, HTTP resume) would have
+    // created the directory first. Fall back to the agent id, which this process minted.
+    const safe = isSafeSessionId(resolved) ? resolved : this.deps.getAgentId();
+    const dir = `${AGENT_LOG_DIR}/${safe}`;
     const log = this.deps.getLog();
     if (log.getFileSinkDir() === dir) return;
 

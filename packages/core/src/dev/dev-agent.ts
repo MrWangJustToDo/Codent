@@ -188,7 +188,7 @@ export {
   WireProjectionCache,
   wireSourceFingerprint,
 } from "../agent/compaction";
-export { extractTextFromContent } from "../agent/compaction/message-utils.js";
+export { extractTextFromContent } from "../utils/message-content.js";
 export {
   createConfiguredProviderManager,
   ProviderManager,

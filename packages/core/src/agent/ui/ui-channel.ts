@@ -137,7 +137,11 @@ export class AgentUIChannel {
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
     this.eventBus = bus;
-    bus.retain("session:messages", () => (this.getMessages() ?? []) as never);
+    // A copy, matching `getSnapshot()` and the live frames (`emitMessagesChange` copies too). The
+    // retained provider used to hand out the channel's live array to every new subscriber, so one
+    // host that sorted/patched its first `messages` payload edited the transcript and the next
+    // persist wrote it to disk.
+    bus.retain("session:messages", () => [...(this.getMessages() ?? [])] as never);
   }
 
   /** @internal Bind this channel to its owning agent's tool presentations. */

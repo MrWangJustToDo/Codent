@@ -1,40 +1,19 @@
 /**
- * Shared message content utilities for the compaction module.
+ * Compaction-local message helpers.
  *
- * Helpers for TanStack {@link ModelMessage} shape:
+ * The content readers themselves (`extractTextFromContent` / `describeContentPart`) live in
+ * `utils/message-content.ts`: `agent/memory`, `agent/turn-context` and `agent-session` read the same
+ * TanStack `content` field, and `agent-session` must not depend on compaction for a leaf helper.
+ *
+ * What stays here is about turning messages into a compact transcript:
  * - assistant tool calls live on `message.toolCalls`
  * - tool results are `role: "tool"` messages with `toolCallId` + `content`
  * - text parts use the `content` field (not legacy `text`)
  */
 
-import { type ContentPart, type ModelMessage, type UIMessage } from "@tanstack/ai";
+import { describeContentPart, extractTextFromContent } from "../../utils/message-content.js";
 
-/**
- * Extract text from ModelMessage `content` (string or ContentPart[]).
- * Non-text modalities are replaced with short placeholders.
- */
-export function extractTextFromContent(content: ModelMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (content === null) return "";
-  if (!Array.isArray(content)) return "";
-
-  const parts: string[] = [];
-  for (const part of content) {
-    parts.push(describeContentPart(part));
-  }
-  return parts.filter(Boolean).join("\n");
-}
-
-/** Text from the first text part, or the string content directly. */
-export function getFirstTextPartContent(content: ModelMessage["content"]): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-
-  for (const part of content) {
-    if (part.type === "text") return part.content;
-  }
-  return "";
-}
+import type { ModelMessage, UIMessage } from "@tanstack/ai";
 
 /** Serialize tool-message content to a string for size checks and transcripts. */
 export function serializeToolMessageContent(content: ModelMessage["content"]): string {
@@ -57,23 +36,6 @@ export function serializeToolMessageContent(content: ModelMessage["content"]): s
     }
   }
   return parts.join("\n");
-}
-
-function describeContentPart(part: ContentPart): string {
-  switch (part.type) {
-    case "text":
-      return part.content;
-    case "image":
-      return "[Image was attached]";
-    case "audio":
-      return "[Audio was attached]";
-    case "video":
-      return "[Video was attached]";
-    case "document":
-      return "[Document was attached]";
-    default:
-      return "";
-  }
 }
 
 function findUserMessage(messages: Array<UIMessage | ModelMessage>, from: "first" | "last") {

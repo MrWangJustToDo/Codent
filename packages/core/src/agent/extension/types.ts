@@ -574,8 +574,11 @@ export interface ExtensionContext {
   /** The effective system prompt for the current run. */
   getSystemPrompt(): string;
   /**
-   * A defensive copy of the model-visible conversation (compaction and synthetic `<ctx>` blocks
-   * included). Mutating it cannot reach the wire.
+   * A defensive copy of the **compaction projection** of the conversation (summary-first wire plus
+   * synthetic `<ctx>` blocks). Mutating it cannot reach the wire.
+   *
+   * Not byte-identical to what the adapter receives: it is taken before `tool-compact`,
+   * `message-transform` and this turn's turn-context / wire-recovery changes.
    */
   getMessages(): ModelMessage[];
   /** The active run's abort signal, or undefined when idle. */

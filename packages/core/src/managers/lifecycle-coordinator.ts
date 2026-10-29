@@ -48,6 +48,9 @@ export class LifecycleCoordinator {
     // A debounced memory-index refresh can outlive the agent and write after teardown.
     managedAgent.getMemoryManager?.()?.dispose();
 
+    // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
+    // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
+    managedAgent.markDestroyed();
     managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed);
 
     // Destroy all subagents first.

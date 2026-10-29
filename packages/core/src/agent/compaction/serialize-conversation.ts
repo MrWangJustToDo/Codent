@@ -11,9 +11,10 @@
  *   [Tool result from name]: ...
  */
 
+import { extractTextFromContent } from "../../utils/message-content.js";
 import { truncateText } from "../../utils/text-truncation.js";
 
-import { extractTextFromContent, serializeToolMessageContent } from "./message-utils.js";
+import { serializeToolMessageContent } from "./message-utils.js";
 import { estimateCharUnits } from "./token-estimator.js";
 import { toolNameByMessageIndex } from "./tool-call-pairing.js";
 
