@@ -77,18 +77,9 @@ const makeTextAdapterConfig = ({ structured = [], text = [], modelStyle = "opena
   };
 };
 
-const makeCapturingLog = () => {
-  const entries = [];
-  return {
-    entries,
-    warn(category, message, data) {
-      entries.push({ category, message, data });
-      return null;
-    },
-    info: () => null,
-    debug: () => null,
-    error: () => null,
-  };
+const makeCapturingEvents = () => {
+  const events = [];
+  return { events, onEvent: (event) => events.push(event) };
 };
 
 // ---------------------------------------------------------------------------
@@ -334,29 +325,29 @@ const makeCapturingLog = () => {
 // ---------------------------------------------------------------------------
 
 {
-  const log = makeCapturingLog();
+  const { events, onEvent } = makeCapturingEvents();
   const textAdapter = makeTextAdapterConfig({
     structured: [runErrorChunk("provider exploded"), usageChunk(1, 1)],
   });
 
   await assert.rejects(
-    () => runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, log }),
+    () => runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, onEvent }),
     /provider exploded/,
     "a RUN_ERROR chunk is converted into a throw"
   );
 
-  // Two records, because the structured failure is retried once in text mode and
+  // Two reports, because the structured failure is retried once in text mode and
   // each attempt reports its own outcome. The first must still carry the
   // transport reason, so the fallback does not hide what the provider did.
-  assert.equal(log.entries.length, 2, "both attempts are logged");
-  assert.equal(log.entries[0].category, "side-query", "logged under the port's dedicated category");
-  assert.match(log.entries[0].message, /provider exploded/, "the reason is carried");
-  assert.equal(log.entries[0].data.mode, "structured", "the first record names the mode it failed in");
-  assert.equal(log.entries[0].data.fallback, "text", "and the mode it is about to retry in");
-  assert.equal(log.entries[0].data.model, "fake-model");
-  assert.equal(typeof log.entries[0].data.durationMs, "number");
+  assert.equal(events.length, 2, "both attempts are reported");
+  assert.equal(events[0].type, "side-query:error");
+  assert.match(events[0].error, /provider exploded/, "the reason is carried");
+  assert.equal(events[0].mode, "structured", "the first report names the mode it failed in");
+  assert.equal(events[0].fallback, "text", "and the mode it is about to retry in");
+  assert.equal(events[0].model, "fake-model");
+  assert.equal(typeof events[0].durationMs, "number");
 
-  console.log("✓ transport failure logged under `side-query`");
+  console.log("✓ transport failure reported as side-query:error");
 }
 
 // ---------------------------------------------------------------------------
@@ -364,19 +355,19 @@ const makeCapturingLog = () => {
 // ---------------------------------------------------------------------------
 
 {
-  const log = makeCapturingLog();
+  const { events, onEvent } = makeCapturingEvents();
   const textAdapter = makeTextAdapterConfig({
     structured: [completeChunk({ name: "Ada" }, '{"name":"Ada"}'), usageChunk(3, 2)],
   });
 
-  await assert.rejects(() => runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, log }));
+  await assert.rejects(() => runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, onEvent }));
 
-  assert.equal(log.entries.length, 2, "the validation failure is logged for both attempts");
-  assert.equal(log.entries[0].category, "side-query");
-  assert.equal(log.entries[0].data.mode, "structured");
-  assert.match(String(log.entries[0].data.raw), /Ada/, "a raw-response excerpt is attached for diagnosis");
+  assert.equal(events.length, 2, "the validation failure is reported for both attempts");
+  assert.equal(events[0].type, "side-query:error");
+  assert.equal(events[0].mode, "structured");
+  assert.match(String(events[0].rawExcerpt), /Ada/, "a raw-response excerpt is attached for diagnosis");
 
-  console.log("✓ schema failure logged with reason + excerpt");
+  console.log("✓ schema failure reported with reason + excerpt");
 }
 
 // ---------------------------------------------------------------------------
@@ -384,13 +375,13 @@ const makeCapturingLog = () => {
 // ---------------------------------------------------------------------------
 
 {
-  const log = makeCapturingLog();
+  const { events, onEvent } = makeCapturingEvents();
   const textAdapter = makeTextAdapterConfig({
     structured: [completeChunk({ name: "Ada", age: 2 }, '{"name":"Ada","age":2}'), usageChunk(1, 1)],
   });
 
-  await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, log });
-  assert.equal(log.entries.length, 0, "a successful query writes no log entry");
+  await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, onEvent });
+  assert.equal(events.length, 0, "a successful query on the expected path reports nothing");
 
   console.log("✓ success path is silent");
 }

@@ -15,11 +15,14 @@
  *
  * Two entry paths, and they are deliberately different mechanisms:
  *
- * 1. **The seam** — `AgentLog.debug/info/warn/error/eventEntry` (the ~76 call sites plus the
- *    `ctx.logger` facade). These pass assembled entries straight through; their routing is decided
- *    at the call site, not by a rule.
- * 2. **The bus** — every observable event, turned into entries by the rule table. This is the
- *    subscription that centralizes lifecycle logging.
+ * 1. **The bus** — every observable event, turned into entries by the rule table
+ *    (`event-log-rules.ts`). This is the ONE recording path: a call site decides *what happened* by
+ *    emitting an event, and the table decides whether, at what level, and in which category it
+ *    reaches the file. `validate:no-direct-agent-log` keeps it that way.
+ * 2. **The seam** — `AgentLog.debug/info/warn/error/eventEntry`, reached by the bridge itself, by the
+ *    subagent parent-log mirror, and by the pre-registration window (bootstrap facts resolve a log
+ *    through the manager before the agent is registered). It exists so a fact can be recorded when
+ *    no bus consumer can see it yet — not as a general write path.
  *
  * The seam is a **privileged dependency injection**, not a bus event: a log-entry event would have
  * to be deliverable to this extension, but internal events are withheld from both wildcard delivery

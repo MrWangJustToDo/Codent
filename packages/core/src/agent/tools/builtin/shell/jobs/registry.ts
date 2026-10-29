@@ -14,15 +14,10 @@
 
 import { registerEnvTeardownHook } from "../../../../../env/teardown.js";
 import { generateId } from "../../../../../utils/generate-id.js";
+import { sweepWorkspaceCaches } from "../../../shared/cache/workspace-cache.js";
 
-import { appendJobLogFooter, createCommandJobLogWriter, readJobLogFooter, sweepStaleJobLogs } from "./output-log.js";
-import {
-  readCommandJobRecords,
-  removeCommandJobRecord,
-  sweepStaleJobRecords,
-  tailText,
-  writeCommandJobRecord,
-} from "./store.js";
+import { appendJobLogFooter, createCommandJobLogWriter, readJobLogFooter } from "./output-log.js";
+import { readCommandJobRecords, removeCommandJobRecord, tailText, writeCommandJobRecord } from "./store.js";
 
 import type { CommandJobLogWriter } from "./output-log.js";
 import type { PersistedCommandJob } from "./store.js";
@@ -258,8 +253,9 @@ export class CommandJobRegistry {
       changed = true;
     }
     if (changed) this.notifyChange();
-    // Opportunistic sweep: records are tiny, but a long-lived workspace still accumulates them.
-    void sweepStaleJobRecords(this.env);
+    // Opportunistic sweep for every workspace cache (records, logs, spilled tool output): the guards
+    // make the other kinds free, and one trigger is what keeps the retention rules from drifting.
+    if (this.env) void sweepWorkspaceCaches(this.env);
   }
 
   private fromPersisted(persisted: PersistedCommandJob): CommandJobRecord {
@@ -404,9 +400,8 @@ export class CommandJobRegistry {
       ...(this.env ? { env: this.env } : {}),
     });
     if (log) this.logs.set(id, log);
-    // Opportunistic safety net for logs/records left behind by an earlier run.
-    void sweepStaleJobLogs(undefined, this.env);
-    if (this.env) void sweepStaleJobRecords(this.env);
+    // Opportunistic safety net for anything left behind by an earlier run (all workspace caches).
+    if (this.env) void sweepWorkspaceCaches(this.env);
     const record: CommandJobRecord = {
       id,
       ...(toolCallId ? { toolCallId } : {}),

@@ -37,7 +37,6 @@ const logCategories = [
   "tool",
   "approval",
   "compaction",
-  "todo",
   "skill",
   "memory",
   "hooks",

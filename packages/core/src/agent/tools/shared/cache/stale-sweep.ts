@@ -1,20 +1,17 @@
 /**
  * Shared age-based file sweep for the workspace cache directories.
  *
- * Two caches under `.agents/cache/` stay bounded by deleting entries past an age
- * threshold — background job logs and spilled tool output. The policy is
- * identical in both (readdir → suffix filter → mtime check → best-effort remove,
- * at most once per workspace root per process, never throwing); only the directory, suffix and
- * threshold differ, so the walk lives here once.
+ * Every cache under `.agents/cache/` stays bounded the same way: readdir → suffix filter → mtime
+ * check → best-effort remove, at most once per workspace root per process, never throwing. Only the
+ * directory, suffix and threshold differ, so the walk lives here once and the *table* of those
+ * three values lives in `workspace-cache.ts` (`WORKSPACE_CACHE_RETENTION`).
  *
- * Age-based on purpose in both cases: the reference-based collector
- * (`cleanupOrphanedToolCache`) can only ever see files a *compacting* session
- * referenced, so a session that never compacted — and any file no session ever
- * referenced — leaks without a blanket age rule.
+ * Age-based on purpose: the reference-based collector (`cleanupOrphanedToolCache`) can only ever see
+ * files a *compacting* session referenced, so a session that never compacted — and any file no
+ * session ever referenced — leaks without a blanket age rule.
  *
- * The suffix filter is the isolation guard between the two caches: a `.log`
- * sweep can never eat a spill file, and vice versa, even if the directories are
- * ever merged.
+ * The suffix filter is the isolation guard between artifacts: a `.log` sweep can never eat a spill
+ * file, and vice versa, even if the directories are ever merged.
  */
 
 import type { ResolvedCoreEnv } from "../../../../env";

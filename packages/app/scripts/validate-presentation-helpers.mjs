@@ -13,27 +13,27 @@
  * (or the re-export drifting to a different module) fails here.
  */
 
+import { CONVERSATION_SUMMARY_END, CONVERSATION_SUMMARY_START } from "@codent/core";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The markers are read from core's BUILT surface, not from a source file. Reading them out of
+// `compaction-summary.ts` with a regex made this validator a test of "which module holds the
+// literal": moving the declarations one file down (`summary-marker.ts`, to break an import cycle)
+// turned it red for a refactor that changed nothing observable. The value is the contract.
+
 const here = dirname(fileURLToPath(import.meta.url));
 const appSummaryPath = join(here, "../src/utils/compaction-summary.ts");
-const coreSummaryPath = join(here, "../../core/src/agent/compaction/compaction-summary.ts");
 const appSummary = readFileSync(appSummaryPath, "utf8");
-const coreSummary = readFileSync(coreSummaryPath, "utf8");
-
-/** The literal a `export const NAME = "…"` declares, or fail. */
-function constString(src, name, where) {
-  const match = src.match(new RegExp(`export const ${name} = "([^"]+)"`));
-  assert.ok(match, `${name} is not declared as a literal in ${where}`);
-  return match[1];
-}
 
 // Core is the source of truth: the markers are written by its compaction, so they are declared there.
-const start = constString(coreSummary, "CONVERSATION_SUMMARY_START", "core");
-const end = constString(coreSummary, "CONVERSATION_SUMMARY_END", "core");
+const start = CONVERSATION_SUMMARY_START;
+const end = CONVERSATION_SUMMARY_END;
+assert.equal(typeof start, "string", "CONVERSATION_SUMMARY_START must resolve from @codent/core");
+assert.equal(typeof end, "string", "CONVERSATION_SUMMARY_END must resolve from @codent/core");
+assert.ok(start.length > 0 && end.length > 0, "the markers must be non-empty");
 assert.notEqual(start, end, "the two markers must differ, or every body would match either");
 
 // The app must not re-declare them. This is the regression the old assertion was too weak to catch:

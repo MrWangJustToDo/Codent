@@ -5,6 +5,7 @@
 import { type UIMessage as TanStackUIMessage, type ModelMessage } from "@tanstack/ai";
 
 import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
+import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
 import type { AgentStatus, RunFinalizeReason } from "./agent-types.js";
@@ -13,7 +14,6 @@ import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
-import type { AgentLog } from "../agent/agent-log";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 
@@ -26,7 +26,7 @@ export interface RunLifecycleHost {
   readonly id: string;
   parentId?: string;
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus) => void;
+  setStatus: (status: AgentStatus, trigger?: string) => void;
   /** Track the active run id (log run-scoping); pass null to clear. */
   setCurrentRunId: (runId: string | null) => void;
   recordStreamDuration: () => void;
@@ -43,7 +43,6 @@ export interface RunLifecycleHost {
   collectExtensionPromptHooks: (prompt: string) => Promise<void>;
   emitEvent: EmitAgentTelemetryFn;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  log: AgentLog | null;
   usage: UsageTracker;
   getUI?: () => AgentUIChannel | undefined;
   run: RunCoordinator;
@@ -85,7 +84,7 @@ export async function prepareManagedAgentForRun(
       // `signal.aborted`); rewriting its STATUS is not. A run that already has an outcome
       // (completed / aborted / error) or never started (idle) keeps the status it has.
       if (isActiveStatus(host.getStatus())) {
-        host.setStatus("aborted");
+        host.setStatus("aborted", "run-abort");
       }
     },
   });
@@ -103,7 +102,9 @@ export async function prepareManagedAgentForRun(
     !forcedNewTurn && (isToolContinuationPrepare(host.getStatus(), options.messages) || flaggedContinuation);
   // Remember it for the finalizer: a turn with no prompt skips memory extraction (nothing the user
   // said to remember, and the notification + reply are not worth a side query).
-  if (forcedNewTurn) host.run.setPromptlessTurn(true);
+  if (forcedNewTurn) {
+    host.run.setPromptlessTurn(true);
+  }
   if (!isToolContinuation || host.getStreamStartedAt() === 0) {
     host.setStreamStartedAt(Date.now());
   }
@@ -112,21 +113,35 @@ export async function prepareManagedAgentForRun(
   if (!isToolContinuation) {
     const runId = Math.random().toString(36).slice(2, 10);
     host.setCurrentRunId(runId);
-    host.log?.setRun(runId);
+    // Emitted AFTER the id exists: a wake turn has no `prompt:submit`, so this row is the only
+    // explanation of why the agent is working, and it has to slice with the run it explains.
+    if (forcedNewTurn) {
+      // Debug-level on purpose — it explains a run without being part of the readable story.
+      host.emitEvent("run:wake", { cause: "job" });
+    }
   }
 
   if (!isToolContinuation && !forcedNewTurn && !host.parentId) {
+    // The user's ask, when this run has one: a run started from `messages` (resume, queued send,
+    // wake) carries no `prompt` string, and both consumers below used to receive the literal
+    // placeholder "(structured)" — every prompt row claimed a 12-byte prompt and an extension's
+    // `before_agent_start` hook got the placeholder instead of what the user said.
+    const userMsg =
+      (typeof options.prompt === "string" ? options.prompt : undefined) ??
+      lastGenuineUserText(host.getUI?.()?.getMessages() ?? []);
+
     // Extension hooks once per user turn — consumed by the turn-context middleware
     // at onConfig (injection happens after compaction, against the real wire payload).
     // A wake turn is skipped: there is no user prompt, so `before_agent_start` / memory selection
-    // would be handed "(structured)" and spend a side query on it.
-    await host.collectExtensionPromptHooks(typeof options.prompt === "string" ? options.prompt : "(structured)");
+    // would be handed nothing to select against.
+    if (userMsg) await host.collectExtensionPromptHooks(userMsg);
 
-    const userMsg = typeof options.prompt === "string" ? options.prompt : "(structured)";
-    host.emitEvent("prompt:submit", {
-      prompt: userMsg,
-      contextMessageCount: (host.getUI?.()?.getMessages() ?? inputMessages).length,
-    });
+    if (userMsg) {
+      host.emitEvent("prompt:submit", {
+        prompt: userMsg,
+        contextMessageCount: (host.getUI?.()?.getMessages() ?? inputMessages).length,
+      });
+    }
   }
 }
 
@@ -143,7 +158,10 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   if (reason === "finished" && !promptless) {
     host.memory.runExtraction({
       getMessagesForLLM: () => host.getMessagesForLLM(),
-      log: host.log,
+      onSideQuery: (event) => {
+        const { type, ...payload } = event;
+        host.emitEvent(type, payload as never);
+      },
       // Extraction and consolidation are real LLM spend; the tracker is what makes it
       // show up in the session's lifetime totals.
       usage: host.usage,
@@ -164,18 +182,17 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   //
   // Teardown outlives the run it tears down: a cancelled tool's `onAfterToolCall` —
   // and, in the pump path, the `turn:summary` that reports the run — is delivered
-  // after `agent:stop`, so clearing synchronously here wrote those entries with NO
-  // `run` at all (observed: the cancelled `run_command`'s `tool-end` was the only
-  // line in the session log without a run id). Deferring keeps a late entry inside
-  // the run that produced it while still clearing before the next run, which stamps
-  // a fresh id with `setRun` anyway.
+  // after `agent:stop`, so clearing synchronously here stamped those entries with no
+  // run at all (observed: the cancelled `run_command`'s `tool-end` was the only line
+  // in the session log without a run id). Deferring keeps a late entry inside the run
+  // that produced it while still clearing before the next run, which stamps a fresh id
+  // with `setCurrentRunId` in `prepareManagedAgentForRun` anyway.
   //
   // A microtask is enough for the pump path (`emitEvent` dispatches synchronously, so
-  // `turn:summary` lands before this checkpoint); the `setRun` in `prepareManagedAgent`
-  // is the backstop for anything slower, since it overwrites unconditionally.
-  host.setCurrentRunId(null);
+  // `turn:summary` lands before this checkpoint); the `setCurrentRunId` in prepare is
+  // the backstop for anything slower, since it overwrites unconditionally.
   queueMicrotask(() => {
-    host.log?.setRun(null);
+    host.setCurrentRunId(null);
   });
   return true;
 }
@@ -202,6 +219,6 @@ export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): v
   // match, or one of them undoes the other (an `error` agent was being relabelled `aborted`
   // here once the listener stopped pre-empting it).
   if (isActiveStatus(host.getStatus())) {
-    host.setStatus("aborted");
+    host.setStatus("aborted", "run-abort");
   }
 }

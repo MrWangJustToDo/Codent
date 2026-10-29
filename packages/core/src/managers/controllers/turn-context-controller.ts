@@ -26,7 +26,6 @@ import { formatSessionRetrievalSection, hasSessionHistory } from "../../agent/tu
 import { errorMessage } from "../../utils/errors.js";
 import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
 
-import type { AgentLog } from "../../agent/agent-log";
 import type { ExtensionRunner, ExtensionTurnContextSection } from "../../agent/extension";
 import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
@@ -46,7 +45,12 @@ export interface TurnContextControllerOptions {
   onPromptBefore: (input: { prompt: string; hasTurnContext: boolean }) => void;
   /** Prompt changed → the cached AgentRunner key is stale. */
   invalidateRunner: () => void;
-  log?: AgentLog;
+  /** Publishes subsystem notes (`session:diagnostic`); the policy owns level/category. */
+  emitDiagnostic?: (
+    area: "context",
+    message: string,
+    options?: { level?: "debug" | "info" | "warn" | "error"; error?: string }
+  ) => void;
 }
 
 export class TurnContextController {
@@ -225,7 +229,10 @@ export class TurnContextController {
       return formatInstructionContextSection(loaded);
     } catch (err) {
       const message = errorMessage(err);
-      this.options.log?.warn("agent", "Instruction-context detection failed", { error: message });
+      this.options.emitDiagnostic?.("context", "Instruction-context detection failed", {
+        level: "warn",
+        error: message,
+      });
       return undefined;
     }
   }

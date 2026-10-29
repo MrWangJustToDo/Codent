@@ -123,7 +123,7 @@ const sentinelManaged = {
   parentId: "sub-agent",
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
   getUI: () => undefined,
   setError() {},
   setRetry() {},
@@ -189,25 +189,19 @@ function makeRunCoordinatorStub() {
   };
 }
 
-/** Direct log rows the recovery loop writes itself (must stay empty — see the assertion below). */
-const directRetryLogs = [];
+// The recovery loop used to write its own `log.debug` rows beside `agent:retry`; the port is gone
+// (a regression now throws on the stub instead of being captured here), so there is nothing to probe.
 
 const managed = {
   parentId: "sub-agent",
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: {
-    warn() {},
-    debug(_category, message) {
-      directRetryLogs.push(message);
-    },
-    error() {},
-  },
   getUI: () => undefined,
   setError() {},
   setRetry(state) {
     retryStates.push(state);
   },
+  emitDiagnostic() {},
   emitEvent(type, payload) {
     if (type === "agent:retry") retryEvents.push(payload);
   },
@@ -227,7 +221,7 @@ const stripManaged = {
   run: stripRun,
   getUI: () => undefined,
   usage: { hasCapability: (cap) => cap !== "vision" },
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
 };
 assert.equal(armCapabilityStrip(stripManaged), true, "a model without vision arms a strip");
 assert.deepEqual([...stripRun.getWireDropPartTypes()], ["image"], "only the unsupported modality is dropped");
@@ -238,7 +232,7 @@ assert.equal(
     parentId: undefined,
     run: fullRun,
     usage: { hasCapability: () => true },
-    log: { warn() {}, debug() {}, error() {} },
+    emitDiagnostic() {},
   }),
   false,
   "a fully capable model arms no strip"
@@ -271,7 +265,7 @@ assert.equal(retryEvents[0].attempt, 1);
 // ONE retry = ONE row. The loop used to write a "Transient provider error — retrying" debug row and
 // a "Backoff before retry" row (with a pre-increment `attempt`, contradicting the "1/3" beside it)
 // on top of the `agent:retry` event — three lines for one fact, one of them self-contradictory.
-assert.deepEqual(directRetryLogs, [], "the retry loop writes no rows of its own — `agent:retry` is the writer");
+// `agent:retry` is the only writer of that fact: the stub above has no `log` port to write to.
 
 // --- the SDK-normalized `retryAfterMs` on a RUN_ERROR drives the backoff --------
 //
@@ -301,7 +295,7 @@ const msManaged = {
   parentId: "sub-agent",
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
   getUI: () => undefined,
   setError() {},
   setRetry(state) {
@@ -366,7 +360,7 @@ const subManaged = {
   parentId: "parent-1",
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
   setError(error) {
     lastError = error;
   },
@@ -424,7 +418,7 @@ const rootChannel = new CountingChannel({
 const rootManaged = {
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
   setError() {},
   getUI: () => rootChannel,
   statusController: {
@@ -467,7 +461,7 @@ async function* alwaysRateLimited() {
 const abortManaged = {
   run: makeRunCoordinatorStub(),
   usage: null,
-  log: { warn() {}, debug() {}, error() {} },
+  emitDiagnostic() {},
   setError() {},
   setRetry() {},
   emitEvent() {},
@@ -506,7 +500,7 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
   const abortClearManaged = {
     run: makeRunCoordinatorStub(),
     usage: null,
-    log: { warn() {}, debug() {}, error() {} },
+    emitDiagnostic() {},
     setError() {},
     setRetry(state) {
       seenRetryStates.push(state);
@@ -547,7 +541,7 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
       },
     },
     usage: null,
-    log: { warn() {}, debug() {}, error() {} },
+    emitDiagnostic() {},
     setError() {},
     setRetry(state) {
       if (state) truncationRetries.push(state);
@@ -600,7 +594,7 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
   const mixedManaged = {
     run: makeRunCoordinatorStub(),
     usage: null,
-    log: { warn() {}, debug() {}, error() {} },
+    emitDiagnostic() {},
     setError() {},
     setRetry(state) {
       if (state) mixedRetries.push(state);

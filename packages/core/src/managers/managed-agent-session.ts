@@ -92,7 +92,7 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     reasoningEffort: host.getReasoningEffort(),
     resolveTextAdapter: host.resolveTextAdapter,
     emitEvent: (type, data) => host.emitEvent(type, data),
-    log: host.getLog?.(),
+    emitSessionTitle: (payload) => host.emitEvent("session:title", payload),
     // The auto-title path writes `SessionData.name`; mirror it onto the agent so
     // live UI / snapshots pick it up (previously only manual rename broadcast).
     onTitleResolved: (name) => host.setDisplayName?.(name),
@@ -259,8 +259,11 @@ export async function restoreManagedSession(
     // identity — re-emit state so live subscribers see the switch.
     host.refreshState?.();
   } catch (error) {
-    host.getLog?.()?.warn("system", "post-restore step failed", {
-      sessionId,
+    host.emitEvent("session:diagnostic", {
+      area: "session",
+      level: "warn",
+      message: "post-restore step failed",
+      details: { sessionId },
       error: errorMessage(error),
     });
   }

@@ -15,7 +15,6 @@ import { resolveModelInfoFromModelsDev } from "../models/config/models-config.js
 import { errorMessage } from "../utils/errors.js";
 
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
-import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { ExtensionLlmRequest, ExtensionLlmResult } from "../agent/extension/context-access.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { LoadedModelEntry } from "../models/config/models-config.js";
@@ -31,7 +30,14 @@ export const DEFAULT_EXTENSION_CALLS_PER_RUN = 20;
 /** What the completion path needs from the agent. Structural so this module stays free of the class. */
 export interface ExtensionCompletionHost {
   readonly usage: UsageTracker;
-  readonly log: AgentLog | null;
+  /** Telemetry sink: the completion's own rows are `session:diagnostic` (area `extension`). */
+  emitDiagnostic?(
+    area: "extension",
+    message: string,
+    options?: { level?: "debug" | "info" | "warn"; data?: Record<string, unknown>; error?: string }
+  ): void;
+  /** Publishes the side query's own facts (`side-query:complete` / `side-query:error`). */
+  emitSideQuery?(type: "side-query:mode" | "side-query:error", payload: Record<string, unknown>): void;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   /** The session's current connection, used to decide whether a catalog model is reachable. */
   getExtensionConnection(): { style?: ModelStyle; baseURL?: string; apiKey?: string };
@@ -241,16 +247,23 @@ export async function completeExtensionQuery(
       ...(request.schema ? { schema: request.schema } : {}),
       maxOutputTokens,
       ...(signal ? { abortSignal: signal } : {}),
-      ...(host.log ? { log: host.log } : {}),
+      purpose: `extension:${extensionId}`,
+      onEvent: (event) => {
+        const { type, ...payload } = event;
+        host.emitSideQuery?.(type, payload);
+      },
     });
 
     // Price the model that ran, not the session's: a named catalog model can differ in rate, and the
     // usage-history row already uses this adapter's pricing — one call must not have two costs.
     if ("usage" in result && result.usage) host.usage.addTotal(result.usage, adapter.pricing ?? undefined);
-    host.log?.info("side-query", `extension completion (${extensionId})`, {
-      model: request.model?.trim() || host.getExtensionModel(),
-      maxOutputTokens,
-      ...("usage" in result && result.usage ? { usage: result.usage } : {}),
+    host.emitDiagnostic?.("extension", `LLM completion (${extensionId})`, {
+      level: "debug",
+      data: {
+        model: request.model?.trim() || host.getExtensionModel(),
+        maxOutputTokens,
+        ...("usage" in result && result.usage ? { usage: result.usage } : {}),
+      },
     });
 
     return "data" in result ? { data: result.data } : { text: result.text };
@@ -261,9 +274,9 @@ export async function completeExtensionQuery(
     const billed = (error as { usage?: Parameters<UsageTracker["addTotal"]>[0] }).usage;
     if (billed) {
       host.usage.addTotal(billed, adapter.pricing ?? undefined);
-      host.log?.info("side-query", `extension completion failed after billing (${extensionId})`, {
-        model: request.model?.trim() || host.getExtensionModel(),
-        usage: billed,
+      host.emitDiagnostic?.("extension", `LLM completion failed after billing (${extensionId})`, {
+        level: "warn",
+        data: { model: request.model?.trim() || host.getExtensionModel(), usage: billed },
       });
     } else {
       // Nothing was billed, so the slot goes back: a burst of transient failures must not spend the

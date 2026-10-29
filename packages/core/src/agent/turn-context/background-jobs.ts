@@ -12,8 +12,8 @@
 
 import { extractTextFromContent } from "../../utils/message-content.js";
 import { truncateText } from "../../utils/text-truncation.js";
-import { COMMAND_JOB_LOG_DIR } from "../tools/builtin/shell/jobs/output-log.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { COMMAND_JOB_CACHE_DIR } from "../tools/shared/cache/workspace-cache.js";
 
 import {
   TURN_CONTEXT_KINDS,
@@ -110,7 +110,7 @@ export function formatBackgroundJobsSection(jobs: readonly BackgroundJobContextR
     return `- ${job.jobId} — ${status}: ${oneLine(job.command)}${log}`;
   });
   if (ordered.length > shown.length) {
-    lines.push(`- … ${ordered.length - shown.length} more job(s); see ${COMMAND_JOB_LOG_DIR}/`);
+    lines.push(`- … ${ordered.length - shown.length} more job(s); see ${COMMAND_JOB_CACHE_DIR}/`);
   }
   // No generation/epoch attribute: the section is admitted by content like every other kind,
   // against the post-compaction wire, so a cut that removed it re-admits it and a surviving copy

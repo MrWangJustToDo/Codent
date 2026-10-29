@@ -21,8 +21,11 @@ export const generateLogId = createSequentialIdGenerator("log");
  * sink that attaches, and capped so a session that never binds a sink (or binds one
  * only at the very end) cannot grow memory without bound.
  *
- * The cap only has to exceed a bootstrap's emission count (~15 today); it is not a
- * history buffer, and nothing reads it back for queried entries.
+ * The cap only has to exceed a bootstrap's emission count. Measured (validate-bootstrap-log-binding:
+ * one throwing extension + a documentation file + the search-directory note + the summary): **8 entries**, of which the
+ * extension's own activation failure is one. 200 leaves two orders of magnitude of headroom for a
+ * workspace with many extensions, so the cap is not the thing to raise if bootstrap ever grows —
+ * the fix would be binding the sink earlier, not buffering more.
  */
 export const MAX_PENDING_LOG_ENTRIES = 200;
 
@@ -56,15 +59,12 @@ export interface LogSink {
  *
  * Features:
  * 1. **Structured entries** - LogEntry with level, category, data, error, run id
- * 2. **Run scoping** - entries logged during an agent run share one `run` id
+ * 2. **Run scoping** - the run id travels on the event envelope; the seam never stores it
  * 3. **Disk persistence** - JSONL file sink with size-based rotation
  */
 export class AgentLog {
   private enabled = true;
   private minLevel: LogLevel = "debug";
-
-  /** Short run id stamped onto entries while an agent run is in flight. */
-  private currentRun: string | null = null;
 
   /** Profile/task attribution stamped onto every assembled entry. */
   private scope: LogScope = { profile: "root" };
@@ -113,14 +113,8 @@ export class AgentLog {
   }
 
   /**
-   * Set the active run id: entries logged while set are stamped with `run`.
-   * Pass `null` to leave run scope (bootstrap/idle entries carry no `run`).
+   * Set this agent's profile/task attribution for subsequent entries.
    */
-  setRun(run: string | null): void {
-    this.currentRun = run;
-  }
-
-  /** Set this agent's profile/task attribution for subsequent entries. */
   setScope(scope: LogScope): void {
     this.scope = scope;
   }
@@ -144,6 +138,12 @@ export class AgentLog {
       tags?: string[];
       /** Originating bus event type (Event→Log bridge). */
       event?: string;
+      /**
+       * Run id from the originating event envelope. The envelope is the ONLY source: the seam keeps
+       * no run state, so a consumer cannot disagree with the producer about which run an entry
+       * belongs to (absent outside a run).
+       */
+      run?: string | null;
     }
   ): LogEntry | null {
     if (!this.shouldLog(level)) return null;
@@ -160,7 +160,7 @@ export class AgentLog {
     if (options?.data) entry.data = options.data;
     if (options?.tags) entry.tags = options.tags;
     if (options?.event) entry.event = options.event;
-    if (this.currentRun) entry.run = this.currentRun;
+    if (options?.run) entry.run = options.run;
     if (options?.error) {
       entry.error = {
         name: options.error.name,
@@ -222,9 +222,10 @@ export class AgentLog {
     eventType: string,
     message: string,
     data?: Record<string, unknown>,
-    error?: Error
+    error?: Error,
+    run?: string | null
   ): LogEntry | null {
-    return this.log(level, category, message, { data, error, event: eventType });
+    return this.log(level, category, message, { data, error, event: eventType, ...(run !== undefined ? { run } : {}) });
   }
 
   // ============================================================================

@@ -79,16 +79,18 @@ export function handleMaxTokensTruncation(options: {
     // made one truncated turn raise the cap forever.
     managed.run.setMaxOutputTokensOverride(ESCALATED_MAX_TOKENS);
     truncation.maxTokensEscalated = true;
-    managed.log?.debug("agent", "Output truncated — escalating max_tokens", {
-      escalatedTokens: ESCALATED_MAX_TOKENS,
+    managed.emitDiagnostic("stream", "Output truncated — escalating max_tokens", {
+      level: "debug",
+      data: { escalatedTokens: ESCALATED_MAX_TOKENS },
     });
     return { shouldRetry: true, countsAsRecoveryAttempt: false };
   }
 
   if (truncation.continuationCount < MAX_TRUNCATION_CONTINUATIONS) {
     truncation.continuationCount++;
-    managed.log?.debug("agent", "Output truncated — injecting continuation prompt", {
-      continuationCount: truncation.continuationCount,
+    managed.emitDiagnostic("stream", "Output truncated — injecting continuation prompt", {
+      level: "debug",
+      data: { continuationCount: truncation.continuationCount },
     });
     // NOTE: wire-only recovery, and the reason this is a flag on the run rather than an
     // extra message appended to the array handed to the engine: `compaction` rebuilds
@@ -104,6 +106,8 @@ export function handleMaxTokensTruncation(options: {
     return { shouldRetry: true, countsAsRecoveryAttempt: true };
   }
 
-  managed.log?.warn("agent", "Output truncated — max continuations reached, returning partial result");
+  managed.emitDiagnostic("stream", "Output truncated — max continuations reached, returning partial result", {
+    level: "warn",
+  });
   return { shouldRetry: false, countsAsRecoveryAttempt: false };
 }

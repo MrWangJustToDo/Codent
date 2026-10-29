@@ -45,9 +45,9 @@ console.log("persistence-only surface: OK");
   const { log: runLog, readEntries } = capture;
 
   runLog.info("system", "bootstrap entry"); // no run id
-  runLog.setRun("run00001");
-  runLog.info("llm", "LLM response: ok", { costUsd: 0.01 });
-  runLog.setRun(null);
+  // The seam keeps no run state: the id travels with the event (here simulated through `eventEntry`,
+  // which is the only API that accepts one).
+  runLog.eventEntry("info", "llm", "llm:response", "LLM response: ok", { costUsd: 0.01 }, undefined, "run00001");
   runLog.info("system", "post-run entry");
 
   // Poll rather than sleep: the sink flushes on an interval, so a fixed sleep is a race that

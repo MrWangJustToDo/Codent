@@ -237,6 +237,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
             inputTokens: usage.inputTokens ?? 0,
             outputTokens: usage.outputTokens ?? 0,
             totalTokens: usage.totalTokens ?? 0,
+            costUsd: subagentManaged.usage.getTotalCostUsd(),
           },
     { parentId: parentAgentId }
   );

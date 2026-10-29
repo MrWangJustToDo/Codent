@@ -5,7 +5,8 @@
 export class AutoModeController {
   private enabled = false;
 
-  constructor(private readonly onChange?: () => void) {}
+  /** `onChange` receives the NEW state (the controller only fires on an actual change). */
+  constructor(private readonly onChange?: (enabled: boolean) => void) {}
 
   isEnabled(): boolean {
     return this.enabled;
@@ -14,7 +15,7 @@ export class AutoModeController {
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
-    this.onChange?.();
+    this.onChange?.(enabled);
   }
 
   /** @returns new enabled state */

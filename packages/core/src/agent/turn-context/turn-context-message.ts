@@ -21,6 +21,7 @@
  */
 
 import { extractTextFromContent } from "../../utils/message-content.js";
+import { isCompactionSummaryText } from "../compaction/summary-marker.js";
 
 import type { ModelMessage, UIMessage } from "@tanstack/ai";
 
@@ -297,6 +298,34 @@ export function isContextUIMessage(message: UIMessage): boolean {
   const textPart = message.parts.find((part) => part.type === "text");
   if (!textPart || textPart.type !== "text") return false;
   return isContextText(textPart.content);
+}
+
+/**
+ * The text of the newest real user message in a transcript, or `undefined` when there is none.
+ *
+ * Exists because a run started from `messages` (a resume, a queued send, a wake) has no `prompt`
+ * string — and the two consumers of that string, `prompt:submit` and `before_agent_start`, were
+ * handed the literal placeholder `"(structured)"`. Every recorded prompt row then claimed a 12-byte
+ * prompt, and an extension hook that reads the user's ask got the placeholder instead of the ask.
+ *
+ * Synthetic `<ctx …>` messages are skipped: they are not the user, and reporting them as the prompt
+ * would be the same misattribution one layer deeper.
+ */
+export function lastGenuineUserText(messages: readonly UIMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!message || message.role !== "user" || isContextUIMessage(message)) continue;
+    const text = message.parts
+      .filter((part): part is Extract<UIMessage["parts"][number], { type: "text" }> => part.type === "text")
+      .map((part) => part.content)
+      .join("\n")
+      .trim();
+    // A compaction summary is a `user` message too (`[CONVERSATION SUMMARY]`). Reporting it as the
+    // prompt sent the whole summary to `before_agent_start` (and paid for a memory side query) on
+    // a transcript whose newest message happens to be the summary.
+    if (text && !isCompactionSummaryText(text)) return text;
+  }
+  return undefined;
 }
 
 /**

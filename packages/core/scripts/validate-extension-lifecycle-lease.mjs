@@ -31,7 +31,7 @@
 
 import assert from "node:assert/strict";
 
-import { ExtensionRunner } from "../dist/dev.mjs";
+import { bridgeTelemetryToAgentLog, createAgentEventBus, ExtensionRunner } from "../dist/dev.mjs";
 
 // ============================================================================
 // Harness
@@ -40,24 +40,29 @@ import { ExtensionRunner } from "../dist/dev.mjs";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-/** A runner whose host side keeps a simple name → owner map, plus an optional log sink. */
+/** A runner whose host side keeps a simple name → owner map, plus the rows its log received. */
 function makeRunner() {
   const tools = new Map();
   const commands = new Map();
   const logEntries = [];
+  // `ctx.logger` publishes `extension:log` on the bus; the bridge turns that into one log row. The
+  // stub records the bridge's write instead of a file, which is what the assertions below need —
+  // "the refusal was recorded once" — without waiting for a flush interval.
+  const bus = createAgentEventBus();
+  bridgeTelemetryToAgentLog(bus, () => ({
+    eventEntry: (level, category, _eventType, message) => {
+      logEntries.push({ level, category, message });
+      return null;
+    },
+  }));
   const runner = new ExtensionRunner({
+    eventBus: bus,
     onRegisterTool: (def, ownerId) => tools.set(def.name, { ownerId, def }),
     onUnregisterTool: (name, ownerId) => {
       if (tools.get(name)?.ownerId === ownerId) tools.delete(name);
     },
     onRegisterCommand: (cmd) => commands.set(cmd.name, cmd),
     onUnregisterCommand: (name) => commands.delete(name),
-    log: {
-      debug: () => {},
-      info: () => {},
-      warn: (category, message) => logEntries.push({ level: "warn", category, message }),
-      error: (category, message) => logEntries.push({ level: "error", category, message }),
-    },
   });
   return { runner, tools, commands, logEntries };
 }
@@ -221,7 +226,6 @@ const toolDef = (name) => ({
     onUnregisterTool: (name, ownerId) => {
       if (tools.get(name)?.ownerId === ownerId) tools.delete(name);
     },
-    log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
     // A runtime is required for the live path to succeed; without it the assertion below would pass
     // for the wrong reason (the "no-adapter" rejection).
     getRuntime: () => ({ complete: async () => ({ text: "ok" }) }),
@@ -270,6 +274,44 @@ const toolDef = (name) => ({
   await live.events.emit({ type: "test:lease-probe", payload: {} });
   assert.equal(fired, 2);
 
+  await runner.destroyAll();
+}
+
+// ----------------------------------------------------------------------------
+// `ctx.logger` is an event, and an observer that logs must not recurse.
+//
+// `extension:log` is observable (it has to be: the wildcard log consumer is what records it), so an
+// extension logging from its own observer is one frame away from an infinite loop. The emitter drops
+// a nested log while one is dispatching; this is the only test of that guard.
+// ----------------------------------------------------------------------------
+{
+  const { runner, logEntries } = makeRunner();
+  let observed = 0;
+  const api = {
+    id: "logger-loop",
+    name: "logger-loop",
+    async activate(ctx) {
+      ctx.events.observe("*", () => {
+        observed += 1;
+        ctx.logger.warn("nested from observer");
+      });
+      ctx.logger.info("first");
+    },
+  };
+  await runner.loadExtension(api);
+  const extensionRows = () => logEntries.filter((entry) => entry.message.includes("[extension:logger-loop]"));
+  assert.equal(extensionRows().length, 1, "the first log is recorded");
+  assert.equal(observed, 1, "the observer saw that one event");
+
+  const ctx = runner.contextFor("logger-loop");
+  assert.ok(ctx, "live context");
+  ctx.logger.info("second");
+  assert.equal(
+    extensionRows().length,
+    2,
+    `a nested log is dropped, so each outer log is one row (got ${extensionRows().length})`
+  );
+  assert.ok(observed >= 2, "the observer still runs for the outer frame");
   await runner.destroyAll();
 }
 

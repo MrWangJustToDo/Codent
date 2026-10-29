@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  COMMAND_JOB_LOG_DIR,
+  COMMAND_JOB_CACHE_DIR,
   MAX_JOB_LOG_AGE_MS,
   AgentCommandService,
   CommandJobRegistry,
@@ -141,7 +141,7 @@ assert.equal(job.stderr, "");
 assert.equal(job.exitCode, null);
 assert.ok(job.startedAt > 0);
 assert.equal(job.endedAt, null);
-assert.equal(job.logPath, `${COMMAND_JOB_LOG_DIR}/${job.id}.log`);
+assert.equal(job.logPath, `${COMMAND_JOB_CACHE_DIR}/${job.id}.log`);
 
 // ---------------------------------------------------------------------------
 // 2. Append output and poll incrementally
@@ -348,7 +348,7 @@ console.log("teardown log deletion OK");
   registerCoreEnv(createEnv(throwRoot, { withAppendFile: "throwing" }));
 
   const failing = registry.create("echo failing");
-  assert.equal(failing.logPath, `${COMMAND_JOB_LOG_DIR}/${failing.id}.log`, "path advertised while healthy");
+  assert.equal(failing.logPath, `${COMMAND_JOB_CACHE_DIR}/${failing.id}.log`, "path advertised while healthy");
   registry.appendStdout(failing.id, "boom\n");
   // The flush is DEBOUNCED (`JOB_LOG_FLUSH_INTERVAL_MS`) and then awaits real I/O, so the failure is
   // observed on a timer rather than synchronously. A fixed 400 ms wait therefore raced a loaded CI
@@ -373,9 +373,9 @@ console.log("teardown log deletion OK");
 // 14. Stale sweep: only logs past the age threshold are removed
 // ---------------------------------------------------------------------------
 {
-  const staleRel = `${COMMAND_JOB_LOG_DIR}/job_stale.log`;
-  const freshRel = `${COMMAND_JOB_LOG_DIR}/job_fresh.log`;
-  await fs.promises.mkdir(abs(COMMAND_JOB_LOG_DIR), { recursive: true });
+  const staleRel = `${COMMAND_JOB_CACHE_DIR}/job_stale.log`;
+  const freshRel = `${COMMAND_JOB_CACHE_DIR}/job_fresh.log`;
+  await fs.promises.mkdir(abs(COMMAND_JOB_CACHE_DIR), { recursive: true });
   await fs.promises.writeFile(abs(staleRel), "# stale\n");
   await fs.promises.writeFile(abs(freshRel), "# fresh\n");
   const old = new Date(Date.now() - MAX_JOB_LOG_AGE_MS - 60_000);
@@ -451,7 +451,7 @@ console.log("teardown log deletion OK");
   const finished = first.create("echo durable", "call_durable");
   first.appendStdout(finished.id, "durable output\n");
   first.markExited(finished.id, 0);
-  const recordPath = `${COMMAND_JOB_LOG_DIR}/${finished.id}.json`;
+  const recordPath = `${COMMAND_JOB_CACHE_DIR}/${finished.id}.json`;
   const record = await waitForFileContent(recordPath, '"status":"exited"');
   assert.ok(record.includes('"status":"exited"'), "terminal record persisted");
 
@@ -513,7 +513,7 @@ console.log("teardown log deletion OK");
   const running = first.create("sleep 60", "call_running");
   first.appendStdout(running.id, "partial\n");
   await waitForLog(running.logPath, "partial");
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${running.id}.json`, '"status":"running"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${running.id}.json`, '"status":"running"');
 
   const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
   await resumed.ready();
@@ -553,7 +553,7 @@ console.log("teardown log deletion OK");
   await ownerA.ready();
   const job = ownerA.create("echo scoped");
   ownerA.markExited(job.id, 0);
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`, '"status":"exited"');
 
   const ownerB = new CommandJobRegistry(env, { ownerSessionId: "ses_scope_b" });
   await ownerB.ready();
@@ -764,8 +764,8 @@ console.log("teardown log deletion OK");
     const secondJob = batch.create("npm run build", "call_b");
     batch.appendStdout(secondJob.id, "second output\n");
     batch.markExited(secondJob.id, 0);
-    await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${firstJob.id}.json`, '"status":"exited"');
-    await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${secondJob.id}.json`, '"status":"exited"');
+    await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${firstJob.id}.json`, '"status":"exited"');
+    await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${secondJob.id}.json`, '"status":"exited"');
 
     let notificationMessages = [];
     const ui = { getMessages: () => notificationMessages, setMessages: (next) => (notificationMessages = next) };
@@ -806,7 +806,7 @@ console.log("teardown log deletion OK");
   const unNotified = first.create("echo pending");
   first.appendStdout(unNotified.id, "pending output\n");
   first.markExited(unNotified.id, 0);
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${unNotified.id}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${unNotified.id}.json`, '"status":"exited"');
 
   const notified = first.create("echo seen");
   first.markExited(notified.id, 0);
@@ -815,11 +815,11 @@ console.log("teardown log deletion OK");
   // while the session was idle and the process then quit before the next LLM call.
   const idle = first.create("echo idle");
   first.markExited(idle.id, 0);
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${idle.id}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${idle.id}.json`, '"status":"exited"');
 
   await first.destroyAll();
   assert.equal(
-    await fs.promises.access(abs(`${COMMAND_JOB_LOG_DIR}/${idle.id}.json`)).then(
+    await fs.promises.access(abs(`${COMMAND_JOB_CACHE_DIR}/${idle.id}.json`)).then(
       () => true,
       () => false
     ),
@@ -827,7 +827,7 @@ console.log("teardown log deletion OK");
     "a graceful quit keeps an un-notified terminal record"
   );
   assert.equal(
-    await fs.promises.access(abs(`${COMMAND_JOB_LOG_DIR}/${notified.id}.json`)).then(
+    await fs.promises.access(abs(`${COMMAND_JOB_CACHE_DIR}/${notified.id}.json`)).then(
       () => true,
       () => false
     ),
@@ -851,12 +851,12 @@ console.log("teardown log deletion OK");
   const registryA = new CommandJobRegistry(env, { ownerSessionId: () => owner });
   await registryA.ready();
   const job = registryA.create("echo survives-clear");
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"running"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`, '"status":"running"');
   owner = "ses_after_switch";
   registryA.markExited(job.id, 0);
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`, '"status":"exited"');
 
-  const record = JSON.parse(await fs.promises.readFile(abs(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`), "utf-8"));
+  const record = JSON.parse(await fs.promises.readFile(abs(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`), "utf-8"));
   assert.equal(record.ownerSessionId, "ses_before_switch", "the record stays filed to the starting session");
   assert.deepEqual(
     await registryA.collectCompleted(),
@@ -901,7 +901,7 @@ console.log("teardown log deletion OK");
     coreEnv: startEnv,
   });
   const job = { id: started.jobId };
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${job.id}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${job.id}.json`, '"status":"exited"');
   await service.ready();
 
   const section = await service.sectionFor(
@@ -956,7 +956,7 @@ console.log("teardown log deletion OK");
   });
   assert.equal(typeof started.jobId, "string", "startBackground returns the job id");
   assert.equal(typeof started.cachedOutputPath, "string", "startBackground returns the durable log path");
-  await waitForFileContent(`${COMMAND_JOB_LOG_DIR}/${started.jobId}.json`, '"status":"exited"');
+  await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${started.jobId}.json`, '"status":"exited"');
 
   const polled = await service.poll(started.jobId);
   assert.equal(polled.status, "exited");

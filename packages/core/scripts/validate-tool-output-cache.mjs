@@ -28,51 +28,11 @@ import {
   sweepStaleToolOutput,
 } from "../dist/dev.mjs";
 
+import { createMockEnv } from "./helpers/mock-env.mjs";
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
-// ---------------------------------------------------------------------------
-// Mock CoreEnv backed by the real filesystem (relative paths resolve against
-// rootPath, like the Node adapter).
-// ---------------------------------------------------------------------------
-function createEnv(rootPath) {
-  const resolve = (p) => (path.isAbsolute(p) ? p : path.join(rootPath, p));
-  return {
-    rootPath,
-    getPlatform: async () => "linux",
-    getArch: async () => "x64",
-    getEnv: async () => ({}),
-    homedir: async () => rootPath,
-    fs: {
-      readFile: async (p, encoding) => fs.promises.readFile(resolve(p), encoding ?? "utf-8"),
-      writeFile: async (p, content) => fs.promises.writeFile(resolve(p), content),
-      mkdir: async (p) => fs.promises.mkdir(resolve(p), { recursive: true }),
-      exists: async (p) =>
-        fs.promises.access(resolve(p)).then(
-          () => true,
-          () => false
-        ),
-      readdir: async (p) => {
-        try {
-          const entries = await fs.promises.readdir(resolve(p), { withFileTypes: true });
-          return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? "directory" : "file" }));
-        } catch {
-          return [];
-        }
-      },
-      stat: async (p) => {
-        const st = await fs.promises.stat(resolve(p));
-        return { isDirectory: st.isDirectory(), isFile: st.isFile(), size: st.size, mtime: st.mtime };
-      },
-      remove: async (p) => fs.promises.rm(resolve(p), TEMP_RM_OPTIONS),
-    },
-    runCommand: async () => ({ stdout: "", stderr: "", code: 0 }),
-    exec: async () => ({ stdout: "", stderr: "", code: 0 }),
-    fetch: async () => new Response(),
-  };
-}
-
 const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "tool-output-cache-"));
-registerCoreEnv(createEnv(rootPath));
+registerCoreEnv(createMockEnv(rootPath));
 
 const abs = (relPath) => path.join(rootPath, relPath);
 const exists = (relPath) =>
@@ -134,7 +94,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 // ---------------------------------------------------------------------------
 {
   const root2 = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codent-tool-cache2-"));
-  const env2 = createEnv(root2);
+  const env2 = createMockEnv(root2);
   const rel2 = `${TOOL_OUTPUT_CACHE_DIR}/call_root2-stdout.txt`;
   const abs2 = path.join(root2, rel2);
   await fs.promises.mkdir(path.join(root2, TOOL_OUTPUT_CACHE_DIR), { recursive: true });
@@ -171,7 +131,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 // ---------------------------------------------------------------------------
 {
   resetToolOutputSweepForTesting();
-  const env = createEnv(rootPath);
+  const env = createMockEnv(rootPath);
   const originalExists = env.fs.exists;
   let failures = 1;
   env.fs = {
@@ -282,7 +242,8 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
     stringMessage("call_kept_string", keptString),
     partsMessage("call_kept_parts", keptParts),
   ];
-  await cleanupOrphanedToolCache(getEnv(), messages, 2);
+  // `minAgeMs: 0` pins the REFERENCE walk; the default grace is covered by §4e.
+  await cleanupOrphanedToolCache(getEnv(), messages, 2, { minAgeMs: 0 });
 
   assert.equal(await exists(orphanString), false, "a spilled file behind the cut (string content) is deleted");
   assert.equal(await exists(orphanParts), false, "a spilled file behind the cut (text-part content) is deleted");
@@ -309,7 +270,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
     { role: "tool", toolCallId: "call_job", content: JSON.stringify({ success: true, cachedOutputPath: jobRel }) },
     { role: "tool", toolCallId: "call_cache", content: JSON.stringify({ success: true, cachedOutputPath: inCache }) },
   ];
-  await cleanupOrphanedToolCache(getEnv(), messages, 2);
+  await cleanupOrphanedToolCache(getEnv(), messages, 2, { minAgeMs: 0 });
 
   assert.equal(await exists(jobRel), true, "a background job log is not a cache entry and survives the GC");
   assert.equal(await exists(inCache), false, "a real cache entry behind the cut is still collected");
@@ -341,6 +302,32 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 }
 
 // ---------------------------------------------------------------------------
+// 4e. Shadowed is not expired: the default grace keeps a fresh candidate
+//
+// Compaction appends a summary; it never removes the transcript. A message therefore keeps naming
+// its `cachedOutputPath` after it leaves the wire, and a live turn can still read it. One session
+// lost a subagent report this way (auto-compact at 17:48, `No such file` at 17:49). The reference
+// pass must only collect files old enough that no live reader can still hold the path; the 7-day
+// age sweep stays the real reclamation path.
+// ---------------------------------------------------------------------------
+{
+  const fresh = await writeEntry("call_grace_fresh-stdout.txt");
+  const stale = await writeEntry("call_grace_stale-stdout.txt");
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  await fs.promises.utimes(abs(stale), twoDaysAgo, twoDaysAgo);
+
+  const messages = [
+    { role: "tool", toolCallId: "call_grace_fresh", content: JSON.stringify({ cachedOutputPath: fresh }) },
+    { role: "tool", toolCallId: "call_grace_stale", content: JSON.stringify({ cachedOutputPath: stale }) },
+  ];
+  await cleanupOrphanedToolCache(getEnv(), messages, 2);
+
+  assert.equal(await exists(fresh), true, "a candidate younger than the grace period survives the compaction pass");
+  assert.equal(await exists(stale), false, "an old candidate is still collected (the pass is not dead code)");
+  console.log("compaction reference GC OK (grace period keeps fresh evidence)");
+}
+
+// ---------------------------------------------------------------------------
 // 5. Degraded host: no CoreEnv → no throw, nothing removed
 // ---------------------------------------------------------------------------
 {
@@ -352,7 +339,7 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   assert.doesNotThrow(() => sweepStaleToolOutput(undefined, { force: true }));
   assert.equal(await exists(stale), true, "nothing removed without an env");
 
-  registerCoreEnv(createEnv(rootPath));
+  registerCoreEnv(createMockEnv(rootPath));
   console.log("degraded host OK (no throw, no removal)");
 }
 

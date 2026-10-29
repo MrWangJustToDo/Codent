@@ -201,7 +201,7 @@ function formatManifest(memories: Memory[]): string {
  * Filter out memories whose `expiresAt` is in the past or unparseable.
  * Memories without an expiry are always kept.
  */
-function filterExpired(memories: Memory[], log?: MemoryLog): Memory[] {
+function filterExpired(memories: Memory[], logger?: MemoryLog): Memory[] {
   const now = Date.now();
   const live: Memory[] = [];
   let expired = 0;
@@ -213,7 +213,7 @@ function filterExpired(memories: Memory[], log?: MemoryLog): Memory[] {
     live.push(m);
   }
   if (expired > 0) {
-    log?.info(`Filtered ${expired} expired memories from retrieval`);
+    logger?.info(`Filtered ${expired} expired memories from retrieval`);
   }
   return live;
 }
@@ -361,7 +361,7 @@ export async function findRelevantMemories(
   alreadySurfaced: ReadonlySet<string> = new Set(),
   options: FindRelevantMemoriesOptions = {},
   env?: ResolvedCoreEnv,
-  log?: MemoryLog
+  logger?: MemoryLog
 ): Promise<RelevantMemory[]> {
   const resolvedEnv = env ?? getEnv();
   const {
@@ -374,7 +374,7 @@ export async function findRelevantMemories(
   const allMemories = await memoryManager.listMemories();
 
   // Drop expired memories (expiresAt in the past) before any selection work.
-  const live = filterExpired(allMemories, log);
+  const live = filterExpired(allMemories, logger);
 
   // Pre-filter already-surfaced before LLM call (don't waste slots on repeats)
   const candidates = live.filter((m) => !alreadySurfaced.has(m.filename));
@@ -401,7 +401,7 @@ export async function findRelevantMemories(
       // The port has already recorded the reason under `side-query`; this entry
       // records only the decision made here, so one failure is not filed twice.
       const reason = errorMessage(err);
-      log?.info(`Fell back to keyword memory selection (${reason})`);
+      logger?.info(`Fell back to keyword memory selection (${reason})`);
       selectedFilenames = selectWithKeywords(query, candidates, maxItems);
       selectionMethod = "keyword-fallback";
     }
@@ -419,7 +419,7 @@ export async function findRelevantMemories(
   for (const filename of selectedFilenames.slice(0, maxItems)) {
     const mem = resolveSelectedMemoryFilename(filename, candidateMap, candidates);
     if (!mem) {
-      log?.warn(`Selected filename "${filename}" not found in candidate map`);
+      logger?.warn(`Selected filename "${filename}" not found in candidate map`);
       continue;
     }
     if (resolved.some((m) => m.filename === mem.filename)) continue;
@@ -462,7 +462,7 @@ export async function findRelevantMemories(
   }
 
   const names = results.map((r) => r.filename).join(", ");
-  log?.info(
+  logger?.info(
     `Loaded ${results.length} relevant memories (${totalBytes} bytes, method: ${selectionMethod})${names ? `: ${names}` : ""}`
   );
 

@@ -99,11 +99,12 @@ import {
 // 3. Truncation budget exhaustion is distinguishable (P1-5)
 // ---------------------------------------------------------------------------
 {
-  // A minimal managed stub: `handleMaxTokensTruncation` only touches `log`,
-  // `run.setWireContinuationArmed`, and the runner's max output tokens.
+  // A minimal managed stub: `handleMaxTokensTruncation` only touches `run` (the two setters) and
+  // `emitDiagnostic`. There is deliberately no `log` port: a regression to `managed.log.warn(...)`
+  // throws here instead of being swallowed by a no-op double.
   const observed = { continuationArmed: false, maxOutputTokens: 0 };
   const managed = {
-    log: { debug() {}, warn() {} },
+    emitDiagnostic() {},
     run: {
       setWireContinuationArmed(value) {
         observed.continuationArmed = value;

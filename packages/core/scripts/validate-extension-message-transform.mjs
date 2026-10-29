@@ -50,11 +50,10 @@ import {
 // Harness
 // ============================================================================
 
-function makeRunner(bus, log) {
+function makeRunner(bus) {
   return new ExtensionRunner({
     cwd: "/workspace",
     eventBus: bus,
-    log: log ?? null,
   });
 }
 

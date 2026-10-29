@@ -90,6 +90,8 @@ function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}
     setDisplayName(name) {
       managed.name = name;
     },
+    /** Every recorded fact is an event now; the fake just needs a sink for them. */
+    emitEvent() {},
     getL1State() {
       return {
         status: managed.status,

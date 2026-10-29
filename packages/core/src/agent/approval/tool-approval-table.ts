@@ -7,6 +7,7 @@
 
 import { isToolCallPart } from "../stream/message-parts.js";
 
+import type { ToolApprovalSource } from "../../runtime-types/agent-event-payloads.js";
 import type { ToolApprovalRecord, ToolApprovalStatus } from "../persistence/types.js";
 import type { ToolApprovalResolution, ToolCallPart, UIMessage } from "@tanstack/ai";
 
@@ -18,6 +19,22 @@ export interface UpsertToolApprovalInput {
   updatedAt?: number;
   /** Tool name when the caller knows it — forwarded to the resolved callback. */
   toolName?: string;
+  /**
+   * Who decided. Carried to the resolved callback only — it is NOT persisted with the record, so the
+   * session schema and the restore path are unchanged.
+   */
+  source?: ToolApprovalSource;
+}
+
+/** One real pending → approved/denied transition, as reported to `onResolved`. */
+export interface ToolApprovalDecisionEvent {
+  approvalId: string;
+  toolCallId: string;
+  decision: "approved" | "denied";
+  reason?: string;
+  toolName?: string;
+  /** Who decided; in-memory only (never persisted with the record). */
+  source?: ToolApprovalSource;
 }
 
 function statusRank(status: ToolApprovalStatus): number {
@@ -30,23 +47,9 @@ export class ToolApprovalTable {
   private readonly byToolCallId = new Map<string, ToolApprovalRecord>();
 
   /** Invoked once per actual resolution (pending → approved/denied); not on restore. */
-  private readonly onResolved?: (resolution: {
-    approvalId: string;
-    toolCallId: string;
-    decision: "approved" | "denied";
-    reason?: string;
-    toolName?: string;
-  }) => void;
+  private readonly onResolved?: (resolution: ToolApprovalDecisionEvent) => void;
 
-  constructor(options?: {
-    onResolved?: (resolution: {
-      approvalId: string;
-      toolCallId: string;
-      decision: "approved" | "denied";
-      reason?: string;
-      toolName?: string;
-    }) => void;
-  }) {
+  constructor(options?: { onResolved?: (resolution: ToolApprovalDecisionEvent) => void }) {
     this.onResolved = options?.onResolved;
   }
 
@@ -95,6 +98,7 @@ export class ToolApprovalTable {
         decision: input.status === "denied" ? "denied" : "approved",
         reason: input.reason,
         toolName: input.toolName,
+        ...(input.source ? { source: input.source } : {}),
       });
     }
 

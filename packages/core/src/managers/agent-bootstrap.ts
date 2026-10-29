@@ -22,11 +22,15 @@ import { SkillRegistry, type SkillDirectory } from "../agent/skills/skill-regist
 import { createTaskTool } from "../agent/subagent/task-tool.js";
 import { errorMessage } from "../utils/errors.js";
 
-import type { AgentLog } from "../agent/agent-log";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
+import type { AgentEventPayloadMap, SessionDiagnosticArea } from "../runtime-types/agent-event-payloads.js";
+import type { AgentEventType } from "../runtime-types/agent-events.js";
 import type { AnyServerTool } from "@tanstack/ai";
+
+/** Phases a bootstrap-time extension failure can be attributed to. */
+type AgentExtensionErrorPhase = "load" | "config" | "disk";
 
 export interface BootstrapExtensionFailure {
   /** Extension id when known, otherwise the load site label. */
@@ -86,12 +90,49 @@ export interface AgentBootstrapOptions {
   env: ResolvedCoreEnv;
   rootPath: string;
   manager: AgentManager;
-  log: AgentLog;
   getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
 }
 
 export class AgentBootstrap {
   constructor(private readonly deps: AgentBootstrapOptions) {}
+
+  /**
+   * Bootstrap runs before the agent is registered, so every fact it records must be an event.
+   *
+   * Three carriers cover all of it: a degraded-but-not-fatal step (`session:diagnostic`),
+   * a failure the extension runner cannot see yet (module load / factory throw →
+   * `agent:extension-error`), and the aggregated report (`session:bootstrap-summary`).
+   */
+  private emitEvent<T extends AgentEventType>(type: T, payload: AgentEventPayloadMap[T]): void {
+    this.deps.managed.emitEvent(type, payload);
+  }
+
+  /**
+   * A bootstrap step that degraded but did not fail.
+   *
+   * Level stays at the diagnostic default (`warn`): the policy owns the scale, and every caller here
+   * is reporting something the user would otherwise never learn (a doc that did not load, a memory
+   * store that stayed empty).
+   */
+  private warnBootstrap(area: SessionDiagnosticArea, message: string): void {
+    this.emitEvent("session:diagnostic", { area, message, level: "warn" });
+  }
+
+  /**
+   * A failure the extension runner cannot report yet (module import, factory throw, activate before
+   * the instance exists).
+   *
+   * `extensionId` is optional on purpose: a file that failed to import has no id yet, and inventing
+   * one ("disk"/"config") put a sentinel where the formatter prints an extension name. The phase
+   * already says where it happened.
+   */
+  private extensionError(phase: AgentExtensionErrorPhase, error: string, extensionId?: string): void {
+    this.emitEvent("agent:extension-error", {
+      phase,
+      error,
+      ...(extensionId ? { extensionId } : {}),
+    });
+  }
 
   async bootstrapRoot(): Promise<BootstrapReport> {
     const report = createBootstrapReport();
@@ -105,7 +146,7 @@ export class AgentBootstrap {
   }
 
   private async loadDocumentation(report: BootstrapReport): Promise<void> {
-    const { managed, config, env, rootPath, log } = this.deps;
+    const { managed, config, env, rootPath } = this.deps;
     const docResult = await loadAgentDoc({
       rootPath,
       filenames: config.agentDocFilenames,
@@ -125,7 +166,7 @@ export class AgentBootstrap {
       // out loud: without this the session simply has no project instructions and nothing explains
       // why, which is indistinguishable from "the project has no AGENTS.md".
       for (const { path: failedPath, error } of docResult.readErrors) {
-        log.warn("agent", `Instruction file could not be read: ${failedPath} (${errorMessage(error)})`);
+        this.warnBootstrap("doc", `Instruction file could not be read: ${failedPath} (${errorMessage(error)})`);
       }
     }
 
@@ -134,7 +175,7 @@ export class AgentBootstrap {
     // A broken `@` reference would otherwise be invisible: the file loads fine, just without the
     // imported content. Surface it.
     for (const notice of docResult.importNotices) {
-      log.warn("agent", `Instruction import: ${notice}`);
+      this.warnBootstrap("doc", `Instruction import: ${notice}`);
     }
     report.doc = {
       source: docResult.source ?? "",
@@ -144,13 +185,13 @@ export class AgentBootstrap {
   }
 
   private async loadSkills(report: BootstrapReport): Promise<SkillRegistry> {
-    const { managed, config, env, rootPath, log } = this.deps;
+    const { managed, config, env, rootPath } = this.deps;
     const skillsConfig = typeof config.skills === "object" && config.skills !== null ? config.skills : undefined;
 
     const skillRegistry = new SkillRegistry({
       rootPath,
       env,
-      logger: { warn: (message) => log.warn("system", message) },
+      logger: { warn: (message) => this.warnBootstrap("skill", message) },
     });
     managed.setSkillRegistry(skillRegistry);
 
@@ -190,9 +231,7 @@ export class AgentBootstrap {
       // `.agents/memory` is not guaranteed writable (read-only mount, restricted remote fs).
       // Every other bootstrap resource degrades; memory used to abort the whole agent, which
       // made an unwritable cache directory fatal to a conversation that never needed it.
-      this.deps.log.warn("memory", "Memory initialization failed; continuing without memory", {
-        error: errorMessage(error),
-      });
+      this.warnBootstrap("memory", `Memory initialization failed; continuing without memory: ${errorMessage(error)}`);
       report.memory = { enabled: false };
       return;
     }
@@ -201,7 +240,7 @@ export class AgentBootstrap {
   }
 
   private async loadExtensions(report: BootstrapReport, skillRegistry: SkillRegistry): Promise<void> {
-    const { managed, config, env, rootPath, log, manager } = this.deps;
+    const { managed, config, env, rootPath, manager } = this.deps;
     const publishTools = (): void => {
       managed.publishToolPresentationCatalog();
     };
@@ -221,7 +260,6 @@ export class AgentBootstrap {
       agentId: managed.id,
       getCoreEnv: () => env,
       eventBus: manager.of(managed.id, undefined),
-      log,
     });
     managed.extensions.setExtensionRunner(extensionRunner);
 
@@ -243,31 +281,32 @@ export class AgentBootstrap {
     // path, an unrelated local file runs while the workspace is elsewhere. Skip discovery rather
     // than report a pile of phantom load failures. In-process extensions still load below.
     if (env.remote === true) {
-      log.warn(
-        "system",
+      this.warnBootstrap(
+        "extension",
         "Skipping disk extension discovery: a remote workspace's extension files cannot be imported in the " +
           "client process. Load extensions in-process (config.extensions) instead."
       );
     } else {
       const extensionDirs = await getDefaultExtensionDirs(config.extensionDirs, env);
-      log.debug("system", "Extension search directories", { dirs: extensionDirs });
+      // "Why is my extension not loaded" needs the list we actually searched. It used to be a
+      // direct debug log and was dropped by the convergence; `details.dirs` keeps it greppable.
+      this.emitEvent("session:diagnostic", {
+        area: "extension",
+        level: "debug",
+        message: "Extension search directories",
+        details: { dirs: extensionDirs.join(", ") },
+      });
 
       const fromDisk = await extensionLoader.loadFromDirectories(extensionDirs);
       for (const err of fromDisk.errors) {
         recordExtensionError(report, "disk", err);
-        log.warn("system", err.message);
+        // No instance exists for a module that failed to import, so the runner cannot report it.
+        this.extensionError("disk", err.message);
       }
       for (const api of fromDisk.loaded) {
-        const instance = await extensionRunner.loadExtension(api);
-        // Keep this row: bootstrap runs BEFORE the log extension starts, so the runner's
-        // `agent:extension-error` emit has no bus subscriber yet and the failure would be invisible
-        // in the persisted timeline (a later reload is covered by that event instead).
-        if (!recordExtensionResult(report, api.id, instance)) {
-          log.warn(
-            "system",
-            `Extension failed to activate from disk "${api.id}": ${instance.error?.message ?? "unknown"}`
-          );
-        }
+        // The runner emits `agent:extension-error` when `activate` throws; bootstrap only accounts.
+        // The event is visible now because the log is bound before bootstrap (bindConstructionLog).
+        recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api));
       }
     }
 
@@ -275,16 +314,10 @@ export class AgentBootstrap {
       for (const factory of config.extensions) {
         try {
           const api = await factory.create();
-          const instance = await extensionRunner.loadExtension(api);
-          if (!recordExtensionResult(report, api.id, instance)) {
-            log.warn(
-              "system",
-              `Extension failed to activate from config "${api.id}": ${instance.error?.message ?? "unknown"}`
-            );
-          }
+          recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api));
         } catch (err) {
           recordExtensionError(report, "config", err);
-          log.warn("system", `Failed to load extension from config: ${err}`);
+          this.extensionError("config", errorMessage(err));
         }
       }
     }
@@ -293,16 +326,14 @@ export class AgentBootstrap {
     if (config.lsp !== false) {
       try {
         const lspOptions = typeof config.lsp === "object" && config.lsp !== null ? config.lsp : undefined;
-        const instance = await extensionRunner.loadExtension(createLspExtension(lspOptions));
-        if (!recordExtensionResult(report, "codent-lsp", instance)) {
-          log.warn(
-            "system",
-            `Built-in extension failed to activate "codent-lsp": ${instance.error?.message ?? "unknown"}`
-          );
-        }
+        recordExtensionResult(
+          report,
+          "codent-lsp",
+          await extensionRunner.loadExtension(createLspExtension(lspOptions))
+        );
       } catch (err) {
         recordExtensionError(report, "codent-lsp", err);
-        log.warn("system", `Failed to load built-in LSP extension: ${err}`);
+        this.extensionError("config", errorMessage(err), "codent-lsp");
       }
     }
 
@@ -310,18 +341,14 @@ export class AgentBootstrap {
     if (config.skills !== false && skillRegistry) {
       try {
         const skillsConfig = typeof config.skills === "object" && config.skills !== null ? config.skills : undefined;
-        const instance = await extensionRunner.loadExtension(
-          createSkillsExtension({ skillRegistry, config: skillsConfig })
+        recordExtensionResult(
+          report,
+          "codent-skills",
+          await extensionRunner.loadExtension(createSkillsExtension({ skillRegistry, config: skillsConfig }))
         );
-        if (!recordExtensionResult(report, "codent-skills", instance)) {
-          log.warn(
-            "system",
-            `Built-in extension failed to activate "codent-skills": ${instance.error?.message ?? "unknown"}`
-          );
-        }
       } catch (err) {
         recordExtensionError(report, "codent-skills", err);
-        log.warn("system", `Failed to load built-in Skills extension: ${err}`);
+        this.extensionError("config", errorMessage(err), "codent-skills");
       }
     }
 
@@ -331,40 +358,32 @@ export class AgentBootstrap {
         const memoryManager = managed.getMemoryManager();
         if (memoryManager) {
           const memoryConfig = typeof config.memory === "object" && config.memory !== null ? config.memory : undefined;
-          const instance = await extensionRunner.loadExtension(
-            createMemoryExtension({
-              memoryManager,
-              // The owning agent's service: it owns the per-turn query, surfaced set and pending
-              // commit, so a session switch resets them through the normal lifecycle hook.
-              selection: managed.memory,
-              ...(memoryConfig ? { config: memoryConfig } : {}),
-            })
+          recordExtensionResult(
+            report,
+            "codent-memory",
+            await extensionRunner.loadExtension(
+              createMemoryExtension({
+                memoryManager,
+                // The owning agent's service: it owns the per-turn query, surfaced set and pending
+                // commit, so a session switch resets them through the normal lifecycle hook.
+                selection: managed.memory,
+                ...(memoryConfig ? { config: memoryConfig } : {}),
+              })
+            )
           );
-          if (!recordExtensionResult(report, "codent-memory", instance)) {
-            log.warn(
-              "system",
-              `Built-in extension failed to activate "codent-memory": ${instance.error?.message ?? "unknown"}`
-            );
-          }
         }
       } catch (err) {
         recordExtensionError(report, "codent-memory", err);
-        log.warn("system", `Failed to load built-in Memory extension: ${err}`);
+        this.extensionError("config", errorMessage(err), "codent-memory");
       }
     }
 
     // Built-in Jobs extension. Pure presentation (no tools, no turn-context text).
     try {
-      const instance = await extensionRunner.loadExtension(createJobsExtension());
-      if (!recordExtensionResult(report, "codent-jobs", instance)) {
-        log.warn(
-          "system",
-          `Built-in extension failed to activate "codent-jobs": ${instance.error?.message ?? "unknown"}`
-        );
-      }
+      recordExtensionResult(report, "codent-jobs", await extensionRunner.loadExtension(createJobsExtension()));
     } catch (err) {
       recordExtensionError(report, "codent-jobs", err);
-      log.warn("system", `Failed to load built-in Jobs extension: ${err}`);
+      this.extensionError("config", errorMessage(err), "codent-jobs");
     }
 
     // Built-in MCP extension (enabled unless explicitly disabled).
@@ -374,24 +393,22 @@ export class AgentBootstrap {
         if (mcpManager) {
           const mcpConfig: McpExtensionConfig | undefined =
             typeof config.mcp === "object" && config.mcp !== null ? config.mcp : undefined;
-          const instance = await extensionRunner.loadExtension(
-            createMcpExtension({
-              mcpManager,
-              configPath: mcpConfig?.configPath ?? config.mcpConfigPath,
-              // Session-supplied servers win over the file (see `mcpConfigFromServers`).
-              servers: mcpConfigFromServers(config.mcpServers),
-            })
+          recordExtensionResult(
+            report,
+            "codent-mcp",
+            await extensionRunner.loadExtension(
+              createMcpExtension({
+                mcpManager,
+                configPath: mcpConfig?.configPath ?? config.mcpConfigPath,
+                // Session-supplied servers win over the file (see `mcpConfigFromServers`).
+                servers: mcpConfigFromServers(config.mcpServers),
+              })
+            )
           );
-          if (!recordExtensionResult(report, "codent-mcp", instance)) {
-            log.warn(
-              "system",
-              `Built-in extension failed to activate "codent-mcp": ${instance.error?.message ?? "unknown"}`
-            );
-          }
         }
       } catch (err) {
         recordExtensionError(report, "codent-mcp", err);
-        log.warn("system", `Failed to load built-in MCP extension: ${err}`);
+        this.extensionError("config", errorMessage(err), "codent-mcp");
       }
     }
 
@@ -400,34 +417,30 @@ export class AgentBootstrap {
       try {
         const codeModeConfig =
           typeof config.codeMode === "object" && config.codeMode !== null ? config.codeMode : undefined;
-        const instance = await extensionRunner.loadExtension(
-          createCodeModeExtension({
-            tools: codeModeTools,
-            lazyToolNames: codeModeLazyNames,
-            timeout: codeModeConfig?.timeout,
-            memoryLimit: codeModeConfig?.memoryLimit,
-            lazyToolsConfig: codeModeConfig?.lazyToolsConfig,
-            allowApprovalTools: codeModeConfig?.allowApprovalTools,
-          })
+        recordExtensionResult(
+          report,
+          "codent-code-mode",
+          await extensionRunner.loadExtension(
+            createCodeModeExtension({
+              tools: codeModeTools,
+              lazyToolNames: codeModeLazyNames,
+              timeout: codeModeConfig?.timeout,
+              memoryLimit: codeModeConfig?.memoryLimit,
+              lazyToolsConfig: codeModeConfig?.lazyToolsConfig,
+              allowApprovalTools: codeModeConfig?.allowApprovalTools,
+            })
+          )
         );
-        if (!recordExtensionResult(report, "codent-code-mode", instance)) {
-          log.warn(
-            "system",
-            `Built-in extension failed to activate "codent-code-mode": ${instance.error?.message ?? "unknown"}`
-          );
-        }
       } catch (err) {
         recordExtensionError(report, "codent-code-mode", err);
-        log.warn("system", `Failed to load built-in Code Mode extension: ${err}`);
+        this.extensionError("config", errorMessage(err), "codent-code-mode");
       }
     }
   }
 
+  /** The one aggregated bootstrap row: how many extensions were attempted, live and failed. */
   private logSummary(report: BootstrapReport): void {
-    const { active, failed } = report.extensions;
-    this.deps.log.info(
-      "system",
-      `Bootstrap complete: ${active} extensions active` + (failed > 0 ? `, ${failed} failed` : "")
-    );
+    const { attempted, active, failed } = report.extensions;
+    this.emitEvent("session:bootstrap-summary", { attempted, active, failed });
   }
 }

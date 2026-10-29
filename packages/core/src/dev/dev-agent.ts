@@ -260,6 +260,7 @@ export {
   isContextModelMessage,
   isContextUIMessage,
   isGenuineUserMessage,
+  lastGenuineUserText,
   syntheticKindFromId,
   extractContextSection,
   hashTurnContextSection,
@@ -414,15 +415,22 @@ export type {
   CommandJobPollResult,
   CommandJobSummary,
 } from "../agent/tools/builtin/shell/jobs/registry.js";
+export { sweepStaleJobLogs } from "../agent/tools/builtin/shell/jobs/output-log.js";
+export { sweepStaleJobRecords } from "../agent/tools/builtin/shell/jobs/store.js";
 export {
-  COMMAND_JOB_LOG_DIR,
+  COMMAND_JOB_CACHE_DIR,
   MAX_JOB_LOG_AGE_MS,
-  sweepStaleJobLogs,
-} from "../agent/tools/builtin/shell/jobs/output-log.js";
+  MAX_JOB_RECORD_AGE_MS,
+  WORKSPACE_CACHE_RETENTION,
+  resetWorkspaceCacheSweeps,
+  sweepWorkspaceCache,
+  sweepWorkspaceCaches,
+} from "../agent/tools/shared/cache/workspace-cache.js";
 export {
   CACHE_THRESHOLD,
   TOOL_OUTPUT_CACHE_DIR,
   TOOL_OUTPUT_MAX_AGE_MS,
+  TOOL_OUTPUT_ORPHAN_GRACE_MS,
   cacheToolOutput,
   cleanupOrphanedToolCache,
   maybeCacheOutput,

@@ -44,6 +44,13 @@ export interface AgentStatusControllerDeps {
   setPendingApprovalCount: (count: number) => void;
   /** Record the run's model finish reason (null when a new run starts). */
   setFinishReason?: (reason: string | null) => void;
+  /**
+   * Whether the pending approvals will be answered without a human (auto mode / plan execution).
+   *
+   * The request event carries the answer: with it the log policy can drop the request/resolve pair
+   * for approvals nobody was asked about, while the `agent:tool-*` rows still record the call.
+   */
+  shouldAutoApprove?: () => boolean;
   emitEvent?: EmitAgentTelemetryFn;
 }
 
@@ -149,10 +156,13 @@ export class AgentStatusController {
     this.deps.setStatus("aborted", "run-abort");
   }
 
-  onRunError(message: string): void {
+  onRunError(message: string, stack?: string): void {
     this.deps.setError(message);
     this.deps.setStatus("error", "run-error");
-    this.deps.emitEvent?.("agent:stream-error", { error: message });
+    this.deps.emitEvent?.("agent:stream-error", {
+      error: message,
+      ...(stack ? { stack } : {}),
+    });
   }
 
   /**
@@ -206,12 +216,14 @@ export class AgentStatusController {
       this.deps.setStatus("waiting", "approvals-pending");
     }
 
+    const auto = this.deps.shouldAutoApprove?.() ?? false;
     for (const approval of needsApproval) {
       this.deps.emitEvent?.("agent:tool-approval-request", {
         tool_call_id: approval.toolCallId,
         tool_name: approval.toolName,
         approval_id: approval.approvalId,
         tool_input: approval.input,
+        ...(auto ? { auto: true } : {}),
       });
     }
   }

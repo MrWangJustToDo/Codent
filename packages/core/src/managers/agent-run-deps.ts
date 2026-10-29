@@ -5,7 +5,6 @@ import type { AgentStatusController } from "./controllers/agent-status-controlle
 import type { CompactionController } from "./controllers/compaction-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { RunCoordinator } from "./run-coordinator.js";
-import type { AgentLog } from "../agent/agent-log";
 import type { SessionService } from "./services/session-service.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
@@ -70,8 +69,6 @@ export interface AgentRunDeps {
    * rewrite after the approval was decided on the original input.
    */
   isToolNeedsApproval: (toolName: string) => boolean;
-  /** Set-once in practice, but `setLog` is public — read live to be safe. */
-  getLog: () => AgentLog;
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
   /** The agent's background-job registry (drained by the notification middleware). */
@@ -146,7 +143,6 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     planMode: managed.planMode,
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
     isToolNeedsApproval: (toolName) => managed.isToolNeedsApproval(toolName),
-    getLog: () => managed.getLog(),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
     getCommandService: () => managed.getCommandService(),

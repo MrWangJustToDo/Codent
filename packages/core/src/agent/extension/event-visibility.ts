@@ -39,10 +39,15 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "session:restore": "observable",
   "session:switch": "observable",
   "session:save-error": "observable",
+  "session:diagnostic": "observable",
+  "session:bootstrap-summary": "observable",
+  "session:title": "observable",
+  "session:reset": "observable",
   // Turn lifecycle
   "prompt:submit": "observable",
   "prompt:before": "observable",
   "turn:summary": "observable",
+  "run:wake": "observable",
   // Agent lifecycle / tools / approvals
   "agent:thinking": "observable",
   "turn:start": "observable",
@@ -58,7 +63,16 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "agent:retry": "observable",
   "agent:stream-error": "observable",
   "agent:stop": "observable",
+  "agent:status": "observable",
   "agent:extension-error": "observable",
+  "agent:event-handler-error": "observable",
+  // Observable, not internal: the log consumer is the wildcard subscriber and internal events are
+  // withheld from it, so an internal `extension:log` would never be recorded at all.
+  "extension:log": "observable",
+  "hooks:echo": "observable",
+  "model:change": "observable",
+  "mode:change": "observable",
+  "tool:projection-error": "observable",
   // Memory
   "memory:prefetch": "observable",
   "memory:extract": "observable",
@@ -66,6 +80,8 @@ export const EXTENSION_EVENT_VISIBILITY = {
   // LLM
   "llm:request": "observable",
   "llm:response": "observable",
+  "side-query:mode": "observable",
+  "side-query:error": "observable",
   // Compaction
   "compaction:auto-start": "observable",
   "compaction:auto-complete": "observable",
@@ -77,6 +93,7 @@ export const EXTENSION_EVENT_VISIBILITY = {
   "compaction:reactive-complete": "observable",
   "compaction:reactive-error": "observable",
   "compaction:reactive-max-retries": "observable",
+  "compaction:cache-cleanup-error": "observable",
   // Subagents
   "subagent:created": "observable",
   "subagent:queue": "observable",
@@ -131,10 +148,12 @@ export const EXTENSION_EVENT_VISIBILITY = {
  *
  * The bus imports this runtime value; it holds no dependency back, so there is no cycle.
  *
- * ⚠️ An `internal` event MUST NOT carry an event→entry rule (`DEFAULT_EVENT_LOG_RULES`): the
- * wildcard subscriber is what turns events into log entries, and wildcard delivery withholds
- * internal events, so such a rule can never run. It reads as though the event is logged while the
- * event silently never appears — asserted in `validate-extension-event-observation` §7b.
+ * ⚠️ An `internal` event MUST NOT carry a *rendering* event→entry rule: the wildcard subscriber is
+ * what turns events into log entries, and wildcard delivery withholds internal events, so a formatter
+ * can never run. It must be `false` in `DEFAULT_EVENT_LOG_RULES` — an explicit "never logged" cell —
+ * because the table is exhaustive: an omitted internal event would be indistinguishable from one
+ * whose author forgot it. Asserted in `validate-extension-event-observation` §7b, which accepts
+ * `false` and rejects a formatter.
  */
 export const INTERNAL_EXTENSION_EVENTS: ReadonlySet<string> = new Set(
   Object.entries(EXTENSION_EVENT_VISIBILITY)

@@ -15,6 +15,12 @@ export interface AgentTelemetryEmitter {
   dispatchEvent?: (event: AgentEvent) => void;
   getSessionData?(): { id: string } | null;
   /**
+   * Current agent run id, when one is active (`null` while idle). Stamped onto the envelope so
+   * consumers (the Event→Log bridge, extensions) read one run identity instead of keeping their own
+   * state.
+   */
+  getCurrentRunId?(): string | null | undefined;
+  /**
    * Session id an event from this agent should carry, when it is not `getSessionData()`.
    *
    * A subagent has no session of its own (it runs inside the parent's), so the owner resolves the
@@ -29,6 +35,8 @@ export interface EmitAgentTelemetryOptions {
   parentId?: string;
   /** Override sessionId (default: `getEventSessionId()` / `getSessionData()?.id`, omitted when unknown) */
   sessionId?: string;
+  /** Override the run id (default: `getCurrentRunId()`, omitted outside a run) */
+  runId?: string;
 }
 
 /** Bind {@link emitAgentTelemetry} to a managed agent or other emitter. */
@@ -56,6 +64,7 @@ export function emitAgentTelemetry<T extends TelemetryEventType>(
   // stamping the agent id made a subagent's events claim a session that does not exist. Unknown is
   // reported as absent.
   const sessionId = options?.sessionId ?? emitter.getEventSessionId?.() ?? emitter.getSessionData?.()?.id;
+  const runId = options?.runId ?? emitter.getCurrentRunId?.() ?? undefined;
   const body = (payload ?? {}) as AgentEventPayloadMap[T];
 
   emitter.dispatchEvent({
@@ -64,6 +73,7 @@ export function emitAgentTelemetry<T extends TelemetryEventType>(
     agentId: options?.agentId ?? emitter.id,
     parentId: options?.parentId,
     ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(runId !== undefined ? { runId } : {}),
     payload: body,
   } as AgentEvent);
 }

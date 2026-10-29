@@ -8,12 +8,15 @@ import type { ToModelOutputRegistry } from "../../agent/compaction/tool-compact/
 import type { CompactionConfig } from "../../agent/compaction/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { ManagedAgent } from "../../runtime-types";
+import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { ChatMiddleware, ModelMessage } from "@tanstack/ai";
 
 export interface ToolCompactMiddlewareDeps {
   getCompactionConfig: () => CompactionConfig | null;
   getToolCompactCache: () => ToolCompactCache;
   getManagedAgent: () => ManagedAgent;
+  /** Publishes projection failures (`tool:projection-error`) — the policy decides the row. */
+  emitEvent: EmitAgentTelemetryFn;
   registry?: ToModelOutputRegistry;
 }
 
@@ -48,10 +51,7 @@ export function createToolCompactMiddleware(deps: ToolCompactMiddlewareDeps): Ch
           registry,
           cache: deps.getToolCompactCache(),
           onProjectionError: (toolName, error) =>
-            deps.getManagedAgent().log?.warn("tool", "toModelOutput failed", {
-              tool: toolName,
-              error: errorMessage(error),
-            }),
+            deps.emitEvent("tool:projection-error", { tool_name: toolName, error: errorMessage(error) }),
         }),
       };
     },

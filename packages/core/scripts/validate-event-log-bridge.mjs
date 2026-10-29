@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 
 import {
+  AGENT_EVENT_META,
   bridgeTelemetryToAgentLog,
   createAgentEventBus,
   DEFAULT_EVENT_LOG_RULES,
@@ -396,6 +397,262 @@ console.log("approval request + resolution bridged: OK");
     assert.notEqual(DEFAULT_EVENT_LOG_RULES[type], false, `${type}: not both specialized and suppressed`);
   }
   console.log("specialized-rule table matches the handler map — ok");
+}
+
+// Every event type has a decision. `AGENT_EVENT_META` is exhaustive over `AgentEventType` at compile
+// time, which makes it the runtime list to check the merged table against: a new event without a
+// rule is "unlogged because nobody listed it", the state this change replaced with an explicit
+// decision (a formatter, a handler marker, or `false`).
+{
+  const undecided = Object.keys(AGENT_EVENT_META).filter((type) => DEFAULT_EVENT_LOG_RULES[type] === undefined);
+  assert.deepEqual(undecided, [], `every event type has a rule (missing: ${undecided.join(", ")})`);
+  console.log("every event type has an explicit log decision — ok");
+}
+
+// ---------------------------------------------------------------------------
+// Run scope comes from the envelope, not from seam state.
+//
+// The seam used to own the run id (`setRun`), which meant two consumers could disagree and a late
+// entry could lose its run. The producer stamps it once on the envelope; the bridge must copy it.
+// ---------------------------------------------------------------------------
+{
+  const before = (await readEntries()).length;
+  bus.emit(
+    "agent:tool-start",
+    { tool_name: "read_file", tool_call_id: "tc-run-1" },
+    { agentId: "agent-1", runId: "runone01" }
+  );
+  await waitFor(readEntries, (snapshot) => snapshot.length > before);
+  bus.emit(
+    "agent:tool-start",
+    { tool_name: "read_file", tool_call_id: "tc-run-2" },
+    { agentId: "agent-1", runId: "runtwo02" }
+  );
+  await waitFor(readEntries, (snapshot) => snapshot.length > before + 1);
+  bus.emit("session:start", { cwd: "/w" }, { agentId: "agent-1" });
+  const scoped = await waitFor(readEntries, (snapshot) => snapshot.length > before + 2);
+
+  const runEntries = scoped.filter((entry) => entry.data?.tool_call_id?.startsWith?.("tc-run-"));
+  assert.deepEqual(
+    runEntries.map((entry) => entry.run),
+    ["runone01", "runtwo02"],
+    "each entry carries its own event's run id, so two runs never share a slice"
+  );
+  const startEntry = scoped.find((entry) => entry.event === "session:start");
+  assert.equal(startEntry?.run, undefined, "an event emitted outside a run carries no run id");
+  console.log("run scope comes from the envelope — ok");
+}
+
+// ---------------------------------------------------------------------------
+// Content of the events this change introduced.
+//
+// "Every event has a rule" says a decision exists, not that it is the right one: the level,
+// category and wording are what a reader filters on, and they were previously picked at each call
+// site. These assertions pin the policy side of the convergence.
+// ---------------------------------------------------------------------------
+{
+  const cases = [
+    {
+      label: "session:title (ok)",
+      emit: () => bus.emit("session:title", { ok: true, name: "Named" }, { agentId: "agent-1" }),
+      event: "session:title",
+      level: "info",
+      category: "system",
+      match: /^Session title: Named$/,
+    },
+    {
+      label: "session:title (failed)",
+      emit: () => bus.emit("session:title", { ok: false, error: "nope" }, { agentId: "agent-1" }),
+      event: "session:title",
+      level: "warn",
+      category: "system",
+      match: /^Session title failed: nope$/,
+    },
+    {
+      label: "model:change",
+      emit: () => bus.emit("model:change", { from: "a", to: "b", style: "openai" }, { agentId: "agent-1" }),
+      event: "model:change",
+      level: "info",
+      category: "agent",
+      match: /a → b/,
+    },
+    {
+      label: "side-query:mode",
+      emit: () =>
+        bus.emit(
+          "side-query:mode",
+          { purpose: "title", mode: "text", reason: "no structured output" },
+          { agentId: "agent-1" }
+        ),
+      event: "side-query:mode",
+      level: "debug",
+      category: "side-query",
+      match: /using text mode: no structured output/,
+    },
+    {
+      label: "agent:event-handler-error",
+      emit: () =>
+        bus.emit(
+          "agent:event-handler-error",
+          { pattern: "tool:before:*", event: "tool:before:read_file", kind: "interceptor", error: "boom" },
+          { agentId: "agent-1" }
+        ),
+      event: "agent:event-handler-error",
+      level: "warn",
+      category: "hooks",
+      match: /interceptor threw.*tool:before:\*/,
+    },
+    {
+      label: "turn:summary (paused)",
+      emit: () => bus.emit("turn:summary", { paused: true, phases: 1, toolCalls: 0 }, { agentId: "agent-1" }),
+      event: "turn:summary",
+      level: "info",
+      category: "chat",
+      match: /^Turn paused/,
+    },
+    {
+      label: "agent:extension-error without an id",
+      emit: () => bus.emit("agent:extension-error", { phase: "disk", error: "import failed" }, { agentId: "agent-1" }),
+      event: "agent:extension-error",
+      level: "error",
+      category: "system",
+      match: /^Extension disk failed: import failed$/,
+    },
+  ];
+  for (const testCase of cases) {
+    const before = (await readEntries()).length;
+    testCase.emit();
+    await waitFor(readEntries, (snapshot) => snapshot.length > before);
+    const entry = (await readEntries()).at(-1);
+    assert.equal(entry.event, testCase.event, `${testCase.label}: event stamp`);
+    assert.equal(entry.level, testCase.level, `${testCase.label}: level`);
+    assert.equal(entry.category, testCase.category, `${testCase.label}: category`);
+    assert.match(entry.message, testCase.match, `${testCase.label}: message, got ${entry.message}`);
+  }
+
+  // A diagnostic's `details` are summarized like any payload: an array becomes bytes+preview, so a
+  // nested value can no longer bypass the size cap (the handler used to write it verbatim).
+  {
+    const before = (await readEntries()).length;
+    bus.emit(
+      "session:diagnostic",
+      { area: "compaction", message: "cut plan", level: "debug", details: { segmentTokens: [10, 20, 30] } },
+      { agentId: "agent-1" }
+    );
+    await waitFor(readEntries, (snapshot) => snapshot.length > before);
+    const entry = (await readEntries()).at(-1);
+    assert.equal(entry.category, "compaction", "diagnostic area → category");
+    assert.match(entry.message, /^\[compaction\] cut plan$/);
+    assert.ok(
+      typeof entry.data.segmentTokensBytes === "number",
+      "details are summarized (bytes+preview), not written verbatim"
+    );
+  }
+  console.log("new event families keep their level/category/wording — ok");
+}
+
+// ---------------------------------------------------------------------------
+// Per-instance suppression (approvals nobody was asked about) + the rows that replaced
+// the two biggest noise sources in a real session: auto approvals (22% of 6,034 lines) and
+// `Model reasoning started` with no payload (280 empty rows).
+// ---------------------------------------------------------------------------
+{
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
+  const rowsFor = async (type) => (await readEntries()).filter((entry) => entry.event === type);
+
+  // An auto-approved call: both rows are suppressed, even though both events are emitted.
+  const autoRequestBefore = (await rowsFor("agent:tool-approval-request")).length;
+  const autoResolvedBefore = (await rowsFor("agent:tool-approval-resolved")).length;
+  bus.emit(
+    "agent:tool-approval-request",
+    { tool_name: "run_command", tool_call_id: "tc-auto", approval_id: "ap-auto", auto: true },
+    { agentId: "agent-1" }
+  );
+  bus.emit(
+    "agent:tool-approval-resolved",
+    { tool_name: "run_command", tool_call_id: "tc-auto", approval_id: "ap-auto", decision: "approved", source: "auto" },
+    { agentId: "agent-1" }
+  );
+  await settle();
+  assert.equal(
+    (await rowsFor("agent:tool-approval-request")).length,
+    autoRequestBefore,
+    "an auto-mode request writes no row (nobody was asked)"
+  );
+  assert.equal(
+    (await rowsFor("agent:tool-approval-resolved")).length,
+    autoResolvedBefore,
+    "an auto-mode resolution writes no row"
+  );
+
+  // A human answer keeps both, and the resolution names the source.
+  let before = (await rowsFor("agent:tool-approval-request")).length;
+  bus.emit(
+    "agent:tool-approval-request",
+    { tool_name: "run_command", tool_call_id: "tc-user", approval_id: "ap-user" },
+    { agentId: "agent-1" }
+  );
+  await waitFor(rowsFor.bind(null, "agent:tool-approval-request"), (rows) => rows.length > before);
+
+  before = (await rowsFor("agent:tool-approval-resolved")).length;
+  bus.emit(
+    "agent:tool-approval-resolved",
+    {
+      tool_name: "run_command",
+      tool_call_id: "tc-user",
+      approval_id: "ap-user",
+      decision: "denied",
+      reason: "not this file",
+      source: "user",
+    },
+    { agentId: "agent-1" }
+  );
+  await waitFor(rowsFor.bind(null, "agent:tool-approval-resolved"), (rows) => rows.length > before);
+  const humanRow = (await rowsFor("agent:tool-approval-resolved")).at(-1);
+  assert.equal(humanRow.level, "info", "a human decision stays visible");
+  assert.match(humanRow.message, /denied/, "the decision is readable");
+  assert.match(humanRow.message, /not this file/, "the reason survives");
+  assert.equal(humanRow.data.source, "user", "the source is on the row");
+
+  // A policy verdict is visible AND labelled (it was invisible before the source existed).
+  before = (await rowsFor("agent:tool-approval-resolved")).length;
+  bus.emit(
+    "agent:tool-approval-resolved",
+    {
+      tool_name: "run_command",
+      tool_call_id: "tc-policy",
+      approval_id: "ap-policy",
+      decision: "approved",
+      source: "policy",
+    },
+    { agentId: "agent-1" }
+  );
+  await waitFor(rowsFor.bind(null, "agent:tool-approval-resolved"), (rows) => rows.length > before);
+  assert.match((await rowsFor("agent:tool-approval-resolved")).at(-1).message, /by policy/);
+
+  // `mode:change` is the append-only counterpart of the suppressed `session:mode` projection.
+  before = (await rowsFor("mode:change")).length;
+  bus.emit("mode:change", { field: "auto", auto: true }, { agentId: "agent-1" });
+  await waitFor(rowsFor.bind(null, "mode:change"), (rows) => rows.length > before);
+  assert.equal((await rowsFor("mode:change")).at(-1).message, "Auto mode on");
+  assert.equal((await readEntries()).filter((e) => e.event === "session:mode").length, 0, "the projection stays out");
+
+  // The thinking row now carries the turn + model it belongs to (it used to be empty).
+  before = (await rowsFor("agent:thinking")).length;
+  bus.emit("agent:thinking", { iteration: 7, model: "deepseek/deepseek-v4.1-flash" }, { agentId: "agent-1" });
+  await waitFor(rowsFor.bind(null, "agent:thinking"), (rows) => rows.length > before);
+  assert.match((await rowsFor("agent:thinking")).at(-1).message, /\[iter 7\].*deepseek/);
+
+  // A delegated run's billing is visible on the only row it can appear on.
+  before = (await rowsFor("subagent:completed")).length;
+  bus.emit(
+    "subagent:completed",
+    { subagentId: "sub-1", summary: "done", costUsd: 0.1234, inputTokens: 10, outputTokens: 5 },
+    { agentId: "agent-1" }
+  );
+  await waitFor(rowsFor.bind(null, "subagent:completed"), (rows) => rows.length > before);
+  assert.match((await rowsFor("subagent:completed")).at(-1).message, /\$0\.1234/);
+  console.log("policy suppression + mode/thinking/subagent rows — ok");
 }
 
 console.log("event-log-bridge validation passed");

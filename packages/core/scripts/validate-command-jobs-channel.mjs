@@ -161,8 +161,10 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
   // Exhaustiveness is compile-checked; this pins the classification the extension surface reads.
   assert.equal(EXTENSION_EVENT_VISIBILITY["session:jobs"], "observable", "extensions may observe it");
 
-  // Deliberate absence: job start/stop must not write a log line per event.
-  assert.equal(DEFAULT_EVENT_LOG_RULES["session:jobs"], undefined, "session:jobs carries no event→log rule");
+  // Deliberate absence: job start/stop must not write a log line per event. The suppression is
+  // EXPLICIT (`false`), not an omission — the table's other half is exhaustive, so a projection
+  // event that nobody classified would be indistinguishable from one deliberately left silent.
+  assert.equal(DEFAULT_EVENT_LOG_RULES["session:jobs"], false, "session:jobs is an explicit suppression");
 }
 
 // ============================================================================

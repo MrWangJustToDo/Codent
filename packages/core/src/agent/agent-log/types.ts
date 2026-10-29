@@ -16,7 +16,6 @@ export type LogCategory =
   | "tool"
   | "approval"
   | "compaction"
-  | "todo"
   | "skill"
   | "memory"
   | "hooks"

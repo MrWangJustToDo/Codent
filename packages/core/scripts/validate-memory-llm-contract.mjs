@@ -32,6 +32,7 @@ import { z } from "zod";
 import {
   MemoryManager,
   consolidateMemories,
+  DEFAULT_EVENT_LOG_RULES,
   extractMemories,
   registerCoreEnv,
   runSideTextQuery,
@@ -459,12 +460,12 @@ const readBody = async (manager, filename) => manager.readMemory(filename);
 
   const before = (await manager.listMemories()).map((m) => m.filename).sort();
 
+  // The consolidation query now reports structured facts instead of log lines: each attempt
+  // publishes a `side-query:error` with the offending text, and the harness formats it the same way
+  // the policy table does so the assertions stay about content.
   const entries = [];
-  const log = {
-    warn: (category, message) => entries.push(`${category}: ${message}`),
-    info: () => null,
-    debug: () => null,
-    error: () => null,
+  const onSideQuery = (event) => {
+    if (event.type === "side-query:error") entries.push(`side-query: failed in ${event.mode} mode: ${event.error}`);
   };
 
   // The merge is invalid (unknown type); the deletions are perfectly valid and
@@ -484,7 +485,7 @@ const readBody = async (manager, filename) => manager.readMemory(filename);
     },
   });
 
-  const result = await consolidateMemories(manager, textAdapter, log);
+  const result = await consolidateMemories(manager, textAdapter, onSideQuery);
 
   assert.equal(result.changed, false, "a rejected merge reports no change");
   assert.deepEqual(
@@ -492,7 +493,7 @@ const readBody = async (manager, filename) => manager.readMemory(filename);
     before,
     "a rejected merge must not let its deletions run — no source file is lost"
   );
-  assert.equal(entries.length, 2, "both attempts are logged rather than silent");
+  assert.equal(entries.length, 2, "both attempts are reported rather than silent");
   // The structured record carries the offending field path and names the mode it
   // failed in; the text record follows it. Two records, not one, because a
   // structured failure now falls back to exactly one text attempt — each attempt
@@ -500,9 +501,13 @@ const readBody = async (manager, filename) => manager.readMemory(filename);
   assert.match(entries[0], /mode: .*merged\.0\.type/, "the first record names the offending field and its mode");
   assert.match(entries[0], /failed in structured mode/, "the first record is the structured attempt");
   assert.match(entries[1], /failed in text mode/, "the second record is the text fallback");
-  for (const entry of entries) {
-    assert.match(entry, /^side-query: /, "every record uses the port's own category");
-  }
+  // The content assertions above are about what the port reports. The POLICY assertion is separate:
+  // a harness that formats its own string with the same prefix proves nothing about the rule table
+  // (that tautology was here before — it now checks the table the bridge actually reads).
+  const sideQueryRule = DEFAULT_EVENT_LOG_RULES["side-query:error"];
+  assert.ok(sideQueryRule && sideQueryRule !== "specialized", "side-query:error has a generic rule");
+  assert.equal(sideQueryRule.level, "warn", "a failed side query is a warning");
+  assert.equal(sideQueryRule.category, "side-query", "…filed under the port's own category");
 
   console.log("✓ a rejected merge does not delete its sources");
 }

@@ -1,15 +1,19 @@
 /**
- * Validates instrumentMiddlewareLog under the timeline contract: hook-call
- * echoes are OFF by default (opt-in via `MY_AGENT_LOG_HOOKS`), return values
- * (sync + async/promise) pass through untouched in both modes, and
- * high-frequency onChunk and nested sandbox hooks are never wrapped.
+ * Validates the middleware echo under the timeline contract: hook-call echoes are OFF by
+ * default (the log policy gates them on `MY_AGENT_LOG_HOOKS`), return values (sync +
+ * async/promise) pass through untouched in both modes, and high-frequency onChunk and
+ * nested sandbox hooks are never wrapped.
+ *
+ * The wrapper emits `hooks:echo` and the policy decides whether it becomes a row, so this
+ * harness wires the real bridge instead of handing the wrapper a log handle — asserting the
+ * wrapper alone would prove nothing about what reaches the file.
  *
  * Run: pnpm --filter @codent/core run validate:middleware-log
  */
 
 import assert from "node:assert/strict";
 
-import { instrumentMiddlewareLog } from "../dist/dev.mjs";
+import { bridgeTelemetryToAgentLog, createAgentEventBus, instrumentMiddlewareLog } from "../dist/dev.mjs";
 
 import { createLogCapture, waitFor } from "./helpers/log-capture.mjs";
 
@@ -51,7 +55,16 @@ const ctx = {
 
 const capture = await createLogCapture("middleware-log");
 const { log, readEntries } = capture;
-const wrapped = instrumentMiddlewareLog(middleware, log);
+const bus = createAgentEventBus();
+bridgeTelemetryToAgentLog(bus, () => log);
+const emitEvent = (type, payload) => bus.emit(type, payload, { agentId: "agent-1" });
+/** Every echo that reached the BUS — the emitter-level assertion the sink read cannot make. */
+const echoes = [];
+bus.on("*", (event) => {
+  if (event.type === "hooks:echo") echoes.push(event);
+});
+
+const wrapped = instrumentMiddlewareLog(middleware, emitEvent);
 
 // ----------------------------------------------------------------------------
 // 1. Default (MY_AGENT_LOG_HOOKS unset): no hook echoes, returns still pass.
@@ -72,14 +85,17 @@ assert.equal(wrapped[0].onChunk(ctx), "chunk", "onChunk untouched");
 assert.equal(typeof wrapped[0].sandbox.onFile, "function", "sandbox untouched");
 assert.equal(wrapped[0].onChunk === middleware[0].onChunk, true, "onChunk identity preserved (not wrapped)");
 
-// Negative assertion: nothing should be flushed. Give the sink a settling window so a
-// real stray write has time to land before we assert absence.
+// Negative assertion: the emitter must not even EMIT the echo. Reading the file alone was a race
+// (the sink's flush timer had not run, so a stray write still read as 0); the bus count is immediate
+// and the flush makes the file check real.
+await log.flush();
+assert.equal(echoes.length, 0, `no hook echo is emitted with the flag off, got ${echoes.length}`);
 const defaultEntries = await readEntries();
 assert.equal(defaultEntries.length, 0, `no hook echoes by default, got ${JSON.stringify(defaultEntries)}`);
 console.log("hook echoes off by default, passthrough intact: OK");
 
 // ----------------------------------------------------------------------------
-// 2. Opt-in (MY_AGENT_LOG_HOOKS=1): hooks logged with category/level/phase/iteration.
+// 2. Opt-in (MY_AGENT_LOG_HOOKS=1): the policy records category/level/phase/iteration.
 // ----------------------------------------------------------------------------
 process.env.MY_AGENT_LOG_HOOKS = "1";
 
@@ -91,6 +107,7 @@ assert.ok(entries.length >= 2, `expected >=2 hook entries, got ${entries.length}
 for (const entry of entries) {
   assert.equal(entry.category, "hooks", `category hooks, got ${entry.category}`);
   assert.equal(entry.level, "debug", `level debug, got ${entry.level}`);
+  assert.equal(entry.event, "hooks:echo", `stamped with the originating event, got ${entry.event}`);
 }
 
 assert.ok(

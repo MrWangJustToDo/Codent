@@ -14,6 +14,7 @@ export {
   isContextModelMessage,
   isContextUIMessage,
   isGenuineUserMessage,
+  lastGenuineUserText,
   extractContextSection,
   hashTurnContextSection,
   findLatestContextSectionsFromWire,

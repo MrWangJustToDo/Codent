@@ -32,7 +32,6 @@ import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
-import type { AgentLog } from "../../agent/agent-log";
 import type { CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
 import type { TurnContextSection } from "../../agent/turn-context";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
@@ -50,8 +49,12 @@ export interface BackgroundMiddlewareDeps {
   getCommandService: () => AgentCommandService;
   /** Parent id of the owning agent — subagents get neither the pointer nor jobs. */
   getParentId: () => string | undefined;
-  /** Agent log, so a failed pointer build is visible instead of silently absent. */
-  getLog?: () => AgentLog | null;
+  /** Record a degraded step as `session:diagnostic` (the policy owns the row). */
+  emitDiagnostic?: (
+    area: "jobs",
+    message: string,
+    options?: { level?: "debug" | "info" | "warn" | "error"; error?: string }
+  ) => void;
 }
 
 const NOTIFICATION_KIND = TURN_CONTEXT_KINDS.backgroundNotification;
@@ -128,7 +131,10 @@ async function buildJobsSection(
   try {
     return await deps.getCommandService().sectionFor(messages, { excludeJobIds });
   } catch (error) {
-    deps.getLog?.()?.warn("tool", "background_jobs pointer unavailable", { error: errorMessage(error) });
+    deps.emitDiagnostic?.("jobs", "background_jobs pointer unavailable", {
+      level: "warn",
+      error: errorMessage(error),
+    });
     return undefined;
   }
 }

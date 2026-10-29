@@ -19,7 +19,6 @@ import type { CompactionController, CompactionLease } from "./controllers/compac
 import type { CompactionService } from "./services/compaction-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
-import type { AgentLog } from "../agent/agent-log/agent-log.js";
 import type { CompactionConfig } from "../agent/compaction/types.js";
 import type { TodoManager } from "../agent/todo";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
@@ -48,8 +47,6 @@ export interface ReactiveCompactHost {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
-  /** The agent log, for non-fatal diagnostics (cache cleanup). */
-  getLog?: () => AgentLog | null;
 }
 
 export async function handleManagedReactiveCompact(
@@ -105,10 +102,7 @@ export async function handleManagedReactiveCompact(
       onCacheCleanupError: (err) => {
         // A cache-cleanup failure is not a failed compaction: emitting `compaction:reactive-error`
         // here rendered as "Reactive compact failed" even though the summary had been applied.
-        host.getLog?.()?.warn("compaction", "Reactive compact cache cleanup failed", {
-          phase: "cache-cleanup",
-          error: err.message,
-        });
+        host.emitEvent("compaction:cache-cleanup-error", { stage: "reactive", error: err.message });
       },
     });
 
@@ -176,7 +170,7 @@ export interface ManualCompactHost {
   resetSystemPrompt: () => void;
   persistSession: () => void;
   maybeSaveSessionUIMessages: (messages: TanStackUIMessage[], reason: "force") => void;
-  getLog?: () => AgentLog | null;
+  emitEvent: EmitAgentTelemetryFn;
 }
 
 export type ManualCompactResult =
@@ -244,10 +238,7 @@ export async function runManualCompact(
     const applied = applyCompactionResult(host.getCoreEnv(), allModelMessages, channel, host.usage, result, {
       ...keepOptions,
       onCacheCleanupError: (err) => {
-        host.getLog?.()?.warn("compaction", "Manual compact cache cleanup failed", {
-          phase: "cache-cleanup",
-          error: err.message,
-        });
+        host.emitEvent("compaction:cache-cleanup-error", { stage: "manual", error: err.message });
       },
     });
 

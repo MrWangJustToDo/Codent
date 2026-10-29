@@ -596,9 +596,10 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
   （`managed-agent.ts:943-950` 的 `resetIterationProgress` 在 finalize 时把它清零）。
 - **`turn:start`/`turn:end`/`message:*` 是观察事实，不是 session channel**：它们的消费者
   是扩展（`ctx.events.observe`）与日志策略，不参与 UI channel 投影。
-- 状态跳转本身也会记录：`ManagedAgent.setStatus` 只在 `prev !== status` 时写一行，
-  级别由 `statusTransitionLogLevel` 决定（进入 `error`/`aborted` 或用户驱动动作是 `info`，
-  pump 内部记账是 `debug`，`agent/log/status-transition-log.ts:92-98`）。
+- 状态跳转本身也会记录：`ManagedAgent.setStatus` 只在 `prev !== status` 时发 `agent:status`
+  事件（`{ from, to, trigger }`），是否写行由日志策略表决定——机械记账（`approvals-*` /
+  `chunk:*` / `run-*` / `reconcile*` / `compaction:*`）整条抑制，终态（`error` / `aborted`）与
+  无 trigger 的转移记一行 `info`（`agent/log/event-log-specialized.ts` 的 `logAgentStatus`）。
 
 ### 6.2 快照里的 run 事实
 
@@ -742,7 +743,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 
 | 脚本 | 守住什么 |
 |---|---|
-| `validate:agent-status`、`validate:status-middleware`、`validate:status-transition-log` | 状态集合、跳转、日志级别 |
+| `validate:agent-status`、`validate:status-middleware`、`validate:agent-status-log` | 状态集合、跳转、日志策略 |
 | `validate:run-finalize`、`validate:run-finalizer`、`validate:agent-run-finalization` | finalize 顺序与幂等 |
 | `validate:run-abort-ownership`、`validate:session-switch-safety` | abort 归属、切会话不伪造 abort |
 | `validate:tool-phase-utils`、`validate:pending-message-queue`、`validate:task-queue` | 续跑判定与队列 |

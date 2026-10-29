@@ -107,19 +107,34 @@ export class AgentManager {
    * the diagnostics that explain a bad shutdown.
    */
   private readonly teardownLogs = new Map<string, AgentLog>();
+  /**
+   * Logs of agents that are still being CONSTRUCTED (bootstrap runs before registration).
+   *
+   * Symmetric to {@link teardownLogs}, and it exists for the same reason: a `resolveLog` that only
+   * reads the registry drops every event emitted between `new ManagedAgent` and `register` — which
+   * is when extensions activate, and therefore when their activation failures are reported. Core
+   * binds the log here first (see `buildManagedAgent`), and registration hands it to the registry.
+   */
+  private readonly constructionLogs = new Map<string, AgentLog>();
   /** Guards {@link dispose} against re-running and rejects construction after teardown. */
   private disposed = false;
 
   constructor(runtime?: AgentRuntime) {
     this.runtime = runtime;
     this.busScope = new AgentEventBusScope({
-      // Log on the agent that owns the scope the interceptor was registered on; root-scoped
-      // interceptors fall back to any agent with a log. Retained teardown logs keep a scope
-      // resolvable after its registry entry is gone.
-      resolveLog: (scopeId) =>
-        this.agents.get(scopeId)?.log ??
-        this.teardownLogs.get(scopeId) ??
-        [...this.agents.values()].find((agent) => agent.log)?.log,
+      // Attribute a contained observer/interceptor failure to the agent whose scope registered it.
+      // Retained construction/teardown logs keep a scope resolvable before registration and after
+      // the registry entry is gone; a root-scoped hook falls back to any agent with a log (the same
+      // fallback the previous direct write used).
+      resolveLogOwner: (scopeId) => {
+        if (this.agents.get(scopeId)?.log) return scopeId;
+        if (this.constructionLogs.get(scopeId)) return scopeId;
+        if (this.teardownLogs.get(scopeId)) return scopeId;
+        return [...this.agents.values()].find((agent) => agent.log)?.id;
+      },
+      // Envelope identity is an agent property, not a call-site property: resolve it once for every
+      // emitter on the scoped bus (the telemetry funnel, `plan`, `ui`, the extension runner).
+      resolveMeta: (agentId) => this.agents.get(agentId)?.getEventContext(),
     });
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
@@ -128,9 +143,13 @@ export class AgentManager {
       // Every event is attributed to its owning agent. A child that has already left the registry
       // must NOT fall back to the parent sink: late child events would then look like parent
       // content and violate the index-only contract. The parent index is written explicitly by
-      // `logSubagentLifecycle`. A retained teardown log keeps the dying agent's own events
-      // attributable while its async teardown runs (they are dropped once it settles).
-      resolveLog: (event) => this.agents.get(event.agentId)?.log ?? this.teardownLogs.get(event.agentId) ?? null,
+      // `logSubagentLifecycle`. A construction or retained teardown log keeps the agent's own
+      // events attributable while its async work runs (they are dropped once it settles).
+      resolveLog: (event) =>
+        this.agents.get(event.agentId)?.log ??
+        this.constructionLogs.get(event.agentId) ??
+        this.teardownLogs.get(event.agentId) ??
+        null,
     });
     this.logExtension.start();
     this.lifecycle = new LifecycleCoordinator({
@@ -145,6 +164,18 @@ export class AgentManager {
   /** The root log extension (sink provider + event→entry consumer). */
   getLogExtension(): LogExtension {
     return this.logExtension;
+  }
+
+  /**
+   * Live construction bindings.
+   *
+   * Must return to 0 after registration (handed to the registry), after a failed construction
+   * (released by the factory), and after teardown. Exposed for the bootstrap validator: removing the
+   * release leaves every other assertion green while the map holds a log (and its sink) forever.
+   * @internal
+   */
+  getConstructionLogCount(): number {
+    return this.constructionLogs.size;
   }
 
   /**
@@ -202,6 +233,22 @@ export class AgentManager {
     this.busScope.delete(agentId);
   }
 
+  /**
+   * Bind an agent's log before it is registered, so bootstrap events resolve to it.
+   *
+   * Call order is the contract: `buildManagedAgent` creates the agent + log, binds here, and only
+   * then runs bootstrap (extensions, MCP, memory). Registration removes the binding.
+   * @internal
+   */
+  bindConstructionLog(agentId: string, log: AgentLog): void {
+    this.constructionLogs.set(agentId, log);
+  }
+
+  /** Drop a construction-time log binding (registration or a failed build). @internal */
+  releaseConstructionLog(agentId: string): void {
+    this.constructionLogs.delete(agentId);
+  }
+
   // ============================================================================
   // Agent Lifecycle
   // ============================================================================
@@ -244,6 +291,9 @@ export class AgentManager {
 
       this.agents.register(managed);
       managed.manager = this;
+      // The registry now resolves this agent, so the construction-time binding has done its job.
+      // Dropping it here keeps one owner per log (registry → teardown), never two.
+      this.releaseConstructionLog(managed.id);
 
       if (bootstrap) {
         // Attach the JSONL log sink BEFORE bootstrap events so the session
@@ -286,6 +336,7 @@ export class AgentManager {
           await this.lifecycle.settleTeardowns();
         } else {
           await managed.disposeBuiltResources();
+          this.releaseConstructionLog(managed.id);
           this.releaseAgentScope(managed.id);
         }
       }

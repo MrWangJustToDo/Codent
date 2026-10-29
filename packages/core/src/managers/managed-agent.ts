@@ -58,7 +58,6 @@ import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.j
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
 import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { scopeExtensionOwnerId } from "../agent/extension/owner-id.js";
-import { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
@@ -164,7 +163,11 @@ import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle } from "../models/config/model-config.js";
 import type { ModelInfo } from "../models/types.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
-import type { AgentEventPayloadMap } from "../runtime-types/agent-event-payloads.js";
+import type {
+  AgentEventPayloadMap,
+  SessionDiagnosticArea,
+  SessionSwitchReason,
+} from "../runtime-types/agent-event-payloads.js";
 import type { AgentEventType } from "../runtime-types/agent-events.js";
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
@@ -620,6 +623,8 @@ export class ManagedAgent {
       setFinishReason: (reason) => {
         this.lastFinishReason = reason;
       },
+      // The controller is built before `this.mode`; the callback is read per call, at runtime.
+      shouldAutoApprove: () => this.mode.shouldAutoApprove(),
       emitEvent: (type, data) => this.emitEvent(type, data),
     });
     this.compactions = new CompactionController({
@@ -653,7 +658,11 @@ export class ManagedAgent {
     // A mode switch is session state (autoMode is persisted with every save), so
     // emit it live AND persist: otherwise a toggle that is not followed by another
     // turn/state change is lost on the next launch.
-    this.autoMode = new AutoModeController(() => {
+    this.autoMode = new AutoModeController((enabled) => {
+      // `session:mode` is a retained projection (an explicit `false` in the log table), so the
+      // append-only record of this switch is its own event. Without it the timeline cannot explain
+      // why a stretch of approvals needed no human — in one session 595 of 665.
+      this.emitEvent("mode:change", { field: "auto", auto: enabled });
       this.emitStateChange();
       this.persistSession();
     });
@@ -670,6 +679,7 @@ export class ManagedAgent {
           tool_name: resolution.toolName,
           decision: resolution.decision,
           ...(resolution.reason ? { reason: resolution.reason } : {}),
+          ...(resolution.source ? { source: resolution.source } : {}),
         });
       },
     });
@@ -715,7 +725,7 @@ export class ManagedAgent {
       getParentId: () => this.parentId,
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
       invalidateRunner: () => this.invalidateRunner(),
-      log: this.log,
+      emitDiagnostic: (area, message, options) => this.emitDiagnostic(area, message, options),
     });
 
     this.sessionLifecycle = new SessionLifecycleService({
@@ -729,8 +739,8 @@ export class ManagedAgent {
       releaseSessionOwnership: (sessionId) => this.manager?.releaseSessionOwnership(sessionId, this.id),
       bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
       emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
-      emitSessionSwitch: (fromSessionId, toSessionId, messageCount) =>
-        this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason: "resume" }),
+      emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
+        this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason }),
       refreshState: () => this.refreshState(),
       refreshSubagents: () => this.refreshSubagents(),
       beginStateBatch: () => this.beginStateBatch(),
@@ -770,10 +780,18 @@ export class ManagedAgent {
         const service = this.commandService;
         this.commandService = undefined;
         void service?.reset(reason).catch((error: unknown) => {
-          this.log?.warn("system", "Failed to reset command jobs", { reason, error: String(error) });
+          this.emitDiagnostic("jobs", "Failed to reset command jobs", {
+            level: "warn",
+            data: { reason },
+            error: String(error),
+          });
         });
       },
-      warn: (category, message, data) => this.log?.warn(category, message, data),
+      warn: (message, data) =>
+        this.emitDiagnostic("session", message, {
+          level: "warn",
+          ...(data ? { data: diagnosticDetails(data) } : {}),
+        }),
     });
 
     if (config.setUp) {
@@ -837,7 +855,9 @@ export class ManagedAgent {
    * has to be driven from this side anyway.
    */
   logSubagentLifecycle(phase: SubagentLifecyclePhase, details: SubagentLogDetails): void {
-    logSubagentLifecycle(this.log, phase, details);
+    // The parent's current run: the index row belongs to the run that spawned the child, and the
+    // seam no longer remembers a run on its own.
+    logSubagentLifecycle(this.log, phase, details, this.getCurrentRunId() ?? undefined);
   }
 
   setStatus(status: AgentStatus, trigger?: string): void {
@@ -848,17 +868,13 @@ export class ManagedAgent {
       this.retryInfo = null;
     }
     this.currentStatus = status;
-    // Timeline: log actual transitions only (no-op sets stay silent). Most transitions are
-    // the pump's own bookkeeping, so the level follows the trigger — see
-    // `statusTransitionLogLevel`. The set is still recorded either way; only its level moves.
+    // Timeline: an actual transition is a fact, so it is published as one (`agent:status`).
+    // Whether that fact earns a row is the log policy's decision (`event-log-specialized`),
+    // not this setter's: the pump's mechanical transitions — the approval bracket, chunk-derived
+    // status, reconcile — are already described by the events that caused them, and suppressing
+    // them here is what keeps the timeline from being 31% status lines.
     if (prev !== status) {
-      const data = { from: prev, to: status, ...(trigger ? { trigger } : {}) };
-      const message = `Status: ${prev} → ${status}`;
-      if (statusTransitionLogLevel(status, trigger) === "debug") {
-        this.log?.debug("agent", message, data);
-      } else {
-        this.log?.info("agent", message, data);
-      }
+      this.emitEvent("agent:status", { from: prev, to: status, ...(trigger ? { trigger } : {}) });
     }
     this.emitStateChange();
   }
@@ -1097,6 +1113,50 @@ export class ManagedAgent {
     return parent?.getSessionData()?.id;
   }
 
+  /**
+   * Envelope identity for this agent, consulted by the bus when an emitter supplied none.
+   *
+   * `runId` comes from the run coordinator and `sessionId` from the disk session (a subagent
+   * reports its parent's, which is the session it actually runs inside). Both are agent state, so
+   * resolving them here means a direct `bus.emit` and a `emitEvent` funnel produce the same
+   * envelope — the property the old seam's `setRun` state used to fake.
+   */
+  getEventContext(): { runId?: string; sessionId?: string } {
+    const runId = this.getCurrentRunId();
+    const sessionId = this.getEventSessionId();
+    return {
+      ...(runId ? { runId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    };
+  }
+
+  /**
+   * Record a subsystem note as a `session:diagnostic` event.
+   *
+   * The emitting code knows *what* happened and how severe it is; the policy owns the category and
+   * whether a row exists at all. That split is the point of this change — the twelve sites it
+   * replaced each picked their own level, category and wording, so "what do we record" could only be
+   * answered by grepping for `log.`.
+   */
+  emitDiagnostic(
+    area: SessionDiagnosticArea,
+    message: string,
+    options?: {
+      level?: "debug" | "info" | "warn" | "error";
+      /** Shallow detail fields; the event payload calls them `details` (never an open bag). */
+      data?: Record<string, string | number | boolean | null | readonly number[]>;
+      error?: string;
+    }
+  ): void {
+    this.emitEvent("session:diagnostic", {
+      area,
+      message,
+      ...(options?.level ? { level: options.level } : {}),
+      ...(options?.data ? { details: options.data } : {}),
+      ...(options?.error ? { error: options.error } : {}),
+    });
+  }
+
   emitEvent<T extends AgentEventType>(
     type: T,
     payload?: AgentEventPayloadMap[T],
@@ -1167,6 +1227,7 @@ export class ManagedAgent {
         agentId: event.agentId,
         ...(event.parentId !== undefined ? { parentId: event.parentId } : {}),
         ...(event.sessionId !== undefined ? { sessionId: event.sessionId } : {}),
+        ...(event.runId !== undefined ? { runId: event.runId } : {}),
       });
     };
   }
@@ -1231,17 +1292,31 @@ export class ManagedAgent {
       : { model: next.model };
 
     if (selection.fallback) {
-      this.log?.warn(
-        "agent",
-        "Persisted model is not in this provider's catalog; keeping the session's model",
-        selection.fallback
-      );
+      this.emitEvent("model:change", {
+        from: selection.fallback.requested,
+        to: selection.model,
+        fallback: true,
+        reason: "resume",
+        ...(this.config.modelStyle ? { style: this.config.modelStyle } : {}),
+      });
     }
 
     const style = remote ? this.config.modelStyle : next.modelStyle;
     const sameModel = selection.model === this.config.model;
     const sameStyle = !style || style === this.config.modelStyle;
     if (sameModel && sameStyle) return false;
+
+    // The adopted model is a change too (bootstrap ran on the default). Emitted here, not in
+    // `setModel`, because `from` is the SESSION's requested id rather than whatever the runtime
+    // happened to be configured with; `setModel`'s own emit is disabled below.
+    if (!selection.fallback && !sameModel) {
+      this.emitEvent("model:change", {
+        from: this.config.model,
+        to: selection.model,
+        reason: "resume",
+        ...(style ? { style } : {}),
+      });
+    }
 
     // Preflight the same schema `updateConfig` will run. A session written by another build (or a
     // hand-edited JSONL) can name a style this build no longer accepts, and `setModel` would throw
@@ -1254,15 +1329,15 @@ export class ManagedAgent {
         ...(style ? { modelStyle: style } : {}),
       });
     } catch (error) {
-      this.log?.warn("agent", "Persisted model could not be applied; keeping the current model", {
-        model: selection.model,
-        ...(style ? { modelStyle: style } : {}),
+      this.emitDiagnostic("model", "Persisted model could not be applied; keeping the current model", {
+        level: "warn",
         error: errorMessage(error),
+        data: { model: selection.model, ...(style ? { modelStyle: style } : {}) },
       });
       return false;
     }
 
-    this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) });
+    this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) }, { emitChange: false });
     return true;
   }
 
@@ -1312,20 +1387,34 @@ export class ManagedAgent {
    * with the model, and this only stamps the transcript being written.
    */
   setReasoningEffort(effort: AgentConfig["reasoningEffort"]): void {
+    const previous = this.config.reasoningEffort;
     this.updateConfig({ reasoningEffort: effort });
     this.invalidateRunner();
     this.persistSession();
     this.emitStateChange();
+    // Same reason as the auto toggle: the retained `session:mode` projection is not in the log, so
+    // an append-only row is the only record that the depth changed. Only on an actual change — the
+    // restore path and `/models` both call this even when the value is unchanged.
+    if (previous !== effort) {
+      this.emitEvent("mode:change", {
+        field: "effort",
+        auto: this.mode.isAutoEnabled(),
+        ...(effort ? { reasoningEffort: effort } : {}),
+      });
+    }
   }
 
   /** Replace the model metadata. Pass `null` to clear it (unknown model). */
   setModelInfo(info: ModelInfo | null): void {
     this.modelInfo = info;
     if (info) {
-      this.log?.debug("agent", "Setting model info", {
-        id: info.id,
-        style: info.style,
-        contextWindow: info.contextWindow,
+      this.emitDiagnostic("model", "Setting model info", {
+        level: "debug",
+        data: {
+          id: info.id,
+          ...(info.style ? { style: info.style } : {}),
+          ...(info.contextWindow !== undefined ? { contextWindow: info.contextWindow } : {}),
+        },
       });
     }
     // The footer's budget is `min(tokenThreshold, contextWindow)` — the same reading the trigger
@@ -1368,13 +1457,23 @@ export class ManagedAgent {
    * (`/models`, `applyPersistedModel`, `resolveModelConfigFromProvider`) resolve the choice through
    * `selectModel` first.
    */
-  setModel(next: {
-    model?: string;
-    modelStyle?: ModelStyle;
-    modelBaseURL?: string;
-    modelApiKey?: string;
-    modelInfo?: ModelInfo | null;
-  }): void {
+  setModel(
+    next: {
+      model?: string;
+      modelStyle?: ModelStyle;
+      modelBaseURL?: string;
+      modelApiKey?: string;
+      modelInfo?: ModelInfo | null;
+    },
+    options?: {
+      /**
+       * Skip the `model:change` event. Used by the persisted-model adoption path, which reports a
+       * fallback under its own wording (the requested id vs the one that was actually kept).
+       */
+      emitChange?: boolean;
+    }
+  ): void {
+    const previous = { model: this.config.model, style: this.config.modelStyle };
     const updates: Partial<AgentConfig> = {};
     if (next.model !== undefined) updates.model = next.model;
     if (next.modelStyle !== undefined) updates.modelStyle = next.modelStyle;
@@ -1416,6 +1515,21 @@ export class ManagedAgent {
       !offerableReasoningEfforts(this.modelInfo ?? undefined).includes(this.config.reasoningEffort)
     ) {
       this.updateConfig({ reasoningEffort: undefined });
+    }
+
+    // The switch itself is the fact. Without this, `/models` success was invisible in the timeline:
+    // the only trace was the next `llm:request`, so "why did the answers change" had no answer.
+    // `from` is the pre-switch model, so a style-only change still reads as one decision.
+    if (options?.emitChange !== false) {
+      const model = next.model ?? previous.model;
+      const style = next.modelStyle ?? previous.style;
+      if (model !== previous.model || style !== previous.style) {
+        this.emitEvent("model:change", {
+          from: previous.model,
+          to: model,
+          ...(style ? { style } : {}),
+        });
+      }
     }
 
     // Keep new on-disk sessions (`/new`, session.new) on the switched model.
@@ -1700,7 +1814,18 @@ export class ManagedAgent {
 
     const host = {
       usage: this.usage,
-      log: this.log,
+      emitDiagnostic: (
+        area: "extension",
+        message: string,
+        options?: { level?: "debug" | "info" | "warn"; data?: Record<string, unknown>; error?: string }
+      ) =>
+        this.emitDiagnostic(area, message, {
+          ...(options?.level ? { level: options.level } : {}),
+          ...(options?.data ? { data: diagnosticDetails(options.data) } : {}),
+          ...(options?.error ? { error: options.error } : {}),
+        }),
+      emitSideQuery: (type: "side-query:mode" | "side-query:error", payload: Record<string, unknown>) =>
+        this.emitEvent(type, payload as never),
       resolveTextAdapter: async () => (await this.resolveTextAdapter?.()) ?? null,
       getExtensionConnection: () => ({
         ...(this.config.modelStyle ? { style: this.config.modelStyle } : {}),
@@ -1815,7 +1940,7 @@ export class ManagedAgent {
     this.extensions.registerTool(def, {
       tools: this.tools,
       ownerId: this.scopedOwnerId(extensionId),
-      warn: (message) => this.log?.warn("system", message),
+      warn: (message) => this.emitDiagnostic("tool", message, { level: "warn" }),
       onToolsChanged: () => {
         this.setRunnerConfigKey(undefined);
         // A tool that lands or leaves changes what `toModelOutput` produces; cached projections
@@ -1842,7 +1967,7 @@ export class ManagedAgent {
     this.extensions.unregisterExtensionTool(name, {
       tools: this.tools,
       ownerId: this.scopedOwnerId(extensionId),
-      warn: (message) => this.log?.warn("system", message),
+      warn: (message) => this.emitDiagnostic("tool", message, { level: "warn" }),
       onToolsChanged: () => {
         this.setRunnerConfigKey(undefined);
         this.toolCompactCache.clear();
@@ -1881,8 +2006,9 @@ export class ManagedAgent {
   }
 
   setCompactionConfig(config: CompactionConfig): void {
-    this.log?.debug("agent", "Setting compaction config", {
-      tokenThreshold: config.tokenThreshold,
+    this.emitDiagnostic("compaction", "Setting compaction config", {
+      level: "debug",
+      data: { tokenThreshold: config.tokenThreshold },
     });
     this.compaction.setConfig(config);
     this.syncCompactionBudget();
@@ -2022,7 +2148,7 @@ export class ManagedAgent {
       if (completed.length === 0) return;
       chat.wakeForBackgroundCompletion();
     } catch (error) {
-      this.log?.warn("system", "Background completion wake skipped", { error: errorMessage(error) });
+      this.emitDiagnostic("jobs", "Background completion wake skipped", { level: "warn", error: errorMessage(error) });
     }
   }
 
@@ -2388,8 +2514,8 @@ export class ManagedAgent {
     return this.unhydratedMediaCount > 0;
   }
 
-  async restoreSession(sessionId: string): Promise<SessionData> {
-    return this.sessionLifecycle.resume(sessionId);
+  async restoreSession(sessionId: string, reason: SessionSwitchReason = "resume"): Promise<SessionData> {
+    return this.sessionLifecycle.resume(sessionId, reason);
   }
 
   isToolNeedsApproval(toolName: string): boolean {
@@ -2496,7 +2622,7 @@ export class ManagedAgent {
   }
 
   reset(reason: SessionLifecycleReason = "session-switch"): void {
-    this.log?.info("agent", "Resetting agent", {
+    this.emitEvent("session:reset", {
       reason,
       previousStatus: this.getStatus(),
       hadTodos: this.getTodoManager()?.hasTodos() ?? false,
@@ -2550,8 +2676,10 @@ export class ManagedAgent {
   }
 }
 
-/** Build the {@link ManualCompactHost} adapter for one agent. */
-export function createManualCompactHost(managed: ManagedAgent, lease: CompactionLease): ManualCompactHost {
+/** Build the {@link ManualCompactHost} adapter for one agent. */ export function createManualCompactHost(
+  managed: ManagedAgent,
+  lease: CompactionLease
+): ManualCompactHost {
   return {
     id: managed.id,
     getUI: () => managed.getUI(),
@@ -2565,6 +2693,29 @@ export function createManualCompactHost(managed: ManagedAgent, lease: Compaction
     resetSystemPrompt: () => managed.resetSystemPrompt(),
     persistSession: () => managed.persistSession(),
     maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
-    getLog: () => managed.log,
+    emitEvent: (type, data) => managed.emitEvent(type, data),
   };
+}
+
+/**
+ * Keep diagnostic `details` shallow and JSON-safe.
+ *
+ * The event payload forbids `Record<string, unknown>` (it is written to the entry verbatim, so a
+ * nested value bypassed the size cap). Two adapters still receive an open record from a host port;
+ * this is where that ends — scalars pass, numeric arrays pass, anything else becomes its text.
+ */
+function diagnosticDetails(
+  data: Record<string, unknown>
+): Record<string, string | number | boolean | null | readonly number[]> {
+  const out: Record<string, string | number | boolean | null | readonly number[]> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    } else if (Array.isArray(value) && value.every((entry) => typeof entry === "number")) {
+      out[key] = value as number[];
+    } else {
+      out[key] = String(value);
+    }
+  }
+  return out;
 }

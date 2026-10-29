@@ -24,6 +24,8 @@
  * looks for, and whose reason is the whole point — is `info`.
  */
 
+import { eventError } from "./event-error.js";
+
 import type { AgentLog } from "../agent-log";
 import type { LogLevel } from "../agent-log/types.js";
 import type { SubagentStopReason } from "../subagent/subagent-stop-reason.js";
@@ -102,7 +104,9 @@ export function subagentLifecycleLogLine(
 export function logSubagentLifecycle(
   log: AgentLog | null | undefined,
   phase: SubagentLifecyclePhase,
-  details: SubagentLogDetails
+  details: SubagentLogDetails,
+  /** The parent's run id: an index row belongs to the run that spawned the child. */
+  run?: string
 ): void {
   if (!log) return;
   const { level, message } = subagentLifecycleLogLine(phase, details);
@@ -123,17 +127,16 @@ export function logSubagentLifecycle(
     ...(details.error ? { error: details.error } : {}),
     ...(details.usage ? { usage: details.usage } : {}),
   };
-  switch (level) {
-    case "debug":
-      log.debug("system", message, data);
-      return;
-    case "warn":
-      log.warn("system", message, data);
-      return;
-    case "error":
-      log.error("system", message, undefined, data);
-      return;
-    default:
-      log.info("system", message, data);
-  }
+  // `eventEntry`, not `info/warn/error`: those have no run parameter (the seam owns no run state),
+  // and an index row is exactly the case that needs the explicit one. `eventError` keeps the
+  // fault text without inventing a stack that points at this module.
+  log.eventEntry(
+    level,
+    "system",
+    `subagent:${phase}`,
+    message,
+    data,
+    details.error ? eventError(details.error) : undefined,
+    run
+  );
 }

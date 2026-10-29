@@ -30,8 +30,8 @@ import { DEFAULT_HARD_MAX_MEMORIES, memoryTypeSchema } from "./types.js";
 import type { MemoryManager } from "./memory-manager.js";
 import type { Memory } from "./types.js";
 import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
+import type { SideQueryTelemetry } from "../../models/adapter/side-text-query.js";
 import type { UsageTracker } from "../../runtime-types/hosts.js";
-import type { AgentLog } from "../agent-log/agent-log.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -283,7 +283,7 @@ export async function extractMemories(
   messages: ModelMessage[],
   memoryManager: MemoryManager,
   textAdapter: TextAdapterConfig,
-  log?: AgentLog,
+  onSideQuery?: SideQueryTelemetry,
   abortSignal?: AbortSignal,
   usage?: UsageTracker | null
 ): Promise<number> {
@@ -328,7 +328,8 @@ export async function extractMemories(
       userPrompt: prompt,
       maxOutputTokens: MEMORY_EXTRACT_MAX_TOKENS,
       abortSignal,
-      log,
+      ...(onSideQuery ? { onEvent: onSideQuery } : {}),
+      purpose: "memory-extract",
       schema: extractionSchema,
     });
     extracted = data.memories;
@@ -387,7 +388,7 @@ export interface ConsolidationResult {
 export async function consolidateMemories(
   memoryManager: MemoryManager,
   textAdapter: TextAdapterConfig,
-  log?: AgentLog,
+  onSideQuery?: SideQueryTelemetry,
   usage?: UsageTracker | null
 ): Promise<ConsolidationResult> {
   const memories = await memoryManager.listMemories();
@@ -398,7 +399,7 @@ export async function consolidateMemories(
   // Phase 1: LLM consolidation via lightweight catalog (frontmatter only).
   // This avoids the token-truncation problem where sending full bodies would
   // exceed the context and cause the LLM to only see a subset of memories.
-  const llmChanged = await llmConsolidate(memories, memoryManager, textAdapter, log, usage);
+  const llmChanged = await llmConsolidate(memories, memoryManager, textAdapter, onSideQuery, usage);
 
   // Phase 2: Hard-cap eviction. If LLM consolidation didn't reduce enough,
   // evict oldest memories by updatedAt to stay under the hard limit.
@@ -452,7 +453,7 @@ async function llmConsolidate(
   memories: Memory[],
   memoryManager: MemoryManager,
   textAdapter: TextAdapterConfig,
-  log?: AgentLog,
+  onSideQuery?: SideQueryTelemetry,
   usage?: UsageTracker | null
 ): Promise<boolean> {
   // Build a lightweight catalog: filename + name + type + description (no body).
@@ -472,7 +473,8 @@ async function llmConsolidate(
       systemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
       userPrompt: prompt,
       maxOutputTokens: MEMORY_CONSOLIDATE_MAX_TOKENS,
-      log,
+      ...(onSideQuery ? { onEvent: onSideQuery } : {}),
+      purpose: "memory-consolidate",
       schema: consolidationSchema,
     });
     decisions = data as ConsolidationDecisions;

@@ -27,6 +27,16 @@ export interface EventLogRule {
   level: LogLevel;
   category: LogCategory;
   formatMessage: (event: AgentEvent) => string;
+  /**
+   * Conditional suppression for THIS event instance.
+   *
+   * A table cell is static per event type; some facts are only worth a row in one variant. The
+   * canonical case is an approval the agent answered itself: in auto/plan-execution mode nobody was
+   * asked, so the request/resolve pair is machinery (the `agent:tool-*` rows already carry the call)
+   * and recording it made 22% of a real session's log. The predicate lives with the rule — NOT at
+   * the emit site — because an emitter must always emit and the policy decides what is recorded.
+   */
+  suppress?: (event: AgentEvent) => boolean;
 }
 
 /**
@@ -131,10 +141,52 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     category: "system",
     formatMessage: (event) => `Failed to save session ${p(event).target ?? "data"}: ${p(event).error ?? "unknown"}`,
   },
+  "session:diagnostic": SPECIALIZED_EVENT_LOG,
+  "session:bootstrap-summary": {
+    level: "info",
+    category: "system",
+    formatMessage: (event) => {
+      const d = p(event);
+      const failed = typeof d.failed === "number" && d.failed > 0 ? `, ${d.failed} failed` : "";
+      return `Bootstrap complete: ${d.active ?? 0}/${d.attempted ?? 0} extensions active${failed}`;
+    },
+  },
+  "session:title": SPECIALIZED_EVENT_LOG,
+  "session:reset": {
+    level: "info",
+    category: "agent",
+    formatMessage: (event) => {
+      const d = p(event);
+      return `Session reset (${d.reason ?? "unknown"})${d.previousStatus ? ` from ${d.previousStatus}` : ""}`;
+    },
+  },
 
   // ============================================================================
   // Turn lifecycle
   // ============================================================================
+  "model:change": {
+    level: "info",
+    category: "agent",
+    formatMessage: (event) => {
+      const d = p(event);
+      const style = d.style ? ` (${d.style})` : "";
+      const fallback = d.fallback === true ? " — requested model unavailable, kept the previous one" : "";
+      return `Model: ${d.from ?? "?"} → ${d.to ?? "?"}${style}${fallback}`;
+    },
+  },
+  // `session:mode` is a projection (suppressed by policy); this is its append-only counterpart.
+  // Without the row, a run of approvals that never asked a human reads exactly like one that did.
+  "mode:change": {
+    level: "info",
+    category: "agent",
+    formatMessage: (event) => {
+      const d = p(event);
+      if (d.field === "effort") {
+        return `Reasoning effort: ${typeof d.reasoningEffort === "string" ? d.reasoningEffort : "default"}`;
+      }
+      return d.auto === true ? "Auto mode on" : "Auto mode off";
+    },
+  },
   "prompt:submit": {
     level: "info",
     category: "chat",
@@ -153,36 +205,82 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       return `Extension prompt hooks (${hasTurn})`;
     },
   },
+  "side-query:mode": {
+    level: "debug",
+    category: "side-query",
+    formatMessage: (event) => {
+      const d = p(event);
+      // A MODE DECISION, not a completed query: the request has not been issued yet. The old name
+      // (`side-query:complete`) claimed a completion, so a decision followed by a failure read as
+      // "completed" then "failed".
+      return `Side query (${d.purpose ?? "?"}) using ${d.mode ?? "?"} mode: ${d.reason ?? "decided"}`;
+    },
+  },
+  "side-query:error": {
+    level: "warn",
+    category: "side-query",
+    formatMessage: (event) => {
+      const d = p(event);
+      return `Side query (${d.purpose ?? "?"}) failed in ${d.mode ?? "?"} mode: ${d.error ?? "unknown"}`;
+    },
+  },
   "turn:summary": {
     level: "info",
     category: "chat",
     formatMessage: (event) => {
       const d = p(event);
-      const outcome = d.outcome ? ` (${d.outcome})` : "";
+      // A parked turn is not a finished one: "Turn complete" on an approval wait is how the
+      // majority-paused summaries ended up describing turns that had not ended.
+      const headline =
+        d.paused === true ? "Turn paused (waiting for input)" : `Turn complete${d.outcome ? ` (${d.outcome})` : ""}`;
       const phases = d.phases ?? "?";
       const toolCalls = d.toolCalls ?? "?";
       const inTokens = d.inputTokens ?? "?";
       const outTokens = d.outputTokens ?? "?";
       const cost = typeof d.costUsd === "number" && d.costUsd > 0 ? `, $${d.costUsd.toFixed(4)}` : "";
       const ms = d.durationMs ?? "?";
-      return `Turn complete${outcome}: ${phases} phases, ${toolCalls} tools, ${inTokens}→${outTokens} tokens${cost}, ${ms}ms`;
+      return `${headline}: ${phases} phases, ${toolCalls} tools, ${inTokens}→${outTokens} tokens${cost}, ${ms}ms`;
     },
   },
   "agent:thinking": {
     level: "debug",
     category: "agent",
-    formatMessage: () => "Model reasoning started",
+    formatMessage: (event) => {
+      const d = p(event);
+      const iter = d.iteration != null ? ` [iter ${d.iteration}]` : "";
+      const model = typeof d.model === "string" ? ` ${d.model}` : "";
+      return `Model reasoning started${iter}${model}`;
+    },
   },
   "agent:stop": {
     level: "info",
     category: "agent",
     formatMessage: (event) => `Agent stop (${p(event).reason ?? "unknown"})`,
   },
+  "agent:status": SPECIALIZED_EVENT_LOG,
+  "extension:log": SPECIALIZED_EVENT_LOG,
+  "hooks:echo": SPECIALIZED_EVENT_LOG,
   "agent:extension-error": {
     level: "error",
     category: "system",
-    formatMessage: (event) =>
-      `Extension ${p(event).phase ?? ""} failed "${p(event).extensionId ?? event.agentId}": ${p(event).error ?? "unknown"}`.trim(),
+    formatMessage: (event) => {
+      const d = p(event);
+      // The id is absent for a file that failed to import or a factory that threw before it had one;
+      // printing a sentinel there ("disk"/"config") named an extension that does not exist.
+      const phase = d.phase ? `${d.phase} ` : "";
+      const id = typeof d.extensionId === "string" && d.extensionId ? ` "${d.extensionId}"` : "";
+      return `Extension ${phase}failed${id}: ${d.error ?? "unknown"}`;
+    },
+  },
+  "agent:event-handler-error": {
+    level: "warn",
+    category: "hooks",
+    formatMessage: (event) => {
+      const d = p(event);
+      const what =
+        d.kind === "observer" ? "event observer threw; frame dropped" : "interceptor threw; continuing without it";
+      return `${what}: ${d.pattern ?? "*"} (${d.event ?? "?"})`;
+    },
   },
   "agent:abort": {
     level: "warn",
@@ -254,15 +352,27 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   "agent:tool-approval-request": {
     level: "info",
     category: "approval",
+    // Auto/plan execution answers this in the same tick: nobody is asked, and `agent:tool-start`
+    // still records the call. Keeping the pair made 1,330 of one real session's 6,034 lines.
+    //
+    // The request suppresses on `auto` (what the pump knew when it asked) while the resolution
+    // suppresses on `source` (what actually decided). A mode toggle between the two can therefore
+    // leave one row without its twin; matching on `source` here is impossible without buffering the
+    // request until the decision arrives, and `mode:change` is the row that explains the window.
+    suppress: (event) => p(event).auto === true,
     formatMessage: (event) => `Approval requested: ${p(event).tool_name ?? "unknown"}`,
   },
   "agent:tool-approval-resolved": {
     level: "info",
     category: "approval",
+    // Same fact as the request row above — suppressed by the decision's source, which the request
+    // could not know. A human answer and a command-safety verdict keep their rows.
+    suppress: (event) => p(event).source === "auto",
     formatMessage: (event) => {
       const d = p(event);
+      const by = d.source === "policy" ? ", by policy" : "";
       const reason = d.reason ? ` — ${d.reason}` : "";
-      return `Approval resolved: ${d.tool_name ?? d.tool_call_id ?? "unknown"} (${d.decision ?? "?"})${reason}`;
+      return `Approval resolved: ${d.tool_name ?? d.tool_call_id ?? "unknown"} (${d.decision ?? "?"}${by})${reason}`;
     },
   },
   "agent:tool-end": {
@@ -295,6 +405,12 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   // Turn / message boundaries — observable, never default-logged (2-4 rows per turn would dominate
   // the timeline; a consumer that wants them persists them under its own scope).
   // ============================================================================
+  "tool:projection-error": {
+    level: "warn",
+    category: "tool",
+    formatMessage: (event) =>
+      `Tool output projection failed (${p(event).tool_name ?? "unknown"}): ${p(event).error ?? "unknown"}`,
+  },
   "turn:start": false,
   "turn:end": false,
   "message:start": false,
@@ -339,6 +455,16 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     category: "compaction",
     formatMessage: () => "Reactive compact: max retries exceeded, giving up",
   },
+  "compaction:cache-cleanup-error": {
+    level: "warn",
+    category: "compaction",
+    formatMessage: (event) => `Post-compact cache cleanup failed: ${p(event).error ?? "unknown"}`,
+  },
+  "run:wake": {
+    level: "debug",
+    category: "agent",
+    formatMessage: (event) => `Wake turn (${p(event).cause ?? "unknown"})`,
+  },
 
   // ============================================================================
   // Subagents
@@ -379,7 +505,11 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     formatMessage: (event) => {
       const summary =
         typeof p(event).summary === "string" ? truncateText(p(event).summary as string, 200) : "(no summary)";
-      return `Subagent completed: ${summary}${taskBindingSuffix(p(event))}`;
+      // The child's own cost, because the parent's `llm:response` rows cover only the parent's calls
+      // (a worker runs its whole loop in ONE `chat()`), so this is the only row where a delegated
+      // run's billing is visible.
+      const cost = typeof p(event).costUsd === "number" ? ` $${(p(event).costUsd as number).toFixed(4)}` : "";
+      return `Subagent completed: ${summary}${cost}${taskBindingSuffix(p(event))}`;
     },
   },
   "subagent:error": {
@@ -464,5 +594,36 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
   },
 };
 
-/** Default event → log rule lookup (session-projection events are intentionally absent). */
-export const DEFAULT_EVENT_LOG_RULES: Partial<Record<AgentEventType, EventLogRuleEntry>> = TELEMETRY_EVENT_LOG_RULES;
+/**
+ * Session-projection events: snapshots of state a host reads from a session channel.
+ *
+ * They are the second half of the registry (`AgentEvents` minus the telemetry map), and they must be
+ * decisions rather than omissions: a snapshot re-publishes on every change, so recording one is the
+ * fastest way to make the timeline unreadable. Typed as an exhaustive `false` map so a new projection
+ * event cannot land without the author stating it.
+ */
+export const PROJECTION_EVENT_LOG_RULES: Record<Exclude<AgentEventType, keyof AgentEventPayloadMap>, false> = {
+  "agent:state": false,
+  "session:messages": false,
+  "session:queues": false,
+  "session:usage": false,
+  "session:todos": false,
+  "session:plan": false,
+  "session:summary": false,
+  "session:mode": false,
+  "session:extensions": false,
+  "session:tool-presentation": false,
+  "session:interaction": false,
+  "agent:iteration": false,
+  "session:jobs": false,
+  "session:subagents": false,
+  "extension:ui": false,
+  "tool:chunk": false,
+  "tool:clear": false,
+};
+
+/** Default event → log rule lookup (projection events are explicit suppressions). */
+export const DEFAULT_EVENT_LOG_RULES: Partial<Record<AgentEventType, EventLogRuleEntry>> = {
+  ...TELEMETRY_EVENT_LOG_RULES,
+  ...PROJECTION_EVENT_LOG_RULES,
+};

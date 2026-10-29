@@ -23,10 +23,10 @@ export type {
   AgentEventType,
   AgentEventPayloadMap,
 } from "../agent/agent-event-bus/index.js";
-export { bridgeTelemetryToAgentLog, summarizePayload } from "../agent/log/event-log-bridge.js";
+export { bridgeTelemetryToAgentLog } from "../agent/log/event-log-bridge.js";
+export { summarizePayload } from "../agent/log/payload.js";
 export { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG } from "../agent/log/event-log-rules.js";
-export { SPECIALIZED_EVENT_LOG_TYPES } from "../agent/log/event-log-specialized.js";
-export { statusTransitionLogLevel } from "../agent/log/status-transition-log.js";
+export { SPECIALIZED_EVENT_LOG_TYPES, SPECIALIZED_EVENT_LOG_HANDLERS } from "../agent/log/event-log-specialized.js";
 export { createJsonlFileSink } from "../agent/log/jsonl-file-sink.js";
 export { createLogExtension } from "../agent/log/extension.js";
 export type { LogExtension, LogExtensionOptions, EventLogPolicy } from "../agent/log/extension.js";

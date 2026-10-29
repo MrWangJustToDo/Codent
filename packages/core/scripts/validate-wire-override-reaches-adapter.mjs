@@ -630,7 +630,11 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput()), { 
 {
   // max_tokens continuation: arming the run, never appending to the handed-in array.
   const run = new TestRun();
-  const managed = { run, log: { debug: noop, warn: noop, error: noop }, getMessagesForLLM: () => [] };
+  const managed = {
+    run,
+    getMessagesForLLM: () => [],
+    emitDiagnostic: noop,
+  };
   const truncation = createTruncationState();
   truncation.maxTokensEscalated = true; // skip the escalation branch
 
@@ -654,7 +658,11 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput()), { 
   // lose its only transient backoff).
   const escalationRun = new TestRun();
   const escalation = handleMaxTokensTruncation({
-    managed: { run: escalationRun, log: { debug: noop, warn: noop, error: noop }, getMessagesForLLM: () => [] },
+    managed: {
+      run: escalationRun,
+      getMessagesForLLM: () => [],
+      emitDiagnostic: noop,
+    },
     runner: {},
     truncation: createTruncationState(),
   });
@@ -689,7 +697,7 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput()), { 
   const stripManaged = {
     run: stripRun,
     usage: { hasCapability: (cap) => cap !== "vision" },
-    log: { debug: noop, warn: noop, error: noop },
+    emitDiagnostic: noop,
   };
   assert.equal(armCapabilityStrip(stripManaged), true, "a model without vision arms a strip");
   const armedDrop = stripRun.getWireDropPartTypes();
@@ -701,7 +709,6 @@ function makeToolMediaChannel(content = JSON.stringify(rawImageReadOutput()), { 
     armCapabilityStrip({
       run: fullRun,
       usage: { hasCapability: () => true },
-      log: { warn: noop, debug: noop, error: noop },
     }),
     false,
     "a fully capable model arms no strip"

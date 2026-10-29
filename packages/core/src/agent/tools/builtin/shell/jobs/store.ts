@@ -14,18 +14,13 @@
  */
 
 import { writeFileAtomic } from "../../../../../utils/atomic-write.js";
-import { createStaleFileSweeper } from "../../../shared/cache/stale-sweep.js";
-
-import { COMMAND_JOB_LOG_DIR } from "./output-log.js";
+import { COMMAND_JOB_CACHE_DIR, sweepWorkspaceCache } from "../../../shared/cache/workspace-cache.js";
 
 import type { CommandJobStatus } from "./registry.js";
 import type { ResolvedCoreEnv } from "../../../../../env";
 
 /** Bump when the record shape changes; unknown versions are ignored. */
 export const COMMAND_JOB_RECORD_VERSION = 1;
-
-/** Records are tiny; keep them longer than the (large) logs so a resume can still notify. */
-export const MAX_JOB_RECORD_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface PersistedCommandJob {
   version: typeof COMMAND_JOB_RECORD_VERSION;
@@ -51,7 +46,7 @@ export interface PersistedCommandJob {
 
 /** Workspace-relative path of a job's record file. */
 export function jobRecordPath(jobId: string): string {
-  return `${COMMAND_JOB_LOG_DIR}/${jobId}.json`;
+  return `${COMMAND_JOB_CACHE_DIR}/${jobId}.json`;
 }
 
 /** Keep the last `max` characters (head-lossy is fine — the log holds the full output). */
@@ -66,13 +61,13 @@ export async function readCommandJobRecords(
 ): Promise<PersistedCommandJob[]> {
   try {
     const fs = env.fs;
-    if (!(await fs.exists(COMMAND_JOB_LOG_DIR))) return [];
-    const entries = await fs.readdir(COMMAND_JOB_LOG_DIR);
+    if (!(await fs.exists(COMMAND_JOB_CACHE_DIR))) return [];
+    const entries = await fs.readdir(COMMAND_JOB_CACHE_DIR);
     const records: PersistedCommandJob[] = [];
     for (const entry of entries) {
       if (!entry.name.endsWith(".json")) continue;
       try {
-        const text = await fs.readFile(`${COMMAND_JOB_LOG_DIR}/${entry.name}`);
+        const text = await fs.readFile(`${COMMAND_JOB_CACHE_DIR}/${entry.name}`);
         const parsed = JSON.parse(text) as Partial<PersistedCommandJob>;
         if (
           parsed.version !== COMMAND_JOB_RECORD_VERSION ||
@@ -119,7 +114,7 @@ export async function readCommandJobRecords(
 export async function writeCommandJobRecord(env: ResolvedCoreEnv, record: PersistedCommandJob): Promise<void> {
   const fs = env.fs;
   const path = jobRecordPath(record.jobId);
-  await fs.mkdir(COMMAND_JOB_LOG_DIR);
+  await fs.mkdir(COMMAND_JOB_CACHE_DIR);
   await writeFileAtomic(fs, path, JSON.stringify(record));
 }
 
@@ -133,16 +128,10 @@ export async function removeCommandJobRecord(env: ResolvedCoreEnv, jobId: string
   }
 }
 
-const recordSweeper = createStaleFileSweeper({
-  dir: COMMAND_JOB_LOG_DIR,
-  suffix: ".json",
-  maxAgeMs: MAX_JOB_RECORD_AGE_MS,
-});
-
-/** Sweep records past {@link MAX_JOB_RECORD_AGE_MS} (once per process unless forced). */
+/** Sweep records past {@link MAX_JOB_RECORD_AGE_MS} (one kind of the shared workspace sweep). */
 export function sweepStaleJobRecords(
   env: ResolvedCoreEnv,
   options?: { force?: boolean; now?: number }
 ): Promise<number> {
-  return recordSweeper.sweep(env, options);
+  return sweepWorkspaceCache(env, "jobRecord", options);
 }

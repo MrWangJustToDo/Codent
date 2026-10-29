@@ -33,6 +33,7 @@ import {
   injectSyntheticMessages,
   isContextModelMessage,
   isContextUIMessage,
+  lastGenuineUserText,
   syntheticKindFromId,
   syntheticMessageId,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -600,6 +601,35 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   current = { key: "codent-memory", content: "<memory_index>a</memory_index>" };
   await run();
   assert.equal(ids().length, 3, "hyphenated extension kind cycles get fresh nonces");
+}
+
+// ---------------------------------------------------------------------------
+// The prompt a `messages`-driven run reports is the genuine user text, not a shell and not a
+// compaction checkpoint. The old code handed both consumers the literal "(structured)".
+// ---------------------------------------------------------------------------
+{
+  const text = (content) => ({
+    id: `m-${content.length}-${Math.random()}`,
+    role: "user",
+    parts: [{ type: "text", content }],
+  });
+  const shell = {
+    id: "ctx-current_date-abc12345",
+    role: "user",
+    parts: [
+      {
+        type: "text",
+        content: formatContextSectionUserContent({ key: "current_date", content: "<current_date>x</current_date>" }),
+      },
+    ],
+  };
+  const summary = text("[CONVERSATION SUMMARY]\n- goal: keep going");
+  const real = text("  deploy the fix  ");
+
+  assert.equal(lastGenuineUserText([shell, real, summary]), "deploy the fix", "skips the shell AND the summary");
+  assert.equal(lastGenuineUserText([summary]), undefined, "a transcript that ends on a summary has no prompt");
+  assert.equal(lastGenuineUserText([shell]), undefined, "synthetic context is not the user");
+  assert.equal(lastGenuineUserText([]), undefined);
 }
 
 console.log("turn-context validation passed");

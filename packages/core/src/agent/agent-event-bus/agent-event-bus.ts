@@ -86,7 +86,15 @@ export class DefaultAgentEventBus implements AgentEventBus {
       error: unknown;
       /** Which dispatch mode failed. Absent means interceptor (the original caller shape). */
       kind?: "interceptor" | "observer";
-    }) => void
+    }) => void,
+    /**
+     * Envelope fields resolved from the owning agent when the caller supplied none.
+     *
+     * A fact's run/session identity belongs to the agent, so every emitter gets the same answer —
+     * including the domain objects that emit straight on their scoped bus instead of going through
+     * the telemetry funnel (`plan`, `ui`, `stream-hub`, the extension runner).
+     */
+    private readonly resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined
   ) {}
 
   get scopeId(): string {
@@ -139,7 +147,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           return unsub;
         }
         try {
-          const event = this.buildEventAt(retained.node, type, payload as never);
+          const event = this.buildEventAt(retained.node, type, payload as never, undefined, false);
           const result = (typed as (value: AgentEvent) => unknown)(event);
           if (result && typeof (result as PromiseLike<unknown>).then === "function") {
             void Promise.resolve(result).catch((error) =>
@@ -243,9 +251,9 @@ export class DefaultAgentEventBus implements AgentEventBus {
   }
 
   scope(id: string): AgentEventBus {
-    // Child scopes share the parent's error sink: a scoped bus is the same bus
+    // Child scopes share the parent's error sink and metadata resolver: a scoped bus is the same bus
     // with a narrower view, not a separate pipeline.
-    return new DefaultAgentEventBus(new EventBusScopeNode(id, this.node), this.onInterceptorError);
+    return new DefaultAgentEventBus(new EventBusScopeNode(id, this.node), this.onInterceptorError, this.resolveMeta);
   }
 
   // --------------------------------------------------------------------------
@@ -337,7 +345,9 @@ export class DefaultAgentEventBus implements AgentEventBus {
     node: EventBusScopeNode,
     type: T,
     payload: AgentEvent<T>["payload"],
-    meta?: AgentEventMetaInput
+    meta?: AgentEventMetaInput,
+    /** Retained replay must not inherit the CURRENT run/session of the node it came from. */
+    resolveOwnMeta = true
   ): AgentEvent<T> {
     // A scope under another AGENT is a child scope; a scope under the synthetic root node is a root
     // agent (`AgentEventBusScope.of` scopes parent-less agents directly on the root bus). Deriving
@@ -346,12 +356,22 @@ export class DefaultAgentEventBus implements AgentEventBus {
     // produce child events with only `agentId`.
     const parentNode = node.parent;
     const parentId = meta?.parentId ?? (parentNode && parentNode.parent !== null ? parentNode.id : undefined);
+    const agentId = meta?.agentId ?? node.id;
+    // Resolve only what the caller left out: an explicit envelope always wins, and a retained
+    // replay is a snapshot of the past (stamping it with the agent's current run would be a lie).
+    const resolved =
+      resolveOwnMeta && (meta?.runId === undefined || meta?.sessionId === undefined)
+        ? this.resolveMeta?.(agentId)
+        : undefined;
+    const sessionId = meta?.sessionId ?? resolved?.sessionId;
+    const runId = meta?.runId ?? resolved?.runId;
     return {
       type,
       ts: Date.now(),
-      agentId: meta?.agentId ?? node.id,
+      agentId,
       ...(parentId !== undefined ? { parentId } : {}),
-      ...(meta?.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(runId !== undefined ? { runId } : {}),
       payload,
     } as AgentEvent<T>;
   }
@@ -383,7 +403,8 @@ export function createAgentEventBus(
     scopeId: string;
     error: unknown;
     kind?: "interceptor" | "observer";
-  }) => void
+  }) => void,
+  options?: { resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined }
 ): AgentEventBus {
-  return new DefaultAgentEventBus(new EventBusScopeNode(id, null), onInterceptorError);
+  return new DefaultAgentEventBus(new EventBusScopeNode(id, null), onInterceptorError, options?.resolveMeta);
 }

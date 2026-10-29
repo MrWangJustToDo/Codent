@@ -7,39 +7,52 @@
  *
  * ## Two cleanup paths (they are complements, not alternatives)
  *
- * 1. **Compaction — reference-based, optimistic.** When the conversation is
- *    compacted (auto or reactive), messages before the compact index are shadowed,
- *    so the LLM will never see them again and their files become collectable.
- *    `cleanupOrphanedToolCache()` deletes those. It only *can* fire for sessions
- *    that actually compact, and only for files that session's wire referenced —
- *    a file no session references is never in its candidate set. A referenced path
- *    must also live under {@link TOOL_OUTPUT_CACHE_DIR}: the collection key is the
- *    `cachedOutputPath` FIELD, which background job results use for their durable
- *    log, so containment — not the field name — decides what this pass may delete.
- * 2. **Age-based — unconditional backstop.** `sweepStaleToolOutput()` deletes any
+ * 1. **Compaction — reference-based, deferred.** When the conversation is
+ *    compacted (auto or reactive), messages outside the kept window stop being
+ *    sent to the model, so their spills become *candidates*. Being shadowed is
+ *    not the same as being expired, though: compaction only APPENDS a summary to
+ *    the UI channel, so the transcript still holds the original message and its
+ *    `cachedOutputPath`, and a later turn can still `read_file` that path (or
+ *    recover it through `session_search`). Deleting a fresh file on that signal
+ *    silently broke a subagent report mid-session: the parent read the file
+ *    before compaction and, eleven minutes later, got `No such file or
+ *    directory` — with nothing in the log to say the evidence had been collected.
+ *    So this pass is bounded by {@link TOOL_OUTPUT_ORPHAN_GRACE_MS}: a candidate
+ *    younger than the grace period survives, because "no live turn can still be
+ *    reading it" cannot be proven for a file the current session just wrote.
+ *    It also only *can* fire for sessions that compact, and only for files that
+ *    session's wire referenced — a file no session references is never in its
+ *    candidate set. A referenced path must also live under
+ *    {@link TOOL_OUTPUT_CACHE_DIR}: the collection key is the `cachedOutputPath`
+ *    FIELD, which background job results use for their durable log, so
+ *    containment — not the field name — decides what this pass may delete.
+ * 2. **Age-based — unconditional backstop.** `sweepWorkspaceCaches()` deletes any
  *    cache file older than {@link TOOL_OUTPUT_MAX_AGE_MS}, regardless of
  *    references. Without it, every session that never compacted (and every file
  *    no session ever referenced) leaks forever: the reference-based path has no
- *    global scan. It runs lazily on the first cache write of a process, mirroring
- *    `sweepStaleJobLogs` for background job logs.
+ *    global scan. It runs lazily on the first cache write of a process, and it is
+ *    the *same* sweep (same table, same walker, same once-per-root guard) that
+ *    expires background-job logs and records — see `workspace-cache.ts`.
  *
  * Both are non-fatal by contract: a failed delete never fails the tool call.
  */
 
-import { AGENT_CACHE_DIR } from "../../../../utils/workspace-paths.js";
-
-import { createStaleFileSweeper } from "./stale-sweep.js";
+import {
+  resetWorkspaceCacheSweeps,
+  sweepWorkspaceCache,
+  sweepWorkspaceCaches,
+  TOOL_OUTPUT_CACHE_DIR,
+  TOOL_OUTPUT_MAX_AGE_MS,
+  TOOL_OUTPUT_ORPHAN_GRACE_MS,
+} from "./workspace-cache.js";
 
 import type { StaleSweepOptions } from "./stale-sweep.js";
 import type { ResolvedCoreEnv } from "../../../../env";
 import type { ModelMessage } from "@tanstack/ai";
 
-// ============================================================================
-// Constants
-// ============================================================================
-
-/** Cache directory holding one file per spilled tool result (workspace-relative). */
-export const TOOL_OUTPUT_CACHE_DIR = `${AGENT_CACHE_DIR}/tool-output`;
+// The retention numbers and the directories are defined once, in the workspace-cache table; these
+// re-exports keep the spill module the import surface the dev/validate scripts already use.
+export { TOOL_OUTPUT_CACHE_DIR, TOOL_OUTPUT_MAX_AGE_MS, TOOL_OUTPUT_ORPHAN_GRACE_MS };
 
 /**
  * Only `.txt` entries are swept. Background job logs live in a sibling directory
@@ -81,9 +94,6 @@ const DEFAULT_HEAD_CHARS = 5000;
 /** Number of chars to show from the end when content has few (but very long) lines */
 const DEFAULT_TAIL_CHARS = 2000;
 
-/** Spill files older than this are swept on the first cache write of a process. */
-export const TOOL_OUTPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
 // ============================================================================
 // Public API
 // ============================================================================
@@ -95,7 +105,9 @@ export const TOOL_OUTPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  * (a freshly written file is never a candidate anyway — the filter is age-based).
  */
 export async function cacheToolOutput(env: ResolvedCoreEnv, content: string, id: string): Promise<string> {
-  await sweepStaleToolOutput(env);
+  // One trigger for every workspace cache (spills, job logs, job records): the guards make the
+  // other two kinds free, and a trigger that only knows its own cache is how the rules drifted.
+  await sweepWorkspaceCaches(env);
   const filePath = `${TOOL_OUTPUT_CACHE_DIR}/${uniqueCacheEntryName(id)}${CACHE_ENTRY_SUFFIX}`;
   await env.fs.writeFile(filePath, content);
   return filePath;
@@ -284,14 +296,20 @@ function collectCachedPathsFromValue(value: unknown, paths: Set<string>, depth =
 /**
  * Scan orphaned messages (those before compactIndex) for cached tool output
  * file paths and delete them from disk.
+ *
+ * A path is collected only when the file is at least {@link TOOL_OUTPUT_ORPHAN_GRACE_MS} old:
+ * "shadowed from the wire" is not proof that nothing can read it (see the module header). Callers
+ * that are asserting the reference walk itself — the cache validator — pass `minAgeMs: 0`.
  */
 export async function cleanupOrphanedToolCache(
   env: ResolvedCoreEnv,
   messages: ModelMessage[],
-  compactIndex: number
+  compactIndex: number,
+  options?: { minAgeMs?: number }
 ): Promise<void> {
   if (compactIndex <= 0 || messages.length === 0) return;
 
+  const minAgeMs = options?.minAgeMs ?? TOOL_OUTPUT_ORPHAN_GRACE_MS;
   const pathsToDelete = new Set<string>();
 
   for (let i = 0; i < Math.min(compactIndex, messages.length); i++) {
@@ -311,12 +329,20 @@ export async function cleanupOrphanedToolCache(
   if (pathsToDelete.size === 0) return;
 
   const fs = env.fs;
+  const now = Date.now();
   const deletions = Array.from(pathsToDelete).map(async (filePath) => {
     try {
-      const exists = await fs.exists(filePath);
-      if (exists) {
-        await fs.remove(filePath);
-      }
+      if (!(await fs.exists(filePath))) return;
+      // Keep evidence the current session may still be reading. A missing/unreadable mtime is
+      // treated as "too young" (fail closed: under-delete, never lose a file we cannot age).
+      // `minAgeMs: 0` means "no grace" — compared as a plain `<` it would ALSO skip a file whose
+      // mtime is a fraction of a millisecond ahead of `Date.now()` (fresh writes round both ways),
+      // which made the no-grace test path depend on clock timing.
+      const stat = await fs.stat(filePath);
+      const ageMs = now - stat.mtime.getTime();
+      if (!Number.isFinite(ageMs)) return;
+      if (minAgeMs > 0 && ageMs < minAgeMs) return;
+      await fs.remove(filePath);
     } catch {
       // Non-fatal — stale cache files are harmless
     }
@@ -330,26 +356,15 @@ export async function cleanupOrphanedToolCache(
 // ============================================================================
 
 /**
- * Delete cache files older than {@link TOOL_OUTPUT_MAX_AGE_MS}, which no live
- * surface can still be reading. Runs at most once per process unless forced.
- *
- * Age-based on purpose: the reference-based compaction pass can only collect
- * files a *compacting* session referenced, so anything else (a session that never
- * compacted, a file no session ever referenced) would otherwise accumulate
- * forever. Symmetric to `sweepStaleJobLogs` for background job logs — same
- * laziness, same silent degradation, same shared walker.
+ * Delete spike files older than {@link TOOL_OUTPUT_MAX_AGE_MS} (one kind of the shared workspace
+ * sweep). Production triggers call {@link sweepWorkspaceCaches}; this targeted form exists for
+ * tests and for a caller that owns only this cache.
  */
-const toolOutputSweeper = createStaleFileSweeper({
-  dir: TOOL_OUTPUT_CACHE_DIR,
-  suffix: CACHE_ENTRY_SUFFIX,
-  maxAgeMs: TOOL_OUTPUT_MAX_AGE_MS,
-});
-
 export function sweepStaleToolOutput(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number> {
-  return toolOutputSweeper.sweep(env, options);
+  return sweepWorkspaceCache(env, "toolOutput", options);
 }
 
 /** Test-only escape hatch for the once-per-process guard. */
 export function resetToolOutputSweepForTesting(): void {
-  toolOutputSweeper.reset();
+  resetWorkspaceCacheSweeps("toolOutput");
 }

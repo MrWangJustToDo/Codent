@@ -13,14 +13,13 @@ import { toError } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
-import type { AgentLog } from "../../agent/agent-log";
 import type { WireProjectionCache } from "../../agent/compaction";
 import type { CompactionConfig } from "../../agent/compaction/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TodoManager } from "../../agent/todo";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { ResolvedCoreEnv } from "../../env";
-import type { AgentManager, UsageTracker } from "../../runtime-types";
+import type { AgentManager, EmitAgentTelemetryFn, UsageTracker } from "../../runtime-types";
 import type { CompactionController } from "../controllers/compaction-controller.js";
 
 export { projectWireFromChannel, type WireProjectionSource } from "../../agent/compaction/wire-projection.js";
@@ -39,7 +38,8 @@ export interface CompactionMiddlewareDeps {
   shouldTriggerAutoCompact: (messages?: ModelMessage[]) => boolean;
   /** Compaction ownership (status, generation, start/complete/error events). */
   compactions: CompactionController;
-  log: AgentLog | null;
+  /** Publishes the post-compact cache-cleanup failure (`compaction:cache-cleanup-error`). */
+  emitEvent: EmitAgentTelemetryFn;
   /**
    * Wire-projection cache to use. Supplied by the agent so that `getMessagesForLLM`
    * (manual `/compact`, reactive compact, memory extraction) and this middleware share
@@ -131,10 +131,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
                 // `.catch`), so by the time it runs the lease has ALREADY finished as completed:
                 // calling `finish` here was a no-op (`isCurrent` false) and the failure vanished.
                 // Report it directly, as the other two compaction paths do.
-                deps.log?.warn("compaction", "Auto-compact cache cleanup failed", {
-                  phase: "cache-cleanup",
-                  error: err.message,
-                });
+                deps.emitEvent("compaction:cache-cleanup-error", { error: err.message });
               },
             })
           ) {

@@ -43,17 +43,22 @@ export async function generateAndApplySessionTitle(
   }
 
   try {
-    managed.getLog()?.info("chat", "Generating title...", { recentText });
     const { text, usage } = await runSideTextQuery(textAdapter, {
       systemPrompt: TITLE_SYSTEM_PROMPT,
       userPrompt: recentText,
       maxOutputTokens: 60,
+      purpose: "title",
+      onEvent: (event) => {
+        const { type, ...payload } = event;
+        managed.emitEvent(type, payload);
+      },
     });
     if (usage) {
       managed.usage.addTotal(usage);
     }
     const generated = text.trim().slice(0, 80);
     if (!generated) {
+      managed.emitEvent("session:title", { ok: false, error: "model returned an empty title" });
       return { ok: false, error: "Failed to generate title" };
     }
     session.name = generated;
@@ -61,10 +66,11 @@ export async function generateAndApplySessionTitle(
     // title (a raw `managed.name = …` write never notified subscribers).
     managed.setDisplayName(generated);
     await store.save(session);
-    managed.getLog()?.info("chat", "Title generated", { text: generated });
+    managed.emitEvent("session:title", { ok: true, name: generated });
     return { ok: true, name: generated };
   } catch (error) {
     const err = toError(error);
+    managed.emitEvent("session:title", { ok: false, error: err.message });
     return { ok: false, error: `Title generation failed: ${err.message}` };
   }
 }
@@ -84,6 +90,9 @@ export async function applySessionRename(
     session.name = trimmed;
     await store.save(session);
   }
+  // Same event as the auto-title path: both change the user-visible name, and a reader greps one
+  // fact. (`setDisplayName` only re-emits `agent:state`.)
+  managed.emitEvent("session:title", { ok: true, name: trimmed });
   return { ok: true, name: trimmed };
 }
 
@@ -200,7 +209,7 @@ export async function branchSession(
   await store.save(newSession);
   // `restoreSession` acquires the new id and releases the session being left only after a
   // successful restore, so a branch needs no compensating release here.
-  const restored = await managed.restoreSession(newSession.id);
+  const restored = await managed.restoreSession(newSession.id, options.mode);
 
   return {
     ok: true,

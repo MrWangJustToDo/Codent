@@ -165,7 +165,7 @@ export function buildAgentRunner(
       // Per-user-turn identity: a retried attempt keeps the same id, so `firstOutput` is not
       // reported twice when the engine is re-entered.
       getRunToken: () => deps.getCurrentRunId?.() ?? null,
-      onThinking: () => emitEvent("agent:thinking"),
+      onThinking: (info) => emitEvent("agent:thinking", info),
       emitEvent,
       recordUsage: (input) => usageHistory.record({ agentId: deps.agentId, ...input }),
       maxIterations: midIterationMax,
@@ -184,13 +184,14 @@ export function buildAgentRunner(
       getTodoManager: deps.getTodoManager,
       shouldTriggerAutoCompact: deps.shouldTriggerAutoCompact,
       compactions: deps.compactions,
-      log: deps.getLog(),
+      emitEvent,
       getWireProjectionCache: deps.getWireProjectionCache,
     }),
     createToolCompactMiddleware({
       getCompactionConfig: deps.getCompactionConfig,
       getToolCompactCache: deps.getToolCompactCache,
       getManagedAgent: () => managed,
+      emitEvent,
     }),
     // Extension message transformers. Sits after `compaction` (that projection rebuilds the wire
     // from the channel, discarding earlier edits) and after `tool-compact` (the stage that
@@ -239,7 +240,12 @@ export function buildAgentRunner(
       // it. Neither can honour a rewritten argument list after the fact.
       isApprovalGated: (toolName) => deps.isToolNeedsApproval(toolName),
       onArgRewriteRefused: (toolName) => {
-        deps.getLog().warn("hooks", "Ignored an extension argument rewrite on a gated tool call", { toolName });
+        emitEvent("session:diagnostic", {
+          area: "extension",
+          message: "Ignored an extension argument rewrite on a gated tool call",
+          level: "warn",
+          details: { toolName },
+        });
       },
       onToolSettled: (toolCallId) => deps.streamHub.endCommand(toolCallId),
     }),
@@ -277,14 +283,22 @@ export function buildAgentRunner(
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
-      getLog: () => deps.getLog(),
+      emitDiagnostic: (area, message, options) =>
+        emitEvent("session:diagnostic", {
+          area,
+          message,
+          ...(options?.level ? { level: options.level } : {}),
+          ...(options?.error ? { error: options.error } : {}),
+        }),
     }),
     createPromptCacheMiddleware({
       getModelStyle: () => config.modelStyle,
       getPromptCacheKey: () => resolvePromptCacheKey(session.getSessionData()?.id, deps.agentId),
     }),
   ]);
-  assertCanonicalMiddlewareOrder(middleware, (message: string) => deps.getLog().warn("agent", message));
+  assertCanonicalMiddlewareOrder(middleware, (message: string) =>
+    emitEvent("session:diagnostic", { area: "middleware", message })
+  );
 
   const maxOutputTokens = config.maxTokens ?? deps.getModelInfo()?.defaultMaxTokens;
 
@@ -294,7 +308,7 @@ export function buildAgentRunner(
     maxIterations: midIterationMax,
     systemPrompts: systemPrompt ? [systemPrompt] : undefined,
     tools: resolveTanStackTools(managed, deps.resolveToolPresentation),
-    middleware: instrumentMiddlewareLog(middleware, deps.getLog()),
+    middleware: instrumentMiddlewareLog(middleware, emitEvent),
     temperature: config.temperature,
     maxOutputTokens,
     reasoningEffort: config.reasoningEffort ?? deps.getModelInfo()?.reasoningConfig?.defaultEffort,

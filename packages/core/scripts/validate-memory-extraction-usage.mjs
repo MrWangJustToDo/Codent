@@ -208,7 +208,6 @@ const MESSAGES = [{ role: "user", content: "please remember that this project us
 
   service.runExtraction({
     getMessagesForLLM: () => messages,
-    log: null,
     usage,
     resolveTextAdapter: async () =>
       adapter({ memories: [{ name: "m1", type: "project", description: "d", body: "b" }] }, stub),

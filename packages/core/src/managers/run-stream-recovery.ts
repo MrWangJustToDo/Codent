@@ -1,7 +1,7 @@
 import { assertAsyncIterable } from "../agent/stream/assert-async-iterable.js";
 import { readRetryAfterMs, runErrorFromChunk } from "../agent/stream/stream-errors.js";
 import { discardRegisteredPrefork } from "../agent/subagent/subagent-runs.js";
-import { toError } from "../utils/errors.js";
+import { errorMessage, toError } from "../utils/errors.js";
 
 import { armCapabilityStrip, tryCapabilitySanitizeRetry } from "./stream-recovery/capability-sanitize.js";
 import {
@@ -93,7 +93,12 @@ async function attemptErrorRecovery(
   // Never start a new recovery strategy for an already-cancelled run.
   if (options.signal?.aborted) return null;
   if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
-    options.managed.log?.error("agent", `Max recovery attempts (${MAX_RECOVERY_ATTEMPTS}) exceeded`, toError(error));
+    // A note, not a second `agent:stream-error`: the stream's own failure emits that row (and does
+    // so once). Same text under the same event type produced two identical errors for one fault.
+    options.managed.emitDiagnostic("stream", `Max recovery attempts (${MAX_RECOVERY_ATTEMPTS}) exceeded`, {
+      level: "error",
+      error: errorMessage(error),
+    });
     return null;
   }
 

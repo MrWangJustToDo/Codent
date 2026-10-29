@@ -36,9 +36,10 @@ export function armCapabilityStrip(managed: ManagedAgent, messages?: Array<UIMes
   // of its lines, all identical. When a message carries no multimodal part the strip is a
   // no-op, and saying so on every iteration is noise that buries the lines that matter.
   if (!messages || chatMessagesHaveMultimodal(messages, drop)) {
-    managed.log?.warn(
-      "agent",
-      `Stripping unsupported multimodal parts for model capabilities: ${[...drop].join(", ")}`
+    managed.emitDiagnostic(
+      "capability",
+      `Stripping unsupported multimodal parts for model capabilities: ${[...drop].join(", ")}`,
+      { level: "warn" }
     );
   }
   return true;
@@ -60,9 +61,10 @@ export function tryCapabilitySanitizeRetry(
   if (!isMultimodalUnsupportedError(error)) return false;
 
   managed.run.setWireDropPartTypes(new Set(ALL_MULTIMODAL_PART_TYPES));
-  managed.log?.warn(
-    "agent",
-    "Retrying without multimodal parts after capability/schema API error (UI history unchanged)"
+  managed.emitDiagnostic(
+    "capability",
+    "Retrying without multimodal parts after capability/schema API error (UI history unchanged)",
+    { level: "warn" }
   );
   managed.setError("");
   return true;

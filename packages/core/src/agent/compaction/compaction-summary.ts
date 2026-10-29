@@ -21,15 +21,11 @@
 import { extractTextFromContent } from "../../utils/message-content.js";
 import { isContextUIMessage } from "../turn-context/turn-context-message.js";
 
+import { CONVERSATION_SUMMARY_END, CONVERSATION_SUMMARY_START, isCompactionSummaryText } from "./summary-marker.js";
+
 import type { ContentPart, ModelMessage, UIMessage } from "@tanstack/ai";
 
-export const CONVERSATION_SUMMARY_START = "[CONVERSATION SUMMARY]";
-export const CONVERSATION_SUMMARY_END = "[END SUMMARY]";
-
-export function isCompactionSummaryText(text: string | undefined | null): boolean {
-  if (!text) return false;
-  return text.trimStart().startsWith(CONVERSATION_SUMMARY_START);
-}
+export { CONVERSATION_SUMMARY_END, CONVERSATION_SUMMARY_START, isCompactionSummaryText } from "./summary-marker.js";
 
 function extractFirstText(content: string | readonly ContentPart[]): string | undefined {
   if (typeof content === "string") return content;

@@ -21,8 +21,7 @@
  */
 
 import { getEnv } from "../../../../../env";
-import { AGENT_CACHE_DIR } from "../../../../../utils/workspace-paths.js";
-import { createStaleFileSweeper } from "../../../shared/cache/stale-sweep.js";
+import { COMMAND_JOB_CACHE_DIR, sweepWorkspaceCache } from "../../../shared/cache/workspace-cache.js";
 
 import type { CoreEnvFs, ResolvedCoreEnv } from "../../../../../env";
 import type { StaleSweepOptions } from "../../../shared/cache/stale-sweep.js";
@@ -31,14 +30,10 @@ import type { StaleSweepOptions } from "../../../shared/cache/stale-sweep.js";
 // Constants
 // ============================================================================
 
-/** Cache directory holding one log per background job (workspace-relative). */
-export const COMMAND_JOB_LOG_DIR = `${AGENT_CACHE_DIR}/command-jobs`;
-
+// The directory and the age are defined once for every workspace cache — see
+// `tools/shared/cache/workspace-cache.ts` (logs and records share the directory, separated by suffix).
 /** Buffered write interval — batches noisy streams into fewer filesystem writes. */
 export const JOB_LOG_FLUSH_INTERVAL_MS = 250;
-
-/** Sweep logs older than this: their job is long gone and unqueryable. */
-export const MAX_JOB_LOG_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Per-line marker keeping stderr distinguishable from stdout in the log. */
 const STDERR_MARK = "[stderr] ";
@@ -49,7 +44,7 @@ const STDERR_MARK = "[stderr] ";
 
 /** Workspace-relative path of a job's log file. */
 export function jobLogPath(jobId: string): string {
-  return `${COMMAND_JOB_LOG_DIR}/${jobId}.log`;
+  return `${COMMAND_JOB_CACHE_DIR}/${jobId}.log`;
 }
 
 // ============================================================================
@@ -192,7 +187,7 @@ class FileJobLogWriter implements CommandJobLogWriter {
         if (this.stopped) return;
         try {
           if (!this.created) {
-            await this.fs.mkdir(COMMAND_JOB_LOG_DIR);
+            await this.fs.mkdir(COMMAND_JOB_CACHE_DIR);
             await this.fs.writeFile(this.path, this.header);
             this.created = true;
           }
@@ -248,21 +243,15 @@ export async function removeJobLog(path: string, env?: ResolvedCoreEnv): Promise
 // ============================================================================
 
 /**
- * Delete logs whose job can no longer be queried (older than
- * {@link MAX_JOB_LOG_AGE_MS}). Runs at most once per process unless forced.
+ * Delete logs whose job can no longer be queried (older than `MAX_JOB_LOG_AGE_MS` in
+ * `tools/shared/cache/workspace-cache.ts`). Runs at most once per process unless forced.
  * Age-based on purpose: concurrent sessions may share a workspace root, and a
  * live session's logs are never older than the threshold. Shares its walk with
  * the tool-output spill sweep (`stale-file-sweep.ts`) — same policy, and the
  * `.log` suffix keeps the two caches from ever deleting each other's files.
  */
-const jobLogSweeper = createStaleFileSweeper({
-  dir: COMMAND_JOB_LOG_DIR,
-  suffix: ".log",
-  maxAgeMs: MAX_JOB_LOG_AGE_MS,
-});
-
 export function sweepStaleJobLogs(options?: StaleSweepOptions, env?: ResolvedCoreEnv): Promise<number> {
-  return jobLogSweeper.sweep(env ?? getEnv(), options);
+  return sweepWorkspaceCache(env ?? getEnv(), "jobLog", options);
 }
 
 // ============================================================================

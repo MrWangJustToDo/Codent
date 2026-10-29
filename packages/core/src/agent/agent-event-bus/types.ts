@@ -172,6 +172,13 @@ export interface AgentEventMetaInput {
   agentId?: string;
   parentId?: string;
   sessionId?: string;
+  /**
+   * Agent run the event belongs to (absent outside a run).
+   *
+   * It travels on the envelope so every consumer records the same run identity instead of each
+   * keeping its own `setRun`-style state.
+   */
+  runId?: string;
 }
 
 export type AgentEvent<T extends AgentEventType = AgentEventType> = {
@@ -184,6 +191,8 @@ export type AgentEvent<T extends AgentEventType = AgentEventType> = {
     parentId?: string;
     /** Disk/session id when available (not the agent id). */
     sessionId?: string;
+    /** Agent run this event belongs to; absent for bootstrap and idle-time events. */
+    runId?: string;
     payload: AgentEvents[K];
   };
 }[T];

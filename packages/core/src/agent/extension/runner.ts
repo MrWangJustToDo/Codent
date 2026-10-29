@@ -42,7 +42,6 @@ import type {
 } from "./types.js";
 import type { CoreEnv } from "../../env";
 import type { AgentEventBus } from "../agent-event-bus";
-import type { AgentLog } from "../agent-log/agent-log.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToModelOutputDecorator } from "../tools/runtime/contract.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -115,15 +114,12 @@ export interface ExtensionRunnerOptions {
    * `agent:extension-error` on it, surfacing in AgentLog / lifecycle channels
    * via the Event→Log bridge instead of being swallowed. Defaults to a
    * standalone bus for hosts that build an {@link ExtensionRunner} without an agent.
+   *
+   * `ctx.logger` and turn-context failures are published on it too (`extension:log`); a runner built
+   * without a bus has no consumer for that event and keeps printing to console. There is deliberately
+   * no `AgentLog` handle here — a second write path is what the log convergence removed.
    */
   eventBus?: AgentEventBus;
-  /**
-   * Optional agent log to converge extension logging into. When provided,
-   * `ctx.logger` and turn-context provider failures are written as structured
-   * `hooks` entries instead of raw console output (console stays as a fallback
-   * for standalone runner usage without an agent log).
-   */
-  log?: AgentLog | null;
   /**
    * Host-supplied overrides for the extension UI context snapshot (model /
    * status / usage / workspace / session name / mode). Omitted fields fall back
@@ -172,6 +168,8 @@ export class ExtensionRunner {
    * with the same sentence. Cleared when the extension is activated again.
    */
   private readonly refusedRegistrations = new Set<string>();
+  /** Guards `writeExtensionLog` against a log consumer that itself logs. */
+  private emittingExtensionLog = false;
   /** Live context per active extension — the object handed to every handler of that extension. */
   private contexts = new Map<string, ExtensionContext>();
   /**
@@ -1088,27 +1086,33 @@ export class ExtensionRunner {
   }
 
   /**
-   * Converge extension logging into the agent log (`hooks` category) when one
-   * is wired; fall back to console for standalone runner usage (validation
-   * scripts, hosts that build an ExtensionRunner without an agent).
+   * Publish extension logging as an `extension:log` event.
+   *
+   * `ctx.logger` is the extension author's surface, not a write path of its own: the row must be
+   * produced by the same policy table as every other entry, so which categories are recorded stays
+   * one decision. Falls back to console for a standalone runner (no bus, no log) — the case a
+   * validation script builds.
    */
   private writeExtensionLog(level: LogLevel, extensionId: string, msg: string, category: LogCategory = "hooks"): void {
-    const message = `[extension:${extensionId}] ${msg}`;
-    const log = this.options.log;
-    if (log) {
-      // `category` is the caller's (defaults to `hooks`, the historical extension category);
-      // `level` is passed through whole so `debug` is expressible rather than silently upgraded.
-      if (level === "debug") log.debug(category, message);
-      else if (level === "error") log.error(category, message);
-      else if (level === "warn") log.warn(category, message);
-      else log.info(category, message);
+    if (!this.options.eventBus) {
+      // No agent wired (standalone runner): keep the pre-existing console behaviour, which prints
+      // debug/info through `log` and never emits to stderr for a non-warning.
+      const message = `[extension:${extensionId}] ${msg}`;
+      if (level === "error") console.error(message);
+      else if (level === "warn") console.warn(message);
+      else console.log(message);
       return;
     }
-    // No agent log wired (standalone runner): keep the pre-existing console behavior, which
-    // prints debug/info through `log` and never emits to stderr for a non-warning.
-    if (level === "error") console.error(message);
-    else if (level === "warn") console.warn(message);
-    else console.log(message);
+    // Reentrancy: the log sink runs on the same thread as this emit, so an extension that logs from
+    // inside a log consumer would recurse. One nested frame is dropped, which is the same bound the
+    // bus applies to observer failures.
+    if (this.emittingExtensionLog) return;
+    this.emittingExtensionLog = true;
+    try {
+      this.rawBus.emit("extension:log", { extensionId, level, message: msg, category });
+    } finally {
+      this.emittingExtensionLog = false;
+    }
   }
 
   private resolveCoreEnv(): CoreEnv {

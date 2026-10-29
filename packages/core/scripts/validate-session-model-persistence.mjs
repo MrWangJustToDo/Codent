@@ -103,8 +103,18 @@ await store.save(managed.getSessionData());
 await waitFor(async () => (await store.load(sessionId)) !== null, "initial session on disk");
 assert.equal((await store.load(sessionId)).model, "default-model");
 
+// A switch is a timeline fact: `/models` used to be silent (the only trace was the next
+// `llm:request`), so "why did the answers change" had no answer.
+const modelEvents = [];
+manager.of(agentId).on("model:change", (event) => modelEvents.push(event.payload));
+
 const switched = await session.dispatch({ type: "model.set", model: "switched-model", modelStyle: "anthropic" });
 assert.equal(switched.ok, true);
+assert.deepEqual(
+  modelEvents,
+  [{ from: "default-model", to: "switched-model", style: "anthropic" }],
+  `one model:change per switch, got ${JSON.stringify(modelEvents)}`
+);
 
 await waitFor(async () => (await store.load(sessionId)).model === "switched-model", "model persisted to disk");
 const onDisk = await store.load(sessionId);

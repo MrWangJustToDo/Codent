@@ -320,7 +320,7 @@ assert.equal(managed.getStatus(), "waiting");
     "the listener flips the status only for an ACTIVE run"
   );
   assert.ok(
-    body.indexOf("isActiveStatus") < body.indexOf('setStatus("aborted")'),
+    body.indexOf("isActiveStatus") < body.indexOf('setStatus("aborted"'),
     "the guard must be read BEFORE the status is written (the write is unconditional otherwise)"
   );
   // Both abort paths use the SAME predicate; if one lags, it silently undoes the other (the
@@ -331,12 +331,14 @@ assert.equal(managed.getStatus(), "waiting");
   for (const g of guards) {
     assert.equal(g[1], "isActiveStatus", "…and with the same predicate");
   }
-  // No unguarded `setStatus("aborted")` may survive in this module.
-  for (const match of src.matchAll(/setStatus\("aborted"\)/g)) {
+  // No unguarded `setStatus("aborted")` may survive in this module. The write now carries a
+  // trigger (`setStatus("aborted", "run-abort")`, which the log rule consumes), so the pattern
+  // matches the call prefix and tolerates arguments.
+  for (const match of src.matchAll(/setStatus\("aborted"/g)) {
     const before = src.slice(Math.max(0, match.index - 500), match.index);
     assert.ok(
       /isActiveStatus/.test(before),
-      'every `setStatus("aborted")` in the run-lifecycle module is behind the active-status guard'
+      'every `setStatus("aborted"` in the run-lifecycle module is behind the active-status guard'
     );
   }
 }

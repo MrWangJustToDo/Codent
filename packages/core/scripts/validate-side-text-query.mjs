@@ -157,21 +157,9 @@ const makeTextAdapterConfig = ({ structured = [], text = [], structuredOutput, m
   };
 };
 
-const makeCapturingLog = () => {
-  const entries = [];
-  return {
-    entries,
-    warn(category, message, data) {
-      entries.push({ category, message, data });
-      return null;
-    },
-    info(category, message, data) {
-      entries.push({ category, message, data, level: "info" });
-      return null;
-    },
-    debug: () => null,
-    error: () => null,
-  };
+const makeCapturingEvents = () => {
+  const events = [];
+  return { events, onEvent: (event) => events.push(event) };
 };
 
 // The person payload both mechanisms must agree on, and the transform schema used
@@ -192,9 +180,9 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
     text: textChunks(PERSON_RAW),
     structured: [completeChunk({ name: "unused", age: 0 }, "{}")],
   });
-  const log = makeCapturingLog();
+  const { events, onEvent } = makeCapturingEvents();
 
-  const result = await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, log });
+  const result = await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, onEvent });
 
   assert.equal(textAdapter.calls.structured, 0, "no structured request is issued for a declared-unsupported model");
   assert.equal(textAdapter.calls.text, 1, "exactly one text request is issued");
@@ -203,10 +191,11 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
 
   // The mode choice must be visible, or a provider that keeps failing looks like a
   // model that returns nothing.
-  assert.equal(log.entries.length, 1, "the capability-driven mode choice is recorded");
-  assert.equal(log.entries[0].category, "side-query");
-  assert.equal(log.entries[0].data.mode, "text", "the record names the chosen mode");
-  assert.match(log.entries[0].message, /text mode: .*declare no structured output/i);
+  assert.equal(events.length, 1, "the capability-driven mode choice is reported");
+  assert.equal(events[0].type, "side-query:mode");
+  assert.equal(events[0].mode, "text", "the record names the chosen mode");
+  assert.match(events[0].reason, /declare no structured output/i);
+  assert.equal(events[0].model, textAdapter.model, "the model that ran is carried");
 
   console.log("✓ a declared-unsupported model goes straight to text mode");
 }
@@ -246,22 +235,22 @@ const PERSON_RAW = '{"name":"Ada","age":36}';
     structured: [{ type: "TEXT_MESSAGE_CONTENT", delta: "I cannot do that" }, usageChunk(5, 5)],
     text: textChunks(PERSON_RAW),
   });
-  const log = makeCapturingLog();
+  const { events, onEvent } = makeCapturingEvents();
 
-  const result = await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, log });
+  const result = await runSideTextQuery(textAdapter, { userPrompt: "x", schema: personSchema, onEvent });
 
   assert.equal(textAdapter.calls.structured, 1, "the structured attempt happened once");
   assert.equal(textAdapter.calls.text, 1, "the fallback happened exactly once — never a second structured retry");
   assert.deepEqual(result.data, { name: "Ada", age: 36 }, "the fallback's result is returned");
 
-  // The structured failure is recorded with its mode *and* the retry it led to,
+  // The structured failure is reported with its mode *and* the retry it led to,
   // so a provider that silently ignores `response_format` stays diagnosable even
   // though the call ultimately succeeded.
-  const failed = log.entries.find((entry) => entry.level !== "info");
-  assert.ok(failed, "the structured failure is recorded despite the successful fallback");
-  assert.equal(failed.data.mode, "structured", "it names the mode it failed in");
-  assert.equal(failed.data.fallback, "text", "and the mode it is retrying in");
-  assert.equal(log.entries.filter((entry) => entry.level !== "info").length, 1, "one failure record per attempt");
+  const failed = events.find((event) => event.type === "side-query:error");
+  assert.ok(failed, "the structured failure is reported despite the successful fallback");
+  assert.equal(failed.mode, "structured", "it names the mode it failed in");
+  assert.equal(failed.fallback, "text", "and the mode it is retrying in");
+  assert.equal(events.filter((event) => event.type === "side-query:error").length, 1, "one failure report per attempt");
 
   console.log("✓ a structured failure falls back to text exactly once");
 }

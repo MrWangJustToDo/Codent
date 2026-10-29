@@ -10,7 +10,6 @@ import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from 
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { errorMessage } from "../../utils/errors.js";
 
-import type { AgentLog } from "../../agent/agent-log";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
 import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
@@ -33,11 +32,13 @@ export interface SessionPersistInput {
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent?: EmitAgentTelemetryFn;
   /**
-   * Agent log for the async side queries this service runs on its own (session
-   * title generation). Without it those failures are invisible: the title path
-   * falls back to a truncated first message, which looks like a normal title.
+   * Report a title attempt's outcome (`session:title`).
+   *
+   * Injected as a fact emitters rather than an `AgentLog`: a failed title used to be written as a
+   * `side-query` warning, so "no title" and "the model call broke" were one row and neither said the
+   * title was missing.
    */
-  log?: AgentLog;
+  emitSessionTitle?: (payload: { ok: boolean; name?: string; error?: string }) => void;
   /**
    * Invoked when the async auto-title resolves, so the agent can broadcast the
    * new display name (the title lands on `SessionData.name` first).
@@ -217,9 +218,9 @@ export class SessionService {
 
   private async generateSessionTitle(
     userMessage: string,
-    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "log">
+    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent">
   ): Promise<string> {
-    const { usage, resolveTextAdapter, log } = input;
+    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent } = input;
     // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
     // that does not exist yet; some providers answer with a plausible-looking name and some
     // reject the request outright (400 → the caller's fallback is also empty). The persist
@@ -234,7 +235,14 @@ export class SessionService {
           "Generate a concise title (3-8 words) for a conversation that starts with the following message. Return ONLY the title, no quotes or punctuation.",
         userPrompt: userMessage.slice(0, 500),
         maxOutputTokens: 30,
-        log,
+        purpose: "title",
+        // The port's own facts reach the timeline like the manual `/title` path: without this, a
+        // failed auto-title kept only `session:title{ok:false}` and lost mode/duration/raw/fallback
+        // (the structured-mode retry was invisible).
+        onEvent: (event) => {
+          const { type, ...payload } = event;
+          emitEvent?.(type, payload as never);
+        },
       });
 
       if (queryUsage) {
@@ -243,13 +251,11 @@ export class SessionService {
 
       return text.slice(0, 80) || userMessage.slice(0, 50);
     } catch (error) {
-      // The port logs its own transport / model failures, but this catch also
-      // covers adapter resolution and any non-LLM throw, so the fallback stays
-      // observable instead of being a bare swallow. Filed under `side-query` —
-      // the category the port itself uses — so one filter shows the health of
-      // every internal one-shot call.
-      const reason = errorMessage(error);
-      log?.warn("side-query", `Session title generation failed: ${reason}`);
+      // The port reports its own transport / model failures (`side-query:error`); this catch also
+      // covers adapter resolution and any non-LLM throw. A failed title is its own fact, not a
+      // side-query failure — the two answer different questions ("no title" vs "the model call
+      // broke"), and `session:title` is what a reader greps for.
+      emitSessionTitle?.({ ok: false, error: errorMessage(error) });
       return userMessage.slice(0, 50);
     }
   }
@@ -413,7 +419,7 @@ export class SessionService {
       onTitleResolved,
       emitEvent,
       uiMessages,
-      log,
+      emitSessionTitle,
     } = input;
     if (!this.store) return false;
     if (!this.data) {
@@ -509,7 +515,12 @@ export class SessionService {
         // /resume during it swaps `this.data`. Without this guard the old session's
         // title would be written into (and persisted to) the new session.
         const target = data;
-        this.generateSessionTitle(firstUserText, { usage, resolveTextAdapter, log }).then((title) => {
+        this.generateSessionTitle(firstUserText, {
+          usage,
+          resolveTextAdapter,
+          ...(emitSessionTitle ? { emitSessionTitle } : {}),
+          ...(emitEvent ? { emitEvent } : {}),
+        }).then((title) => {
           if (this.data !== target) return;
           const trimmed = title.trim();
           if (!trimmed) {
@@ -526,6 +537,10 @@ export class SessionService {
           // Broadcast the new display name so live UI / snapshots see the
           // auto-generated title (the write above only touches SessionData).
           onTitleResolved?.(trimmed);
+          // The generated name is the fact both readers look for. Only the FAILURE branch used to
+          // emit, so the most common naming path (the first message) had no row while `/title` had
+          // one — the same fact with two visibilities.
+          emitSessionTitle?.({ ok: true, name: trimmed });
           // Reuse the unified save path so a title-write failure also emits
           // `session:save-error` (target "session-title").
           void this.saveToStore(emitEvent, target, "session-title");

@@ -18,11 +18,29 @@ import type { InferSchemaType, SchemaInput } from "@tanstack/ai";
 // Types
 // ============================================================================
 
-/** Minimal log sink a side query writes to (structurally satisfied by `AgentLog`). */
-export interface SideQueryLog {
-  info(category: string, message: string, data?: Record<string, unknown>): unknown;
-  warn(category: string, message: string, data?: Record<string, unknown>): unknown;
-}
+/**
+ * A fact a side query reports to the timeline.
+ *
+ * Two shapes, not a log line: which mode it ran in (with the reason, when the mode was *chosen*) and
+ * whether it failed (with the raw excerpt, which is the only evidence of what the model actually
+ * said). The owner publishes these as `side-query:*`; the port itself decides nothing about
+ * recording — it may not even have a bus (a model-level unit test), which is why the sink is optional.
+ */
+export type SideQueryEvent =
+  | { type: "side-query:mode"; purpose: string; mode: string; reason: string; model?: string }
+  | {
+      type: "side-query:error";
+      purpose: string;
+      mode: string;
+      error: string;
+      model?: string;
+      durationMs?: number;
+      rawExcerpt?: string;
+      fallback?: string;
+    };
+
+/** Sink for {@link SideQueryEvent} facts. */
+export type SideQueryTelemetry = (event: SideQueryEvent) => void;
 
 /** One message in a side query's conversation. */
 export interface SideQueryMessage {
@@ -50,17 +68,20 @@ export interface SideTextQueryOptions {
    */
   disableThinking?: boolean;
   /**
-   * Optional log sink for failure visibility. The port is otherwise silent: a
-   * failed side query used to leave no trace anywhere, and one caller
-   * (`session-service` title generation) swallowed it with a bare `catch {}`.
+   * Optional telemetry sink. The port is otherwise silent: a failed side query used to leave no
+   * trace anywhere, and one caller (`session-service` title generation) swallowed it with a bare
+   * `catch {}`.
    *
-   * Only failures are logged — a success writes nothing, so there is no line per
-   * title/summary/memory-selection.
-   *
-   * Structural rather than the `AgentLog` class: models/ must not depend on
-   * `agent/`, and the port only ever calls `info` / `warn`. `AgentLog` satisfies it.
+   * `complete` is reported only when the mode was **chosen** (declared capability, fallback) rather
+   * than the implicit common case — a successful query on the expected path writes nothing, so there
+   * is still no line per title/summary/memory-selection. Failures always report.
    */
-  log?: SideQueryLog;
+  onEvent?: SideQueryTelemetry;
+  /**
+   * What this query is for, for attribution: `title`, `summary`, `memory-select`, `memory-extract`,
+   * `memory-consolidate`, `extension:<id>`. Defaults to `side-query`.
+   */
+  purpose?: string;
 }
 
 export interface SideTextQueryResult {
@@ -86,9 +107,8 @@ export interface StructuredQueryResult<T> {
 }
 
 /**
- * Log category for every entry this port writes. Dedicated, not a caller's: the
- * same port serves memory, titles, and summaries, so filing under any one of
- * them would misattribute the others.
+ * Log category for every entry this port reports. Dedicated, not a caller's: the same port serves
+ * memory, titles, and summaries, so filing under any one of them would misattribute the others.
  */
 const SIDE_QUERY_LOG_CATEGORY = "side-query";
 
@@ -168,7 +188,7 @@ async function runStructuredQuery<TSchema extends SchemaInput>(
   const contract = renderSchemaContract(options.schema);
 
   if (declaredUnsupported) {
-    logModeDecision(textAdapter, options, "text", "the model's capabilities declare no structured output");
+    reportModeDecision(textAdapter, options, "text", "the model's capabilities declare no structured output");
     return runTextModeQuery(textAdapter, options, contract);
   }
 
@@ -290,7 +310,7 @@ async function runTextQuery(
       }
       if (chunk.type === "RUN_ERROR") {
         throw new Error(
-          sideQueryError(extractRunErrorMessage(chunk), textAdapter, options.log, startTime, { mode: "text" })
+          sideQueryError(extractRunErrorMessage(chunk), textAdapter, options, startTime, { mode: "text" })
         );
       }
     }
@@ -389,7 +409,7 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
     }
     if (chunk.type === "RUN_ERROR") {
       throw new Error(
-        sideQueryError(extractRunErrorMessage(chunk), textAdapter, options.log, startTime, {
+        sideQueryError(extractRunErrorMessage(chunk), textAdapter, options, startTime, {
           mode: "structured",
           ...failureContext,
         })
@@ -403,7 +423,7 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
     const reason = "no structured-output completion event was emitted";
     throw withUsage(
       new Error(
-        sideQueryError(reason, textAdapter, options.log, startTime, {
+        sideQueryError(reason, textAdapter, options, startTime, {
           mode: "structured",
           raw: text,
           ...failureContext,
@@ -425,7 +445,7 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
     const reason = `response failed schema validation: ${validation.issue}`;
     throw withUsage(
       new Error(
-        sideQueryError(reason, textAdapter, options.log, startTime, {
+        sideQueryError(reason, textAdapter, options, startTime, {
           mode: "structured",
           raw: result.raw,
           ...failureContext,
@@ -541,9 +561,7 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
       recordUsage(textAdapter, usage);
     }
     if (chunk.type === "RUN_ERROR") {
-      throw new Error(
-        sideQueryError(extractRunErrorMessage(chunk), textAdapter, options.log, startTime, { mode: "text" })
-      );
+      throw new Error(sideQueryError(extractRunErrorMessage(chunk), textAdapter, options, startTime, { mode: "text" }));
     }
   }
 
@@ -552,7 +570,7 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
   if (!extracted) {
     const reason = "no complete JSON document was found in the reply";
     throw withUsage(
-      new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: text })),
+      new Error(sideQueryError(reason, textAdapter, options, startTime, { mode: "text", raw: text })),
       usage
     );
   }
@@ -561,7 +579,7 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
   if (!validation.ok) {
     const reason = `response failed schema validation: ${validation.issue}`;
     throw withUsage(
-      new Error(sideQueryError(reason, textAdapter, options.log, startTime, { mode: "text", raw: extracted.raw })),
+      new Error(sideQueryError(reason, textAdapter, options, startTime, { mode: "text", raw: extracted.raw })),
       usage
     );
   }
@@ -578,16 +596,19 @@ async function runTextModeQuery<TSchema extends SchemaInput>(
 // Mode reporting
 // ============================================================================
 
-/** Record a mode chosen from declared capability — never the implicit common case. */
-function logModeDecision<TSchema extends SchemaInput>(
+/** Report the mode a query ran in, when that mode was a decision rather than the default. */
+function reportModeDecision<TSchema extends SchemaInput>(
   textAdapter: TextAdapterConfig,
   options: StructuredQueryOptions<TSchema>,
   mode: QueryMode,
   reason: string
 ): void {
-  options.log?.info(SIDE_QUERY_LOG_CATEGORY, `Side query using ${mode} mode: ${reason}`, {
-    model: textAdapter.model,
+  options.onEvent?.({
+    type: "side-query:mode",
+    purpose: options.purpose ?? SIDE_QUERY_LOG_CATEGORY,
     mode,
+    reason,
+    model: textAdapter.model,
   });
 }
 
@@ -671,7 +692,7 @@ async function* queryStream<T>(
 }
 
 /**
- * Log a failure and return its message for the caller to throw.
+ * Report a failure and return its message for the caller to throw.
  *
  * A `RUN_ERROR` is a stream chunk rather than a throw, so without this the
  * failure never reaches a catch block anywhere in the process — which is how a
@@ -680,15 +701,21 @@ async function* queryStream<T>(
 function sideQueryError(
   message: string,
   textAdapter: TextAdapterConfig,
-  log: SideQueryLog | undefined,
+  options: SideTextQueryOptions,
   startTime: number,
   context: FailureContext
 ): string {
-  log?.warn(SIDE_QUERY_LOG_CATEGORY, `Side query failed in ${context.mode} mode: ${message}`, {
+  options.onEvent?.({
+    type: "side-query:error",
+    purpose: options.purpose ?? SIDE_QUERY_LOG_CATEGORY,
+    mode: context.mode,
+    error: message,
     model: textAdapter.model,
     durationMs: Date.now() - startTime,
-    ...context,
-    ...(context.raw ? { raw: excerpt(context.raw) } : {}),
+    // The raw reply is truncated here rather than at the recorder: this port is the only place that
+    // knows which slice is evidence and which is the whole response.
+    ...(context.raw ? { rawExcerpt: excerpt(context.raw) } : {}),
+    ...(context.fallback ? { fallback: context.fallback } : {}),
   });
   return message;
 }

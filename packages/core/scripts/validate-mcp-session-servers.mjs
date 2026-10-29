@@ -32,6 +32,8 @@ import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:
 import {
   ExtensionRunner,
   McpManager,
+  bridgeTelemetryToAgentLog,
+  createAgentEventBus,
   createMcpExtension,
   mcpConfigFromServers,
   registerCoreEnv,
@@ -108,6 +110,17 @@ async function activateMcpExtension({ servers, configPath } = {}) {
   const logLines = [];
   const captured = { config: null, calls: 0 };
 
+  // The extension's own `ctx.logger` rows and the `session:mcp` rows both reach the log through the
+  // bridge now, so the harness runs the real bridge into a recording sink instead of handing the
+  // runner an AgentLog handle (which no longer exists as an option).
+  const bus = createAgentEventBus();
+  bridgeTelemetryToAgentLog(bus, () => ({
+    eventEntry: (level, category, _eventType, message) => {
+      logLines.push({ level, category, message });
+      return null;
+    },
+  }));
+
   const manager = new McpManager();
   // `initialize` is the network boundary (it would spawn processes / open sockets), and the
   // config that reaches it is the whole subject of this file — so capture it and stop there.
@@ -121,15 +134,10 @@ async function activateMcpExtension({ servers, configPath } = {}) {
 
   const runner = new ExtensionRunner({
     cwd: root,
+    eventBus: bus,
     onRegisterTool: () => {},
     onRegisterCommand: () => {},
     onUnregisterTool: () => {},
-    log: {
-      debug: (category, message) => logLines.push({ level: "debug", category, message }),
-      info: (category, message) => logLines.push({ level: "info", category, message }),
-      warn: (category, message) => logLines.push({ level: "warn", category, message }),
-      error: (category, message) => logLines.push({ level: "error", category, message }),
-    },
   });
 
   const extension = createMcpExtension({

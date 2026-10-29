@@ -176,6 +176,10 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
   if (!subagentManaged) {
     throw new Error(`Subagent not found: ${subagentId}`);
   }
+  // A child run is its own run for timeline slicing: the envelope resolver reads `runId` from the
+  // child agent. The old seam stamped every entry while the PARENT's run was set; the convergence
+  // removed that state, and without this the child's rows have no `run` at all.
+  subagentManaged.setCurrentRunId(generateId("run"));
 
   // Any throw after spawn (stream failure, finalize error, summarizer crash) must
   // not leave the subagent registered when autoDestroy was requested.
@@ -359,6 +363,9 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     subagentRunCompleted = true;
     return taskResult;
   } finally {
+    // The child is usually destroyed here (`autoDestroy`); clearing keeps a retained preview from
+    // reporting the finished run as still current.
+    subagentManaged.setCurrentRunId(null);
     if (!subagentRunCompleted && autoDestroy) {
       try {
         manager.destroyAgent(subagentId);

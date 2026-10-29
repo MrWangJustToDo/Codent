@@ -19,6 +19,7 @@ import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
 import type { ResolvedCoreEnv } from "../env";
+import type { ToolApprovalSource } from "../runtime-types/agent-event-payloads.js";
 import type { ToolCallPart, UIMessage } from "@tanstack/ai";
 
 export interface ApprovalDecisionCoordinatorDeps {
@@ -84,6 +85,7 @@ export class ApprovalDecisionCoordinator {
       toolName: pending.toolName,
       approved,
       reason,
+      source: "user",
     });
     this.settle();
     return this.deps.enqueueRun();
@@ -117,6 +119,7 @@ export class ApprovalDecisionCoordinator {
         toolName: approval.toolName,
         approved: false,
         reason,
+        source: "user",
       });
     }
   }
@@ -143,6 +146,7 @@ export class ApprovalDecisionCoordinator {
         toolCallId: approval.toolCallId,
         toolName: approval.toolName,
         approved: true,
+        source: "auto",
       });
     }
   }
@@ -180,6 +184,7 @@ export class ApprovalDecisionCoordinator {
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           approved: true,
+          source: "policy",
         });
         handled = true;
       } else if (decision.action === "deny") {
@@ -189,6 +194,7 @@ export class ApprovalDecisionCoordinator {
           toolName: toolCall.name,
           approved: false,
           reason: decision.reason,
+          source: "policy",
         });
         handled = true;
       }
@@ -204,6 +210,8 @@ export class ApprovalDecisionCoordinator {
     toolName?: string;
     approved: boolean;
     reason?: string;
+    /** Who decided — travels to the log row, never to the persisted record. */
+    source: ToolApprovalSource;
   }): void {
     // The channel resolves the time; the table reuses it (one time value for log + memory).
     const decidedAt = this.deps.addToolApprovalResponse(input.approvalId, input.approved, input.reason);
@@ -213,6 +221,7 @@ export class ApprovalDecisionCoordinator {
       status: input.approved ? "approved" : "denied",
       ...(!input.approved && input.reason ? { reason: input.reason } : {}),
       toolName: input.toolName,
+      source: input.source,
       updatedAt: decidedAt,
     });
   }

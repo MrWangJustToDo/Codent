@@ -261,7 +261,10 @@ class LocalAgentSessionImpl implements AgentSession {
     if (this.reportedSubscriberFailures.has(key)) return;
     if (this.reportedSubscriberFailures.size >= 100) this.reportedSubscriberFailures.clear();
     this.reportedSubscriberFailures.add(key);
-    this.managed.getLog?.()?.warn("system", "session subscriber failed", { error: text });
+    this.managed.emitDiagnostic("session", "session subscriber failed", {
+      level: "warn",
+      error: text,
+    });
   }
 
   private releaseSource(): void {

@@ -21,6 +21,12 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "session:restore": { mode: "emit" },
   "session:switch": { mode: "emit" },
   "session:save-error": { mode: "emit", channel: "lifecycle" },
+  // Bootstrap diagnostics: recorded by the policy table, not published on a session channel (the
+  // pre-registration window has no subscriber yet, and hosts do not render them).
+  "session:diagnostic": { mode: "emit" },
+  "session:bootstrap-summary": { mode: "emit" },
+  "session:title": { mode: "emit" },
+  "session:reset": { mode: "emit" },
 
   // ==========================================================================
   // Turn lifecycle
@@ -28,6 +34,7 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "prompt:submit": { mode: "emit", channel: "lifecycle" },
   "prompt:before": { mode: "emit" },
   "turn:summary": { mode: "emit", channel: "lifecycle" },
+  "run:wake": { mode: "emit" },
 
   // ==========================================================================
   // Agent lifecycle / tools / approvals
@@ -38,11 +45,22 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "agent:tool-approval-resolved": { mode: "emit", channel: "lifecycle" },
   "agent:tool-end": { mode: "emit", channel: "lifecycle" },
   "agent:tool-error": { mode: "emit", channel: "lifecycle" },
+  "tool:projection-error": { mode: "emit" },
   "agent:abort": { mode: "emit", channel: "lifecycle" },
   "agent:retry": { mode: "emit", channel: "lifecycle" },
   "agent:stream-error": { mode: "emit", channel: "lifecycle" },
   "agent:stop": { mode: "emit", channel: "lifecycle" },
+  // Status transitions are their own event so the log policy (not `setStatus`) decides whether one
+  // is recorded. `agent:state` stays the retained snapshot a host reads.
+  "agent:status": { mode: "emit" },
   "agent:extension-error": { mode: "emit", channel: "lifecycle" },
+  "agent:event-handler-error": { mode: "emit" },
+  // `extension:log` is observable by construction: internal events are withheld from wildcard
+  // delivery, and the log consumer IS the wildcard subscriber (see `event-visibility.ts`).
+  "extension:log": { mode: "emit" },
+  "hooks:echo": { mode: "emit" },
+  "model:change": { mode: "emit" },
+  "mode:change": { mode: "emit" },
 
   // ==========================================================================
   // Memory
@@ -56,6 +74,8 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   // ==========================================================================
   "llm:request": { mode: "emit" },
   "llm:response": { mode: "emit" },
+  "side-query:mode": { mode: "emit" },
+  "side-query:error": { mode: "emit" },
 
   // ==========================================================================
   // Compaction
@@ -75,6 +95,7 @@ export const AGENT_EVENT_META: Record<AgentEventType, AgentEventMeta> = {
   "compaction:reactive-complete": { mode: "emit", channel: "lifecycle" },
   "compaction:reactive-error": { mode: "emit", channel: "lifecycle" },
   "compaction:reactive-max-retries": { mode: "emit", channel: "lifecycle" },
+  "compaction:cache-cleanup-error": { mode: "emit" },
 
   // ==========================================================================
   // Subagents

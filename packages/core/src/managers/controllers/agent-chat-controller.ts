@@ -513,7 +513,10 @@ export class AgentChatController {
    */
   private dropIfSwitching(operation: string): boolean {
     if (!this.managed.isSessionSwitching()) return false;
-    this.managed.getLog().debug("system", "Dropped interaction during session switch", { operation });
+    this.managed.emitDiagnostic("session", "Dropped interaction during session switch", {
+      level: "debug",
+      data: { operation },
+    });
     return true;
   }
 
@@ -774,12 +777,13 @@ export class AgentChatController {
       // unhandled rejection that the host's process guard turns into `exit(1)`. Finalize as
       // an error instead; a broken auxiliary step must not take the process with it.
       const normalized = toError(error);
-      this.managed.log?.error("agent", "Run loop failed", normalized);
       const message = normalized.message;
       if (!finalized && token.isCurrent) {
         try {
           this.managed.setError(message);
-          this.managed.statusController.onRunError(message);
+          // One row: `onRunError` already emits `agent:stream-error`. The separate emit above it
+          // produced two identical "Stream error: …" entries for one failure.
+          this.managed.statusController.onRunError(message, normalized.stack);
           // Same terminal rule as the normal path: an error is not a wait.
           this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
           this.managed.runFinalizer.finalizeChat({

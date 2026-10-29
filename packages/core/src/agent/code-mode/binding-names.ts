@@ -112,7 +112,7 @@ function shortSuffix(input: string): string {
  */
 export function renameCodeModeTools<T extends { name: string }>(
   tools: T[],
-  log: BindingNameLog
+  logger: BindingNameLog
 ): BindingNameRenameResult<T> {
   const renames = new Map<string, string>();
 
@@ -149,7 +149,7 @@ export function renameCodeModeTools<T extends { name: string }>(
     }
     for (const [name, duplicates] of byOriginalName) {
       for (const index of duplicates.slice(1)) {
-        log.warn(`Code Mode: dropping duplicate tool "${name}" — it was offered more than once.`);
+        logger.warn(`Code Mode: dropping duplicate tool "${name}" — it was offered more than once.`);
         assigned.set(index, null);
       }
     }
@@ -179,7 +179,7 @@ export function renameCodeModeTools<T extends { name: string }>(
       const disambiguated = `${binding}_${suffix}`;
       assigned.set(index, disambiguated);
       renames.set(name, disambiguated);
-      log.warn(
+      logger.warn(
         `Code Mode: renamed tool "${name}" to binding "${disambiguated}" — "${binding}" collides with another binding.`
       );
     }

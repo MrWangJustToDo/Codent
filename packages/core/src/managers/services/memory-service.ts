@@ -14,16 +14,23 @@ import { extractUserQuery, findRelevantMemories, formatRelevantMemories } from "
 import { defaultByteLength } from "../../env";
 import { errorMessage } from "../../utils/errors.js";
 
-import type { AgentLog } from "../../agent/agent-log";
 import type { MemoryManager } from "../../agent/memory/memory-manager.js";
 import type { MemoryPrefetchInput, MemorySelectionPort, MemoryTelemetry } from "../../agent/memory/types.js";
 import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
+import type { SideQueryTelemetry } from "../../models/adapter/side-text-query.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
 import type { ModelMessage } from "@tanstack/ai";
 
 export interface MemoryExtractionInput {
   getMessagesForLLM: () => ModelMessage[];
-  log: AgentLog | null;
+  /**
+   * Telemetry sink for the extraction / consolidation queries (`side-query:*`).
+   *
+   * The queries report a structured fact (the mode chosen, a failure with the raw excerpt) that the
+   * timeline records on its own terms — which is why this is a typed sink and not an `AgentLog`
+   * handle. Extraction used to also take a log for the same job; the event made it redundant.
+   */
+  onSideQuery?: SideQueryTelemetry;
   /**
    * Owning agent's usage tracker. Extraction and consolidation are real LLM calls, so
    * their tokens belong in the session's lifetime totals — they reached only the global
@@ -182,7 +189,7 @@ export class MemoryService implements MemorySelectionPort {
 
     const messages = llmMessages.slice(-80);
     const memoryManager = this.manager;
-    const { log, resolveTextAdapter, abortSignal, usage } = input;
+    const { onSideQuery, resolveTextAdapter, abortSignal, usage } = input;
 
     this.extractionInProgress = true;
     this.emitEvent?.("memory:extract", { status: "start" });
@@ -196,7 +203,7 @@ export class MemoryService implements MemorySelectionPort {
           return;
         }
 
-        const count = await extractMemories(messages, memoryManager, textAdapter, log ?? undefined, abortSignal, usage);
+        const count = await extractMemories(messages, memoryManager, textAdapter, onSideQuery, abortSignal, usage);
         if (count > 0) {
           await memoryManager.flushIndex();
           this.emitEvent?.("memory:extract", { status: "complete", count });
@@ -207,7 +214,7 @@ export class MemoryService implements MemorySelectionPort {
         const memoryCount = await memoryManager.getMemoryCount();
         if (memoryCount >= memoryManager.getConsolidateThreshold()) {
           this.emitEvent?.("memory:consolidate", { status: "start", count: memoryCount });
-          const result = await consolidateMemories(memoryManager, textAdapter, log ?? undefined, usage);
+          const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage);
           if (result.changed) {
             await memoryManager.flushIndex();
             this.emitEvent?.("memory:consolidate", {

@@ -114,13 +114,6 @@ function makeManagedStub() {
     usage: {},
     memory: { runExtraction: noop },
     session: { getSessionData: () => ({ id: "validation-session" }) },
-    log: {
-      warn: noop,
-      info: noop,
-      error: noop,
-      debug: noop,
-      child: () => ({ warn: noop, info: noop, error: noop, debug: noop }),
-    },
     getTodoManager: () => ({}),
     getExtensionRunner: () => ({}),
     getLog: () => ({

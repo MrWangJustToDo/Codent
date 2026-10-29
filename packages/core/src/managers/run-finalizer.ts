@@ -5,9 +5,8 @@
  * The sequence used to be copied across the chat pump, the subagent runner and the run
  * skeleton's optional outcome path. The ordering is the asset:
  * `applyRunOutcome` before persistence, persistence before `finalizeRun`, and `turn:summary` last
- * (it must land while the run's **log scope** is still set; `finalizeRun` defers only
- * `log.setRun(null)` to a microtask). This class owns it so a new caller cannot reorder it by
- * accident.
+ * (it must land while the run's **log scope** is still set; `finalizeRun` defers the run-id clear
+ * to a microtask). This class owns it so a new caller cannot reorder it by accident.
  */
 
 import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
@@ -116,7 +115,7 @@ export class RunFinalizer {
     const totalUsage = this.deps.usage.getTotal();
     const delta = (now: number, before: number) => Math.max(0, now - before);
     this.deps.emitEvent("turn:summary", {
-      ...(input.kind !== "waiting" ? { outcome: input.kind } : {}),
+      ...(input.kind !== "waiting" ? { outcome: input.kind } : { paused: true as const }),
       phases: input.phases,
       toolCalls: delta(countToolCalls(input.messages), input.toolCallsBefore),
       inputTokens: delta(totalUsage.inputTokens, input.usageBefore.inputTokens),

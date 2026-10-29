@@ -39,7 +39,8 @@ function providerFromModel(model: string | undefined): string | undefined {
 export interface LifecycleMiddlewareDeps {
   usage: UsageTracker;
   getPricing: () => ModelPricing | null | undefined;
-  onThinking?: () => void;
+  /** The first reasoning chunk of a turn: the run-scoped turn it belongs to and the model. */
+  onThinking?: (info: { iteration: number; model?: string }) => void;
   emitEvent?: EmitAgentTelemetryFn;
   /** Global usage-history hook: record each model iteration's tokens + cost. */
   recordUsage?: (input: { model?: string; usage: TokenUsage; costUsd: number }) => void;
@@ -183,7 +184,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
       ) {
         thinkingEmitted = true;
         if (!firstTokenAt) firstTokenAt = Date.now();
-        deps.onThinking?.();
+        deps.onThinking?.({ iteration: lastIteration, ...(lastModel ? { model: lastModel } : {}) });
       }
 
       // ---- assistant message boundaries ----

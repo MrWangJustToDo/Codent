@@ -10,12 +10,12 @@ import { errorMessage } from "../../utils/errors.js";
 
 import type { CompactionService } from "./compaction-service.js";
 import type { MemoryService } from "./memory-service.js";
-import type { LogCategory } from "../../agent/agent-log/types.js";
 import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
 import type { AgentStreamHub } from "../../agent/stream-hub/agent-stream-hub.js";
 import type { TodoManager } from "../../agent/todo";
+import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
 import type { AgentChatController } from "../controllers/agent-chat-controller.js";
 import type { AgentStatusController } from "../controllers/agent-status-controller.js";
 import type { ModeCoordinator } from "../mode-coordinator.js";
@@ -38,7 +38,12 @@ export interface SessionLifecycleHost {
   releaseSessionOwnership(sessionId: string): void;
   bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void;
   emitSessionNew(sessionId: string, reason: "session-new"): void;
-  emitSessionSwitch(fromSessionId: string, toSessionId: string, messageCount: number): void;
+  emitSessionSwitch(
+    fromSessionId: string,
+    toSessionId: string,
+    messageCount: number,
+    reason?: SessionSwitchReason
+  ): void;
   refreshState(): void;
   refreshSubagents(): void;
   beginStateBatch?(): void;
@@ -74,7 +79,7 @@ export interface SessionLifecycleHost {
   clearTaskRuns(): void;
   resetCommandJobs(reason: string): void;
   /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
-  warn?(category: LogCategory, message: string, data?: Record<string, unknown>): void;
+  warn?(message: string, data?: Record<string, unknown>): void;
 }
 
 export class SessionLifecycleService {
@@ -303,11 +308,11 @@ export class SessionLifecycleService {
    * Ownership is acquired up front and handed over only after the commit; the old claim is released
    * at the same moment, so "active in another live session" always describes a real holder.
    */
-  async resume(sessionId: string): Promise<SessionData> {
-    return this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId)));
+  async resume(sessionId: string, reason: SessionSwitchReason = "resume"): Promise<SessionData> {
+    return this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
   }
 
-  private async resumeInner(sessionId: string): Promise<SessionData> {
+  private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {
     if (!this.host.acquireSessionOwnership(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
@@ -348,7 +353,7 @@ export class SessionLifecycleService {
           // written when its sink was bound above).
           this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
           try {
-            this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount);
+            this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
           } finally {
             this.host.bindSessionLogSink(sessionId, { sessionBoundary: false });
           }
@@ -357,7 +362,7 @@ export class SessionLifecycleService {
       } catch (error) {
         // Past the commit the switch HAS happened. Surfacing this as a failed resume made the host
         // report a failure for a state it is actually in; report and keep the switch instead.
-        this.host.warn?.("system", "session resume post-commit step failed", {
+        this.host.warn?.("session resume post-commit step failed", {
           error: errorMessage(error),
         });
       }

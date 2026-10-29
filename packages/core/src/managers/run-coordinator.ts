@@ -283,6 +283,10 @@ export class RunCoordinator {
 
   resetRunState(): void {
     this.promptlessTurn = false;
+    // A parked turn never reaches `finalizeManagedAgentRun`, so its deferred clear does not run.
+    // Leaving the id set made the NEXT session's early rows (reset/switch/title/diagnostic) carry
+    // the abandoned run; the bus resolves runId from here, so it must be empty again.
+    this.currentRunId = null;
     this.abort();
     this.pendingAbortControllers = [];
     this.cancelAbortController();

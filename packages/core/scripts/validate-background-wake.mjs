@@ -325,7 +325,7 @@ function makeCapturingAdapter() {
   const scopedChat = scoped.initChat(manager);
   scopedChat.getUIChannel().addUserMessage("start the build in the background");
 
-  const observed = { requests: [], responses: [], summaries: [], promptSubmits: 0 };
+  const observed = { requests: [], responses: [], summaries: [], promptSubmits: 0, wakes: [] };
   const bus = manager.of(scoped.id);
   bus.on("llm:request", (event) => {
     // During the model call the run scope is set — the finalizer clears it just before the summary,
@@ -340,6 +340,12 @@ function makeCapturingAdapter() {
   });
   bus.on("prompt:submit", () => {
     observed.promptSubmits += 1;
+  });
+  // The wake row is the ONLY explanation of a run with no `prompt:submit`; it has to slice with the
+  // run it explains. It used to be emitted before the id was minted (so it carried none, or the
+  // previous run's).
+  bus.on("run:wake", (event) => {
+    observed.wakes.push(event.runId);
   });
 
   const scopedService = scoped.getCommandService();
@@ -369,6 +375,12 @@ function makeCapturingAdapter() {
   // counter, so one model call reported two different turns.
   assert.equal(observed.requests[0]?.iteration, 1, "the first request of the run is turn 1");
   assert.equal(observed.responses[0]?.iteration, 1, "…and its response reports the same turn");
+  assert.equal(observed.wakes.length, 1, "the wake emits one run:wake row");
+  assert.equal(
+    observed.wakes[0],
+    observed.requests[0]?.runId,
+    "run:wake is stamped with the run it explains (not the previous one, not none)"
+  );
 
   manager.destroyAgent(scoped.id);
 }

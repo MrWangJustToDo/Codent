@@ -14,6 +14,46 @@ export type EmptyAgentEventPayload = Record<string, never>;
 
 type PlanPhase = "off" | "planning" | "ready" | "executing" | "retro";
 
+/**
+ * Why the active session changed (`/resume`, `/fork`, `/clone`).
+ *
+ * A closed union because "how did we get here" is the question the row exists to answer, and it used
+ * to be hardcoded to `resume` for all three — a forked session claimed to be a resumed one.
+ */
+export type SessionSwitchReason = "resume" | "fork" | "clone";
+
+/**
+ * Subsystem a {@link SessionDiagnosticArea} note came from.
+ *
+ * A closed list, not a free string: the area decides the log category, so an unlisted area would
+ * silently bucket into `system`. Adding a subsystem is a one-word edit here.
+ */
+export type SessionDiagnosticArea =
+  | "doc"
+  | "skill"
+  | "memory"
+  | "extension"
+  | "middleware"
+  | "capability"
+  | "stream"
+  | "context"
+  | "session"
+  | "jobs"
+  | "model"
+  | "tool"
+  | "compaction";
+
+/**
+ * Who answered a tool approval.
+ *
+ * The log needs this to separate a human decision from machinery: the same `resolved` row shape is
+ * produced by a y/n answer, by auto/plan mode, and by the command-safety policy.
+ */
+export type ToolApprovalSource = "user" | "auto" | "policy";
+
+/** The mode field that changed (see `mode:change`). */
+export type ModeChangeField = "auto" | "effort";
+
 export type AgentEventPayloadMap = {
   "session:doc": {
     source?: string;
@@ -74,11 +114,85 @@ export type AgentEventPayloadMap = {
     toSessionId?: string;
     /** Transcript size of the session being left. */
     messageCount?: number;
-    reason?: string;
+    reason?: SessionSwitchReason;
   };
   "session:save-error": {
     target?: string;
     error?: string;
+  };
+  /**
+   * A bootstrap step that degraded but did not abort the session (unreadable instruction file, an
+   * import notice, memory init failure, skipped disk discovery) or a non-fatal lifecycle failure
+   * with no dedicated event (a command-job reset during a session switch).
+   *
+   * One type with an `area` discriminator rather than four near-identical types: the level, the
+   * shape and the reader's action are the same.
+   */
+  "session:diagnostic": {
+    area: SessionDiagnosticArea;
+    message: string;
+    /**
+     * Severity the emitting subsystem knows, defaulting to `warn`.
+     *
+     * A fallback that kept working (keyword memory selection) is `info`; a degraded capability is
+     * `warn`; the "we did this anyway" bookkeeping is `debug`. The *caller* knows which of those it
+     * is — but which **category** the row lands in, and whether the row exists at all, stays with
+     * the policy, so this is not a level the emitter can use to bypass the table.
+     */
+    level?: "debug" | "info" | "warn" | "error";
+    /**
+     * Shallow, JSON-scalar detail fields. Deliberately NOT `Record<string, unknown>`: an open bag
+     * would carry nested structures into the entry (the handler writes it verbatim), bypassing the
+     * size cap every other payload field goes through. Arrays are numeric-only (segment token
+     * counts) and are summarized as text by the recorder.
+     */
+    details?: Record<string, string | number | boolean | null | readonly number[]>;
+    error?: string;
+  };
+  /** The one aggregated bootstrap row: attempted / active / failed extension counts. */
+  "session:bootstrap-summary": {
+    attempted: number;
+    active: number;
+    failed: number;
+  };
+  /** The user-visible name of the session changed (auto-title or `/rename`). */
+  "session:title": {
+    ok: boolean;
+    name?: string;
+    error?: string;
+  };
+  /** A mid-conversation reset (session switch / teardown) that clears transient state. */
+  "session:reset": {
+    reason: string;
+    previousStatus?: string;
+    hadTodos?: boolean;
+  };
+  /**
+   * The effective model changed (a `/models` switch, or a persisted-model fallback on resume).
+   *
+   * Without it the only evidence was the next `llm:request`, so "why did the answers change" had no
+   * answer in the timeline.
+   */
+  "model:change": {
+    from: string;
+    to: string;
+    style?: string;
+    /** True when the requested model was not available and the previous/served one was kept. */
+    fallback?: boolean;
+    reason?: string;
+  };
+  /**
+   * Auto mode or reasoning depth changed.
+   *
+   * The retained `session:mode` channel cannot serve the log: it is a projection event (an explicit
+   * `false` in the policy table) and it re-publishes on every state change, so a reader of
+   * `agent.log` could not tell that 595 of one session's 665 approvals were answered by the agent
+   * itself. This is the append-only counterpart, emitted once per actual change.
+   */
+  "mode:change": {
+    field: ModeChangeField;
+    auto: boolean;
+    reasoningEffort?: string;
   };
   "prompt:submit": {
     prompt?: string;
@@ -88,7 +202,14 @@ export type AgentEventPayloadMap = {
     prompt?: string;
     hasTurnContext?: boolean;
   };
-  "agent:thinking": EmptyAgentEventPayload;
+  /**
+   * The model began reasoning on a turn.
+   *
+   * It used to carry no payload at all, which made the row (`Model reasoning started`) pure noise:
+   * one real session wrote 280 of them with nothing to correlate against. The turn index is the same
+   * run-scoped number `llm:request` / `llm:response` report, so the row can be read next to them.
+   */
+  "agent:thinking": { iteration?: number; model?: string };
   /**
    * One model turn began.
    *
@@ -144,6 +265,15 @@ export type AgentEventPayloadMap = {
     tool_call_id?: string;
     approval_id?: string;
     tool_input?: unknown;
+    /**
+     * Nobody is being asked: auto mode / plan execution answers this approval itself.
+     *
+     * The flag rides the REQUEST because the decision may arrive in the same tick (auto-approve),
+     * so a reader (and the log policy) can tell "a question was put to a human" from "the pump
+     * parked for one microtask". Without it a real session recorded 1,330 approval rows for 665
+     * calls that never involved the user.
+     */
+    auto?: boolean;
   };
   "agent:tool-approval-resolved": {
     tool_name?: string;
@@ -151,6 +281,14 @@ export type AgentEventPayloadMap = {
     approval_id?: string;
     decision: "approved" | "denied";
     reason?: string;
+    /**
+     * Who decided: the operator, auto/plan mode, or the command-safety policy.
+     *
+     * `reason` alone could not answer this (2 of 12,126 resolutions carried one), and the log's
+     * approval rows are only meaningful if "the user approved this" and "the agent approved this"
+     * are distinguishable.
+     */
+    source?: ToolApprovalSource;
   };
   "agent:tool-end": {
     tool_name?: string;
@@ -185,6 +323,11 @@ export type AgentEventPayloadMap = {
     cancelled?: boolean;
     timestamp?: number;
   };
+  /** A tool's model-facing projection (`toModelOutput`) failed; the call still settles. */
+  "tool:projection-error": {
+    tool_name?: string;
+    error: string;
+  };
   "agent:abort": {
     reason?: string;
   };
@@ -198,14 +341,62 @@ export type AgentEventPayloadMap = {
   };
   "agent:stream-error": {
     error?: string;
+    /**
+     * Throw site, when the producer had an `Error`.
+     *
+     * The payload carries a message only by default; a loop step that threw (command safety,
+     * plan sync) is exactly the case where the stack is the evidence, and dropping it sent readers
+     * to the log module instead.
+     */
+    stack?: string;
   };
   "agent:stop": {
     reason?: string;
   };
+  /**
+   * One agent status transition. The policy table decides whether it is recorded: transitions whose
+   * meaning is already carried by a dedicated event (approval, compaction, run start/finish) are
+   * suppressed, so this is a fact about the state machine, not a line per flip.
+   */
+  "agent:status": {
+    from: string;
+    to: string;
+    trigger?: string;
+  };
   "agent:extension-error": {
     extensionId?: string;
+    /**
+     * Where the failure happened — a free string because the runner reports a dozen phases
+     * (`activate`, `deactivate`, `flush`, `interceptor`, `event-observer`, `message-transform`,
+     * `disable-notice`, `model-access`, `turn-context`) and bootstrap adds its own (`load`, `config`,
+     * `disk`). Kept open so a new phase is not a type change in a wire contract.
+     */
     phase?: string;
     error?: string;
+  };
+  /**
+   * An extension's own log output (`ctx.logger`). Observable on purpose: the log consumer is the
+   * wildcard subscriber, and internal events are withheld from it — an internal `extension:log`
+   * would never be recorded (the same trap `validate-extension-event-observation` §7b documents).
+   */
+  "extension:log": {
+    extensionId: string;
+    level: "debug" | "info" | "warn" | "error";
+    message: string;
+    /**
+     * Requested log category, when the caller named one (`ctx.logger.log(level, category, msg)`).
+     *
+     * A plain string rather than `LogCategory`: this file describes the wire payload, and the log
+     * vocabulary lives in the log layer — the handler narrows it and falls back to `hooks`.
+     */
+    category?: string;
+  };
+  /** One middleware hook invocation (opt-in echo, `MY_AGENT_LOG_HOOKS`). */
+  "hooks:echo": {
+    middleware: string;
+    hook: string;
+    phase?: string;
+    iteration?: number;
   };
   "memory:prefetch": {
     status?: string;
@@ -260,8 +451,41 @@ export type AgentEventPayloadMap = {
     firstTokenMs?: number;
     durationMs?: number;
   };
+  /**
+   * A one-shot LLM call outside the conversation turn (memory selection, titles, summaries).
+   *
+   * `complete` marks a usable answer; `error` carries the failure so the timeline says why a title or
+   * a memory pick fell back instead of silently taking the cheap path.
+   */
+  "side-query:mode": {
+    purpose: string;
+    mode: string;
+    reason?: string;
+    /** Model that ran (or was about to) — an extension may pick one that is not the session's. */
+    model?: string;
+  };
+  "side-query:error": {
+    purpose: string;
+    mode: string;
+    error: string;
+    /** Model that ran (or was about to) — an extension may pick one that is not the session's. */
+    model?: string;
+    durationMs?: number;
+    /** Raw response excerpt for a parse failure — the only evidence of what the model actually said. */
+    rawExcerpt?: string;
+    /** The mode the caller retried in, when this failure led to a fallback attempt. */
+    fallback?: string;
+  };
   "turn:summary": {
     outcome?: "finished" | "aborted" | "error";
+    /**
+     * The turn stopped to wait for something (approval / `ask_user`), so it has no outcome yet.
+     *
+     * Set instead of `outcome` — the two are mutually exclusive, and the reason this field exists: a
+     * summary that says "Turn complete" while the run is parked on an approval reads as a finished
+     * turn, which is how 423 of 846 recorded summaries described a turn that had not ended.
+     */
+    paused?: true;
     /** Driver-level tool-phase continuations executed in this run (each one streamed once). */
     phases?: number;
     /**
@@ -315,6 +539,34 @@ export type AgentEventPayloadMap = {
     error?: string;
   };
   "compaction:reactive-max-retries": EmptyAgentEventPayload;
+  /** Post-compaction cache cleanup failed (best-effort; the compaction itself succeeded). */
+  "compaction:cache-cleanup-error": {
+    error: string;
+    /** Which compaction path hit it — all three share the same failure. */
+    stage?: "auto" | "manual" | "reactive";
+  };
+  /**
+   * A bus observer/interceptor threw and the failure was contained.
+   *
+   * It used to be a direct `AgentLog` write from the bus scope: the one diagnostic with no event
+   * behind it, invisible to the policy table and to every other consumer.
+   */
+  "agent:event-handler-error": {
+    /** Interceptor pattern (or event type) that failed. */
+    pattern: string;
+    /** Event type being dispatched when it threw. */
+    event: string;
+    /** Which dispatch mode failed. */
+    kind: "interceptor" | "observer";
+    error?: string;
+  };
+  /**
+   * A turn nobody prompted (a background job finished, or a reminder fired). It explains why the
+   * agent started working without a `prompt:submit`, which was otherwise unreadable.
+   */
+  "run:wake": {
+    cause: "job" | "reminder" | "unknown";
+  };
   /**
    * The pre-fork queue: `task` calls admitted a few at a time, the rest waiting for a slot.
    *
@@ -379,6 +631,14 @@ export type AgentEventPayloadMap = {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
+    /**
+     * What the child's run cost, in USD.
+     *
+     * The parent's `llm:response` rows only cover the parent's own calls (a worker's whole run is
+     * one `chat()`), so without this a reader reconciling `agent.log` against the session's
+     * `cost` finds a hole — measured at 31% ($1.34 logged vs $1.94 billed) in one session.
+     */
+    costUsd?: number;
     parentTaskToolCallId?: string;
   };
   "subagent:error": {

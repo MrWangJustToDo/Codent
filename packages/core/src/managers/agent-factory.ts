@@ -119,6 +119,11 @@ export async function buildManagedAgent({
     }
 
     managed.setLog(log);
+    // Bind the log to the bus scope BEFORE bootstrap runs. Bootstrap activates extensions and
+    // connects MCP/memory, and their failures are emitted as events — but the agent is not in the
+    // registry yet, so a registry-only resolver dropped every one of them. The seam's pending buffer
+    // was the old workaround; this makes the event path the real one.
+    manager.bindConstructionLog(managed.id, log);
 
     let bootstrapReport: BootstrapReport | undefined;
 
@@ -145,7 +150,6 @@ export async function buildManagedAgent({
         env: coreEnv,
         rootPath: fsRootPath,
         manager,
-        log,
         getDefaultSkillDirs,
       }).bootstrapRoot();
     }
@@ -186,6 +190,7 @@ export async function buildManagedAgent({
     // resources before the manager registers the agent. If a later step fails,
     // no registry/lifecycle owner exists to clean them up.
     await managed.disposeBuiltResources();
+    manager.releaseConstructionLog(managed.id);
     manager.releaseAgentScope(managed.id);
     throw error;
   }

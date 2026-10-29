@@ -86,7 +86,8 @@ export class SessionPersistence {
    */
   private reportBackgroundPersistError(error: unknown): void {
     const message = errorMessage(error);
-    this.host.getLog?.()?.warn("system", "background session persist failed", { error: message });
+    // One fact, one row: this used to write the seam directly AND emit the same failure, so a
+    // background persist error appeared twice (and only one of the two carried `event`).
     this.host.emitEvent("session:save-error", { target: "session+uiMessages", error: message });
   }
 }
