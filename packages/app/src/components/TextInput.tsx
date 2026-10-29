@@ -3,12 +3,15 @@ import { Box, Text } from "ink";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useMainInput } from "../hooks/input";
+import { codePointLength } from "../utils/code-point-length.js";
 
 // ============================================================================
 // TextInput — shared text input with full cursor editing (multi-line capable)
 //
 // A lightweight controlled input for form fields. The value renders with a
-// chalk.inverse block cursor. Editing keys:
+// chalk.inverse block cursor — and the caret's line also claims the TERMINAL
+// cursor, so a terminal's IME candidate window follows the caret instead of
+// wherever the last repaint stopped painting. Editing keys:
 //   - left/right/home/end (and Ctrl+A/E/B/F) navigation; home/end and Ctrl+A/E
 //     move to line edges in multi-line text, up/down move across lines
 //   - insert/delete/backspace, word deletion (Ctrl+W), line deletion (Ctrl+U/K)
@@ -79,8 +82,14 @@ function renderWithCursor(value: string, cursor: number, placeholder: string): s
   return before + chalk.inverse(at) + after;
 }
 
-/** Multi-line rendering: one Text node per line, cursor drawn at its position. */
-function renderMultiLine(value: string, cursor: number): ReactNode[] {
+/** Multi-line rendering: one Text node per line, cursor drawn at its position.
+ *
+ * The line holding the caret also claims the TERMINAL cursor (`terminalCursorFocus` +
+ * `terminalCursorPosition`): the inverse cell is drawn by us, but a terminal anchors the IME
+ * candidate window to the physical cursor, which would otherwise be left wherever the frame
+ * stopped painting — every repaint then moves the candidate window between cells.
+ */
+function renderMultiLine(value: string, cursor: number, anchorCursor: boolean): ReactNode[] {
   const starts = lineStarts(value);
   const nodes: ReactNode[] = [];
   for (let i = 0; i < starts.length; i += 1) {
@@ -89,14 +98,21 @@ function renderMultiLine(value: string, cursor: number): ReactNode[] {
     const line = value.slice(lineStart, lineEnd);
     const cursorInLine = cursor >= lineStart && cursor <= lineEnd;
     let content: string;
+    let at = 0;
     if (cursorInLine) {
-      const at = cursor - lineStart;
+      at = cursor - lineStart;
       content = line.slice(0, at) + chalk.inverse(line[at] || " ") + line.slice(at + 1);
     } else {
       content = line;
     }
+    // Code points, not UTF-16 units: `terminalCursorPosition` indexes the renderer's per-code-point
+    // character array (see `utils/code-point-length.ts`).
+    const cursorProps =
+      anchorCursor && cursorInLine
+        ? { terminalCursorFocus: true, terminalCursorPosition: codePointLength(line.slice(0, at)) }
+        : {};
     nodes.push(
-      <Text key={i} wrap="truncate-end">
+      <Text key={i} wrap="truncate-end" {...cursorProps}>
         {content || " "}
       </Text>
     );
@@ -263,11 +279,23 @@ export const TextInput = ({
   );
 
   if (!value) {
-    return <Text wrap="truncate-end">{renderWithCursor(value, cursor, placeholder)}</Text>;
+    return (
+      <Text wrap="truncate-end" terminalCursorFocus={!disabled} terminalCursorPosition={0}>
+        {renderWithCursor(value, cursor, placeholder)}
+      </Text>
+    );
   }
 
   if (display.includes("\n")) {
-    return <Box flexDirection="column">{renderMultiLine(display, cursor)}</Box>;
+    return <Box flexDirection="column">{renderMultiLine(display, cursor, !disabled)}</Box>;
   }
-  return <Text wrap="truncate-end">{renderWithCursor(display, cursor, placeholder)}</Text>;
+  return (
+    <Text
+      wrap="truncate-end"
+      terminalCursorFocus={!disabled}
+      terminalCursorPosition={codePointLength(display.slice(0, cursor))}
+    >
+      {renderWithCursor(display, cursor, placeholder)}
+    </Text>
+  );
 };

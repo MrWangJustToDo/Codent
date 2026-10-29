@@ -43,8 +43,10 @@ import { checks as budgetChecks } from "./budget-fixtures.mjs";
 import { ConfigEditor } from "./dist/components/ConfigEditor.mjs";
 import { ExitSummary } from "./dist/components/ExitSummary.mjs";
 import { MessageList, selectVisibleRows, MAX_STATIC_LINES } from "./dist/components/MessageList.mjs";
+import { MultiLineInput } from "./dist/components/MultiLineInput.mjs";
 import { SessionPicker, MAX_VISIBLE_SESSIONS } from "./dist/components/SessionPicker.mjs";
 import { SubagentPanel } from "./dist/components/SubagentPanel.mjs";
+import { TextInput } from "./dist/components/TextInput.mjs";
 import { WorkspaceImagePreview } from "./dist/components/WorkspaceImagePreview.mjs";
 import { WorkspaceModeHeader } from "./dist/components/WorkspaceModeHeader.mjs";
 import { CoreEnvProvider } from "./dist/context/core-env-context.mjs";
@@ -2165,6 +2167,166 @@ console.error = realConsoleError;
   });
 
   instance.unmount();
+}
+
+// ── IME cursor anchor ────────────────────────────────────────────────────────
+//
+// The input's caret is an inverse cell the component draws itself, but a terminal anchors the IME
+// candidate window to the TERMINAL cursor — a different position. That position used to be left to
+// the renderer, which parks it wherever the frame stopped painting; so every repaint above the
+// input (the spinner while the agent runs) moved it, and the candidate window jittered between
+// cells. `<Text terminalCursorFocus>` pins the terminal cursor to the caret; because the bug is
+// visible only as motion, the assertion is on the emitted frames: the LAST cursor move of a frame
+// has to land on the caret cell, and has to be identical across repaints.
+{
+  const ESC = String.fromCharCode(27);
+  /** Row deltas + column a frame ends by moving the cursor to, e.g. `ESC[1A ESC[6G`; null when it
+   *  leaves the cursor where painting stopped (no anchored text in the frame). */
+  const cursorTail = (stdout) => {
+    const chunk = [...stdout.chunks].reverse().find((c) => c.length > 0) ?? "";
+    const tail = chunk.match(new RegExp(`((?:${ESC}\\[[0-9]*[ABG])+)$`));
+    return tail ? tail[1] : null;
+  };
+  const at = (...codes) => codes.map((code) => `${ESC}[${code}`).join("");
+  const InputScreen = ({ frame, value, cursorPosition, showCursor = true }) =>
+    createElement("ink-box", { flexDirection: "column" }, [
+      createElement("ink-text", { key: "spinner" }, `frame ${frame}`),
+      createElement(MultiLineInput, { key: "input", value, cursorPosition, showCursor }),
+    ]);
+
+  const stdout = new FakeStdout();
+  const stdin = fakeStdin();
+  const instance = render(createElement(InputScreen, { frame: 1, value: "hello world", cursorPosition: 5 }), {
+    stdout,
+    stdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  // One row up from the end of the frame (the input is the last row) and the 6th cell: caret index
+  // 5 in "hello world", 1-based column 6.
+  const first = cursorTail(stdout);
+  record("the terminal cursor lands on the input caret", first === at("1A", "6G"), { tail: first });
+
+  instance.rerender(createElement(InputScreen, { frame: 2, value: "hello world", cursorPosition: 5 }));
+  await settle(150);
+  const second = cursorTail(stdout);
+  instance.rerender(createElement(InputScreen, { frame: 3, value: "hello world", cursorPosition: 5 }));
+  await settle(150);
+  const third = cursorTail(stdout);
+  record(
+    "repaints above the input keep the cursor on the caret",
+    first !== null && second === first && third === first,
+    { first, second, third }
+  );
+
+  // End of line: the caret cell is the one after the last character.
+  instance.rerender(createElement(InputScreen, { frame: 4, value: "hi", cursorPosition: 2 }));
+  await settle(150);
+  const atEnd = cursorTail(stdout);
+  record("a caret at the end of the line anchors after the last character", atEnd === at("1A", "3G"), { tail: atEnd });
+
+  // Second line: index 5 of "one\ntwo" is the second cell of the second row.
+  instance.rerender(createElement(InputScreen, { frame: 5, value: "one\ntwo", cursorPosition: 5 }));
+  await settle(150);
+  const secondLine = cursorTail(stdout);
+  record("a caret on a later line anchors on that line", secondLine === at("1A", "2G"), { tail: secondLine });
+
+  // An astral character is ONE code point (the renderer indexes by code point) but TWO cells, so the
+  // caret after an emoji belongs on column 3, not 4. This is the `cpLen` half of the fix.
+  instance.rerender(createElement(InputScreen, { frame: 6, value: "\u{1F389}b", cursorPosition: 2 }));
+  await settle(150);
+  const afterEmoji = cursorTail(stdout);
+  record("the caret offset counts code points, not UTF-16 units", afterEmoji === at("1A", "3G"), {
+    tail: afterEmoji,
+  });
+
+  // Control: with no caret there is nothing to anchor to, and the frame ends without moving the
+  // cursor — which is exactly the state the input used to be in while its caret was drawn.
+  instance.rerender(
+    createElement(InputScreen, { frame: 7, value: "hello world", cursorPosition: 5, showCursor: false })
+  );
+  await settle(150);
+  const unanchored = cursorTail(stdout);
+  record("without a caret the frame leaves the terminal cursor unanchored", unanchored === null, {
+    tail: unanchored,
+  });
+
+  instance.unmount();
+}
+
+// The form-field half of the same contract: a controlled field's caret is the only thing on screen,
+// so if it does not claim the terminal cursor the IME candidate window has nowhere to sit.
+{
+  const ESC = String.fromCharCode(27);
+  const cursorTail = (stdout) => {
+    const chunk = [...stdout.chunks].reverse().find((c) => c.length > 0) ?? "";
+    const tail = chunk.match(new RegExp(`((?:${ESC}\\[[0-9]*[ABG])+)$`));
+    return tail ? tail[1] : null;
+  };
+  const at = (...codes) => codes.map((code) => `${ESC}[${code}`).join("");
+  // `TextInput`'s caret is internal state (its cursor never follows an externally-changed value up,
+  // only down), so the field is driven through real keystrokes on the `main` input surface — the
+  // same path a user types through.
+  const Field = ({ disabled }) => {
+    const [value, setValue] = useState("");
+    return createElement(TextInput, { value, onChange: setValue, placeholder: "sk-...", disabled });
+  };
+
+  const stdout = new FakeStdout();
+  const stdin = fakeStdin();
+  const instance = render(createElement(InputScopeProvider, { value: "main" }, createElement(Field, {})), {
+    stdout,
+    stdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    maxFps: 30,
+  });
+  await settle(200);
+
+  // An empty field draws the placeholder, and the caret is the placeholder's first cell. A frame's
+  // trailing newline means the cursor starts one row below the content, hence the `1A` everywhere.
+  const placeholder = cursorTail(stdout);
+  record("an empty field anchors the cursor on the placeholder", placeholder === at("1A", "1G"), {
+    tail: placeholder,
+  });
+
+  // Two wide characters typed: caret index 2 sits AFTER 4 display cells, so column 5. The renderer
+  // maps a code-point index onto the display grid, which is why the offset must not be a width and
+  // must not be a UTF-16 length.
+  stdin.push("\u4F60");
+  await settle(120);
+  stdin.push("\u597D");
+  await settle(150);
+  const wide = cursorTail(stdout);
+  record("a field's cursor follows wide characters", wide === at("1A", "5G"), { tail: wide });
+
+  // Ctrl+J then two characters: the caret ends on the SECOND row, three cells in.
+  stdin.push("\n");
+  await settle(120);
+  stdin.push("a");
+  await settle(120);
+  stdin.push("b");
+  await settle(150);
+  const secondRow = cursorTail(stdout);
+  record("a field's caret on a later line anchors on that line", secondRow === at("1A", "3G"), {
+    tail: secondRow,
+  });
+
+  instance.unmount();
+
+  // A disabled field cannot take input, so it must not claim the cursor.
+  const disabledStdout = new FakeStdout();
+  const disabledInstance = render(
+    createElement(InputScopeProvider, { value: "main" }, createElement(Field, { disabled: true })),
+    { stdout: disabledStdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false, maxFps: 30 }
+  );
+  await settle(200);
+  const disabled = cursorTail(disabledStdout);
+  record("a disabled field leaves the terminal cursor alone", disabled === null, { tail: disabled });
+  disabledInstance.unmount();
 }
 
 const pass = results.every((r) => r.pass);

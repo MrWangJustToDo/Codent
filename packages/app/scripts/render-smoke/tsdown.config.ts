@@ -29,6 +29,11 @@ export default defineConfig({
     // Mounted directly by the smoke to pin the compact summary's fold window.
     `${src}/messages/CompactionSummaryView.tsx`,
     `${src}/components/MessageList.tsx`,
+    // Mounted directly to pin the terminal cursor anchor: the caret is drawn by this component, but the
+    // IME candidate window follows the TERMINAL cursor, so the mounted frame has to claim it.
+    `${src}/components/MultiLineInput.tsx`,
+    // The form-field sibling of the same anchor (masked fields, the config wizard's text steps).
+    `${src}/components/TextInput.tsx`,
     // Mounted directly to pin that the exit summary sits BELOW the footer behind its own
     // top border — the layout the user asked for, which nothing else renders.
     `${src}/components/ExitSummary.tsx`,

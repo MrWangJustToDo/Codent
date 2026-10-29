@@ -9,6 +9,7 @@ import {
   formatPastePlaceholder,
 } from "../hooks/use-user-input.js";
 import { COLORS } from "../theme/colors.js";
+import { codePointLength } from "../utils/code-point-length.js";
 
 import type { PendingPaste } from "../hooks/use-user-input.js";
 
@@ -109,6 +110,20 @@ function getCharDisplay(
 }
 
 /**
+ * One styled line, plus where the caret sits in it — the two facts that have to travel together,
+ * because the CARET CELL is drawn here while the TERMINAL cursor (what a terminal anchors the IME
+ * candidate window to) is claimed by the `<Text>` that renders this line.
+ */
+interface StyledLineResult {
+  /** The styled (ANSI-wrapped) content of the line. */
+  text: string;
+  /** Code-point index of the caret within `text`'s VISIBLE characters, or null when it is elsewhere. */
+  caretOffset: number | null;
+  /** Visible code points in the line, i.e. where a caret at the end of the line sits. */
+  plainLength: number;
+}
+
+/**
  * Build styled string for a single line segment.
  */
 function buildStyledString(
@@ -119,17 +134,24 @@ function buildStyledString(
   selectAll: boolean,
   showCursor: boolean,
   cursorPosition: number
-): string {
+): StyledLineResult {
   let rendered = "";
+  let plain = "";
+  let caretOffset: number | null = null;
   for (let i = 0; i < segment.length; i++) {
     const char = segment[i]!;
     const { text: display, isImage, isPaste } = getCharDisplay(char, imageDisplayNumbers, pasteDisplayNumbers);
     const globalIndex = segmentOffset + i;
+    const isCaret = showCursor && !selectAll && globalIndex === cursorPosition;
 
-    if (selectAll) {
-      rendered += chalk.bgCyan.black(display);
-    } else if (showCursor && globalIndex === cursorPosition) {
+    if (isCaret) {
+      // Offset is measured on the VISIBLE text emitted so far, so a placeholder that renders wider
+      // than the character it replaces (`\u0001` → `[Image #1]`) still lands the caret on its first
+      // cell.
+      caretOffset = codePointLength(plain);
       rendered += chalk.inverse(display[0] || " ") + display.slice(1);
+    } else if (selectAll) {
+      rendered += chalk.bgCyan.black(display);
     } else if (isImage) {
       // Subtle highlight for image placeholders
       rendered += chalk.dim.cyan(display);
@@ -139,9 +161,10 @@ function buildStyledString(
     } else {
       rendered += display;
     }
+    plain += display;
   }
 
-  return rendered;
+  return { text: rendered, caretOffset, plainLength: codePointLength(plain) };
 }
 
 /**
@@ -157,12 +180,27 @@ export const MultiLineInput = ({
   pendingPastes,
   expandedPasteIndex = null,
 }: MultiLineInputProps) => {
-  if (!value && showCursor) {
+  // The visible caret and the TERMINAL cursor are two different things: the inverse cell is drawn by
+  // us, while the physical cursor position is what a terminal anchors the IME candidate window to.
+  // Leaving the latter to the renderer put it wherever the frame stopped painting, so any repaint —
+  // the spinner above this input, a streaming message — moved it and the candidate window jumped
+  // between cells. `terminalCursorFocus` pins it to the caret (see the renderer's `Text` props).
+  const caretVisible = showCursor && !selectAll;
+
+  if (!value && caretVisible) {
     if (placeholder) {
       const rendered = chalk.inverse(placeholder[0] || " ") + chalk.gray(placeholder.slice(1));
-      return <Text wrap="wrap">{rendered}</Text>;
+      return (
+        <Text wrap="wrap" terminalCursorFocus terminalCursorPosition={0}>
+          {rendered}
+        </Text>
+      );
     }
-    return <Text>{chalk.inverse(" ")}</Text>;
+    return (
+      <Text terminalCursorFocus terminalCursorPosition={0}>
+        {chalk.inverse(" ")}
+      </Text>
+    );
   }
 
   if (!value) {
@@ -192,7 +230,7 @@ export const MultiLineInput = ({
     <>
       {lines.map((line, lineIndex) => {
         const lineOffset = lineOffsets[lineIndex]!;
-        const styledContent = buildStyledString(
+        const styled = buildStyledString(
           line,
           lineOffset,
           imageDisplayNumbers,
@@ -204,12 +242,18 @@ export const MultiLineInput = ({
 
         // Show cursor at end of line if cursor is positioned exactly at line end
         const lineEndPos = lineOffset + line.length;
-        const showCursorAtLineEnd = showCursor && !selectAll && cursorPosition === lineEndPos;
+        const showCursorAtLineEnd = caretVisible && cursorPosition === lineEndPos;
+        // Exactly one line may claim the terminal cursor; the caret cell and the end-of-line cell
+        // are the two shapes that carry it.
+        const focused = caretVisible && (styled.caretOffset !== null || showCursorAtLineEnd);
+        const cursorProps = focused
+          ? ({ terminalCursorFocus: true, terminalCursorPosition: styled.caretOffset ?? styled.plainLength } as const)
+          : {};
 
         if (showCursorAtLineEnd) {
           return (
-            <Text key={lineIndex} wrap="wrap">
-              {styledContent}
+            <Text key={lineIndex} wrap="wrap" {...cursorProps}>
+              {styled.text}
               {chalk.inverse(" ")}
             </Text>
           );
@@ -220,10 +264,10 @@ export const MultiLineInput = ({
         // single space so the line still occupies a row. Use a regular space
         // (not \u00A0) so word-wrap measurement stays consistent with non-empty
         // lines.
-        const content = styledContent || " ";
+        const content = styled.text || " ";
 
         return (
-          <Text key={lineIndex} wrap="wrap">
+          <Text key={lineIndex} wrap="wrap" {...cursorProps}>
             {content}
           </Text>
         );
