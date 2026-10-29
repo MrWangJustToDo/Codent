@@ -82,6 +82,8 @@ export class AgentLog {
    * steady state — every entry goes straight to the sink once one is bound.
    */
   private pendingEntries: LogEntry[] = [];
+  /** Entries dropped by the pending cap. Reported once when the buffer is drained. */
+  private pendingDropped = 0;
 
   private static readonly levelPriority: Record<LogLevel, number> = {
     debug: 0,
@@ -172,7 +174,14 @@ export class AgentLog {
       this.sinkEntry(entry);
     } else {
       this.pendingEntries.push(entry);
-      if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) this.pendingEntries.shift();
+      if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) {
+        // The cap drops the OLDEST entries — which at bootstrap are the earliest extension/MCP
+        // failures, the ones a reader most needs. The loss itself is now recorded (see
+        // `attachSink`), so "the log starts mid-bootstrap" is distinguishable from "nothing went
+        // wrong".
+        this.pendingEntries.shift();
+        this.pendingDropped += 1;
+      }
     }
 
     return entry;
@@ -232,9 +241,30 @@ export class AgentLog {
     // Drain entries emitted before this sink existed (bootstrap), before anything emitted from
     // here on — so binding a sink never loses the diagnostics that explain how the bind
     // happened. Cleared on drain: a later re-attach must not replay them.
-    if (this.pendingEntries.length > 0) {
+    if (this.pendingEntries.length > 0 || this.pendingDropped > 0) {
       const retained = this.pendingEntries;
+      const dropped = this.pendingDropped;
       this.pendingEntries = [];
+      this.pendingDropped = 0;
+      // Say that the buffer overflowed BEFORE replaying it: the dropped entries are the oldest,
+      // so the marker is the first line the reader sees and explains the gap that follows.
+      if (dropped > 0) {
+        sink.handleEntry({
+          scope: { ...this.scope },
+          id: generateLogId(),
+          timestamp: Date.now(),
+          level: "warn",
+          category: "system",
+          message: `Log buffer overflowed before the session sink was bound; ${dropped} earliest ${
+            dropped === 1 ? "entry was" : "entries were"
+          } dropped (cap ${MAX_PENDING_LOG_ENTRIES}).`,
+          data: { dropped, cap: MAX_PENDING_LOG_ENTRIES },
+          tags: ["log-buffer"],
+        });
+        // The marker occupies one of the cap's slots: trim the oldest entry from the replay so the
+        // bound still holds exactly (the marker already accounts for what was dropped).
+        retained.shift();
+      }
       // The level is applied by whoever binds the persisted sink (the log extension calls
       // `setMinLevel` immediately before this), so the drain must honour it too: entries accepted
       // while the seam defaulted to `debug` used to land regardless of `AGENT_LOG_LEVEL`, making

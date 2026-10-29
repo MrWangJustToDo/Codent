@@ -47,13 +47,6 @@ export function parseToolMessageOutput(content: ModelMessage["content"]): unknow
   }
 }
 
-/** Extract `cachedOutputPath` from a parsed tool output object, if present. */
-export function extractCachedOutputPath(output: unknown): string | null {
-  if (!output || typeof output !== "object") return null;
-  const path = (output as Record<string, unknown>).cachedOutputPath;
-  return typeof path === "string" && path.length > 0 ? path : null;
-}
-
 /**
  * TanStack `output-error` tool results — see `runtime-types/tool-error.ts`.
  *

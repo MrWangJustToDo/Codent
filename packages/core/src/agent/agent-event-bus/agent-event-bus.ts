@@ -120,11 +120,26 @@ export class DefaultAgentEventBus implements AgentEventBus {
     if (options?.replay !== false) {
       const retained = this.findRetained(type, options?.includeParents === true);
       if (retained) {
+        // Two independent failure sources, two different owners: a throwing PROVIDER belongs to the
+        // node that holds the value (an `includeParents` replay carries a parent's payload), while a
+        // throwing LISTENER belongs to this node — `scopeId` is what routes the report to a log.
+        let payload: unknown;
         try {
-          // Build against the OWNING node, not the subscriber: an `includeParents` replay carries
-          // a parent's payload, so stamping it with this child's `agentId`/`parentId` would make
-          // the envelope disagree with the value it describes.
-          const event = this.buildEventAt(retained.node, type, retained.provider() as never);
+          payload = retained.provider();
+        } catch (error) {
+          reportContained(() =>
+            this.onInterceptorError?.({
+              pattern: type,
+              event: type,
+              scopeId: retained.node.id,
+              error,
+              kind: "observer",
+            })
+          );
+          return unsub;
+        }
+        try {
+          const event = this.buildEventAt(retained.node, type, payload as never);
           const result = (typed as (value: AgentEvent) => unknown)(event);
           if (result && typeof (result as PromiseLike<unknown>).then === "function") {
             void Promise.resolve(result).catch((error) =>
@@ -132,7 +147,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
                 this.onInterceptorError?.({
                   pattern: type,
                   event: type,
-                  scopeId: retained.node.id,
+                  scopeId: this.node.id,
                   error,
                   kind: "observer",
                 })
@@ -141,13 +156,13 @@ export class DefaultAgentEventBus implements AgentEventBus {
           }
         } catch (error) {
           // A retained replay is still a listener notification. Without this guard a throwing
-          // handler (or a throwing retained provider) escaped `on()` AFTER the subscription was
-          // registered, so the caller never received a disposer and leaked the listener.
+          // handler escaped `on()` AFTER the subscription was registered, so the caller never
+          // received a disposer and leaked the listener.
           reportContained(() =>
             this.onInterceptorError?.({
               pattern: type,
               event: type,
-              scopeId: retained.node.id,
+              scopeId: this.node.id,
               error,
               kind: "observer",
             })

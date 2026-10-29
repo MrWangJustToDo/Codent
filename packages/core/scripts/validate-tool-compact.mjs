@@ -97,7 +97,7 @@ const newest = compacted.find((m) => m.role === "tool" && m.toolCallId === "call
 assert.ok(newest);
 assert.match(String(newest.content), /gamma/);
 assert.equal(
-  cache.has(toolCompactCacheKey("call-3", 2, messages[2].content)),
+  cache.get(toolCompactCacheKey("call-3", 2, messages[2].content)) !== undefined,
   true,
   "the cache key carries position + content, not the bare provider id"
 );
@@ -181,8 +181,8 @@ assert.equal(replayNewest.content, newest.content);
   bounded.set("a", { source: "a", projected: "1" });
   bounded.set("b", { source: "b", projected: "2" });
   bounded.set("c", { source: "c", projected: "3" });
-  assert.equal(bounded.has("a"), false, "the oldest projection is evicted at the cap");
-  assert.equal(bounded.has("c"), true, "the newest stays");
+  assert.equal(bounded.get("a"), undefined, "the oldest projection is evicted at the cap");
+  assert.equal(bounded.get("c") !== undefined, true, "the newest stays");
 }
 
 const pendingApproval = [

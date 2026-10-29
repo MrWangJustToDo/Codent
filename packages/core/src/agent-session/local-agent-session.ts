@@ -53,9 +53,18 @@ const RETAINED_CHANNEL_EVENT = (() => {
   const map = new Map<AgentSessionChannel, AgentEventType>();
   for (const eventName of Object.keys(EVENT_META) as AgentEventType[]) {
     const meta = EVENT_META[eventName];
-    if (meta.retained && meta.channel && !map.has(meta.channel)) {
-      map.set(meta.channel, eventName);
+    if (!meta.retained || !meta.channel) continue;
+    const existing = map.get(meta.channel);
+    if (existing !== undefined) {
+      // One retained event per channel is an invariant of this map, not a preference: the replay
+      // below delivers exactly one event per channel, so a second `retained: true` event on the
+      // same channel would be dropped in silence. Say so once at load instead.
+      console.warn(
+        `[agent-session] two retained events claim channel "${meta.channel}": "${existing}" and "${eventName}"; only the first is replayed`
+      );
+      continue;
     }
+    map.set(meta.channel, eventName);
   }
   return map;
 })();

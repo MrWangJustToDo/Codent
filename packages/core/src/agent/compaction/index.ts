@@ -110,10 +110,12 @@ export {
 export { buildSegmentedConversationText, serializeConversation } from "./serialize-conversation.js";
 export {
   applyCompactionResult,
-  findOrphanedToolCut,
   applyReactiveCompactionResult,
   type ApplyCompactionResultOptions,
 } from "./apply-compaction-result.js";
+
+// Cancel classification (shared by auto / manual / reactive)
+export { isCompactionCancel, compactionAbortError } from "./abort-classification.js";
 
 // Reactive compaction (Emergency)
 export { isPromptTooLongError, reactiveCompact, getMaxReactiveRetries } from "./reactive-compact.js";

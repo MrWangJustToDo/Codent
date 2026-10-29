@@ -21,6 +21,7 @@
 
 import { isContentPartArray } from "@tanstack/ai";
 
+import { isRecord } from "../../utils/is-record.js";
 import { defaultMimeForPartType } from "../media/types.js";
 import { describeReadFileMedia } from "../tools/builtin/fs/read/format-result.js";
 import { isProjectedModelContent } from "../tools/runtime/projected-model-content.js";
@@ -56,10 +57,6 @@ const MAX_LIFTED_MEDIA_PARTS = 16;
 // ============================================================================
 // Detection
 // ============================================================================
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isMediaOutput(value: unknown): value is MediaOutput {
   if (!isRecord(value)) return false;

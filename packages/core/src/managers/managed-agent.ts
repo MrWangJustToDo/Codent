@@ -760,6 +760,7 @@ export class ManagedAgent {
           this.log?.warn("system", "Failed to reset command jobs", { reason, error: String(error) });
         });
       },
+      warn: (category, message, data) => this.log?.warn(category, message, data),
     });
 
     if (config.setUp) {

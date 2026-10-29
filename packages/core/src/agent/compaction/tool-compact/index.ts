@@ -1,6 +1,5 @@
 export { applyToolCompact, type ApplyToolCompactOptions } from "./apply-tool-compact.js";
 export {
-  extractCachedOutputPath,
   extractToolErrorMessage,
   formatToolErrorForModel,
   isToolErrorResult,

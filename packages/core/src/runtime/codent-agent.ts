@@ -241,8 +241,11 @@ export class CodentAgent {
   }
 
   /**
-   * Destroy every session this runtime created and release the provider — and the environment
-   * only when this runtime owns it ({@link CodentAgentOptions.ownsEnv}). Idempotent.
+   * Destroy every session this runtime created and release what it OWNS: the manager (only when
+   * this runtime built it, not when one was injected), the provider and the environment (gated by
+   * {@link CodentAgentOptions.ownsRuntime}, which defaults to "no manager was injected" — an
+   * injected runtime belongs to its injector; `ownsEnv` further gates the env). Pass
+   * `ownsRuntime: true` when you inject a manager but still want the provider released. Idempotent.
    *
    * Deliberately never calls `host.list()`: a remote host's catalog is the SERVER's live agents,
    * not this client's ownership. Enumerating and destroying it would delete other clients'

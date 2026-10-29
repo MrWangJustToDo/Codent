@@ -1,5 +1,8 @@
 /**
- * ExtensionLoader — discover and load extensions from factories and filesystem dirs.
+ * ExtensionLoader — discover extension modules in filesystem directories and import them.
+ *
+ * In-process registration is not loader work: `config.extensions` factories are handed to the
+ * runner directly (the factory paths that used to live here were removed).
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
@@ -125,9 +128,6 @@ export class ExtensionLoader {
 
     for (const file of files) {
       try {
-        if (file.absPath.toLowerCase().endsWith(".ts")) {
-          // Node needs a TS loader (e.g. --import tsx). Fail with a clear message if missing.
-        }
         const href = pathToFileUrl(file.absPath);
         const mod = await import(/* @vite-ignore */ href);
         const api = await normalizeExtensionExport(mod, file.id);

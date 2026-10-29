@@ -7,12 +7,9 @@
 
 import { truncateText } from "../../utils/text-truncation.js";
 
-import type { Node, Tree } from "web-tree-sitter";
+import { childrenOf } from "./node-utils.js";
 
-/** web-tree-sitter types children as nullable; runtime never returns null. */
-function childrenOf(node: Node): Node[] {
-  return node.namedChildren.filter((c): c is Node => c != null);
-}
+import type { Node, Tree } from "web-tree-sitter";
 
 /** Symbol kinds matching LSP SymbolKind values */
 export const SymbolKind = {

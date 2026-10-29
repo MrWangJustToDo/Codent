@@ -10,16 +10,12 @@
  */
 
 import { eventError } from "./event-error.js";
+import { readEventPayload as p } from "./payload.js";
 
 import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 import type { McpServerStatus } from "../mcp/manager.js";
-
-/** Read payload fields for logging formatters. */
-function p(event: AgentEvent): Record<string, unknown> {
-  return event.payload as Record<string, unknown>;
-}
 
 /** A handler that writes its own rows for one event type. */
 export type SpecializedEventLogHandler = (log: AgentLog, event: AgentEvent) => void;

@@ -10,15 +10,11 @@
  */
 
 import { SKIP_DIRS, MAX_FILE_SIZE, MAX_INDEX_FILES } from "./constants.js";
+import { childrenOf } from "./node-utils.js";
 
 import type { TreeSitterManager, TreeSitterEnv } from "./parser-manager.js";
 import type { CompiledPattern, PatternNode } from "./pattern-compiler.js";
 import type { Node as SyntaxNode } from "web-tree-sitter";
-
-/** web-tree-sitter types children as nullable; runtime never returns null. */
-function childrenOf(node: SyntaxNode): SyntaxNode[] {
-  return node.namedChildren.filter((c): c is SyntaxNode => c != null);
-}
 
 // ── Result types ────────────────────────────────────────────────────────────
 

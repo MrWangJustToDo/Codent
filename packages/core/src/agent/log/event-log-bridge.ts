@@ -4,16 +4,12 @@ import { truncateText } from "../../utils/text-truncation.js";
 import { eventError } from "./event-error.js";
 import { DEFAULT_EVENT_LOG_RULES, SPECIALIZED_EVENT_LOG, type EventLogRule } from "./event-log-rules.js";
 import { SPECIALIZED_EVENT_LOG_HANDLERS } from "./event-log-specialized.js";
+import { readEventPayload as p } from "./payload.js";
 
 import type { AgentEvent, AgentEventBus, AgentEventType } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
 
 export type { EventLogRule } from "./event-log-rules.js";
-
-/** Read payload fields for logging formatters. */
-function p(event: AgentEvent): Record<string, unknown> {
-  return event.payload as Record<string, unknown>;
-}
 
 // ============================================================================
 // Payload summarization — logs carry sizes + previews, never full payloads
@@ -120,12 +116,13 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // A `cancelled` payload is not a fault, so it must not be written through the error
   // path: that attaches the payload's `error` text as a synthesized `Error` — for a
   // cancelled subagent that text is its partial narration, and the entry then carried
-  // a whole paragraph as a stack-bearing exception. The level stays at the rule's
-  // (the rule table is static per event type; `agent:tool-error` keeps `warn` for the
-  // same reason), only the fault-shaped error object is dropped.
+  // a whole paragraph as a stack-bearing exception. The LEVEL drops to `warn` too: the rule
+  // table is static per event type (`subagent:error` is an error event), but a user cancel is
+  // not a failure, and `AGENT_LOG_LEVEL=error` kept cancels while hiding `agent:tool-error`'s
+  // warn-level cancel — the same fact filed at two severities.
   if (rule.level === "error") {
     if (p(event).cancelled === true) {
-      log.eventEntry("error", rule.category, event.type, message, data);
+      log.eventEntry("warn", rule.category, event.type, message, data);
       return;
     }
     const errorMessage = (p(event).error as string | undefined) ?? message;

@@ -1,9 +1,9 @@
 /**
  * Abort classification at the compaction boundary.
  *
- * Compaction needs a stricter rule than {@link isAbortError}: its summarizer's failure text can
- * contain the word "aborted" (the no-summary diagnostic names its own flag), and the network stack
- * raises `AbortError` for its own body/operation timeouts. Treating either as a user cancel
+ * Compaction needs a stricter rule than {@link isAbortError}: the network stack raises
+ * `AbortError` for its own body/operation timeouts, and any future diagnostic that happens to
+ * contain the word "aborted" would match its message heuristic. Treating either as a user cancel
  * released the lease without arming the retry backoff, so every later model call started another
  * full summarizer over the same prefix — the exact amplification the backoff exists to prevent.
  *

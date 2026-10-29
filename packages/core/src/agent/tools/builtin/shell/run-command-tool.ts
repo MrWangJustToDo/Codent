@@ -66,6 +66,7 @@ export function buildTimedOutCommandResult(params: {
   timeoutMs: number;
   durationMs: number;
   cachedOutputPath: string | null;
+  cachedOutputPaths?: string[];
 }): RunCommandOutput {
   return {
     command: params.command,
@@ -77,7 +78,18 @@ export function buildTimedOutCommandResult(params: {
     timedOut: true,
     timeoutMs: params.timeoutMs,
     cachedOutputPath: params.cachedOutputPath,
+    ...(params.cachedOutputPaths && params.cachedOutputPaths.length > 0
+      ? { cachedOutputPaths: params.cachedOutputPaths }
+      : {}),
   };
+}
+
+/** Every disk copy a command produced: stdout and stderr are cached to separate files. */
+function cachedPathsOf(...results: ReadonlyArray<{ cachedOutputPath?: string | null }>): string[] {
+  const paths = results
+    .map((result) => result.cachedOutputPath)
+    .filter((path): path is string => typeof path === "string" && path.length > 0);
+  return [...new Set(paths)];
 }
 
 export const createRunCommandTool = (options?: { subagentSafe?: boolean; context?: AgentToolContext }) => {
@@ -273,6 +285,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
             success: false,
             cancelled: true,
             cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,
+            cachedOutputPaths: cachedPathsOf(stdoutResult, stderrResult),
           };
         }
 
@@ -299,6 +312,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
             timeoutMs: effectiveTimeout,
             durationMs: Date.now() - startTime,
             cachedOutputPath: stdoutResult.cachedOutputPath ?? stderrResult.cachedOutputPath ?? null,
+            cachedOutputPaths: cachedPathsOf(stdoutResult, stderrResult),
           });
         }
 
@@ -340,6 +354,9 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
         durationMs: result.durationMs,
         success: result.exitCode === 0,
         cachedOutputPath,
+        // Both files are real; `cachedOutputPath` is the one the model is pointed at. The GC used
+        // to collect only that one, so the other was uncollectable until the 7-day age sweep.
+        cachedOutputPaths: cachedPathsOf(stdoutResult, stderrResult),
       };
     },
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: RunCommandOutput }) {

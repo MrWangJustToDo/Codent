@@ -155,6 +155,10 @@ export async function branchSession(
     return { ok: false, error: "No active session" };
   }
 
+  if (managed.isSessionSwitching?.()) {
+    return { ok: false, error: `Session is switching — try again when it finishes.` };
+  }
+
   if (managed.getChatController()?.isRunActive?.()) {
     return { ok: false, error: `Cannot ${options.mode} while the agent is running — stop it first (Esc).` };
   }

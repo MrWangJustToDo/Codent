@@ -96,6 +96,15 @@ export const runCommandOutputSchema = z.object({
   /** The deadline (ms) that elapsed — present with `timedOut`; the UI/compact presenters name it. */
   timeoutMs: z.number().optional().describe("The elapsed deadline in ms — present with `timedOut`."),
   ...toolOutputBaseSchema.shape,
+  /**
+   * Every disk copy written for this result. stdout and stderr are cached to separate files, while
+   * `cachedOutputPath` names only the first — the reference-based GC needs the full list, or the
+   * second file survives until the age sweep.
+   */
+  cachedOutputPaths: z
+    .array(z.string())
+    .optional()
+    .describe("All disk copies written for this result; `cachedOutputPath` is the first of them."),
 });
 
 export const getCommandOutputSchema = z.object({

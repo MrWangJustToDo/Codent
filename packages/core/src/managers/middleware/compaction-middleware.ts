@@ -3,11 +3,11 @@ import { convertMessagesToModelMessages, type ChatMiddleware, type ModelMessage 
 import {
   applyCompactionResult,
   autoCompact,
+  isCompactionCancel,
   isLatestDurableMessageCompactionSummary,
   keepPolicyProjectionOptions,
   resolveKeepPolicy,
 } from "../../agent/compaction";
-import { isCompactionCancel } from "../../agent/compaction/abort-classification.js";
 import { projectWireFromChannel } from "../../agent/compaction/wire-projection.js";
 import { toError } from "../../utils/errors.js";
 

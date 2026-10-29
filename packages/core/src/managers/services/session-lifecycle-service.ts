@@ -6,8 +6,11 @@
  * resets the transient state they write into.
  */
 
+import { errorMessage } from "../../utils/errors.js";
+
 import type { CompactionService } from "./compaction-service.js";
 import type { MemoryService } from "./memory-service.js";
+import type { LogCategory } from "../../agent/agent-log/types.js";
 import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
@@ -68,6 +71,8 @@ export interface SessionLifecycleHost {
   /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
   clearTaskRuns(): void;
   resetCommandJobs(reason: string): void;
+  /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
+  warn?(category: LogCategory, message: string, data?: Record<string, unknown>): void;
 }
 
 export class SessionLifecycleService {
@@ -322,26 +327,34 @@ export class SessionLifecycleService {
       // COMMITTED: the restore adopted the target last, so the old claim is free from here on.
       if (leavingId && leavingId !== sessionId) this.host.releaseSessionOwnership(leavingId);
 
-      // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
-      // the restore just adopted those.
-      this.resetTransientState("session-resume", "resume");
-      // The reset makes the status idle; re-apply the restored interaction state so a session that
-      // was waiting on approval/ask_user does not come back as idle.
-      this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);
-      this.host.refreshSubagents?.();
+      try {
+        // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
+        // the restore just adopted those.
+        this.resetTransientState("session-resume", "resume");
+        // The reset makes the status idle; re-apply the restored interaction state so a session that
+        // was waiting on approval/ask_user does not come back as idle.
+        this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);
+        this.host.refreshSubagents?.();
 
-      if (leavingId && leavingId !== sessionId) {
-        // The departure entry belongs to the session being left, so point the sink back for this one
-        // line, then re-attach the target WITHOUT a second boundary (the target's boundary was
-        // written when its sink was bound above).
-        this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
-        try {
-          this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount);
-        } finally {
-          this.host.bindSessionLogSink(sessionId, { sessionBoundary: false });
+        if (leavingId && leavingId !== sessionId) {
+          // The departure entry belongs to the session being left, so point the sink back for this one
+          // line, then re-attach the target WITHOUT a second boundary (the target's boundary was
+          // written when its sink was bound above).
+          this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
+          try {
+            this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount);
+          } finally {
+            this.host.bindSessionLogSink(sessionId, { sessionBoundary: false });
+          }
         }
+        this.host.refreshState();
+      } catch (error) {
+        // Past the commit the switch HAS happened. Surfacing this as a failed resume made the host
+        // report a failure for a state it is actually in; report and keep the switch instead.
+        this.host.warn?.("system", "session resume post-commit step failed", {
+          error: errorMessage(error),
+        });
       }
-      this.host.refreshState();
       return session;
     } catch (error) {
       // No commit ⇒ the leaving session is still the active one. Give the target claim back and

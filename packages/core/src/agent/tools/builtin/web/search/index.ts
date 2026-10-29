@@ -17,7 +17,6 @@ export { ProviderManager, hashToIndex } from "./provider.js";
 export { PROVIDER_REGISTRY } from "./registry.js";
 export { PROVIDER_KEY_FIELDS } from "./key-fields.js";
 export { filterResultsByDomain } from "./domain-filter.js";
-export { createTimeoutAbort, withTimeoutAbort } from "../../../shared/abort-timeout.js";
 export { duckduckgoProvider } from "./providers/duckduckgo.js";
 export { braveProvider } from "./providers/brave.js";
 export { exaProvider, parseExaResults } from "./providers/exa.js";

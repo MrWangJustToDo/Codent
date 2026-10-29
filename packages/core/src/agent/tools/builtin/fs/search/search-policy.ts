@@ -96,8 +96,16 @@ export function activeExcludeDirs(searchPath: string, policy: SearchPolicy = def
  * identity never changes, so an object-keyed memo answered for the wrong workspace the moment a
  * second one was registered in the same process (a validator's fixture, a host with two runtimes).
  * The answer is a property of the directory.
+ *
+ * Entries expire: a workspace can BECOME a repository during a session (`git init`), and a
+ * permanent memo meant `grep`/`glob` ignored `.gitignore` for the rest of the process. A TTL keeps
+ * the spawn cost amortized without making a stale "not a repo" a fact of the runtime.
  */
-const gitWorkTreeCache = new Map<string, Promise<{ decided: boolean; isRepo: boolean }>>();
+const GIT_WORK_TREE_TTL_MS = 30_000;
+const gitWorkTreeCache = new Map<
+  string,
+  { probe: Promise<{ decided: boolean; isRepo: boolean }>; expiresAt: number }
+>();
 
 /**
  * Whether the workspace is inside a git work tree — the gate for every VCS-aware rung.
@@ -106,15 +114,15 @@ const gitWorkTreeCache = new Map<string, Promise<{ decided: boolean; isRepo: boo
  * and zero" cannot be told apart from a host stub that answers zero to everything, and reading
  * that as "this path is ignored" silently disabled the fallback rung.
  *
- * Memoized per env because a workspace does not stop being a repository while an agent's runtime
- * lives — but only a *decided* answer is memoized: a probe cut short by the run's signal (Esc)
- * learned nothing, and caching that would report "no repo" for the rest of the session.
+ * Only a *decided* answer is memoized: a probe cut short by the run's signal (Esc) learned
+ * nothing, and caching that would report "no repo" for the rest of the session.
  */
 export function isGitWorkTree(env: CoreEnv, signal?: AbortSignal): Promise<boolean> {
   const key = env.rootPath;
+  const now = Date.now();
   const cached = gitWorkTreeCache.get(key);
-  if (cached) {
-    return cached.then((result) => {
+  if (cached && cached.expiresAt > now) {
+    return cached.probe.then((result) => {
       if (!result.decided) gitWorkTreeCache.delete(key);
       return result.isRepo;
     });
@@ -133,7 +141,7 @@ export function isGitWorkTree(env: CoreEnv, signal?: AbortSignal): Promise<boole
       return { decided: false, isRepo: false };
     }
   })();
-  gitWorkTreeCache.set(key, probe);
+  gitWorkTreeCache.set(key, { probe, expiresAt: now + GIT_WORK_TREE_TTL_MS });
   return probe.then((result) => {
     if (!result.decided) gitWorkTreeCache.delete(key);
     return result.isRepo;

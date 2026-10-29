@@ -37,11 +37,17 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env
   dirs.push(DEFAULT_EXTENSION_DIR);
 
   const runEnv = await e.getEnv();
+  const home = await e.homedir();
+  /** `~` is a shell affordance, not a path segment: resolving it against rootPath produced
+   * `<root>/~/.agents/extension`, which does not exist, so the directory was skipped in silence. */
+  const expandHome = (dir: string): string =>
+    dir === "~" || dir.startsWith("~/") ? e.path.join(home, dir.slice(1)) : dir;
+
   const envDirs = runEnv[EXTENSION_DIRS_ENV_VAR];
   if (envDirs) {
     const parsedDirs = envDirs
       .split(",")
-      .map((d) => d.trim())
+      .map((d) => expandHome(d.trim()))
       .filter((d) => d.length > 0);
     dirs.push(...parsedDirs);
   }
@@ -49,7 +55,7 @@ export async function getDefaultExtensionDirs(extraDirs?: readonly string[], env
   if (extraDirs) {
     for (const dir of extraDirs) {
       const trimmed = dir.trim();
-      if (trimmed) dirs.push(trimmed);
+      if (trimmed) dirs.push(expandHome(trimmed));
     }
   }
 

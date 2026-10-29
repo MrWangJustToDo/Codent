@@ -156,10 +156,22 @@ console.log("pre-attach retention + JSONL OK:", lines.length, "lines");
     MAX_PENDING_LOG_ENTRIES,
     `cap must bound retention to ${MAX_PENDING_LOG_ENTRIES}, got ${capLines.length}`
   );
-  const first = JSON.parse(capLines[0]).message;
+  const first = JSON.parse(capLines[0]);
+  const second = JSON.parse(capLines[1]).message;
   const last = JSON.parse(capLines[capLines.length - 1]).message;
   assert.equal(last, `pending-${overflow - 1}`, "newest entry is retained (oldest dropped at the cap)");
-  assert.equal(first, `pending-${overflow - MAX_PENDING_LOG_ENTRIES}`, "the oldest entries are the ones dropped");
+  // The overflow is recorded first, so a reader can tell "the log starts mid-bootstrap" from
+  // "nothing went wrong". It occupies one slot of the same cap, hence the +2 below.
+  assert.match(
+    first.message,
+    /^Log buffer overflowed .* 25 earliest entries were dropped/,
+    `the cap reports what it dropped, got: ${first.message}`
+  );
+  assert.equal(
+    second,
+    `pending-${overflow - MAX_PENDING_LOG_ENTRIES + 1}`,
+    "the oldest SURVIVING entries follow the overflow marker"
+  );
 
   // Drain is one-shot: a second sink must not replay the first sink's entries.
   capDetach();

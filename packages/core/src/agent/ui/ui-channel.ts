@@ -4,6 +4,7 @@
 
 import { StreamProcessor } from "@tanstack/ai";
 
+import { deliverContained } from "../../utils/contained-report.js";
 import { generateId } from "../../utils/generate-id.js";
 import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "../stream/apply-tool-denial-reason.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
@@ -204,21 +205,16 @@ export class AgentUIChannel {
         onApprovalRequest: (request) => {
           options.onApprovalRequest?.(request);
           for (const listener of this.approvalListeners) {
-            try {
-              listener(request);
-            } catch {
-              // Ignore listener errors
-            }
+            // Contained like every other dispatcher (see `utils/contained-report.ts`): the local
+            // `catch {}` was the one listener path with no report and no async handling, so a
+            // broken subscriber vanished and an async one became an unhandled rejection.
+            deliverContained(listener, [request]);
           }
         },
         onCustomEvent: (eventType, data, context) => {
           options.onCustomEvent?.(eventType, data, context);
           for (const listener of this.customEventListeners) {
-            try {
-              listener(eventType, data, context);
-            } catch {
-              // Ignore listener errors
-            }
+            deliverContained(listener, [eventType, data, context]);
           }
         },
       },

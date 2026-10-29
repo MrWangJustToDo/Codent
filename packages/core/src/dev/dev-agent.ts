@@ -192,13 +192,12 @@ export { extractTextFromContent } from "../agent/compaction/message-utils.js";
 export {
   createConfiguredProviderManager,
   ProviderManager,
-  createTimeoutAbort,
   filterResultsByDomain,
   hashToIndex,
   PROVIDER_KEY_FIELDS,
   PROVIDER_REGISTRY,
-  withTimeoutAbort,
 } from "../agent/tools/builtin/web/search/index.js";
+export { createTimeoutAbort, withTimeoutAbort } from "../agent/tools/shared/abort-timeout.js";
 export { braveProvider } from "../agent/tools/builtin/web/search/providers/brave.js";
 export { tavilyProvider } from "../agent/tools/builtin/web/search/providers/tavily.js";
 export { parseParallelResults } from "../agent/tools/builtin/web/search/providers/parallel.js";

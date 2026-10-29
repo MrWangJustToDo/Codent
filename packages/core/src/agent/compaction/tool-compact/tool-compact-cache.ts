@@ -78,15 +78,7 @@ export class ToolCompactCache {
     this.entries.set(key, entry);
   }
 
-  delete(key: string): void {
-    this.entries.delete(key);
-  }
-
   clear(): void {
     this.entries.clear();
-  }
-
-  has(key: string): boolean {
-    return this.entries.has(key);
   }
 }

@@ -4,21 +4,9 @@
  * Prefer composition: `private readonly events = new Emitter<{ change: T }>()`.
  */
 
-import { reportContained } from "./contained-report.js";
+import { deliverContained } from "./contained-report.js";
 
 export type EmitterListener<T> = (payload: T) => void;
-
-/**
- * Report a listener failure without letting the report itself escape.
- *
- * The async branch runs inside a `.catch`, so a throwing reporter there became an unhandled
- * rejection; the sync branch runs inside the delivery loop, so a throwing reporter cost the
- * remaining listeners their frame.
- */
-function safeReport(report: ((error: unknown) => void) | undefined, error: unknown): void {
-  if (!report) return;
-  reportContained(() => report(error));
-}
 
 export class Emitter<TEvents extends Record<string, unknown>> {
   private readonly listeners = new Map<keyof TEvents & string, Set<EmitterListener<unknown>>>();
@@ -59,17 +47,10 @@ export class Emitter<TEvents extends Record<string, unknown>> {
     const set = this.listeners.get(type);
     if (!set || set.size === 0) return;
     for (const listener of [...set]) {
-      try {
-        const result = (listener as (value: TEvents[K]) => unknown)(payload);
-        // A subscriber typed `void` may still be async (the server's SSE writer is). Its
-        // rejection is not caught by this try/catch, and Node's default policy turns an
-        // unhandled rejection into process exit — attach a handler instead.
-        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-          void Promise.resolve(result).catch((error) => safeReport(onListenerError, error));
-        }
-      } catch (error) {
-        safeReport(onListenerError, error);
-      }
+      // A subscriber typed `void` may still be async (the server's SSE writer is): the shared
+      // delivery helper catches both the synchronous throw and the rejection, which Node's default
+      // policy would otherwise turn into process exit.
+      deliverContained(listener as (value: TEvents[K]) => unknown, [payload], onListenerError);
     }
   }
 

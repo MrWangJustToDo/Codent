@@ -4,7 +4,7 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
-import { isCompactionCancel } from "../agent/compaction/abort-classification.js";
+import { isCompactionCancel } from "../agent/compaction";
 import { applyCompactionResult, applyReactiveCompactionResult } from "../agent/compaction/apply-compaction-result.js";
 import { autoCompact } from "../agent/compaction/auto-compact.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";

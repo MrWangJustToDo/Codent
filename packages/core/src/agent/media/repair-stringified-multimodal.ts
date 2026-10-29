@@ -18,6 +18,8 @@
  * legacy session stores are migrated.
  */
 
+import { isRecord } from "../../utils/is-record.js";
+
 import { isBinaryMediaPartType } from "./types.js";
 
 import type { StreamChunk, UIMessage } from "@tanstack/ai";
@@ -29,10 +31,6 @@ type LoosePart = {
   source?: unknown;
   metadata?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === "object" && !Array.isArray(value);
-}
 
 /** True when a JSON value looks like TanStack ContentPart[] with multimodal parts. */
 export function isStringifiedMultimodalContentParts(value: unknown): value is LoosePart[] {

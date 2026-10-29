@@ -4,15 +4,12 @@
 
 import { truncateText } from "../../utils/text-truncation.js";
 
+import { readEventPayload as p } from "./payload.js";
+
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
 import type { AgentEvent, AgentEventType } from "../agent-event-bus";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { SubagentStopReason } from "../subagent/subagent-stop-reason.js";
-
-/** Read payload fields for logging formatters. */
-function p(event: AgentEvent): Record<string, unknown> {
-  return event.payload as Record<string, unknown>;
-}
 
 /**
  * Append the parent `task` call binding so a subagent line is attributable to its call.

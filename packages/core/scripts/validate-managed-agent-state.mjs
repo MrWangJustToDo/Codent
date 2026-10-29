@@ -196,6 +196,9 @@ registerCoreEnv({
     );
     const manager = {
       getAgent: (id) => (id === parent.id ? parent : id === child.id ? child : undefined),
+      // `refreshSubagents` (child state change) projects the parent's task rows, which reads the
+      // catalog. A stub without it failed as soon as a child's status changed.
+      getSubagents: () => [],
     };
     parent.manager = manager;
     child.manager = manager;

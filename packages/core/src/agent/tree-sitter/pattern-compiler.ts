@@ -7,13 +7,10 @@
  * metavariable identifiers are replaced with wildcard matchers.
  */
 
+import { childrenOf } from "./node-utils.js";
+
 import type { TreeSitterManager } from "./parser-manager.js";
 import type { Node as SyntaxNode } from "web-tree-sitter";
-
-/** web-tree-sitter types children as nullable; runtime never returns null. */
-function childrenOf(node: SyntaxNode): SyntaxNode[] {
-  return node.namedChildren.filter((c): c is SyntaxNode => c != null);
-}
 
 /** First named child (runtime never null when namedChildCount > 0). */
 function firstNamed(node: SyntaxNode): SyntaxNode {
