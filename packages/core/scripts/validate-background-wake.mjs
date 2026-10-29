@@ -283,6 +283,12 @@ function makeCapturingAdapter() {
   e2eChat.getUIChannel().addUserMessage("start the build in the background");
   const e2eService = e2e.getCommandService();
 
+  // What a status surface sees, per `session:jobs` emission — the states the footer line renders.
+  const jobStates = [];
+  manager.of(e2e.id).on("session:jobs", (event) => {
+    jobStates.push(event.payload.jobs.map((job) => (job.pendingPickup ? `${job.status}+pending` : job.status)));
+  });
+
   const started = await e2eService.startBackground({
     command: "npm run build",
     toolCallId: "tc-e2e",
@@ -305,6 +311,23 @@ function makeCapturingAdapter() {
     await e2eService.collectCompleted(),
     [],
     "the injected notification is marked notified, so it is delivered exactly once"
+  );
+
+  // The UI half of the same fact: the job stays "finished, still owed" until the notification is in
+  // the message window, then it is cleared — the transition is the delivery, not the exit and not a
+  // poll. Without the `markNotified` notification the last state would still read `exited+pending`,
+  // which is what the footer showed before this state existed (nothing: the line was removed).
+  assert.ok(
+    jobStates.some((states) => states.includes("exited+pending")),
+    `the finished job reads as pending until delivery, saw ${JSON.stringify(jobStates)}`
+  );
+  assert.deepEqual(jobStates.at(-1), ["exited"], "the delivery clears pending, and nothing is owed after the turn");
+  assert.deepEqual(
+    jobStates,
+    // The retained channel replays its current (empty) value on subscribe, then one emission per
+    // transition: started → finished-and-owed → picked up.
+    [[], ["running"], ["exited+pending"], ["exited"]],
+    "one emission per transition: started → finished-and-owed → picked up"
   );
   assert.equal(e2e.getStatus(), "completed", "the wake turn ends like any other turn");
   manager.destroyAgent(e2e.id);

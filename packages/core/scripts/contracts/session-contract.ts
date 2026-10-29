@@ -47,6 +47,7 @@ const job: SessionJobSummary = {
   exitCode: 0,
   startedAt: 1,
   endedAt: 2,
+  pendingPickup: false,
 };
 const jobs: SessionJobsSnapshot = { jobs: [job] };
 void jobs;

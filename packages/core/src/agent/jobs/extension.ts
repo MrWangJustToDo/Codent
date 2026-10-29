@@ -12,6 +12,7 @@
  * renders ONE line into the `footer` surface:
  *
  *     ⏳ 2 running · 1 failed · 2m 14s
+ *     ✓ 1 pending
  *
  * (rendered ANSI-styled: an amber glyph, the counts in bright-black gray — see {@link AMBER} /
  * {@link GRAY})
@@ -24,11 +25,16 @@
  *   dedupe identical payloads (`default-extension-ui.ts`), so a tick's cost is this summarizer,
  *   never a host repaint — and the timer is `unref`'d plus cleared in `deactivate()`, so it can
  *   neither hold a host process open nor outlive the extension.
- * - **The slot is removed as soon as nothing is running.** The list arrives as one retained
- *   snapshot, and a one-line summary has no item to dim, so a finished job's outcome would
- *   otherwise outlive the fact it reports. Outcomes are already carried where they belong: the
- *   transcript row and the completion notification. Output stays reachable via
- *   `get_command_output` / the job's log file.
+ * - **A job's row ends when its result is PICKED UP, not when its process exits.** The slot used
+ *   to be removed the instant nothing was running, so a job that finished while the session was
+ *   parked (approval pending, `ask_user`, a run the user aborted) vanished exactly when it owed
+ *   the most: its completion had not reached the transcript yet. The line now stays, counting
+ *   those jobs as `pending` ("待消费"), until `background-middleware` hands the completion to the
+ *   message window — the same transition that sets the durable `notified` flag.
+ *
+ * A finished job is not listed twice: `pending` counts the finished-and-owed ones, `failed` /
+ * `killed` count the outcomes, and an `exited` job that was picked up contributes nothing (its
+ * outcome lives in the transcript).
  */
 
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
@@ -72,31 +78,50 @@ const RESET = "\u001b[0m";
 /**
  * Order counts appear in — busiest concern first. `exited` is deliberately absent: it is the
  * uninteresting outcome, so a mixed line reads `2 running · 1 failed` rather than burying the
- * failure behind every success.
+ * failure behind every success. A finished job that has not been picked up is counted separately
+ * (see {@link PENDING_LABEL}), because "done, result still owed" is the one state the user has to
+ * act on.
  */
 const COUNT_ORDER = ["running", "failed", "killed"] as const;
 
 /**
- * One-line summary for the current list, or `null` when the slot must be removed (nothing is
- * running). ANSI-styled: amber glyph, bright-black counts, reset-terminated.
+ * What the pending count is called.
  *
- * Elapsed time is the oldest *running* job's age — the number the user is waiting on. Finished
- * jobs are not counted into it, so a long-dead completion cannot inflate the line.
+ * `pending` is short enough for a footer and states the thing the user needs: the job is over and
+ * the result has not been handed over yet. It is deliberately not `done` (that reads as finished
+ * and therefore ignorable) and not `unread` (which implies a UI the user owns — this one is owed to
+ * the model).
+ */
+const PENDING_LABEL = "pending";
+
+/**
+ * One-line summary for the current list, or `null` when the slot must be removed (nothing is
+ * running and nothing is waiting to be picked up). ANSI-styled: amber glyph, bright-black counts,
+ * reset-terminated.
+ *
+ * Elapsed time is the oldest *running* job's age — the number the user is waiting on. Finished jobs
+ * are not counted into it, so a long-dead completion cannot inflate the line; a line with nothing
+ * running therefore carries no duration at all (`✓ 1 pending`), and its glyph becomes a tick
+ * because there is no wait in progress.
  */
 export function summarizeJobs(jobs: readonly SessionJobSummary[], now: number): string | null {
   const counts: Record<SessionJobSummary["status"], number> = { running: 0, exited: 0, killed: 0, failed: 0 };
+  let pending = 0;
   let oldestRunningStartedAt = Number.POSITIVE_INFINITY;
   for (const job of jobs) {
     counts[job.status] += 1;
+    if (job.pendingPickup) pending += 1;
     if (job.status === "running" && job.startedAt < oldestRunningStartedAt) {
       oldestRunningStartedAt = job.startedAt;
     }
   }
-  if (counts.running === 0) return null;
+  if (counts.running === 0 && pending === 0) return null;
 
   const parts = COUNT_ORDER.filter((status) => counts[status] > 0).map((status) => `${counts[status]} ${status}`);
-  parts.push(formatDuration(now - oldestRunningStartedAt));
-  return `${AMBER}⏳${RESET} ${GRAY}${parts.join(" · ")}${RESET}`;
+  if (pending > 0) parts.push(`${pending} ${PENDING_LABEL}`);
+  if (counts.running > 0) parts.push(formatDuration(now - oldestRunningStartedAt));
+  const glyph = counts.running > 0 ? "⏳" : "✓";
+  return `${AMBER}${glyph}${RESET} ${GRAY}${parts.join(" · ")}${RESET}`;
 }
 
 // ============================================================================

@@ -121,6 +121,14 @@ export interface SessionJobSummary {
   exitCode: number | null;
   startedAt: number;
   endedAt: number | null;
+  /**
+   * The process finished but its completion has not been handed to the message window yet.
+   *
+   * A status surface shows this as "waiting to be picked up" instead of dropping the row: the job
+   * is over, and what it produced is still owed to the transcript (see `CommandJobSummary` for why
+   * it is derived from the delivery flag rather than from a poll).
+   */
+  pendingPickup: boolean;
 }
 
 /** Background jobs started by this agent (mirrors the retained `jobs` channel). */

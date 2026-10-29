@@ -63,8 +63,16 @@ function plain(line) {
 }
 
 /** A registry job summary, shaped exactly as the channel payload carries it. */
-function summary({ jobId, command = "sleep 30", status, exitCode = null, startedAt, endedAt = null }) {
-  return { jobId, command, status, exitCode, startedAt, endedAt };
+function summary({
+  jobId,
+  command = "sleep 30",
+  status,
+  exitCode = null,
+  startedAt,
+  endedAt = null,
+  pendingPickup = status !== "running",
+}) {
+  return { jobId, command, status, exitCode, startedAt, endedAt, pendingPickup };
 }
 
 // ============================================================================
@@ -106,6 +114,7 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
     "endedAt",
     "exitCode",
     "jobId",
+    "pendingPickup",
     "startedAt",
     "status",
   ]);
@@ -118,6 +127,33 @@ function summary({ jobId, command = "sleep 30", status, exitCode = null, started
   // A second terminal transition on a finished job is a no-op (and so is its notification).
   registry.markExited(job.id, 0);
   assert.equal(notified.length, 2, "(a) a repeat terminal transition does not re-notify");
+
+  // (c) Ownership: a finished job this session can never be handed is not owed here. The line would
+  // otherwise count a completion that `collectCompleted` filters out (another session's job), i.e. a
+  // pending badge that can never clear.
+  {
+    let owner = "ses-a";
+    const scoped = new CommandJobRegistry(undefined, { ownerSessionId: () => owner });
+    const job = scoped.create("sleep 5");
+    scoped.markExited(job.id, 0);
+    assert.equal(scoped.list()[0].pendingPickup, true, "(c) this session's finished job is pending");
+    owner = "ses-b";
+    assert.equal(
+      scoped.list()[0].pendingPickup,
+      false,
+      "(c) …but one owned by another session is not, since it can never be delivered here"
+    );
+  }
+
+  // (b) A finished job stays `pendingPickup` until its completion is handed to the message window,
+  // and the delivery re-notifies: the retained snapshot is what the footer renders, so without this
+  // event the line would keep counting a job the model already received.
+  assert.equal(jobsOf(notified[0])[0].pendingPickup, false, "(b) a running job is never pending");
+  assert.equal(jobsOf(notified[1])[0].pendingPickup, true, "(b) a finished job is pending pickup");
+  await registry.markNotified([job.id]);
+  assert.equal(notified.length, 3, "(b) marking the delivery re-notifies — the visible state changed");
+  assert.equal(jobsOf(notified[2])[0].pendingPickup, false, "(b) …and the pending flag clears");
+  assert.deepEqual(finishedBatches[2], [], "(b) a delivery is not a completion: no finished ids, no wake");
 
   const failing = registry.create("exit 1");
   registry.markFailed(failing.id, "boom");
@@ -224,22 +260,63 @@ function createHarness() {
     "only the intended SGR codes are emitted, and the line ends reset"
   );
 
-  // Nothing running any more → the slot is revoked (the one-line shape has no item to dim).
+  // Nothing running any more and nothing owed → the slot is revoked (the one-line shape has no
+  // item to dim).
   h.emit([]);
-  assert.equal(h.renders.at(-1).payload, null, "no running job removes the slot");
+  assert.equal(h.renders.at(-1).payload, null, "no jobs at all removes the slot");
 
   // …and a repeat revoke does not re-notify.
   const afterRevoke = h.renders.length;
   h.emit([]);
   assert.equal(h.renders.length, afterRevoke, "a repeat empty snapshot is deduped");
 
-  // A finished-only list also renders nothing (it is not an error state).
+  // A finished-only list whose results were all picked up also renders nothing (it is not an error
+  // state: the outcomes live in the transcript).
   const done = createHarness();
   createJobsExtension().activate(done.ctx);
   done.emit([
-    summary({ jobId: "job-done", status: "exited", exitCode: 0, startedAt: Date.now() - 5000, endedAt: Date.now() }),
+    summary({
+      jobId: "job-done",
+      status: "exited",
+      exitCode: 0,
+      startedAt: Date.now() - 5000,
+      endedAt: Date.now(),
+      pendingPickup: false,
+    }),
   ]);
-  assert.equal(done.renders.length, 0, "a finished job alone renders nothing");
+  assert.equal(done.renders.length, 0, "a finished, picked-up job renders nothing");
+
+  // …but a finished job whose result is still owed KEEPS the slot. This is the whole point of the
+  // state: the process is gone, so nothing else on screen says the run produced something.
+  const owed = createHarness();
+  createJobsExtension().activate(owed.ctx);
+  owed.emit([
+    summary({
+      jobId: "job-owed",
+      status: "exited",
+      exitCode: 0,
+      startedAt: Date.now() - 5000,
+      endedAt: Date.now(),
+      pendingPickup: true,
+    }),
+  ]);
+  assert.equal(owed.renders.length, 1, "a finished job awaiting pickup renders a line");
+  assert.equal(plain(owed.renders[0].payload), "✓ 1 pending", "and says so instead of showing an elapsed time");
+  assert.ok(owed.renders[0].payload.startsWith(`${ESC}[33m✓${ESC}[0m`), "the glyph is a tick: no wait is in progress");
+
+  // Delivery clears it — the same snapshot with the flag flipped revokes the slot. No tick is
+  // needed to notice: the registry re-notifies when it marks the delivery.
+  owed.emit([
+    summary({
+      jobId: "job-owed",
+      status: "exited",
+      exitCode: 0,
+      startedAt: Date.now() - 5000,
+      endedAt: Date.now(),
+      pendingPickup: false,
+    }),
+  ]);
+  assert.equal(owed.renders.at(-1).payload, null, "picking the result up removes the slot");
 }
 
 // --- the elapsed-time tick (1s, only while something runs) -------------------
@@ -290,9 +367,24 @@ function createHarness() {
   const running = (ms) => summary({ jobId: `j-${ms}`, status: "running", startedAt: now - ms });
   const finished = (status, exitCode = 0) =>
     summary({ jobId: `j-${status}`, status, exitCode, startedAt: now - 60_000, endedAt: now - 59_000 });
+  /** The same outcome after the completion reached the message window. */
+  const pickedUp = (status, exitCode = 0) => ({ ...finished(status, exitCode), pendingPickup: false });
 
   assert.equal(summarizeJobs([], now), null, "no jobs → no line");
-  assert.equal(summarizeJobs([finished("exited"), finished("failed", 1)], now), null, "no running job → no line");
+  assert.equal(
+    summarizeJobs([pickedUp("exited"), pickedUp("failed", 1)], now),
+    null,
+    "finished AND picked up → no line"
+  );
+
+  // A finished job that has not been picked up KEEPS the line — that is the state this surface
+  // exists for. No duration: nothing is being waited on, and the tick glyph says so.
+  assert.equal(plain(summarizeJobs([finished("exited")], now)), "✓ 1 pending", "an owed success keeps the line");
+  assert.equal(
+    plain(summarizeJobs([finished("exited"), finished("killed", null)], now)),
+    "✓ 1 killed · 2 pending",
+    "owed outcomes are counted, and every owed job is counted as pending"
+  );
 
   // The shipped line is ANSI-styled; the assertions read its plain text so the style is not
   // repeated in every expected string. The style itself is asserted above.
@@ -300,12 +392,19 @@ function createHarness() {
   assert.equal(plain(summarizeJobs([running(90_000)], now)), "⏳ 1 running · 1m 30s");
 
   // Counts lead with what the user is waiting on, and `exited` is never counted — a success is the
-  // uninteresting outcome, so a mixed line must not bury the failure behind it.
+  // uninteresting outcome, so a mixed line must not bury the failure behind it. The pending count
+  // trails both, because it applies to jobs of any status.
   const mixed = plain(summarizeJobs([running(5000), running(1000), finished("failed", 1)], now));
-  assert.equal(mixed, "⏳ 2 running · 1 failed · 5.0s");
+  assert.equal(mixed, "⏳ 2 running · 1 failed · 1 pending · 5.0s");
   assert.doesNotMatch(mixed, /exited/, "successful jobs are not listed");
 
-  assert.equal(plain(summarizeJobs([running(1000), finished("killed", null)], now)), "⏳ 1 running · 1 killed · 1.0s");
+  assert.equal(
+    plain(summarizeJobs([running(1000), finished("killed", null)], now)),
+    "⏳ 1 running · 1 killed · 1 pending · 1.0s"
+  );
+
+  // A picked-up success contributes nothing but does not hide the running job beside it.
+  assert.equal(plain(summarizeJobs([running(1000), pickedUp("exited")], now)), "⏳ 1 running · 1.0s");
 
   // Elapsed time is the OLDEST running job's age (what the user is still waiting on), not the newest.
   assert.match(
@@ -316,7 +415,7 @@ function createHarness() {
 
   // A finished job's own age never enters the line, however long ago it finished.
   const stale = finished("failed", 1);
-  assert.equal(plain(summarizeJobs([running(1000), stale], now)), "⏳ 1 running · 1 failed · 1.0s");
+  assert.equal(plain(summarizeJobs([running(1000), stale], now)), "⏳ 1 running · 1 failed · 1 pending · 1.0s");
 
   // Sub-second elapsed still formats (formatDuration's ms branch).
   assert.equal(plain(summarizeJobs([running(250)], now)), "⏳ 1 running · 250ms");

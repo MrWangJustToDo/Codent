@@ -88,6 +88,22 @@ export interface CommandJobSummary {
   exitCode: number | null;
   startedAt: number;
   endedAt: number | null;
+  /**
+   * Finished, but its completion has not reached the message window yet.
+   *
+   * This is the "待消费" state a status surface shows between a process exiting and
+   * `background-middleware` handing the result to the model: the job is done, and its outcome is
+   * still owed to the transcript. It clears when `markNotified` persists the delivery — not on poll,
+   * because polling is `get_command_output` reading incremental output, which does not consume the
+   * completion.
+   *
+   * Derived rather than stored: `notified` is the persisted fact (a restart must not re-deliver),
+   * and `running` jobs are never pending — they have not finished, so nothing is owed yet. A job owned
+   * by another session is not pending either: this session's model can never be handed it
+   * (`collectCompleted` filters by owner), so counting it would be a line that can never clear. The
+   * job stays listed and queryable — only the "owed here" claim is dropped.
+   */
+  pendingPickup: boolean;
 }
 
 /**
@@ -374,6 +390,7 @@ export class CommandJobRegistry {
         exitCode: job.exitCode,
         startedAt: job.startedAt,
         endedAt: job.endedAt,
+        pendingPickup: job.status !== "running" && this.isCurrentOwner(job) && !this.notifiedJobIds.has(job.id),
       });
     }
     return out;
@@ -688,6 +705,11 @@ export class CommandJobRegistry {
         .filter((job): job is CommandJobRecord => job !== undefined)
         .map((job) => this.persist(job))
     );
+    // The delivery is a visible state change: `pendingPickup` is derived from this set, so a status
+    // surface would otherwise keep showing "finished, still owed" until the next job event — which,
+    // for the last job in a session, may never arrive. No `finished` ids: nothing ended here, only
+    // a result was handed over (so the idle wake stays quiet).
+    this.notifyChange();
   }
 
   /**
