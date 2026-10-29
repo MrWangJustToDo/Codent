@@ -128,6 +128,10 @@ module.exports = [
         setImmediate: "readonly",
         clearImmediate: "readonly",
         URL: "readonly",
+        // Standard global since ES2020 and present in every supported Node (>=24); a test that
+        // needs to stand in for a missing platform global (the browser case, `test/alternate-screen`)
+        // has to reach it through `globalThis`.
+        globalThis: "readonly",
         process: "readonly",
         Buffer: "readonly",
         Response: "readonly",

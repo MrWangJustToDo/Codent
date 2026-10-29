@@ -64,6 +64,16 @@ The `rewriteRendererSpecifiers` plugin rewrites bare `react` / `ink` to `@my-rea
 
 A consequence hosts must handle: the emitted specifier is `@my-react/react-terminal`, **not** `ink`. A browser host therefore has to alias *both* spellings to the package's `/web` entry — aliasing only `ink` silently resolves the Node entry, which imports `signal-exit` and reads `process.platform` at module scope (`process is not defined`). See `packages/playground/vite.config.ts` and `packages/extension/wxt.config.ts`.
 
+### Platform reads must survive a browser host
+
+The same components render in the playground and the extension, where a Node global that looks obvious simply is not there — the playground defines **no `process`**, and no host has a TTY. So a platform read is either taken from CoreEnv (`getPlatform()`, never `process.platform`) or comes with the guard this package uses everywhere else:
+
+```ts
+if (typeof process === "undefined" || !process.stdout?.isTTY) return;
+```
+
+`enableWheelAsArrows()` is the worked example: an unguarded `process.stdout.isTTY` threw a `ReferenceError` out of the workspace panel's mount effect, so the web app never rendered. `test/alternate-screen.test.mjs` pins both shapes by standing in a `process` (absent / no stdout / TTY / non-TTY) around the real helper — Node's own `process` always exists, so a copy of the condition would prove nothing.
+
 ## Validate
 
 ```bash

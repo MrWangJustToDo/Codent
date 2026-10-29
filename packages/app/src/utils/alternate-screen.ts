@@ -41,6 +41,11 @@ export function setAlternateScreenActive(value: boolean): void {
  * row model.
  */
 export function enableWheelAsArrows(): void {
-  if (!process.stdout.isTTY) return;
+  // Terminal-only by nature, and guarded like every other platform read in this package
+  // (`use-size`, `file-icons`, `colorEnabled`): 1007 is an escape sequence for a real TTY, and a
+  // browser host has no `process` at all — the playground defines none, so reading
+  // `process.stdout.isTTY` threw a ReferenceError straight out of the workspace panel's mount
+  // effect and the web app never rendered. A host without a TTY keeps its native wheel handling.
+  if (typeof process === "undefined" || !process.stdout?.isTTY) return;
   process.stdout.write("\x1b[?1007h");
 }
