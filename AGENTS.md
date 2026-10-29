@@ -643,6 +643,8 @@ The `@codent/server` package exposes CoreEnv APIs over HTTP using Hono RPC for e
 | `/api/provider/info` | GET | Remote model provider metadata (style, model, proxy basePath; no secrets) |
 | `/api/provider/openai/*` | ALL | Streaming OpenAI-compatible proxy (injects server `API_KEY`; strips `Content-Encoding` after undici decode) |
 | `/api/provider/anthropic/*` | ALL | Streaming Anthropic proxy (injects server `x-api-key`; same encoding strip) |
+| `/v1/*` (server root) | ALL | **Same proxy, provider-native path** — `/v1/chat/completions` + `/v1/models` (OpenAI shape) or `/v1/messages` (anthropic shape, requires `MODEL_STYLE=anthropic`). Lets a foreign service set `baseURL=http://host:3100/v1` with any placeholder key; caller `Authorization` is replaced by the server's, and the model allowlist still applies. Unauthenticated — bind it to a trusted network. |
+| `.../models` (both surfaces) | GET | Answered **locally from the allowlist** (`servedModelsResponse`), never forwarded: the upstream catalog advertises ids the proxy refuses, so listing first and asking second would 400. Detection is by mapped target (`isUpstreamModelsRequest`), so prefixed and root paths cannot disagree. |
 | `/api/mcp/init` | POST | Create a new MCP stdio process session |
 | `/api/mcp/:id/message` | POST | Send a JSON-RPC message to an MCP session |
 | `/api/mcp/:id` | DELETE | Clean up an MCP stdio process session |
@@ -671,7 +673,7 @@ registerModelProvider(await createRemoteProvider("http://localhost:3100"));
 ### Known Limitations
 - `runCommand` mid-run streaming is lost over HTTP — chunks are not pushed live; the remote client delivers full stdout/stderr once when `/api/command/run` returns (UI/tool still get the final output)
 - Binary fetch responses are base64-encoded over the wire
-- Provider proxy assumes a trusted network (no extra auth on `/api/provider/*` in v1)
+- Provider proxy assumes a trusted network (no auth on `/api/provider/*` or the root-compatible `/v1/*` surface) — a caller's `Authorization` is discarded and replaced by the server's own key, so anyone who can reach the port spends that key
 - Provider proxy `/api/provider/*` fetch failures return OpenAI `{ error: { message, type, code } }` (not `{ error: true }`); the **server host** must be able to reach its `BASE_URL`
 - LLM adapters still use global `fetch` against the proxy `baseURL` (not `CoreEnv.fetch`)
 

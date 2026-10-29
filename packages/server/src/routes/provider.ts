@@ -174,6 +174,44 @@ export function mapProviderPathToUpstream(
   return `${upstreamBaseURL.replace(/\/+$/, "")}${rest}`;
 }
 
+/**
+ * Map a request on the **root-compatible** surface (`/v1/...`) onto the upstream base URL.
+ *
+ * Same upstream, same allowlist, same injected key as the prefixed surface — it only drops
+ * `/api/provider/{family}` from the client's base URL, so any OpenAI/Anthropic SDK consumer can
+ * point `baseURL` at `http://<server>:3100/v1` without knowing Codent's route layout.
+ *
+ * Exactly one `/v1` survives: the client supplies one (`/v1/chat/completions`) and the upstream
+ * base may already end with one (`https://api.openai.com/v1`) or not (`https://api.deepseek.com`,
+ * whose OpenAI-compatible paths carry their own `/v1`).
+ */
+export function mapRootAliasToUpstream(
+  upstreamBaseURL: string,
+  family: "openai" | "anthropic",
+  requestPath: string
+): string {
+  const upstreamBase = upstreamBaseURL.replace(/\/+$/, "");
+  const proxyBase = family === "openai" ? openaiProxyBasePath(upstreamBase) : anthropicProxyBasePath(upstreamBase);
+  const pathOnly = requestPath.split("?")[0] ?? requestPath;
+  // `proxyBase` names the `/v1` its upstream needs; whether it needs one is decided by
+  // `openaiProxyBasePath`/`anthropicProxyBasePath`, so reuse that answer instead of a second rule.
+  const suffix = proxyBase.endsWith("/v1") ? pathOnly.replace(/^\/v1(?=\/|$)/, "") : pathOnly;
+  return `${upstreamBase}${suffix === "/" ? "" : suffix}`;
+}
+
+/**
+ * Which upstream protocol a root-surface request speaks.
+ *
+ * Anthropic's Messages API lives at `/v1/messages`; everything else under `/v1` is the
+ * OpenAI-compatible shape the majority of gateways expose. The style check in `proxyStream` turns
+ * the mismatch (an Anthropic-shaped server asked for `/v1/chat/completions`) into a diagnosable
+ * 400 rather than an upstream 404.
+ */
+export function rootProviderFamily(pathname: string): "openai" | "anthropic" {
+  const pathOnly = pathname.split("?")[0] ?? pathname;
+  return pathOnly === "/v1/messages" || pathOnly.startsWith("/v1/messages/") ? "anthropic" : "openai";
+}
+
 function filterRequestHeaders(source: Headers, inject: Record<string, string>): Headers {
   const out = new Headers();
   source.forEach((value, key) => {
@@ -226,15 +264,53 @@ function formatUnknownError(err: unknown): string {
   return parts.join(": ");
 }
 
+/**
+ * Whether the client asked for the upstream MODEL LIST.
+ *
+ * Decided on the MAPPED TARGET rather than on the client path, so both surfaces answer the same
+ * way: a prefixed client (`/api/provider/openai/v1/models`) and a foreign OpenAI SDK
+ * (`/v1/models`) resolve to the same upstream URL, and a base that does not end with `/v1`
+ * (DeepSeek shape) needs no third rule.
+ */
+function isUpstreamModelsRequest(method: string, upstreamTarget: string, upstreamBaseURL: string): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const base = upstreamBaseURL.replace(/\/+$/, "");
+  return upstreamTarget.split("?")[0] === `${base}/models`;
+}
+
+/**
+ * The OpenAI `.../models` body for what THIS server serves.
+ *
+ * Forwarding the upstream catalog was the behaviour, and it advertised ids that every other
+ * request on this surface refuses with `model_not_allowed` — a client that lists first and asks
+ * second gets a 400 for a model the list itself recommended. The allowlist that refuses those
+ * requests is therefore the only honest answer to "what can I ask for", and reusing the refusal
+ * path's own set means the two answers can never disagree.
+ *
+ * `created` is 0: an upstream catalog carries no creation time we could claim for a model id, but
+ * OpenAI's SDKs type it as a required integer (and some clients sort by it).
+ */
+function servedModelsResponse(allowed: Set<string>): Response {
+  return Response.json({
+    object: "list",
+    data: [...allowed].sort().map((id) => ({ id, object: "model", created: 0, owned_by: "codent" })),
+  });
+}
+
+/** Which client-facing surface a proxied request arrived on. */
+type ProxySurface = "prefix" | "root";
+
 async function proxyStream(
   c: { req: { raw: Request; url: string; path: string; method: string } },
-  family: "openai" | "anthropic"
+  family: "openai" | "anthropic",
+  surface: ProxySurface = "prefix"
 ): Promise<Response> {
   const connection = readServerModelEnv();
+  const pathname = new URL(c.req.url).pathname;
   if (connection.style !== family) {
     return openaiErrorResponse(
       400,
-      `Server MODEL_STYLE is "${connection.style}", but client requested ${family} proxy`,
+      `Server MODEL_STYLE is "${connection.style}", but ${pathname} speaks the ${family} API`,
       "style_mismatch"
     );
   }
@@ -242,8 +318,33 @@ async function proxyStream(
     return openaiErrorResponse(500, "Server API_KEY is not configured", "missing_api_key");
   }
 
-  const pathname = new URL(c.req.url).pathname;
-  const target = mapProviderPathToUpstream(connection.baseURL, family, pathname);
+  // Model policy: the server's own model set is the allowlist, and it is the
+  // single source of truth — a client model outside it is refused, never
+  // rewritten. Rewriting was the older behaviour ("so a leftover local default
+  // like gpt-4o-mini never leaks upstream"), but silently swapping the model in
+  // a client's request body is the worse failure: the client believes it is
+  // talking to model A while the server answers as model B, with nothing in the
+  // response to reveal the substitution. A 400 with the allowed set named is
+  // diagnosable.
+  //
+  // The set is never empty on this path: reaching here requires
+  // `connection.baseURL`, whose companion `MODEL` is seeded below, so a server
+  // with no models.json still refuses unknown models rather than rewriting them.
+  const serverConfig = await loadServerModelsConfig();
+  const allowed = collectAllowedModels(serverConfig, connection);
+
+  const target =
+    surface === "root"
+      ? mapRootAliasToUpstream(connection.baseURL, family, pathname)
+      : mapProviderPathToUpstream(connection.baseURL, family, pathname);
+
+  // A model-list request is answered FROM the allowlist above, never forwarded: the upstream's
+  // catalog contains ids this proxy refuses, so a client that lists first and requests second
+  // would be told "this exists" and then refused with `model_not_allowed`.
+  if (isUpstreamModelsRequest(c.req.method, target, connection.baseURL)) {
+    return servedModelsResponse(allowed);
+  }
+
   const url = new URL(c.req.url);
   const targetUrl = `${target}${url.search}`;
 
@@ -261,20 +362,6 @@ async function proxyStream(
   const method = c.req.method;
   const hasBody = method !== "GET" && method !== "HEAD";
 
-  // Model policy: the server's own model set is the allowlist, and it is the
-  // single source of truth — a client model outside it is refused, never
-  // rewritten. Rewriting was the older behaviour ("so a leftover local default
-  // like gpt-4o-mini never leaks upstream"), but silently swapping the model in
-  // a client's request body is the worse failure: the client believes it is
-  // talking to model A while the server answers as model B, with nothing in the
-  // response to reveal the substitution. A 400 with the allowed set named is
-  // diagnosable.
-  //
-  // The set is never empty on this path: reaching here requires
-  // `connection.baseURL`, whose companion `MODEL` is seeded below, so a server
-  // with no models.json still refuses unknown models rather than rewriting them.
-  const serverConfig = await loadServerModelsConfig();
-  const allowed = collectAllowedModels(serverConfig, connection);
   let body: BodyInit | undefined = c.req.raw.body ?? undefined;
   if (hasBody && connection.baseURL) {
     const contentType = headers.get("content-type") ?? "";
@@ -337,6 +424,19 @@ export interface ProviderInfoResponse {
   /** Server's own models.json (sanitized) — lets clients resolve the list. */
   config?: SanitizedProviderConfig;
 }
+
+/**
+ * The same proxy at the server root: `/v1/chat/completions`, `/v1/models`, `/v1/messages`, …
+ *
+ * This is the "consume me like a provider" surface. A foreign service configures
+ * `baseURL=http://<server>:3100/v1` plus any placeholder key (the proxy replaces `Authorization`
+ * with the server's own `API_KEY`), and gets the server's model allowlist, streaming, and
+ * tool calls without knowing Codent's `/api/provider/{family}` layout. Mounted on the root app,
+ * not under `/api` — the shape other OpenAI-compatible tools expect.
+ */
+export const rootProviderRoutes = new Hono()
+  .all("/v1/*", (c) => proxyStream(c, rootProviderFamily(new URL(c.req.url).pathname), "root"))
+  .all("/v1", (c) => proxyStream(c, rootProviderFamily(new URL(c.req.url).pathname), "root"));
 
 export const providerRoutes = new Hono()
   .get("/info", async (c) => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { installAgentLogProcessGuards, registerCoreEnv, errorMessage } from "@codent/core";
+import { installAgentLogProcessGuards, parseModelStyle, registerCoreEnv, errorMessage } from "@codent/core";
 import { createNodeEnv } from "@codent/node";
 import { serve } from "@hono/node-server";
 import "dotenv/config";
@@ -22,10 +22,13 @@ import { mcpRoutes } from "./routes/mcp.js";
 import {
   anthropicProxyBasePath,
   mapProviderPathToUpstream,
+  mapRootAliasToUpstream,
   normalizeProviderRequestPath,
   openaiProxyBasePath,
   providerRoutes,
   readServerModelEnv,
+  rootProviderFamily,
+  rootProviderRoutes,
 } from "./routes/provider.js";
 import { getServerEnv, initServerRuntime } from "./server-runtime.js";
 
@@ -38,10 +41,13 @@ export {
   filterSensitiveVars,
   imageRoutes,
   mapProviderPathToUpstream,
+  mapRootAliasToUpstream,
   normalizeProviderRequestPath,
   openaiProxyBasePath,
   providerRoutes,
   readServerModelEnv,
+  rootProviderFamily,
+  rootProviderRoutes,
 };
 
 export { createRemoteProvider } from "./remote-provider.js";
@@ -201,13 +207,45 @@ app.get("/health", (c) => {
 
 app.route("/api", api);
 
+// Provider-compatible surface at the ROOT (`/v1/*`): the same proxy/allowlist/key injection as
+// `/api/provider/*`, at the path an OpenAI- or Anthropic-SDK consumer expects. Kept out of `/api`
+// deliberately — `baseURL=http://host:3100/v1` has to be enough for a foreign service.
+app.route("/", rootProviderRoutes);
+
 export { app, api };
+
+/**
+ * Print the LLM surface a foreign client should point at.
+ *
+ * The provider-native proxy lives at the server ROOT (`/v1/...`), which nothing advertises: it is
+ * absent from `/health`, and an operator who started the process only sees CoreEnv/workspace lines.
+ * The two styles also need DIFFERENT base URLs — an OpenAI SDK appends `/chat/completions` to the
+ * base it is given and so needs the `/v1`, while an Anthropic SDK appends `/v1/messages` itself and
+ * would double it — so the line prints the exact value instead of a generic "LLM ready".
+ */
+function logProviderSurface(port: number): void {
+  const connection = readServerModelEnv();
+  const style = parseModelStyle(connection.style);
+  const addresses = [...new Set([`http://localhost:${port}`, `http://${getLocalIP()}:${port}`])];
+  // OpenAI-compatible clients take base=/v1; the Messages API is versioned by the client, not the base.
+  const bases = style === "anthropic" ? addresses : addresses.map((address) => `${address}/v1`);
+  const surface =
+    style === "anthropic"
+      ? "Anthropic Messages (/v1/messages)"
+      : "OpenAI-compatible (/v1/chat/completions, /v1/models)";
+  // A missing key is not fatal at startup but every proxied request 500s — say so here, with the
+  // first line an operator reads, instead of leaving it to the first request to explain.
+  const missingKey = connection.apiKey ? "" : "  [warn] API_KEY is not set — proxied requests will fail";
+  const model = connection.model ? `model=${connection.model}` : "model=<unset>";
+  console.log(`[server] LLM ${surface} at ${bases.join(" | ")}  (${model})${missingKey}`);
+}
 
 export const createServer = () => {
   return serve({ fetch: app.fetch, port: PORT }, (info) => {
     console.log(`[server] CoreEnv HTTP server listening on http://localhost:${info.port}`);
     console.log(`[server] CoreEnv HTTP server listening on http://${getLocalIP()}:${info.port}`);
     console.log(`[server] rootPath=${getServerEnv().rootPath}, sandbox=${SANDBOX_ENV}`);
+    logProviderSurface(info.port);
   });
 };
 

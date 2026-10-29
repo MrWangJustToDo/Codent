@@ -17,11 +17,15 @@ import { TEMP_RM_OPTIONS } from "../../core/scripts/helpers/temp-cleanup.mjs";
 import {
   REMOTE_PROVIDER_API_KEY,
   anthropicProxyBasePath,
+  app as serverApp,
   filterSensitiveVars,
   mapProviderPathToUpstream,
+  mapRootAliasToUpstream,
   normalizeProviderRequestPath,
   openaiProxyBasePath,
   providerRoutes,
+  rootProviderFamily,
+  rootProviderRoutes,
 } from "../dist/index.mjs";
 
 // --- path helpers ---
@@ -39,6 +43,43 @@ assert.equal(
   "https://api.deepseek.com/v1/chat/completions"
 );
 assert.equal(normalizeProviderRequestPath("/openai/v1/x"), "/api/provider/openai/v1/x");
+
+// --- root-compatible surface (`/v1/...`) ---
+
+// Exactly one `/v1` survives, whether the upstream base already carries it (OpenAI) or not
+// (DeepSeek, whose OpenAI-compatible paths carry their own). Two `/v1`s is a 404 on every
+// upstream, which is what a naive `${base}${path}` join produces.
+assert.equal(
+  mapRootAliasToUpstream("https://api.openai.com/v1", "openai", "/v1/chat/completions"),
+  "https://api.openai.com/v1/chat/completions"
+);
+assert.equal(
+  mapRootAliasToUpstream("https://api.deepseek.com", "openai", "/v1/chat/completions"),
+  "https://api.deepseek.com/v1/chat/completions"
+);
+assert.equal(
+  mapRootAliasToUpstream("https://api.deepseek.com/", "openai", "/v1/models"),
+  "https://api.deepseek.com/v1/models",
+  "a trailing slash on the base must not double up"
+);
+assert.equal(
+  mapRootAliasToUpstream("https://api.anthropic.com", "anthropic", "/v1/messages"),
+  "https://api.anthropic.com/v1/messages"
+);
+assert.equal(mapRootAliasToUpstream("https://api.anthropic.com", "anthropic", "/v1"), "https://api.anthropic.com/v1");
+assert.equal(
+  mapRootAliasToUpstream("https://api.openai.com/v1", "openai", "/v1"),
+  "https://api.openai.com/v1",
+  "a bare /v1 against a /v1 base is the base itself, not /v1/v1"
+);
+
+// Protocol is decided by PATH SHAPE, so an OpenAI client and an Anthropic client cannot
+// silently agree on the same endpoint name.
+assert.equal(rootProviderFamily("/v1/chat/completions"), "openai");
+assert.equal(rootProviderFamily("/v1/models"), "openai");
+assert.equal(rootProviderFamily("/v1/messages"), "anthropic");
+assert.equal(rootProviderFamily("/v1/messages/count_tokens"), "anthropic");
+assert.equal(rootProviderFamily("/v1/messagesx"), "openai", "only the Messages prefix selects the anthropic shape");
 
 assert.equal(REMOTE_PROVIDER_API_KEY, "remote-provider");
 
@@ -62,10 +103,12 @@ assert.equal(filtered.BRAVE_API_KEY, undefined);
 const upstreamChunks = ["data: hello\n\n", "data: world\n\n"];
 let sawAuth = "";
 let sawBody = "";
+let sawPath = "";
 let upstreamHits = 0;
 const upstream = createServer((req, res) => {
   upstreamHits += 1;
   sawAuth = String(req.headers.authorization || "");
+  sawPath = req.url || "";
   req.on("data", (d) => (sawBody += d));
   req.on("end", () => {
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -134,6 +177,79 @@ const noModelRes = await app.request("http://local/api/provider/openai/v1/chat/c
 assert.equal(noModelRes.status, 200, "a request without a model field still passes through");
 assert.equal(upstreamHits, 2, "the model-less request reached upstream");
 
+// --- root-compatible surface: the same proxy/allowlist at `/v1/...` ---
+
+const rootApp = new Hono().route("/", rootProviderRoutes);
+
+sawBody = "";
+const rootRes = await rootApp.request("http://local/v1/chat/completions", {
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: "Bearer placeholder-key" },
+  body: JSON.stringify({ model: "mock-model", stream: true }),
+});
+assert.equal(rootRes.status, 200, "a root /v1 request reaches the upstream");
+assert.equal(sawPath, "/v1/chat/completions", "one /v1 survives when the upstream base already ends with /v1");
+assert.equal(sawAuth, "Bearer sk-server-only", "the root surface injects the server key, not the client's placeholder");
+const rootBody = await rootRes.text();
+assert.ok(rootBody.includes("hello") && rootBody.includes("world"), "streaming still works at the root surface");
+
+// The model list is answered FROM the server's allowlist, never forwarded: the upstream catalog
+// advertises ids this proxy refuses, so a client that lists first and asks second would be told
+// "this exists" and then get model_not_allowed for it.
+const modelsRes = await rootApp.request("http://local/v1/models");
+assert.equal(modelsRes.status, 200, "GET /v1/models is answered by the server itself");
+const modelsBody = await modelsRes.json();
+assert.equal(modelsBody.object, "list");
+assert.deepEqual(
+  modelsBody.data.map((m) => m.id),
+  ["mock-model"],
+  "the list must be exactly the served set, not the upstream catalog"
+);
+assert.equal(modelsBody.data[0].object, "model");
+assert.equal(typeof modelsBody.data[0].created, "number", "OpenAI SDKs type `created` as a required integer");
+assert.equal(upstreamHits, 3, "a model-list request must not reach the upstream");
+
+// The prefixed surface maps onto the same upstream URL, so it must give the same answer —
+// otherwise the same request differs by prefix.
+const prefixedModels = await app.request("http://local/api/provider/openai/v1/models");
+assert.equal(prefixedModels.status, 200);
+assert.deepEqual(
+  (await prefixedModels.json()).data.map((m) => m.id),
+  ["mock-model"]
+);
+assert.equal(upstreamHits, 3, "the prefixed model list is local too");
+
+const rootRejected = await rootApp.request("http://local/v1/chat/completions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "client-wrong-model" }),
+});
+assert.equal(rootRejected.status, 400, "the model allowlist also guards the root surface");
+assert.equal(JSON.parse(await rootRejected.text()).error.code, "model_not_allowed");
+
+// An Anthropic-shaped path against an OpenAI-style server is refused locally, so the client
+// sees "style mismatch" instead of an upstream 404 it cannot diagnose.
+const rootStyleMismatch = await rootApp.request("http://local/v1/messages", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "mock-model" }),
+});
+assert.equal(rootStyleMismatch.status, 400);
+assert.equal(JSON.parse(await rootStyleMismatch.text()).error.code, "style_mismatch");
+assert.equal(upstreamHits, 3, "neither refusal reached upstream");
+
+// A base that does NOT end with /v1 (DeepSeek shape) still gets exactly one from the surface.
+process.env.BASE_URL = `http://127.0.0.1:${upstreamPort}`;
+const rootNoV1 = await rootApp.request("http://local/v1/chat/completions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model: "mock-model", stream: true }),
+});
+assert.equal(rootNoV1.status, 200);
+assert.equal(sawPath, "/v1/chat/completions", "a base without /v1 receives exactly one /v1 from the root surface");
+assert.equal(upstreamHits, 4);
+process.env.BASE_URL = `http://127.0.0.1:${upstreamPort}/v1`;
+
 const infoRes = await app.request("http://local/api/provider/info");
 assert.equal(infoRes.status, 200);
 const info = await infoRes.json();
@@ -201,6 +317,17 @@ assert.equal(info.basePath, "/api/provider/openai/v1");
 
   rmSync(root, TEMP_RM_OPTIONS);
 }
+
+// The root surface must be mounted on the REAL app (index.ts), not only on the sub-app this
+// harness builds — otherwise `/v1/chat/completions` exists in the validator and nowhere a
+// deployed server would serve it.
+const realAppRoot = await serverApp.request("http://local/v1/models");
+assert.equal(realAppRoot.status, 200, "index.ts mounts the root-compatible surface on the server app");
+assert.deepEqual(
+  (await realAppRoot.json()).data.map((m) => m.id),
+  ["mock-model"],
+  "the real app answers the model list from the server's allowlist"
+);
 
 upstream.close();
 

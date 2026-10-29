@@ -130,6 +130,31 @@ LLM credentials are **not** part of CoreEnv — the workspace and the model keys
 | `createDirectModelProvider()` | `@codent/core` | Local LLM keys / baseURL (default) |
 | `createRemoteProvider(url)` | `@codent/server` (client) | Remote LLM provider (`--remote-provider` / `REMOTE_PROVIDER`) — keys live on the server, requests proxied through `/api/provider/*` |
 
+#### Using the server as an LLM endpoint
+
+The same proxy is also mounted at the **server root** in provider-native shape, so a service that knows only OpenAI/Anthropic can point at it — no `/api/provider/{family}` prefix:
+
+```bash
+# OpenAI-compatible (openai SDK: base_url="http://<host>:3100/v1")
+curl http://localhost:3100/v1/chat/completions \
+  -H "Authorization: Bearer any-placeholder" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<the server MODEL>","messages":[{"role":"user","content":"hi"}]}'
+
+# Model list / Anthropic Messages
+curl http://localhost:3100/v1/models
+curl http://localhost:3100/v1/messages -H "x-api-key: any" -H "anthropic-version: 2023-06-01" ...
+```
+
+| Surface | Path | Notes |
+|---|---|---|
+| OpenAI-compatible | `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, … | `baseURL = http://host:3100/v1` in any OpenAI SDK |
+| Anthropic Messages | `/v1/messages`, `/v1/messages/count_tokens` | served only when the server runs `MODEL_STYLE=anthropic` |
+
+`/v1/models` is answered **by the server, not forwarded**, and lists exactly the ids a request may use (`MODEL` + the server's `models.json`). Forwarding the upstream catalog was the behaviour, and it advertised ids every other request refuses with `model_not_allowed` — a client that lists first and asks second was told "this exists" and then rejected.
+
+Same model allowlist (`MODEL` + the server's `models.json` → `model_not_allowed`), same server-side key injection, same streaming and tool calls. The caller's `Authorization` / `x-api-key` is **discarded and replaced** by the server's, so the key a client passes is a placeholder and the cost lands on the server's account — there is **no authentication on these routes**: expose the port only on a network you trust (or put a reverse proxy in front). A path that speaks the other protocol fails fast with `style_mismatch` instead of an upstream 404.
+
 ### AgentSession — Agent Loop Plane
 
 The agent loop and its full session state (messages, queued messages, todos, approvals, plan, usage) can run in-process or on the server. The UI stays **Session-only** either way — hosts talk to an `AgentSession` interface and never touch the loop directly.
