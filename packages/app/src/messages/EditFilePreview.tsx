@@ -53,6 +53,7 @@ export const EditFilePreview = memo(function EditFilePreview({
   const oldFile = hasOutput ? output!.oldFile! : preview?.oldFile;
   const newFile = hasOutput ? output!.newFile! : preview?.newFile;
   const hasFullPreview = oldFile !== undefined && newFile !== undefined;
+  const hasChange = hasFullPreview && oldFile !== newFile;
 
   return (
     <Box flexDirection="column">
@@ -63,26 +64,27 @@ export const EditFilePreview = memo(function EditFilePreview({
           ⚠ edit_file will refuse this: {preview.error}
         </Text>
       ) : null}
-      {hasFullPreview ? (
-        /* Full-file diff: original file → file after all edits applied */
-        <MessageDiffView width={width} oldPath={path} oldFile={oldFile} newPath={path} newFile={newFile} />
-      ) : (
-        /* Fallback: per-edit fragment diffs when full-file preview is unavailable */
-        edits.map((edit, i) => (
-          <Fragment key={i}>
-            {edit.oldString !== edit.newString && (
-              <MessageDiffView
-                width={width}
-                oldPath={path}
-                oldFile={edit.oldString}
-                newPath={path}
-                newFile={edit.newString}
-                startLine={edit.startLine}
-              />
-            )}
-          </Fragment>
-        ))
-      )}
+      {hasChange &&
+        (hasFullPreview ? (
+          /* Full-file diff: original file → file after all edits applied */
+          <MessageDiffView width={width} oldPath={path} oldFile={oldFile} newPath={path} newFile={newFile} />
+        ) : (
+          /* Fallback: per-edit fragment diffs when full-file preview is unavailable */
+          edits.map((edit, i) => (
+            <Fragment key={i}>
+              {edit.oldString !== edit.newString && (
+                <MessageDiffView
+                  width={width}
+                  oldPath={path}
+                  oldFile={edit.oldString}
+                  newPath={path}
+                  newFile={edit.newString}
+                  startLine={edit.startLine}
+                />
+              )}
+            </Fragment>
+          ))
+        ))}
     </Box>
   );
 });
