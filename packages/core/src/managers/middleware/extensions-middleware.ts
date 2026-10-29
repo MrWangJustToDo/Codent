@@ -71,7 +71,6 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           tool_name: hookCtx.toolName,
           tool_call_id: hookCtx.toolCallId,
           tool_input: hookCtx.args,
-          timestamp: Date.now(),
         });
       }
 
@@ -132,6 +131,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           tool_name: info.toolName,
           tool_call_id: info.toolCallId,
           duration_ms: info.duration,
+          ok: true,
           tool_output: info.result,
           // `info.ok` only means the tool RETURNED — a tool that catches its own abort
           // returns normally (`run_command` settles with `cancelled: true` + partial
@@ -139,18 +139,17 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           // cancel from a success. Read the verdict off the output, the same marker
           // the render layer uses, so one semantic does not get two readers.
           cancelled: isCancelledOutputMarker(info.result),
-          timestamp: Date.now(),
         });
       } else {
         deps.emitEvent?.("agent:tool-error", {
           tool_name: info.toolName,
           tool_call_id: info.toolCallId,
+          duration_ms: info.duration,
           error: errorMessage(info.error),
           // A user abort reaches here as a throw, indistinguishable from a fault unless we
           // ask the run's signal. Consumers counting failures must not count cancels, and
           // the log bridge must not report one as an error.
           cancelled: isAbortError(info.error, deps.getAbortSignal?.()),
-          timestamp: Date.now(),
         });
       }
 

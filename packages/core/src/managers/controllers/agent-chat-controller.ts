@@ -16,6 +16,7 @@ import {
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
 } from "../../agent/stream/incomplete-tool-calls.js";
+import { findToolCallPart } from "../../agent/stream/suppress-replayed-tool-chunks.js";
 import {
   hasPendingAskUser,
   hasPendingInteraction,
@@ -52,6 +53,20 @@ const WAKEABLE_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(["idle"
 export type SendMessageOutcome = "sent" | "queued" | "dropped";
 
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
+
+/** Plain text of a queued message: the string itself, or the text parts of a content array. */
+function queuedContentText(content: QueuedMessageContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => {
+      const record = part as { text?: unknown; content?: unknown };
+      if (typeof record.text === "string") return record.text;
+      if (typeof record.content === "string") return record.content;
+      return "";
+    })
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
 
 /**
  * Core-owned main chat session: StreamProcessor + explicit tool-phase continuation.
@@ -494,6 +509,13 @@ export class AgentChatController {
     // A client-tool answer (`ask_user`) belongs to the question the leaving turn asked.
     if (this.dropIfSwitching("add-tool-result")) return false;
     this.channel.addToolResult(toolCallId, output);
+    // A client tool has no server-side `agent:tool-end`; this is the only place the answer exists.
+    const part = findToolCallPart(this.channel.getMessages(), toolCallId);
+    this.managed.emitEvent("agent:client-tool-result", {
+      tool_call_id: toolCallId,
+      ...(part?.name ? { tool_name: part.name } : {}),
+      output,
+    });
     // The client tool's result IS the end of the wait — but only when it was the LAST pending one
     // (a host could settle a different tool while an `ask_user` is still open). Clearing it here
     // rather than in each host is what lets the resumed pump leave `awaiting_user`; see
@@ -581,6 +603,7 @@ export class AgentChatController {
     }
     this.notifyQueueListeners();
     this.persistMessages("user-message");
+    this.emitQueuedPromptRows(items);
     return true;
   }
 
@@ -592,7 +615,27 @@ export class AgentChatController {
     }
     this.notifyQueueListeners();
     this.persistMessages("user-message");
+    this.emitQueuedPromptRows(items);
     return true;
+  }
+
+  /**
+   * Record each released queued message as a prompt.
+   *
+   * The drain appends to the transcript directly (no `send`), so the run lifecycle's
+   * `prompt:submit` — which fires once per turn — never saw it. One row per message, because a
+   * steer batch can carry several.
+   */
+  private emitQueuedPromptRows(items: QueuedMessageContent[]): void {
+    for (const content of items) {
+      const text = queuedContentText(content);
+      if (!text) continue;
+      this.managed.emitEvent("prompt:submit", {
+        prompt: text,
+        contextMessageCount: this.channel.getMessages().length,
+        source: "queued",
+      });
+    }
   }
 
   private hasQueuedMessages(): boolean {

@@ -8,7 +8,7 @@ import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
-import type { AgentStatus, RunFinalizeReason } from "./agent-types.js";
+import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "./agent-types.js";
 import type { RunCoordinator } from "./run-coordinator.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
@@ -26,7 +26,7 @@ export interface RunLifecycleHost {
   readonly id: string;
   parentId?: string;
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: string) => void;
+  setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
   /** Track the active run id (log run-scoping); pass null to clear. */
   setCurrentRunId: (runId: string | null) => void;
   recordStreamDuration: () => void;
@@ -140,6 +140,7 @@ export async function prepareManagedAgentForRun(
       host.emitEvent("prompt:submit", {
         prompt: userMsg,
         contextMessageCount: (host.getUI?.()?.getMessages() ?? inputMessages).length,
+        source: "user",
       });
     }
   }

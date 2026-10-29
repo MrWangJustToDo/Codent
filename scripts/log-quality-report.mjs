@@ -255,6 +255,9 @@ for (const [event, why] of [
   ["mode:change", "auto/effort switch"],
   ["compaction:auto-start", "context compaction"],
   ["subagent:completed", "delegated run"],
+  ["agent:client-tool-result", "client tool answer (ask_user)"],
+  ["job:changed", "background job transition"],
+  ["session:deleted", "session deletion"],
 ]) {
   const n = countEvent(event);
   if (n > 0) console.log(`  ok    ${event.padEnd(24)} ${String(n).padStart(5)}  ${why}`);

@@ -367,7 +367,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
     const runId = meta?.runId ?? resolved?.runId;
     return {
       type,
-      ts: Date.now(),
+      ts: meta?.ts ?? Date.now(),
       agentId,
       ...(parentId !== undefined ? { parentId } : {}),
       ...(sessionId !== undefined ? { sessionId } : {}),

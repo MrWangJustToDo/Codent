@@ -121,6 +121,15 @@ export interface ExtensionRunnerOptions {
    */
   eventBus?: AgentEventBus;
   /**
+   * Telemetry funnel for this runner's own facts (`agent:extension-error`, `extension:log`).
+   *
+   * Production passes the owning agent's `emitEvent`, so extension failures and logger output ride
+   * the same envelope path as every other domain event. The bus remains the floor because a runner
+   * can be constructed without a manager (tests, a standalone host), and dropping the diagnostics
+   * there would be worse than emitting them directly.
+   */
+  emitEvent?: (type: "agent:extension-error" | "extension:log", payload: Record<string, unknown>) => void;
+  /**
    * Host-supplied overrides for the extension UI context snapshot (model /
    * status / usage / workspace / session name / mode). Omitted fields fall back
    * to retained bus state and the runner's own `cwd`.
@@ -225,7 +234,7 @@ export class ExtensionRunner {
         await this.eventBus.emit(event);
       },
       reportFailure: (extensionId, phase, error) =>
-        this.rawBus.emit("agent:extension-error", { extensionId, phase, error }),
+        this.emitExtensionEvent("agent:extension-error", { extensionId, phase, error }),
       log: (level, extensionId, message) => this.writeExtensionLog(level, extensionId, message),
     });
 
@@ -301,6 +310,21 @@ export class ExtensionRunner {
     };
   }
 
+  /**
+   * Emit one of this runner's own facts through the funnel when the host supplied one.
+   *
+   * The fallback is the only direct emit the guard allows outside a projection (see
+   * `validate-event-emit-paths`): a runner built without a manager still has an agent-scoped bus,
+   * and `buildEventAt` stamps the same envelope fields either way.
+   */
+  private emitExtensionEvent(type: "agent:extension-error" | "extension:log", payload: Record<string, unknown>): void {
+    if (this.options.emitEvent) {
+      this.options.emitEvent(type, payload);
+      return;
+    }
+    this.rawBus.emit(type as never, payload as never);
+  }
+
   getEventBus(): ExtensionEventBus {
     return this.eventBus;
   }
@@ -332,7 +356,7 @@ export class ExtensionRunner {
     const message = errorMessage(err);
     // The event's log rule writes the row; a direct `writeExtensionLog` here made every failure two
     // rows with the same text.
-    this.rawBus.emit("agent:extension-error", {
+    this.emitExtensionEvent("agent:extension-error", {
       extensionId,
       phase: "message-transform",
       error: message,
@@ -423,7 +447,7 @@ export class ExtensionRunner {
     }
     this.reportingObserverFailure = true;
     try {
-      this.rawBus.emit("agent:extension-error", {
+      this.emitExtensionEvent("agent:extension-error", {
         extensionId,
         phase: "event-observer",
         error: message,
@@ -590,7 +614,7 @@ export class ExtensionRunner {
       instance.state = "error";
       instance.error = error;
       // Emitting is the record (and the bootstrap reports it too); the direct logger row duplicated it.
-      this.rawBus.emit("agent:extension-error", {
+      this.emitExtensionEvent("agent:extension-error", {
         extensionId: api.id,
         phase: "activate",
         error: error.message,
@@ -628,7 +652,7 @@ export class ExtensionRunner {
       await flush(this.contexts.get(instance.api.id));
     } catch (err) {
       const error = toError(err);
-      this.rawBus.emit("agent:extension-error", {
+      this.emitExtensionEvent("agent:extension-error", {
         extensionId: instance.api.id,
         phase: "flush",
         error: error.message,
@@ -648,7 +672,7 @@ export class ExtensionRunner {
     } catch (err) {
       // Do not swallow: surface deactivation failures for observability.
       const error = toError(err);
-      this.rawBus.emit("agent:extension-error", {
+      this.emitExtensionEvent("agent:extension-error", {
         extensionId: instance.api.id,
         phase: "deactivate",
         error: error.message,
@@ -1025,7 +1049,7 @@ export class ExtensionRunner {
   private reportInterceptorFailure(extensionId: string, pattern: string, eventType: string, err: unknown): void {
     const message = errorMessage(err);
     this.writeExtensionLog("warn", extensionId, `interceptor for "${pattern}" failed on ${eventType}: ${message}`);
-    this.rawBus.emit("agent:extension-error", {
+    this.emitExtensionEvent("agent:extension-error", {
       extensionId,
       phase: "interceptor",
       error: `${pattern} (${eventType}): ${message}`,
@@ -1109,7 +1133,7 @@ export class ExtensionRunner {
     if (this.emittingExtensionLog) return;
     this.emittingExtensionLog = true;
     try {
-      this.rawBus.emit("extension:log", { extensionId, level, message: msg, category });
+      this.emitExtensionEvent("extension:log", { extensionId, level, message: msg, category });
     } finally {
       this.emittingExtensionLog = false;
     }

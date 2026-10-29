@@ -7,6 +7,24 @@ type TelemetryEventType = keyof AgentEventPayloadMap;
 
 export type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 
+/**
+ * Telemetry emitted before the agent had a bus to dispatch on.
+ *
+ * `emitAgentTelemetry` used to return silently, so an event lost in the pre-wiring window was
+ * indistinguishable from one that was never emitted. The count is exported so a validator can
+ * assert the bootstrap deferral covers the window instead of trusting it.
+ */
+let droppedTelemetryEvents = 0;
+
+export function getDroppedTelemetryEventCount(): number {
+  return droppedTelemetryEvents;
+}
+
+/** Test-only reset (one process hosts several bootstraps in the validator suite). */
+export function resetDroppedTelemetryEventCount(): void {
+  droppedTelemetryEvents = 0;
+}
+
 /** Minimal surface for unified agent telemetry emission. */
 export interface AgentTelemetryEmitter {
   readonly id: string;
@@ -58,7 +76,10 @@ export function emitAgentTelemetry<T extends TelemetryEventType>(
   payload?: AgentEventPayloadMap[T],
   options?: EmitAgentTelemetryOptions
 ): void {
-  if (!emitter.dispatchEvent) return;
+  if (!emitter.dispatchEvent) {
+    droppedTelemetryEvents += 1;
+    return;
+  }
 
   // Never fall back to the agent id: `sessionId` and `agentId` are different identifier spaces, and
   // stamping the agent id made a subagent's events claim a session that does not exist. Unknown is

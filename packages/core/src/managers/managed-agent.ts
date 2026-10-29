@@ -122,7 +122,7 @@ import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentConfig, AgentStatus, RunFinalizeReason } from "./agent-types.js";
+import type { AgentConfig, AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
@@ -178,6 +178,7 @@ import type {
   AgentSessionSubagentSummary,
   AgentMode,
   SessionInteractionsSnapshot,
+  SessionJobSummary,
   SessionJobsSnapshot,
 } from "../runtime-types/session-payloads.js";
 
@@ -520,6 +521,26 @@ export class ManagedAgent {
    * frame it suppresses.
    */
   private lastSubagentsSignature: string | null = null;
+  /**
+   * Last published retained snapshot, for de-duplication.
+   *
+   * `publishStateChange` is called for every status flip AND for unrelated state changes (todo,
+   * extensions, errors), so it used to re-send byte-identical `agent:state` / `session:mode`
+   * frames — hundreds per session over SSE. The subagent list already dedupes this way; these are
+   * the other two high-frequency snapshots.
+   */
+  private lastStateSignature: string | null = null;
+  private lastModeSignature: string | null = null;
+  private lastToolPresentationSignature: string | null = null;
+  /**
+   * Last observed status per background job, for the `job:changed` transitions.
+   *
+   * The registry's listener carries the current list but not a delta; a job's start and its
+   * terminal status land in different notifications, so the previous value has to be remembered
+   * here. A terminal row observed for the first time is a RESTORED job (its start predates this
+   * process) and must not be reported as a transition.
+   */
+  private readonly lastJobStatuses = new Map<string, SessionJobSummary["status"]>();
   readonly sessionPersistence: SessionPersistence;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
@@ -647,6 +668,7 @@ export class ManagedAgent {
     this.planMode = new PlanModeController({
       getTodoManager: () => this.getTodoManager(),
       getCoreEnv: () => this.getCoreEnv(),
+      emitEvent: (type, data) => this.emitEvent(type, data),
       onPhaseChange: () => {
         this.invalidateRunner();
         this.emitStateChange();
@@ -860,7 +882,7 @@ export class ManagedAgent {
     logSubagentLifecycle(this.log, phase, details, this.getCurrentRunId() ?? undefined);
   }
 
-  setStatus(status: AgentStatus, trigger?: string): void {
+  setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
     const prev = this.currentStatus;
     if (status === "completed" || status === "aborted" || status === "error") {
       this.recordStreamDuration();
@@ -1080,8 +1102,18 @@ export class ManagedAgent {
   private publishStateChange(): void {
     // L1 state and mode flow exclusively through the scoped bus (`agent:state`
     // retained, `session:mode` projected) — see unified-agent-event-bus.
-    this.eventBus?.emit("agent:state", this.getL1State());
-    this.eventBus?.emit("session:mode", this.modeState());
+    const state = this.getL1State();
+    const stateSignature = JSON.stringify(state);
+    if (stateSignature !== this.lastStateSignature) {
+      this.lastStateSignature = stateSignature;
+      this.eventBus?.emit("agent:state", state);
+    }
+    const mode = this.modeState();
+    const modeSignature = JSON.stringify(mode);
+    if (modeSignature !== this.lastModeSignature) {
+      this.lastModeSignature = modeSignature;
+      this.eventBus?.emit("session:mode", mode);
+    }
     // A CHILD's status/usage row lives in the PARENT's retained `subagents` list. Child state used
     // to publish only `agent:state`, which the parent session projection drops (`acceptEvent`
     // forwards only `subagent:*`), so an off-process reader kept the spawn-time status/usage until
@@ -1222,8 +1254,13 @@ export class ManagedAgent {
     bus.retain("session:subagents", () => this.readSubagents());
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
+    // A new bus has no subscribers that saw the old frames; do not suppress its first snapshot.
+    this.lastStateSignature = null;
+    this.lastModeSignature = null;
+    this.lastToolPresentationSignature = null;
     this.dispatchEvent = (event) => {
       bus.emit(event.type as never, event.payload as never, {
+        ts: event.ts,
         agentId: event.agentId,
         ...(event.parentId !== undefined ? { parentId: event.parentId } : {}),
         ...(event.sessionId !== undefined ? { sessionId: event.sessionId } : {}),
@@ -1997,7 +2034,13 @@ export class ManagedAgent {
 
   /** Publish the current presentation catalog (tool set changed). */
   publishToolPresentationCatalog(): void {
-    this.getEventBus()?.emit("session:tool-presentation", { descriptors: this.getToolPresentationCatalog() });
+    const descriptors = this.getToolPresentationCatalog();
+    // One batch + one dispatch call can both land here for the same change (extension enable /
+    // disable). The retained channel only needs the newest shape, so skip an identical frame.
+    const signature = JSON.stringify(descriptors);
+    if (signature === this.lastToolPresentationSignature) return;
+    this.lastToolPresentationSignature = signature;
+    this.getEventBus()?.emit("session:tool-presentation", { descriptors });
   }
 
   /** Unregister a command previously added by an extension (used when disabling). */
@@ -2107,6 +2150,23 @@ export class ManagedAgent {
         env: () => this.getCoreEnv(),
         ownerSessionId: () => this.getSessionData?.()?.id,
         onJobsChange: ({ jobs, finished }) => {
+          const seen = new Set<string>();
+          for (const job of jobs) {
+            seen.add(job.jobId);
+            const previousStatus = this.lastJobStatuses.get(job.jobId);
+            if (previousStatus === job.status) continue;
+            this.lastJobStatuses.set(job.jobId, job.status);
+            // First observation of a terminal row = a restored job, not a transition.
+            if (previousStatus === undefined && job.status !== "running") continue;
+            this.emitEvent("job:changed", {
+              jobId: job.jobId,
+              command: job.command,
+              status: job.status,
+              ...(previousStatus !== undefined ? { previousStatus } : {}),
+              exitCode: job.exitCode,
+            });
+          }
+          for (const id of [...this.lastJobStatuses.keys()]) if (!seen.has(id)) this.lastJobStatuses.delete(id);
           this.eventBus?.emit("session:jobs", { jobs });
           if (finished.length > 0) void this.wakeForBackgroundJobs();
         },

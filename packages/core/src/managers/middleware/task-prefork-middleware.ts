@@ -314,7 +314,6 @@ function trySpawn(
         // the second line used to be byte-identical, which is why a discarded-then-
         // respawned pair read as one doubled log line instead of a respawn.
         source: "prefork",
-        timestamp: Date.now(),
       });
     }
   );

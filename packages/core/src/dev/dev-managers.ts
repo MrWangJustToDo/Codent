@@ -30,7 +30,11 @@ export { SPECIALIZED_EVENT_LOG_TYPES, SPECIALIZED_EVENT_LOG_HANDLERS } from "../
 export { createJsonlFileSink } from "../agent/log/jsonl-file-sink.js";
 export { createLogExtension } from "../agent/log/extension.js";
 export type { LogExtension, LogExtensionOptions, EventLogPolicy } from "../agent/log/extension.js";
-export { emitAgentTelemetry } from "../managers/telemetry/emit-agent-telemetry.js";
+export {
+  emitAgentTelemetry,
+  getDroppedTelemetryEventCount,
+  resetDroppedTelemetryEventCount,
+} from "../managers/telemetry/emit-agent-telemetry.js";
 export { UsageTracker } from "../managers/telemetry/usage-tracker.js";
 export { UsageStore } from "../agent/usage/index.js";
 // The one convention-aware reading of prompt/total tokens, so a validation can assert a

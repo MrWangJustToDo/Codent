@@ -2,18 +2,17 @@
  * Which events the extension observation surface exposes — the **read side** of the bus, as a
  * declaration rather than an implementation.
  *
- * Split out of `types.ts` (which hit the file-size limit) because this table is the one place a new
- * agent event must be classified, and it is consulted by three consumers that have nothing else in
- * common: the extension facade (`observeAny` expands the observable set), the bus (wildcard delivery
- * withholds internal events), and the validators that hold the two to each other.
- *
- * The exhaustiveness check is the point: `satisfies Record<AgentEventType, ExtensionEventVisibility>`
- * means a new event breaks compilation here until it is classified, so it can neither become
- * observable by accident nor be silently missing from `observeAny`.
+ * The classification itself lives beside the event (`AGENT_EVENT_META[...].visibility`), so a new
+ * event is classified in one place and the registry's `satisfies` check refuses to compile without
+ * it. This module derives the read-side shapes from that table; three consumers need them and have
+ * nothing else in common — the extension facade (`observeAny` expands the observable set), the bus
+ * (wildcard delivery withholds internal events), and the validators that hold the two to each other.
  */
 
+import { AGENT_EVENT_META } from "../agent-event-bus/meta.js";
+
 import type { ExtensionContext } from "./types.js";
-import type { AgentEvent, AgentEventType, AgentEvents } from "../agent-event-bus/types.js";
+import type { AgentEvent, AgentEventType, AgentEvents, EventVisibility } from "../agent-event-bus/types.js";
 
 /**
  * Visibility of one observer event to extensions.
@@ -21,122 +20,18 @@ import type { AgentEvent, AgentEventType, AgentEvents } from "../agent-event-bus
  * - `observable` — an extension may subscribe to it or read its retained value.
  * - `internal` — deliberately withheld; the reason is recorded next to the row.
  */
-export type ExtensionEventVisibility = "observable" | "internal";
+export type ExtensionEventVisibility = EventVisibility;
 
 /**
- * The observable set, exhaustively keyed by `AgentEventType`.
+ * Extension visibility, derived from the event registry.
  *
- * The default is `observable`; an `internal` row must state why, so a blanket hide cannot creep in.
+ * The classification belongs beside the event (`AGENT_EVENT_META[...].visibility`), so adding an
+ * event cannot leave a second table behind. `ExtensionEventVisibility` is the public name for the
+ * same union.
  */
-export const EXTENSION_EVENT_VISIBILITY = {
-  // Session lifecycle
-  "session:start": "observable",
-  "session:new": "observable",
-  "session:doc": "observable",
-  "session:skill": "observable",
-  "session:mcp": "observable",
-  "session:memory": "observable",
-  "session:restore": "observable",
-  "session:switch": "observable",
-  "session:save-error": "observable",
-  "session:diagnostic": "observable",
-  "session:bootstrap-summary": "observable",
-  "session:title": "observable",
-  "session:reset": "observable",
-  // Turn lifecycle
-  "prompt:submit": "observable",
-  "prompt:before": "observable",
-  "turn:summary": "observable",
-  "run:wake": "observable",
-  // Agent lifecycle / tools / approvals
-  "agent:thinking": "observable",
-  "turn:start": "observable",
-  "turn:end": "observable",
-  "message:start": "observable",
-  "message:end": "observable",
-  "agent:tool-start": "observable",
-  "agent:tool-approval-request": "observable",
-  "agent:tool-approval-resolved": "observable",
-  "agent:tool-end": "observable",
-  "agent:tool-error": "observable",
-  "agent:abort": "observable",
-  "agent:retry": "observable",
-  "agent:stream-error": "observable",
-  "agent:stop": "observable",
-  "agent:status": "observable",
-  "agent:extension-error": "observable",
-  "agent:event-handler-error": "observable",
-  // Observable, not internal: the log consumer is the wildcard subscriber and internal events are
-  // withheld from it, so an internal `extension:log` would never be recorded at all.
-  "extension:log": "observable",
-  "hooks:echo": "observable",
-  "model:change": "observable",
-  "mode:change": "observable",
-  "tool:projection-error": "observable",
-  // Memory
-  "memory:prefetch": "observable",
-  "memory:extract": "observable",
-  "memory:consolidate": "observable",
-  // LLM
-  "llm:request": "observable",
-  "llm:response": "observable",
-  "side-query:mode": "observable",
-  "side-query:error": "observable",
-  // Compaction
-  "compaction:auto-start": "observable",
-  "compaction:auto-complete": "observable",
-  "compaction:auto-error": "observable",
-  "compaction:manual-start": "observable",
-  "compaction:manual-complete": "observable",
-  "compaction:manual-error": "observable",
-  "compaction:reactive-start": "observable",
-  "compaction:reactive-complete": "observable",
-  "compaction:reactive-error": "observable",
-  "compaction:reactive-max-retries": "observable",
-  "compaction:cache-cleanup-error": "observable",
-  // Subagents
-  "subagent:created": "observable",
-  "subagent:queue": "observable",
-  "subagent:started": "observable",
-  "subagent:prefork-discarded": "observable",
-  "subagent:completed": "observable",
-  "subagent:error": "observable",
-  "subagent:destroyed": "observable",
-  "subagent:phase": "observable",
-  "subagent:progress-summary-error": "observable",
-  // Plan mode
-  "plan:enter": "observable",
-  "plan:ready": "observable",
-  "plan:execute": "observable",
-  "plan:cancel-execution": "observable",
-  "plan:todo-replaced": "observable",
-  "plan:retro": "observable",
-  "plan:complete": "observable",
-  "plan:exit": "observable",
-  // Session channel projection
-  "agent:state": "observable",
-  "session:messages": "observable",
-  "session:queues": "observable",
-  "session:usage": "observable",
-  "session:todos": "observable",
-  "session:plan": "observable",
-  "session:summary": "observable",
-  "session:mode": "observable",
-  "session:extensions": "observable",
-  "session:tool-presentation": "observable",
-  "session:interaction": "observable",
-  "agent:iteration": "observable",
-  "session:jobs": "observable",
-  "session:subagents": "observable",
-  // Deliberately withheld (each needs a reason).
-  // token-by-token streaming already has a dedicated UI path; observing it invites
-  // per-chunk extension work on the hot path.
-  "tool:chunk": "internal",
-  "tool:clear": "internal",
-  // the extension-UI channel is how extensions publish to the host; making it
-  // observable would couple unrelated extensions through each other's output.
-  "extension:ui": "internal",
-} as const satisfies Record<AgentEventType, ExtensionEventVisibility>;
+export const EXTENSION_EVENT_VISIBILITY = Object.fromEntries(
+  (Object.keys(AGENT_EVENT_META) as AgentEventType[]).map((type) => [type, AGENT_EVENT_META[type].visibility])
+) as { readonly [K in AgentEventType]: (typeof AGENT_EVENT_META)[K]["visibility"] };
 
 /**
  * The same classification as a runtime `Set`, for the bus's wildcard delivery.

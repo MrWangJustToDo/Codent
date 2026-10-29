@@ -66,7 +66,7 @@ export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 // Agent Status (compat re-exports)
 // ============================================================================
 
-export type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
+export type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
 
 // ============================================================================
 // Run options

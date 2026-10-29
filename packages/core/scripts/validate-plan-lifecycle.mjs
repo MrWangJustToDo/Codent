@@ -48,11 +48,14 @@ assert.match(retro, /\.agents\/plans\/x\.md/);
 
 const events = [];
 const todoManager = new TodoManager();
-const controller = new PlanModeController({
-  getTodoManager: () => todoManager,
-});
 const bus = createAgentEventBus();
 bus.on("*", (e) => events.push({ type: e.type, data: e.payload }));
+const controller = new PlanModeController({
+  getTodoManager: () => todoManager,
+  // Plan transitions are domain events: the controller emits through the funnel, and the funnel
+  // ends at the bus. A controller built without one emits nothing (see the PlanModeController doc).
+  emitEvent: (type, payload) => bus.emit(type, payload),
+});
 todoManager.setEventBus(bus);
 controller.setEventBus(bus);
 

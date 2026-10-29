@@ -16,6 +16,41 @@ export type AgentStatus =
 
 export type RunFinalizeReason = "finished" | "aborted" | "error";
 
+/** Compaction paths that move the status via `compaction:<kind>`. */
+export type StatusCompactionKind = "auto" | "manual" | "reactive";
+
+/**
+ * Why a status changed.
+ *
+ * A closed union, not a free string: the log policy suppresses a set of triggers and records the
+ * rest, so a typo used to land in neither set and silently produced a row (or, worse, a mechanical
+ * transition that looked notable). The policy's `MECHANICAL_STATUS_TRIGGERS` is a subset of this.
+ */
+export type AgentStatusTrigger =
+  | "run-prepare"
+  | "run-start"
+  | "run-finish"
+  | "run-abort"
+  | "run-error"
+  | "recovery-retry"
+  | "external-error"
+  | "user-cancel"
+  | "approvals-pending"
+  | "approvals-cleared"
+  | "before-tool-call"
+  | "client-tool-wait"
+  | "client-tool-resume"
+  | "reconcile"
+  | "reconcile-after-run"
+  | "apply-outcome"
+  | "detached-terminal"
+  | "reset"
+  | "compaction-end"
+  | `compaction:${StatusCompactionKind}`
+  | "chunk:text"
+  | "chunk:tool"
+  | "chunk:reasoning";
+
 // ============================================================================
 // Status predicates (shared — importable from agent/ domain modules)
 // ============================================================================

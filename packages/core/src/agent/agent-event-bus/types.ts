@@ -4,7 +4,13 @@
  * `AgentEvents` is the single source of truth for observer event names and
  * payload types. It merges the former lifecycle/telemetry vocabulary
  * ({@link AgentEventPayloadMap}) with the session channel projection events.
- * Augment it via `declare module` to add events.
+ *
+ * **Core-owned.** Do NOT add events with `declare module` augmentation: three tables are exhaustive
+ * over this union (`AGENT_EVENT_META`, `EXTENSION_EVENT_VISIBILITY`, `DEFAULT_EVENT_LOG_RULES`), so
+ * an augmented key type-checks in the consumer while every one of those tables lacks it at runtime —
+ * the event would be silently unobservable, unprojected and unlogged. A third-party event needs a
+ * runtime registration path with defaults, which does not exist yet; extensions extend tools,
+ * commands, hooks and context sections instead.
  *
  * Two dispatch modes share this registry:
  * - observer `emit` — synchronous, fire-and-forget, error-isolated;
@@ -113,6 +119,13 @@ export type AgentEventPayload<T extends AgentEventType> = AgentEvents[T];
 /** Observer dispatch mode; interceptors are declared separately. */
 export type AgentEventDispatchMode = "emit";
 
+/**
+ * Who may observe an event (extension surface / wildcard delivery).
+ *
+ * `internal` must state why it is withheld; the default is `observable`.
+ */
+export type EventVisibility = "observable" | "internal";
+
 /** Declared runtime metadata for one observer event. */
 export interface AgentEventMeta {
   /** Dispatch mode (observer events are always `emit`). */
@@ -121,6 +134,8 @@ export interface AgentEventMeta {
   channel?: AgentSessionChannel;
   /** Whether the owning scope exposes a retained current value for late subscribers. */
   retained?: boolean;
+  /** Extension visibility. Declared beside the event so a new event is classified in one place. */
+  visibility: EventVisibility;
 }
 
 /**
@@ -146,7 +161,8 @@ export interface AgentEventMeta {
  */
 export type AgentEventMetaTable = {
   [K in AgentEventType]:
-    { mode: AgentEventDispatchMode; retained?: boolean; channel?: undefined } | ChannelRouteRow<AgentEvents[K]>;
+    | { mode: AgentEventDispatchMode; retained?: boolean; channel?: undefined; visibility: EventVisibility }
+    | ChannelRouteRow<AgentEvents[K]>;
 };
 
 /**
@@ -161,9 +177,9 @@ export type AgentEventMetaTable = {
  */
 type ChannelRouteRow<P> = {
   [C in keyof AgentSessionChannelPayloads]: C extends "lifecycle" | "mcp"
-    ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C }
+    ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C; visibility: EventVisibility }
     : [P] extends [AgentSessionChannelPayloads[C]]
-      ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C }
+      ? { mode: AgentEventDispatchMode; retained?: boolean; channel: C; visibility: EventVisibility }
       : never;
 }[keyof AgentSessionChannelPayloads];
 
@@ -172,6 +188,13 @@ export interface AgentEventMetaInput {
   agentId?: string;
   parentId?: string;
   sessionId?: string;
+  /**
+   * Emission time (epoch ms); the bus stamps `Date.now()` when omitted.
+   *
+   * The telemetry funnel already builds an envelope (`emitAgentTelemetry`), and dropping its `ts`
+   * here made that field dead code while the bus re-stamped a second clock reading.
+   */
+  ts?: number;
   /**
    * Agent run the event belongs to (absent outside a run).
    *

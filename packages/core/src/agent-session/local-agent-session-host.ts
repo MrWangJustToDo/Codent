@@ -250,6 +250,9 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // shutdown handler performs a no-op (`persistSession` refuses after close), so the final
       // extension work was silently dropped on the delete path only. The file is removed after
       // that teardown returns, so the ordering this barrier was protecting still holds.
+      // Record the deletion in the session's own log before teardown flushes it; a session with no
+      // live agent has no sink to write to (and no log that would outlive the delete).
+      live.emitEvent?.("session:deleted", { sessionId });
       await this.destroy(live.id);
       // `destroy` is NOT enough on its own: it releases a still-empty session's startup
       // reservation but leaves the log file in place, so without this delete a live session that

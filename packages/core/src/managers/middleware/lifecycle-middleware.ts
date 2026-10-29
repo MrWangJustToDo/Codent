@@ -87,6 +87,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
    * another model call and takes the next index. `agent:retry` is the event that marks it.
    */
   let turnsInRun = 0;
+  /** Model calls this ONE `chat()` covered (1 for a pump, N for a worker's loop). */
+  let chatIterations = 0;
   let turnsRunToken: unknown;
   let lastRoundElapsedMs = 0;
   let lastReasoningTokens = 0;
@@ -117,6 +119,7 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         turnsInRun = 0;
       }
       turnsInRun += 1;
+      chatIterations += 1;
       lastIteration = turnsInRun;
       const index = turnsInRun;
       // Progress keeps the ENGINE's 0-based counter: `max` is that engine's budget, so a run-scoped
@@ -139,6 +142,8 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
     },
     onStart: (ctx) => {
       thinkingEmitted = false;
+      // One chat can cover many model calls (a worker's loop); `llm:response` reports the count.
+      chatIterations = 0;
       startTime = Date.now();
       roundStart = startTime;
       firstTokenAt = 0;
@@ -274,6 +279,9 @@ export function createLifecycleMiddleware(deps: LifecycleMiddlewareDeps): ChatMi
         model: lastModel,
         provider: lastProvider,
         iteration: lastIteration,
+        // How many model calls this ONE chat covered. 1 for a tool-phase pump, N for a worker's
+        // single-chat loop — without it a 50-iteration subagent looked like one call.
+        iterations: chatIterations,
         finishReason: info.finishReason ?? undefined,
         inputTokens: lastRoundUsage.inputTokens,
         outputTokens: lastRoundUsage.outputTokens,

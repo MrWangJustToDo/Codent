@@ -260,6 +260,9 @@ export class AgentBootstrap {
       agentId: managed.id,
       getCoreEnv: () => env,
       eventBus: manager.of(managed.id, undefined),
+      // Extension failures/logs ride the agent's telemetry funnel (same envelope as every other
+      // domain event); the bus above stays as the runner's standalone fallback.
+      emitEvent: (type, payload) => managed.emitEvent(type, payload as never),
     });
     managed.extensions.setExtensionRunner(extensionRunner);
 

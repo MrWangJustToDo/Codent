@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 
-import { emitAgentTelemetry } from "../dist/dev.mjs";
+import { emitAgentTelemetry, getDroppedTelemetryEventCount, resetDroppedTelemetryEventCount } from "../dist/dev.mjs";
 
 const events = [];
 
@@ -36,7 +36,14 @@ assert.equal(events[1].parentId, "parent-1");
 assert.equal(events[1].sessionId, "override-session");
 assert.equal(events[1].payload?.description, "explore");
 
+// A pre-wiring emit is counted, not silently swallowed (the old `return` made a lost event
+// indistinguishable from one that was never emitted).
+resetDroppedTelemetryEventCount();
+assert.equal(getDroppedTelemetryEventCount(), 0, "the counter starts clean");
 emitAgentTelemetry({ id: "no-dispatch" }, "agent:stop");
 assert.equal(events.length, 2);
+assert.equal(getDroppedTelemetryEventCount(), 1, "an emit with no dispatch is counted");
+emitAgentTelemetry(emitter, "agent:stop");
+assert.equal(getDroppedTelemetryEventCount(), 1, "a delivered emit does not count");
 
 console.log("emitAgentTelemetry validation passed");

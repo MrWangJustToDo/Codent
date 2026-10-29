@@ -353,7 +353,9 @@ queueMicrotask(() => log.setRun(null))
 ```
 registry.finish()  → notifyChange([job.id])        registry.ts:507
   → AgentCommandService.onJobsChange({ jobs, finished })
-  → ManagedAgent：emit("session:jobs") + 若 finished 非空 → wakeForBackgroundJobs()   managed-agent.ts:1834-1873
+  → ManagedAgent：emit("session:jobs")（快照）
+                 + 每个状态变化 emit("job:changed")（时间线行；恢复出来的历史不算转移）
+                 + 若 finished 非空 → wakeForBackgroundJobs()
       → collectCompleted() 只 peek（空则返回，不开空轮）
       → AgentChatController.wakeForBackgroundCompletion()   agent-chat-controller.ts:350-367
           → enqueueRunOnce()  → 首个 onConfig 注入通知 → 模型汇报完 → finalize

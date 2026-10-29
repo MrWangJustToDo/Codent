@@ -6,6 +6,7 @@ import { extractGoalFromPlanMarkdown } from "./plan-summary.js";
 import { parseVerificationItemsFromPlanMarkdown } from "./plan-verification.js";
 
 import type { ResolvedCoreEnv } from "../../env";
+import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { TodoManager } from "../todo/todo-manager.js";
 
@@ -40,6 +41,14 @@ export interface PlanModeControllerDeps {
    * `todosSeeded` and kept auto-approving tools the user thought they had left.
    */
   persist?: () => void;
+  /**
+   * Telemetry funnel for the phase events.
+   *
+   * Plan transitions are facts, not channel snapshots, so they go through `emitEvent` like every
+   * other domain event. `session:plan` (the retained projection) still rides the bus directly —
+   * that is the one event whose job is the snapshot.
+   */
+  emitEvent?: EmitAgentTelemetryFn;
 }
 
 export interface BeginPlanExecutionResult {
@@ -218,7 +227,7 @@ export class PlanModeController {
   enable(): void {
     if (this.phase !== "off") return;
     this.resetPlanState("planning", Date.now());
-    this.eventBus?.emit("plan:enter", { phase: this.phase });
+    this.deps.emitEvent?.("plan:enter", { phase: this.phase });
     this.notifyChange();
   }
 
@@ -227,7 +236,7 @@ export class PlanModeController {
     this.detachTodoListener();
     this.clearPlanTodos();
     this.resetPlanState("off", null);
-    this.eventBus?.emit("plan:exit", { phase: this.phase });
+    this.deps.emitEvent?.("plan:exit", { phase: this.phase });
     this.notifyChange();
   }
 
@@ -255,7 +264,7 @@ export class PlanModeController {
       return { ok: false, error: "Plan mode is already off" };
     }
     const fromPhase = this.phase;
-    this.eventBus?.emit("plan:complete", {
+    this.deps.emitEvent?.("plan:complete", {
       phase: fromPhase,
       planFilePath: this.planFilePath,
       stepCount: this.steps.length,
@@ -279,7 +288,7 @@ export class PlanModeController {
     this.detachTodoListener();
     this.setPlanTodoAutoClear(false);
     this.phase = "ready";
-    this.eventBus?.emit("plan:cancel-execution", {
+    this.deps.emitEvent?.("plan:cancel-execution", {
       phase: this.phase,
       stepCount: this.steps.length,
     });
@@ -303,7 +312,7 @@ export class PlanModeController {
     this.phase = "executing";
     this.setPlanTodoAutoClear(false);
     this.attachTodoListener();
-    this.eventBus?.emit("plan:execute", {
+    this.deps.emitEvent?.("plan:execute", {
       phase: this.phase,
       stepCount: this.steps.length,
       replacedExistingTodos: replacedExisting,
@@ -402,7 +411,7 @@ export class PlanModeController {
 
     if (this.phase === "planning") {
       this.phase = "ready";
-      this.eventBus?.emit("plan:ready", {
+      this.deps.emitEvent?.("plan:ready", {
         phase: this.phase,
         stepCount: this.steps.length,
         preservedExistingTodos: skippedDueToExisting,
@@ -502,7 +511,7 @@ export class PlanModeController {
     todoManager.setPlanBound(true);
     this.todosSeeded = true;
     if (replacedExisting) {
-      this.eventBus?.emit("plan:todo-replaced", { stepCount: this.steps.length });
+      this.deps.emitEvent?.("plan:todo-replaced", { stepCount: this.steps.length });
     }
     return { seeded: true, skippedDueToExisting: false, replacedExisting };
   }
@@ -556,7 +565,7 @@ export class PlanModeController {
     if (!todoManager.isAllCompleted()) return;
 
     this.phase = "retro";
-    this.eventBus?.emit("plan:retro", {
+    this.deps.emitEvent?.("plan:retro", {
       phase: this.phase,
       stepCount: this.steps.length,
       planFilePath: this.planFilePath,

@@ -21,7 +21,7 @@ import {
   type WhenClearStatus,
 } from "../agent-run-outcome.js";
 
-import type { AgentStatus } from "../agent-types.js";
+import type { AgentStatus, AgentStatusTrigger } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { StreamChunk, ToolPhaseCompleteInfo, UIMessage } from "@tanstack/ai";
 
@@ -38,7 +38,7 @@ export type {
 
 export interface AgentStatusControllerDeps {
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: string) => void;
+  setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
   getError: () => string;
   setError: (error: string) => void;
   setPendingApprovalCount: (count: number) => void;
@@ -64,7 +64,7 @@ export interface ReconcileFromUIMessagesOptions {
 
 function applyChunkStatus(
   getStatus: () => AgentStatus,
-  setStatus: (s: AgentStatus, trigger?: string) => void,
+  setStatus: (s: AgentStatus, trigger?: AgentStatusTrigger) => void,
   chunk: StreamChunk
 ): void {
   const type = chunk.type;

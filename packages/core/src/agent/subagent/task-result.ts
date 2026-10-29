@@ -210,10 +210,27 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     );
   }
 
+  // Run facts every terminal branch carries: a failed or cancelled child spent the same tokens and
+  // wall-clock as a completed one, and the log's cost reconciliation sums these rows.
+  const runFacts = {
+    iterations: statusFlags.iterations,
+    maxIterations: statusFlags.maxIterations,
+    durationMs,
+    usage: {
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+      totalTokens: usage.totalTokens ?? 0,
+    },
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+    costUsd: subagentManaged.usage.getTotalCostUsd(),
+  };
+
   subagentManaged.emitEvent(
     aborted || failed ? "subagent:error" : "subagent:completed",
     failed
-      ? { subagentId, parentTaskToolCallId, error: errorMessage }
+      ? { subagentId, parentTaskToolCallId, error: errorMessage, ...runFacts }
       : aborted
         ? {
             cancelled: true,
@@ -221,23 +238,13 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
             subagentId,
             parentTaskToolCallId,
             error: finalOutput,
+            ...runFacts,
           }
         : {
             subagentId,
             parentTaskToolCallId,
             summary: finalOutput,
-            iterations: statusFlags.iterations,
-            maxIterations: statusFlags.maxIterations,
-            durationMs,
-            usage: {
-              inputTokens: usage.inputTokens ?? 0,
-              outputTokens: usage.outputTokens ?? 0,
-              totalTokens: usage.totalTokens ?? 0,
-            },
-            inputTokens: usage.inputTokens ?? 0,
-            outputTokens: usage.outputTokens ?? 0,
-            totalTokens: usage.totalTokens ?? 0,
-            costUsd: subagentManaged.usage.getTotalCostUsd(),
+            ...runFacts,
           },
     { parentId: parentAgentId }
   );

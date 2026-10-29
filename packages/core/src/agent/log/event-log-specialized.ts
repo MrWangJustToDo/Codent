@@ -9,11 +9,14 @@
  * so the marker and the implementation cannot drift.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import { eventError } from "./event-error.js";
 import { hookEchoesEnabled } from "./hooks-echo.js";
 import { readEventPayload as p, summarizePayload } from "./payload.js";
 
 import type { SessionDiagnosticArea } from "../../runtime-types/agent-event-payloads.js";
+import type { AgentStatusTrigger } from "../../runtime-types/agent-status.js";
 import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
@@ -115,6 +118,25 @@ function logMemoryConsolidate(log: AgentLog, event: AgentEvent): void {
   // complete/start/skip are silent — not actionable per-entry.
 }
 
+function logJobChanged(log: AgentLog, event: AgentEvent): void {
+  const d = p(event);
+  const status = typeof d.status === "string" ? d.status : "unknown";
+  const previous = typeof d.previousStatus === "string" ? d.previousStatus : undefined;
+  const terminal = status !== "running";
+  const exit = typeof d.exitCode === "number" ? ` (exit ${d.exitCode})` : "";
+  const command = typeof d.command === "string" ? ` — ${truncateText(d.command, 80)}` : "";
+  const what = terminal ? `Job ${d.jobId ?? "?"} ${status}` : `Job ${d.jobId ?? "?"} started`;
+  const from = previous && previous !== status ? ` (from ${previous})` : "";
+  // A start is a debug fact (the `run_command` row already shows it); a terminal transition is the
+  // row the timeline needs, and a restored job's first observation is not a transition at all.
+  entry(log, event, terminal ? "info" : "debug", "tool", `${what}${exit}${from}${command}`, {
+    jobId: d.jobId,
+    status,
+    ...(previous ? { previousStatus: previous } : {}),
+    ...(d.exitCode !== undefined ? { exitCode: d.exitCode } : {}),
+  });
+}
+
 function logCompactionAutoStart(log: AgentLog, event: AgentEvent): void {
   entry(log, event, "info", "compaction", "Auto-compacting context...");
 }
@@ -170,7 +192,7 @@ function logCompactionManualError(log: AgentLog, event: AgentEvent): void {
  * emits neither `agent:tool-start` nor `agent:tool-end`, and `session:interaction` is a projection
  * (suppressed). Suppressing both transitions made a pause on a user question leave no trace at all.
  */
-const MECHANICAL_STATUS_TRIGGERS: ReadonlySet<string> = new Set([
+const MECHANICAL_STATUS_TRIGGERS: ReadonlySet<AgentStatusTrigger> = new Set([
   "approvals-pending",
   "approvals-cleared",
   "chunk:text",
@@ -198,7 +220,7 @@ const NOTABLE_STATUSES: ReadonlySet<string> = new Set(["error", "aborted"]);
 function logAgentStatus(log: AgentLog, event: AgentEvent): void {
   const d = p(event);
   const to = typeof d.to === "string" ? d.to : "unknown";
-  const trigger = typeof d.trigger === "string" ? d.trigger : undefined;
+  const trigger = typeof d.trigger === "string" ? (d.trigger as AgentStatusTrigger) : undefined;
   if (!NOTABLE_STATUSES.has(to)) {
     // A transition nobody explained is worth a row; the pump's bookkeeping is not.
     if (trigger) {
@@ -302,6 +324,7 @@ const HANDLERS = {
   "session:diagnostic": logSessionDiagnostic,
   "session:title": logSessionTitle,
   "agent:status": logAgentStatus,
+  "job:changed": logJobChanged,
   "extension:log": logExtensionLog,
   "hooks:echo": logHookEcho,
   "memory:prefetch": logMemoryPrefetch,

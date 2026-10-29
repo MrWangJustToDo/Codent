@@ -7,7 +7,9 @@
 
 import type { AgentEventType } from "./agent-events.js";
 import type { AgentRetryStrategy } from "./agent-retry.js";
+import type { AgentStatusTrigger } from "./agent-status.js";
 import type { McpConfigSourceKind, McpServerStatus } from "./mcp-status.js";
+import type { SessionJobSummary } from "./session-payloads.js";
 
 /** Explicit empty object for events with no fields. */
 export type EmptyAgentEventPayload = Record<string, never>;
@@ -161,6 +163,10 @@ export type AgentEventPayloadMap = {
     name?: string;
     error?: string;
   };
+  /** A persisted session was deleted. Emitted by its live owner before teardown, when one exists. */
+  "session:deleted": {
+    sessionId?: string;
+  };
   /** A mid-conversation reset (session switch / teardown) that clears transient state. */
   "session:reset": {
     reason: string;
@@ -197,6 +203,13 @@ export type AgentEventPayloadMap = {
   "prompt:submit": {
     prompt?: string;
     contextMessageCount?: number;
+    /**
+     * Where the message came from: a normal send, or a queued steer/follow-up released into a
+     * running turn. A released message is appended to the transcript by the queue drain, not by a
+     * new `send`, so without this row (and this flag) the timeline showed a user message the model
+     * answered with no prompt record behind it.
+     */
+    source?: "user" | "queued";
   };
   "prompt:before": {
     prompt?: string;
@@ -258,7 +271,6 @@ export type AgentEventPayloadMap = {
      * hid a discarded-then-respawned subagent pair (one orphan, one real) from the log.
      */
     source?: "prefork";
-    timestamp?: number;
   };
   "agent:tool-approval-request": {
     tool_name?: string;
@@ -290,11 +302,35 @@ export type AgentEventPayloadMap = {
      */
     source?: ToolApprovalSource;
   };
+  /**
+   * A CLIENT tool (`ask_user`) returned its result, supplied by the host.
+   *
+   * Client tools are executed by the host, so the server-side tool lifecycle has no end for them:
+   * the request appears as `agent:tool-start` (the middleware sees the call) and the answer arrived
+   * nowhere — a real session logged 2 questions and 0 answers. The host's `addToolResult` is the
+   * one place every transport funnels through, so the fact is emitted there.
+   */
+  "agent:client-tool-result": {
+    tool_call_id?: string;
+    tool_name?: string;
+    /** The same object the host supplied (summarized by the log consumer). */
+    output?: unknown;
+  };
   "agent:tool-end": {
     tool_name?: string;
     tool_call_id?: string;
     duration_ms?: number;
     tool_output?: unknown;
+    /**
+     * Whether the call itself succeeded.
+     *
+     * Always `true` today — the middleware routes a throw to `agent:tool-error`, so a returned
+     * result means the tool ran. Carried anyway so a consumer does not have to infer "success"
+     * from the event NAME (a tool may return an `exitCode: 1` result, which is a successful call
+     * with a failing command). A future branch that reports a soft failure can then use the value
+     * instead of minting another event shape.
+     */
+    ok?: boolean;
     /**
      * True when the output carries a user-cancel marker (`cancelled` / `aborted`) rather
      * than being a genuine success.
@@ -307,11 +343,12 @@ export type AgentEventPayloadMap = {
      * cancel. The verdict has to come from the output, because the return says nothing.
      */
     cancelled?: boolean;
-    timestamp?: number;
   };
   "agent:tool-error": {
     tool_name?: string;
     tool_call_id?: string;
+    /** Wall-clock of the failed call, so a failure can be told from a hang. */
+    duration_ms?: number;
     error?: string;
     /**
      * True when the failure IS the user aborting the run, not a tool fault. Without it the
@@ -361,7 +398,8 @@ export type AgentEventPayloadMap = {
   "agent:status": {
     from: string;
     to: string;
-    trigger?: string;
+    /** Why the status moved; the same closed union `setStatus` accepts. */
+    trigger?: AgentStatusTrigger;
   };
   "agent:extension-error": {
     extensionId?: string;
@@ -439,6 +477,14 @@ export type AgentEventPayloadMap = {
     /** Provider id reported by the adapter usage. */
     provider?: string;
     iteration?: number;
+    /**
+     * Model calls this ONE chat covered.
+     *
+     * A pump restarts `chat()` per tool phase (1), while a subagent runs its whole loop in one
+     * `chat()` (N). Without it the worker's single row read as one call and its per-round cost was
+     * invisible.
+     */
+    iterations?: number;
     finishReason?: string;
     inputTokens?: number;
     outputTokens?: number;
@@ -568,6 +614,21 @@ export type AgentEventPayloadMap = {
     cause: "job" | "reminder" | "unknown";
   };
   /**
+   * A background job changed lifecycle state (created, or reached a terminal status).
+   *
+   * `session:jobs` is the retained SNAPSHOT and is deliberately not logged; this is the
+   * append-only row. Without it a finished job existed only as a wake turn, and the timeline could
+   * not say which command finished or how it ended.
+   */
+  "job:changed": {
+    jobId: string;
+    command?: string;
+    status: SessionJobSummary["status"];
+    /** Absent on the first observation (the job was just created). */
+    previousStatus?: SessionJobSummary["status"];
+    exitCode?: number | null;
+  };
+  /**
    * The pre-fork queue: `task` calls admitted a few at a time, the rest waiting for a slot.
    *
    * A SNAPSHOT, not a delta — every emission carries the whole queue, so a receiver replaces its
@@ -645,6 +706,17 @@ export type AgentEventPayloadMap = {
     subagentId?: string;
     error?: string;
     parentTaskToolCallId?: string;
+    // Run facts, same shape as `subagent:completed`: a failed or cancelled child spent real tokens
+    // and time, and without these the parent's log could not account for them (the completed rows
+    // were the only ones carrying usage/cost).
+    iterations?: number;
+    maxIterations?: number;
+    durationMs?: number;
+    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    costUsd?: number;
     /**
      * Why the run stopped, when it was aborted rather than failing.
      *

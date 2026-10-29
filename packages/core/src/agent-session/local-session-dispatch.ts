@@ -183,13 +183,14 @@ export async function dispatchLocalAgentSessionCommand(
         if (result.ok) {
           managed.getEventBus()?.emit("session:extensions", readExtensionSummary(runner));
           // Enabling/disabling an extension adds or drops its tools, so the presentation
-          // catalog changes too — publishers (SSE subscribers) must see the new shape.
-          managed.getEventBus()?.emit("session:tool-presentation", {
-            descriptors:
-              typeof managed.getToolPresentationCatalog === "function"
-                ? managed.getToolPresentationCatalog()
-                : describeToolPresentations(),
-          });
+          // catalog changes too — publishers (SSE subscribers) must see the new shape. Route through
+          // the owner so its signature de-duplication applies (the runner's batch callback may
+          // already have published the same catalog for this change).
+          if (typeof managed.publishToolPresentationCatalog === "function") {
+            managed.publishToolPresentationCatalog();
+          } else {
+            managed.getEventBus()?.emit("session:tool-presentation", { descriptors: describeToolPresentations() });
+          }
           return { ok: true, data: result };
         }
         return { ok: false, code: "failed", error: result.message };

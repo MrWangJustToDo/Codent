@@ -151,6 +151,11 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       return `Bootstrap complete: ${d.active ?? 0}/${d.attempted ?? 0} extensions active${failed}`;
     },
   },
+  "session:deleted": {
+    level: "info",
+    category: "system",
+    formatMessage: (event) => `Session deleted${p(event).sessionId ? `: ${p(event).sessionId}` : ""}`,
+  },
   "session:title": SPECIALIZED_EVENT_LOG,
   "session:reset": {
     level: "info",
@@ -194,7 +199,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       const prompt = p(event).prompt as string | undefined;
       const preview = prompt ? truncateText(prompt, 80) : "";
       const msgCount = p(event).contextMessageCount ?? "?";
-      return `Prompt: ${preview}  (${msgCount} context messages)`;
+      // A released steer/follow-up is a prompt too, but it did not start the turn — say so.
+      const queued = p(event).source === "queued" ? " (queued)" : "";
+      return `Prompt${queued}: ${preview}  (${msgCount} context messages)`;
     },
   },
   "prompt:before": {
@@ -211,7 +218,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     formatMessage: (event) => {
       const d = p(event);
       // A MODE DECISION, not a completed query: the request has not been issued yet. The old name
-      // (`side-query:complete`) claimed a completion, so a decision followed by a failure read as
+      // (`side-query:mode`) claimed a completion, so a decision followed by a failure read as
       // "completed" then "failed".
       return `Side query (${d.purpose ?? "?"}) using ${d.mode ?? "?"} mode: ${d.reason ?? "decided"}`;
     },
@@ -330,8 +337,9 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       const cost = typeof d.costUsd === "number" && d.costUsd > 0 ? ` $${d.costUsd.toFixed(4)}` : "";
       const firstToken = typeof d.firstTokenMs === "number" ? `, first token ${d.firstTokenMs}ms` : "";
       const round = typeof d.roundElapsedMs === "number" ? `, round ${d.roundElapsedMs}ms` : "";
+      const calls = typeof d.iterations === "number" && d.iterations > 1 ? ` (${d.iterations} model calls)` : "";
       const ms = d.durationMs ?? "?";
-      return `LLM response: ${fr}${iter}  ${inT}→${outT} tokens${cache}${reasoning}${cost}  ${ms}ms${firstToken}${round}`;
+      return `LLM response: ${fr}${iter}${calls}  ${inT}→${outT} tokens${cache}${reasoning}${cost}  ${ms}ms${firstToken}${round}`;
     },
   },
 
@@ -386,6 +394,17 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       const duration = p(event).duration_ms;
       const suffix = duration != null ? ` (${duration}ms)` : "";
       return p(event).cancelled === true ? `Tool cancelled: ${name}${suffix}` : `Tool end: ${name}${suffix}`;
+    },
+  },
+  "agent:client-tool-result": {
+    level: "info",
+    category: "tool",
+    formatMessage: (event) => {
+      const d = p(event);
+      const output = d.output as { answer?: unknown; cancelled?: unknown } | undefined;
+      const answer = typeof output?.answer === "string" ? output.answer : "";
+      const suffix = answer ? ` — ${truncateText(answer, 120)}` : output?.cancelled === true ? " — cancelled" : "";
+      return `Client tool result: ${d.tool_name ?? d.tool_call_id ?? "unknown"}${suffix}`;
     },
   },
   "agent:tool-error": {
@@ -460,6 +479,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
     category: "compaction",
     formatMessage: (event) => `Post-compact cache cleanup failed: ${p(event).error ?? "unknown"}`,
   },
+  "job:changed": SPECIALIZED_EVENT_LOG,
   "run:wake": {
     level: "debug",
     category: "agent",

@@ -115,9 +115,12 @@ assert.match(deduped, /^3\. Third already doubled$/m);
 assert.doesNotMatch(deduped, /1\. 1\./);
 
 const events = [];
-const controller = new PlanModeController({ getTodoManager: () => null });
 const bus = createAgentEventBus();
 bus.on("*", (e) => events.push({ type: e.type, data: e.payload }));
+const controller = new PlanModeController({
+  getTodoManager: () => null,
+  emitEvent: (type, payload) => bus.emit(type, payload),
+});
 controller.setEventBus(bus);
 controller.enable();
 const applied = await controller.applyStructuredPlan({

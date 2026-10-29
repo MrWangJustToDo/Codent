@@ -36,7 +36,7 @@ export interface ExtensionCompletionHost {
     message: string,
     options?: { level?: "debug" | "info" | "warn"; data?: Record<string, unknown>; error?: string }
   ): void;
-  /** Publishes the side query's own facts (`side-query:complete` / `side-query:error`). */
+  /** Publishes the side query's own facts (`side-query:mode` / `side-query:error`). */
   emitSideQuery?(type: "side-query:mode" | "side-query:error", payload: Record<string, unknown>): void;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   /** The session's current connection, used to decide whether a catalog model is reachable. */

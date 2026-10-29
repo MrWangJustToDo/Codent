@@ -21,7 +21,7 @@ import {
   type AgentSessionSubscriber,
 } from "./types.js";
 
-import type { AgentEvent, AgentEventType } from "../agent/agent-event-bus";
+import type { AgentEvent, AgentEventMeta, AgentEventType } from "../agent/agent-event-bus";
 import type { AgentManager } from "../managers/agent-manager.js";
 import type { ManagedAgent } from "../managers/managed-agent.js";
 
@@ -52,7 +52,8 @@ function resolveChannels(options?: AgentSessionSubscribeOptions): Set<AgentSessi
 const RETAINED_CHANNEL_EVENT = (() => {
   const map = new Map<AgentSessionChannel, AgentEventType>();
   for (const eventName of Object.keys(EVENT_META) as AgentEventType[]) {
-    const meta = EVENT_META[eventName];
+    // Typed read: the `as const` table omits optional keys on rows that do not use them.
+    const meta: AgentEventMeta = EVENT_META[eventName];
     if (!meta.retained || !meta.channel) continue;
     const existing = map.get(meta.channel);
     if (existing !== undefined) {
@@ -291,7 +292,7 @@ class LocalAgentSessionImpl implements AgentSession {
 
     if (bus) {
       for (const eventName of Object.keys(EVENT_META) as AgentEventType[]) {
-        const channel = EVENT_META[eventName].channel;
+        const channel = (EVENT_META[eventName] as AgentEventMeta).channel;
         if (!channel) continue;
         unsubs.push(
           bus.on(

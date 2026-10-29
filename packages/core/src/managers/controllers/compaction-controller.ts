@@ -28,7 +28,7 @@
 
 import { isTerminalStatus } from "../../runtime-types/agent-status.js";
 
-import type { AgentStatus } from "../../runtime-types/agent-status.js";
+import type { AgentStatus, AgentStatusTrigger } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
 export type CompactionKind = "auto" | "manual" | "reactive";
@@ -69,7 +69,7 @@ export type CompactionOutcome =
 
 export interface CompactionControllerDeps {
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: string) => void;
+  setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
   /**
    * Clear the last error when a compaction restores a terminal status to `idle`.
    *
