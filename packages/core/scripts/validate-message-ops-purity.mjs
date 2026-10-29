@@ -102,7 +102,7 @@ const registry = { get: (name) => (name === "purity_probe" ? getToolMetadata(pur
   await applyToolCompact(messages, { registry, cache }); // warm the cache
   assert.equal(cache.has(toolCompactCacheKey("p2", 1, payload)), true, "first pass must populate the cache");
 
-  // Count BYTES decoded, not call count: `buildToolCallInputMap` legitimately parses the
+  // Count BYTES decoded, not call count: pairing a result with its call legitimately parses the
   // (tiny) tool-call arguments every call. The expensive thing is the tool payload.
   const realParse = JSON.parse;
   let bytes = 0;

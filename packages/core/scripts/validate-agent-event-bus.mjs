@@ -162,4 +162,37 @@ import { AGENT_EVENT_META, createAgentEventBus } from "../dist/dev.mjs";
   assert.equal(AGENT_EVENT_META["subagent:queue"].channel, "lifecycle");
 }
 
+// ============================================================================
+// 8. A throwing reporter cannot escape dispatch, and async wildcards are contained
+// ============================================================================
+//
+// `onInterceptorError` is host-wired (agent log → pluggable sink). A throw there used to escape
+// `emit()` / `intercept()`, turning a contained subscriber failure into a failed tool call or a
+// crashed frame; a wildcard listener typed `void` may also be async, and its rejection was
+// unhandled (the same shape `Emitter` handles).
+{
+  const bus = createAgentEventBus("root", () => {
+    throw new Error("reporter broke");
+  });
+  let frames = 0;
+  bus.on("*", () => {
+    throw new Error("listener broke");
+  });
+  bus.on("*", () => {
+    frames += 1;
+  });
+  assert.doesNotThrow(() => bus.emit("agent:iteration", { current: 1, max: 1 }), "a throwing reporter is contained");
+  assert.equal(frames, 1, "the remaining wildcard listener still receives the frame");
+
+  let asyncFrames = 0;
+  const asyncBus = createAgentEventBus("root", () => {});
+  asyncBus.on("*", async () => {
+    asyncFrames += 1;
+    throw new Error("async boom");
+  });
+  asyncBus.emit("agent:iteration", { current: 1, max: 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(asyncFrames, 1, "an async wildcard is contained instead of becoming an unhandled rejection");
+}
+
 console.log("agent-event-bus validation passed");

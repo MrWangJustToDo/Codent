@@ -9,20 +9,6 @@
 
 import { type ContentPart, type ModelMessage, type UIMessage } from "@tanstack/ai";
 
-/** Build toolCallId → tool name from assistant `toolCalls`. */
-export function buildToolCallNameMap(messages: ModelMessage[]): Map<string, string> {
-  const map = new Map<string, string>();
-
-  for (const message of messages) {
-    if (message.role !== "assistant" || !message.toolCalls) continue;
-    for (const toolCall of message.toolCalls) {
-      map.set(toolCall.id, toolCall.function.name);
-    }
-  }
-
-  return map;
-}
-
 /**
  * Extract text from ModelMessage `content` (string or ContentPart[]).
  * Non-text modalities are replaced with short placeholders.

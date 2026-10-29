@@ -11,6 +11,7 @@
  * only during persist, and hydrate happens only during restore.
  */
 
+import { isMultimodalPartType, type MultimodalPartType } from "../../utils/multimodal-part-types.js";
 import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 /** Directory relative to workspace root where media files are stored. */
@@ -19,27 +20,27 @@ export const MEDIA_DIR = `${AGENT_DATA_DIR}/media`;
 /**
  * UIMessage part types that carry inline binary media.
  *
- * The single membership set for the media module: the dehydrate/hydrate walk and the nested
- * tool-result rewrite both test against this, so the four types cannot be listed twice and drift.
+ * The vocabulary lives in `utils/multimodal-part-types.ts` so the wire layer (which cannot import
+ * `agent/`) shares one tuple with the media walk; this module keeps the media-specific name and
+ * predicate on top. The dehydrate/hydrate walk and the nested tool-result rewrite both test against
+ * {@link isBinaryMediaPartType}, so the four types cannot be listed twice inside this module.
  */
-export const BINARY_MEDIA_PART_TYPES = ["image", "audio", "video", "document"] as const;
-
-/** One of the binary media part types. */
-export type BinaryMediaPartType = (typeof BINARY_MEDIA_PART_TYPES)[number];
+export type BinaryMediaPartType = MultimodalPartType;
 
 /** Whether a part type carries inline binary media. */
 export function isBinaryMediaPartType(type: string | undefined): type is BinaryMediaPartType {
-  return typeof type === "string" && (BINARY_MEDIA_PART_TYPES as readonly string[]).includes(type);
+  return isMultimodalPartType(type);
 }
 
 /**
  * Fallback MIME per binary part kind, used when the value/file type carries none.
  *
- * One table: `media-utils` (hydrate/dehydrate), `read_file`'s media part, the wire projection and
- * code-mode's media projection all need the same fallback, and four inline `"image/png"` literals
- * were how the audio/video/document defaults drifted apart.
+ * One table: `media-utils` (hydrate/dehydrate), `read_file`'s media part and code-mode's media
+ * projection all need the same fallback, and four inline `"image/png"` literals were how the
+ * audio/video/document defaults drifted apart. The wire projection does not choose a default (it
+ * only substitutes a placeholder for an unreadable `media://` ref).
  */
-export const DEFAULT_MIME_BY_PART_TYPE: Record<BinaryMediaPartType, string> = {
+const DEFAULT_MIME_BY_PART_TYPE: Record<BinaryMediaPartType, string> = {
   image: "image/png",
   audio: "audio/mpeg",
   video: "video/mp4",

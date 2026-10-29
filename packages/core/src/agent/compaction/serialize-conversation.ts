@@ -13,8 +13,9 @@
 
 import { truncateText } from "../../utils/text-truncation.js";
 
-import { buildToolCallNameMap, extractTextFromContent, serializeToolMessageContent } from "./message-utils.js";
+import { extractTextFromContent, serializeToolMessageContent } from "./message-utils.js";
 import { estimateCharUnits } from "./token-estimator.js";
+import { toolNameByMessageIndex } from "./tool-call-pairing.js";
 
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -41,10 +42,15 @@ function truncateToolResult(text: string): string {
  * (e.g. {@link splitMessagesByTokenBudget}) measure what is actually sent
  * rather than the untruncated wire.
  *
- * @param toolCallMap - toolCallId → tool name, built from the whole message
- *   list via {@link buildToolCallNameMap} so tool result labels are accurate.
+ * @param toolNames - result message index → tool name, built from the whole message list via
+ *   {@link toolNameByMessageIndex} so tool result labels survive reused provider call ids.
+ * @param messageIndex - the message's position in the list (the key into `toolNames`).
  */
-export function serializedMessageChars(message: ModelMessage, toolCallMap: Map<string, string>): number {
+export function serializedMessageChars(
+  message: ModelMessage,
+  toolNames: Map<number, string>,
+  messageIndex: number
+): number {
   if (message.role === "user") {
     const text = extractTextFromContent(message.content);
     return text ? estimateCharUnits(`[User]: ${text}`) : 0;
@@ -65,7 +71,7 @@ export function serializedMessageChars(message: ModelMessage, toolCallMap: Map<s
   }
 
   if (message.role === "tool") {
-    const toolName = (message.toolCallId && toolCallMap.get(message.toolCallId)) || "tool";
+    const toolName = toolNames.get(messageIndex) ?? "tool";
     const resultText = truncateToolResult(serializeToolMessageContent(message.content));
     return resultText ? estimateCharUnits(`[Tool result from ${toolName}]: ${resultText}`) : 0;
   }
@@ -79,11 +85,11 @@ export function serializedMessageChars(message: ModelMessage, toolCallMap: Map<s
  * {@link serializeConversation} (including the `\n\n` segment join).
  */
 export function measureSerializedConversationChars(messages: ModelMessage[]): number {
-  const toolCallMap = buildToolCallNameMap(messages);
+  const toolNames = toolNameByMessageIndex(messages);
   let chars = 0;
   let segments = 0;
-  for (const message of messages) {
-    const messageChars = serializedMessageChars(message, toolCallMap);
+  for (let i = 0; i < messages.length; i++) {
+    const messageChars = serializedMessageChars(messages[i]!, toolNames, i);
     if (messageChars > 0) {
       chars += messageChars;
       segments += 1;
@@ -97,9 +103,10 @@ export function measureSerializedConversationChars(messages: ModelMessage[]): nu
  */
 export function serializeConversation(messages: ModelMessage[]): string {
   const parts: string[] = [];
-  const toolCallMap = buildToolCallNameMap(messages);
+  const toolNames = toolNameByMessageIndex(messages);
 
-  for (const msg of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
     if (msg.role === "user") {
       const text = extractTextFromContent(msg.content);
       if (text) parts.push(`[User]: ${text}`);
@@ -121,7 +128,7 @@ export function serializeConversation(messages: ModelMessage[]): string {
     }
 
     if (msg.role === "tool") {
-      const toolName = (msg.toolCallId && toolCallMap.get(msg.toolCallId)) || "tool";
+      const toolName = toolNames.get(i) ?? "tool";
       const resultText = truncateToolResult(serializeToolMessageContent(msg.content));
       if (resultText) {
         parts.push(`[Tool result from ${toolName}]: ${resultText}`);

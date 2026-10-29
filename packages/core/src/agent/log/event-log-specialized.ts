@@ -116,14 +116,11 @@ function logCompactionAutoComplete(log: AgentLog, event: AgentEvent): void {
 }
 
 function logCompactionAutoError(log: AgentLog, event: AgentEvent): void {
-  const phase = p(event).phase as string | undefined;
   const error = (p(event).error as string | undefined) ?? "unknown";
-  if (phase === "cache-cleanup") {
-    entry(log, event, "warn", "compaction", "Auto-compact cache cleanup failed", { error });
-    return;
-  }
   // The payload carries the message, not the exception: `eventError` keeps the text without
-  // inventing a stack at the logger (which would point every reader at this file).
+  // inventing a stack at the logger (which would point every reader at this file). Cache-cleanup
+  // failures do not come through here any more — the callback is async and runs after the lease
+  // finished, so it writes a direct `warn` row instead.
   entry(log, event, "error", "compaction", `Auto-compact failed: ${error}`, undefined, eventError(error));
 }
 
@@ -144,12 +141,7 @@ function logCompactionManualComplete(log: AgentLog, event: AgentEvent): void {
 }
 
 function logCompactionManualError(log: AgentLog, event: AgentEvent): void {
-  const phase = p(event).phase as string | undefined;
   const error = (p(event).error as string | undefined) ?? "unknown";
-  if (phase === "cache-cleanup") {
-    entry(log, event, "warn", "compaction", "Manual compact cache cleanup failed", { error });
-    return;
-  }
   entry(log, event, "error", "compaction", `Manual compact failed: ${error}`, undefined, eventError(error));
 }
 

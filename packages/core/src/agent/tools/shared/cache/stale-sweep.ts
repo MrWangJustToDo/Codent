@@ -62,6 +62,8 @@ export interface StaleFileSweeper {
  */
 export function createStaleFileSweeper(spec: StaleFileSweepSpec): StaleFileSweeper {
   const sweptRoots = new Set<string>();
+  /** One running pass per root: parallel first writes share it instead of walking the dir N times. */
+  const inFlight = new Map<string, Promise<number>>();
 
   return {
     reset(): void {
@@ -71,30 +73,57 @@ export function createStaleFileSweeper(spec: StaleFileSweepSpec): StaleFileSweep
     async sweep(env: ResolvedCoreEnv, options?: StaleSweepOptions): Promise<number> {
       const rootKey = env?.rootPath ?? "";
       if (sweptRoots.has(rootKey) && !options?.force) return 0;
-      sweptRoots.add(rootKey);
 
-      const now = options?.now ?? Date.now();
-      let removed = 0;
-      try {
-        const fs = env.fs;
-        if (!(await fs.exists(spec.dir))) return 0;
-        const entries = await fs.readdir(spec.dir);
-        for (const entry of entries) {
-          if (!entry.name.endsWith(spec.suffix)) continue;
-          const path = `${spec.dir}/${entry.name}`;
-          try {
-            const stat = await fs.stat(path);
-            if (now - stat.mtime.getTime() <= spec.maxAgeMs) continue;
-            await fs.remove(path);
-            removed++;
-          } catch {
-            // Raced with another sweep / removal — ignore.
-          }
-        }
-      } catch {
-        // Non-fatal — the sweep is a safety net, never a source of failure.
+      // Concurrent first writes (parallel tool calls) share one pass. Registering the root only
+      // after success is what keeps a transient failure retryable; this slot is what keeps that
+      // from turning into N parallel directory walks (each `stat` is an HTTP round-trip remotely).
+      if (!options?.force) {
+        const running = inFlight.get(rootKey);
+        if (running) return running;
       }
-      return removed;
+
+      const run = (async (): Promise<number> => {
+        const now = options?.now ?? Date.now();
+        let removed = 0;
+        try {
+          const fs = env.fs;
+          if (!(await fs.exists(spec.dir))) {
+            // An absent directory is a settled answer — remember it, or every write pays a stat.
+            sweptRoots.add(rootKey);
+            return 0;
+          }
+          const entries = await fs.readdir(spec.dir);
+          for (const entry of entries) {
+            if (!entry.name.endsWith(spec.suffix)) continue;
+            const path = `${spec.dir}/${entry.name}`;
+            try {
+              const stat = await fs.stat(path);
+              if (now - stat.mtime.getTime() <= spec.maxAgeMs) continue;
+              await fs.remove(path);
+              removed++;
+            } catch {
+              // Raced with another sweep / removal — ignore.
+            }
+          }
+          // Mark only a COMPLETED pass. The guard is per process, so registering before the I/O
+          // meant one transient `exists`/`readdir` failure (a remote env hiccup) disabled the sweep
+          // for this workspace until the process restarted — and the age sweep is the only fallback
+          // for sessions that never compact.
+          sweptRoots.add(rootKey);
+        } catch {
+          // Non-fatal — the sweep is a safety net, never a source of failure. Unmarked, so the next
+          // write retries.
+        }
+        return removed;
+      })();
+
+      if (options?.force) return run;
+      inFlight.set(rootKey, run);
+      try {
+        return await run;
+      } finally {
+        inFlight.delete(rootKey);
+      }
     },
   };
 }

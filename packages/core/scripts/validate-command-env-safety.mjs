@@ -270,6 +270,7 @@ function makeCoordinator(env) {
     reconcile: () => {},
     persist: () => {},
     enqueueRun: async () => {},
+    isSessionSwitching: () => false,
     getCoreEnv: () => getEnv(),
   });
   return { coordinator, responses, approvals };

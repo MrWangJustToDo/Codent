@@ -54,7 +54,10 @@ export function describeReadFileMedia(output: MediaRenderInput): { line: string;
   const body = output.extractedText?.trim() || PDF_NO_TEXT_LAYER;
   return {
     line: `${header}\n\n${body}`,
-    part: { type: "document", source: { type: "data", value: output.base64, mimeType: "application/pdf" } },
+    part: {
+      type: "document",
+      source: { type: "data", value: output.base64, mimeType: defaultMimeForPartType("document") },
+    },
   };
 }
 

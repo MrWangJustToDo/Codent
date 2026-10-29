@@ -1,4 +1,5 @@
 import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
+import { parseToolArguments } from "../../../utils/parse-tool-arguments.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
 
@@ -56,12 +57,7 @@ export function isCancelledToolCall(part: ToolCallPart | { output?: unknown }): 
 }
 
 export function parseToolInput(part: { arguments?: string }): unknown {
-  if (!part.arguments) return undefined;
-  try {
-    return JSON.parse(part.arguments) as unknown;
-  } catch {
-    return part.arguments;
-  }
+  return parseToolArguments(part.arguments);
 }
 
 export function getUiToolState(part: ToolCallPart): UiToolState {

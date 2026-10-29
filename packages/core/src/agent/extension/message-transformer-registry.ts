@@ -61,13 +61,16 @@ function describeValue(value: unknown): string {
 }
 
 /**
- * How many containers below a part are copied.
+ * How many containers below a MESSAGE are copied.
  *
- * Four levels covers every shape the wire carries — part → `content`/`source` → array element →
- * that element's own object — without turning into a deep clone of arbitrary tool output. Going
- * deeper would start copying payload strings, which are immutable and can be large.
+ * Six, because the message level costs one that the old part-rooted clone did not pay: at five the
+ * per-part depth was one less than before, so `part.output[0].content` (and its elements) were
+ * shared with the UI channel and a transformer pushing into them reached the persisted transcript.
+ * Six keeps the part depth the durability invariant was written for while also covering the
+ * message's own fields (`toolCalls`, `metadata`, `structuredOutput`). Payload strings stay shared:
+ * they are immutable (and can be large).
  */
-const OWNERSHIP_CLONE_DEPTH = 4;
+const OWNERSHIP_CLONE_DEPTH = 6;
 
 /**
  * Copy one value's own containers down to {@link OWNERSHIP_CLONE_DEPTH}.
@@ -90,16 +93,15 @@ function cloneOwnedValue(value: unknown, depth: number): unknown {
   return value;
 }
 
-/** Ownership copy for one content part — see the note at the top of this file. */
-function cloneContentPart(part: unknown): unknown {
-  return cloneOwnedValue(part, OWNERSHIP_CLONE_DEPTH);
-}
-
-/** Ownership copy for one model message — see the note at the top of this file. */
+/**
+ * Ownership copy for one model message — see the note at the top of this file.
+ *
+ * The whole message is copied, not just `content`: the wire conversion shares `metadata`,
+ * `structuredOutput` and the `toolCalls` array with the UI channel, so an edit to any of them used
+ * to reach the persisted transcript (or the retained wire) just like a part edit did.
+ */
 function cloneModelMessage(message: ModelMessage): ModelMessage {
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return { ...message };
-  return { ...message, content: content.map(cloneContentPart) } as ModelMessage;
+  return cloneOwnedValue(message, OWNERSHIP_CLONE_DEPTH) as ModelMessage;
 }
 
 export interface MessageTransformerRegistryHost {

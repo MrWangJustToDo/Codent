@@ -271,6 +271,18 @@ function bigToolConversation() {
   console.log("emergency degrade path (cut even when input fits budget) OK");
 }
 
+// No cut point: one oversized user turn has no pairing-safe boundary above index 0. The helper
+// must signal "nothing to summarize" with [] — returning the input made the caller append the
+// user's own text as a SUMMARY and report a successful compaction.
+{
+  const noCut = await reactiveCompact([{ role: "user", content: "x".repeat(20_000) }], "agent-z", throwingManager, {
+    keepRecentTokens: 100,
+    contextWindow: 100,
+  });
+  assert.deepEqual(noCut, [], "no cut point returns an empty result, not the input");
+  console.log("no-cut path returns [] OK");
+}
+
 console.log("reactive token-budget validation passed");
 
 // ============================================================================
@@ -459,6 +471,9 @@ for (const [label, error, expectSilent] of [
       emitEvent: (type, data) => events.push({ type, data }),
     }),
     getCanonicalFromUI: () => [],
+    // A real cancel aborts the run signal; a bare AbortError without one is a failure (network
+    // timeouts raise the same name), which is exactly what the strict compaction classifier fixes.
+    getAbortSignal: () => (expectSilent ? AbortSignal.abort() : undefined),
     getMessagesForLLM: () => {
       throw error;
     },

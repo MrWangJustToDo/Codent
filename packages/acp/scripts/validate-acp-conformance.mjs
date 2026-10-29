@@ -1138,11 +1138,8 @@ for (const [label, finishReason, iteration, expected] of [
   };
   push("state", { ...baseSnapshot("compact"), status: "compacting" });
   push("lifecycle", { type: "compaction:auto-complete", payload: {} });
-  push("lifecycle", { type: "compaction:auto-error", payload: { phase: "cache-cleanup", error: "cleanup" } });
-  check(
-    "a cache-cleanup failure does not mark a completed compaction failed",
-    !emitted.some((u) => u.sessionUpdate === "compaction_update" && u.status === "failed")
-  );
+  // Cache-cleanup failures are a direct `warn` row now, not `compaction:auto-error`; there is no
+  // lifecycle event left to misclassify as a compaction outcome.
   push("state", { ...baseSnapshot("compact"), status: "compacting" });
   push("state", { ...baseSnapshot("compact"), status: "error" });
   check(

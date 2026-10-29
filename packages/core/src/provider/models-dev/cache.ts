@@ -26,7 +26,8 @@ import { AGENT_CACHE_DIR } from "../../utils/workspace-paths.js";
 
 import type { ModelsDevData } from "./types.js";
 
-export const MODELS_DEV_URL = "https://models.dev/api.json";
+/** Endpoint for the metadata dataset. Internal: the module exposes `fetchModelsDev`, not the URL. */
+const MODELS_DEV_URL = "https://models.dev/api.json";
 
 /** Timeout for the models.dev fetch — metadata is best-effort, never stall startup. */
 const MODELS_DEV_FETCH_TIMEOUT_MS = 5_000;

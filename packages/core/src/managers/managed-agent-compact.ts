@@ -4,13 +4,13 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
+import { isCompactionCancel } from "../agent/compaction/abort-classification.js";
 import { applyCompactionResult, applyReactiveCompactionResult } from "../agent/compaction/apply-compaction-result.js";
 import { autoCompact } from "../agent/compaction/auto-compact.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
 import { isPromptTooLongError, reactiveCompact } from "../agent/compaction/reactive-compact.js";
 import { estimateTokens } from "../agent/compaction/token-estimator.js";
-import { isAbortError } from "../runtime-types/abort.js";
 import { toError } from "../utils/errors.js";
 
 import type { AgentManager } from "./agent-manager.js";
@@ -43,6 +43,8 @@ export interface ReactiveCompactHost {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Current run abort signal, so a cancel also cancels the summarizer. */
   getAbortSignal?: () => AbortSignal | undefined;
+  /** The agent log, for non-fatal diagnostics (cache cleanup). */
+  getLog?: () => AgentLog | null;
 }
 
 export async function handleManagedReactiveCompact(
@@ -69,11 +71,12 @@ export async function handleManagedReactiveCompact(
   });
   if (!lease) return false;
   const current = () => host.compactions.isCurrent(lease);
+  // Hoisted so the catch can classify the throw against the same signal.
+  const abortSignal = host.getAbortSignal?.();
 
   try {
     const canon = host.getCanonicalFromUI();
     const llmMessages = host.getMessagesForLLM(canon);
-    const abortSignal = host.getAbortSignal?.();
     const compactedMessages = await reactiveCompact(llmMessages, host.id, manager, {
       ...(host.compactionConfig?.keepRecentTokens != null
         ? { keepRecentTokens: host.compactionConfig.keepRecentTokens }
@@ -89,15 +92,24 @@ export async function handleManagedReactiveCompact(
     // Capture window fill before apply (usage is reset by applyReactiveCompactionResult).
     const tokensBefore = host.usage.getContextFillTokens();
 
-    applyReactiveCompactionResult(host.getCoreEnv(), canon, channel, host.usage, compactedMessages, {
+    const applied = applyReactiveCompactionResult(host.getCoreEnv(), canon, channel, host.usage, compactedMessages, {
       ...keepPolicyProjectionOptions(resolveKeepPolicy(host.compactionConfig ?? {}, host.getContextWindow())),
       onCacheCleanupError: (err) => {
-        host.emitEvent("compaction:reactive-error", {
+        // A cache-cleanup failure is not a failed compaction: emitting `compaction:reactive-error`
+        // here rendered as "Reactive compact failed" even though the summary had been applied.
+        host.getLog?.()?.warn("compaction", "Reactive compact cache cleanup failed", {
           phase: "cache-cleanup",
           error: err.message,
         });
       },
     });
+
+    // An empty/unappliable result is NOT a compaction: do not append a checkpoint, do not reset
+    // the window, and do not report `completed` (the retry budget/status must see the truth).
+    if (!applied) {
+      host.compactions.release(lease);
+      return false;
+    }
 
     if (!current()) return false;
 
@@ -112,7 +124,9 @@ export async function handleManagedReactiveCompact(
   } catch (err) {
     if (!current()) return false;
     // A user cancel is not a reactive-compaction failure — stay silent, but give the status back.
-    if (isAbortError(err)) {
+    // The signal is authoritative: a gateway error whose text says "aborted" while the run is
+    // still live is a failure, not a cancel.
+    if (isCompactionCancel(err, abortSignal)) {
       host.compactions.release(lease);
       return false;
     }
@@ -222,12 +236,21 @@ export async function runManualCompact(
     const applied = applyCompactionResult(host.getCoreEnv(), allModelMessages, channel, host.usage, result, {
       ...keepOptions,
       onCacheCleanupError: (err) => {
-        host.getLog?.()?.warn("agent", "Failed to cleanup tool cache after compact", { error: err.message });
+        host.getLog?.()?.warn("compaction", "Manual compact cache cleanup failed", {
+          phase: "cache-cleanup",
+          error: err.message,
+        });
       },
     });
 
     if (!applied) {
       if (abortSignal?.aborted) {
+        host.compactions.release(host.lease);
+        return { ok: false, error: "Compaction aborted" };
+      }
+      // The summarizer boundary tags its own cancel; a bare `skipped` here reported a cancel as
+      // "Nothing to compact" with `ok: true` (remote/ACP treated it as completed).
+      if (result.aborted) {
         host.compactions.release(host.lease);
         return { ok: false, error: "Compaction aborted" };
       }
@@ -268,7 +291,7 @@ export async function runManualCompact(
       tokensAfter,
     };
   } catch (error) {
-    if (isAbortError(error)) {
+    if (isCompactionCancel(error, host.lease.signal)) {
       // A cancel already took the status (and invalidated the lease); `release` is the no-op case
       // where the summarizer itself threw an abort without one.
       host.compactions.release(host.lease);

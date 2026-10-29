@@ -19,9 +19,15 @@ export interface ParsedDataUrl {
 /** Matches a base64 data URL and captures its media type and payload. */
 const DATA_URL_PATTERN = /^data:([^;,]*);base64,(.*)$/s;
 
+/** Prefix-only probe with the SAME grammar as the capture pattern (the media type may be empty). */
+const DATA_URL_PREFIX_PATTERN = /^data:[^;,]*;base64,/s;
+
 /** Whether a value is a base64 data URL. */
 export function isDataUrl(value: string): boolean {
-  return /^data:[^;]+;base64,/s.test(value);
+  // Must agree with `parseDataUrl`: the old probe required a non-empty media type (`[^;]+`), so
+  // `data:;base64,AAA` parsed successfully but was not recognized as base64 — the media walk then
+  // skipped it and left the whole payload inline in the session JSON.
+  return DATA_URL_PREFIX_PATTERN.test(value);
 }
 
 /** Parse a base64 data URL into its media type and payload, or `null` when it is not one. */

@@ -84,6 +84,11 @@ export interface LogExtension {
   dispose(): void;
 }
 
+/** Parsed once per process after the first VALID value: `attachSink` runs for the root AND every subagent. */
+let cachedLogLevel: LogLevel | undefined;
+/** Last invalid raw value already warned about, so a typo does not warn per sink. */
+let warnedInvalidLogLevel: string | null = null;
+
 /**
  * `AGENT_LOG_LEVEL=debug|info|warn|error` — the one volume knob for the persisted timeline.
  *
@@ -93,8 +98,22 @@ export interface LogExtension {
  * before an extension is loaded.
  */
 function configuredLogLevel(): LogLevel | undefined {
+  if (cachedLogLevel) return cachedLogLevel;
   const raw = process.env.AGENT_LOG_LEVEL?.trim().toLowerCase();
-  return raw === "debug" || raw === "info" || raw === "warn" || raw === "error" ? raw : undefined;
+  // Unset is not cached: a library host may load `.env` after the runtime was built, and the first
+  // subagent's `attachSink` happens before that. Re-reading `process.env` per sink is cheap.
+  if (!raw) return undefined;
+  if (raw === "debug" || raw === "info" || raw === "warn" || raw === "error") {
+    cachedLogLevel = raw;
+    return raw;
+  }
+  // A typo used to fall through to the seam default (the noisiest level) with no signal at all,
+  // so a user trying to quieten a workspace got the opposite. Say it once per bad value.
+  if (warnedInvalidLogLevel !== raw) {
+    console.warn(`[agent] ignoring AGENT_LOG_LEVEL="${raw}" (expected debug | info | warn | error; using the default)`);
+    warnedInvalidLogLevel = raw;
+  }
+  return undefined;
 }
 
 /**

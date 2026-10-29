@@ -182,6 +182,15 @@ import type {
 // Config
 // ============================================================================
 
+/**
+ * `subagent:*` types that move work between seats but do not change a retained row.
+ *
+ * The row summary carries status / task phase / usage, not queue depth. Rebuilding the whole list
+ * for these sent two full frames per admission (one for the queue event, one for the transition
+ * that followed). Kept as an exclusion set, so a new event type refreshes by default.
+ */
+const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", "subagent:prefork-discarded"]);
+
 /** When the turn context payload hasn't changed, re-admit every N messages to keep context fresh. */
 export type { RunFinalizeReason } from "./agent-types.js";
 
@@ -488,6 +497,15 @@ export class ManagedAgent {
   /** Shared channel → wire projection cache (see `getWireProjectionCache`). */
   private wireProjectionCache: WireProjectionCache | null = null;
   private toolCompactCache: ToolCompactCache;
+  /**
+   * Last published `subagents` row list, for de-duplication.
+   *
+   * A child's status beats (thinking → responding → running) each republish the whole table, and
+   * a turn also ends with a `subagent:*` frame: four parallel tasks produced hundreds of identical
+   * full-table SSE frames per turn. The rows are small, so serializing them is cheaper than the
+   * frame it suppresses.
+   */
+  private lastSubagentsSignature: string | null = null;
   readonly sessionPersistence: SessionPersistence;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
@@ -718,6 +736,7 @@ export class ManagedAgent {
       streamHub: this.streamHub,
       getTodoManager: () => this.getTodoManager(),
       stopActiveRun: (reason) => this.stopActiveRun(reason),
+      clearQueuedInput: () => this.clearQueuedMessages(),
       abortManualCompaction: (reason) => this.compactions.abortForTeardown(reason),
       cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
       discardPreforkRuns: () => this.discardPreforkRuns(),
@@ -869,6 +888,9 @@ export class ManagedAgent {
    * Core does not infer this from messages; the UI sets it when opening/closing client-tool flows.
    */
   setClientToolWaiting(active: boolean): void {
+    // A switch is unload → load: the waiting flag describes the turn being replaced, and setting
+    // it after the target is adopted would park the new session on a question it never asked.
+    if (this.isSessionSwitching()) return;
     this.statusController.setClientToolWaiting(active);
   }
 
@@ -1030,6 +1052,12 @@ export class ManagedAgent {
     // retained, `session:mode` projected) — see unified-agent-event-bus.
     this.eventBus?.emit("agent:state", this.getL1State());
     this.eventBus?.emit("session:mode", this.modeState());
+    // A CHILD's status/usage row lives in the PARENT's retained `subagents` list. Child state used
+    // to publish only `agent:state`, which the parent session projection drops (`acceptEvent`
+    // forwards only `subagent:*`), so an off-process reader kept the spawn-time status/usage until
+    // the next phase event. Status transitions are bounded per turn; the parent's own state needs
+    // no row rebuild.
+    if (this.parentId) this.manager?.getAgent(this.parentId)?.refreshSubagents();
     // Approvals / ask_user pause also surface through emitStateChange (status +
     // pending-count transitions), so keep the retained interaction snapshot fresh.
     this.eventBus?.emit("session:interaction", this.readInteractions());
@@ -1070,7 +1098,11 @@ export class ManagedAgent {
     //
     // The event is dispatched by the CHILD, but the rows describe the PARENT's children, so resolve
     // the parent and refresh its scope. A root agent emitting its own event refreshes itself.
-    if (type.startsWith("subagent:")) {
+    // Queue / discarded-seat events move work between seats but do not change a row (the summary
+    // carries status/phase/usage, not queue depth), and rebuilding the whole list for them sent a
+    // second full frame per admission. Every other `subagent:*` refreshes, so a NEW event type is
+    // covered by default rather than silently leaving rows stale.
+    if (type.startsWith("subagent:") && !NON_ROW_SUBAGENT_EVENTS.has(type)) {
       const parent = this.parentId ? this.manager?.getAgent(this.parentId) : this;
       parent?.refreshSubagents();
     }
@@ -1081,7 +1113,11 @@ export class ManagedAgent {
    * @internal
    */
   refreshSubagents(): void {
-    this.eventBus?.emit("session:subagents", this.readSubagents());
+    const snapshot = this.readSubagents();
+    const signature = JSON.stringify(snapshot);
+    if (signature === this.lastSubagentsSignature) return;
+    this.lastSubagentsSignature = signature;
+    this.eventBus?.emit("session:subagents", snapshot);
   }
 
   /**
@@ -1187,6 +1223,26 @@ export class ManagedAgent {
     const sameModel = selection.model === this.config.model;
     const sameStyle = !style || style === this.config.modelStyle;
     if (sameModel && sameStyle) return false;
+
+    // Preflight the same schema `updateConfig` will run. A session written by another build (or a
+    // hand-edited JSONL) can name a style this build no longer accepts, and `setModel` would throw
+    // out of the restore HALF-WAY. The caller treats a persisted-model miss as "keep the current
+    // model", so reject it here, before any config/usage/adapter mutation.
+    try {
+      AgentConfigSchema.parse({
+        ...this.config,
+        model: selection.model,
+        ...(style ? { modelStyle: style } : {}),
+      });
+    } catch (error) {
+      this.log?.warn("agent", "Persisted model could not be applied; keeping the current model", {
+        model: selection.model,
+        ...(style ? { modelStyle: style } : {}),
+        error: errorMessage(error),
+      });
+      return false;
+    }
+
     this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) });
     return true;
   }
@@ -1730,6 +1786,10 @@ export class ManagedAgent {
       warn: (message) => this.log?.warn("system", message),
       onToolsChanged: () => {
         this.setRunnerConfigKey(undefined);
+        // A tool that lands or leaves changes what `toModelOutput` produces; cached projections
+        // are keyed by content, not formatter identity, so they must be dropped here (the one
+        // choke point both register and unregister pass through).
+        this.toolCompactCache.clear();
         if (options.publishCatalog !== false) this.publishToolPresentationCatalog();
       },
       agentId: this.id,
@@ -1751,7 +1811,10 @@ export class ManagedAgent {
       tools: this.tools,
       ownerId: this.scopedOwnerId(extensionId),
       warn: (message) => this.log?.warn("system", message),
-      onToolsChanged: () => this.setRunnerConfigKey(undefined),
+      onToolsChanged: () => {
+        this.setRunnerConfigKey(undefined);
+        this.toolCompactCache.clear();
+      },
     });
     this.publishToolPresentationCatalog();
   }
@@ -2225,6 +2288,12 @@ export class ManagedAgent {
     if (!manager) {
       return { ok: false, error: "AgentManager required for compact" };
     }
+    // A resume/new is unload → load: the transcript this would summarize is about to be replaced
+    // (and in the restore half the pump is already stopped and the status is idle). Drop the
+    // request rather than running it against the leaving channel or the target before its commit.
+    if (this.isSessionSwitching()) {
+      return { ok: false, error: "Session is switching — try again when it finishes" };
+    }
     const lease = this.compactions.begin("manual");
     if (!lease) {
       return { ok: false, error: "Compaction already in progress" };
@@ -2297,12 +2366,19 @@ export class ManagedAgent {
     fn: Parameters<AgentToolService["registerDecorator"]>[1],
     ownerId = this.id
   ): () => void {
-    return this.toolService.registerDecorator(toolName, fn, ownerId);
+    const dispose = this.toolService.registerDecorator(toolName, fn, ownerId);
+    // A decorator changes the model-facing projection; cached entries were built without it.
+    this.toolCompactCache.clear();
+    return () => {
+      dispose();
+      this.toolCompactCache.clear();
+    };
   }
 
   /** Remove every decorator belonging to an owner (extension disable/destroy). */
   removeToolOutputDecoratorOwner(ownerId = this.id): void {
     this.toolService.removeDecoratorOwner(ownerId);
+    this.toolCompactCache.clear();
   }
 
   /** Presentation catalog for this agent's live tools, not the process-wide union. */
@@ -2343,6 +2419,11 @@ export class ManagedAgent {
    */
   stopActiveRun(reason = "session-switch"): void {
     this.chatController?.stopIfActive(reason);
+  }
+
+  /** Whether a session switch is in flight (interactions are dropped while it runs). @internal */
+  isSessionSwitching(): boolean {
+    return this.sessionLifecycle.isTransitioning();
   }
 
   /**

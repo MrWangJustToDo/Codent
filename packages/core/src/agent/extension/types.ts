@@ -4,8 +4,8 @@ import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
 import type { ExtensionUI } from "./ui-types.js";
 import type { CoreEnv } from "../../env";
-import type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
 import type { ModelCapability } from "../../models/types.js";
+import type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
 import type { ModelToolContent, ToModelOutputContext, ToModelOutputDecorator } from "../tools/runtime/contract.js";
@@ -14,7 +14,7 @@ import type { ModelMessage, SchemaInput } from "@tanstack/ai";
 export type { ExtensionZod } from "./extension-zod.js";
 
 /** Re-exported so extension authors can name the union without importing `models/**`. */
-export type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
+export type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
 export type { ModelCapability } from "../../models/types.js";
 
 // ============================================================================

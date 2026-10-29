@@ -5,6 +5,7 @@
  * `AgentToolService` is the orchestration layer that registers and unregisters entries.
  */
 
+import { compareCodeUnits } from "../../../utils/code-unit-order.js";
 import { INCUMBENT_RANK, pickTopByRank } from "../../dispatch-order.js";
 
 import { getToolMetadata } from "./define-tool.js";
@@ -104,10 +105,10 @@ export class AgentToolRegistry {
     };
   }
 
-  /** Every live tool, in name order. */
+  /** Every live tool, in name order (code-unit, same order the schema prefix uses). */
   list(): ResolvedAgentTool[] {
     return [...this.stacks.keys()]
-      .sort((a, b) => a.localeCompare(b))
+      .sort(compareCodeUnits)
       .map((name) => this.resolve(name))
       .filter((entry): entry is ResolvedAgentTool => entry !== undefined);
   }

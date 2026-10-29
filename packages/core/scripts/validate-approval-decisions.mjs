@@ -59,6 +59,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
     enqueueRun: async () => {
       pumps += 1;
     },
+    isSessionSwitching: () => false,
     getCoreEnv: () => ({}),
     ...(evaluate ? { evaluateCommandSafety: evaluate } : {}),
   });
@@ -231,6 +232,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
     enqueueRun: async () => {
       pumps += 1;
     },
+    isSessionSwitching: () => false,
     getCoreEnv: () => ({}),
   });
 

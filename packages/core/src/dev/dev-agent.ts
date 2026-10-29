@@ -25,7 +25,8 @@ export { PendingMessageQueue } from "../agent/queue/pending-message-queue.js";
 export type { QueueMode } from "../agent/queue/pending-message-queue.js";
 export { SessionStore } from "../agent/persistence/session-store.js";
 export { autoCompact } from "../agent/compaction/auto-compact.js";
-export { applyCompactionResult } from "../agent/compaction/apply-compaction-result.js";
+export { applyCompactionResult, findOrphanedToolCut } from "../agent/compaction/apply-compaction-result.js";
+export { compactionAbortError, isCompactionCancel } from "../agent/compaction/abort-classification.js";
 export {
   CONTEXT_OVERFLOW_CODES,
   isPromptTooLongError,
@@ -376,7 +377,8 @@ export {
   trySanitizeForMultimodalRetry,
   unsupportedMultimodalPartTypes,
 } from "../models/adapter/capability-message-utils.js";
-export type { CapabilityProbe, MultimodalPartType } from "../models/adapter/capability-message-utils.js";
+export type { CapabilityProbe } from "../models/adapter/capability-message-utils.js";
+export type { MultimodalPartType } from "../utils/multimodal-part-types.js";
 export {
   hasDeferredToolExecution,
   hasApprovedToolsPendingExecution,

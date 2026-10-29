@@ -202,6 +202,9 @@ export class AgentBootstrap {
 
   private async loadExtensions(report: BootstrapReport, skillRegistry: SkillRegistry): Promise<void> {
     const { managed, config, env, rootPath, log, manager } = this.deps;
+    const publishTools = (): void => {
+      managed.publishToolPresentationCatalog();
+    };
     const extensionRunner = new ExtensionRunner({
       onRegisterTool: (def, ownerId, rank) => managed.registerTool(def, ownerId, rank, { publishCatalog: false }),
       onUnregisterTool: (name, ownerId) => managed.unregisterExtensionTool(name, ownerId),
@@ -211,8 +214,8 @@ export class AgentBootstrap {
       onRegisterToolOutputDecorator: (name, decorator, ownerId) =>
         managed.registerToolOutputDecorator(name, decorator, ownerId),
       onRemoveToolOutputDecoratorOwner: (ownerId) => managed.removeToolOutputDecoratorOwner(ownerId),
-      onToolRegistrationBatchComplete: () => managed.publishToolPresentationCatalog(),
-      onToolRegistrationComplete: () => managed.publishToolPresentationCatalog(),
+      onToolRegistrationBatchComplete: publishTools,
+      onToolRegistrationComplete: publishTools,
       cwd: rootPath,
       agentId: managed.id,
       getCoreEnv: () => env,

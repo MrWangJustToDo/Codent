@@ -110,6 +110,7 @@ export {
 export { buildSegmentedConversationText, serializeConversation } from "./serialize-conversation.js";
 export {
   applyCompactionResult,
+  findOrphanedToolCut,
   applyReactiveCompactionResult,
   type ApplyCompactionResultOptions,
 } from "./apply-compaction-result.js";

@@ -2,8 +2,8 @@
  * Token budget helpers for compaction summarization subagents.
  */
 
-import { buildToolCallNameMap } from "./message-utils.js";
 import { measureSerializedConversationChars, serializedMessageChars } from "./serialize-conversation.js";
+import { toolNameByMessageIndex } from "./tool-call-pairing.js";
 
 import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { ModelMessage } from "@tanstack/ai";
@@ -74,8 +74,12 @@ export function resolveSummarizationInputBudget(manager: AgentManager, parentAge
 }
 
 /** Serialized-size tokens for one message (see {@link splitMessagesByTokenBudget}). */
-function estimateSerializedMessageTokens(message: ModelMessage, toolCallMap: Map<string, string>): number {
-  const chars = serializedMessageChars(message, toolCallMap);
+function estimateSerializedMessageTokens(
+  message: ModelMessage,
+  toolNames: Map<number, string>,
+  messageIndex: number
+): number {
+  const chars = serializedMessageChars(message, toolNames, messageIndex);
   return chars > 0 ? Math.ceil(chars / SUMMARIZATION_CHARS_PER_TOKEN) : 0;
 }
 
@@ -90,13 +94,14 @@ function estimateSerializedMessageTokens(message: ModelMessage, toolCallMap: Map
 export function splitMessagesByTokenBudget(messages: ModelMessage[], maxTokens: number): ModelMessage[][] {
   if (messages.length === 0) return [];
 
-  const toolCallMap = buildToolCallNameMap(messages);
+  const toolNames = toolNameByMessageIndex(messages);
   const batches: ModelMessage[][] = [];
   let current: ModelMessage[] = [];
   let currentTokens = 0;
 
-  for (const message of messages) {
-    const messageTokens = estimateSerializedMessageTokens(message, toolCallMap);
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    const messageTokens = estimateSerializedMessageTokens(message, toolNames, i);
     if (current.length > 0 && currentTokens + messageTokens > maxTokens) {
       batches.push(current);
       current = [];

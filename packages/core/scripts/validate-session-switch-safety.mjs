@@ -159,6 +159,7 @@ assert.equal(
       );
     },
     abortManualCompaction: () => {},
+    clearQueuedInput: () => {},
     cascadeAbortToChildren: () => {},
     discardPreforkRuns: () => {},
     streamHub: { endAllCommands: () => {}, clearAll: markReset("streamHub") },
@@ -262,6 +263,7 @@ assert.equal(
     },
     stopActiveRun: () => {},
     abortManualCompaction: () => {},
+    clearQueuedInput: () => {},
     cascadeAbortToChildren: () => {},
     discardPreforkRuns: () => {},
     streamHub: { endAllCommands: () => {}, clearAll: () => {} },
@@ -303,6 +305,85 @@ assert.equal(
   assert.equal(transcriptCleared, true, "the live transcript is reset for the new session");
   assert.equal(taskRunsCleared, true, "the previous conversation's task records are dropped");
   assert.equal(released, "ses_old", "the previous session's ownership is released after adoption");
+}
+
+// A transition is "admitted" synchronously (before `runTransition` starts on a microtask), and the
+// window must stay open until EVERY admitted switch settles — a second switch queued behind the
+// first is still part of the same unload → load window. Before this, `isTransitioning` flipped only
+// when the operation began, so an interaction in that gap saw "not switching" and was applied to
+// the session being left.
+{
+  const gates = [];
+  const drainGates = [0, 1].map(
+    () =>
+      new Promise((resolve) => {
+        gates.push(resolve);
+      })
+  );
+  let drains = 0;
+  let adopted = null;
+  let transcriptCleared = false;
+  const lifecycle = new SessionLifecycleService({
+    getSessionData: () => ({ id: "ses_flag_old", uiMessages: [] }),
+    setSessionData: (data) => {
+      adopted = data;
+    },
+    getSessionStore: () => ({
+      create: () => ({ id: `ses_flag_new_${drains}`, uiMessages: [], model: "m", modelStyle: "openai" }),
+    }),
+    acquireSessionOwnership: () => true,
+    releaseSessionOwnership: () => {},
+    awaitSessionPersistIdle: () => drainGates[Math.min(drains++, drainGates.length - 1)],
+    stopActiveRun: () => {},
+    abortManualCompaction: () => {},
+    clearQueuedInput: () => {},
+    cascadeAbortToChildren: () => {},
+    discardPreforkRuns: () => {},
+    streamHub: { endAllCommands: () => {}, clearAll: () => {} },
+    mode: { reset: () => {} },
+    approvals: { clear: () => {} },
+    run: { resetRunState: () => {}, resetTurnLifecycle: () => {} },
+    getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
+    statusController: { resetToIdle: () => {} },
+    clearErrorAndRetry: () => {},
+    clearPendingApprovals: () => {},
+    memory: { resetState: () => {} },
+    usage: { reset: () => {} },
+    resetMediaHydrationMisses: () => {},
+    getTodoManager: () => ({ reset: () => {} }),
+    resetTurnContext: () => {},
+    resetSessionSyncTracker: () => {},
+    resetIterationProgress: () => {},
+    clearTaskRuns: () => {},
+    resetCommandJobs: () => {},
+    emitSessionNew: () => {},
+    refreshState: () => {},
+    refreshSubagents: () => {},
+    bindSessionLogSink: () => {},
+    getChatController: () => ({
+      clearTranscript: () => {
+        transcriptCleared = true;
+      },
+    }),
+  });
+
+  const first = lifecycle.newSession("session-new");
+  assert.equal(lifecycle.isTransitioning(), true, "a switch is visible synchronously, before its microtask runs");
+
+  // A SECOND switch admitted while the first is still running keeps the window open too.
+  const second = lifecycle.newSession("session-new");
+  await Promise.resolve();
+  assert.equal(lifecycle.isTransitioning(), true, "a queued second switch keeps the window open");
+
+  gates[0]();
+  await first;
+  assert.equal(lifecycle.isTransitioning(), true, "still switching while the second is queued");
+
+  gates[1]();
+  await second;
+  assert.equal(adopted?.id, "ses_flag_new_1", "both transitions committed");
+  assert.equal(transcriptCleared, true);
+  assert.equal(lifecycle.isTransitioning(), false, "the flag clears once every admitted transition settles");
 }
 
 console.log("session-switch-safety validation passed");

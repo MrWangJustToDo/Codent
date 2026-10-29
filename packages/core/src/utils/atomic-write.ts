@@ -1,5 +1,9 @@
 /**
- * Crash-safe whole-file write — the one implementation.
+ * Crash-safe whole-file write for best-effort document saves.
+ *
+ * `write-file-tool` keeps its own variant on purpose: it must FAIL LOUDLY when the rename fails,
+ * while a document save here degrades to an in-place write instead of losing the save. The shared
+ * rule is the unique temp name + cleanup, not the failure policy.
  *
  * `writeFile(path, body)` truncates the destination before writing, so a crash, a power loss, or
  * a concurrent reader observes a zero-length or half-written file. For an append-only log that is

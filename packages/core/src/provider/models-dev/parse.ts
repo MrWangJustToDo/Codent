@@ -113,9 +113,6 @@ export function deriveCapabilities(data: ModelsDevModel): ModelCapability[] {
   return capabilities;
 }
 
-/** Wire field a model echoes its reasoning back on. See {@link ModelInfo.reasoningEchoField}. */
-export type { ReasoningEchoField };
-
 /**
  * Resolve the reasoning echo field from models.dev `interleaved`.
  *

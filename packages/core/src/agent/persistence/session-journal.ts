@@ -27,7 +27,6 @@ export function getJournalPath(id: string): string {
 }
 
 /**
-/**
  * Append `lines` to the log as JSONL.
  *
  * `tailTerminated` comes from the last {@link readLog} (or from this process's own writes, which

@@ -4,7 +4,21 @@
  * Prefer composition: `private readonly events = new Emitter<{ change: T }>()`.
  */
 
+import { reportContained } from "./contained-report.js";
+
 export type EmitterListener<T> = (payload: T) => void;
+
+/**
+ * Report a listener failure without letting the report itself escape.
+ *
+ * The async branch runs inside a `.catch`, so a throwing reporter there became an unhandled
+ * rejection; the sync branch runs inside the delivery loop, so a throwing reporter cost the
+ * remaining listeners their frame.
+ */
+function safeReport(report: ((error: unknown) => void) | undefined, error: unknown): void {
+  if (!report) return;
+  reportContained(() => report(error));
+}
 
 export class Emitter<TEvents extends Record<string, unknown>> {
   private readonly listeners = new Map<keyof TEvents & string, Set<EmitterListener<unknown>>>();
@@ -18,11 +32,15 @@ export class Emitter<TEvents extends Record<string, unknown>> {
       set = new Set();
       this.listeners.set(type, set);
     }
-    const wrapped = listener as EmitterListener<unknown>;
+    // One wrapper per registration: storing the listener function itself collapsed two subscribers
+    // sharing a callback into one entry, so the first disposer cancelled both.
+    const wrapped = ((payload: unknown) => listener(payload as TEvents[K])) as EmitterListener<unknown>;
     set.add(wrapped);
     return () => {
       set!.delete(wrapped);
-      if (set!.size === 0) {
+      // Identity check: a disposer called twice (or after the type was re-subscribed) must not
+      // delete a NEW listener set that now owns the entry.
+      if (this.listeners.get(type) === set && set!.size === 0) {
         this.listeners.delete(type);
       }
     };
@@ -42,9 +60,15 @@ export class Emitter<TEvents extends Record<string, unknown>> {
     if (!set || set.size === 0) return;
     for (const listener of [...set]) {
       try {
-        listener(payload);
+        const result = (listener as (value: TEvents[K]) => unknown)(payload);
+        // A subscriber typed `void` may still be async (the server's SSE writer is). Its
+        // rejection is not caught by this try/catch, and Node's default policy turns an
+        // unhandled rejection into process exit — attach a handler instead.
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+          void Promise.resolve(result).catch((error) => safeReport(onListenerError, error));
+        }
       } catch (error) {
-        onListenerError?.(error);
+        safeReport(onListenerError, error);
       }
     }
   }

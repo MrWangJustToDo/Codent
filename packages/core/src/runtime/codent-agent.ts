@@ -77,6 +77,12 @@ export interface CodentAgentOptions {
    * `true` for the manager this runtime builds itself.
    */
   ownsManager?: boolean;
+  /**
+   * Whether this runtime owns the **runtime** it runs on (its provider and env) for dispose.
+   * Default `false` when a manager is injected (that runtime is borrowed and may be shared), and
+   * `true` when this call built the runtime.
+   */
+  ownsRuntime?: boolean;
   /** `--remote-session`: a remote AgentSessionHost; skips the local manager. */
   host?: AgentSessionHost;
   /**
@@ -102,6 +108,8 @@ export class CodentAgent {
   private readonly manager?: AgentManager;
   /** Whether {@link dispose} destroys {@link manager}. An injected manager stays its owner's. */
   private readonly ownsManager: boolean;
+  /** Whether {@link dispose} destroys the runtime's provider/env. A borrowed runtime's stay. */
+  private readonly ownsRuntime: boolean;
   private readonly models?: ModelCatalogRead;
   /** Agent ids this runtime created, and therefore owns for disposal. */
   private readonly ownedSessionIds = new Set<string>();
@@ -122,13 +130,15 @@ export class CodentAgent {
     host: AgentSessionHost,
     manager: AgentManager | undefined,
     models: ModelCatalogRead | undefined,
-    ownsManager: boolean
+    ownsManager: boolean,
+    ownsRuntime: boolean
   ) {
     this.runtime = runtime;
     this.host = host;
     this.manager = manager;
     this.models = models;
     this.ownsManager = ownsManager;
+    this.ownsRuntime = ownsRuntime;
   }
 
   /**
@@ -164,7 +174,8 @@ export class CodentAgent {
     // A manager we built is ours to tear down; an injected one belongs to the injector, and
     // disposing it here would destroy every root agent another runtime is using.
     const ownsManager = options.ownsManager ?? options.manager === undefined;
-    return new CodentAgent(runtime, host, manager, options.models, ownsManager);
+    const ownsRuntime = options.ownsRuntime ?? options.manager === undefined;
+    return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
   }
 
   /** The runtime's workspace env (fs/shell/fetch), with defaults resolved. */
@@ -266,16 +277,18 @@ export class CodentAgent {
       }
     }
 
-    try {
-      await this.runtime.modelProvider?.destroy?.();
-    } catch (error) {
-      firstError ??= error;
-    }
-    if (this.runtime.ownsEnv) {
+    if (this.ownsRuntime) {
       try {
-        await this.runtime.env.destroy?.();
+        await this.runtime.modelProvider?.destroy?.();
       } catch (error) {
         firstError ??= error;
+      }
+      if (this.runtime.ownsEnv) {
+        try {
+          await this.runtime.env.destroy?.();
+        } catch (error) {
+          firstError ??= error;
+        }
       }
     }
     if (firstError !== undefined) throw firstError;

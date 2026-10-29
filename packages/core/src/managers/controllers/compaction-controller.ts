@@ -62,7 +62,7 @@ export type CompactionOutcome =
       originalCount?: number;
       compactedCount?: number;
     }
-  | { status: "failed"; error: string; phase?: string }
+  | { status: "failed"; error: string }
   | { status: "skipped" };
 
 export interface CompactionControllerDeps {
@@ -95,6 +95,13 @@ export class CompactionController {
    */
   begin(kind: CompactionKind, options: CompactionBeginOptions = {}): CompactionLease | null {
     if (kind === "manual" && this.active?.lease.kind === "manual") return null;
+
+    // An automatic claim may supersede (that is how a stale attempt is invalidated), but a manual
+    // compaction has its own summarizer signal: abort it instead of leaving a paid model call
+    // running whose result can no longer be applied (`isCurrent` is false from here on).
+    if (kind !== "manual" && this.active?.lease.kind === "manual") {
+      this.abortActive(`superseded-by-${kind}`);
+    }
 
     const controller = kind === "manual" ? new AbortController() : undefined;
     const lease: CompactionLease = {
@@ -159,17 +166,14 @@ export class CompactionController {
     } else if (outcome.status === "failed") {
       if (lease.kind === "reactive") {
         this.deps.emitEvent("compaction:reactive-error", {
-          ...(outcome.phase ? { phase: outcome.phase } : {}),
           error: outcome.error,
         });
       } else if (lease.kind === "manual") {
         this.deps.emitEvent("compaction:manual-error", {
-          ...(outcome.phase ? { phase: outcome.phase } : {}),
           error: outcome.error,
         });
       } else {
         this.deps.emitEvent("compaction:auto-error", {
-          ...(outcome.phase ? { phase: outcome.phase } : {}),
           error: outcome.error,
         });
       }

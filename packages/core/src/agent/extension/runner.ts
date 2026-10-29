@@ -557,6 +557,9 @@ export class ExtensionRunner {
         // contract makes teardown idempotent) and drop any artifact that still landed on a race.
         await this.deactivateExtension(instance);
         this.unregisterInstanceArtifacts(instance);
+        // Anything the tail of `activate` rendered after the teardown would otherwise be replayed
+        // to a later subscriber.
+        this.uiBridge.clearOwner(api.id);
         instance.state = "inactive";
         return instance;
       }
@@ -570,6 +573,9 @@ export class ExtensionRunner {
       // Roll back any artifacts registered before the failure so a later re-enable
       // starts clean (no duplicate registrations).
       this.unregisterInstanceArtifacts(instance);
+      // A slot rendered before the throw must not survive the rollback (the queued UI flush
+      // would still publish it for an instance reported as `error`).
+      this.uiBridge.clearOwner(api.id);
       instance.state = "error";
       instance.error = error;
       // Emitting is the record (and the bootstrap reports it too); the direct logger row duplicated it.
@@ -718,9 +724,22 @@ export class ExtensionRunner {
       if (!enabled) {
         const instance = this.extensions.find((e) => e.api.id === id);
         if (instance) {
+          // Flush while the context and its registration are still reachable: the activation may
+          // continue in the background, and `unregisterInstanceArtifacts` clears `flush` below.
+          // Best-effort — a hung activation may still be holding whatever it has not handed over.
+          await this.flushExtension(instance);
+          // Revoke the lease FIRST, then run teardown ourselves. Waiting for the in-flight
+          // `activate` to resolve is not enough: it can observe the still-live context, mark the
+          // instance active, and never call `deactivate()` (its resources then leak), while a
+          // hung activation never resolves and leaves nobody to run the teardown at all.
           this.contexts.delete(id);
+          this.uiBridge.clearOwner(instance.api.id);
+          await this.deactivateExtension(instance);
           this.unregisterInstanceArtifacts(instance);
           instance.state = "inactive";
+          // `activating` is intentionally NOT cleared: a re-enable must stay refused while the
+          // old `activate` is still running (two activations would register two copies). Disable
+          // is the remedy, and it now runs the full teardown.
           return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
         }
       }
@@ -761,6 +780,10 @@ export class ExtensionRunner {
       instance.context = context;
       this.contexts.set(instance.api.id, context);
       this.refusedRegistrations.delete(instance.api.id);
+      // The disable notice describes the previous incarnation. Clear it when activation STARTS: a
+      // turn collected while `activate` is still awaiting would otherwise carry the provider's
+      // section and the stale "disabled" notice under the same `<ctx kind="ext:<id>">`.
+      this.turnContextSections.clearNotices(instance.api.id);
       try {
         await instance.api.activate(context);
         if (!this.isContextLive(context)) {
@@ -769,12 +792,12 @@ export class ExtensionRunner {
           // could not have seen (deactivate is idempotent by contract).
           await this.deactivateExtension(instance);
           this.unregisterInstanceArtifacts(instance);
+          this.uiBridge.clearOwner(instance.api.id);
           instance.state = "inactive";
           return { ok: false, message: `Extension "${id}" was disabled while activating` };
         }
         instance.state = "active";
         instance.error = undefined;
-        this.turnContextSections.clearNotices(instance.api.id);
         this.options.onToolRegistrationBatchComplete?.();
         return { ok: true, message: `Extension "${id}" enabled` };
       } catch (err) {
@@ -784,6 +807,7 @@ export class ExtensionRunner {
         await this.deactivateExtension(instance);
         // Roll back any artifacts registered before the failure.
         this.unregisterInstanceArtifacts(instance);
+        this.uiBridge.clearOwner(instance.api.id);
         instance.state = "error";
         instance.error = error;
         return { ok: false, message: `Failed to enable "${id}": ${error.message}` };
@@ -908,7 +932,9 @@ export class ExtensionRunner {
     instance.registrations.flush = null;
     instance.registrations.exitFlushRef?.();
     instance.registrations.exitFlushRef = null;
-    this.contexts.delete(instance.api.id);
+    // Identity-checked: a revoked instance must not delete a NEWER incarnation's lease for the
+    // same id (every other lease operation is identity-based too).
+    if (this.contexts.get(instance.api.id) === instance.context) this.contexts.delete(instance.api.id);
     instance.registrations.exitFlush = null;
   }
 

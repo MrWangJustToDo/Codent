@@ -303,9 +303,10 @@ export class AgentLog {
   }
 
   /**
-   * Synchronously flush buffered entries. Best-effort: falls back to async when
-   * the runtime lacks sync fs primitives. Safe to call from `process.on`
-   * handlers and teardown paths.
+   * Synchronously flush buffered entries. Best-effort: when the runtime lacks sync fs primitives
+   * (a remote CoreEnv) it falls back to an async write that an exit handler usually cannot
+   * complete, so the final batch is not guaranteed on such a host. Safe to call from `process.on`
+   * handlers and teardown paths; ordinary teardown still awaits `flush()`.
    */
   flushSync(): void {
     this.sinkFlushSync?.();

@@ -152,6 +152,11 @@ export interface AgentSessionSubagentSummary {
   taskPhase?: "running" | "summary" | "limit";
   /** Execution profile (root/explore/internal); useful for distinguishing internal workers. */
   profile?: AgentProfileId;
+  /**
+   * Last sampled usage when this row was republished (status/phase transitions), not a live feed.
+   * A child's per-call `session:usage` is not forwarded to the parent session; a host that needs
+   * real-time numbers subscribes to the child session directly.
+   */
   usage?: UsageChangeSnapshot;
 }
 

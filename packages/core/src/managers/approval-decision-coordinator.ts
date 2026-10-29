@@ -32,6 +32,11 @@ export interface ApprovalDecisionCoordinatorDeps {
   persist: () => void;
   /** Join a queued pump; exactly one call per user/auto-mode decision batch. */
   enqueueRun: () => Promise<void>;
+  /**
+   * True while a session switch (unload → load) is in flight. Decisions are dropped, not written:
+   * the approval table and channel they would mutate are about to be replaced.
+   */
+  isSessionSwitching: () => boolean;
   getCoreEnv: () => ResolvedCoreEnv;
   /**
    * Test/alternate-host seam. Receives every part of the call that decides the verdict
@@ -139,6 +144,8 @@ export class ApprovalDecisionCoordinator {
    */
   async applyCommandSafetyPolicy(): Promise<void> {
     if (this.deps.shouldAutoApprove()) return;
+    // Nothing read before the switch is safe to write after it.
+    if (this.deps.isSessionSwitching()) return;
 
     let handled = false;
     for (const part of this.deps.getMessages().flatMap((message) => message.parts)) {
@@ -152,6 +159,9 @@ export class ApprovalDecisionCoordinator {
       if (!approvalId || !command || !input) continue;
 
       const decision = await this.evaluateCommand({ ...input, command });
+      // The analysis is an awaited CoreEnv call. A switch admitted while it ran replaces the
+      // channel and the approval table, so this decision no longer has a row to settle.
+      if (this.deps.isSessionSwitching()) return;
       if (decision.action === "allow") {
         this.recordDecision({
           approvalId,

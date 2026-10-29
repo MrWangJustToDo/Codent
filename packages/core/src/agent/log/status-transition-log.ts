@@ -13,16 +13,15 @@
  * | Transition | Level | Why |
  * |---|---|---|
  * | into `error` / `aborted` | `info` | terminal, and the outcome a reader looks for |
- * | a user-driven change (cancel, manual compact) | `info` | an actor did something |
+ * | a user-driven change (cancel) | `info` | an actor did something |
  * | everything else, with a real trigger | `debug` | the pump's internal bookkeeping |
  * | no trigger (restore, direct set) | `info` | uncommon; likely a state nothing else explains |
  *
  * "User-driven" is judged by whether another event already records it. The abort has
- * `agent:abort`; a **manual** compact has nothing —
- * `compaction:auto-*` is off in the log rules and the only compaction event that fires is
- * the reactive one, which is internal. So `manual-compact` stays `info`: it is the single
- * trace a reader has that an operator compacted, and demoting it would delete the fact
- * rather than denoise it.
+ * `agent:abort`; a **manual** compact has its own `compaction:manual-*` rows (info on start /
+ * complete, error on failure) written by the specialized handler. The status line is therefore
+ * `debug` — demoting it removes a duplicate, not the fact (the earlier note here claimed the
+ * rule table suppressed those events, which stopped being true when they became specialized).
  *
  * The trigger is the discriminator because it is already the vocabulary the status
  * controller uses for *why* it is setting a status (`chunk:tool`, `reconcile`, …), so
@@ -67,8 +66,8 @@ const MECHANICAL_TRIGGERS: ReadonlySet<string> = new Set([
   "detached-terminal",
   "reset",
   // Recovery and compaction bookkeeping — each has a dedicated telemetry event.
-  // `manual-compact` is deliberately NOT here: nothing else emits for a user's `/compact`
-  // (see the header), so its status line is the record, not the duplication.
+  // `compaction:<kind>` is demoted by the prefix rule below; the controller's trigger is
+  // `compaction:manual`, not a `manual-compact` literal.
   "recovery-retry",
   "external-error",
   "compaction-end",

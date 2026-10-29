@@ -54,6 +54,8 @@ export interface SessionLifecycleHost {
   readonly streamHub: AgentStreamHub;
   getTodoManager(): TodoManager | null;
   stopActiveRun(reason: string): void;
+  /** Drop input queued while the agent was busy — a teardown has no turn to deliver it to. */
+  clearQueuedInput(): void;
   abortManualCompaction(reason: string): void;
   cascadeAbortToChildren(reason?: string): void;
   discardPreforkRuns(): void;
@@ -73,15 +75,26 @@ export class SessionLifecycleService {
   private switchInFlight: Promise<unknown> = Promise.resolve();
   /** Set by {@link settle}; prevents a teardown window from admitting a new switch. */
   private disposed = false;
+  /**
+   * Admitted transitions that have not settled. Counted at ADMISSION (synchronously), not when
+   * `runTransition` starts a microtask later: a send/compact arriving in that gap used to see
+   * "not switching" and write into the session being left.
+   */
+  private pendingSwitches = 0;
 
   constructor(private readonly host: SessionLifecycleHost) {}
 
   private serializeSwitch<T>(operation: () => Promise<T>): Promise<T> {
     if (this.disposed) return Promise.reject(new Error("Agent is being destroyed; session switch refused."));
+    this.pendingSwitches += 1;
     const run = this.switchInFlight.then(operation, operation);
     this.switchInFlight = run.then(
-      () => undefined,
-      () => undefined
+      () => {
+        this.pendingSwitches -= 1;
+      },
+      () => {
+        this.pendingSwitches -= 1;
+      }
     );
     return run;
   }
@@ -107,6 +120,11 @@ export class SessionLifecycleService {
   stop(reason: SessionLifecycleReason = "session-switch"): void {
     this.host.abortManualCompaction(reason);
     this.host.stopActiveRun(reason);
+    // A manual compaction has no pump, so `stopActiveRun` does not clear its queue; and a
+    // compaction aborted by this switch can settle AFTER the caller starts awaiting the restore,
+    // where `resumeAfterCompaction()` would drain input into the session being replaced (or start
+    // a turn on the new one). Drop it here, where every switch path passes.
+    this.host.clearQueuedInput();
     this.host.cascadeAbortToChildren(reason);
     this.host.discardPreforkRuns();
     this.host.streamHub.endAllCommands();
@@ -179,6 +197,18 @@ export class SessionLifecycleService {
    */
   async newSession(reason: "session-new" = "session-new"): Promise<SessionData> {
     return this.serializeSwitch(() => this.runTransition(() => this.newSessionInner(reason)));
+  }
+
+  /**
+   * Whether a new/resume transaction is admitted and not yet settled (including queued ones).
+   *
+   * The window spans the whole unload → load transaction, including a second switch queued behind
+   * the first. Every interaction offered inside it is dropped (not redirected into the target and
+   * not queued for a turn whose transcript is being replaced): see `AgentChatController`'s
+   * `dropIfSwitching`.
+   */
+  isTransitioning(): boolean {
+    return this.pendingSwitches > 0;
   }
 
   /** Publish one final L1 frame after a complete unload/load transaction. */

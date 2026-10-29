@@ -7,8 +7,8 @@ import {
   keepPolicyProjectionOptions,
   resolveKeepPolicy,
 } from "../../agent/compaction";
+import { isCompactionCancel } from "../../agent/compaction/abort-classification.js";
 import { projectWireFromChannel } from "../../agent/compaction/wire-projection.js";
-import { isAbortError } from "../../runtime-types/abort.js";
 import { toError } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
@@ -81,6 +81,9 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
 
       const managed = deps.manager.getAgent(deps.agentId);
       const isSubagent = Boolean(managed?.parentId);
+      // Hoisted for the catch: a throw from the summarizer must be classified against the run's
+      // signal, not by matching the word "abort" in its message.
+      const runAbortSignal = managed?.run.currentAbortController?.signal;
 
       const alreadyCompacted = isLatestDurableMessageCompactionSummary(channel.getMessages());
       if (!isSubagent && !alreadyCompacted && deps.shouldTriggerAutoCompact(llmMessages)) {
@@ -107,7 +110,6 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           const fromChannel = convertMessagesToModelMessages(channel.getMessages());
           // Cancel the summarizer with the run so an Esc mid-compaction does not
           // leave a half-written checkpoint.
-          const runAbortSignal = managed?.run.currentAbortController?.signal;
           const result = await autoCompact(llmMessages, compactionConfig ?? {}, deps.agentId, deps.manager, {
             todos: todos.length > 0 ? todos : undefined,
             actualTokens: actualTokens || undefined,
@@ -125,7 +127,14 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             applyCompactionResult(deps.getCoreEnv(), fromChannel, channel, usage, result, {
               ...keepPolicyProjectionOptions(resolveKeepPolicy(compactionConfig ?? {}, contextWindow)),
               onCacheCleanupError: (err) => {
-                deps.compactions.finish(lease, { status: "failed", phase: "cache-cleanup", error: err.message });
+                // The cleanup callback is asynchronous (`applyCompactionResult` fires it from a
+                // `.catch`), so by the time it runs the lease has ALREADY finished as completed:
+                // calling `finish` here was a no-op (`isCurrent` false) and the failure vanished.
+                // Report it directly, as the other two compaction paths do.
+                deps.log?.warn("compaction", "Auto-compact cache cleanup failed", {
+                  phase: "cache-cleanup",
+                  error: err.message,
+                });
               },
             })
           ) {
@@ -140,6 +149,16 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
             });
+          } else if (result.aborted) {
+            // Esc cancelled the summarizer: give the status back and emit nothing. Arming
+            // `failedAtFill` here (the old path treated it as `skipped`) deferred the next real
+            // compaction until the context grew another 8k tokens.
+            deps.compactions.release(lease);
+          } else if (result.error) {
+            // A real failure used to fall into `skipped`: no event, no log, indistinguishable
+            // from "nothing to compact", and the reason was dropped.
+            failedAtFill = fillBefore;
+            deps.compactions.finish(lease, { status: "failed", error: result.error });
           } else {
             // No progress (empty summary, summarizer no-op): remember where we tried so the
             // next model call does not start the same summarization again.
@@ -148,7 +167,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
         } catch (err) {
           // A user cancel is not a compaction failure — stay silent (but give the status back).
-          if (isAbortError(err)) {
+          if (isCompactionCancel(err, runAbortSignal)) {
             deps.compactions.release(lease);
           } else if (deps.compactions.isCurrent(lease)) {
             const error = toError(err);

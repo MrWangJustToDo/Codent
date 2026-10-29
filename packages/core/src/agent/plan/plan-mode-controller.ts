@@ -152,6 +152,11 @@ export class PlanModeController {
 
     if (!snapshot || snapshot.phase === "off") {
       this.resetPlanState("off", null);
+      // A plan phase turns todo auto-clear OFF; resuming a plain session must turn it back ON, or
+      // its completed list lingers in the footer forever (autoClear would stay disabled for the
+      // life of the process). `disable()` does this on a phase transition; a restore does not
+      // pass through it.
+      this.setPlanTodoAutoClear(true);
       // A resumed file can carry `todoPlanBound: true` with no plan phase (the flag is
       // persisted independently of `planMode`). Clearing it here is what stops that stale
       // binding from tagging every later list as plan-owned.
@@ -533,6 +538,12 @@ export class PlanModeController {
   }
 
   private maybeEnterRetro(): void {
+    // During a restore the todo list still belongs to the session being LEFT — the target's list
+    // is adopted later by `adoptRestoredSession`. Judging completeness here promoted the TARGET
+    // phase to `retro` on the other session's list (and `retro` auto-approves tools). The
+    // adoption's `session:todos` emission and `reapplyTodoBinding()` run the same check against
+    // the real list.
+    if (this.restoring) return;
     if (this.phase !== "executing") return;
     if (!this.todosSeeded) return;
     const todoManager = this.deps.getTodoManager();

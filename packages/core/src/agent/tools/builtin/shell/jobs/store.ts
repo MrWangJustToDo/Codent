@@ -13,6 +13,7 @@
  * a record whose log was swept still carries the status and the output tail.
  */
 
+import { writeFileAtomic } from "../../../../../utils/atomic-write.js";
 import { createStaleFileSweeper } from "../../../shared/cache/stale-sweep.js";
 
 import { COMMAND_JOB_LOG_DIR } from "./output-log.js";
@@ -108,19 +109,18 @@ export async function readCommandJobRecords(
   }
 }
 
-/** Write one record atomically when the host can rename (write a sibling, then move it in). */
+/**
+ * Write one record crash-safely (unique sibling temp + rename, falling back in place).
+ *
+ * The hand-rolled version used a FIXED `${path}.tmp`, never cleaned it on failure, and left one
+ * behind for the record sweeper to ignore (it only scans `.json`), so a failing write could pile
+ * up temp files forever. `writeFileAtomic` owns the unique name and the cleanup.
+ */
 export async function writeCommandJobRecord(env: ResolvedCoreEnv, record: PersistedCommandJob): Promise<void> {
   const fs = env.fs;
   const path = jobRecordPath(record.jobId);
-  const json = JSON.stringify(record);
   await fs.mkdir(COMMAND_JOB_LOG_DIR);
-  if (fs.rename) {
-    const temp = `${path}.tmp`;
-    await fs.writeFile(temp, json);
-    await fs.rename(temp, path);
-  } else {
-    await fs.writeFile(path, json);
-  }
+  await writeFileAtomic(fs, path, JSON.stringify(record));
 }
 
 /** Remove a record (job eviction / teardown). Best-effort. */

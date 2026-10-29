@@ -34,9 +34,19 @@ export interface UsageSnapshot {
 
 export type { UsageChangeSnapshot } from "../../runtime-types/session-payloads.js";
 
-/**
- * Tracks per-step context window fill and lifetime token usage for a managed agent.
- */
+/** Value comparison, so a repeated `setPricing` (model switch calls it more than once) is silent. */
+function samePricing(a: ModelPricing | null, b: ModelPricing | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.inputPerM === b.inputPerM &&
+    a.outputPerM === b.outputPerM &&
+    a.cacheReadPerM === b.cacheReadPerM &&
+    a.cacheWritePerM === b.cacheWritePerM
+  );
+}
+
+/** Tracks per-step context window fill and lifetime token usage for a managed agent. */
 export class UsageTracker {
   /** Current context window fill (input replaced each step; output accumulated per turn). */
   private window: TokenUsage = emptyUsage();
@@ -303,6 +313,7 @@ export class UsageTracker {
   }
 
   setPricing(pricing: ModelPricing | null): void {
+    if (samePricing(this.pricing, pricing)) return;
     this.pricing = pricing;
     // Pricing is part of the snapshot (`cost`): a model switch must reach the footer/view that
     // renders it, not wait for the next LLM call.
@@ -335,6 +346,7 @@ export class UsageTracker {
   }
 
   setTokenLimit(limit: number): void {
+    if (limit === this.tokenLimit) return;
     this.tokenLimit = limit;
     // `percent` and `tokenLimit` are read by the footer's context bar. Switching to a model with a
     // smaller window changes this without an LLM call, so the reading would otherwise show the old

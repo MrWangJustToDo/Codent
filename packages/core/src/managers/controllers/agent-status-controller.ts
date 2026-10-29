@@ -13,7 +13,7 @@ import {
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
 } from "../../agent/stream/tool-phase-utils.js";
-import { isTerminalStatus, resolveFinishStatus } from "../../runtime-types/agent-status.js";
+import { isActiveStatus, isTerminalStatus, resolveFinishStatus } from "../../runtime-types/agent-status.js";
 import {
   whenClearForReconcilePolicy,
   type AgentRunOutcome,
@@ -183,8 +183,10 @@ export class AgentStatusController {
   }
 
   onUserCancel(): void {
-    const status = this.deps.getStatus();
-    if (status === "running" || status === "thinking" || status === "responding" || status === "compacting") {
+    // `isActiveStatus`, not a hand-written subset: `waiting` / `awaiting_user` are active waits
+    // (a run parked on an approval or `ask_user`), and an abort that reached here used to leave
+    // them un-marked while the other abort writer (`abortManagedAgentRun`) did mark them.
+    if (isActiveStatus(this.deps.getStatus())) {
       this.deps.setStatus("aborted", "user-cancel");
     }
   }

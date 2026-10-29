@@ -170,28 +170,16 @@ export async function restoreManagedSession(
   // Mutual exclusivity: plan phase wins over auto on restore.
   const wantAuto = Boolean(session.autoMode ?? session.autoApprove);
 
-  // ---------------------------------------------------------------------------
-  // COMMIT — synchronous from here to `adoptRestoredSession`.
-  //
-  // Everything above can fail on I/O (plan file, media, session load) and must leave `setSessionData`
-  // on the session the agent was running. The session data is adopted LAST, after the channel,
-  // tracker, mode and approvals all point at the target; the previous order adopted inside the read,
-  // so a later failure left one session's data with the other's transcript — and the next save
-  // rewrote the target's log with the stale transcript.
-  // ---------------------------------------------------------------------------
-  // Mutual exclusivity: plan phase wins over auto on restore.
-  if (host.mode) {
-    host.mode.restore(planSnapshot, wantAuto);
-  } else {
-    host.planMode.restoreState(planSnapshot);
-    host.setAutoModeEnabled(host.planMode.getPhase() === "off" && wantAuto);
-  }
-  host.getApprovals().restore(approvals);
-
   // Adopt the model this session was saved with: the agent is created from the
   // ambient config (env / CLI flags), which may differ from what the session ran
   // on (e.g. after `/models`). Without this a resumed session silently reverts to
   // the default model.
+  //
+  // This is the last step that can fail (its `setModel` runs the config schema), so it runs
+  // BEFORE mode/approvals/channel are pointed at the target. `applyPersistedModel` preflights that
+  // schema and keeps the current model on a rejection; without the preflight, a session written by
+  // another build left the leaving session carrying the target's plan phase (and therefore its
+  // auto-approve flag) and its approval table, while `getSessionData()` still named the leaving one.
   const modelChanged =
     host.applyPersistedModel?.({
       model: session.model,
@@ -204,6 +192,23 @@ export async function restoreManagedSession(
   if (session.reasoningEffort === undefined || isReasoningEffort(session.reasoningEffort)) {
     host.setReasoningEffort?.(session.reasoningEffort);
   }
+
+  // ---------------------------------------------------------------------------
+  // ADOPTION — synchronous and non-throwing from here to `adoptRestoredSession`.
+  //
+  // The session data is adopted LAST, after the channel, tracker, mode and approvals all point at
+  // the target; the previous order adopted inside the read, so a later failure left one session's
+  // data with the other's transcript — and the next save rewrote the target's log with the stale
+  // transcript.
+  // ---------------------------------------------------------------------------
+  // Mutual exclusivity: plan phase wins over auto on restore.
+  if (host.mode) {
+    host.mode.restore(planSnapshot, wantAuto);
+  } else {
+    host.planMode.restoreState(planSnapshot);
+    host.setAutoModeEnabled(host.planMode.getPhase() === "off" && wantAuto);
+  }
+  host.getApprovals().restore(approvals);
 
   // Hydrate UI channel when present; hosts also apply uiMessages via resume APIs.
   // Bump the UI generation first so a run that started on the session being left

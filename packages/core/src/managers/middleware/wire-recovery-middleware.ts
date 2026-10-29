@@ -61,7 +61,7 @@ import { CONTINUATION_PROMPT } from "../stream-recovery/max-tokens-continue.js";
 import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
-import type { MultimodalPartType } from "../../models/adapter/capability-message-utils.js";
+import type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
 import type { RunCoordinator } from "../run-coordinator.js";
 import type { ContentPart, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 

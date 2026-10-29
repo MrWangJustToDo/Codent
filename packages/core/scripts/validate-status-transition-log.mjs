@@ -90,9 +90,9 @@ assert.equal(statusTransitionLogLevel("running", "recovery-retry"), "debug");
 // --- dynamic spellings share a prefix ---
 
 assert.equal(
-  statusTransitionLogLevel("compacting", "manual-compact"),
-  "info",
-  "a user's /compact has no other event — the status line IS the record"
+  statusTransitionLogLevel("compacting", "compaction:manual"),
+  "debug",
+  "a manual compact's own events are the record; the status line is a duplicate"
 );
 assert.equal(statusTransitionLogLevel("compacting", "compaction:auto"), "debug");
 assert.equal(statusTransitionLogLevel("compacting", "compaction:reactive"), "debug");

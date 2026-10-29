@@ -23,6 +23,42 @@ emitter.emit("ping", { n: 3 });
 assert.deepEqual(seen, [{ n: 1 }, { n: 2 }]);
 assert.equal(emitter.listenerCount("ping"), 0);
 
+// A stale disposer must not delete a listener set created by a LATER subscription.
+{
+  const reap = new Emitter();
+  const stale = reap.on("tick", () => {});
+  stale();
+  let calls = 0;
+  reap.on("tick", () => {
+    calls += 1;
+  });
+  stale(); // second call, now that a new Set owns the entry
+  reap.emit("tick", null);
+  assert.equal(calls, 1, "a stale disposer leaves a re-created listener set alone");
+}
+
+// An async listener's rejection goes to `onListenerError` (a `void`-typed subscriber may still be
+// async), and a reporter that throws cannot break the remaining listeners or escape the catch.
+{
+  const asyncBus = new Emitter();
+  const errors = [];
+  let second = 0;
+  asyncBus.on("async", async () => {
+    throw new Error("boom");
+  });
+  asyncBus.on("async", () => {
+    second += 1;
+  });
+  asyncBus.emit("async", null, (error) => {
+    errors.push(String(error));
+    throw new Error("reporter broke");
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(second, 1, "the sync listener still receives the frame");
+  assert.equal(errors.length, 1, "the async rejection reaches the reporter");
+  assert.match(errors[0], /boom/);
+}
+
 // --- TodoManager (session `todos` projection on the unified bus) ---
 const todosBus = createAgentEventBus();
 const todos = new TodoManager();

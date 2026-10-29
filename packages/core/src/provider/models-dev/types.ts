@@ -30,9 +30,10 @@ export interface ModelsDevLimit {
  * models.dev `interleaved`: whether reasoning streams interleaved with tool calls, and on
  * which wire field.
  *
- * Carried in the payload but **not yet consumed** — `reasoning-echo.ts` hardcodes
- * `reasoning_content` while `field: "reasoning_details"` entries (and the OpenRouter default)
- * use the other name. Declared here so the shape is honest and the echo fix has a home.
+ * Consumed by `parse.ts`: `shouldEchoReasoning` routes the echo adapter (including the two entries
+ * that declare `reasoning: false` but still interleave) and `resolveReasoningEchoField` maps
+ * `field: "reasoning_details"` to the non-default wire field. A bare `true` names no field and
+ * therefore keeps the `reasoning_content` default.
  *
  * @see https://github.com/sst/models.dev — `packages/core/src/schema.ts`
  */

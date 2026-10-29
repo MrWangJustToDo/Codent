@@ -41,6 +41,8 @@ export const DEFAULT_LOG_FLUSH_INTERVAL_MS = 250;
  * and the run died from logging. Oldest lines are dropped first and the loss is reported.
  */
 const MAX_RETRY_BUFFER_LINES = 2_000;
+/** Consecutive automatic retries after a failed write before waiting for the next entry. */
+const MAX_WRITE_RETRIES = 5;
 /** Default log file name inside the bound directory. */
 export const DEFAULT_LOG_FILENAME = "agent.log";
 
@@ -89,6 +91,8 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let flushChain: Promise<void> = Promise.resolve();
   /** True while `flushBatch` owns the buffer. `flushSync` must yield to it. */
   let flushInFlight = false;
+  /** Consecutive failed writes; the retry timer is re-armed only up to a small cap. */
+  let consecutiveFailures = 0;
   /** Whether the session-boundary divider has been decided for this sink. `false` means the
    * caller asked for a continuation (a temporary re-point), so no divider is ever written. */
   let boundaryWritten = options.sessionBoundary === false;
@@ -118,6 +122,8 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     flushInFlight = true;
     const lines = buffer;
     buffer = [];
+    /** Whether this batch prepended the session divider (so a failed write can put it back). */
+    let dividerAdded = false;
     try {
       await envFs.mkdir(dir);
       const existed = await envFs.exists(filePath);
@@ -130,6 +136,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         boundaryWritten = true;
         if (existed) {
           lines.unshift(`---------- ${new Date().toISOString()} new session ----------`);
+          dividerAdded = true;
         }
       }
       const content = lines.join("\n") + "\n";
@@ -147,19 +154,45 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         await rotate();
       }
       await appendFile(filePath, content);
+      consecutiveFailures = 0;
     } catch (error) {
       // Non-fatal, but not silent: put the batch back at the HEAD so the next flush retries in
       // order, and say why. A failed append used to vanish with no trace at all.
+      //
+      // If this batch carried the divider, take it back out and clear the flag: the retry must be
+      // able to prepend it again. Otherwise the >MAX_RETRY_BUFFER_LINES cap below — which drops
+      // from the HEAD — could discard the divider while `boundaryWritten` already said "written",
+      // and a resumed file would silently lose its launch marker.
+      if (dividerAdded) {
+        lines.shift();
+        boundaryWritten = false;
+      }
+      // A failed append may have written a prefix of the batch (ENOSPC/EIO mid-write), and the
+      // whole batch is retried, so that prefix can appear twice. Knowing exactly how much landed
+      // needs the pre-write file size (a stat on every flush); for a diagnostic log, a duplicated
+      // line is preferable to losing the tail, so this is a deliberate trade-off.
       buffer = [...lines, ...buffer];
       let dropped = 0;
       if (buffer.length > MAX_RETRY_BUFFER_LINES) {
         dropped = buffer.length - MAX_RETRY_BUFFER_LINES;
         buffer = buffer.slice(dropped);
       }
-      console.error(
-        `[agent] log batch write failed: ${errorMessage(error)}` +
-          (dropped > 0 ? ` (dropped ${dropped} oldest buffered lines)` : "")
-      );
+      consecutiveFailures += 1;
+      if (consecutiveFailures <= MAX_WRITE_RETRIES) {
+        console.error(
+          `[agent] log batch write failed: ${errorMessage(error)}` +
+            (dropped > 0 ? ` (dropped ${dropped} oldest buffered lines)` : "")
+        );
+        // The timer that fired this flush was cleared and nothing else re-arms it, so without
+        // this the final batch (often the fault lines) sat in memory until the next entry —
+        // exactly when a quiet session needs the record. Bounded, so a permanently unwritable
+        // directory stops retrying instead of logging forever.
+        schedule();
+      } else if (consecutiveFailures === MAX_WRITE_RETRIES + 1) {
+        console.error(
+          `[agent] log write failed ${consecutiveFailures} times in a row; buffered lines are dropped at the cap and writing resumes on the next entry`
+        );
+      }
     } finally {
       flushInFlight = false;
     }
@@ -215,8 +248,14 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
 
   /**
    * Synchronous best-effort write of the pending buffer, for crash/exit paths that cannot await an
-   * async flush. Requires sync fs primitives (`appendFileSync`); otherwise falls back to an async
-   * flush. Skips rotation — the goal is to land the final lines, not to enforce size.
+   * async flush.
+   *
+   * Requires sync fs primitives (`appendFileSync`). When the env has none (a remote CoreEnv exposes
+   * only async fs), there is no way to land the batch before an exit handler returns, so this
+   * degrades to an async flush that an exit will usually not complete — it does NOT promise the
+   * final lines. The ordinary teardown path (`detach`) calls `flush()` afterwards, so only a hard
+   * crash on such a runtime loses the tail. Skips rotation either way: the goal is to land the
+   * final lines, not to enforce size.
    */
   const flushSync = (): void => {
     if (buffer.length === 0) return;
@@ -231,6 +270,14 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       void flush();
       return;
     }
+    // The session divider is only decidable with `existsSync`. Without it, defer to the async path
+    // (which has `exists`) instead of writing this batch now: marking the divider "written" would
+    // drop it entirely, while leaving it pending would prepend a "new session" marker in the
+    // middle of this session's next async batch.
+    if (!boundaryWritten && typeof envFs.existsSync !== "function") {
+      void flush();
+      return;
+    }
     const lines = buffer;
     buffer = [];
     if (timer) {
@@ -239,15 +286,24 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     }
     try {
       envFs.mkdirSync?.(dir);
-      if (!boundaryWritten) {
-        boundaryWritten = true;
-        if (envFs.existsSync?.(filePath)) {
-          lines.unshift(`---------- ${new Date().toISOString()} new session ----------`);
-        }
+      const pending = [...lines];
+      if (!boundaryWritten && envFs.existsSync?.(filePath)) {
+        pending.unshift(`---------- ${new Date().toISOString()} new session ----------`);
       }
-      appendFileSync(filePath, lines.join("\n") + "\n");
-    } catch {
-      // Non-fatal: best-effort final flush on a crash path.
+      appendFileSync(filePath, pending.join("\n") + "\n");
+      // Only mark the divider once the write landed, so a retry still writes it.
+      boundaryWritten = true;
+      consecutiveFailures = 0;
+    } catch (error) {
+      // Put the batch back so `detach()`'s follow-up async flush can land it while the process is
+      // still alive (a hard crash has lost it either way). The previous swallow made a failed
+      // final write indistinguishable from success and left the buffer empty. Bounded like the
+      // async path; reported, never thrown.
+      buffer = [...lines, ...buffer];
+      if (buffer.length > MAX_RETRY_BUFFER_LINES) {
+        buffer = buffer.slice(buffer.length - MAX_RETRY_BUFFER_LINES);
+      }
+      console.error(`[agent] log sync flush failed: ${errorMessage(error)}`);
     }
   };
 

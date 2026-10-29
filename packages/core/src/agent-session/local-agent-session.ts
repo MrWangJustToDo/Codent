@@ -5,6 +5,7 @@
 
 import { AGENT_EVENT_META as EVENT_META } from "../agent/agent-event-bus";
 import { Emitter } from "../utils/emitter.js";
+import { errorMessage } from "../utils/errors.js";
 
 import { dispatchLocalAgentSessionCommand } from "./local-session-dispatch.js";
 import { readLocalAgentSessionSnapshot } from "./local-session-snapshot.js";
@@ -172,9 +173,13 @@ class LocalAgentSessionImpl implements AgentSession {
     // (duplicate messages / transcript re-renders / repeated ACP projection).
     const deliverInitial = (event: AgentSessionEvent): void => {
       try {
-        handler(event);
-      } catch {
+        const result = (handler as (value: AgentSessionEvent) => unknown)(event);
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+          void Promise.resolve(result).catch((error) => this.reportSubscriberFailure(error));
+        }
+      } catch (error) {
         // Initial reconciliation is best-effort; the live subscription remains active.
+        this.reportSubscriberFailure(error);
       }
     };
 
@@ -237,6 +242,19 @@ class LocalAgentSessionImpl implements AgentSession {
     };
   }
 
+  /** Fingerprints already reported, so a flapping subscriber cannot flood the log per frame. */
+  private readonly reportedSubscriberFailures = new Set<string>();
+
+  /** Contain a host callback failure (sync throw or async rejection) to that subscriber. */
+  private reportSubscriberFailure(error: unknown): void {
+    const text = errorMessage(error);
+    const key = text.slice(0, 200);
+    if (this.reportedSubscriberFailures.has(key)) return;
+    if (this.reportedSubscriberFailures.size >= 100) this.reportedSubscriberFailures.clear();
+    this.reportedSubscriberFailures.add(key);
+    this.managed.getLog?.()?.warn("system", "session subscriber failed", { error: text });
+  }
+
   private releaseSource(): void {
     this.sourceRefCount -= 1;
     if (this.sourceRefCount > 0) return;
@@ -269,7 +287,9 @@ class LocalAgentSessionImpl implements AgentSession {
             (event) => {
               if (!this.acceptEvent(event)) return;
               const projected = projectChannelEvent(channel, event);
-              if (projected) this.events.emit(channel, projected);
+              if (projected) {
+                this.events.emit(channel, projected, (error) => this.reportSubscriberFailure(error));
+              }
             },
             { replay: false }
           )

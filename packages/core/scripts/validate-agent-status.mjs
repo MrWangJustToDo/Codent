@@ -396,4 +396,39 @@ assert.equal(managed.getStatus(), "waiting");
   }
 }
 
+// The compaction controller calls `onUserCancel` for Esc on a manual `/compact`. Its predicate
+// was a hand-written subset (running/thinking/responding/compacting) that omitted the active
+// WAITS, while the other abort writer (`abortManagedAgentRun`) did mark them — one cancel, two
+// verdicts depending on which entry reached it.
+{
+  const makeController = (initial) => {
+    let current = initial;
+    const controller = createAgentStatusController({
+      getStatus: () => current,
+      setStatus: (status) => {
+        current = status;
+      },
+      setError: () => {},
+      setPendingApprovalCount: () => {},
+      setClientToolWaiting: () => {},
+      emitState: () => {},
+      emitEvent: () => {},
+      emitError: () => {},
+      log: () => undefined,
+    });
+    return { controller, status: () => current };
+  };
+
+  for (const active of ["running", "thinking", "responding", "waiting", "awaiting_user", "compacting"]) {
+    const { controller, status } = makeController(active);
+    controller.onUserCancel();
+    assert.equal(status(), "aborted", `Esc during ${active} is an abort`);
+  }
+  for (const settled of ["completed", "aborted", "error", "idle"]) {
+    const { controller, status } = makeController(settled);
+    controller.onUserCancel();
+    assert.equal(status(), settled, `Esc must not rewrite a ${settled} agent`);
+  }
+}
+
 console.log("agent-status validation passed");

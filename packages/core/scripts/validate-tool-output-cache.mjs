@@ -20,6 +20,7 @@ import {
   cacheToolOutput,
   cleanupOrphanedToolCache,
   clearCoreEnv,
+  findOrphanedToolCut,
   maybeCacheOutput,
   getEnv,
   registerCoreEnv,
@@ -163,6 +164,39 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
 }
 
 // ---------------------------------------------------------------------------
+// 2c. A failed pass must not arm the once-per-process guard
+//
+// The guard used to be set BEFORE the I/O, so one transient `exists`/`readdir` failure (a remote
+// env hiccup) disabled the sweep for this workspace until the process restarted.
+// ---------------------------------------------------------------------------
+{
+  resetToolOutputSweepForTesting();
+  const env = createEnv(rootPath);
+  const originalExists = env.fs.exists;
+  let failures = 1;
+  env.fs = {
+    ...env.fs,
+    exists: async (path) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error("transient getEnv failure");
+      }
+      return originalExists(path);
+    },
+  };
+
+  const stale = await writeEntry("call_transient-stdout.txt", { ageMs: STALE_AGE });
+  assert.equal(await sweepStaleToolOutput(env), 0, "a failing pass removes nothing and does not throw");
+  assert.equal(
+    await sweepStaleToolOutput(env),
+    1,
+    "the next unforced pass retries instead of treating the failure as 'already swept'"
+  );
+  assert.equal(await exists(stale), false, "and it removes the stale entry");
+  console.log("failed pass does not arm the sweep guard OK");
+}
+
+// ---------------------------------------------------------------------------
 // 3. Wiring: the first cache write of a process triggers the sweep
 // ---------------------------------------------------------------------------
 {
@@ -280,6 +314,30 @@ const STALE_AGE = TOOL_OUTPUT_MAX_AGE_MS + 60_000;
   assert.equal(await exists(jobRel), true, "a background job log is not a cache entry and survives the GC");
   assert.equal(await exists(inCache), false, "a real cache entry behind the cut is still collected");
   console.log("compaction reference GC OK (job logs outside the cache are never deleted)");
+}
+
+// ---------------------------------------------------------------------------
+// 4d. The compaction cut spans the WHOLE orphan prefix, not just its first entry
+//
+// The kept window is the tail, so orphans form the head prefix. Returning the first orphan (+1)
+// left every later prefix result "visible": a 20-result compaction collected exactly one spill
+// file and the other 19 waited for the age sweep.
+// ---------------------------------------------------------------------------
+{
+  const visible = new Set(["kept"]);
+  const messages = [
+    ...Array.from({ length: 5 }, (_, i) => ({ role: "tool", toolCallId: `orphan-${i}`, content: "{}" })),
+    { role: "user", content: "kept turn" },
+    { role: "tool", toolCallId: "kept", content: "{}" },
+  ];
+  assert.equal(findOrphanedToolCut(messages, visible), 5, "the cut includes every orphaned prefix result");
+  assert.equal(findOrphanedToolCut([], visible), 0, "an empty wire has no cut");
+  assert.equal(
+    findOrphanedToolCut([{ role: "tool", toolCallId: "kept", content: "{}" }], visible),
+    0,
+    "a fully visible wire has no cut"
+  );
+  console.log("compaction cut spans the orphan prefix OK");
 }
 
 // ---------------------------------------------------------------------------

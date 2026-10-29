@@ -1,6 +1,6 @@
 import { isAbortError as matchesAbortError } from "../runtime-types/abort.js";
 
-import type { MultimodalPartType } from "../models/adapter/capability-message-utils.js";
+import type { MultimodalPartType } from "../utils/multimodal-part-types.js";
 
 export interface AbortControllerSetup {
   onAborted: () => void;

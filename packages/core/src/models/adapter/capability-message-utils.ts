@@ -1,4 +1,3 @@
-import { errorMessage } from "../../utils/errors.js";
 /**
  * Capability-gated chat message sanitization for the model wire format.
  *
@@ -19,22 +18,15 @@ import { errorMessage } from "../../utils/errors.js";
  * model unable to tell which `#N` was omitted.
  */
 
+import { errorMessage } from "../../utils/errors.js";
+import {
+  MULTIMODAL_PART_TYPES,
+  isMultimodalPartType,
+  type MultimodalPartType,
+} from "../../utils/multimodal-part-types.js";
+
 import type { ModelCapability } from "../types.js";
 import type { ContentPart, ModelMessage, UIMessage } from "@tanstack/ai";
-
-/**
- * Multimodal content part types that may appear in user/model messages.
- *
- * One tuple is the runtime list, and the union is derived from it — a separate `Set` literal was a
- * second definition that could drift from the type. `capability-sanitize` imports the tuple for
- * the widened post-rejection drop set instead of listing the four names again.
- */
-export const MULTIMODAL_PART_TYPES = ["image", "audio", "video", "document"] as const;
-
-/** One multimodal content part type. */
-export type MultimodalPartType = (typeof MULTIMODAL_PART_TYPES)[number];
-
-const MULTIMODAL_PART_TYPE_SET: ReadonlySet<string> = new Set(MULTIMODAL_PART_TYPES);
 
 /** Which {@link ModelCapability} is required to send each multimodal part on the wire. */
 export const MULTIMODAL_PART_CAPABILITY: Record<MultimodalPartType, ModelCapability> = {
@@ -129,10 +121,6 @@ export function multimodalPartPlaceholder(
 
 export interface CapabilityProbe {
   hasCapability(cap: ModelCapability): boolean;
-}
-
-function isMultimodalPartType(type: string | undefined): type is MultimodalPartType {
-  return typeof type === "string" && MULTIMODAL_PART_TYPE_SET.has(type);
 }
 
 /** Resolve which multimodal part types should be stripped for the given capabilities. */
@@ -314,7 +302,7 @@ export function trySanitizeForMultimodalRetry(
   messages: Array<UIMessage | ModelMessage>
 ): Array<UIMessage | ModelMessage> | null {
   if (!isMultimodalUnsupportedError(error)) return null;
-  const all = new Set<MultimodalPartType>(["image", "audio", "video", "document"]);
+  const all = new Set<MultimodalPartType>(MULTIMODAL_PART_TYPES);
   if (!chatMessagesHaveMultimodal(messages, all)) return null;
   return stripMultimodalFromChatMessages(messages, all);
 }

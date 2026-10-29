@@ -275,4 +275,53 @@ function runnerToolNames(controller) {
   console.log("restore: plan binding re-applied after adoption, retro reachable");
 }
 
+// ---------------------------------------------------------------------------
+// 3c. Restoring must not judge the TARGET phase on the LEAVING session's todos
+// ---------------------------------------------------------------------------
+//
+// `mode.restore` runs before `adoptRestoredSession`, so the target's phase is applied while the
+// TodoManager still holds the session being left. Judging completeness there promoted an
+// `executing` target to `retro` whenever the leaving session's plan-bound list was complete —
+// and `retro` auto-approves tools. The target's own list is judged at adoption.
+{
+  const todoManager = new TodoManager();
+  const controller = new PlanModeController({ getTodoManager: () => todoManager });
+
+  // Leaving session: plan-bound list, all completed (it was in retro).
+  todoManager.restoreTodos([{ id: "l1", content: "done", status: "completed", priority: "medium" }], {
+    title: PLAN_TODO_TITLE,
+    planBound: true,
+  });
+
+  controller.restoreState({
+    phase: "executing",
+    planMarkdown: "plan",
+    steps: [
+      { step: 1, text: "One" },
+      { step: 2, text: "Two" },
+    ],
+    enabledAt: Date.now(),
+    todosSeeded: true,
+    preservedExistingTodos: false,
+    planFilePath: null,
+  });
+
+  assert.equal(
+    controller.getPhase(),
+    "executing",
+    "the target phase must not be promoted to retro by the leaving session's completed list"
+  );
+
+  // Adopting the TARGET list (one step still pending) keeps executing.
+  todoManager.restoreTodos(
+    [
+      { id: "t1", content: "One", status: "completed", priority: "medium" },
+      { id: "t2", content: "Two", status: "pending", priority: "medium" },
+    ],
+    { title: PLAN_TODO_TITLE, planBound: true }
+  );
+  controller.reapplyTodoBinding();
+  assert.equal(controller.getPhase(), "executing", "the target's real (incomplete) list keeps executing");
+}
+
 console.log("\nplan retro continuation validation passed");

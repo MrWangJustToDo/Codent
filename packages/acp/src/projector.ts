@@ -1036,16 +1036,12 @@ export class AcpProjector {
   /** Compaction completion → `compaction_update` (gated by the client capability). */
   private onLifecycle(event: {
     type: string;
-    payload?: { payload?: { error?: unknown; phase?: string }; error?: unknown; phase?: string };
+    payload?: { payload?: { error?: unknown }; error?: unknown };
     error?: unknown;
-    phase?: string;
   }): void {
     // The channel carries the `AgentEvent` envelope (`payload.payload` holds the event's data);
     // projectors driven directly by validators pass the data payload itself. Read both.
-    const data = (event.payload?.payload ?? event.payload ?? event) as { error?: unknown; phase?: string };
-    // Cache-cleanup runs AFTER a successful compaction and reports its own phase. It is not the
-    // compaction outcome; treating its error as one marked a completed row failed.
-    if (data.phase === "cache-cleanup") return;
+    const data = (event.payload?.payload ?? event.payload ?? event) as { error?: unknown };
     const type = event.type;
     if (type === "compaction:auto-complete" || type === "compaction:reactive-complete") {
       this.finishCompaction("completed");

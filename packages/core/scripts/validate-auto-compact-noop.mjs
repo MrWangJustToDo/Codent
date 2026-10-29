@@ -140,4 +140,18 @@ assert.equal(
 );
 console.log("scenario E (latest durable is SUMMARY) -> skip-trigger OK");
 
+// ============================================================================
+// Scenario H (regression): a user cancel is reported as `aborted`, not as a
+// failure and not as a silent no-op. The middleware treats those differently:
+// `skipped`/`failed` arm the 8k-token retry backoff, a cancel must not.
+// ============================================================================
+const benignManager = { getAgent: () => null };
+const resultH = await autoCompact(scenarioG, { keepRecentTokens: 8_000 }, "agent-h", benignManager, {
+  abortSignal: AbortSignal.abort(),
+});
+assert.equal(resultH.compacted, false, "H: an aborted summarizer must not compact");
+assert.equal(resultH.aborted, true, "H: a cancel is distinguishable from failure and from no-op");
+assert.equal(resultH.error, undefined, "H: a cancel carries no failure text");
+console.log("scenario H (aborted summarizer reports aborted) OK");
+
 console.log("\nvalidate:auto-compact-noop passed");

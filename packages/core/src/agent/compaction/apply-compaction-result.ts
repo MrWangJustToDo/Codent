@@ -56,7 +56,7 @@ export function applyCompactionResult(
   const chronologic = convertMessagesToModelMessages(channel.getMessages());
   const visible = getModelVisibleMessages(chronologic, { keepRecentTokens });
   const visibleToolIds = collectToolCallIds(visible);
-  const orphanCut = firstOrphanToolIndex(chronologic, visibleToolIds);
+  const orphanCut = findOrphanedToolCut(chronologic, visibleToolIds);
   if (orphanCut > 0) {
     cleanupOrphanedToolCache(env, chronologic, orphanCut).catch((err) => {
       const error = toError(err);
@@ -121,13 +121,26 @@ function collectToolCallIds(messages: ModelMessage[]): Set<string> {
   return ids;
 }
 
-/** First index of a tool message whose toolCallId is not in the visible set. */
-function firstOrphanToolIndex(messages: ModelMessage[], visibleToolIds: Set<string>): number {
+/**
+ * Index just past the LAST tool result whose call id is not in the kept window.
+ *
+ * The kept window is the TAIL of the chronology, so the orphaned results are the HEAD prefix.
+ * Returning the FIRST orphan (+1) made `cleanupOrphanedToolCache` treat every later prefix result
+ * as still visible: only the first spilled file of a compaction was ever collected, and the rest
+ * waited for the 7-day age sweep. Taking the last one spans the whole prefix. Under-deleting is
+ * still possible (an id reused inside the kept window makes its older result "visible"), and that
+ * is the safe direction.
+ *
+ * Exported for `validate:tool-output-cache` — the unit it pins is the boundary itself, and the
+ * end-to-end path only surfaces it through file deletion.
+ */
+export function findOrphanedToolCut(messages: ModelMessage[], visibleToolIds: Set<string>): number {
+  let cut = 0;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
     if (msg.role === "tool" && msg.toolCallId && !visibleToolIds.has(msg.toolCallId)) {
-      return i + 1;
+      cut = i + 1;
     }
   }
-  return 0;
+  return cut;
 }

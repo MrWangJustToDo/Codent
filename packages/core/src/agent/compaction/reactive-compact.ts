@@ -13,10 +13,10 @@
  * Max retries: 1 (configurable). After that, the error propagates.
  */
 
-import { isAbortError } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
 import { extractRunErrorMessage } from "../stream/run-error-message.js";
 
+import { isCompactionCancel } from "./abort-classification.js";
 import { createCompactedMessages, summarizeConversation } from "./auto-compact.js";
 import { findCutPointByBudget } from "./cut-point.js";
 import { deriveKeepRecentTokens } from "./keep-policy.js";
@@ -243,11 +243,15 @@ export async function reactiveCompact(
   manager: AgentManager,
   config: ReactiveCompactConfig = {}
 ): Promise<ModelMessage[]> {
-  if (messages.length === 0) return messages;
+  // No cut point means there is nothing safe to summarize (one oversized user turn, or a wire
+  // whose only cuttable boundary is index 0). Returning the input unchanged used to be read as a
+  // successful compaction by the caller, which wrapped the user's own text in a SUMMARY and reset
+  // the window — a fabricated checkpoint that made the next retry overflow again.
+  if (messages.length === 0) return [];
 
   // Split into summary portion and pairing-safe token-budgeted tail
   const { summaryMessages, tailMessages } = selectReactiveTail(messages, config);
-  if (summaryMessages.length === 0) return messages;
+  if (summaryMessages.length === 0) return [];
 
   let summary: string;
 
@@ -261,7 +265,7 @@ export async function reactiveCompact(
   } catch (error) {
     // A cancelled run must not fall back to a placeholder compaction checkpoint
     // (that would still mutate the channel after the user aborted).
-    if (isAbortError(error, config.abortSignal)) {
+    if (isCompactionCancel(error, config.abortSignal)) {
       throw error;
     }
     // If summarization fails, use a simple fallback so the session isn't lost

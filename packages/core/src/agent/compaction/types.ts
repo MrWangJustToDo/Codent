@@ -62,6 +62,11 @@ export const compactionResultSchema = z.object({
   cutIndex: z.number().int().nonnegative().optional(),
   /** Error message if compaction failed */
   error: z.string().optional(),
+  /**
+   * True when the summarizer was aborted by the user (Esc). Not a failure: the middleware must
+   * not arm its retry backoff or emit an error event for a cancel.
+   */
+  aborted: z.boolean().optional(),
 });
 
 // ============================================================================

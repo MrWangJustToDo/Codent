@@ -448,6 +448,40 @@ await runCase("a NESTED ARRAY's element is copied, not shared", async () => {
   assert.deepEqual(original.content[0].metadata.tags, [], "a nested array inside an object is copied too");
 });
 
+await runCase("MESSAGE-level fields are copied too (metadata / toolCalls)", async () => {
+  const bus = createAgentEventBus();
+  const runner = makeRunner(bus);
+  await runner.loadExtension(
+    extension("inplace-message-fields", (ctx) => {
+      ctx.registerMessageTransformer((c) => {
+        const message = c.messages[0];
+        // The wire conversion shares these with the UI channel / retained projection; a
+        // content-only copy let them write through to the persisted transcript.
+        message.metadata.tag = "MUTATED";
+        message.toolCalls[0].function.arguments = '{"x":2}';
+        return undefined;
+      });
+    })
+  );
+
+  const original = {
+    role: "assistant",
+    content: null,
+    metadata: { tag: "original" },
+    toolCalls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"x":1}' } }],
+  };
+  const out = await runner.applyMessageTransformers({
+    extensionId: "",
+    agentId: "x",
+    phase: "init",
+    messages: [original],
+  });
+
+  assert.equal(out[0].metadata.tag, "MUTATED", "the transformer edits the wire it owns");
+  assert.equal(original.metadata.tag, "original", "message metadata is copied, not shared");
+  assert.equal(original.toolCalls[0].function.arguments, '{"x":1}', "toolCalls are copied, not shared");
+});
+
 await runCase("a cached array is transformed again on every call", async () => {
   const bus = createAgentEventBus();
   const runner = makeRunner(bus);

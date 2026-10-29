@@ -289,7 +289,6 @@ export type AgentEventPayloadMap = {
     tokensAfter?: number;
   };
   "compaction:auto-error": {
-    phase?: string;
     error?: string;
   };
   "compaction:manual-start": {
@@ -300,7 +299,6 @@ export type AgentEventPayloadMap = {
     tokensAfter?: number;
   };
   "compaction:manual-error": {
-    phase?: string;
     error?: string;
   };
   "compaction:reactive-start": {
@@ -314,7 +312,6 @@ export type AgentEventPayloadMap = {
     tokensAfter?: number;
   };
   "compaction:reactive-error": {
-    phase?: string;
     error?: string;
   };
   "compaction:reactive-max-retries": EmptyAgentEventPayload;

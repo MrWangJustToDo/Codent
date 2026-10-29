@@ -1,6 +1,5 @@
-import { buildToolCallNameMap } from "../message-utils.js";
+import { pairToolResults } from "../tool-call-pairing.js";
 
-import { buildToolCallInputMap } from "./build-tool-call-input-map.js";
 import {
   formatToolErrorForModel,
   isPendingToolExecutionResult,
@@ -17,11 +16,6 @@ import type { ContentPart, ModelMessage } from "@tanstack/ai";
 // ============================================================================
 // Types
 // ============================================================================
-
-interface ToolResultRef {
-  messageIndex: number;
-  toolCallId: string;
-}
 
 export interface ApplyToolCompactOptions {
   /** Reserved for future tool-compact options; currently unused. */
@@ -48,22 +42,6 @@ export interface ApplyToolCompactOptions {
  */
 function isDeniedToolResult(output: unknown): output is { approved: false } {
   return typeof output === "object" && output !== null && (output as Record<string, unknown>).approved === false;
-}
-
-function findToolResultMessages(messages: ModelMessage[]): ToolResultRef[] {
-  const results: ToolResultRef[] = [];
-
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
-    if (message.role !== "tool") continue;
-
-    results.push({
-      messageIndex: i,
-      toolCallId: message.toolCallId ?? "",
-    });
-  }
-
-  return results;
 }
 
 // ============================================================================
@@ -93,14 +71,11 @@ export async function applyToolCompact(
   options: ApplyToolCompactOptions
 ): Promise<ModelMessage[]> {
   const cache = options.cache;
-  const toolResults = findToolResultMessages(messages);
+  const toolResults = [...pairToolResults(messages).values()];
 
   if (toolResults.length === 0) {
     return messages;
   }
-
-  const toolCallMap = buildToolCallNameMap(messages);
-  const toolInputMap = buildToolCallInputMap(messages);
   /** Replacements keyed by index; only touched results are copied. */
   const replaced = new Map<number, ModelMessage>();
 
@@ -129,7 +104,7 @@ export async function applyToolCompact(
       continue;
     }
 
-    const toolName = toolCallMap.get(target.toolCallId) ?? "tool";
+    const toolName = target.toolName;
     const rawOutput = parseToolMessageOutput(message.content);
     if (isPendingToolExecutionResult(rawOutput)) continue;
 
@@ -142,7 +117,7 @@ export async function applyToolCompact(
       continue;
     }
 
-    const input = toolInputMap.get(target.toolCallId);
+    const input = target.input;
     let transformed: unknown;
     try {
       // Resolve inside the guard too: `registry.get` touches the live tool service, which can

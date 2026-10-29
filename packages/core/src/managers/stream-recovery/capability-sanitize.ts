@@ -1,10 +1,9 @@
 import {
-  MULTIMODAL_PART_TYPES,
   chatMessagesHaveMultimodal,
   isMultimodalUnsupportedError,
   unsupportedMultimodalPartTypes,
-  type MultimodalPartType,
 } from "../../models/adapter/capability-message-utils.js";
+import { MULTIMODAL_PART_TYPES, type MultimodalPartType } from "../../utils/multimodal-part-types.js";
 
 import type { ManagedAgent } from "../managed-agent.js";
 import type { ModelMessage, UIMessage } from "@tanstack/ai";

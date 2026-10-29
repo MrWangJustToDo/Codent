@@ -117,7 +117,17 @@ const fakeEnv = (root) => ({
 // destroyed sessions it never created. `ownsManager` defaults to false for an injected manager.
 {
   const env = fakeEnv("/tmp/injected-manager");
-  const runtime = new AgentRuntime({ env });
+  let envDisposals = 0;
+  let providerDisposals = 0;
+  env.destroy = async () => {
+    envDisposals += 1;
+  };
+  const provider = {
+    destroy: async () => {
+      providerDisposals += 1;
+    },
+  };
+  const runtime = new AgentRuntime({ env, modelProvider: provider, ownsEnv: true });
   const manager = new AgentManager(runtime);
   let managerDisposals = 0;
   manager.dispose = async () => {
@@ -127,10 +137,14 @@ const fakeEnv = (root) => ({
   const agent = await CodentAgent.create({ env, manager });
   await agent.dispose();
   assert.equal(managerDisposals, 0, "dispose must not tear down a manager it did not build");
+  assert.equal(providerDisposals, 0, "a borrowed runtime's provider is not destroyed");
+  assert.equal(envDisposals, 0, "nor its env (ownsEnv belongs to the injector)");
 
   const owned = await CodentAgent.create({ env, ownsManager: true, manager });
   await owned.dispose();
   assert.equal(managerDisposals, 1, "an explicit ownsManager: true keeps the old ownership");
+  assert.equal(providerDisposals, 0, "ownsManager does not silently claim the runtime");
+  assert.equal(envDisposals, 0, "…or its env");
 }
 
 // ---------------------------------------------------------------------------

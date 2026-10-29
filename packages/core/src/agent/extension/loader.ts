@@ -71,51 +71,8 @@ export async function normalizeExtensionExport(moduleExport: unknown, fallbackId
 }
 
 export class ExtensionLoader {
-  private factories = new Map<string, ExtensionFactory>();
-
   /** Owning runtime's env, so discovery reads the runtime root. Ambient when omitted. */
   constructor(private readonly env?: ResolvedCoreEnv) {}
-
-  registerFactory(id: string, factory: ExtensionFactory): void {
-    this.factories.set(id, factory);
-  }
-
-  hasFactory(id: string): boolean {
-    return this.factories.has(id);
-  }
-
-  async loadFromFactories(ids: string[]): Promise<ExtensionLoadResult> {
-    const loaded: ExtensionAPI[] = [];
-    const errors: Error[] = [];
-
-    for (const id of ids) {
-      const factory = this.factories.get(id);
-      if (!factory) {
-        errors.push(new Error(`Extension factory not found: ${id}`));
-        continue;
-      }
-
-      try {
-        const api = await factory.create();
-        loaded.push(api);
-      } catch (err) {
-        const error = toError(err);
-        errors.push(error);
-      }
-    }
-
-    return { loaded, errors };
-  }
-
-  async loadFromConfigs(ids: string[]): Promise<ExtensionLoadResult> {
-    const registeredIds: string[] = [];
-    for (const id of ids) {
-      if (this.factories.has(id)) {
-        registeredIds.push(id);
-      }
-    }
-    return this.loadFromFactories(registeredIds);
-  }
 
   /**
    * List loadable extension files under the given directories (in order).

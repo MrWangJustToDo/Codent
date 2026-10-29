@@ -1,3 +1,4 @@
+import { reportContained } from "../../utils/contained-report.js";
 import { Emitter } from "../../utils/emitter.js";
 import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
 import { INTERNAL_EXTENSION_EVENTS } from "../extension/event-visibility.js";
@@ -117,15 +118,40 @@ export class DefaultAgentEventBus implements AgentEventBus {
     // Retained replay: late subscribers synchronously receive the current value.
     // Callers that reconcile retained values themselves opt out via `replay:false`.
     if (options?.replay !== false) {
-      const provider = this.findRetained(type, options?.includeParents === true);
-      if (provider) {
+      const retained = this.findRetained(type, options?.includeParents === true);
+      if (retained) {
         try {
-          typed(this.buildEvent(type, provider() as never));
+          // Build against the OWNING node, not the subscriber: an `includeParents` replay carries
+          // a parent's payload, so stamping it with this child's `agentId`/`parentId` would make
+          // the envelope disagree with the value it describes.
+          const event = this.buildEventAt(retained.node, type, retained.provider() as never);
+          const result = (typed as (value: AgentEvent) => unknown)(event);
+          if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+            void Promise.resolve(result).catch((error) =>
+              reportContained(() =>
+                this.onInterceptorError?.({
+                  pattern: type,
+                  event: type,
+                  scopeId: retained.node.id,
+                  error,
+                  kind: "observer",
+                })
+              )
+            );
+          }
         } catch (error) {
           // A retained replay is still a listener notification. Without this guard a throwing
           // handler (or a throwing retained provider) escaped `on()` AFTER the subscription was
           // registered, so the caller never received a disposer and leaked the listener.
-          this.onInterceptorError?.({ pattern: type, event: type, scopeId: this.node.id, error });
+          reportContained(() =>
+            this.onInterceptorError?.({
+              pattern: type,
+              event: type,
+              scopeId: retained.node.id,
+              error,
+              kind: "observer",
+            })
+          );
         }
       }
     }
@@ -137,14 +163,16 @@ export class DefaultAgentEventBus implements AgentEventBus {
     type: T,
     options?: { includeParents?: boolean }
   ): AgentEvent<T>["payload"] | undefined {
-    const provider = this.findRetained(type, options?.includeParents === true);
-    if (!provider) return undefined;
+    const retained = this.findRetained(type, options?.includeParents === true);
+    if (!retained) return undefined;
     try {
-      return provider() as AgentEvent<T>["payload"];
+      return retained.provider() as AgentEvent<T>["payload"];
     } catch (error) {
       // Same containment as the `on()` replay: this is a user-facing read, and one faulty provider
       // must not turn `subscribe()` (which reconciles retained values) into a failed subscription.
-      this.onInterceptorError?.({ pattern: type, event: type, scopeId: this.node.id, error });
+      reportContained(() =>
+        this.onInterceptorError?.({ pattern: type, event: type, scopeId: retained.node.id, error, kind: "observer" })
+      );
       return undefined;
     }
   }
@@ -164,14 +192,27 @@ export class DefaultAgentEventBus implements AgentEventBus {
       // vanishing in `Emitter`'s catch. Silence here was the worst case to debug — a projector or
       // log sink failing on every live frame with no diagnostic at all.
       node.observers.emit(type, event, (error) =>
-        this.onInterceptorError?.({ pattern: type, event: type, scopeId: node.id, error, kind: "observer" })
+        reportContained(() =>
+          this.onInterceptorError?.({ pattern: type, event: type, scopeId: node.id, error, kind: "observer" })
+        )
       );
       if (!deliverToWildcards) continue;
       for (const listener of [...node.wildcards]) {
         try {
-          listener(event);
+          // A wildcard listener typed `void` may still be async (`agentManager.on("*", …)` is a
+          // public entry). Its rejection is not caught here, so attach a handler like `Emitter`.
+          const result = (listener as (value: AgentEvent) => unknown)(event);
+          if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+            void Promise.resolve(result).catch((error) =>
+              reportContained(() =>
+                this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
+              )
+            );
+          }
         } catch (error) {
-          this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" });
+          reportContained(() =>
+            this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
+          );
         }
       }
     }
@@ -216,7 +257,9 @@ export class DefaultAgentEventBus implements AgentEventBus {
         try {
           result = await registration.handler(event as InterceptableEvent);
         } catch (error) {
-          this.onInterceptorError?.({ pattern: registration.pattern, event: event.type, scopeId: node.id, error });
+          reportContained(() =>
+            this.onInterceptorError?.({ pattern: registration.pattern, event: event.type, scopeId: node.id, error })
+          );
           continue;
         }
         // `cancel` = return false or set `skipDefault`; stop the chain.
@@ -271,28 +314,46 @@ export class DefaultAgentEventBus implements AgentEventBus {
     payload: AgentEvent<T>["payload"],
     meta?: AgentEventMetaInput
   ): AgentEvent<T> {
+    return this.buildEventAt(this.node, type, payload, meta);
+  }
+
+  /** Build an event in the scope of `node` (its `agentId`/`parentId`, not the caller's). */
+  private buildEventAt<T extends AgentEventType>(
+    node: EventBusScopeNode,
+    type: T,
+    payload: AgentEvent<T>["payload"],
+    meta?: AgentEventMetaInput
+  ): AgentEvent<T> {
     // A scope under another AGENT is a child scope; a scope under the synthetic root node is a root
     // agent (`AgentEventBusScope.of` scopes parent-less agents directly on the root bus). Deriving
     // it here is what makes EVERY emitter carry the parent — including the domain objects that
     // emit straight on the bus (`usage` / `todo` / `ui` / `stream-hub` / `plan`), which used to
     // produce child events with only `agentId`.
-    const parentNode = this.node.parent;
+    const parentNode = node.parent;
     const parentId = meta?.parentId ?? (parentNode && parentNode.parent !== null ? parentNode.id : undefined);
     return {
       type,
       ts: Date.now(),
-      agentId: meta?.agentId ?? this.node.id,
+      agentId: meta?.agentId ?? node.id,
       ...(parentId !== undefined ? { parentId } : {}),
       ...(meta?.sessionId !== undefined ? { sessionId: meta.sessionId } : {}),
       payload,
     } as AgentEvent<T>;
   }
 
-  /** Nearest retained provider for `type`; optionally walks this node up to the root. */
-  private findRetained(type: string, includeParents = false): (() => unknown) | undefined {
+  /**
+   * Nearest retained provider for `type`, with the node that owns it.
+   *
+   * The owner matters for `includeParents` replay: the event must be stamped with the scope the
+   * value came from, not the subscriber's.
+   */
+  private findRetained(
+    type: string,
+    includeParents = false
+  ): { node: EventBusScopeNode; provider: () => unknown } | undefined {
     for (let node: EventBusScopeNode | null = this.node; node; node = includeParents ? node.parent : null) {
       const provider = node.retained.get(type);
-      if (provider) return provider;
+      if (provider) return { node, provider };
     }
     return undefined;
   }

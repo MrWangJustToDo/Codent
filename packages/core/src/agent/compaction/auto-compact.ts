@@ -15,13 +15,13 @@
  * - No retry on empty (the prompt is explicit about output format)
  */
 
-import { isAbortError } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
 import { generateId } from "../../utils/generate-id.js";
 import { runSubagent } from "../subagent/run-subagent.js";
 import { EMPTY_SUMMARY } from "../subagent/subagent-output.js";
 import { isContextModelMessage } from "../turn-context/turn-context-message.js";
 
+import { compactionAbortError, isCompactionCancel } from "./abort-classification.js";
 import { buildCompactionPrompt, COMPACTION_SYSTEM_PROMPT, TURN_PREFIX_INSTRUCTION } from "./compaction-prompt.js";
 import { formatCompactionSummaryContent, isCompactionSummaryModelMessage } from "./compaction-summary.js";
 import { extractExistingSummary, findCutPointByBudget } from "./cut-point.js";
@@ -123,13 +123,6 @@ export interface SummarizeOptions {
    * never apply a half-written compaction checkpoint.
    */
   abortSignal?: AbortSignal;
-}
-
-/** Tag an aborted summarization so callers can tell cancel apart from failure. */
-function compactionAbortError(): Error {
-  const error = new Error("Compaction summarization aborted");
-  error.name = "AbortError";
-  return error;
 }
 
 /**
@@ -306,7 +299,7 @@ async function summarizeConversationBatch(
   if (!output || output === EMPTY_SUMMARY) {
     throw new Error(
       `Compaction subagent returned no summary (tokens=${result.usage.totalTokens}, ` +
-        `incomplete=${result.incomplete}, reachedLimit=${result.reachedLimit}, aborted=${result.aborted})`
+        `incomplete=${result.incomplete}, reachedLimit=${result.reachedLimit}, wasAborted=${result.aborted})`
     );
   }
 
@@ -502,10 +495,12 @@ export async function autoCompact(
       cutIndex,
     };
   } catch (error) {
-    // User cancel: leave the conversation untouched and report no error (the run
-    // is ending anyway — callers must not surface a compaction failure).
-    if (isAbortError(error)) {
-      return { compacted: false, tokensBefore, tokensAfter: tokensBefore, type: "auto" };
+    // User cancel: leave the conversation untouched and report that explicitly. It is NOT a
+    // failure: the caller must not arm the compaction retry backoff (a cancel would otherwise
+    // defer the next real compaction until the context grew by another 8k tokens) and must not
+    // emit an error event.
+    if (isCompactionCancel(error, options?.abortSignal)) {
+      return { compacted: false, tokensBefore, tokensAfter: tokensBefore, type: "auto", aborted: true };
     }
     const failureText = errorMessage(error);
 

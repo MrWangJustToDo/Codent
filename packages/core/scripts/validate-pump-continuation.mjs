@@ -134,4 +134,37 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   assert.equal(streams, 1, "a user message still starts the model call");
 }
 
+// A throw during pump SETUP (before the loop's try block) used to skip the finally: pumpDepth
+// stayed > 0, the run token stayed valid, and every later message queued with nothing to drain
+// it — plus `enqueueRunOnce`'s promise rejected with no handler. The setup belongs inside the
+// guard, and the catch must finalize the turn as an error.
+{
+  const managed = new ManagedAgent(
+    { name: "pump-setup-throw", model: "test-model" },
+    { log: new AgentLog(), tools: {}, todoManager: null }
+  );
+  const chat = managed.initChat({});
+  const channel = chat.getUIChannel();
+  channel.addUserMessage("start");
+
+  const originalPrepare = managed.statusController.prepareRunPhase;
+  managed.statusController.prepareRunPhase = () => {
+    throw new Error("prepare exploded");
+  };
+
+  await chat.pumpToolPhases?.();
+  assert.equal(chat.isRunActive(), false, "a setup throw must leave no live/queued pump");
+  assert.equal(managed.getStatus(), "error", "and the turn settles as a failed run");
+
+  // The agent is usable again instead of queueing forever.
+  managed.statusController.prepareRunPhase = originalPrepare;
+  let streams = 0;
+  chat.executeStream = async () => {
+    streams += 1;
+  };
+  channel.addUserMessage("again");
+  await chat.pumpToolPhases?.();
+  assert.equal(streams, 1, "the next turn still runs");
+}
+
 console.log("validate:pump-continuation passed");

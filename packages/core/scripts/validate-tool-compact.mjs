@@ -324,6 +324,66 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
 }
 
 // ---------------------------------------------------------------------------
+// A reused provider id must bind each result to ITS OWN call, not to the last
+// call with that id (which picked the wrong formatter and input).
+// ---------------------------------------------------------------------------
+{
+  const reusedId = "call_0";
+  const wire = [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        {
+          id: reusedId,
+          type: "function",
+          function: { name: "read_file", arguments: JSON.stringify({ path: "a.ts" }) },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId: reusedId,
+      content: JSON.stringify({
+        type: "text",
+        path: "a.ts",
+        content: "alpha",
+        totalLines: 1,
+        startLine: 1,
+        endLine: 1,
+        truncated: false,
+      }),
+    },
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [
+        {
+          id: reusedId,
+          type: "function",
+          function: { name: "run_command", arguments: JSON.stringify({ command: "echo hi" }) },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId: reusedId,
+      content: JSON.stringify({ success: true, exitCode: 0, stdout: "hi\n", stderr: "" }),
+    },
+  ];
+
+  const out = await applyToolCompact(wire, { config: {}, registry, cache: new ToolCompactCache() });
+  const toolMessages = out.filter((message) => message.role === "tool");
+  assert.equal(toolMessages.length, 2);
+  assert.match(
+    String(toolMessages[0].content),
+    /alpha/,
+    "the first call keeps read_file's projection even though a later call reuses its id"
+  );
+  assert.doesNotMatch(String(toolMessages[1].content), /alpha/, "the second call does not inherit the first result");
+}
+
+// ---------------------------------------------------------------------------
 // The fingerprint is only a candidate filter: an exact-source mismatch must
 // re-project rather than serve the stale content (same id, index, length and
 // sampled windows — a real same-length file edit).

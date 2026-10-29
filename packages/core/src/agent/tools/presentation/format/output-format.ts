@@ -292,12 +292,6 @@ function formatTaskOutput(output: TaskOutput): string {
   return lines.join("\n");
 }
 
-/** Short JSON/text preview for a tool with no dedicated renderer (or one that produced nothing). */
-function formatGenericToolOutput(output: unknown): string {
-  const str = typeof output === "string" ? output : JSON.stringify(output, null, 2);
-  return truncateText(str, 200);
-}
-
 /** Format tool output for display based on tool name. */
 export function formatToolOutput(
   output: unknown,
@@ -338,12 +332,10 @@ export function formatToolOutput(
     const uiRenderer = resolvePresentation(toolName)?.text;
     if (uiRenderer) {
       const rendered = uiRenderer(output);
-      if (typeof rendered === "string") return rendered;
-      // The descriptor exists but produced nothing usable: a host-side descriptor is a stub
-      // (`presentationFromInfo` cannot carry renderers across processes, so `text` returns
-      // undefined), or a real formatter received a shape it does not know. An empty row is worse
-      // than the generic preview — the tool ran, so the user should see at least the payload.
-      return formatGenericToolOutput(output);
+      // "" is a real answer ("no body"); a host-side descriptor is a stub whose `text` returns
+      // undefined, and rendering raw JSON for it would defeat the tool's own decision not to
+      // render a body. The owning process ships `display.text` with the part when it can render.
+      return typeof rendered === "string" ? rendered : "";
     }
   }
 
@@ -414,7 +406,8 @@ export function formatToolOutput(
     }
   }
 
-  return formatGenericToolOutput(output);
+  const str = typeof output === "string" ? output : JSON.stringify(output, null, 2);
+  return truncateText(str, 200);
 }
 
 /** Format tool arguments for detailed display. */
