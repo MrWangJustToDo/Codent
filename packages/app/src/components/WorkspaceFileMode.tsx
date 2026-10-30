@@ -20,7 +20,13 @@ import { clearWorkspaceDiffCache } from "../utils/workspace-git-diff.js";
 import { clearGitStatusCache } from "../utils/workspace-git-status.js";
 import { workspaceRelativePath } from "../utils/workspace-path.js";
 import { decideReveal } from "../utils/workspace-reveal.js";
-import { clampScrollTop, ensureIndexVisible } from "../utils/workspace-scroll.js";
+import {
+  clampScrollTop,
+  createScrollPacer,
+  ensureIndexVisible,
+  PREVIEW_SCROLL_STEP,
+  SCROLL_BURST_INTERVAL_MS,
+} from "../utils/workspace-scroll.js";
 
 import { clearContentCache } from "./FileContent.js";
 import { clearDirCache, FileTree, useDiffFileTree, useFileTree } from "./FileTree.js";
@@ -41,7 +47,6 @@ const TREE_WIDTH_RATIO = 0.34;
 const MIN_TREE_WIDTH = 28;
 const MIN_PREVIEW_WIDTH = 24;
 const FOOTER_LINES = 1;
-const PREVIEW_SCROLL_STEP = 3;
 
 // ============================================================================
 // File mode
@@ -67,6 +72,21 @@ export const WorkspaceFileMode = () => {
 
   const previewRef = useRef<CodeViewRef>(null);
   const diffRef = useRef<DiffViewRef>(null);
+  /**
+   * One gate for every wheel-driven move in this panel.
+   *
+   * 1007 hands the wheel to the app as plain arrow keys, so a trackpad's momentum tail arrives as
+   * a stream of presses indistinguishable from a held key — that stream IS the inertia users
+   * feel. Only the timing separates them (see `SCROLL_BURST_INTERVAL_MS`), and the pane must not
+   * be able to tell: a fresh press on either side always moves.
+   */
+  const scrollPacer = useRef(createScrollPacer(SCROLL_BURST_INTERVAL_MS));
+  const admitScroll = useCallback(() => scrollPacer.current.admit(Date.now()), []);
+  // A pane that just took focus scrolls on its first key: the gate is about a burst *inside* one
+  // gesture, not about how long ago the user scrolled the other pane.
+  useEffect(() => {
+    scrollPacer.current.reset();
+  }, [paneFocus]);
 
   const [rootPath, setRootPath] = useState("");
   const [cursorIndex, setCursorIndex] = useState(0);
@@ -421,11 +441,11 @@ export const WorkspaceFileMode = () => {
   const handleTreeKey = useCallback(
     (key: Key) => {
       if (key.upArrow) {
-        moveCursor(cursorIndex - 1);
+        if (admitScroll()) moveCursor(cursorIndex - 1);
         return;
       }
       if (key.downArrow) {
-        moveCursor(cursorIndex + 1);
+        if (admitScroll()) moveCursor(cursorIndex + 1);
         return;
       }
       if (key.rightArrow) {
@@ -470,7 +490,7 @@ export const WorkspaceFileMode = () => {
         else selectFile(current.path);
       }
     },
-    [cursorIndex, items, moveCursor, handleToggleDir, selectedPath, selectFile, setPaneFocus]
+    [cursorIndex, items, moveCursor, handleToggleDir, selectedPath, selectFile, setPaneFocus, admitScroll]
   );
 
   /**
@@ -497,8 +517,14 @@ export const WorkspaceFileMode = () => {
           // Directions, not distances: the store sizes the step from the visible window, so a press
           // moves the same number of CELLS at 2× and at 8× (a constant step skipped a whole screen
           // at deep zoom, where the pannable range is large and the window is small).
-          if (key.upArrow) return panImage(0, -1);
-          if (key.downArrow) return panImage(0, 1);
+          if (key.upArrow) {
+            if (admitScroll()) panImage(0, -1);
+            return;
+          }
+          if (key.downArrow) {
+            if (admitScroll()) panImage(0, 1);
+            return;
+          }
           if (key.leftArrow) return panImage(-1, 0);
           if (key.rightArrow) return panImage(1, 0);
         }
@@ -508,10 +534,12 @@ export const WorkspaceFileMode = () => {
         }
         if (key.rightArrow) return;
         if (key.upArrow) {
-          scrollActivePane("up");
+          if (admitScroll()) scrollActivePane("up");
           return;
         }
-        if (key.downArrow) scrollActivePane("down");
+        if (key.downArrow) {
+          if (admitScroll()) scrollActivePane("down");
+        }
         return;
       }
 
@@ -522,12 +550,14 @@ export const WorkspaceFileMode = () => {
       if (key.rightArrow) return;
       if (!selectedPath) return;
       if (key.upArrow) {
-        scrollActivePane("up");
+        if (admitScroll()) scrollActivePane("up");
         return;
       }
-      if (key.downArrow) scrollActivePane("down");
+      if (key.downArrow) {
+        if (admitScroll()) scrollActivePane("down");
+      }
     },
-    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus]
+    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus, admitScroll]
   );
 
   /** Zoom keys, only while an image preview is on screen. Returns whether the key was consumed. */

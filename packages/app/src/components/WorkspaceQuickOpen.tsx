@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useCoreEnv } from "../context/core-env-context.js";
 import { useWorkspacePanelInput } from "../hooks/input";
@@ -8,7 +8,13 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatIconGlyph, getFileIconStyle } from "../utils/file-icons.js";
 import { fetchWorkspaceFileList, fuzzyFilterFiles, type FuzzyFileResult } from "../utils/workspace-file-search.js";
 import { joinWorkspacePath } from "../utils/workspace-path.js";
-import { clampScrollTop, ensureIndexVisible, visibleWindow } from "../utils/workspace-scroll.js";
+import {
+  clampScrollTop,
+  createScrollPacer,
+  ensureIndexVisible,
+  SCROLL_BURST_INTERVAL_MS,
+  visibleWindow,
+} from "../utils/workspace-scroll.js";
 
 const MAX_RESULTS = 50;
 
@@ -52,6 +58,12 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
 
   const [files, setFiles] = useState<string[] | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  /**
+   * Arrow keys here are also how the wheel arrives (xterm alternate scroll translates a notch into
+   * an Up/Down key), so the wheel needs the same damping as the two panes behind this overlay —
+   * otherwise a trackpad flick runs the selection down the whole result list.
+   */
+  const scrollPacer = useRef(createScrollPacer(SCROLL_BURST_INTERVAL_MS));
 
   useEffect(() => {
     if (!rootPath) return;
@@ -114,11 +126,11 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
       return;
     }
     if (key.upArrow) {
-      moveQuickOpenCursor(-1, results.length);
+      if (scrollPacer.current.admit(Date.now())) moveQuickOpenCursor(-1, results.length);
       return;
     }
     if (key.downArrow) {
-      moveQuickOpenCursor(1, results.length);
+      if (scrollPacer.current.admit(Date.now())) moveQuickOpenCursor(1, results.length);
       return;
     }
     if (key.backspace || key.delete) {
