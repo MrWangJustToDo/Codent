@@ -4,7 +4,8 @@
  * The unified bus is the single mechanism (no internal pub/sub registry), so every state change
  * is a `notify` call the session `extension-ui` channel projection can consume. Render slots are
  * retained so a host subscribing late can reconcile, and are attributed to an owner so disabling
- * an extension clears its slots.
+ * an extension clears its slots. Notices are NOT retained, so the ones published before a host
+ * attached are held aside and handed to that host on subscribe ({@link drainNotices}).
  *
  * Extracted from `runner.ts` (which is at the file-size ceiling) and cohesive on its own: slots,
  * throttling, dedupe, and owner scoping are one concern, and the runner only constructs it, wraps
@@ -19,11 +20,42 @@ import type { AgentEventBus, AgentExtensionUiEvent } from "../agent-event-bus";
 /** Throttle window for coalescing render notifications (ms). */
 const RENDER_THROTTLE_MS = 100;
 
+/**
+ * How many notices are held for a host that has not subscribed yet.
+ *
+ * Only startup-sized bursts matter (one line per language server), so the bound is about keeping a
+ * headless session from accumulating them, not about display.
+ */
+const MAX_PENDING_NOTICES = 16;
+
+/** A notice published before a host was listening (message + its level). */
+export interface PendingExtensionNotice {
+  message: string;
+  level: ExtensionNotificationLevel;
+}
+
 export class DefaultExtensionUI implements ExtensionUI {
   /** surface → key → payload (retained for late-subscriber reconciliation). */
   private readonly slots = new Map<string, Map<string, ExtensionRenderPayload>>();
   /** slot id → owning extension id, for owner-scoped teardown. */
   private readonly slotOwners = new Map<string, string>();
+  /**
+   * Notices published before any host subscribed to the session's `extension-ui` channel.
+   *
+   * `notify` is a plain event — nothing about it is retained — so a host that attaches later than
+   * the emit never sees it. That window is real, not theoretical: extension activation happens
+   * inside session creation, and a language server that becomes ready while the session is still
+   * being built reports into the void (measured 52 ms after activation for the TypeScript server,
+   * which is exactly the gap between "session object exists" and "host subscribed").
+   */
+  private readonly pendingNotices: PendingExtensionNotice[] = [];
+  /**
+   * Whether a host has already taken delivery of the pending notices.
+   *
+   * From then on a notice reaches every current subscriber live, so buffering one would only feed
+   * a *later* re-subscribe a notice the user already saw (the editor-handoff remount).
+   */
+  private hostAttached = false;
   /** Coalesced, not-yet-notified slot updates. */
   private readonly pending = new Map<
     string,
@@ -51,7 +83,23 @@ export class DefaultExtensionUI implements ExtensionUI {
    * Persistent content belongs in a {@link render} slot.
    */
   notify(message: string, level: ExtensionNotificationLevel = "info"): void {
+    if (!this.hostAttached) {
+      this.pendingNotices.push({ message, level });
+      if (this.pendingNotices.length > MAX_PENDING_NOTICES) this.pendingNotices.shift();
+    }
     this.emitEvent({ type: "notify", message, level });
+  }
+
+  /**
+   * Hand the not-yet-delivered notices to the subscriber attaching now, and forget them.
+   *
+   * "Not yet delivered" means "published before a host listened", so this is consumed once: a later
+   * re-subscribe (the editor-handoff remount) must not replay notices the user already saw.
+   */
+  drainNotices(): PendingExtensionNotice[] {
+    this.hostAttached = true;
+    if (this.pendingNotices.length === 0) return [];
+    return this.pendingNotices.splice(0, this.pendingNotices.length);
   }
 
   /**

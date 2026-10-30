@@ -167,6 +167,7 @@
     "validate:empty-model-stream": "pnpm run build && node scripts/validate-empty-model-stream.mjs",
     "validate:extension-tool-restore": "pnpm run build && node scripts/validate-extension-tool-restore.mjs",
     "validate:extension-disable-notice": "pnpm run build && node scripts/validate-extension-disable-notice.mjs",
+    "validate:extension-ui-notices": "pnpm run build && node scripts/validate-extension-ui-notices.mjs",
     "validate:incomplete-tool-calls": "pnpm run build && node scripts/validate-incomplete-tool-calls.mjs",
     "validate:tool-compact": "pnpm run build && node scripts/validate-tool-compact.mjs",
     "validate:tool-denial-reason": "pnpm run build && node scripts/validate-tool-denial-reason.mjs",

@@ -232,6 +232,17 @@ class LocalAgentSessionImpl implements AgentSession {
           }
         }
       }
+      // …and the NOTICES published before any host listened. Slots are retained; notices are
+      // one-shot events, so a notice emitted before this subscriber attached (a language server
+      // reporting ready while `createSession` is still running) would otherwise be lost forever.
+      // `drainUINotices` is consumed, so a re-subscribe does not replay what the user already saw.
+      for (const notice of this.managed.getExtensionRunner()?.drainUINotices() ?? []) {
+        deliverInitial({
+          channel: "extension-ui",
+          payload: { type: "notify", message: notice.message, level: notice.level },
+          ts: now(),
+        });
+      }
     }
 
     // The underlying bus is wired once per session (ref-counted), not once per

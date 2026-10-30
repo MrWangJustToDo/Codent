@@ -17,6 +17,7 @@ import { ExtensionRegistrationStacks } from "./registration-stacks.js";
 import { ExtensionTurnContext } from "./turn-context.js";
 
 import type { DispatchRank } from "../dispatch-order.js";
+import type { PendingExtensionNotice } from "./default-extension-ui.js";
 import type { ExtensionUiBridge } from "./extension-ui-bridge.js";
 import type {
   ExtensionInstance,
@@ -373,6 +374,17 @@ export class ExtensionRunner {
    */
   getUISlots(): Readonly<Record<string, Record<string, ExtensionRenderPayload>>> {
     return this.uiBridge.getSlots();
+  }
+
+  /**
+   * Notices published before a host subscribed, handed to the first subscriber that attaches.
+   *
+   * `notify` retains nothing, so without this a server that reports while the session is still being
+   * created (extension activation runs inside `createSession`) is invisible forever. Consumed once —
+   * see {@link PendingExtensionNotice}.
+   */
+  drainUINotices(): PendingExtensionNotice[] {
+    return this.uiBridge.drainNotices();
   }
 
   /**

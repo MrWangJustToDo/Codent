@@ -16,6 +16,7 @@
 
 import { DefaultExtensionUI } from "./default-extension-ui.js";
 
+import type { PendingExtensionNotice } from "./default-extension-ui.js";
 import type { ExtensionRegistrations, ExtensionRenderPayload, ExtensionUI, ExtensionUiContext } from "./types.js";
 import type { AgentEventBus } from "../agent-event-bus";
 
@@ -43,6 +44,13 @@ export interface ExtensionUiBridge {
   getContext(): ExtensionUiContext;
   /** Retained slots (surface → key → payload) for late-subscriber reconciliation. */
   getSlots(): Readonly<Record<string, Record<string, ExtensionRenderPayload>>>;
+  /**
+   * Notices published before a host subscribed, handed over once.
+   *
+   * Consumed (not replayed): a second subscriber attaching to the same session — the editor-handoff
+   * remount — must not re-show a notice the user already saw.
+   */
+  drainNotices(): PendingExtensionNotice[];
   /** The view one extension sees: renders attributed to it, subscriptions contained and tracked. */
   wrap(ownerId: string, registrations?: ExtensionRegistrations, isLive?: () => boolean): ExtensionUI;
   /** Drop every slot rendered by one extension (disable / destroy). */
@@ -110,6 +118,8 @@ export function createExtensionUiBridge(options: ExtensionUiBridgeOptions): Exte
     ui,
     getContext: () => buildContext(),
     getSlots: () => ui.getSlots(),
+    /** Notices published before a host subscribed; the subscriber takes them by draining. */
+    drainNotices: () => ui.drainNotices(),
     wrap: (ownerId, registrations, isLive) => ({
       notify: (message, level) => {
         if (isLive && !isLive()) return;
