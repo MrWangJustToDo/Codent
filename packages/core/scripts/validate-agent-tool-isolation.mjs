@@ -67,8 +67,10 @@ a.registerToolOutputDecorator("probe", async (_ctx, next) => `${await next(_ctx)
 a.removeToolOutputDecoratorOwner(decoratorOwner);
 assert.equal(await a.getToolModelOutput("probe")?.({ toolCallId: "a", input: {}, output: {} }), "A");
 
-// A shadowing tool owns its metadata, but presentation falls back to the static built-in table
-// at the consumer boundary. `toModelOutput` is deliberately NOT inherited.
+// A shadowing tool owns its metadata, and it does NOT inherit the shadowed built-in's presentation:
+// the descriptor describes an output shape, and dispatch is by name, so handing the built-in's
+// category to a foreign implementation both mislabels the row and (plan mode) classifies a write
+// tool as read-only. `toModelOutput` is deliberately not inherited for the same reason.
 {
   const shadow = makeAgent("agent-shadow", createReadFileTool());
   shadow.registerTool(
@@ -81,15 +83,13 @@ assert.equal(await a.getToolModelOutput("probe")?.({ toolCallId: "a", input: {},
     "shadow-extension"
   );
   assert.equal(
-    shadow.getToolPresentation("read_file")?.category,
-    "reads",
-    "a shadow without present keeps the built-in presentation fallback"
+    shadow.getToolPresentation("read_file"),
+    undefined,
+    "an undeclared shadow is undeclared — it must not borrow the built-in descriptor"
   );
-  assert.equal(
-    shadow.getToolPresentationCatalog().find((entry) => entry.name === "read_file")?.category,
-    "reads",
-    "the catalog also carries the built-in fallback"
-  );
+  const entry = shadow.getToolPresentationCatalog().find((item) => item.name === "read_file");
+  assert.equal(entry?.category, undefined, "…and the catalog agrees");
+  assert.equal(entry?.origin, "extension", "the catalog says which implementation is live");
   assert.equal(
     shadow.getToolModelOutput("read_file"),
     undefined,
