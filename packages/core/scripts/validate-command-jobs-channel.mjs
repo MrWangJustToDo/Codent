@@ -388,37 +388,43 @@ function createHarness() {
 
   // The shipped line is ANSI-styled; the assertions read its plain text so the style is not
   // repeated in every expected string. The style itself is asserted above.
-  assert.equal(plain(summarizeJobs([running(2000)], now)), "⏳ 1 running · 2.0s");
+  assert.equal(plain(summarizeJobs([running(2000)], now)), "⏳ 1 running · 2s");
   assert.equal(plain(summarizeJobs([running(90_000)], now)), "⏳ 1 running · 1m 30s");
 
   // Counts lead with what the user is waiting on, and `exited` is never counted — a success is the
   // uninteresting outcome, so a mixed line must not bury the failure behind it. The pending count
   // trails both, because it applies to jobs of any status.
   const mixed = plain(summarizeJobs([running(5000), running(1000), finished("failed", 1)], now));
-  assert.equal(mixed, "⏳ 2 running · 1 failed · 1 pending · 5.0s");
+  assert.equal(mixed, "⏳ 2 running · 1 failed · 1 pending · 5s");
   assert.doesNotMatch(mixed, /exited/, "successful jobs are not listed");
 
   assert.equal(
     plain(summarizeJobs([running(1000), finished("killed", null)], now)),
-    "⏳ 1 running · 1 killed · 1 pending · 1.0s"
+    "⏳ 1 running · 1 killed · 1 pending · 1s"
   );
 
   // A picked-up success contributes nothing but does not hide the running job beside it.
-  assert.equal(plain(summarizeJobs([running(1000), pickedUp("exited")], now)), "⏳ 1 running · 1.0s");
+  assert.equal(plain(summarizeJobs([running(1000), pickedUp("exited")], now)), "⏳ 1 running · 1s");
 
   // Elapsed time is the OLDEST running job's age (what the user is still waiting on), not the newest.
   assert.match(
     plain(summarizeJobs([running(1000), running(30_000)], now)),
-    /· 30\.0s$/,
+    /· 30s$/,
     "elapsed follows the oldest running job"
   );
 
   // A finished job's own age never enters the line, however long ago it finished.
   const stale = finished("failed", 1);
-  assert.equal(plain(summarizeJobs([running(1000), stale], now)), "⏳ 1 running · 1 failed · 1 pending · 1.0s");
+  assert.equal(plain(summarizeJobs([running(1000), stale], now)), "⏳ 1 running · 1 failed · 1 pending · 1s");
 
-  // Sub-second elapsed still formats (formatDuration's ms branch).
-  assert.equal(plain(summarizeJobs([running(250)], now)), "⏳ 1 running · 250ms");
+  // Whole seconds is the smallest unit the line reports, so sub-second elapsed rounds to zero
+  // instead of falling back to `formatDuration`'s `ms` branch.
+  assert.equal(plain(summarizeJobs([running(250)], now)), "⏳ 1 running · 0s");
+  assert.equal(
+    plain(summarizeJobs([running(59_600)], now)),
+    "⏳ 1 running · 1m 0s",
+    "rounding to a whole seconds value carries into the minute unit"
+  );
 }
 
 console.log("command-jobs-channel validation passed");

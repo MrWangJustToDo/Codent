@@ -102,7 +102,9 @@ const PENDING_LABEL = "pending";
  * Elapsed time is the oldest *running* job's age — the number the user is waiting on. Finished jobs
  * are not counted into it, so a long-dead completion cannot inflate the line; a line with nothing
  * running therefore carries no duration at all (`✓ 1 pending`), and its glyph becomes a tick
- * because there is no wait in progress.
+ * because there is no wait in progress. The age is reported in whole seconds
+ * (`formatDuration(..., { wholeSeconds: true })`): it re-renders on a 1s tick, so tenths would
+ * change on every frame while telling the user nothing a second cannot.
  */
 export function summarizeJobs(jobs: readonly SessionJobSummary[], now: number): string | null {
   const counts: Record<SessionJobSummary["status"], number> = { running: 0, exited: 0, killed: 0, failed: 0 };
@@ -119,7 +121,7 @@ export function summarizeJobs(jobs: readonly SessionJobSummary[], now: number): 
 
   const parts = COUNT_ORDER.filter((status) => counts[status] > 0).map((status) => `${counts[status]} ${status}`);
   if (pending > 0) parts.push(`${pending} ${PENDING_LABEL}`);
-  if (counts.running > 0) parts.push(formatDuration(now - oldestRunningStartedAt));
+  if (counts.running > 0) parts.push(formatDuration(now - oldestRunningStartedAt, { wholeSeconds: true }));
   const glyph = counts.running > 0 ? "⏳" : "✓";
   return `${AMBER}${glyph}${RESET} ${GRAY}${parts.join(" · ")}${RESET}`;
 }
