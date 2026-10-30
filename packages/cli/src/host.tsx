@@ -84,6 +84,15 @@ export interface CliHostOptions {
 /** Upper bound on teardown during exit; a hung hook must not keep the process alive. */
 const EXIT_TEARDOWN_TIMEOUT_MS = 2000;
 
+/**
+ * Quiet window between releasing the renderer and printing the exit report.
+ *
+ * With `renderProcess` the last frame's bytes are written by the renderer's worker, so a write
+ * issued in the same tick can land in the middle of a row. Short: nothing else is painted after
+ * `unmount`, so this is a drain, not a race.
+ */
+const EXIT_REPORT_FLUSH_MS = 50;
+
 /** CSI hide — re-sent after every frame so the hardware cursor stays off. */
 const HIDE_NATIVE_CURSOR = "\x1b[?25l";
 
@@ -207,6 +216,15 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   const sandboxMode = resolveSandboxMode(options.productName, appConfig.sandbox);
   /** Set once the TUI mounts; the exit path unmounts through it so the alternate screen is left. */
   let inkInstance: Instance | undefined;
+  /**
+   * Set by the explicit exit path once it has unmounted the renderer itself.
+   *
+   * The `process.once("exit")` restore below exists for paths that exit WITHOUT unmounting. When
+   * the explicit path already ran, that restore is not a safety net — it is a duplicate, and the
+   * screen-switch sequence it writes would be the last thing the process ever prints, right after
+   * the exit report.
+   */
+  let terminalRestored = false;
 
   // Cosmetic host identity — purely display: help screen + OSC-0 terminal title.
   appConfig.productName = options.productName;
@@ -409,6 +427,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   }
 
   const adapter = new LocalAgentAdapter({
+    // The terminal host prints the report itself, once the renderer has released the screen —
+    // see `printsExitReport` on `AgentAdapter`.
+    printsExitReport: true,
     exit: (report) => {
       // Teardown (`session:shutdown` → per-extension flush → deactivate → MCP/background kill) lives
       // behind `adapter.destroy()`; the app's unmount only fires it as `void`. Await it (bounded, so a
@@ -419,30 +440,40 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
           new Promise<void>((resolve) => setTimeout(resolve, EXIT_TEARDOWN_TIMEOUT_MS)),
         ]);
 
-        // The terminal has to be restored either way: a bare `process.exit` strands it in the
-        // alternate buffer, where the shell prompt is then drawn over a screen the user cannot
-        // scroll. `unmount()` is what writes the leave-alt-screen sequence.
-        // A panel that owns the alternate screen (the workspace browser) discards it on the way
-        // out, so a report painted there would vanish. Leave the screen first, then print it
-        // where the user can read and scroll it. The normal-screen path keeps the painted row.
-        if (isAlternateScreenActive()) {
+        // Release the renderer FIRST, then print the report on the terminal it handed back.
+        //
+        // The report used to be painted into the last frame (the app's `ExitSummary` row) and left
+        // there, on the assumption that the last frame survives the exit. It does not reach the
+        // user as the final screen: `unmount()` restores the terminal, and the process-exit
+        // restore below (which is there for paths that never unmount) then wrote a screen-switch
+        // sequence as the LAST bytes of the process — after the summary and after anything the
+        // frame printed. Printing the report here, with that restore suppressed, is what makes the
+        // report the final content rather than a row that the teardown erases a beat later.
+        //
+        // The workspace panel owns the alternate screen while it is up, and a report written into
+        // it is discarded with it. Read the ownership BEFORE unmounting (the panel's own cleanup
+        // clears the flag) and leave the screen explicitly, so the order is leave → print rather
+        // than "leave, whenever the renderer gets to it, around the report".
+        const ownsAlternateScreen = isAlternateScreenActive();
+        try {
+          inkInstance?.unmount();
+        } catch {
+          // already unmounted (double exit chord) — nothing to restore
+        }
+        if (ownsAlternateScreen && process.stdout.isTTY) {
           try {
-            inkInstance?.unmount();
+            process.stdout.write("\x1b[?1049l");
           } catch {
-            // already unmounted (double exit chord) — nothing to restore
+            // stdout already closed — nothing to restore
           }
+        }
+        terminalRestored = true;
+        // One quiet beat: with `renderProcess` the final byte of the last frame is written by the
+        // renderer's worker, so a write issued in the same tick can be interleaved mid-row.
+        setTimeout(() => {
           if (report && report.length > 0) process.stdout.write(`\n${report.join("\n")}\n`);
           process.exit(0);
-          return;
-        }
-        setTimeout(() => {
-          try {
-            inkInstance?.unmount();
-          } catch {
-            // already unmounted — nothing to restore
-          }
-          process.exit(0);
-        }, 200);
+        }, EXIT_REPORT_FLUSH_MS);
       })();
     },
     readClipboardImage,
@@ -499,6 +530,9 @@ export async function bootstrapCliHost(options: CliHostOptions): Promise<void> {
   // (it is the terminal default, so this only matters for a terminal that starts with it off).
   process.once("exit", () => {
     if (!process.stdout.isTTY) return;
+    // The explicit exit path already released the renderer and printed the report there; adding
+    // this sequence after it would clear the screen the report was just written to.
+    if (terminalRestored) return;
     try {
       process.stdout.write("\x1b[?1007h\x1b[?1049l\x1b[?25h");
     } catch {

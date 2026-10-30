@@ -24,6 +24,11 @@ export class LocalAgentAdapter implements AgentAdapter {
   private _ownsEnv: boolean;
   private _remoteWorkspace: boolean;
   private _createRemoteSessionHost: ((opts: { baseUrl: string }) => AgentSessionHost) | undefined;
+  /**
+   * Declared host capability: this host prints the exit report itself (see `AgentAdapter`).
+   * Readonly because it is a property of the host, not something the session can change.
+   */
+  readonly printsExitReport: boolean | undefined;
 
   constructor(options: {
     exit: (report?: readonly string[]) => void;
@@ -45,6 +50,11 @@ export class LocalAgentAdapter implements AgentAdapter {
     remoteWorkspace?: boolean;
     /** Injected remote AgentSession host factory (`@codent/server/client` in the dev host). */
     createRemoteAgentSessionHost?: (opts: { baseUrl: string }) => AgentSessionHost;
+    /**
+     * This host prints the exit report after releasing the renderer, so the app must not paint it
+     * into its last frame (that would show the same block twice). See `AgentAdapter`.
+     */
+    printsExitReport?: boolean;
   }) {
     this._exit = options.exit;
     this._readClipboardImage = options.readClipboardImage ?? null;
@@ -54,6 +64,7 @@ export class LocalAgentAdapter implements AgentAdapter {
     this._ownsEnv = options.ownsEnv ?? false;
     this._remoteWorkspace = options.remoteWorkspace ?? false;
     this._createRemoteSessionHost = options.createRemoteAgentSessionHost;
+    this.printsExitReport = options.printsExitReport;
   }
 
   async initialize(config: AppConfig): Promise<InitResult> {

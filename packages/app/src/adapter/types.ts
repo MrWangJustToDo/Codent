@@ -145,10 +145,19 @@ export interface AgentAdapter {
    * Leave the app.
    *
    * `report` is the exit summary the app captured from the live session. A host that tears
-   * the UI down before exiting (the alternate-screen hosts) prints it itself; a host that
-   * paints it in the last frame (the normal-screen path) can ignore it.
+   * the UI down before exiting (the terminal hosts) prints it itself; a host that paints it in
+   * the last frame can ignore it.
    */
   exit(report?: readonly string[]): void;
+  /**
+   * Whether {@link exit} prints the report to the terminal itself.
+   *
+   * It has to be declared, not inferred, because BOTH renderers are plausible and only one may
+   * run: the app paints the summary as its last frame row when this is unset, and the host prints
+   * it after releasing the renderer when it is `true`. Painting AND printing shows the same block
+   * twice on screen (the frame survives the unmount).
+   */
+  printsExitReport?: boolean;
   readClipboardImage?(): Promise<ClipboardImageResult | null>;
   /**
    * Open a workspace file in the terminal editor this host owns, suspending the UI until the

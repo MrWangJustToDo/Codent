@@ -15,9 +15,13 @@ import type { AgentSession } from "@codent/core";
  *
  * Order matters: the lines are built **before** `destroy`. The exit summary is a reading of the
  * live session (`snap.usage`, `snap.activeSessionId`), and the destroy is what removes it; building it
- * afterwards would capture a torn-down agent. The lines are then handed to the store, where the
- * already-mounted `ExitSummary` picks them up while the host's deferred `process.exit` gives Ink
- * a frame to paint.
+ * afterwards would capture a torn-down agent.
+ *
+ * WHO SHOWS IT is the host's call, and it is declared rather than guessed (`printsExitReport`): a
+ * host that prints the report itself after releasing the renderer gets the lines through
+ * `adapter.exit` and nothing in the frame; every other host gets the `ExitSummary` row painted while
+ * its teardown runs. Painting AND printing is not a harmless redundancy — the last frame survives the
+ * unmount, so the user would read the same block twice.
  */
 export function exitWithSummary(options: {
   adapter: AgentAdapter;
@@ -27,11 +31,11 @@ export function exitWithSummary(options: {
   const { adapter, session, destroySession } = options;
 
   const lines = session ? buildLinesFromSession(session) : null;
-  useAgent.getActions().beginExit(lines);
+  // One owner per report: a host that prints it after tearing the UI down must not also get it
+  // painted into the last frame, or the block appears twice (the frame outlives the unmount).
+  useAgent.getActions().beginExit(adapter.printsExitReport ? null : lines);
 
   if (session) destroySession(session.id);
-  // The host decides how the report reaches the user: normal-screen hosts paint it through the
-  // store (the `ExitSummary` row), alternate-screen hosts print it after leaving the alt buffer.
   adapter.exit(lines ?? undefined);
 }
 

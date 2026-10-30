@@ -11,8 +11,11 @@ import { FullBox } from "./FullBox.js";
  *
  * Renders lines captured at exit time rather than reading the session here: the exit path
  * destroys the session before `process.exit` lands, so by the time this paints there may be no
- * snapshot left to read. `ctx.exit()` builds the lines while the session is still live and
- * stashes them (`beginExit(lines)`).
+ * snapshot left to read. `exitWithSummary` builds the lines while the session is still live.
+ *
+ * Only the hosts that do NOT print the report themselves render this — the host's
+ * `printsExitReport` decides (see `exitWithSummary`), because a host that prints after releasing the
+ * renderer would otherwise show the block twice: the last frame outlives the unmount.
  *
  * The top border is what separates it from the footer above — the footer ends with its own
  * `borderTop` rule, so a second one reads as "a new region of the same screen" rather than as
@@ -20,8 +23,8 @@ import { FullBox } from "./FullBox.js";
  *
  * Ink owns this frame like any other — the exit path must not write to stdout directly, because
  * Ink tracks the terminal row by row and an external write makes it skip every row whose content
- * did not change (see `PanelOverlay`). The host's `exit()` defers `process.exit` by ~200ms, which
- * is what gives this a frame to paint in, the same arrangement `Help` uses.
+ * did not change (see `PanelOverlay`). A host that relies on this row defers `process.exit` by a
+ * frame, the same arrangement `Help` uses.
  */
 export const ExitSummary = () => {
   const lines = useAgent((s) => s.exitSummaryLines);
