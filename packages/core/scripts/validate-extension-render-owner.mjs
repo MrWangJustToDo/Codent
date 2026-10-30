@@ -95,6 +95,40 @@ await flushUi();
 assert.deepEqual(runner.getUISlots(), {}, "destroyAll clears every slot");
 assert.ok(notifications.filter((n) => n.payload === null).length >= 3, "destroyAll notifies removal for every slot");
 
+// --- Same key across extensions: the LAST publish owns the slot ----------------
+//
+// An identical payload must not skip the ownership transfer. The dedupe early-return skips the
+// host NOTIFICATION, not the attribution: attributing after it left the slot owned by the first
+// publisher, so disabling that one cleared a slot the second one had just published, and disabling
+// the second left its content on screen. Both directions are asserted — a fix in either direction
+// alone would still pass half of this.
+{
+  const runner3 = new ExtensionRunner({});
+  await runner3.loadExtension(renderExtension("ext-first", "shared", "same content"));
+  await runner3.loadExtension(renderExtension("ext-second", "shared", "same content"));
+  await flushUi();
+
+  assert.equal(runner3.getUISlots().footer?.shared, "same content", "the shared slot renders once");
+
+  const disabledFirst = await runner3.setEnabled("ext-first", false);
+  assert.equal(disabledFirst.ok, true, "disabling the earlier publisher succeeds");
+  await flushUi();
+  assert.equal(
+    runner3.getUISlots().footer?.shared,
+    "same content",
+    "disabling the earlier publisher leaves the slot to its actual owner"
+  );
+
+  await runner3.setEnabled("ext-second", false);
+  await flushUi();
+  assert.equal(
+    runner3.getUISlots().footer?.shared,
+    undefined,
+    "disabling the later publisher clears the slot it took ownership of"
+  );
+  await runner3.destroyAll();
+}
+
 // --- Non-serializable payloads are rejected at publish time --------------------
 // A payload that cannot survive JSON round-tripping would be replayed to late
 // subscribers and forwarded to remote hosts outside this publish path, so it must

@@ -123,15 +123,19 @@ export class DefaultExtensionUI implements ExtensionUI {
     try {
       const next = normalizePayload(payload);
       const id = slotId(surface, key);
-      // Identical payload: nothing to render, so do not notify the host at all.
-      if (fingerprintOf(this.slots.get(surface)?.get(key) ?? null) === next.fingerprint) return;
-      this.writeSlot(surface, key, next.value);
+      // Ownership follows the LAST publish, and that includes a publish whose content is identical
+      // to what is already on screen: the dedupe below skips the host notification, not the
+      // attribution. Attributing after the early return left the slot owned by whoever drew it
+      // first, so disabling the earlier publisher cleared a slot the later one now owned, while
+      // disabling the later one left its content on screen.
       if (ownerId !== undefined) {
-        // Only existing slots are owned; a removed slot drops its owner entry so the ownership
-        // map cannot grow without bound.
+        // Only slots own an entry; a removal drops it so the map cannot grow without bound.
         if (next.value === null) this.slotOwners.delete(id);
         else this.slotOwners.set(id, ownerId);
       }
+      // Identical payload: nothing to render, so do not notify the host at all.
+      if (fingerprintOf(this.slots.get(surface)?.get(key) ?? null) === next.fingerprint) return;
+      this.writeSlot(surface, key, next.value);
       this.queueNotify(surface, key, next.value);
     } catch {
       // Failure contained: a broken publish must not break the host UI or the agent loop.
