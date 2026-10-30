@@ -1,6 +1,6 @@
 import { formatExploredActivitySummary, shouldFoldToolRow } from "./tool-activity-summary.js";
 import { isToolCallPart } from "./tool-part.js";
-import { resolveToolPresentation } from "./tool-presentation.js";
+import { isBuiltinToolForRow, resolveToolPresentation } from "./tool-presentation.js";
 
 import type { ToolPresentation } from "@codent/core";
 import type { TextPart, ToolCallPart, UIMessage } from "@tanstack/ai";
@@ -154,7 +154,7 @@ function collapseTurn(turn: Turn, resolve: ResolvePresentation): UIMessage[] {
 
       // Errored tool rows fold into the pending run like completed ones;
       // they surface in the summary as an error count instead of vanishing.
-      if (shouldFoldToolRow(part, resolve)) {
+      if (shouldFoldToolRow(part, resolve, isBuiltinToolForRow)) {
         pendingFoldable.push({ part, source: message, partIndex: i });
         continue;
       }

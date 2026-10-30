@@ -95,3 +95,11 @@ export const CLIENT_TOOL_NAMES: ReadonlySet<string> = new Set([BUILTIN_TOOL_NAME
 
 /** The wire name of a built-in tool. */
 export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[keyof typeof BUILTIN_TOOL_NAMES];
+
+/** Runtime membership test for {@link BUILTIN_TOOL_NAMES} (display rules must not keep a name table). */
+const BUILTIN_TOOL_NAME_SET: ReadonlySet<string> = new Set(Object.values(BUILTIN_TOOL_NAMES));
+
+/** Whether `name` is one of core's built-in tool names. */
+export function isBuiltinToolName(name: string): boolean {
+  return BUILTIN_TOOL_NAME_SET.has(name);
+}

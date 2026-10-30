@@ -17,7 +17,6 @@ import type { MutableRefObject } from "react";
 
 export interface DenyingToolInfo {
   id: string;
-  isLast: boolean;
   toolCallId?: string;
   toolName?: string;
 }
@@ -28,7 +27,6 @@ export interface KeybindingContext {
   mode: InputMode;
   isLoading: boolean;
   isAutocompleteVisible: boolean;
-  currentPendingIsLast: boolean;
   pendingApproval: UseAgentChatReturn["allPendingApproval"][number] | undefined;
   pendingAskUser: UseAgentChatReturn["allPendingAskUser"][number] | undefined;
   inputActions: ReturnType<typeof useUserInput.getActions>;

@@ -14,7 +14,6 @@ export function useApprovalModeKeybindings(ctx: KeybindingContext): void {
     modeActions,
     isAutocompleteVisible,
     pendingApproval,
-    currentPendingIsLast,
     denyingRef,
     acceptAutocomplete,
     addToolApprovalResponse,
@@ -39,7 +38,6 @@ export function useApprovalModeKeybindings(ctx: KeybindingContext): void {
           if (!pendingApproval) return;
           denyingRef.current = {
             id: pendingApproval.id,
-            isLast: currentPendingIsLast,
             toolCallId: pendingApproval.toolCallId,
             toolName: pendingApproval.toolName,
           };

@@ -207,4 +207,54 @@ const rootConfig = {
   );
 }
 
+// ============================================================================
+// 5. A child's usage change republishes the parent's `subagents` rows
+//
+// The retained `subagents` channel is rebuilt on status/phase events, and token accrual is neither.
+// A long `task` therefore kept its spawn-time numbers until the next flip: a live subscriber saw
+// nothing while the run spent tokens, and a reconnecting one saw the whole run land at once.
+// ============================================================================
+
+{
+  const manager = new AgentManager();
+  const root = await manager.createManagedAgent({ ...rootConfig, modelInfo: MODEL_INFO });
+  const sub = await manager.spawnSubagent(root.id, { name: "usage-sub" });
+
+  const frames = [];
+  const dispose = manager.on("session:subagents", (event) => frames.push(event.payload));
+  frames.length = 0; // drop the retained replay; only a change is interesting
+
+  sub.usage.addTotal({ inputTokens: 120, outputTokens: 30, totalTokens: 150 });
+
+  const snapshot = frames.at(-1);
+  assert.ok(snapshot, "a child's usage change must republish the parent's subagent rows");
+  const row = (snapshot.subagents ?? []).find((entry) => entry.id === sub.id);
+  assert.equal(
+    row?.usage?.total?.inputTokens,
+    120,
+    "the republished row must carry the new numbers, not the spawn-time snapshot"
+  );
+  dispose();
+}
+
+// ============================================================================
+// 6. A session switch destroys the previous conversation's subagents
+//
+// `task` children are `autoDestroy: false` so a finished preview survives; a switch is therefore
+// the only point that releases them. The lifecycle test only proves the host HOOK is called — this
+// one proves the agent actually leaves the registry (delete the implementation and it fails).
+// ============================================================================
+
+{
+  const manager = new AgentManager();
+  const root = await manager.createManagedAgent({ ...rootConfig, modelInfo: MODEL_INFO });
+  const sub = await manager.spawnSubagent(root.id, { name: "switch-sub" });
+  assert.ok(manager.getAgent(sub.id), "precondition: the child is registered");
+
+  root.reset("session-switch");
+
+  assert.equal(manager.getAgent(sub.id), undefined, "the child is destroyed, not merely aborted");
+  assert.deepEqual(root.childIds, [], "the parent no longer lists it");
+}
+
 console.log("subagent-usage-pricing validation passed");

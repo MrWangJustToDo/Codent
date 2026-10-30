@@ -139,6 +139,85 @@ assert.equal(managed.getStatus(), "completed");
   assert.deepEqual(transitions.at(-1), ["running", "run-prepare"], "an answered client tool starts the run");
 }
 
+// Conversation order decides which wait the status names.
+//
+// A batch can hold an approval and an `ask_user` at the same time, and the host answers them in
+// the order they were asked. A fixed precedence (approvals always win) made the status flip
+// between `waiting` and `awaiting_user` every time either writer re-asserted itself; each flip was
+// a real transition (state emit + status log + interaction rescan).
+{
+  let status = "idle";
+  let messages = [];
+  const transitions = [];
+  const controller = createAgentStatusController({
+    getStatus: () => status,
+    setStatus: (next, trigger) => {
+      transitions.push([next, trigger]);
+      status = next;
+    },
+    getError: () => "",
+    setError: () => {},
+    setPendingApprovalCount: () => {},
+    getMessages: () => messages,
+    emitEvent: () => {},
+  });
+  const approvalPart = {
+    type: "tool-call",
+    id: "call_run",
+    name: "run_command",
+    arguments: '{"command":"git status"}',
+    state: "input-complete",
+    approval: { id: "ap_run", needsApproval: true, approved: undefined },
+  };
+  const askPart = {
+    type: "tool-call",
+    id: "call_ask",
+    name: "ask_user",
+    arguments: "{}",
+    state: "input-complete",
+  };
+  const answeredAsk = { ...askPart, state: "complete", output: { answer: "x" } };
+
+  // Approval was asked first: the host asserts the question panel, the status must not follow it.
+  messages = [{ id: "a1", role: "assistant", parts: [approvalPart] }];
+  controller.setClientToolWaiting(true);
+  assert.equal(status, "waiting", "an approval asked first keeps the status");
+  controller.reconcileFromUIMessages(messages);
+  assert.equal(status, "waiting", "reconcile agrees with the client-tool writer");
+
+  // Question asked first: the status is `awaiting_user` in both writers.
+  messages = [{ id: "a2", role: "assistant", parts: [askPart] }];
+  controller.setClientToolWaiting(true);
+  assert.equal(status, "awaiting_user");
+  controller.reconcileFromUIMessages(messages);
+  assert.equal(status, "awaiting_user");
+
+  // Same message: part order is the ask order.
+  messages = [{ id: "a3", role: "assistant", parts: [askPart, approvalPart] }];
+  status = "idle";
+  controller.reconcileFromUIMessages(messages);
+  assert.equal(status, "awaiting_user", "part order within one message decides too");
+
+  // Answering the question hands the status to the approval that was next.
+  messages = [{ id: "a4", role: "assistant", parts: [answeredAsk, approvalPart] }];
+  controller.setClientToolWaiting(false);
+  assert.equal(status, "waiting", "the next pending interaction takes over");
+  assert.equal(transitions.at(-1)[1], "client-tool-wait");
+
+  // Nothing pending: the wait ends through the normal reconcile policy.
+  messages = [{ id: "a5", role: "assistant", parts: [answeredAsk] }];
+  controller.reconcileFromUIMessages(messages);
+  assert.equal(status, "idle");
+
+  // A pump must not start while anything is pending — including a question that is not first.
+  status = "awaiting_user";
+  transitions.length = 0;
+  controller.prepareRunPhase([{ id: "a6", role: "assistant", parts: [approvalPart] }]);
+  assert.deepEqual(transitions, [], "a pending interaction keeps the pump parked");
+  controller.prepareRunPhase([{ id: "a7", role: "assistant", parts: [answeredAsk] }]);
+  assert.deepEqual(transitions.at(-1), ["running", "run-prepare"], "once nothing is pending the pump starts");
+}
+
 // The run's finish reason rides the state payload; the ACP host maps `length` → max_tokens from it.
 {
   let reason;

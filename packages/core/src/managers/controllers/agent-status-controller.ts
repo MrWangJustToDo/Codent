@@ -9,7 +9,7 @@
 
 import {
   countPendingToolApprovals,
-  hasPendingAskUser,
+  firstPendingInteraction,
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
 } from "../../agent/stream/tool-phase-utils.js";
@@ -42,6 +42,16 @@ export interface AgentStatusControllerDeps {
   getError: () => string;
   setError: (error: string) => void;
   setPendingApprovalCount: (count: number) => void;
+  /**
+   * The live transcript.
+   *
+   * The pending-approval count is a DERIVED value (`countPendingToolApprovals`), and a writer that
+   * computes it from anything else (a batch list, or a hardcoded 0) can disagree with the retained
+   * `interactions` projection built from the same messages. Callers pass a reader so every
+   * recompute uses the one scan.
+   */
+  getMessages?: () => UIMessage[];
+
   /** Record the run's model finish reason (null when a new run starts). */
   setFinishReason?: (reason: string | null) => void;
   /**
@@ -109,17 +119,14 @@ export class AgentStatusController {
 
   /** Bridge the gap before TanStack `onStart` during {@link AgentChatController} pump. */
   prepareRunPhase(messages: UIMessage[]): void {
-    if (countPendingToolApprovals(messages) > 0) return;
+    // Parked on the user: whichever interaction was asked FIRST is still unanswered, so starting a
+    // pump would only re-ask it. (The old count-only gate missed an unanswered `ask_user` that was
+    // not first, and the `awaiting_user` special case only covered one spelling of the same state.)
+    if (firstPendingInteraction(messages)) return;
 
     const status = this.deps.getStatus();
-    // `awaiting_user` is a wait on a CLIENT tool. Once its result is in the transcript the wait is
-    // over: returning here unconditionally left the resume pump under `awaiting_user`, so
-    // `applyChunkStatus` ignored every status beat, `isAgentLoading` stayed false, and new input
-    // was queued as if the session were still paused. Only an unanswered question keeps the wait.
-    if (status === "awaiting_user" && hasPendingAskUser(messages)) return;
     if (
       status === "waiting" ||
-      // Reachable only when the question above was ANSWERED (the pending case returned early).
       status === "awaiting_user" ||
       status === "idle" ||
       status === "completed" ||
@@ -212,8 +219,15 @@ export class AgentStatusController {
       return;
     }
 
-    if (this.deps.getStatus() !== "waiting") {
-      this.deps.setStatus("waiting", "approvals-pending");
+    // Conversation order decides which wait the status names. The batch is authoritative for "an
+    // approval was just requested", but a question asked EARLIER keeps its status until answered —
+    // otherwise the status flips every time either side re-asserts itself.
+    const messages = this.deps.getMessages?.();
+    const first = messages ? firstPendingInteraction(messages) : undefined;
+    if (first === undefined || first.kind === "approval") {
+      if (this.deps.getStatus() !== "waiting") {
+        this.deps.setStatus("waiting", "approvals-pending");
+      }
     }
 
     const auto = this.deps.shouldAutoApprove?.() ?? false;
@@ -229,18 +243,32 @@ export class AgentStatusController {
   }
 
   onBeforeToolCall(): void {
-    if (this.deps.getStatus() === "waiting") {
-      this.deps.setPendingApprovalCount(0);
-      this.deps.setStatus("running", "before-tool-call");
-    }
+    if (this.deps.getStatus() !== "waiting") return;
+    // Recompute from the transcript instead of zeroing. A parallel batch can hold one answered
+    // call and one still-unanswered sibling; zeroing here reported `pendingApprovalCount: 0`
+    // beside `interactions.approvals: [1]` (the badge flickered to "no approval" until the next
+    // phase), and the run is genuinely still parked on the user for the second call.
+    const messages = this.deps.getMessages?.();
+    const remaining = messages ? countPendingToolApprovals(messages) : 0;
+    this.deps.setPendingApprovalCount(remaining);
+    if (remaining === 0) this.deps.setStatus("running", "before-tool-call");
   }
 
   setClientToolWaiting(active: boolean): void {
+    // Derive from the transcript first: a batch can hold both an approval and a question, and the
+    // host answers them in the order they were asked, so the status names whichever is FIRST.
+    const messages = this.deps.getMessages?.();
+    const first = messages ? firstPendingInteraction(messages) : undefined;
+    if (first) {
+      // Re-asserting the same status every time the host re-dispatches is cheap: `setStatus` emits
+      // `agent:status` only on a real transition, and `emitStateChange` dedupes its frame by
+      // signature, so this cannot feed an app↔core emit loop.
+      this.deps.setStatus(first.kind === "approval" ? "waiting" : "awaiting_user", "client-tool-wait");
+      return;
+    }
     if (active) {
-      // Idempotent guard: the app re-dispatches while an ask_user stays pending
-      // (fresh interaction snapshots change the pending object reference), so a
-      // same-value setStatus here would re-emit state + interactions and feed an
-      // infinite app↔core loop. Only transition when not already awaiting_user.
+      // The caller asserts a question the transcript does not (yet) show — honour the only signal
+      // we have rather than dropping the wait.
       if (this.deps.getStatus() !== "awaiting_user") {
         this.deps.setStatus("awaiting_user", "client-tool-wait");
       }
@@ -258,14 +286,16 @@ export class AgentStatusController {
 
   reconcileFromUIMessages(messages: UIMessage[], options?: ReconcileFromUIMessagesOptions): void {
     const whenClear = options?.whenClear ?? "idle";
-    const pendingCount = countPendingToolApprovals(messages);
-    this.deps.setPendingApprovalCount(pendingCount);
+    // The badge counts every pending approval, independent of which wait the status names.
+    this.deps.setPendingApprovalCount(countPendingToolApprovals(messages));
 
-    if (pendingCount > 0) {
+    // Conversation order: the status describes the interaction the host is asking FIRST.
+    const first = firstPendingInteraction(messages);
+    if (first?.kind === "approval") {
       this.deps.setStatus("waiting", "reconcile");
       return;
     }
-    if (hasPendingAskUser(messages)) {
+    if (first?.kind === "clientTool") {
       this.deps.setStatus("awaiting_user", "reconcile");
       return;
     }

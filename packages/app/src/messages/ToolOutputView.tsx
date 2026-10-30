@@ -8,7 +8,7 @@ import { BG, COLORS } from "../theme/colors.js";
 import { formatToolOutput } from "../utils/format";
 import { hasDetailedOutputBlock, keepsCompactRow } from "../utils/tool-display.js";
 import { isCancelledToolCall } from "../utils/tool-part.js";
-import { resolveToolPresentation } from "../utils/tool-presentation.js";
+import { isBuiltinTool, resolveToolPresentation } from "../utils/tool-presentation.js";
 
 import { TodoToolOutputView } from "./TodoToolOutputView.js";
 
@@ -40,7 +40,9 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // message boxes (screenWidth - 2).
   const boxWidth = Math.max(screenWidth - 4, 1);
 
-  if (toolName === BUILTIN_TOOL_NAMES.todo) {
+  // A built-in-only renderer reads the built-in's output schema; a tool that merely SHADOWS the
+  // name may have a different shape, so it falls through to the generic body.
+  if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.todo) {
     const output = part.output as { items?: TodoItem[]; title?: string; source?: "plan" | "agent" };
     if (!output.items) return null;
     return (
@@ -50,14 +52,19 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
     );
   }
 
-  if (toolName === BUILTIN_TOOL_NAMES.askUser && uiState === "output-error") return null;
+  if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.askUser && uiState === "output-error") {
+    return null;
+  }
 
   const isDetailed = hasDetailedOutputBlock(toolName);
   // Core renders the result text once, at completion, and ships it with the part. Hosts
   // must not need the tool registry in their own process (remote session, extension
   // hosts) — the local formatter stays only as the fallback for older parts.
   const display = (part as ToolCallPart & { display?: { text?: string } }).display;
-  const output = display?.text ?? formatToolOutput(part.output, toolName);
+  // The built-in formatter is keyed by NAME: for a tool that merely shadows one it would read a
+  // schema that never produced this output. Non-built-ins render what core attached (nothing when
+  // they declared no renderer), which is also the rule for unknown names inside `formatToolOutput`.
+  const output = display?.text ?? (isBuiltinTool(toolName) ? formatToolOutput(part.output, toolName) : "");
 
   // Error outputs carry `{ error }` (no formattable body) — the message is
   // rendered by ToolCallPartView, so skip the otherwise-empty result block.
@@ -83,6 +90,7 @@ export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState:
   // choice the glyph makes, and it survives the part being rewritten (the synthetic cancel
   // payload and the tool's own catch both leave `success: false`).
   const failed =
+    isBuiltinTool(toolName) &&
     toolName === BUILTIN_TOOL_NAMES.runCommand &&
     (part.output as { success?: boolean } | undefined)?.success === false &&
     !hasCanceld;

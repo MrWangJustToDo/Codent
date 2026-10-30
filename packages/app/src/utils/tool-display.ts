@@ -3,7 +3,7 @@ import chalk from "chalk";
 
 import { COLORS } from "../theme/colors.js";
 
-import { resolveToolPresentation } from "./tool-presentation.js";
+import { isBuiltinToolForRow, resolveToolPresentation } from "./tool-presentation.js";
 import { wrapTextToLines } from "./user-message-lines.js";
 
 import type { UiToolState } from "./tool-part.js";
@@ -31,7 +31,9 @@ export function keepsCompactRow(
   toolName: string,
   resolver: (name: string) => ReturnType<typeof resolveToolPresentation> = resolveToolPresentation
 ): boolean {
-  return coreKeepsCompactRow(toolName, resolver);
+  // The identity answers "is this still the seeded built-in?": a tool that SHADOWS a built-in name
+  // is an extension, and its `text` is its whole result.
+  return coreKeepsCompactRow(toolName, resolver, isBuiltinToolForRow);
 }
 
 /** Get status color for tool invocation state. */

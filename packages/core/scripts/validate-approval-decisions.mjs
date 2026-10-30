@@ -3,7 +3,8 @@
  * - channel decision time is reused by the approval table;
  * - N decisions settle once and join ONE pump;
  * - auto-mode approvals do not schedule a pump;
- * - the command-safety policy handles allow / deny / ask, and only pending run_command calls.
+ * - the command-safety policy handles allow / deny / ask, only for incumbent `run_command` calls
+ *   that are neither denied nor already executed, and a denial may replace a racing approval.
  *
  * Run: pnpm --filter @codent/core run validate:approval-decisions
  */
@@ -35,7 +36,7 @@ const messages = [
   },
 ];
 
-function makeCoordinator({ messages: initial = messages, auto = false, evaluate } = {}) {
+function makeCoordinator({ messages: initial = messages, auto = false, evaluate, diagnostic } = {}) {
   const decisions = [];
   const upserts = [];
   let reconciles = 0;
@@ -43,9 +44,9 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
   let pumps = 0;
   const coordinator = new ApprovalDecisionCoordinator({
     getMessages: () => initial,
-    addToolApprovalResponse: (approvalId, approved, reason) => {
+    addToolApprovalResponse: (approvalId, approved, reason, overwrite) => {
       const at = 100 + decisions.length;
-      decisions.push({ approvalId, approved, reason, at });
+      decisions.push({ approvalId, approved, reason, ...(overwrite ? { overwrite } : {}), at });
       return at;
     },
     upsertApproval: (input) => upserts.push(input),
@@ -62,6 +63,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
     isSessionSwitching: () => false,
     getCoreEnv: () => ({}),
     ...(evaluate ? { evaluateCommandSafety: evaluate } : {}),
+    ...(diagnostic ? { reportDiagnostic: diagnostic } : {}),
   });
   return {
     coordinator,
@@ -162,6 +164,39 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
 }
 
 {
+  // An approval that raced the analyzer must not hide a policy denial: execution cannot happen
+  // before this method returns (it runs inside the pump, ahead of the next `chat()`), so the
+  // denial still protects the call and replaces the approval.
+  const diagnostics = [];
+  const ctrl = makeCoordinator({
+    messages: [
+      {
+        id: "a",
+        role: "assistant",
+        parts: [
+          toolCall("call_done", "run_command", "rm -rf x", "ap_done", {
+            approval: { id: "ap_done", needsApproval: true, approved: true },
+          }),
+        ],
+      },
+    ],
+    evaluate: async () => ({ action: "deny", reason: "blocked by rules" }),
+    diagnostic: (message, details) => diagnostics.push({ message, details }),
+  });
+  await ctrl.coordinator.applyCommandSafetyPolicy();
+  assert.equal(ctrl.decisions.length, 1, "the denial replaces the racing approval");
+  assert.deepEqual(
+    { approved: ctrl.decisions[0].approved, overwrite: ctrl.decisions[0].overwrite },
+    { approved: false, overwrite: "deny" }
+  );
+  assert.equal(ctrl.upserts[0].status, "denied");
+  assert.equal(ctrl.upserts[0].overwrite, "deny");
+  assert.equal(diagnostics.length, 1, "a replaced approval is reported, never silent");
+  assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 0 });
+}
+
+{
+  // An `allow` never overturns a decision that was already made (the user's, or auto mode's).
   let evaluated = 0;
   const ctrl = makeCoordinator({
     messages: [
@@ -169,7 +204,6 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
         id: "a",
         role: "assistant",
         parts: [
-          toolCall("call_read", "read_file", "x", "ap_read"),
           toolCall("call_done", "run_command", "git status", "ap_done", {
             approval: { id: "ap_done", needsApproval: true, approved: true },
           }),
@@ -182,7 +216,36 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate 
     },
   });
   await ctrl.coordinator.applyCommandSafetyPolicy();
-  assert.equal(evaluated, 0, "only pending run_command calls are evaluated");
+  assert.equal(evaluated, 1, "an approval is re-checked so a later denial can still land");
+  assert.equal(ctrl.decisions.length, 0, "an allow never rewrites an answered call");
+}
+
+{
+  // Already executed / already denied: nothing left to protect, so no analysis.
+  let evaluated = 0;
+  const ctrl = makeCoordinator({
+    messages: [
+      {
+        id: "a",
+        role: "assistant",
+        parts: [
+          toolCall("call_executed", "run_command", "git status", "ap_executed", {
+            approval: { id: "ap_executed", needsApproval: true, approved: true },
+            state: "complete",
+          }),
+          toolCall("call_denied", "run_command", "rm -rf x", "ap_denied", {
+            approval: { id: "ap_denied", needsApproval: true, approved: false },
+          }),
+        ],
+      },
+    ],
+    evaluate: async () => {
+      evaluated += 1;
+      return { action: "deny" };
+    },
+  });
+  await ctrl.coordinator.applyCommandSafetyPolicy();
+  assert.equal(evaluated, 0, "executed and denied calls are not re-evaluated");
   assert.equal(ctrl.decisions.length, 0);
 }
 

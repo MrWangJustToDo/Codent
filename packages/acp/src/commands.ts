@@ -23,14 +23,18 @@ import type { ModelSwitchOutcome } from "./session-config-options.js";
 import type { AcpCommands } from "./types.js";
 import type { AgentSession, AgentSessionSnapshot, ModelCatalogRead } from "@codent/core";
 
-/** Advertizable command set: built-ins (non-UI) + the session's extension commands. */
+/**
+ * Advertizable command set: built-ins (non-UI) + the session's extension commands.
+ *
+ * Reads `extensions.commands` — the LIVE registration per name — never a flatten of
+ * `extensions[].commands`, which is each extension's own claim (management view): two extensions
+ * may claim one name, and the shadowed copy can never run, so advertising it offers a command that
+ * does nothing. A name a built-in wins is dropped too, because dispatch resolves built-ins first.
+ */
 export function commandsFromSnapshot(snapshot: AgentSessionSnapshot): AcpCommands {
-  const extension: Array<{ name: string; description: string }> = [];
-  for (const ext of snapshot.extensions.extensions) {
-    for (const cmd of ext.commands) {
-      if (cmd.name) extension.push({ name: cmd.name, description: cmd.description || "" });
-    }
-  }
+  const extension = snapshot.extensions.commands
+    .filter((cmd) => !findBuiltinCommand(cmd.name))
+    .map((cmd) => ({ name: cmd.name, description: cmd.description || "" }));
   return { builtin: listAdvertisableCommands(), extension };
 }
 
@@ -77,7 +81,9 @@ export async function dispatchSlashCommand(
   const entry = findBuiltinCommand(parsed.name);
 
   if (!entry) {
-    const extensionNames = new Set(snapshot.extensions.extensions.flatMap((e) => e.commands.map((c) => c.name)));
+    // The live set, not the claims: a shadowed name is not reachable, and `extension.invokeCommand`
+    // resolves it against the same per-name list.
+    const extensionNames = new Set(snapshot.extensions.commands.map((c) => c.name));
     if (extensionNames.has(parsed.name)) {
       const result = await session.dispatch({ type: "extension.invokeCommand", name: parsed.name, args: parsed.args });
       return { handled: true, message: result.ok ? result.data?.message : undefined };

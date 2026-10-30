@@ -62,7 +62,7 @@ import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
-import { collectPendingApprovals, collectPendingAskUser } from "../agent/stream/tool-phase-utils.js";
+import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
   clearSubagentRuns,
@@ -618,6 +618,14 @@ export class ManagedAgent {
     this.parentId = init.parentId;
     this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
+    // A child's usage is part of the parent's `subagents` row, and nothing else republishes that row
+    // for token accrual: the retained channel is rebuilt on status/phase events, so a long `task`
+    // kept its spawn-time numbers until the next flip (a reconnecting client then saw the whole run
+    // land at once). The tracker is the only place that knows the numbers moved.
+    this.usage.setChangeListener(() => {
+      if (!this.parentId) return;
+      this.manager?.getAgent(this.parentId)?.refreshSubagents();
+    });
     this.memory =
       init.memory ??
       new MemoryService((type, data) => {
@@ -641,6 +649,9 @@ export class ManagedAgent {
       getError: () => this.error,
       setError: (error) => this.setError(error),
       setPendingApprovalCount: (count) => this.setPendingApprovalCount(count),
+      // Same transcript the retained `interactions` projection reads, so the count and the list
+      // can never describe two different states.
+      getMessages: () => this.getUI()?.getMessages() ?? [],
       setFinishReason: (reason) => {
         this.lastFinishReason = reason;
       },
@@ -781,7 +792,12 @@ export class ManagedAgent {
       getTodoManager: () => this.getTodoManager(),
       stopActiveRun: (reason) => this.stopActiveRun(reason),
       clearQueuedInput: () => this.clearQueuedMessages(),
-      abortManualCompaction: (reason) => this.compactions.abortForTeardown(reason),
+      abortManualCompaction: (reason) => {
+        this.compactions.abortForTeardown(reason);
+        // The retry floor is a fact about the session being left (its fill, its summarizer
+        // failures); the target session starts with a clean slate.
+        this.compactions.clearAutoRetryFloor();
+      },
       cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
       discardPreforkRuns: () => this.discardPreforkRuns(),
       clearErrorAndRetry: () => {
@@ -798,6 +814,24 @@ export class ManagedAgent {
       resetIterationProgress: () => this.resetIterationProgress(),
       // Task phase records and pre-fork seats belong to the conversation being left.
       clearTaskRuns: () => clearSubagentRuns(this),
+      // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
+      // preview, so a switch is the only point that can release the child (UI channel, log sink,
+      // tool state) without destroying a preview the user is still looking at.
+      destroyChildAgents: (reason) => {
+        const manager = this.manager;
+        if (!manager || this.childIds.length === 0) return;
+        for (const childId of [...this.childIds]) {
+          try {
+            manager.destroyAgent(childId);
+          } catch (error) {
+            this.emitDiagnostic("session", "Failed to destroy a subagent during a session switch", {
+              level: "warn",
+              data: { childId, reason },
+              error: String(error),
+            });
+          }
+        }
+      },
       resetCommandJobs: (reason) => {
         const service = this.commandService;
         this.commandService = undefined;
@@ -920,6 +954,13 @@ export class ManagedAgent {
     this.emitStateChange();
   }
 
+  /**
+   * Record the pending-approval count.
+   *
+   * A derived value, not independent state: every writer must derive it from the transcript
+   * (`countPendingToolApprovals`) or, at request time, from the engine's own batch — the one moment
+   * the parts may not be in the channel yet. There is deliberately no writer that just zeroes it.
+   */
   setPendingApprovalCount(count: number): void {
     this.pendingApprovalCount = count;
     this.emitStateChange();
@@ -1003,10 +1044,21 @@ export class ManagedAgent {
    */
   readInteractions(): SessionInteractionsSnapshot {
     const messages = this.getChatController()?.getMessages() ?? this.getUI()?.getMessages() ?? [];
-    return {
-      approvals: collectPendingApprovals(messages),
-      askUser: collectPendingAskUser(messages),
-    };
+    // One ordered scan; the two typed lists are views of it, so `pending[0]`, `approvals[0]` and
+    // the status rule (`firstPendingInteraction`) all name the same interaction.
+    const pending = collectPendingInteractions(messages);
+    const approvals: SessionInteractionsSnapshot["approvals"] = [];
+    const askUser: SessionInteractionsSnapshot["askUser"] = [];
+    for (const entry of pending) {
+      if (entry.kind === "approval") {
+        const { kind: _kind, ...rest } = entry;
+        approvals.push(rest);
+      } else {
+        const { kind: _kind, ...rest } = entry;
+        askUser.push(rest);
+      }
+    }
+    return { pending, approvals, askUser };
   }
 
   /** Current agent-loop progress (1-based iteration vs budget); `{current:0}` when idle. */
@@ -2591,15 +2643,38 @@ export class ManagedAgent {
     return toolService.resolve(toolName)?.toModelOutput ?? getToolMetadata(this.tools[toolName])?.toModelOutput;
   }
 
-  /** Agent-local tool presentation; the live tool entry wins. */
+  /**
+   * Whether the live registration under `name` is the tool this agent was seeded with.
+   *
+   * Dispatch is by name, so a host's built-in-only renderer or classification must check this
+   * rather than compare the name: an extension may legitimately register (or shadow) `read_file`,
+   * and only the registry knows which implementation actually runs.
+   */
+  isBuiltinTool(toolName: string): boolean {
+    const toolService = this.toolService;
+    toolService.useTools(this.tools);
+    // A name this agent does not register at all is "unknown", and hosts treat unknown as the
+    // built-in default (a historical row whose tool no longer exists keeps its built-in rendering;
+    // a remote client answers `true` for the same case). Only a LIVE registration owned by an
+    // extension answers `false`.
+    return toolService.isIncumbent(toolName) || !toolService.resolve(toolName);
+  }
+
+  /**
+   * Agent-local tool presentation; the live tool entry wins.
+   *
+   * The built-in table is a fallback for the tool the agent was SEEDED with, never for a tool that
+   * merely shares its name: an extension may register a write tool called `read_file` and declare
+   * no presentation, and borrowing the built-in's descriptor would (a) let plan mode classify it as
+   * read-only (the fail-closed rule needs "unknown ⇒ editing") and (b) render its output through a
+   * formatter written for a different schema, producing confident but false summaries.
+   */
   getToolPresentation(toolName: string): ToolPresentation | undefined {
     const toolService = this.toolService;
     toolService.useTools(this.tools);
-    return (
-      toolService.resolve(toolName)?.present ??
-      getToolMetadata(this.tools[toolName])?.present ??
-      getBuiltinToolPresentation(toolName)
-    );
+    const declared = toolService.resolve(toolName)?.present ?? getToolMetadata(this.tools[toolName])?.present;
+    if (declared) return declared;
+    return toolService.isIncumbent(toolName) ? getBuiltinToolPresentation(toolName) : undefined;
   }
 
   /** Register a decorator on this agent's tool service (owner-scoped). */

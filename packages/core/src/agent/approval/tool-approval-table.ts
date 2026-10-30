@@ -24,6 +24,15 @@ export interface UpsertToolApprovalInput {
    * session schema and the restore path are unchanged.
    */
   source?: ToolApprovalSource;
+  /**
+   * Narrow override: `"deny"` may replace an existing `approved` row with a denial.
+   *
+   * The table is first-decision-wins so a late client answer cannot undo a decision that was
+   * already acted on. A command-safety denial is the exception: it can resolve AFTER the request
+   * was published (the analyzer awaits CoreEnv), and it is strictly stricter than the approval it
+   * replaces. Literal `"deny"` — there is no way to express "override a denial with an approval".
+   */
+  overwrite?: "deny";
 }
 
 /** One real pending → approved/denied transition, as reported to `onResolved`. */
@@ -70,10 +79,13 @@ export class ToolApprovalTable {
 
   upsert(input: UpsertToolApprovalInput): ToolApprovalRecord {
     const existing = this.byToolCallId.get(input.toolCallId);
+    // A command-safety denial may replace an approval that raced it (see `overwrite`). Only
+    // approved → denied, and only when the caller asks for it explicitly.
+    const forcedDeny = input.overwrite === "deny" && existing?.status === "approved" && input.status === "denied";
     // First decision wins. An answered row is final: a second answer (late client response, or a
     // deny racing an auto-approval batch) used to overwrite it because approved and denied have
     // the same rank, which let a late `allow` contradict a denial already written to the channel.
-    if (existing && existing.status !== "pending") {
+    if (existing && existing.status !== "pending" && !forcedDeny) {
       return { ...existing };
     }
     // Do not downgrade an answered decision back to pending.
@@ -90,8 +102,10 @@ export class ToolApprovalTable {
     };
     this.byToolCallId.set(input.toolCallId, record);
 
-    // Resolution event: only on a real pending → approved/denied transition.
-    if (input.status !== "pending" && (!existing || existing.status === "pending") && this.onResolved) {
+    // Resolution event: only on a real pending → approved/denied transition (or the forced
+    // approval → denial above, which is a real change of verdict and must be visible).
+    const resolves = input.status !== "pending" && (!existing || existing.status === "pending" || forcedDeny);
+    if (resolves && this.onResolved) {
       this.onResolved({
         approvalId: input.id,
         toolCallId: input.toolCallId,

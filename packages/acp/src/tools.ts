@@ -13,7 +13,7 @@ import { textBlock } from "./content.js";
 import { toWirePath } from "./paths.js";
 
 import type { ToolCallContent, ToolKind } from "@agentclientprotocol/sdk";
-import type { ToolActivityCategory } from "@codent/core";
+import type { ToolActivityCategory, ToolPresentation } from "@codent/core";
 
 /** Core presentation category → ACP {@link ToolKind}. */
 const CATEGORY_KIND: Record<ToolActivityCategory, ToolKind> = {
@@ -36,10 +36,27 @@ const NAME_KIND_OVERRIDES: Record<string, ToolKind> = {
   [BUILTIN_TOOL_NAMES.webfetch]: "fetch",
 };
 
-/** Map a tool name to an ACP {@link ToolKind}, from core's presentation catalog. */
-export function toolKindFor(name: string): ToolKind {
-  const category = getBuiltinToolPresentation(name)?.category ?? "other";
-  return NAME_KIND_OVERRIDES[name] ?? CATEGORY_KIND[category];
+/** How a host resolves a tool's live classification (the session's, not a name table). */
+export interface ToolLookup {
+  /** The live descriptor; the static built-in table is only the fallback for hosts without one. */
+  resolvePresentation?: (name: string) => ToolPresentation | undefined;
+  /** Whether `name` is still the seeded built-in. Unknown ⇒ true (the pre-existing rendering). */
+  isBuiltin?: (name: string) => boolean;
+}
+
+/**
+ * Map a tool name to an ACP {@link ToolKind}, from core's presentation catalog.
+ *
+ * The lookup is the SESSION's (live registrations included); reading the static table classified an
+ * extension's editing tool as `other`, and a tool that SHADOWS a built-in name as the built-in's
+ * kind — the same "name is not identity" mistake the plan-mode gate had. The three name overrides
+ * apply to the seeded built-ins only, for the same reason.
+ */
+export function toolKindFor(name: string, lookup?: ToolLookup): ToolKind {
+  const resolve = lookup?.resolvePresentation ?? getBuiltinToolPresentation;
+  const category = resolve(name)?.category ?? "other";
+  const override = lookup?.isBuiltin?.(name) === false ? undefined : NAME_KIND_OVERRIDES[name];
+  return override ?? CATEGORY_KIND[category];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -201,7 +218,8 @@ export function toolCallInfo(
   name: string,
   input: unknown,
   rootPath: string,
-  displayText?: string
+  displayText?: string,
+  lookup?: ToolLookup
 ): {
   title: string;
   kind: ToolKind;
@@ -221,7 +239,7 @@ export function toolCallInfo(
           : undefined;
   return {
     title: toolTitleOf(name, input),
-    kind: toolKindFor(name),
+    kind: toolKindFor(name, lookup),
     locations: toolLocationsFor(input, rootPath),
     ...(input !== undefined ? { rawInput: input } : {}),
     ...(content ? { content } : {}),

@@ -6,7 +6,12 @@ import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assi
 import { isToolCallPart, partTextContent } from "./message-parts.js";
 
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
-import type { SessionInteractionsSnapshot } from "../../runtime-types/session-payloads.js";
+import type {
+  PendingApprovalInteraction,
+  PendingAskUserInteraction,
+  PendingInteractionEntry,
+  SessionInteractionsSnapshot,
+} from "../../runtime-types/session-payloads.js";
 import type { ModelMessage, ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
 
 function lastAssistantMessage(messages: UIMessage[]): UIMessage | undefined {
@@ -157,26 +162,76 @@ export function hasPendingRunContinuation(messages: UIMessage[]): boolean {
   return hasPendingInteraction(messages) || needsToolPhaseContinue(messages);
 }
 
+/** A pending interaction, in the shape the status needs to name the wait. */
+export type PendingInteraction =
+  | { kind: "approval"; approvalId?: string; toolCallId: string; toolName: string }
+  | { kind: "clientTool"; toolCallId: string; toolName: string };
+
 /**
- * Whether the run is parked on the user — an undecided tool approval or an unanswered `ask_user`.
+ * The FIRST pending interaction in conversation order, or undefined.
  *
- * One walk for both questions. Every caller asked them together (`hasPendingToolApprovals(x) ||
- * hasPendingAskUser(x)`), and each predicate scanned every assistant part on its own. This is also
- * the definition the retained `interaction` projection uses, so the pump guard, the status count and
- * the session snapshot cannot disagree about "waiting" by reading different scans.
+ * The host asks pending interactions in the order they were requested, so the status must describe
+ * the one being asked NOW. A fixed precedence (approvals always win) made a batch holding both an
+ * approval and an `ask_user` flip between `waiting` and `awaiting_user` whenever either writer
+ * re-asserted itself; conversation order is the only rule the two projections can agree on.
+ *
+ * Deliberately tolerant of an approval part with no id: it is still a wait (the status only needs
+ * the kind), it just cannot be answered by id. {@link collectPendingInteractions} omits those,
+ * because a host can only present an answerable entry.
  */
-export function hasPendingInteraction(messages: UIMessage[]): boolean {
+export function firstPendingInteraction(messages: UIMessage[]): PendingInteraction | undefined {
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      if (isPendingToolApprovalPart(part)) return true;
-      if (part.name === BUILTIN_TOOL_NAMES.askUser && part.state === "input-complete" && part.output === undefined) {
-        return true;
+      if (isPendingToolApprovalPart(part)) {
+        const approvalId = part.approval?.id;
+        return {
+          kind: "approval",
+          ...(approvalId ? { approvalId } : {}),
+          toolCallId: part.id,
+          toolName: part.name,
+        };
+      }
+      const asked = pendingAskUserEntry(part);
+      if (asked) {
+        return { kind: "clientTool", toolCallId: asked.toolCallId, toolName: asked.toolName };
       }
     }
   }
-  return false;
+  return undefined;
+}
+
+/**
+ * The ordered queue a host should present, rebuilt for a publisher that predates
+ * `SessionInteractionsSnapshot.pending`.
+ *
+ * A snapshot WITH the field is authoritative even when it is empty (nothing is pending). Only a
+ * snapshot without it is re-joined from the typed lists, in their published order (approvals then
+ * questions — the precedence before `pending` existed). Hosts must call this instead of writing
+ * their own fallback: the two answers drift the moment one of them is changed.
+ */
+export function resolvePendingInteractions(snapshot: {
+  pending?: readonly PendingInteractionEntry[];
+  approvals?: readonly PendingApprovalInteraction[];
+  askUser?: readonly PendingAskUserInteraction[];
+}): PendingInteractionEntry[] {
+  if (snapshot.pending !== undefined) return [...snapshot.pending];
+  return [
+    ...(snapshot.approvals ?? []).map((approval) => ({ kind: "approval" as const, ...approval })),
+    ...(snapshot.askUser ?? []).map((ask) => ({ kind: "clientTool" as const, ...ask })),
+  ];
+}
+
+/**
+ * Whether the run is parked on the user — an undecided tool approval or an unanswered `ask_user`.
+ *
+ * Defined through {@link firstPendingInteraction} so "is anything pending" and "which wait does the
+ * status name" can never disagree. Every caller asked the two questions together (approvals OR
+ * `ask_user`), and each predicate used to scan every assistant part on its own.
+ */
+export function hasPendingInteraction(messages: UIMessage[]): boolean {
+  return firstPendingInteraction(messages) !== undefined;
 }
 
 export function hasPendingToolApprovals(messages: UIMessage[]): boolean {
@@ -250,45 +305,82 @@ function parseToolArguments(args: string | undefined): unknown {
 }
 
 /**
- * Pending tool approvals, newest message first — the exact set/order the app and
- * im-bridge used to derive by scanning messages themselves. Feeds the retained
- * `interaction` channel (see {@link SessionInteractionsSnapshot}).
+ * The `ask_user` this part represents, if it is still awaiting an answer.
+ *
+ * One extractor, so "is this pending" (the status scan) and "what would the host show"
+ * ({@link collectPendingInteractions}) cannot disagree about a part.
  */
-export function collectPendingApprovals(messages: UIMessage[]): SessionInteractionsSnapshot["approvals"] {
-  const out: SessionInteractionsSnapshot["approvals"] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
+function pendingAskUserEntry(
+  part: ToolCallPart
+): (SessionInteractionsSnapshot["askUser"][number] & { kind: "clientTool"; toolName: string }) | undefined {
+  if (part.name !== BUILTIN_TOOL_NAMES.askUser) return undefined;
+  if (part.state !== "input-complete" || part.output !== undefined) return undefined;
+  const input = parseToolArguments(part.arguments) as
+    { question?: string; options?: string[]; multiSelect?: boolean } | undefined;
+  return {
+    kind: "clientTool",
+    toolName: part.name,
+    toolCallId: part.id,
+    question: input?.question ?? "",
+    ...(input?.options ? { options: input.options } : {}),
+    ...(input?.multiSelect !== undefined ? { multiSelect: input.multiSelect } : {}),
+  };
+}
+
+/** One host-facing entry for a pending part, or undefined when the part is not a wait. */
+function pendingEntry(part: ToolCallPart): PendingInteractionEntry | undefined {
+  if (isPendingToolApprovalPart(part)) {
+    const approvalId = part.approval?.id;
+    // Without an id the approval cannot be answered, so it must not reach a host's queue.
+    if (!approvalId) return undefined;
+    return { kind: "approval", approvalId, toolName: part.name, toolCallId: part.id };
+  }
+  const asked = pendingAskUserEntry(part);
+  if (!asked) return undefined;
+  const { kind, toolName: _toolName, ...rest } = asked;
+  return { kind, ...rest };
+}
+
+/**
+ * Every pending interaction a host can present, in ASK order (conversation order).
+ *
+ * This is the one ordered projection: the first entry is the interaction to show NOW, so answering
+ * proceeds first-come-first-served — the same rule the status controller uses to choose between
+ * `waiting` and `awaiting_user` (`firstPendingInteraction`). {@link collectPendingApprovals} and
+ * {@link collectPendingAskUser} are typed views of it, so hosts and the status cannot disagree
+ * about which wait is current.
+ */
+export function collectPendingInteractions(messages: UIMessage[]): PendingInteractionEntry[] {
+  const out: PendingInteractionEntry[] = [];
+  for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const part of message.parts) {
       if (!isToolCallPart(part)) continue;
-      if (!isPendingToolApprovalPart(part)) continue;
-      const approvalId = part.approval?.id;
-      if (!approvalId) continue;
-      out.push({ approvalId, toolName: part.name, toolCallId: part.id });
+      const entry = pendingEntry(part);
+      if (entry) out.push(entry);
     }
   }
   return out;
 }
 
-/** Pending `ask_user` requests awaiting a client answer, newest message first. */
+/** Pending tool approvals, in ask order. A view of {@link collectPendingInteractions}. */
+export function collectPendingApprovals(messages: UIMessage[]): SessionInteractionsSnapshot["approvals"] {
+  const out: SessionInteractionsSnapshot["approvals"] = [];
+  for (const entry of collectPendingInteractions(messages)) {
+    if (entry.kind !== "approval") continue;
+    const { kind: _kind, ...rest } = entry;
+    out.push(rest);
+  }
+  return out;
+}
+
+/** Pending `ask_user` requests, in ask order. A view of {@link collectPendingInteractions}. */
 export function collectPendingAskUser(messages: UIMessage[]): SessionInteractionsSnapshot["askUser"] {
   const out: SessionInteractionsSnapshot["askUser"] = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) {
-      if (!isToolCallPart(part)) continue;
-      if (part.name !== BUILTIN_TOOL_NAMES.askUser) continue;
-      if (part.state !== "input-complete" || part.output !== undefined) continue;
-      const input = parseToolArguments(part.arguments) as
-        { question?: string; options?: string[]; multiSelect?: boolean } | undefined;
-      out.push({
-        toolCallId: part.id,
-        question: input?.question ?? "",
-        ...(input?.options ? { options: input.options } : {}),
-        ...(input?.multiSelect !== undefined ? { multiSelect: input.multiSelect } : {}),
-      });
-    }
+  for (const entry of collectPendingInteractions(messages)) {
+    if (entry.kind !== "clientTool") continue;
+    const { kind: _kind, ...rest } = entry;
+    out.push(rest);
   }
   return out;
 }

@@ -56,7 +56,7 @@ export function applyToolApprovalDecision(
   messages: UIMessage[],
   approvalId: string,
   approved: boolean,
-  options?: { reason?: string; decidedAt?: number }
+  options?: { reason?: string; decidedAt?: number; overwrite?: "deny" }
 ): UIMessage[] {
   let changed = false;
 
@@ -67,7 +67,14 @@ export function applyToolApprovalDecision(
     const parts = message.parts.map((part) => {
       if (!isToolCallPart(part) || part.approval?.id !== approvalId) return part;
       const approval = part.approval;
-      if (approval?.approved !== undefined) return part;
+      if (approval?.approved !== undefined) {
+        // The ONE exception to first-decision-wins: a command-safety denial may replace an
+        // approval that raced it. `overwrite` is the literal "deny" (never a boolean), so this
+        // seam cannot be used to turn a denial back into an approval, and only `approved → denied`
+        // is accepted — strictly stricter than the decision it replaces.
+        const forcedDeny = options?.overwrite === "deny" && approved === false && approval.approved === true;
+        if (!forcedDeny) return part;
+      }
       const reason = approved ? undefined : options?.reason?.trim() || DEFAULT_TOOL_DENIAL_MESSAGE;
       const current = { ...approval, approved, ...(reason ? { reason } : {}) } as ToolCallPart["approval"];
       // Keep an existing decision time: the first decision owns the timestamp.
@@ -94,10 +101,18 @@ export function applyToolApprovalDecision(
  * model-facing denial text is generic. This keeps the UI freeform flow while
  * ensuring the LLM sees the user's reason on the next tool-phase run.
  */
-export function applyToolDenialReason(messages: UIMessage[], approvalId: string, reason?: string): UIMessage[] {
+export function applyToolDenialReason(
+  messages: UIMessage[],
+  approvalId: string,
+  reason?: string,
+  overwrite?: "deny"
+): UIMessage[] {
   const denialContent = buildToolDenialResultContent(reason);
 
-  const withDecision = applyToolApprovalDecision(messages, approvalId, false, { reason });
+  const withDecision = applyToolApprovalDecision(messages, approvalId, false, {
+    reason,
+    ...(overwrite ? { overwrite } : {}),
+  });
 
   return withDecision.map((message) => {
     if (message.role !== "assistant") return message;

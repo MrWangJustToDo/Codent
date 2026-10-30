@@ -183,12 +183,15 @@ export {
   isLatestDurableMessageCompactionSummary,
 } from "./agent/compaction";
 export { isUserVisibleTaskRow, type SubagentRowLike } from "./agent-session/subagent-row.js";
+export { resolvePendingInteractions } from "./agent/stream/tool-phase-utils.js";
+export { isBuiltinToolName } from "./agent/tools/catalog/tool-names.js";
 export type { AgentL1State } from "./managers/managed-agent.js";
 export type { AgentRetryState, AgentRetryStrategy } from "./runtime-types/agent-retry.js";
 export type {
   AgentIterationState,
   PendingApprovalInteraction,
   PendingAskUserInteraction,
+  PendingInteractionEntry,
   SessionInteractionsSnapshot,
 } from "./runtime-types/session-payloads.js";
 export type { TaskRunPhase } from "./agent/subagent/task-run-state.js";

@@ -4,6 +4,7 @@ import { Text } from "ink";
 import { Spinner } from "../components/Spinner.js";
 import { COLORS } from "../theme/colors.js";
 import { getToolStatusGlyph } from "../utils/tool-display.js";
+import { isBuiltinTool } from "../utils/tool-presentation.js";
 
 import type { UiToolState } from "../utils/tool-part.js";
 
@@ -41,7 +42,11 @@ export const ToolStatusIcon = ({
     case "input-streaming":
     case "input-available":
     case "approval-responded":
-      return toolName === BUILTIN_TOOL_NAMES.askUser ? <Text color={COLORS.warning}>?</Text> : <Spinner text="" />;
+      return isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.askUser ? (
+        <Text color={COLORS.warning}>?</Text>
+      ) : (
+        <Spinner text="" />
+      );
     case "approval-requested":
       return <Text color={COLORS.warning}>?</Text>;
     default:

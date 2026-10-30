@@ -1,4 +1,5 @@
 import { truncateText } from "../../../utils/text-truncation.js";
+import { isBuiltinToolName } from "../catalog/tool-names.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
 import { formatDuration } from "./format/format.js";
@@ -43,7 +44,8 @@ const BUCKET_LABEL: Record<ToolActivityBucket, { one: string; many: string }> = 
  */
 export function shouldKeepToolRow(
   part: ToolCallPart,
-  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation,
+  isBuiltin: (name: string) => boolean = isBuiltinToolName
 ): boolean {
   const ui = getUiToolState(part);
   if (
@@ -56,17 +58,18 @@ export function shouldKeepToolRow(
     return true;
   }
 
-  // A row that shipped its own rendered text owns its row: a host that never created the tool
-  // (remote session) cannot learn that from the descriptor lookup, and folding would drop the
-  // text. Locally such tools already keep their row, so this changes nothing for the owner.
-  if ((part as { display?: ToolDisplayPayload }).display?.text) return true;
+  // A host-rendered body owns its row only when the tool is not one of ours. An extension tool's
+  // `text` is its whole result (and a remote host's descriptor carries `hasText`, not the function,
+  // so the name is the only signal there); a built-in's body is what full display is for, and
+  // compact folds it like any other output (see `keepsCompactRow`).
+  if ((part as { display?: ToolDisplayPayload }).display?.text && !isBuiltin(part.name)) return true;
 
   // Abort / Esc mid-tool: no output yet — never fold away.
   if (part.output === undefined) return true;
 
   // Completed rows that own their compact representation stay visible; errored
   // rows still fold as an error count (the render layer hides them in compact).
-  if (ui === "output-available" && keepsCompactRow(part.name, resolve)) return true;
+  if (ui === "output-available" && keepsCompactRow(part.name, resolve, isBuiltin)) return true;
 
   return false;
 }
@@ -74,9 +77,10 @@ export function shouldKeepToolRow(
 /** Successfully completed tools of any kind may fold into an activity summary. */
 export function shouldFoldToolRow(
   part: ToolCallPart,
-  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+  resolve: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation,
+  isBuiltin: (name: string) => boolean = isBuiltinToolName
 ): boolean {
-  return !shouldKeepToolRow(part, resolve);
+  return !shouldKeepToolRow(part, resolve, isBuiltin);
 }
 
 /** Errored tool rows fold into the activity summary as an error count. */

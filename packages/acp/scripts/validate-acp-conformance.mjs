@@ -30,6 +30,7 @@ import {
   paginateSessions,
   promptBlocksToContent,
   toolDiffsFor,
+  toolKindFor,
   toolStatusFor,
 } from "../dist/index.mjs";
 
@@ -70,13 +71,38 @@ check(
   toolStatusFor("complete", true, true) === "failed"
 );
 
+// Tool kind comes from the SESSION's descriptor, not the built-in table by name. An extension's
+// editing tool is an `edit`; a tool that shadows a built-in name but declares nothing must not
+// inherit the built-in's kind.
+check(
+  "tool kind follows the session descriptor (extension edit)",
+  toolKindFor("ext_write", {
+    resolvePresentation: (name) => (name === "ext_write" ? { category: "edits" } : undefined),
+  }) === "edit"
+);
+check(
+  "tool kind: an undeclared shadowing name is not the built-in kind",
+  toolKindFor("read_file", { resolvePresentation: () => undefined }) === "other"
+);
+check(
+  "built-in-only kind overrides do not apply to a shadowing tool",
+  toolKindFor("delete_file", { resolvePresentation: () => ({ category: "edits" }), isBuiltin: () => false }) ===
+    "edit" && toolKindFor("delete_file", { isBuiltin: () => true }) === "delete"
+);
+
 {
   // `commands` is the per-name live registration; flattening `extensions[].commands` used to
   // advertise a shadowed name twice, one of which could never run. A built-in collision is
   // filtered because dispatch resolves built-ins first.
+  // TWO extensions claim `memory`, and one claims `mode` (a built-in). Only the live registration
+  // is advertisable, and only when a built-in does not win the name.
   const cmds = commandsFromSnapshot({
     extensions: {
-      extensions: [{ commands: [{ name: "memory", description: "mem", hasOptions: false }] }],
+      extensions: [
+        { commands: [{ name: "memory", description: "shadowed claim", hasOptions: false }] },
+        { commands: [{ name: "memory", description: "mem", hasOptions: false }] },
+        { commands: [{ name: "mode", description: "shadowed builtin", hasOptions: false }] },
+      ],
       commands: [
         { name: "memory", description: "mem", hasOptions: false },
         { name: "mode", description: "shadowed builtin", hasOptions: false },
@@ -85,7 +111,8 @@ check(
   });
   check(
     "only the live extension command is advertised",
-    cmds.extension.some((c) => c.name === "memory")
+    cmds.extension.filter((c) => c.name === "memory").length === 1 &&
+      cmds.extension.find((c) => c.name === "memory")?.description === "mem"
   );
   check("an extension command shadowed by a builtin is not advertised", !cmds.extension.some((c) => c.name === "mode"));
   check(

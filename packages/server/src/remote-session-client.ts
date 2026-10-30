@@ -74,7 +74,7 @@ function emptySnapshot(agentId: string): AgentSessionSnapshot {
     mcp: { servers: [] },
     extensions: { extensions: [], commands: [] },
     toolDescriptors: [],
-    interactions: { approvals: [], askUser: [] },
+    interactions: { pending: [], approvals: [], askUser: [] },
     iteration: { current: 0, max: 0 },
     jobs: { jobs: [] },
     subagents: [],
@@ -241,6 +241,13 @@ export class RemoteSessionClient implements AgentSession {
   /** This session's tool descriptors; never a process-global hydration layer. */
   private readonly toolPresentations = new Map<string, ToolPresentation>();
   /**
+   * Which live registrations are the seeded built-in (from `ToolPresentationInfo.origin`).
+   *
+   * Absent origin (a publisher that predates the field) means "unknown" — {@link isBuiltinTool}
+   * answers `true` then, which keeps the host's pre-existing name-based rendering.
+   */
+  private readonly toolOrigins = new Map<string, "builtin" | "extension">();
+  /**
    * Set once the server reports this agent id no longer exists (HTTP 404
    * "Session not found"). Terminated clients stop reconnecting and fail fast:
    * `dispatch` returns `not_found`, and the host evicts them so a stale
@@ -290,8 +297,11 @@ export class RemoteSessionClient implements AgentSession {
     // A publisher that predates the field sends nothing; keep what we already learned.
     if (!Array.isArray(descriptors)) return;
     this.toolPresentations.clear();
+    this.toolOrigins.clear();
     for (const descriptor of descriptors) {
-      if (descriptor?.name) this.toolPresentations.set(descriptor.name, presentationFromInfo(descriptor));
+      if (!descriptor?.name) continue;
+      this.toolPresentations.set(descriptor.name, presentationFromInfo(descriptor));
+      if (descriptor.origin) this.toolOrigins.set(descriptor.name, descriptor.origin);
     }
   }
 
@@ -305,6 +315,11 @@ export class RemoteSessionClient implements AgentSession {
     // A publisher that omitted metadata serializes as `{ name }`; treat that as "no descriptor"
     // so the host can fall back to its static built-in table.
     return present && Object.keys(present).length > 0 ? present : undefined;
+  }
+
+  /** Whether the live tool under this name is the seeded built-in (unknown ⇒ true). */
+  isBuiltinTool(name: string): boolean {
+    return this.toolOrigins.get(name) !== "extension";
   }
 
   /** Latest buffered tool output per toolCallId (client-side remount source). */

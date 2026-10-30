@@ -70,8 +70,7 @@ export const Agent = () => {
     setClientToolWaiting,
     initError,
     initLoading,
-    allPendingApproval,
-    allPendingAskUser,
+    pendingInteraction,
     saveSessionFromChat,
     saveError,
   } = useAgentChat(config);
@@ -110,8 +109,7 @@ export const Agent = () => {
     addToolApprovalResponse,
     addToolOutput,
     setClientToolWaiting,
-    allPendingApproval,
-    allPendingAskUser,
+    pendingInteraction,
     saveSessionFromChat,
   });
 

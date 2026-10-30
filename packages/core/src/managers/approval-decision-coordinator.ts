@@ -24,8 +24,13 @@ import type { ToolCallPart, UIMessage } from "@tanstack/ai";
 
 export interface ApprovalDecisionCoordinatorDeps {
   getMessages: () => UIMessage[];
-  /** `AgentUIChannel.addToolApprovalResponse` — returns the decision timestamp. */
-  addToolApprovalResponse: (approvalId: string, approved: boolean, reason?: string) => number;
+  /**
+   * `AgentUIChannel.addToolApprovalResponse` — returns the decision timestamp.
+   *
+   * `overwrite` is the one narrow exception to first-decision-wins (approved → denied), used by the
+   * command-safety policy when it resolves after the user already answered.
+   */
+  addToolApprovalResponse: (approvalId: string, approved: boolean, reason?: string, overwrite?: "deny") => number;
   upsertApproval: (input: UpsertToolApprovalInput) => void;
   shouldAutoApprove: () => boolean;
   /** Status reconcile + persistence after a batch of decisions. */
@@ -54,6 +59,14 @@ export interface ApprovalDecisionCoordinatorDeps {
    * different program than the text names. Defaults to the tree-sitter command policy.
    */
   evaluateCommandSafety?: (input: RunCommandApprovalInput) => Promise<CommandApprovalDecision>;
+  /**
+   * Non-fatal diagnostic sink.
+   *
+   * A policy denial that REPLACES a user's approval is a fact both parties need to see: the caller
+   * asked for one thing and a safety rule answered another, and a silent replacement is
+   * indistinguishable from the policy never having run.
+   */
+  reportDiagnostic?: (message: string, details?: Record<string, string>) => void;
 }
 
 /** The parts of a `run_command` call that decide its approval verdict. */
@@ -152,8 +165,14 @@ export class ApprovalDecisionCoordinator {
   }
 
   /**
-   * Command-safety policy for pending `run_command` calls. Runs after {@link autoApprovePending};
+   * Command-safety policy for `run_command` calls. Runs after {@link autoApprovePending};
    * in auto mode / plan execution it is a no-op. `ask` stays pending for the user.
+   *
+   * A policy verdict can arrive AFTER the user answered, because the analyzer awaits CoreEnv while
+   * the request is already on screen. Execution cannot happen in that window (this runs inside the
+   * pump, before the next `chat()`), so a denial still protects the call: it replaces the approval
+   * (see `overwrite`) and is reported, instead of being dropped by first-decision-wins. A denial is
+   * the only verdict allowed to replace an answered call — an `allow` never overturns a user's no.
    */
   async applyCommandSafetyPolicy(): Promise<void> {
     if (this.deps.shouldAutoApprove()) return;
@@ -168,7 +187,12 @@ export class ApprovalDecisionCoordinator {
       // shell text of a call that executes something else approves the wrong object.
       if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
       if (!(this.deps.isIncumbentTool?.(toolCall.name) ?? true)) continue;
-      if (toolCall.approval?.needsApproval !== true || toolCall.approval.approved !== undefined) continue;
+      if (toolCall.approval?.needsApproval !== true) continue;
+      // A denial is terminal — the policy cannot loosen it, and there is nothing to decide.
+      if (toolCall.approval.approved === false) continue;
+      // Already executed: the verdict can no longer protect anything, and re-analysing it would
+      // spend a CoreEnv round-trip on every later phase of the same turn.
+      if (toolCall.state === "complete" || toolCall.output !== undefined) continue;
       const approvalId = toolCall.approval.id;
       const input = parseToolCallInput(toolCall);
       const command = input?.command;
@@ -178,25 +202,46 @@ export class ApprovalDecisionCoordinator {
       // The analysis is an awaited CoreEnv call. A switch admitted while it ran replaces the
       // channel and the approval table, so this decision no longer has a row to settle.
       if (this.deps.isSessionSwitching()) return;
+
+      // Re-read after the await: the user may have answered while the analyzer was running.
+      const live = findApprovalPart(this.deps.getMessages(), approvalId);
+      if (!live) continue;
+
       if (decision.action === "allow") {
+        // Never turn an answered call into an approval: that verdict belongs to the user (or auto
+        // mode), and re-asserting it here would also rewrite a denial.
+        if (live.approval?.approved !== undefined) continue;
         this.recordDecision({
           approvalId,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
+          toolCallId: live.id,
+          toolName: live.name,
           approved: true,
           source: "policy",
         });
         handled = true;
       } else if (decision.action === "deny") {
+        if (live.approval?.approved === false) continue;
+        const overridesUser = live.approval?.approved === true;
         this.recordDecision({
           approvalId,
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
+          toolCallId: live.id,
+          toolName: live.name,
           approved: false,
           reason: decision.reason,
           source: "policy",
+          ...(overridesUser ? { overwrite: "deny" as const } : {}),
         });
         handled = true;
+        if (overridesUser) {
+          this.deps.reportDiagnostic?.(
+            `Command safety policy denied "${live.name}" after it was approved; the approval was overridden.`,
+            {
+              approvalId,
+              toolCallId: live.id,
+              ...(decision.reason ? { reason: decision.reason } : {}),
+            }
+          );
+        }
       }
       // ask → keep pending so the user can approve/deny (y/n).
     }
@@ -212,9 +257,16 @@ export class ApprovalDecisionCoordinator {
     reason?: string;
     /** Who decided — travels to the log row, never to the persisted record. */
     source: ToolApprovalSource;
+    /** Approved → denied only; see {@link UpsertToolApprovalInput.overwrite}. */
+    overwrite?: "deny";
   }): void {
     // The channel resolves the time; the table reuses it (one time value for log + memory).
-    const decidedAt = this.deps.addToolApprovalResponse(input.approvalId, input.approved, input.reason);
+    const decidedAt = this.deps.addToolApprovalResponse(
+      input.approvalId,
+      input.approved,
+      input.reason,
+      input.overwrite
+    );
     this.deps.upsertApproval({
       id: input.approvalId,
       toolCallId: input.toolCallId,
@@ -223,6 +275,7 @@ export class ApprovalDecisionCoordinator {
       toolName: input.toolName,
       source: input.source,
       updatedAt: decidedAt,
+      ...(input.overwrite ? { overwrite: input.overwrite } : {}),
     });
   }
 
@@ -243,6 +296,22 @@ export class ApprovalDecisionCoordinator {
     const report = await analyzeCommand(input.command, ctx);
     return evaluateCommandApproval(report, { agentKind: "root", envOverrides: input.env });
   }
+}
+
+/**
+ * The live tool-call part carrying `approvalId`, re-read after an awaited analysis.
+ *
+ * The part object captured before the await can be stale (the user's answer rewrites it), so the
+ * policy re-reads the current decision instead of acting on the snapshot it started from.
+ */
+function findApprovalPart(messages: UIMessage[], approvalId: string): ToolCallPart | undefined {
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (part.type === "tool-call" && part.approval?.id === approvalId) return part as ToolCallPart;
+    }
+  }
+  return undefined;
 }
 
 /** Safely extract a tool-call's parsed input, falling back to the raw `arguments` JSON string. */

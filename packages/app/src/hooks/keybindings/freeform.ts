@@ -61,7 +61,6 @@ export function useFreeformModeKeybindings(ctx: KeybindingContext): void {
             id: info.id,
             approved: false,
             reason: text || "User denied this tool execution. Do not assume the action was performed.",
-            isLast: info.isLast,
             toolCallId: info.toolCallId,
             toolName: info.toolName,
           });

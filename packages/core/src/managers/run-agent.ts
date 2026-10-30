@@ -152,6 +152,7 @@ export function buildAgentRunner(
   const middleware = sortMiddlewaresByPhase([
     createStatusMiddleware({
       status: statusController,
+      getRunToken: () => run.getRunToken(),
       onApprovalRequested: (approvalId, toolCallId) => {
         approvals.upsert({ id: approvalId, toolCallId, status: "pending" });
       },

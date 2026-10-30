@@ -25,6 +25,7 @@ import {
   shouldContinueAgentPump,
 } from "../../agent/stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
+import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
@@ -120,8 +121,14 @@ export class AgentChatController {
     this.managed.setUIChannel(this.channel);
     this.approvalDecisions = new ApprovalDecisionCoordinator({
       getMessages: () => this.channel.getMessages(),
-      addToolApprovalResponse: (approvalId, approved, reason) =>
-        this.channel.addToolApprovalResponse(approvalId, approved, reason),
+      addToolApprovalResponse: (approvalId, approved, reason, overwrite) =>
+        this.channel.addToolApprovalResponse(
+          approvalId,
+          approved,
+          reason,
+          undefined,
+          overwrite ? { overwrite } : undefined
+        ),
       upsertApproval: (input) => this.managed.getApprovals().upsert(input),
       shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
@@ -130,6 +137,13 @@ export class AgentChatController {
       isSessionSwitching: () => this.managed.isSessionSwitching(),
       getCoreEnv: () => this.managed.getCoreEnv(),
       isIncumbentTool: (name) => this.managed.toolService.isIncumbent(name),
+      reportDiagnostic: (message, details) =>
+        this.managed.emitEvent("session:diagnostic", {
+          area: "tool",
+          level: "warn",
+          message,
+          ...(details ? { details } : {}),
+        }),
     });
   }
 
@@ -508,12 +522,31 @@ export class AgentChatController {
   async addToolResult(toolCallId: string, output: Record<string, unknown>): Promise<boolean> {
     // A client-tool answer (`ask_user`) belongs to the question the leaving turn asked.
     if (this.dropIfSwitching("add-tool-result")) return false;
+    // This command is reachable from the session control plane (`POST /api/agent/:id/command`), so
+    // it must prove the answer belongs here before writing: a client tool, still unanswered. Without
+    // the check any connected client could overwrite an executed `write_file`/`run_command` result
+    // (channel + disk + model wire) or fabricate one for a tool that is still awaiting approval —
+    // `hasDeferredToolExecution` treats `output !== undefined` as settled, so the pump would skip
+    // the real execution.
+    const part = findToolCallPart(this.channel.getMessages(), toolCallId);
+    if (!part || !CLIENT_TOOL_NAMES.has(part.name) || part.output !== undefined) {
+      this.managed.emitEvent("session:diagnostic", {
+        area: "tool",
+        level: "warn",
+        message: part
+          ? part.output !== undefined
+            ? `Ignored a tool result for "${part.name}" (${toolCallId}): the call is already answered.`
+            : `Ignored a tool result for "${part.name}" (${toolCallId}): only client tools accept host results.`
+          : `Ignored a tool result for unknown tool call ${toolCallId}.`,
+        details: { toolCallId, ...(part?.name ? { toolName: part.name } : {}) },
+      });
+      return false;
+    }
     this.channel.addToolResult(toolCallId, output);
     // A client tool has no server-side `agent:tool-end`; this is the only place the answer exists.
-    const part = findToolCallPart(this.channel.getMessages(), toolCallId);
     this.managed.emitEvent("agent:client-tool-result", {
       tool_call_id: toolCallId,
-      ...(part?.name ? { tool_name: part.name } : {}),
+      tool_name: part.name,
       output,
     });
     // The client tool's result IS the end of the wait — but only when it was the LAST pending one

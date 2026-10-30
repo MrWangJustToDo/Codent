@@ -1,8 +1,8 @@
 /**
  * Validates the retained `interaction` channel derivation:
- * `collectPendingApprovals` / `collectPendingAskUser` (newest message first,
- * terminal/approved calls excluded) plus the channel/meta wiring so hosts can
- * stop re-scanning messages for pending approvals / `ask_user`.
+ * `collectPendingApprovals` / `collectPendingAskUser` (in the order they were ASKED —
+ * conversation order — with terminal/approved calls excluded) plus the channel/meta wiring so
+ * hosts can stop re-scanning messages for pending approvals / `ask_user`.
  *
  * Run: pnpm --filter @codent/core run validate:session-interaction-channel
  */
@@ -14,6 +14,9 @@ import {
   DEFAULT_AGENT_SESSION_CHANNELS,
   collectPendingApprovals,
   collectPendingAskUser,
+  collectPendingInteractions,
+  firstPendingInteraction,
+  resolvePendingInteractions,
 } from "../dist/dev.mjs";
 
 function assistant(id, parts) {
@@ -63,7 +66,9 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("mcp"), true, "mcp is a def
   ]);
 }
 
-// Newest message first (matches the previous app/im-bridge message scan order).
+// Ask order: the oldest unanswered call comes first, because a host takes `[0]` as the question
+// on screen and must answer a batch first-come-first-served. Newest-first made the UI answer in
+// reverse and disagreed with the status rule (`firstPendingInteraction`).
 {
   const messages = [
     assistant("a1", [
@@ -76,7 +81,111 @@ assert.equal(DEFAULT_AGENT_SESSION_CHANNELS.includes("mcp"), true, "mcp is a def
   ];
   assert.deepEqual(
     collectPendingApprovals(messages).map((a) => a.approvalId),
-    ["ap-new", "ap-old"]
+    ["ap-old", "ap-new"]
+  );
+}
+
+// Within one assistant message the part order is the ask order.
+{
+  const messages = [
+    assistant("a1", [
+      toolCall({ id: "tc-1", name: "run_command", arguments: "{}", approval: { id: "ap-1", needsApproval: true } }),
+      toolCall({ id: "tc-2", name: "write_file", arguments: "{}", approval: { id: "ap-2", needsApproval: true } }),
+    ]),
+  ];
+  assert.deepEqual(
+    collectPendingApprovals(messages).map((a) => a.approvalId),
+    ["ap-1", "ap-2"]
+  );
+}
+
+// The ordered union is the ONE projection: the typed lists are filters of it, so `pending[0]`,
+// `approvals[0]` and the status rule (`firstPendingInteraction`) name the same interaction.
+{
+  const messages = [
+    user("u1", [{ type: "text", content: "go" }]),
+    assistant("a1", [
+      toolCall({
+        id: "tc-approval",
+        name: "run_command",
+        arguments: "{}",
+        approval: { id: "ap-1", needsApproval: true },
+      }),
+    ]),
+    user("u2", [{ type: "text", content: "next" }]),
+    assistant("a2", [
+      toolCall({
+        id: "tc-ask",
+        name: "ask_user",
+        arguments: JSON.stringify({ question: "Which?", options: ["a", "b"] }),
+        state: "input-complete",
+      }),
+      // Answering the question leaves the approval — order is conversation order, not kind.
+      toolCall({
+        id: "tc-answer",
+        name: "ask_user",
+        arguments: JSON.stringify({ question: "older" }),
+        state: "complete",
+        output: { answer: "x" },
+      }),
+    ]),
+  ];
+
+  const pending = collectPendingInteractions(messages);
+  assert.deepEqual(
+    pending.map((entry) => entry.kind),
+    ["approval", "clientTool"],
+    "one order, mixed kinds"
+  );
+  assert.equal(pending[0].approvalId, "ap-1");
+  assert.equal(pending[1].question, "Which?");
+  assert.deepEqual(pending[1].options, ["a", "b"]);
+
+  // The typed views are exactly the filtered union, in the same order.
+  assert.deepEqual(collectPendingApprovals(messages), [
+    { approvalId: "ap-1", toolName: "run_command", toolCallId: "tc-approval" },
+  ]);
+  assert.deepEqual(collectPendingAskUser(messages), [
+    { toolCallId: "tc-ask", question: "Which?", options: ["a", "b"] },
+  ]);
+
+  // The status rule reads the same first entry, so `waiting` always names `pending[0]`.
+  assert.equal(firstPendingInteraction(messages)?.kind, pending[0].kind);
+
+  // An approval part with no id cannot be answered, so it never reaches a host's queue.
+  const idless = [
+    assistant("a3", [
+      toolCall({ id: "tc-idless", name: "run_command", arguments: "{}", approval: { needsApproval: true } }),
+    ]),
+  ];
+  assert.deepEqual(collectPendingInteractions(idless), []);
+  assert.equal(firstPendingInteraction(idless)?.kind, "approval", "the status still treats it as a wait");
+}
+
+// The queue a host presents: a snapshot WITH `pending` is authoritative even when it is empty;
+// only a publisher that predates the field is re-joined from the typed lists. Both hosts call this
+// one function, so they cannot disagree about the fallback precedence.
+{
+  const approval = { approvalId: "ap-1", toolName: "run_command", toolCallId: "tc-1" };
+  const ask = { toolCallId: "ask-1", question: "Q?" };
+  const ordered = [
+    { kind: "clientTool", toolCallId: "ask-1", question: "Q?" },
+    { kind: "approval", ...approval },
+  ];
+  assert.deepEqual(
+    resolvePendingInteractions({ pending: ordered, approvals: [approval], askUser: [ask] }),
+    ordered,
+    "`pending` is used as-is, in its published order"
+  );
+  assert.deepEqual(
+    resolvePendingInteractions({ pending: [], approvals: [approval], askUser: [ask] }),
+    [],
+    "an EMPTY `pending` is authoritative: nothing is pending, not a fallback to the typed lists"
+  );
+  assert.deepEqual(
+    resolvePendingInteractions({ approvals: [approval], askUser: [ask] }).map((entry) => entry.kind),
+    ["approval", "clientTool"],
+    "a publisher without `pending` falls back to approvals-then-questions"
   );
 }
 

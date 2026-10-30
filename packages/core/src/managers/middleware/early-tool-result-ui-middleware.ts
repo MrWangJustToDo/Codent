@@ -64,7 +64,11 @@ function attachToolDisplay(
     info.toolName,
     output,
     info.input,
-    (name) => channel.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name)
+    // The channel's resolver already falls back to the built-in table for incumbent tools. Adding
+    // a second fallback here would re-introduce the built-in descriptor for a shadowing tool that
+    // declared none (see `ManagedAgent.getToolPresentation`).
+    (name) =>
+      channel.resolveToolPresentation ? channel.resolveToolPresentation(name) : getBuiltinToolPresentation(name)
   );
   if (display) channel.attachToolDisplay(toolCallId, display);
 }

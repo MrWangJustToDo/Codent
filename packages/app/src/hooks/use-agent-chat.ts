@@ -1,4 +1,4 @@
-import { isActiveStatus } from "@codent/core";
+import { isActiveStatus, resolvePendingInteractions } from "@codent/core";
 import { throttle } from "lodash-es";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toRaw } from "reactivity-store";
@@ -29,7 +29,12 @@ import { getWorkSpaceInfo } from "./use-workspace-info.js";
 
 import type { AppConfig } from "../adapter/types.js";
 import type { Attachment } from "../types/attachment.js";
-import type { AgentStatus, QueuedMessagesSnapshot, SessionInteractionsSnapshot } from "@codent/core";
+import type {
+  AgentStatus,
+  PendingInteractionEntry,
+  QueuedMessagesSnapshot,
+  SessionInteractionsSnapshot,
+} from "@codent/core";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 // ============================================================================
@@ -73,7 +78,6 @@ export interface UseAgentChatReturn {
     id: string;
     approved: boolean;
     reason?: string;
-    isLast?: boolean;
     toolCallId?: string;
     toolName?: string;
   }) => void;
@@ -88,6 +92,13 @@ export interface UseAgentChatReturn {
     options?: string[];
     multiSelect?: boolean;
   }>;
+  /**
+   * The interaction core says to present NOW (ask order), or undefined when nothing is pending.
+   *
+   * Hosts must not derive this from `allPendingApproval` / `allPendingAskUser`: "which kind is more
+   * important" is a precedence question, and core already answered it with conversation order.
+   */
+  pendingInteraction: PendingInteractionEntry | undefined;
   addToolOutput: (options: { tool: string; toolCallId: string; output: Record<string, unknown> }) => void;
   /** Pause/resume status while a client tool waits for user input (`ask_user`). */
   setClientToolWaiting: (active: boolean) => void;
@@ -165,7 +176,11 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   const [saveError, setSaveError] = useState("");
   // Pending approvals / ask_user come from core (retained `interaction` channel)
   // instead of each host re-scanning messages.
-  const [interactions, setInteractions] = useState<SessionInteractionsSnapshot>({ approvals: [], askUser: [] });
+  const [interactions, setInteractions] = useState<SessionInteractionsSnapshot>({
+    pending: [],
+    approvals: [],
+    askUser: [],
+  });
 
   const initIdRef = useRef(0);
   // Last disk-session id observed on the session/state channels. `session.new` and
@@ -456,14 +471,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
   );
 
   const addToolApprovalResponse = useCallback(
-    async (options: {
-      id: string;
-      approved: boolean;
-      reason?: string;
-      isLast?: boolean;
-      toolCallId?: string;
-      toolName?: string;
-    }) => {
+    async (options: { id: string; approved: boolean; reason?: string; toolCallId?: string; toolName?: string }) => {
       await session?.dispatch({
         type: "respondApproval",
         approvalId: options.id,
@@ -483,6 +491,14 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
 
   const allPendingAskUser = useMemo<UseAgentChatReturn["allPendingAskUser"]>(
     () => interactions.askUser,
+    [interactions]
+  );
+
+  // Core publishes the ordered queue; `[0]` is the one on screen. `resolvePendingInteractions` is
+  // the ONE place that also rebuilds it for an older publisher (no `pending` field): hosts must not
+  // each write their own fallback precedence.
+  const pendingInteraction = useMemo<PendingInteractionEntry | undefined>(
+    () => resolvePendingInteractions(interactions)[0],
     [interactions]
   );
 
@@ -514,6 +530,7 @@ export function useAgentChat(config: AppConfig): UseAgentChatReturn {
     queuedMessages,
     allPendingApproval,
     allPendingAskUser,
+    pendingInteraction,
     addToolOutput,
     setClientToolWaiting,
     status,

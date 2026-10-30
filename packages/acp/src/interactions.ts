@@ -12,7 +12,12 @@
  */
 
 import { methods } from "@agentclientprotocol/sdk";
-import { BUILTIN_TOOL_NAMES, buildAskUserOutput } from "@codent/core";
+import {
+  BUILTIN_TOOL_NAMES,
+  buildAskUserOutput,
+  getBuiltinToolPresentation,
+  resolvePendingInteractions,
+} from "@codent/core";
 
 import { shouldSuppressApproval, toolInputFor, toolPartFor } from "./approvals.js";
 import {
@@ -26,7 +31,7 @@ import { toolCallInfo } from "./tools.js";
 import type { AcpClientEnv } from "./client-env.js";
 import type { SessionUpdate } from "./types.js";
 import type { AgentContext, RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import type { AgentSession } from "@codent/core";
+import type { AgentSession, PendingInteractionEntry } from "@codent/core";
 
 /** Default window for a human to answer before the interaction is settled as denied/cancelled. */
 export const DEFAULT_INTERACTION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -211,7 +216,18 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         approval.toolName,
         toolInputFor(messages, approval.toolCallId),
         bridge.rootPath,
-        toolPartFor(messages, approval.toolCallId)?.display?.text
+        toolPartFor(messages, approval.toolCallId)?.display?.text,
+        // Same lookup as the transcript row: an extension tool must not arrive as `other`, and a
+        // tool that shadows a built-in must not arrive with the built-in's kind.
+        {
+          // Same fallback as the projector's `presentationOf`: a session that does not expose the
+          // lookup (a minimal host double) keeps the static table.
+          resolvePresentation: (name) =>
+            bridge.session.getToolPresentation
+              ? bridge.session.getToolPresentation(name)
+              : getBuiltinToolPresentation(name),
+          isBuiltin: (name) => bridge.session.isBuiltinTool?.(name) ?? true,
+        }
       );
       // Named at the boundary so a field the client's schema rejects is reported here, on the
       // literal, rather than silently degrading the call's result type to `unknown`.
@@ -419,15 +435,23 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
 
   const handleInteractions = async (bridge: InteractionBridge, payload: unknown): Promise<void> => {
     const snapshot = payload as {
+      pending?: PendingInteractionEntry[];
       approvals?: ApprovalRequest[];
       askUser?: AskUserRequest[];
     };
+
+    // ONE source for both halves: core publishes the ordered queue, and the typed lists are views
+    // of it. Reconciling against a different list than the one we dispatch from let a payload with
+    // only `pending` abort every live dialog and then never re-ask it.
+    const ordered = resolvePendingInteractions(snapshot);
 
     // Settle the requests whose question no longer exists. An approval is normally answered by the
     // client's own response, but the session can resolve it first — switching to auto mode answers
     // every pending approval, and plan execution auto-approves too. Without this the client keeps
     // the dialog open for a tool that already ran, and its late answer re-decides the approval.
-    const liveApprovals = new Set((snapshot.approvals ?? []).map((approval) => approval.approvalId));
+    const liveApprovals = new Set(
+      ordered.filter((entry) => entry.kind === "approval").map((entry) => entry.approvalId)
+    );
     for (const [approvalId, controller] of bridge.pendingApprovals) {
       if (liveApprovals.has(approvalId)) continue;
       bridge.pendingApprovals.delete(approvalId);
@@ -437,23 +461,31 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
     // Same reconciliation for elicitation: core can resolve an `ask_user` out of band (run stopped,
     // `/new`, tool cancelled). Leaving the dialog pending makes the next prompt believe the
     // session is still suspended and cancel it.
-    const liveAskUser = new Set((snapshot.askUser ?? []).map((ask) => ask.toolCallId));
+    const liveAskUser = new Set(
+      ordered.filter((entry) => entry.kind === "clientTool").map((entry) => entry.toolCallId)
+    );
     for (const [toolCallId, entry] of bridge.pendingAskUser) {
       if (liveAskUser.has(toolCallId)) continue;
       bridge.pendingAskUser.delete(toolCallId);
       entry.controller.abort();
     }
 
-    for (const approval of snapshot.approvals ?? []) {
-      if (bridge.seenApprovals.has(approval.approvalId)) continue;
-      bridge.seenApprovals.add(approval.approvalId);
+    for (const entry of ordered) {
+      if (entry.kind === "clientTool") {
+        if (bridge.seenAskUser.has(entry.toolCallId)) continue;
+        bridge.seenAskUser.add(entry.toolCallId);
+        void requestElicitation(bridge, entry);
+        continue;
+      }
+      if (bridge.seenApprovals.has(entry.approvalId)) continue;
+      bridge.seenApprovals.add(entry.approvalId);
       // Under `--client-env` some approvals are the client's to grant, and it already did (it
       // served the `fs/*` call we made). Asking again would be the same question twice, so the
       // answer is given here instead — see `approvals.ts` for the exact set and the exclusions.
       if (
         bridge.clientEnv &&
         shouldSuppressApproval({
-          approval,
+          approval: entry,
           messages: bridge.session.getSnapshot().messages ?? [],
           clientEnv: bridge.clientEnv,
           mode: bridge.session.getSnapshot().mode,
@@ -462,27 +494,20 @@ export function createInteractionHandlers(context: InteractionHandlerContext): I
         bridge.clientOwnedApprovals += 1;
         context.onClientOwnedApproval();
         void bridge.session
-          .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved: true })
+          .dispatch({ type: "respondApproval", approvalId: entry.approvalId, approved: true })
           .catch(() => undefined);
         continue;
       }
       // A remembered `allow_always` / `reject_always` answers without another dialog. The tool row
       // still goes through the transcript, so the user can see what was auto-decided.
-      const policy = bridge.approvalPolicy.get(
-        approvalPolicyKey(approval, bridge.session.getSnapshot().messages ?? [])
-      );
+      const policy = bridge.approvalPolicy.get(approvalPolicyKey(entry, bridge.session.getSnapshot().messages ?? []));
       if (policy !== undefined) {
         void bridge.session
-          .dispatch({ type: "respondApproval", approvalId: approval.approvalId, approved: policy })
+          .dispatch({ type: "respondApproval", approvalId: entry.approvalId, approved: policy })
           .catch(() => undefined);
         continue;
       }
-      void requestApproval(bridge, approval);
-    }
-    for (const ask of snapshot.askUser ?? []) {
-      if (bridge.seenAskUser.has(ask.toolCallId)) continue;
-      bridge.seenAskUser.add(ask.toolCallId);
-      void requestElicitation(bridge, ask);
+      void requestApproval(bridge, entry);
     }
   };
 

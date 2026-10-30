@@ -1,5 +1,5 @@
 import { BUILTIN_TOOL_NAMES } from "@codent/core";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { dispatchCommand } from "../commands";
 import { exitWithSummary } from "../utils/exit-with-summary.js";
@@ -37,8 +37,8 @@ interface UseAgentInputControlsOptions {
   addToolApprovalResponse: UseAgentChatReturn["addToolApprovalResponse"];
   addToolOutput: UseAgentChatReturn["addToolOutput"];
   setClientToolWaiting: UseAgentChatReturn["setClientToolWaiting"];
-  allPendingApproval: UseAgentChatReturn["allPendingApproval"];
-  allPendingAskUser: UseAgentChatReturn["allPendingAskUser"];
+  /** Core's ordered queue; `[0]` is the interaction to present now. */
+  pendingInteraction: UseAgentChatReturn["pendingInteraction"];
   saveSessionFromChat: UseAgentChatReturn["saveSessionFromChat"];
 }
 
@@ -70,8 +70,7 @@ export function useAgentInputControls({
   addToolApprovalResponse,
   addToolOutput,
   setClientToolWaiting,
-  allPendingApproval,
-  allPendingAskUser,
+  pendingInteraction,
   saveSessionFromChat,
 }: UseAgentInputControlsOptions): UseAgentKeybindingsOptions {
   const hasInitRef = useRef(false);
@@ -88,13 +87,20 @@ export function useAgentInputControls({
   const { mode, denyMode } = useInputMode((s) => ({ mode: s.mode, denyMode: s.denyMode }));
   const modeActions = useInputMode.getActions();
 
-  const pendingApproval = allPendingApproval[0];
-  const currentPendingIsLast = useMemo(() => {
-    if (!pendingApproval) return true;
-    const index = allPendingApproval.findIndex((item) => item.id === pendingApproval.id);
-    return index === allPendingApproval.length - 1;
-  }, [allPendingApproval, pendingApproval]);
-  const pendingAskUser = allPendingAskUser[0];
+  // Which kind is on screen is CORE's decision (`interaction.pending[0]`, ask order); the host only
+  // projects the view. Deriving it here from `allPendingApproval.length` was a second precedence
+  // rule that could disagree with the status (`waiting` vs `awaiting_user`).
+  const pendingApproval =
+    pendingInteraction?.kind === "approval"
+      ? {
+          id: pendingInteraction.approvalId,
+          toolName: pendingInteraction.toolName,
+          toolCallId: pendingInteraction.toolCallId,
+        }
+      : undefined;
+  const pendingAskUser: UseAgentChatReturn["allPendingAskUser"][number] | undefined =
+    pendingInteraction?.kind === "clientTool" ? pendingInteraction : undefined;
+  const pendingKind = pendingInteraction?.kind;
   const setMode = modeActions.setMode;
   const setLoading = inputActions.setLoading;
 
@@ -103,12 +109,12 @@ export function useAgentInputControls({
       setMode("freeform");
     } else if (isSelectVisible) {
       setMode("select");
-    } else if (allPendingApproval.length > 0) {
+    } else if (pendingKind === "approval") {
       setMode("approval");
     } else {
       setMode("normal");
     }
-  }, [allPendingApproval.length, denyMode, isSelectVisible, setMode]);
+  }, [pendingKind, denyMode, isSelectVisible, setMode]);
 
   const askUserToolCallId = pendingAskUser?.toolCallId;
   const clientToolWaitingRef = useRef(false);
@@ -282,7 +288,6 @@ export function useAgentInputControls({
     mode,
     isLoading,
     isAutocompleteVisible,
-    currentPendingIsLast,
     pendingApproval,
     pendingAskUser,
     inputActions,

@@ -4,6 +4,7 @@ import { useTranscriptDisplayMode } from "../context/transcript-display-context.
 import { useSize } from "../hooks";
 import { useTask } from "../hooks/use-task.js";
 import { isPreExecutionToolState, isToolExecuting } from "../utils/tool-part.js";
+import { isBuiltinTool } from "../utils/tool-presentation.js";
 
 import { EditFilePreview } from "./EditFilePreview.js";
 import { MessageDiffView } from "./MessageDiffView.js";
@@ -30,14 +31,16 @@ export const ToolInputView = ({
   // ToolCallPartView's padded column (x=3) and span to the shared right edge.
   const bodyWidth = width - 4;
   const isExecuting = isToolExecuting(part);
-  const isTask = toolName === BUILTIN_TOOL_NAMES.task;
+  // Built-in-only previews read the built-in's input schema; a shadowing extension tool may not
+  // have those fields, so it keeps the generic input rendering.
+  const isTask = isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.task;
   const taskInput = toolInput as { prompt?: string; description?: string };
   const { phase: taskPhase, retry: taskRetry } = useTask({ taskId: isTask ? part.id : "" });
 
   // Compact: hide bulky diffs unless the user must review for approval.
   const showFileDiffs = mode === "full" || uiState === "approval-requested";
 
-  if (toolName === BUILTIN_TOOL_NAMES.task) {
+  if (isTask) {
     if (!taskInput?.prompt || taskPhase === "summary") return null;
     // Keep the row visible while a transient retry is in flight (the tool-call
     // is briefly not executing) so the retry state has somewhere to render.
@@ -47,7 +50,7 @@ export const ToolInputView = ({
 
   if (hasError) return null;
 
-  if (toolName === BUILTIN_TOOL_NAMES.writeFile) {
+  if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.writeFile) {
     if (!showFileDiffs) return null;
     const content = toolInput as { content?: string; path?: string };
     if (!content || uiState === "input-streaming") return null;
@@ -63,7 +66,7 @@ export const ToolInputView = ({
     );
   }
 
-  if (toolName === BUILTIN_TOOL_NAMES.editFile) {
+  if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.editFile) {
     if (!showFileDiffs) return null;
     const content = toolInput as {
       path?: string;

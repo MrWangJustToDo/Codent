@@ -171,6 +171,10 @@ class LocalAgentSessionImpl implements AgentSession {
     return this.managed.getToolPresentation(name);
   }
 
+  isBuiltinTool(name: string): boolean {
+    return this.managed.isBuiltinTool(name);
+  }
+
   subscribe(handler: AgentSessionSubscriber, options?: AgentSessionSubscribeOptions): () => void {
     const selected = resolveChannels(options);
     const unsubs: Array<() => void> = [];

@@ -22,6 +22,7 @@ import {
   LIVE_DURATION_THRESHOLD_MS,
 } from "../utils/format.js";
 import { getUiToolState, isCancelledToolCall, isToolExecuting, parseToolInput } from "../utils/tool-part.js";
+import { isBuiltinTool } from "../utils/tool-presentation.js";
 
 import { StreamingOutputView } from "./StreamingOutputView.js";
 import { SummaryStreamView } from "./SummaryStreamView.js";
@@ -110,8 +111,11 @@ export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartView
   const toolCallId = part.id;
   const toolInput = parseToolInput(part);
 
-  const isRunCommand = toolName === BUILTIN_TOOL_NAMES.runCommand;
-  const isTask = toolName === BUILTIN_TOOL_NAMES.task;
+  // Built-in-only rows (live command output, task preview). A shadowing extension tool has the
+  // same name but not necessarily the same shape, so it falls through to the generic row.
+  const isBuiltin = isBuiltinTool(toolName);
+  const isRunCommand = isBuiltin && toolName === BUILTIN_TOOL_NAMES.runCommand;
+  const isTask = isBuiltin && toolName === BUILTIN_TOOL_NAMES.task;
   const isExecuting = isToolExecuting(part);
   const screenWidth = useSize((s) => s.state.screenWidth);
   // Same box metrics as ToolOutputView: message container paddingX=1 + tool
@@ -169,9 +173,15 @@ export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartView
   // The header summary travels with the part (core renders it at completion), so a host
   // without the tool registry still shows it; the local formatter is the fallback for
   // parts written before core started attaching the payload.
+  // A cancel is name-independent (the same marker settles every interrupted call), so it is
+  // checked before the built-in gate: the gate only suppresses NAME-KEYED built-in formatting.
+  const cancelledSummary = isCancelledToolCall(part) ? "cancelled" : null;
   const inlineSummary = errorText
     ? null
-    : ((part as { display?: { summary?: string } }).display?.summary ?? getInlineSummary(part, toolName)) || null;
+    : ((part as { display?: { summary?: string } }).display?.summary ??
+        cancelledSummary ??
+        (isBuiltin ? getInlineSummary(part, toolName) : null)) ||
+      null;
   const outputFailed = (part.output as { success?: boolean } | undefined)?.success === false;
   // Density compact: skip success one-liners; keep failure hints. A cut-off task
   // is treated as a failure hint: it must not read as a clean finish.

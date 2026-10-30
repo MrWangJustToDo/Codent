@@ -27,6 +27,7 @@ function toolMsg(id, tools) {
       arguments: t.arguments ?? "{}",
       output: t.output,
       approval: t.approval,
+      display: t.display,
     })),
   };
 }
@@ -86,6 +87,44 @@ assert.equal(liveExec[2].parts[0].id, "t4");
 const full = projectTranscriptForDisplay([user, tools, final], { mode: "full" });
 assert.equal(full.length, 3);
 assert.equal(full[1].id, "a1");
+
+// A built-in's result renderer is a full-display body, not a row policy: even with core-rendered
+// text (`display.text`, which is what a remote host sees), `session_search` folds in compact mode.
+const builtinBody = projectTranscriptForDisplay(
+  [
+    user,
+    toolMsg("a1", [
+      {
+        id: "s1",
+        name: "session_search",
+        arguments: JSON.stringify({ query: "log" }),
+        output: { matches: [] },
+        display: { text: 'No matches for "log"' },
+      },
+    ]),
+  ],
+  { mode: "compact" }
+);
+assert.ok(isActivitySummaryMessage(builtinBody[1]), "a built-in with display.text folds");
+
+// …while an EXTENSION tool's text is its whole result and keeps the row.
+const extensionBody = projectTranscriptForDisplay(
+  [
+    user,
+    toolMsg("a1", [
+      { id: "x1", name: "ext_echo", arguments: "{}", output: { value: "ok" }, display: { text: "→ ok" } },
+    ]),
+  ],
+  { mode: "compact" }
+);
+assert.equal(extensionBody[1].parts[0].id, "x1", "an extension tool with display.text keeps its row");
+
+// A structured built-in keeps its row regardless of text.
+const structuredRow = projectTranscriptForDisplay(
+  [user, toolMsg("a1", [{ id: "d1", name: "todo", arguments: "{}", output: {}, display: { text: "3 todos" } }])],
+  { mode: "compact" }
+);
+assert.equal(structuredRow[1].parts[0].id, "d1", "a keepRow built-in stays a row");
 
 // Pending approval stays as a real tool row.
 const pending = projectTranscriptForDisplay(

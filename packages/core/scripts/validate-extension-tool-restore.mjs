@@ -147,6 +147,8 @@ const ext = (id) => ({
     "the built-in read_file must own a model shaper (its output is the shaper's own text)"
   );
 
+  const originOf = (name) => managed.getToolPresentationCatalog().find((info) => info.name === name)?.origin;
+
   managed.registerTool(extTool("extension read (overwrites the built-in)", "EXTENSION SHAPING"));
   assert.notEqual(managed.tools.read_file, builtinReadFile, "the extension must have taken the name");
   assert.equal(
@@ -154,10 +156,16 @@ const ext = (id) => ({
     "EXTENSION SHAPING",
     "the extension's shaper must win while it is registered (otherwise this probe proves nothing)"
   );
+  assert.equal(
+    originOf("read_file"),
+    "extension",
+    "a host needs `origin` to know its built-in-only renderer does not apply to this shadow"
+  );
 
   managed.unregisterExtensionTool("read_file");
 
   assert.ok(managed.tools.read_file, "the built-in read_file must be restored, not deleted");
+  assert.equal(originOf("read_file"), "builtin", "the restored built-in is reported as builtin again");
   assert.equal(
     managed.tools.read_file,
     builtinReadFile,

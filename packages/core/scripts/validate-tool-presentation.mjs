@@ -20,6 +20,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { keepsCompactRow } from "../dist/dev.mjs";
+
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 const TABLE_FILE = join(SRC, "agent/tools/presentation/builtin.ts");
 
@@ -101,6 +103,54 @@ for (const [name, expected] of table) {
 }
 
 assert.equal(problems.length, 0, `presentation drift:\n  ${problems.join("\n  ")}`);
+
+// Row policy (`keepsCompactRow`): a result renderer is full-display content, not a keep-row flag.
+// A built-in with a `text` body must fold in compact display; an extension tool's `text` is its
+// whole result, so it keeps its row; `keepRow` always wins.
+{
+  const body = { category: "searches", text: () => "3 matches" };
+  assert.equal(
+    keepsCompactRow("session_search", () => body),
+    false,
+    "a built-in's result renderer folds in compact display"
+  );
+  assert.equal(
+    keepsCompactRow("tree", () => body),
+    false,
+    "the tree body folds like any other built-in output"
+  );
+  assert.equal(
+    keepsCompactRow("ext_echo", () => body),
+    true,
+    "an extension tool's result renderer keeps its row (the text is its whole result)"
+  );
+  assert.equal(
+    keepsCompactRow("todo", () => ({ category: "other", keepRow: true, text: () => "x" })),
+    true,
+    "keepRow always keeps the row"
+  );
+  // A tool that SHADOWS a built-in name is an extension: its `text` is its whole result, so it
+  // keeps its row. The default (name-table) predicate cannot see that; a host passes the session's
+  // `isBuiltinTool`, which is why the predicate is a parameter.
+  assert.equal(
+    keepsCompactRow(
+      "tree",
+      () => body,
+      () => false
+    ),
+    true,
+    "a shadowing extension's result renderer keeps its row when the identity says extension"
+  );
+  assert.equal(
+    keepsCompactRow(
+      "ext_echo",
+      () => body,
+      () => true
+    ),
+    false,
+    "the identity, not the name, decides: an incumbent 'extension name' folds"
+  );
+}
 console.log(
   `validate-tool-presentation: ok — ${table.size - DYNAMIC_TABLE_ONLY.size} declared at definition sites, ` +
     `${DYNAMIC_TABLE_ONLY.size} dynamic (table-owned)`

@@ -1280,9 +1280,11 @@ This is also how a code-mode sandbox reads background output: `read_file` is exp
   - A tool **keeps its row and its one-line result** when `keepsCompactRow(name)` is true
     (core: `agent/tools/presentation/row-rules.ts`, re-exported by app `utils/tool-display.ts`):
     structured built-ins (`present.keepRow`: `ask_user`, `todo`, `complete_plan`), host-supplied
-    results (`present.clientSide`) or any tool with a `present.text` renderer (extension tools —
-    that string is a one-line contract). Everything else folds; errored rows always fold as an
-    `error` count because the render layer hides them.
+    results (`present.clientSide`), or an **extension** tool with a `present.text` renderer (for a
+    tool the host does not own, that string is its whole result). A **built-in** `text` is the body
+    full display shows (`session_search` / `session_read` / `tree` / LSP / memory), so compact folds
+    it like any other output — a result renderer alone is not a row policy. Everything else folds;
+    errored rows always fold as an `error` count because the render layer hides them.
   - Folded tools group by the tool's `present.category` (fold bucket). Tools with no bucket are named
     in the summary (`ext_echo ×2`) rather than collapsing into an opaque `N other`; `present.label(input)`
     adds a short label. Tools (extensions included) declare all of this through one field —

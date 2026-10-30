@@ -36,10 +36,22 @@ Core SHALL decide which completed tool rows stay visible in compact display and 
 - **WHEN** a tool whose descriptor keeps its row completes successfully
 - **THEN** its row remains in compact display
 
-#### Scenario: Tool with a result renderer keeps its row
+#### Scenario: Result renderer alone does not keep the row
 
-- **WHEN** a completed tool has a result-text renderer
+- **WHEN** a completed **built-in** tool has a result-text renderer but does not declare keep-row
+- **THEN** its row folds into the activity summary, and its text is rendered only in full display
+
+A built-in declares `text` so full display shows a readable body (a session page, a tree, LSP
+results). Treating that as a row policy made every such tool permanently unfoldable in compact
+display — the mode whose purpose is density.
+
+#### Scenario: Extension tool with a result renderer keeps its row
+
+- **WHEN** a completed tool that is **not** a built-in has a result-text renderer
 - **THEN** its row remains visible in compact display and its text is rendered by the host
+
+For a tool the host does not own, that string is its whole result; folding would hide the output.
+Such a tool (or any tool) can also declare keep-row explicitly.
 
 #### Scenario: Errored row folds
 

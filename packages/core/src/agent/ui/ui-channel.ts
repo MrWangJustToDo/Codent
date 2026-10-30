@@ -255,16 +255,26 @@ export class AgentUIChannel {
    * is where we write the patch (its `StreamProcessor` owns the UI snapshot);
    * it is not where we ask for the value.
    */
-  addToolApprovalResponse(approvalId: string, approved: boolean, reason?: string, decidedAt?: number): number {
+  addToolApprovalResponse(
+    approvalId: string,
+    approved: boolean,
+    reason?: string,
+    decidedAt?: number,
+    options?: { overwrite?: "deny" }
+  ): number {
     const before = this.processor.getMessages() as TanStackUIMessage[];
     // Resolve the time here: the decision is made now, and an approval that
     // already carries a time keeps it.
     const at = findApprovalDecisionTime(before, approvalId) ?? decidedAt ?? Date.now();
-    const next = applyToolApprovalDecision(before, approvalId, approved, { reason, decidedAt: at });
+    const next = applyToolApprovalDecision(before, approvalId, approved, {
+      reason,
+      decidedAt: at,
+      ...(options?.overwrite ? { overwrite: options.overwrite } : {}),
+    });
     let patched = next;
     if (!approved) {
       // Model-facing denial result (idempotent: keeps an existing one).
-      patched = applyToolDenialReason(next, approvalId, reason);
+      patched = applyToolDenialReason(next, approvalId, reason, options?.overwrite);
     }
     // The UI snapshot and the session log must see the same parts; one write for both.
     this.processor.setMessages(patched);
@@ -446,10 +456,11 @@ export class AgentUIChannel {
     // Safety net for the tool paths the early-result middleware does not see
     // (batched tool phase, replayed results): attach each completed call's display
     // payload once, here, before the turn becomes historical.
-    const withDisplay = attachMissingToolDisplays(
-      this.getMessages(),
-      (name) => this?.resolveToolPresentation?.(name) ?? getBuiltinToolPresentation(name)
-    );
+    //
+    // The resolver already falls back to the built-in table for tools the agent was seeded with.
+    // A second `?? getBuiltinToolPresentation(name)` here would hand that descriptor to a shadowing
+    // extension tool that deliberately declared none — the very case the agent-side resolver stops.
+    const withDisplay = attachMissingToolDisplays(this.getMessages(), (name) => this.resolveToolPresentation(name));
     if (withDisplay) this.processor.setMessages(withDisplay);
     // End of run: everything now materialized becomes historical for the next
     // one (matters when the next stream is fed via processChunk directly).

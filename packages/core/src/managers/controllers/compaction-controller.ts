@@ -253,6 +253,35 @@ export class CompactionController {
     return this.active?.lease.kind === "manual";
   }
 
+  // ==========================================================================
+  // Auto-compaction retry floor
+  // ==========================================================================
+
+  /**
+   * Fill (in tokens) at which the last auto attempt failed or made no progress, or null.
+   *
+   * Lives here, not in the compaction middleware, because the middleware is rebuilt whenever the
+   * runner is invalidated (`/models`, reasoning effort, system prompt, plan phase). The memory used
+   * to vanish with it, so a summarizer that failed once was retried on EVERY model call by the new
+   * pipeline — the exact storm the floor exists to prevent.
+   */
+  private autoRetryFloor: number | null = null;
+
+  /** The fill the last failed/no-progress auto attempt started at (null when none). */
+  getAutoRetryFloor(): number | null {
+    return this.autoRetryFloor;
+  }
+
+  /** Remember that an auto attempt at this fill failed (or produced no checkpoint). */
+  armAutoRetryFloor(tokensBefore: number): void {
+    this.autoRetryFloor = tokensBefore;
+  }
+
+  /** A successful compaction — or a new session — invalidates the floor. */
+  clearAutoRetryFloor(): void {
+    this.autoRetryFloor = null;
+  }
+
   private abortActive(reason: string): void {
     this.active?.controller?.abort(reason);
     // Dropping the lease IS the invalidation: a late `finish`/`release` from the aborted producer

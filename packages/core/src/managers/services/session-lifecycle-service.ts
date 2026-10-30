@@ -77,6 +77,16 @@ export interface SessionLifecycleHost {
   resetIterationProgress(): void;
   /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
   clearTaskRuns(): void;
+  /**
+   * Destroy the subagents that belonged to the conversation being replaced.
+   *
+   * A switch is not a stop: aborting them leaves every child registered (with its UI channel and
+   * full exploration transcript) until the ROOT agent is destroyed, so a long-lived host kept one
+   * copy per historical `task` — and the parent rebuilt its subagent list from all of them on every
+   * child status change. Tasks are deliberately `autoDestroy: false` (the preview outlives the
+   * run), which makes this the only place that can release them without losing the live preview.
+   */
+  destroyChildAgents(reason: string): void;
   resetCommandJobs(reason: string): void;
   /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
   warn?(message: string, data?: Record<string, unknown>): void;
@@ -198,8 +208,10 @@ export class SessionLifecycleService {
     if (full) this.host.resetSessionSyncTracker();
     this.host.resetIterationProgress();
     // Session-scoped, like the iteration progress above: a completed task keeps its row for the
-    // preview, but the conversation it belonged to is gone — and the registry used to keep every
-    // task id for the life of the agent, across `/new` and `/resume`.
+    // preview, but the conversation it belonged to is gone. Destroying them (not just aborting)
+    // is what releases the child's UI channel, log sink and tool state; `clearTaskRuns` below then
+    // drops the phase records/pre-fork seats that pointed at them.
+    this.host.destroyChildAgents(reason);
     this.host.clearTaskRuns();
     this.host.resetRunOutcome?.();
     this.host.resetCommandJobs(reason);

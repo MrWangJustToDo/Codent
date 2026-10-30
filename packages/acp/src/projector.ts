@@ -32,6 +32,7 @@ import {
   isCompactionSummaryUIMessage,
   isContextUIMessage,
   isCancelledToolCall,
+  getBuiltinToolPresentation,
   isUserVisibleTaskRow,
   parseToolInput,
 } from "@codent/core";
@@ -42,6 +43,7 @@ import { toWirePath } from "./paths.js";
 import { announcementOf, diffSubagents, patchOf, terminalUpdateOf } from "./subagent-projection.js";
 import { toolCallInfo, toolDiffsFor, toolKindFor, toolResultText, toolStatusFor, toolTitleOf } from "./tools.js";
 
+import type { ToolLookup } from "./tools.js";
 import type {
   AcpCommands,
   ContentBlock,
@@ -61,6 +63,7 @@ import type {
   AgentSessionSnapshot,
   AgentSessionSubagentSummary,
   AgentStreamEvent,
+  ToolPresentation,
 } from "@codent/core";
 import type { UIMessage } from "@tanstack/ai";
 
@@ -246,6 +249,26 @@ export class AcpProjector {
     private readonly session: AgentSession,
     private readonly options: AcpProjectorOptions
   ) {}
+
+  /**
+   * The SESSION's presentation (live registrations included), not the static built-in table.
+   *
+   * Tool identity is a name on the wire but not in the registry: an extension may register its own
+   * tool, or shadow a built-in name with a different shape. The session resolver already falls back
+   * to the built-in table for the tools the agent was seeded with, so asking it is the only path that
+   * describes what actually ran.
+   */
+  private presentationOf(name: string): ToolPresentation | undefined {
+    return this.session.getToolPresentation ? this.session.getToolPresentation(name) : getBuiltinToolPresentation(name);
+  }
+
+  /** The live lookup a tool row needs: descriptor + "is this still the seeded built-in?". */
+  private toolLookup(): ToolLookup {
+    return {
+      resolvePresentation: (name) => this.presentationOf(name),
+      isBuiltin: (name) => this.session.isBuiltinTool?.(name) ?? true,
+    };
+  }
 
   /**
    * Subscribe and (optionally) seed non-transcript state.
@@ -658,7 +681,7 @@ export class AcpProjector {
           // The label travels again on every update: a client that replaces its row from the update
           // would otherwise show a blank one (see `toolTitleOf`).
           title: toolTitleOf(state.name, state.input),
-          kind: toolKindFor(state.name),
+          kind: toolKindFor(state.name, this.toolLookup()),
           status: next,
           ...(content ? { content } : {}),
           // `rawOutput` only when there is no content to show, and never for a `task` row (its formatted
@@ -681,7 +704,7 @@ export class AcpProjector {
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
-    const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text);
+    const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text, this.toolLookup());
     // A replayed task row carries its result on the CALL part (`output`); the persisted result part
     // has no `output`, only the raw JSON `content`. Format it here or `session/load` shows raw JSON
     // for every historical delegation — the one surface a client without `subagents` has.
@@ -756,7 +779,7 @@ export class AcpProjector {
       sessionUpdate: "tool_call_update",
       toolCallId: id,
       title: toolTitleOf(current.name, current.input),
-      kind: toolKindFor(current.name),
+      kind: toolKindFor(current.name, this.toolLookup()),
       status: current.status,
       content,
     });
@@ -767,7 +790,7 @@ export class AcpProjector {
     if (this.tools.has(part.id)) return;
     const input = toolInputOf(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
-    const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text);
+    const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text, this.toolLookup());
     this.tools.set(part.id, {
       status: this.toolStatusOf(part),
       name: part.name,
@@ -838,7 +861,10 @@ export class AcpProjector {
       sessionUpdate: "tool_call_update",
       toolCallId: part.toolCallId,
       ...(resultState
-        ? { title: toolTitleOf(resultState.name, resultState.input), kind: toolKindFor(resultState.name) }
+        ? {
+            title: toolTitleOf(resultState.name, resultState.input),
+            kind: toolKindFor(resultState.name, this.toolLookup()),
+          }
         : {}),
       status,
       ...(isCancelledToolCall(part as { output?: unknown }) ? { _meta: { cancelled: true } } : {}),
@@ -900,7 +926,7 @@ export class AcpProjector {
       sessionUpdate: "tool_call_update",
       toolCallId: id,
       title: toolTitleOf(state.name, state.input),
-      kind: toolKindFor(state.name),
+      kind: toolKindFor(state.name, this.toolLookup()),
       status: state.status,
       content: diffs,
     });
@@ -928,7 +954,7 @@ export class AcpProjector {
       sessionUpdate: "tool_call_update",
       toolCallId: chunk.toolCallId,
       title: toolTitleOf(state.name, state.input),
-      kind: toolKindFor(state.name),
+      kind: toolKindFor(state.name, this.toolLookup()),
       status: state.status === "pending" ? "in_progress" : state.status,
       content: [{ type: "content", content: textBlock(state.streamBuffer) }],
     });
@@ -1216,7 +1242,7 @@ export class AcpProjector {
           sessionUpdate: "tool_call_update",
           toolCallId: task.toolCallId,
           title: toolTitleOf(toolState.name, toolState.input),
-          kind: toolKindFor(toolState.name),
+          kind: toolKindFor(toolState.name, this.toolLookup()),
           status: toolState.status === "pending" ? "in_progress" : toolState.status,
           // ACP tool `content` REPLACES what the client holds; there is no append form, so each
           // update re-sends the whole accumulated text.

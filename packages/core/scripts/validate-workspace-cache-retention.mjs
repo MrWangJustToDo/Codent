@@ -26,14 +26,18 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  AGENT_LOG_DIR,
   COMMAND_JOB_CACHE_DIR,
+  LOG_MAX_AGE_MS,
   MAX_JOB_LOG_AGE_MS,
   MAX_JOB_RECORD_AGE_MS,
   TOOL_OUTPUT_CACHE_DIR,
   TOOL_OUTPUT_MAX_AGE_MS,
   TOOL_OUTPUT_ORPHAN_GRACE_MS,
   WORKSPACE_CACHE_RETENTION,
+  resetAgentLogSweep,
   resetWorkspaceCacheSweeps,
+  sweepAgentLogs,
   sweepStaleJobLogs,
   sweepStaleJobRecords,
   sweepStaleToolOutput,
@@ -166,6 +170,48 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
   assert.equal(await present(strayLog), true, "a .log inside the spill directory is not a spill");
   assert.equal(await present(strayTxt), true, "a .txt inside the job directory is not a job artifact");
   console.log("suffix isolation holds across shared directories — ok");
+}
+
+// ---------------------------------------------------------------------------
+// 5. Session timelines have a retention rule too, and the ACTIVE one is never reaped
+//
+// `.agents/logs/<sessionId>/agent.log*` is the only agent artifact that used to grow without a
+// bound (rotation caps one file, not the directory; every subagent gets its own file). The unit is
+// the session directory, so the sweep has to descend one level and reap an emptied directory.
+// ---------------------------------------------------------------------------
+{
+  resetAgentLogSweep();
+  const staleLog = await writeAged(`${AGENT_LOG_DIR}/ses_stale/agent.log`, staleAge(LOG_MAX_AGE_MS));
+  const freshLog = await writeAged(`${AGENT_LOG_DIR}/ses_fresh/agent.log`, 0);
+  // Old enough to be collected, but this session is being appended to right now.
+  const keptLog = await writeAged(`${AGENT_LOG_DIR}/ses_kept/agent.log`, staleAge(LOG_MAX_AGE_MS));
+
+  const present = async (rel) =>
+    fs.promises
+      .access(abs(rel))
+      .then(() => true)
+      .catch(() => false);
+
+  const removed = await sweepAgentLogs(env, { force: true, keepDir: `${AGENT_LOG_DIR}/ses_kept` });
+  assert.equal(removed, 1, "only the idle session's timeline is collected");
+  assert.equal(await present(staleLog), false, "a stale timeline is removed");
+  assert.equal(await present(freshLog), true, "a live timeline is kept");
+  assert.equal(await present(keptLog), true, "the session being appended to is never reaped");
+  // The directory is deliberately kept: `remove` is recursive, so deleting a directory that gained a
+  // file between the emptiness check and the delete would lose it. An empty session dir is inert.
+  assert.equal(
+    await fs.promises
+      .access(abs(`${AGENT_LOG_DIR}/ses_stale`))
+      .then(() => true)
+      .catch(() => false),
+    true,
+    "an emptied session directory is left in place (never rm -rf'd from a check-then-act)"
+  );
+
+  // Without `keepDir`, the same age rule applies to every session (a resumed one re-opens its file).
+  await sweepAgentLogs(env, { force: true, now: Date.now() + staleAge(LOG_MAX_AGE_MS) });
+  assert.equal(await present(freshLog), false, "a later pass collects it once the age applies");
+  console.log("session timelines expire by directory, active one excluded — ok");
 }
 
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);

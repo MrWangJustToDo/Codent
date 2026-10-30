@@ -587,32 +587,41 @@ export class ExtensionRunner {
       // A teardown during activation (destroyAll) revokes the context; the activation must not
       // resurrect the instance afterwards.
       if (!this.isContextLive(ctx)) {
-        // `destroyExtension` ran `deactivate` BEFORE this promise resolved, so anything the rest of
-        // `activate` acquired after the revoke has no other owner: release it here (the extension
-        // contract makes teardown idempotent) and drop any artifact that still landed on a race.
-        await this.deactivateExtension(instance);
-        this.unregisterInstanceArtifacts(instance);
-        // Anything the tail of `activate` rendered after the teardown would otherwise be replayed
-        // to a later subscriber.
-        this.uiBridge.clearOwner(api.id);
-        instance.state = "inactive";
+        // Only while this context still owns the instance: a disable-then-enable already created a
+        // NEW incarnation, and tearing it down here would release the new context's registrations
+        // and mark it inactive — an instance that reports `active` with no tools left.
+        if (instance.context === ctx) {
+          // `destroyExtension` ran `deactivate` BEFORE this promise resolved, so anything the rest of
+          // `activate` acquired after the revoke has no other owner: release it here (the extension
+          // contract makes teardown idempotent) and drop any artifact that still landed on a race.
+          await this.deactivateExtension(instance);
+          this.unregisterInstanceArtifacts(instance);
+          // Anything the tail of `activate` rendered after the teardown would otherwise be replayed
+          // to a later subscriber.
+          this.uiBridge.clearOwner(api.id);
+          instance.state = "inactive";
+        }
         return instance;
       }
       instance.state = "active";
       this.options.onToolRegistrationBatchComplete?.();
     } catch (err) {
       const error = toError(err);
-      // Release anything acquired before the throw (MCP clients, LSP servers). Artifact rollback
-      // alone leaves those live and a retry stacks a second copy on top of them.
-      await this.deactivateExtension(instance);
-      // Roll back any artifacts registered before the failure so a later re-enable
-      // starts clean (no duplicate registrations).
-      this.unregisterInstanceArtifacts(instance);
-      // A slot rendered before the throw must not survive the rollback (the queued UI flush
-      // would still publish it for an instance reported as `error`).
-      this.uiBridge.clearOwner(api.id);
-      instance.state = "error";
-      instance.error = error;
+      // Same ownership test as the revoke branch: a superseded activation must not roll back the
+      // incarnation that replaced it.
+      if (instance.context === ctx) {
+        // Release anything acquired before the throw (MCP clients, LSP servers). Artifact rollback
+        // alone leaves those live and a retry stacks a second copy on top of them.
+        await this.deactivateExtension(instance);
+        // Roll back any artifacts registered before the failure so a later re-enable
+        // starts clean (no duplicate registrations).
+        this.unregisterInstanceArtifacts(instance);
+        // A slot rendered before the throw must not survive the rollback (the queued UI flush
+        // would still publish it for an instance reported as `error`).
+        this.uiBridge.clearOwner(api.id);
+        instance.state = "error";
+        instance.error = error;
+      }
       // Emitting is the record (and the bootstrap reports it too); the direct logger row duplicated it.
       this.emitExtensionEvent("agent:extension-error", {
         extensionId: api.id,
@@ -620,7 +629,8 @@ export class ExtensionRunner {
         error: error.message,
       });
     } finally {
-      this.activating.delete(api.id);
+      // Identity-checked: a superseded activation must not clear the marker a newer one owns.
+      if (instance.context === ctx) this.activating.delete(api.id);
     }
 
     return instance;

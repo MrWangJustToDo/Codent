@@ -22,8 +22,10 @@ import { getEnv } from "../../env";
 import { utf8ByteLength } from "../../utils/bytes.js";
 import { errorMessage } from "../../utils/errors.js";
 
+import { sweepAgentLogs } from "./log-retention.js";
 import { logEntrySchema } from "./schemas.js";
 
+import type { ResolvedCoreEnv } from "../../env";
 import type { AgentLogFileSinkOptions, LogEntry } from "../agent-log/types.js";
 
 /** Rotate when the active file exceeds this size (5 MiB). */
@@ -71,18 +73,22 @@ function inertSink(): LogFileSink {
 
 /** Build a JSONL file sink writing to `options.dir`. */
 export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSink {
-  let fs: ReturnType<typeof getEnv>["fs"] | null;
+  let env: ResolvedCoreEnv;
   try {
     // The owning runtime's env when supplied; ambient only for standalone/legacy callers.
-    fs = (options.env ?? getEnv()).fs;
+    env = options.env ?? getEnv();
   } catch {
     return inertSink(); // CoreEnv not registered
   }
-  const envFs = fs;
+  const envFs = env.fs;
   const appendFile = envFs.appendFile;
   if (!appendFile) return inertSink(); // no append support
 
   const dir = options.dir;
+  // Age-based retention for the whole log root (once per process per workspace). The directory this
+  // sink appends to is excluded: a resumed session's older file must not be reaped immediately
+  // before the divider check reads whether it already has content.
+  void sweepAgentLogs(env, { keepDir: dir });
   const filename = options.filename ?? DEFAULT_LOG_FILENAME;
   const maxBytes = options.maxBytes ?? DEFAULT_LOG_MAX_BYTES;
   const maxFiles = options.maxFiles ?? DEFAULT_LOG_MAX_FILES;

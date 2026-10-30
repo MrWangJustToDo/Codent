@@ -391,6 +391,9 @@ export {
   countPendingToolApprovals,
   collectPendingApprovals,
   collectPendingAskUser,
+  collectPendingInteractions,
+  firstPendingInteraction,
+  resolvePendingInteractions,
 } from "../agent/stream/tool-phase-utils.js";
 export { shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
 export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime/tool-sets.js";
@@ -426,6 +429,12 @@ export {
   sweepWorkspaceCache,
   sweepWorkspaceCaches,
 } from "../agent/tools/shared/cache/workspace-cache.js";
+export {
+  AGENT_LOG_DIR,
+  LOG_MAX_AGE_MS,
+  resetAgentLogSweep,
+  sweepAgentLogs,
+} from "../agent/log/log-retention.js";
 export {
   CACHE_THRESHOLD,
   TOOL_OUTPUT_CACHE_DIR,

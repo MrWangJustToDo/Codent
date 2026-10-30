@@ -88,11 +88,24 @@ export class UsageTracker {
 
   /** Unified event bus for the owning agent (session `usage` projection). */
   private eventBus?: AgentEventBus;
+  /**
+   * Extra notification for the owning agent, run after every change.
+   *
+   * The tracker knows WHEN the numbers moved; only the agent knows what else derives from them (a
+   * child's usage is part of its parent's `subagents` rows). Kept as a hook rather than a bus
+   * subscription because the parent's retained projection is not a `session:usage` consumer.
+   */
+  private changeListener: (() => void) | null = null;
 
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
     this.eventBus = bus;
     bus.retain("session:usage", () => this.getChangeSnapshot());
+  }
+
+  /** @internal Hook for projections derived from usage (see {@link changeListener}). */
+  setChangeListener(listener: (() => void) | null): void {
+    this.changeListener = listener;
   }
 
   /** Update window usage from a main run step and accumulate into lifetime totals. */
@@ -409,5 +422,8 @@ export class UsageTracker {
   private emitChange(): void {
     // Session `usage` projection — the bus is the single change mechanism.
     this.eventBus?.emit("session:usage", this.getChangeSnapshot());
+    // AFTER the channel emit: a listener that reads `getChangeSnapshot` (the parent's subagent row)
+    // sees exactly the numbers this frame carries, not the previous tick's.
+    this.changeListener?.();
   }
 }

@@ -144,6 +144,24 @@ export class RunCoordinator {
     if (this.currentRunToken) this.currentRunToken.valid = false;
   }
 
+  /**
+   * The token of the run that is current right now, or null before the first run.
+   *
+   * A fresh view over the shared state: a holder that keeps this across a later `beginRun()`
+   * correctly reads `isCurrent === false`, which is what lets a stream captured for one run notice
+   * that it was superseded (see `createStatusMiddleware`).
+   */
+  getRunToken(): RunToken | null {
+    const state = this.currentRunToken;
+    if (!state) return null;
+    return {
+      id: state.id,
+      get isCurrent() {
+        return state.valid;
+      },
+    };
+  }
+
   /** Whether the latest begun run is still current (no interrupt/supersede since). */
   isCurrentRunValid(): boolean {
     return this.currentRunToken?.valid ?? false;

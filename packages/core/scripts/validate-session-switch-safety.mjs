@@ -185,6 +185,7 @@ assert.equal(
     resetTurnContext: markReset("turnContext"),
     resetSessionSyncTracker: markReset("syncTracker"),
     resetIterationProgress: markReset("iteration"),
+    destroyChildAgents: markReset("childAgents"),
     clearTaskRuns: markReset("taskRuns"),
     resetCommandJobs: markReset("commandJobs"),
     emitSessionSwitch: () => {},
@@ -227,6 +228,7 @@ assert.equal(
     "streamHub",
     "turnContext",
     "iteration",
+    "childAgents",
     "taskRuns",
     "commandJobs",
   ]) {
@@ -248,6 +250,7 @@ assert.equal(
   let adopted;
   let transcriptCleared = false;
   let taskRunsCleared = false;
+  let childAgentsDestroyed = false;
   let persistDrains = 0;
   const newTarget = { id: "ses_new", name: "New Session", uiMessages: [], model: "m", modelStyle: "openai" };
   const newSessionLifecycle = new SessionLifecycleService({
@@ -288,6 +291,9 @@ assert.equal(
     resetTurnContext: () => {},
     resetSessionSyncTracker: () => {},
     resetIterationProgress: () => {},
+    destroyChildAgents: () => {
+      childAgentsDestroyed = true;
+    },
     clearTaskRuns: () => {
       taskRunsCleared = true;
     },
@@ -310,6 +316,11 @@ assert.equal(
   assert.equal(adopted, newTarget, "the new session is adopted");
   assert.equal(persistDrains, 1, "newSession drains queued persists before rotating");
   assert.equal(transcriptCleared, true, "the live transcript is reset for the new session");
+  assert.equal(
+    childAgentsDestroyed,
+    true,
+    "a new session destroys the previous conversation's subagents (not just aborts them)"
+  );
   assert.equal(taskRunsCleared, true, "the previous conversation's task records are dropped");
   assert.equal(released, "ses_old", "the previous session's ownership is released after adoption");
 }
@@ -361,6 +372,7 @@ assert.equal(
     resetTurnContext: () => {},
     resetSessionSyncTracker: () => {},
     resetIterationProgress: () => {},
+    destroyChildAgents: () => {},
     clearTaskRuns: () => {},
     resetCommandJobs: () => {},
     emitSessionNew: () => {},

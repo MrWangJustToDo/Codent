@@ -98,11 +98,36 @@ export interface PendingAskUserInteraction {
 }
 
 /**
+ * One pending interaction, in ask order — the union a host presents.
+ *
+ * {@link SessionInteractionsSnapshot.pending} is the ordered list; its first entry is the
+ * interaction to show NOW. The two typed lists are views over the same scan, so "which wait is
+ * current" has one answer here, not one per host.
+ */
+export type PendingInteractionEntry =
+  ({ kind: "approval" } & PendingApprovalInteraction) | ({ kind: "clientTool" } & PendingAskUserInteraction);
+
+/**
  * Pending user interactions derived from the conversation, projected onto the
  * retained `interaction` channel so hosts no longer each re-scan messages to
  * discover approvals / `ask_user` requests.
+ *
+ * **Both lists are in ASK order** (conversation order, earliest first), because a host takes
+ * `[0]` as the question on screen: a batch must be answered first-come-first-served, which is also
+ * the rule the status controller uses to pick between `waiting` and `awaiting_user`.
  */
 export interface SessionInteractionsSnapshot {
+  /**
+   * Every pending interaction in ask order.
+   *
+   * `[0]` is the one the host presents now; answering it reveals the next. `approvals` / `askUser`
+   * are typed views of this same scan (same entries, same order), so a host never has to decide
+   * which kind is "more important" — the order already did.
+   *
+   * Optional because a publisher that predates the field sends nothing: hosts must then rebuild the
+   * queue with `resolvePendingInteractions`, not guess a precedence themselves.
+   */
+  pending?: PendingInteractionEntry[];
   approvals: PendingApprovalInteraction[];
   askUser: PendingAskUserInteraction[];
 }

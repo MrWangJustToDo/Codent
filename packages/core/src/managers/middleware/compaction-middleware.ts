@@ -51,15 +51,13 @@ export interface CompactionMiddlewareDeps {
 /** TanStack compaction via {@link ChatMiddleware.onConfig}. */
 export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): ChatMiddleware<ToolRunContext> {
   /**
-   * Fill (in tokens) at which the last attempt failed or made no progress.
+   * How much the context must grow past the fill a failed auto attempt started at before that
+   * attempt is worth repeating.
    *
-   * A failing summarizer used to be retried on EVERY model call: the trigger reads the same fill
-   * and `isLatestDurableMessageCompactionSummary` stays false, so a 30-iteration run could start
-   * 30 full summarizer subagents over the whole pre-cut history. One failure is remembered until
-   * the context has grown enough to be worth another attempt (or a success clears it); a user
-   * abort is not a failure and does not arm this.
+   * The floor itself lives on {@link CompactionController} (`getAutoRetryFloor`), because this
+   * middleware is rebuilt with the runner and a per-closure variable lost the memory exactly when a
+   * new pipeline took over. See the controller for the bug that caused.
    */
-  let failedAtFill: number | null = null;
   const RETRY_AFTER_FILL_GROWTH = 8_000;
 
   return defineMiddleware("context-transform", {
@@ -88,7 +86,8 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
       const alreadyCompacted = isLatestDurableMessageCompactionSummary(channel.getMessages());
       if (!isSubagent && !alreadyCompacted && deps.shouldTriggerAutoCompact(llmMessages)) {
         const fillBefore = deps.getUsage().getContextFillTokens() ?? 0;
-        if (failedAtFill !== null && fillBefore < failedAtFill + RETRY_AFTER_FILL_GROWTH) {
+        const retryFloor = deps.compactions.getAutoRetryFloor();
+        if (retryFloor !== null && fillBefore < retryFloor + RETRY_AFTER_FILL_GROWTH) {
           // The previous attempt failed (or made no progress) on this same context; retrying
           // before it grows would re-summarize the whole prefix on every model call.
           return { messages: llmMessages };
@@ -140,26 +139,26 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
           }
 
           if (result.compacted) {
-            failedAtFill = null;
+            deps.compactions.clearAutoRetryFloor();
             deps.compactions.finish(lease, {
               status: "completed",
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
             });
           } else if (result.aborted) {
-            // Esc cancelled the summarizer: give the status back and emit nothing. Arming
-            // `failedAtFill` here (the old path treated it as `skipped`) deferred the next real
-            // compaction until the context grew another 8k tokens.
+            // Esc cancelled the summarizer: give the status back and emit nothing. Arming the retry
+            // floor here (the old path treated it as `skipped`) deferred the next real compaction
+            // until the context grew another 8k tokens.
             deps.compactions.release(lease);
           } else if (result.error) {
             // A real failure used to fall into `skipped`: no event, no log, indistinguishable
             // from "nothing to compact", and the reason was dropped.
-            failedAtFill = fillBefore;
+            deps.compactions.armAutoRetryFloor(fillBefore);
             deps.compactions.finish(lease, { status: "failed", error: result.error });
           } else {
             // No progress (empty summary, summarizer no-op): remember where we tried so the
             // next model call does not start the same summarization again.
-            failedAtFill = fillBefore;
+            deps.compactions.armAutoRetryFloor(fillBefore);
             deps.compactions.finish(lease, { status: "skipped" });
           }
         } catch (err) {
@@ -168,7 +167,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
             deps.compactions.release(lease);
           } else if (deps.compactions.isCurrent(lease)) {
             const error = toError(err);
-            failedAtFill = fillBefore;
+            deps.compactions.armAutoRetryFloor(fillBefore);
             deps.compactions.finish(lease, { status: "failed", error: error.message });
           }
         } finally {

@@ -118,8 +118,16 @@ export class AgentToolService {
   catalog(): ToolPresentationInfo[] {
     return describeToolPresentations(
       this.registry.list().map((entry) => entry.name),
-      (name) => this.resolve(name)?.present ?? getBuiltinToolPresentation(name)
-    );
+      // Same rule as `ManagedAgent.getToolPresentation`: the built-in table describes the tool the
+      // agent was SEEDED with. A shadowing extension tool without its own `present` is described as
+      // undeclared instead of inheriting a descriptor written for a different output shape.
+      (name) =>
+        this.resolve(name)?.present ?? (this.registry.isIncumbent(name) ? getBuiltinToolPresentation(name) : undefined)
+    ).map((info) => ({
+      ...info,
+      // The one field a host cannot derive from the name: which implementation is live.
+      origin: this.registry.isIncumbent(info.name) ? "builtin" : "extension",
+    }));
   }
 
   /** Create and register an extension tool under its owner. */

@@ -37,7 +37,13 @@ export interface ToolPresentation {
   summary?: (output: unknown) => string | undefined;
   /** Short label for a tool call's input, shown in activity-summary label lists. */
   label?: (input: unknown) => string | undefined;
-  /** Result text: the one string a completed call shows. */
+  /**
+   * Result text: the one string a completed call shows (full display).
+   *
+   * It is NOT a row policy. Compact display folds a built-in's body like any other output; only an
+   * extension tool keeps its row on `text`, because that string is its whole result. Use
+   * {@link ToolPresentation.keepRow} to own the row.
+   */
   text?: (output: unknown) => string | undefined;
   /** Header input text; `compact` marks compact display (callers shorten further). */
   input?: (input: unknown, opts: { compact: boolean }) => string | undefined;
@@ -59,6 +65,17 @@ export interface ToolPresentationInfo {
   /** A header-summary renderer exists for this tool. */
   hasSummary?: boolean;
   labelKey?: string;
+  /**
+   * Whether the LIVE registration under this name is the tool the agent was seeded with
+   * (`"builtin"`) or one an extension registered, including a shadow of a built-in name
+   * (`"extension"`).
+   *
+   * A host's built-in-only renderer/classification must ask this rather than compare the name:
+   * dispatch is by name, so both kinds carry the same name and only the registry knows which
+   * implementation actually ran. Optional because a publisher that predates the field sends
+   * nothing — hosts must treat that as "unknown", not as `"extension"`.
+   */
+  origin?: "builtin" | "extension";
 }
 
 /** Rendered presentation for one tool call, attached to that call's message part. */

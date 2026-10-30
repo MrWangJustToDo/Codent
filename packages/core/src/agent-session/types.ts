@@ -430,6 +430,14 @@ export interface AgentSession {
   listAgentStreamSnapshots?(): AgentStreamSnapshot[];
   /** Session-scoped tool presentation (local agent catalog or a remote snapshot's descriptors). */
   getToolPresentation?(name: string): ToolPresentation | undefined;
+  /**
+   * Whether the live registration under `name` is the tool the agent was seeded with.
+   *
+   * A host's built-in-only renderer or classification must ask this instead of comparing the name:
+   * dispatch is by name, so an extension may shadow a built-in and only this answers which
+   * implementation runs. Optional — absent means "unknown", and hosts keep their name-based default.
+   */
+  isBuiltinTool?(name: string): boolean;
   dispatch<C extends AgentSessionCommand["type"]>(
     command: Extract<AgentSessionCommand, { type: C }>
   ): Promise<AgentSessionCommandResultFor<C>>;

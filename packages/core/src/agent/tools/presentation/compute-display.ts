@@ -50,6 +50,12 @@ export function computeToolDisplay(
 ): ToolDisplayPayload | undefined {
   if (!name) return undefined;
 
+  // A CANCEL is a shared shape, not a tool's output: the framework settles every interrupted call
+  // with the same marker, so the row must say "cancelled" for EVERY tool. Handled before the error
+  // short-circuit (the marker carries `success: false`) and before the name-keyed formatter, which
+  // is the only other place that knew how to render it.
+  if (isSyntheticCancelOutput(output)) return { text: TOOL_CANCELLED_MESSAGE };
+
   // A failed call is rendered by the error path (the part's `errorText`), never by the
   // tool's success-shaped renderers: `{ error: "denied by user" }` used to summarize as
   // "updated" / "applied" / "saved", and that wrong text is persisted with the session.
@@ -59,9 +65,15 @@ export function computeToolDisplay(
   // Only the SYNTHETIC framework payload is replaced wholesale: it carries no output at all (the
   // tool never returned). A tool that caught its own abort DOES have output, and its own `text`
   // renderer is what renders it — see {@link isSyntheticCancelOutput}.
-  const text = isSyntheticCancelOutput(output) ? TOOL_CANCELLED_MESSAGE : safe(() => present?.text?.(output));
+  const text = safe(() => present?.text?.(output));
   const summary =
-    safe(() => present?.summary?.(output)) ?? safe(() => inlineSummaryForOutput(output, name)) ?? undefined;
+    safe(() => present?.summary?.(output)) ??
+    // The built-in inline summary is keyed by NAME and describes a built-in's output schema. With no
+    // descriptor at all (an undeclared extension tool, or one SHADOWING a built-in name) there is no
+    // schema to read, and producing the built-in's text would be a confident guess about foreign
+    // data — the same failure the presentation resolver was fixed to avoid.
+    (present ? safe(() => inlineSummaryForOutput(output, name)) : undefined) ??
+    undefined;
   const label = safe(() => present?.label?.(input)) ?? undefined;
 
   const display: ToolDisplayPayload = {};

@@ -97,6 +97,21 @@ assert.deepEqual(
 
 // --- 3. no renderer, no payload ---------------------------------------------
 assert.equal(core.computeToolDisplay("totally_unknown_tool", { ok: true }), undefined);
+
+// A tool that merely SHADOWS a built-in name, with no descriptor of its own: the built-in inline
+// summary is keyed by that name, so without the gate it would read a schema this output never had.
+assert.equal(
+  core.computeToolDisplay("grep", { foreign: true }, undefined, () => undefined),
+  undefined,
+  "no descriptor => no name-keyed built-in summary"
+);
+
+// A cancel is a shared shape: the row says "cancelled" for every tool, descriptor or not.
+assert.equal(
+  core.computeToolDisplay("grep", { success: false, error: "stop", cancelled: true }, undefined, () => undefined)?.text,
+  "Cancelled by user.",
+  "a synthetic cancel renders without a descriptor"
+);
 assert.equal(core.computeToolDisplay("", { ok: true }), undefined);
 
 // --- 4. a tool's own renderer wins ------------------------------------------
