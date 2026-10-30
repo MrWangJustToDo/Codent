@@ -9,10 +9,17 @@ import { useWorkspacePanel } from "../dist/hooks/use-workspace-panel.mjs";
 import {
   clampScrollTop,
   createScrollPacer,
+  createScrollStepper,
+  createWheelGestureGuard,
   ensureIndexVisible,
+  PREVIEW_SCROLL_CONTINUOUS_STEP,
   PREVIEW_SCROLL_STEP,
   SCROLL_BURST_INTERVAL_MS,
+  SCROLL_DISCRETE_GAP_MS,
   visibleWindow,
+  WHEEL_GESTURE_BURST_MS,
+  WHEEL_GESTURE_COMMIT_MS,
+  WHEEL_GESTURE_QUIET_MS,
 } from "../dist/utils/workspace-scroll.mjs";
 
 assert.equal(ensureIndexVisible(0, 0, 5, 10), 0);
@@ -53,9 +60,30 @@ assert.equal(useWorkspacePanel.getReadonlyState().treeScrollTop, 0, "setMode res
 // Wheel input policy (sensitivity + inertia)
 // ============================================================================
 
-// One wheel notch moves ONE row. The terminal delivers the notch as an arrow key (mode 1007), so
-// a bigger step multiplies the wheel's speed instead of a press's — 3 was three rows per notch.
-assert.equal(PREVIEW_SCROLL_STEP, 1, "a wheel notch moves one row");
+// A discrete notch moves a line group; the two panes measure different things (the tree moves a
+// cursor = one item, the preview moves content = one line), so the preview moving 3 lines per
+// deliberate notch is what makes them feel comparable.
+assert.equal(PREVIEW_SCROLL_STEP, 3, "a discrete notch moves three rows");
+assert.equal(PREVIEW_SCROLL_CONTINUOUS_STEP, 1, "a step inside a stream moves one row");
+assert.equal(SCROLL_BURST_INTERVAL_MS, 32);
+assert.ok(SCROLL_DISCRETE_GAP_MS > SCROLL_BURST_INTERVAL_MS, "a notch needs a longer pause than momentum");
+
+// The stepper is the whole content-scroll policy in one place: momentum is dropped, a stream moves
+// one row, and a notch after a pause moves the full step.
+const stepper = createScrollStepper();
+assert.equal(stepper.rows(1000), PREVIEW_SCROLL_STEP, "the first notch after idle is a discrete one");
+assert.equal(stepper.rows(1010), 0, "10ms later is momentum, not intent");
+assert.equal(stepper.rows(1042), PREVIEW_SCROLL_CONTINUOUS_STEP, "a stream moves one row");
+assert.equal(stepper.rows(1074), PREVIEW_SCROLL_CONTINUOUS_STEP, "and stays one row while it lasts");
+assert.equal(stepper.rows(1074 + SCROLL_DISCRETE_GAP_MS), PREVIEW_SCROLL_STEP, "a pause earns a notch");
+stepper.reset();
+assert.equal(stepper.rows(5000), PREVIEW_SCROLL_STEP, "reset makes the next press a fresh notch");
+
+// A held arrow key (40ms repeat) is never dropped — the step is just the stream step.
+const held = createScrollStepper();
+assert.equal(held.rows(0), PREVIEW_SCROLL_STEP);
+assert.equal(held.rows(40), PREVIEW_SCROLL_CONTINUOUS_STEP, "a held key moves one row per repeat");
+assert.equal(held.rows(80), PREVIEW_SCROLL_CONTINUOUS_STEP);
 
 // The cap sits just under the fastest default key repeat (Windows/X11 repeat every 31–40ms), so a
 // held arrow key is never dropped...
@@ -90,21 +118,73 @@ resetPacer.reset();
 assert.equal(resetPacer.admit(1005), true, "reset makes the next press count");
 
 // The whole policy, measured the way the user feels it: one second of momentum (a trackpad keeps
-// emitting notches for ~1s after the fingers stop) against a long file. What the panel does now is
-// the `paced` column — the `unpaced` one is the behaviour this replaced (3 rows × every event).
+// emitting notches for ~1s after the fingers stop) against a long file. The two-tier step is what
+// makes "more sensitive" safe: a deliberate notch is three times heavier while the momentum tail
+// stays exactly the 32 rows it was before the step changed.
 const simulateGesture = ({ intervalMs, durationMs, step, paced }) => {
-  const gesture = createScrollPacer(SCROLL_BURST_INTERVAL_MS);
+  const gesture = paced ? createScrollStepper() : null;
   let offset = 0;
   for (let t = 0; t < durationMs; t += intervalMs) {
-    if (!paced || gesture.admit(t)) offset = clampScrollTop(offset + step, 10_000, 40);
+    const rows = paced ? gesture.rows(t) : step;
+    if (rows > 0) offset = clampScrollTop(offset + rows, 10_000, 40);
   }
   return offset;
 };
 
 const unpaced = simulateGesture({ intervalMs: 8, durationMs: 1000, step: 3, paced: false });
-const paced = simulateGesture({ intervalMs: 8, durationMs: 1000, step: PREVIEW_SCROLL_STEP, paced: true });
+const paced = simulateGesture({ intervalMs: 8, durationMs: 1000, step: 0, paced: true });
 assert.equal(unpaced, 375, "the old policy: 125 notches × 3 rows in one second");
-assert.equal(paced, 32, "the new policy: one row per admitted notch, ~32 per second");
+// 34 = the gesture's own first notch (a discrete one, since nothing preceded it) plus the 31 stream
+// steps that the 32ms gate admits in the remaining 992ms — i.e. the tail is bounded in EVENTS, so a
+// bigger per-notch step cannot make it run away.
+const momentumCeiling = PREVIEW_SCROLL_STEP + 31 * PREVIEW_SCROLL_CONTINUOUS_STEP;
+assert.equal(paced, momentumCeiling, "momentum is still bounded at ~32 admitted steps per second");
 assert.ok(paced * 5 < unpaced, `a momentum burst moves ~${Math.round(unpaced / paced)}× fewer rows`);
+
+// ...while a hand-turned wheel earns the full step per notch — the complaint this addresses: a
+// notch used to move a single line in a text pane, which reads as sluggish next to the tree.
+const notches = simulateGesture({ intervalMs: 200, durationMs: 2000, step: 0, paced: true });
+assert.equal(notches, 10 * PREVIEW_SCROLL_STEP, "ten deliberate notches move ten line groups");
+
+// ============================================================================
+// Horizontal wheel (the same 1007 plane, translated to ←/→)
+// ============================================================================
+
+// A trackpad's lateral swipe is a stream of LEFT/RIGHT keys — far faster than a keyboard repeats —
+// which is the one property that lets the panel ignore it entirely instead of expanding a
+// directory or bouncing the focus between the panes.
+assert.ok(WHEEL_GESTURE_BURST_MS < 31, "the burst window sits under the fastest auto-repeat (31ms)");
+assert.ok(WHEEL_GESTURE_COMMIT_MS <= WHEEL_GESTURE_BURST_MS, "a press must commit before a second one could arrive");
+assert.ok(WHEEL_GESTURE_QUIET_MS > WHEEL_GESTURE_COMMIT_MS, "a gesture outlives its commit window");
+
+const swipe = createWheelGestureGuard();
+assert.equal(swipe.press(0), "defer", "the first press is held for one commit window");
+assert.equal(swipe.press(10), "swallow", "10ms later proves it is a swipe and drops the held action");
+assert.equal(swipe.commit(), false, "…so the held action never runs");
+assert.equal(swipe.press(20), "swallow", "the rest of the gesture is swallowed");
+assert.equal(swipe.press(150), "swallow", "…including a slower tail while the gesture lasts");
+assert.equal(swipe.press(1000), "defer", "after the quiet window a real press counts again");
+assert.equal(swipe.commit(), true, "and it runs");
+
+// A single press of its own always commits: the guard costs one frame, not the keypress.
+const loneKey = createWheelGestureGuard();
+assert.equal(loneKey.press(0), "defer");
+assert.equal(loneKey.commit(), true, "a lone → expands the directory as before");
+
+// A held key repeats slower than the burst window (and starts after the platform's repeat delay),
+// so every repeat is a fresh decision and holding → still walks the tree.
+const heldKey = createWheelGestureGuard();
+assert.equal(heldKey.press(0), "defer");
+assert.equal(heldKey.commit(), true);
+assert.equal(heldKey.press(500), "defer");
+assert.equal(heldKey.commit(), true);
+assert.equal(heldKey.press(540), "defer", "a 40ms auto-repeat is not a swipe");
+assert.equal(heldKey.commit(), true);
+
+// Teardown drops a waiting action instead of running it after the pane unmounts.
+const tornDown = createWheelGestureGuard();
+tornDown.press(0);
+tornDown.cancel();
+assert.equal(tornDown.commit(), false, "a cancelled press never runs");
 
 console.log("workspace-scroll validation passed");

@@ -22,10 +22,11 @@ import { workspaceRelativePath } from "../utils/workspace-path.js";
 import { decideReveal } from "../utils/workspace-reveal.js";
 import {
   clampScrollTop,
-  createScrollPacer,
+  createScrollStepper,
+  createWheelGestureGuard,
   ensureIndexVisible,
   PREVIEW_SCROLL_STEP,
-  SCROLL_BURST_INTERVAL_MS,
+  WHEEL_GESTURE_COMMIT_MS,
 } from "../utils/workspace-scroll.js";
 
 import { clearContentCache } from "./FileContent.js";
@@ -73,19 +74,50 @@ export const WorkspaceFileMode = () => {
   const previewRef = useRef<CodeViewRef>(null);
   const diffRef = useRef<DiffViewRef>(null);
   /**
-   * One gate for every wheel-driven move in this panel.
+   * One gate for every wheel-driven move in this panel, and the one place that says how far a step
+   * goes.
    *
    * 1007 hands the wheel to the app as plain arrow keys, so a trackpad's momentum tail arrives as
    * a stream of presses indistinguishable from a held key — that stream IS the inertia users
-   * feel. Only the timing separates them (see `SCROLL_BURST_INTERVAL_MS`), and the pane must not
-   * be able to tell: a fresh press on either side always moves.
+   * feel. Only the timing separates them (see `createScrollStepper`), and the pane must not be able
+   * to tell: a fresh press on either side always moves.
    */
-  const scrollPacer = useRef(createScrollPacer(SCROLL_BURST_INTERVAL_MS));
-  const admitScroll = useCallback(() => scrollPacer.current.admit(Date.now()), []);
+  const scrollStepper = useRef(createScrollStepper());
+  /** Rows this event may move (0 = momentum, drop it). A cursor move ignores the magnitude. */
+  const scrollRows = useCallback(() => scrollStepper.current.rows(Date.now()), []);
+  /**
+   * Gate for ←/→, the only keys a trackpad's *horizontal* swipe can produce.
+   *
+   * 1007 translates the wheel on both axes, so a lateral two-finger swipe arrives as a stream of
+   * LEFT/RIGHT keys and used to expand directories and bounce the focus between the panes. The
+   * stream is indistinguishable from keys except by speed, so each press is held for one commit
+   * window; if a second one lands inside it the pair is a swipe and the whole gesture is dropped.
+   */
+  const gestureGuard = useRef(createWheelGestureGuard());
+  const gestureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const guardDiscreteKey = useCallback((action: () => void) => {
+    const verdict = gestureGuard.current.press(Date.now());
+    if (gestureTimer.current) {
+      clearTimeout(gestureTimer.current);
+      gestureTimer.current = null;
+    }
+    if (verdict === "swallow") return;
+    gestureTimer.current = setTimeout(() => {
+      gestureTimer.current = null;
+      if (gestureGuard.current.commit()) action();
+    }, WHEEL_GESTURE_COMMIT_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (gestureTimer.current) clearTimeout(gestureTimer.current);
+      gestureGuard.current.cancel();
+    },
+    []
+  );
   // A pane that just took focus scrolls on its first key: the gate is about a burst *inside* one
   // gesture, not about how long ago the user scrolled the other pane.
   useEffect(() => {
-    scrollPacer.current.reset();
+    scrollStepper.current.reset();
   }, [paneFocus]);
 
   const [rootPath, setRootPath] = useState("");
@@ -153,12 +185,12 @@ export const WorkspaceFileMode = () => {
   const dirStatuses = useMemo(() => computeDirStatuses(env, gitStatus, rootPath), [env, gitStatus, rootPath]);
 
   const scrollActivePane = useCallback(
-    (direction: "up" | "down" | "top") => {
+    (direction: "up" | "down" | "top", step: number = PREVIEW_SCROLL_STEP) => {
       const ref = mode === "preview" ? previewRef.current : diffRef.current;
       if (!ref) return;
       if (direction === "top") ref.scrollToTop(1);
-      else if (direction === "up") ref.scrollUp({ step: PREVIEW_SCROLL_STEP });
-      else ref.scrollDown({ step: PREVIEW_SCROLL_STEP });
+      else if (direction === "up") ref.scrollUp({ step });
+      else ref.scrollDown({ step });
     },
     [mode]
   );
@@ -441,46 +473,52 @@ export const WorkspaceFileMode = () => {
   const handleTreeKey = useCallback(
     (key: Key) => {
       if (key.upArrow) {
-        if (admitScroll()) moveCursor(cursorIndex - 1);
+        if (scrollRows() > 0) moveCursor(cursorIndex - 1);
         return;
       }
       if (key.downArrow) {
-        if (admitScroll()) moveCursor(cursorIndex + 1);
+        if (scrollRows() > 0) moveCursor(cursorIndex + 1);
         return;
       }
       if (key.rightArrow) {
-        const current = items[cursorIndex];
-        if (!current) return;
-        if (current.type === "directory") {
-          if (!current.expanded) {
-            void handleToggleDir(current.path);
+        // ←/→ are the only keys a trackpad's horizontal swipe can produce, so they go through the
+        // gesture guard: a swipe must not expand a directory or move focus between the panes.
+        guardDiscreteKey(() => {
+          const current = items[cursorIndex];
+          if (!current) return;
+          if (current.type === "directory") {
+            if (!current.expanded) {
+              void handleToggleDir(current.path);
+              return;
+            }
+            setPaneFocus("preview");
             return;
           }
-          setPaneFocus("preview");
-          return;
-        }
-        if (selectedPath === current.path) {
-          setPaneFocus("preview");
-          return;
-        }
-        selectFile(current.path);
+          if (selectedPath === current.path) {
+            setPaneFocus("preview");
+            return;
+          }
+          selectFile(current.path);
+        });
         return;
       }
       if (key.leftArrow) {
-        const current = items[cursorIndex];
-        if (current?.type === "directory" && current.expanded) {
-          void handleToggleDir(current.path);
-          return;
-        }
-        if (current && current.indent > 0) {
-          for (let i = cursorIndex - 1; i >= 0; i--) {
-            const candidate = items[i];
-            if (candidate && candidate.indent === current.indent - 1) {
-              moveCursor(i);
-              break;
+        guardDiscreteKey(() => {
+          const current = items[cursorIndex];
+          if (current?.type === "directory" && current.expanded) {
+            void handleToggleDir(current.path);
+            return;
+          }
+          if (current && current.indent > 0) {
+            for (let i = cursorIndex - 1; i >= 0; i--) {
+              const candidate = items[i];
+              if (candidate && candidate.indent === current.indent - 1) {
+                moveCursor(i);
+                break;
+              }
             }
           }
-        }
+        });
         return;
       }
       if (key.return) {
@@ -490,7 +528,17 @@ export const WorkspaceFileMode = () => {
         else selectFile(current.path);
       }
     },
-    [cursorIndex, items, moveCursor, handleToggleDir, selectedPath, selectFile, setPaneFocus, admitScroll]
+    [
+      cursorIndex,
+      items,
+      moveCursor,
+      handleToggleDir,
+      selectedPath,
+      selectFile,
+      setPaneFocus,
+      scrollRows,
+      guardDiscreteKey,
+    ]
   );
 
   /**
@@ -518,46 +566,50 @@ export const WorkspaceFileMode = () => {
           // moves the same number of CELLS at 2× and at 8× (a constant step skipped a whole screen
           // at deep zoom, where the pannable range is large and the window is small).
           if (key.upArrow) {
-            if (admitScroll()) panImage(0, -1);
+            if (scrollRows() > 0) panImage(0, -1);
             return;
           }
           if (key.downArrow) {
-            if (admitScroll()) panImage(0, 1);
+            if (scrollRows() > 0) panImage(0, 1);
             return;
           }
-          if (key.leftArrow) return panImage(-1, 0);
-          if (key.rightArrow) return panImage(1, 0);
+          if (key.leftArrow) return guardDiscreteKey(() => panImage(-1, 0));
+          if (key.rightArrow) return guardDiscreteKey(() => panImage(1, 0));
         }
         if (key.leftArrow) {
-          setPaneFocus("tree");
+          guardDiscreteKey(() => setPaneFocus("tree"));
           return;
         }
         if (key.rightArrow) return;
         if (key.upArrow) {
-          if (admitScroll()) scrollActivePane("up");
+          const rows = scrollRows();
+          if (rows > 0) scrollActivePane("up", rows);
           return;
         }
         if (key.downArrow) {
-          if (admitScroll()) scrollActivePane("down");
+          const rows = scrollRows();
+          if (rows > 0) scrollActivePane("down", rows);
         }
         return;
       }
 
       if (key.leftArrow) {
-        setPaneFocus("tree");
+        guardDiscreteKey(() => setPaneFocus("tree"));
         return;
       }
       if (key.rightArrow) return;
       if (!selectedPath) return;
       if (key.upArrow) {
-        if (admitScroll()) scrollActivePane("up");
+        const rows = scrollRows();
+        if (rows > 0) scrollActivePane("up", rows);
         return;
       }
       if (key.downArrow) {
-        if (admitScroll()) scrollActivePane("down");
+        const rows = scrollRows();
+        if (rows > 0) scrollActivePane("down", rows);
       }
     },
-    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus, admitScroll]
+    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus, scrollRows, guardDiscreteKey]
   );
 
   /** Zoom keys, only while an image preview is on screen. Returns whether the key was consumed. */
