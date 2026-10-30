@@ -51,6 +51,10 @@ export const CANONICAL_MIDDLEWARE_ORDER = [
   // projection discards anything applied before it).
   "wire-recovery",
   "turn-context",
+  // Subagent step-budget notice. After `turn-context` (it appends to the same wire tail, and the
+  // notice is the newest block) and after `compaction` for the same reason every tail injection is:
+  // the channel projection would otherwise discard it.
+  "step-budget",
   "extensions",
   "early-tool-result-ui",
   "task-prefork",

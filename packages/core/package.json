@@ -142,6 +142,7 @@
     "validate:assert-async-iterable": "pnpm run build && node scripts/validate-assert-async-iterable.mjs",
     "validate:reasoning-echo": "pnpm run build && node scripts/validate-reasoning-echo.mjs",
     "validate:status-middleware": "pnpm run build && node scripts/validate-status-middleware.mjs",
+    "validate:step-budget": "pnpm run build && node scripts/validate-step-budget.mjs",
     "validate:agent-status-log": "pnpm run build && node scripts/validate-agent-status-log.mjs",
     "validate:lifecycle-middleware": "pnpm run build && node scripts/validate-lifecycle-middleware.mjs",
     "validate:lifecycle-provider": "pnpm run build && node scripts/validate-lifecycle-provider.mjs",

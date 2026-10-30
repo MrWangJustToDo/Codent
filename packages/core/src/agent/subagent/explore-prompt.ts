@@ -21,6 +21,7 @@ export function buildExploreSystemPrompt(maxIterations: number = SUBAGENT_DEFAUL
 - Use up to ${maxIterations} steps as a safety cap, but finish as soon as the task is complete.
 
 **Guidelines**:
+- **Batch independent calls** — when several reads, greps, or trees do not depend on each other, issue them in the SAME turn; they run concurrently. One call per turn multiplies round trips and spends the ${maxIterations}-step budget you could use for more exploration.
 - Explore thoroughly but efficiently — stop once you have enough information to answer.
 - Match the parent conversation's language in your summary.
 - Reference code with \`file_path:line_number\`; keep the summary structured and factual.

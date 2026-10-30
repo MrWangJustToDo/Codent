@@ -32,6 +32,11 @@ import { buildExploreSystemPrompt, createRunCommandTool, createSubagentTools, cr
   assert.match(prompt, /Match the parent conversation's language/);
   assert.match(prompt, /file_path:line_number/);
 
+  // Batching independent tool calls: TanStack executes a turn's tools concurrently, so one call per
+  // turn is pure round-trip overhead — and a child that does that spends its whole step budget.
+  assert.match(prompt, /Batch independent calls/);
+  assert.match(prompt, /issue them in the SAME turn/);
+
   // Length cap guard.
   assert.ok(prompt.length <= 3000, `explore prompt too long: ${prompt.length} chars (cap 3000)`);
 }

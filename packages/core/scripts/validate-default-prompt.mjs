@@ -36,6 +36,10 @@ registerCoreEnv({
   assert.match(prompt, /Follow conventions/);
   assert.match(prompt, /Context efficiency/);
   assert.match(prompt, /Proactiveness/);
+  // Parallel tool calls: the runtime executes a turn's tools concurrently, so the prompt has to
+  // say so — a main agent that issues one call per turn pays a round trip for each.
+  assert.match(prompt, /Parallel tool calls/);
+  assert.match(prompt, /issue them together in one turn/);
 }
 
 {

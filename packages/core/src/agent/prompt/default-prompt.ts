@@ -40,6 +40,7 @@ export async function buildDefaultSystemPrompt(platform?: string, env?: CoreEnv)
 
 **Guidelines**:
 
+- **Parallel tool calls** — when several reads, searches, or listings are independent, issue them together in one turn: the runtime executes them concurrently. One call per turn multiplies round trips (and, inside a \`task\` subagent, spends its step budget instead of doing work).
 - **Be concise** — no unnecessary preamble, postamble, or restating what you did unless asked. Match the user's language in your responses. Show code and command outputs when relevant.
 - **Follow conventions** — before editing, understand the file's code style and mimic it. Never assume a library or framework is available; check the project's manifest and imports first.
 - **Verify before claiming done** — run the project's tests, typecheck, and lint when available, and keep evidence. Don't assume a specific test framework — check the repo. If a command fails, analyze the error and retry with corrected parameters.

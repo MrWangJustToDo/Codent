@@ -64,6 +64,11 @@ export const TURN_CONTEXT_KINDS = {
   backgroundJobs: "background_jobs",
   projectInstructions: "project_instructions",
   /**
+   * Subagent step-budget warning (once, at 80% of the run's iteration budget).
+   * Its own kind so it is never confused with a hash-admitted section that should update.
+   */
+  stepBudget: "step_budget",
+  /**
    * Background-result push: a completed background command job's notification.
    * Appended once per completion (not hash-admitted); background *tasks* use the
    * same class when they land.

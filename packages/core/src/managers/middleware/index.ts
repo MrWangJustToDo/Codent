@@ -22,6 +22,14 @@ export {
   SUBAGENT_ALLOWED_KINDS,
   type TurnContextMiddlewareDeps,
 } from "./turn-context-middleware.js";
+export {
+  createStepBudgetMiddleware,
+  buildStepBudgetNotice,
+  stepBudgetThreshold,
+  STEP_BUDGET_NOTICE_RATIO,
+  STEP_BUDGET_MIN_NOTICE,
+  type StepBudgetMiddlewareDeps,
+} from "./step-budget-middleware.js";
 export { createPromptCacheMiddleware, type PromptCacheMiddlewareDeps } from "./prompt-cache-middleware.js";
 export { instrumentMiddlewareLog } from "./instrument-middleware-log.js";
 export { createPlanModeMiddleware, type PlanModeMiddlewareDeps } from "../../agent/plan/plan-mode-middleware.js";

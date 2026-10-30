@@ -25,6 +25,7 @@ import {
   createPromptCacheMiddleware,
   createRepeatReminderMiddleware,
   createStatusMiddleware,
+  createStepBudgetMiddleware,
   createTaskPreforkMiddleware,
   createTodoReminderMiddleware,
   createToolCompactMiddleware,
@@ -227,6 +228,13 @@ export function buildAgentRunner(
         if (!parentId) return undefined;
         return deps.manager.getAgent(parentId)?.getAgentDocContent() || undefined;
       },
+    }),
+    // Subagent step budget: one gentle reminder at 80%, so the child can wrap up before the cap.
+    createStepBudgetMiddleware({
+      isSubagent: () => Boolean(parentId),
+      getMaxIterations: () => midIterationMax,
+      getUIChannel: () => deps.getUIChannel() ?? undefined,
+      persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
     }),
     createExtensionsMiddleware({
       getExtensionRunner: deps.getExtensionRunner,
