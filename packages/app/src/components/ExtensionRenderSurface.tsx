@@ -1,7 +1,7 @@
 import { Box, Text } from "ink";
 
 import { COLORS } from "../theme/colors.js";
-import { sanitizeAnsi } from "../utils/ansi.js";
+import { boundAnsiText } from "../utils/ansi.js";
 
 import type { ExtensionRenderPayload } from "@codent/core";
 import type { ReactNode } from "react";
@@ -12,17 +12,21 @@ import type { ReactNode } from "react";
  */
 const MAX_DEPTH = 8;
 const MAX_NODES = 200;
+/** Visible characters per text node (code points, not UTF-16 units — see `boundAnsiText`). */
 const MAX_TEXT_LENGTH = 2000;
 const MAX_SPACING = 8;
 
 /** The closed set of layout primitives the generic renderer understands. */
 const NODE_TYPES = new Set(["text", "row", "column", "box"]);
 
-/** Sanitize, then bound the length; a truncated payload gets a reset suffix. */
+/**
+ * Sanitize, bound and style-terminate one text value (`boundAnsiText` owns the three rules).
+ *
+ * The reset is part of every rendered text, not just truncated ones: an extension that closes its
+ * own styling is the normal case, and one that does not must not tint the footer below it.
+ */
 function limitText(value: string): string {
-  const clean = sanitizeAnsi(value);
-  if (clean.length <= MAX_TEXT_LENGTH) return clean;
-  return `${clean.slice(0, MAX_TEXT_LENGTH)}\u001b[0m`;
+  return boundAnsiText(value, MAX_TEXT_LENGTH);
 }
 
 function asRecord(node: unknown): Record<string, unknown> | null {

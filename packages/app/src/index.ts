@@ -23,7 +23,9 @@ export { ExtensionRenderSurface } from "./components/ExtensionRenderSurface.js";
 // mount it directly instead of going through the whole panel.
 export { WorkspaceImagePreview } from "./components/WorkspaceImagePreview.js";
 // The ANSI sandbox lives in `utils` because the workspace image preview needs the same rule.
-export { sanitizeAnsi } from "./utils/ansi.js";
+// `boundAnsiText` is the sanitize + bound + reset triple every foreign text passes through, so the
+// extension surface test can drive it directly instead of mounting the component.
+export { ANSI_RESET, boundAnsiText, sanitizeAnsi } from "./utils/ansi.js";
 export { isAlternateScreenActive } from "./utils/alternate-screen.js";
 // Host-initiated suspend: the one seam that lets a host unmount the UI without ending the session.
 export {

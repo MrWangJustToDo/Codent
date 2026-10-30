@@ -17,7 +17,7 @@
  */
 import assert from "node:assert/strict";
 
-import { sanitizeAnsi } from "../dist/index.mjs";
+import { ANSI_RESET, boundAnsiText, sanitizeAnsi } from "../dist/index.mjs";
 
 const ESC = "\u001b";
 
@@ -87,6 +87,40 @@ assert.equal(sanitizeAnsi(`a${ESC}[b`), "a", "a bare/incomplete ESC[ is still re
 {
   const out = sanitizeAnsi(`${ESC}[33mup${ESC}[2Athen${ESC}[0m`);
   assert.equal(out, `${ESC}[33mupthen${ESC}[0m`, "a dropped sequence leaves both kept neighbours intact");
+}
+
+// ── boundAnsiText: the sanitize + bound + reset triple ──────────────────────
+//
+// Every text an extension renders goes through this, so three properties have to hold. Each one is
+// a shape that has already gone wrong or would be invisible until a user noticed:
+//
+//  1. the reset is appended UNCONDITIONALLY — a payload that forgets its trailing reset would
+//     otherwise tint the footer rows below it and the shell prompt after exit;
+//  2. the bound counts VISIBLE characters and never cuts inside a surrogate pair or an escape —
+//     a UTF-16 slice could split `😀` or leave a bare `ESC[33` that the terminal swallows along
+//     with the text after it;
+//  3. sanitizing still happens, so a bounded payload cannot smuggle a cursor move past the gate.
+{
+  assert.equal(boundAnsiText("plain", 100), `plain${ANSI_RESET}`, "an unterminated payload gets a reset");
+  assert.equal(
+    boundAnsiText(`${ESC}[33mhi${ESC}[0m`, 100),
+    `${ESC}[33mhi${ESC}[0m`,
+    "an already-terminated payload is not double-reset"
+  );
+  assert.equal(boundAnsiText("ab😀cd", 3), `ab😀${ANSI_RESET}`, "the bound counts code points, not UTF-16 units");
+  assert.equal(
+    boundAnsiText(`${ESC}[33mabcdef`, 2),
+    `${ESC}[33mab${ANSI_RESET}`,
+    "an SGR is copied whole and never left half-written at the cut"
+  );
+  assert.equal(
+    boundAnsiText(`${ESC}[38;5;208mx`, 1),
+    `${ESC}[38;5;208mx${ANSI_RESET}`,
+    "escapes do not consume the visible-character budget"
+  );
+  assert.equal(boundAnsiText(`a${ESC}[2Jb`, 100), `ab${ANSI_RESET}`, "a bounded payload is still sanitized");
+  assert.equal(boundAnsiText("anything", 0), "", "a zero bound renders nothing at all");
+  assert.equal(boundAnsiText("", 100), "", "empty stays empty (no stray reset line)");
 }
 
 console.log("extension-render-surface validation passed");
