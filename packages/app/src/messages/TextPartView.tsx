@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { StreamMarkdown } from "ink-stream-markdown";
+import { memo } from "react";
 
 import { useStaticContext } from "../context/static-context.js";
 import { useSize } from "../hooks";
@@ -46,7 +47,7 @@ const STREAMING_PARSE_OPTIONS = { streamParse: "auto", reuseStableTopLevelNodes:
  */
 
 /** Render a text part for assistant messages (user messages are handled by UserMessageView) */
-export const TextPartView = ({ part }: TextPartViewProps) => {
+export const TextPartView = memo(({ part }: TextPartViewProps) => {
   const width = useSize((s) => s.state.screenWidth);
 
   const { staticMessage } = useStaticContext();
@@ -65,4 +66,6 @@ export const TextPartView = ({ part }: TextPartViewProps) => {
       </StreamMarkdown>
     </Box>
   );
-};
+});
+
+TextPartView.displayName = "TextPartView";

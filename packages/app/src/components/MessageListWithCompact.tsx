@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 import { useAgentStatus } from "../hooks/use-agent-status";
 import { useCompactSummaryText } from "../hooks/use-compact-summary-text";
@@ -8,7 +8,7 @@ import { MessageList } from "./MessageList";
 
 import type { UIMessage } from "@tanstack/ai";
 
-export const MessageViewWithCompact = ({ messages }: { messages: UIMessage[] }) => {
+export const MessageViewWithCompact = memo(({ messages }: { messages: UIMessage[] }) => {
   const status = useAgentStatus((s) => s.status);
 
   const isCompacting = status === "compacting";
@@ -31,4 +31,6 @@ export const MessageViewWithCompact = ({ messages }: { messages: UIMessage[] }) 
   }, [messages, isCompacting, compactSummaryText]);
 
   return <MessageList messages={displayMessages} />;
-};
+});
+
+MessageViewWithCompact.displayName = "MessageViewWithCompact";

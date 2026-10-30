@@ -1,5 +1,6 @@
 import { BUILTIN_TOOL_NAMES } from "@codent/core";
 import { Box, Text } from "ink";
+import { memo } from "react";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
 import { useTranscriptDisplayMode } from "../context/transcript-display-context.js";
@@ -104,7 +105,7 @@ const SETTLED_INPUT_MAX_LINES = 2;
 const HEADER_CHROME_WIDTH = 6;
 
 /** Render a tool invocation part — unified compact style for all tools */
-export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartViewProps) => {
+export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPartViewProps) => {
   const displayMode = useTranscriptDisplayMode();
   const uiState = getUiToolState(part);
   const toolName = part.name;
@@ -311,4 +312,6 @@ export const ToolCallPartView = ({ part, streamingThrottleMs }: ToolCallPartView
       )}
     </Box>
   );
-};
+});
+
+ToolCallPartView.displayName = "ToolCallPartView";
