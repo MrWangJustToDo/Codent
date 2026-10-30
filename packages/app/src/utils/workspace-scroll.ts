@@ -23,17 +23,29 @@ export function clampScrollTop(scrollTop: number, totalLines: number, visibleLin
  *
  * The two panes measure different things: the tree moves a *cursor* (one row = one item), while the
  * preview moves *content* (one row = one line). One line per notch reads as sluggish next to the
- * tree, so a fresh notch moves a line group — 3 is also what a text viewer conventionally advances
- * per wheel detent.
+ * tree, so a fresh notch moves a line group — 4 is a detent's worth of a text viewer plus the one
+ * line the pane used to draw for it.
  *
  * Momentum is not this knob's job: {@link createScrollStepper} keeps a *stream* of events at
- * {@link PREVIEW_SCROLL_CONTINUOUS_STEP}, so a trackpad tail still moves one row per admitted
+ * {@link PREVIEW_SCROLL_CONTINUOUS_STEP}, so a trackpad tail still moves one step per admitted
  * event no matter what this is set to.
+ *
+ * Feel ladder (measured, 1s gesture against a long file — see `workspace-scroll.test.mjs`):
+ *
+ * | version | rows / notch | rows / s while scrolling |
+ * |---|---|---|
+ * | unpaced (original) | 3 | 375 |
+ * | one-row pacing | 3 | 31 |
+ * | this | 4 | 125 |
+ *
+ * The unpaced number is why pacing exists (a flick ran away with the file); 31 is why the pacing
+ * was reported as numb. 125 keeps roughly a third of the original's responsiveness while the
+ * admitted-event cap, not the step, still bounds the tail.
  */
-export const PREVIEW_SCROLL_STEP = 3;
+export const PREVIEW_SCROLL_STEP = 4;
 
-/** Rows one step of a *continuous* stream moves (trackpad momentum, or a held arrow key). */
-export const PREVIEW_SCROLL_CONTINUOUS_STEP = 1;
+/** Rows one step of a *continuous* stream moves (trackpad fingers, or a held arrow key). */
+export const PREVIEW_SCROLL_CONTINUOUS_STEP = 2;
 
 /**
  * Quiet time that turns a step into a discrete notch.
@@ -43,7 +55,7 @@ export const PREVIEW_SCROLL_CONTINUOUS_STEP = 1;
  * see it, so it earns the full {@link PREVIEW_SCROLL_STEP}; anything arriving sooner than
  * {@link SCROLL_BURST_INTERVAL_MS} is momentum and is dropped.
  */
-export const SCROLL_DISCRETE_GAP_MS = 96;
+export const SCROLL_DISCRETE_GAP_MS = 64;
 
 /**
  * Shortest gap between two admitted scroll steps.
@@ -51,13 +63,26 @@ export const SCROLL_DISCRETE_GAP_MS = 96;
  * The wheel and a pressed arrow arrive as the SAME event, so the panel cannot tell a flick from a
  * held key — the one lever left on this input plane is time. A trackpad's momentum keeps emitting
  * notches after the fingers stop (every 8–16ms on macOS), which is what reads as scroll *inertia*;
- * dropping events that arrive faster than this caps a burst at ~30 steps/s instead of ~120.
+ * dropping events that arrive faster than this caps a burst instead of letting it run the file.
  *
- * The number is just under the fastest repeat every platform delivers by default (Windows and X11
- * repeat at 31–40ms), so a held arrow key still moves one row per repeat — the cap only bites the
- * bursts no keyboard produces.
+ * 16ms admits one event per display frame, so two-finger scrolling tracks the fingers at frame rate
+ * (that is the part 32ms took away, and the reason this reads as sensitivity); the cap still bites
+ * the 8ms momentum tail, where it admits every other event.
+ *
+ * The number stays well under the fastest keyboard auto-repeat (Windows and X11 repeat at 31–40ms),
+ * so a held arrow key is never dropped — it just moves at the stream step.
  */
-export const SCROLL_BURST_INTERVAL_MS = 32;
+export const SCROLL_BURST_INTERVAL_MS = 16;
+
+/**
+ * Burst interval for **cursor** panes (file tree, quick-open).
+ *
+ * Deliberately still 32ms. A cursor move is one *item* per admitted event and the list has no
+ * "how far" to spend, so a trackpad flick travelling at the content rate walks 60+ rows down the
+ * tree — the overshoot this gate exists to prevent. The content panes got faster; the cursor panes
+ * keep the pace they were tuned to.
+ */
+export const CURSOR_SCROLL_BURST_MS = 32;
 
 /**
  * Admit at most one scroll step per {@link SCROLL_BURST_INTERVAL_MS}, and say how far it moves.

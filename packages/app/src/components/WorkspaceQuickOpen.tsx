@@ -11,8 +11,8 @@ import { joinWorkspacePath } from "../utils/workspace-path.js";
 import {
   clampScrollTop,
   createScrollPacer,
+  CURSOR_SCROLL_BURST_MS,
   ensureIndexVisible,
-  SCROLL_BURST_INTERVAL_MS,
   visibleWindow,
 } from "../utils/workspace-scroll.js";
 
@@ -63,7 +63,7 @@ export const WorkspaceQuickOpen = ({ rootPath, width, height }: WorkspaceQuickOp
    * an Up/Down key), so the wheel needs the same damping as the two panes behind this overlay —
    * otherwise a trackpad flick runs the selection down the whole result list.
    */
-  const scrollPacer = useRef(createScrollPacer(SCROLL_BURST_INTERVAL_MS));
+  const scrollPacer = useRef(createScrollPacer(CURSOR_SCROLL_BURST_MS));
 
   useEffect(() => {
     if (!rootPath) return;

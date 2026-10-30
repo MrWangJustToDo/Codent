@@ -22,8 +22,10 @@ import { workspaceRelativePath } from "../utils/workspace-path.js";
 import { decideReveal } from "../utils/workspace-reveal.js";
 import {
   clampScrollTop,
+  createScrollPacer,
   createScrollStepper,
   createWheelGestureGuard,
+  CURSOR_SCROLL_BURST_MS,
   ensureIndexVisible,
   PREVIEW_SCROLL_STEP,
   WHEEL_GESTURE_COMMIT_MS,
@@ -81,10 +83,18 @@ export const WorkspaceFileMode = () => {
    * a stream of presses indistinguishable from a held key — that stream IS the inertia users
    * feel. Only the timing separates them (see `createScrollStepper`), and the pane must not be able
    * to tell: a fresh press on either side always moves.
+   *
+   * Two gates, because the two kinds of pane spend a step differently: content panes move *lines*
+   * (a bigger step and a faster admission are exactly the sensitivity the thumb asks for), while
+   * cursor panes move one *item* and would overshoot the list at that rate. See
+   * `CURSOR_SCROLL_BURST_MS`.
    */
-  const scrollStepper = useRef(createScrollStepper());
-  /** Rows this event may move (0 = momentum, drop it). A cursor move ignores the magnitude. */
-  const scrollRows = useCallback(() => scrollStepper.current.rows(Date.now()), []);
+  const contentStepper = useRef(createScrollStepper());
+  /** Rows this event may move the preview / diff content (0 = momentum, drop it). */
+  const contentRows = useCallback(() => contentStepper.current.rows(Date.now()), []);
+  const cursorPacer = useRef(createScrollPacer(CURSOR_SCROLL_BURST_MS));
+  /** Whether this event may move a cursor (file tree, image pan). A cursor move ignores magnitude. */
+  const cursorAdmits = useCallback(() => cursorPacer.current.admit(Date.now()), []);
   /**
    * Gate for ←/→, the only keys a trackpad's *horizontal* swipe can produce.
    *
@@ -117,7 +127,8 @@ export const WorkspaceFileMode = () => {
   // A pane that just took focus scrolls on its first key: the gate is about a burst *inside* one
   // gesture, not about how long ago the user scrolled the other pane.
   useEffect(() => {
-    scrollStepper.current.reset();
+    contentStepper.current.reset();
+    cursorPacer.current.reset();
   }, [paneFocus]);
 
   const [rootPath, setRootPath] = useState("");
@@ -473,11 +484,11 @@ export const WorkspaceFileMode = () => {
   const handleTreeKey = useCallback(
     (key: Key) => {
       if (key.upArrow) {
-        if (scrollRows() > 0) moveCursor(cursorIndex - 1);
+        if (cursorAdmits()) moveCursor(cursorIndex - 1);
         return;
       }
       if (key.downArrow) {
-        if (scrollRows() > 0) moveCursor(cursorIndex + 1);
+        if (cursorAdmits()) moveCursor(cursorIndex + 1);
         return;
       }
       if (key.rightArrow) {
@@ -536,7 +547,7 @@ export const WorkspaceFileMode = () => {
       selectedPath,
       selectFile,
       setPaneFocus,
-      scrollRows,
+      cursorAdmits,
       guardDiscreteKey,
     ]
   );
@@ -566,11 +577,11 @@ export const WorkspaceFileMode = () => {
           // moves the same number of CELLS at 2× and at 8× (a constant step skipped a whole screen
           // at deep zoom, where the pannable range is large and the window is small).
           if (key.upArrow) {
-            if (scrollRows() > 0) panImage(0, -1);
+            if (cursorAdmits()) panImage(0, -1);
             return;
           }
           if (key.downArrow) {
-            if (scrollRows() > 0) panImage(0, 1);
+            if (cursorAdmits()) panImage(0, 1);
             return;
           }
           if (key.leftArrow) return guardDiscreteKey(() => panImage(-1, 0));
@@ -582,12 +593,12 @@ export const WorkspaceFileMode = () => {
         }
         if (key.rightArrow) return;
         if (key.upArrow) {
-          const rows = scrollRows();
+          const rows = contentRows();
           if (rows > 0) scrollActivePane("up", rows);
           return;
         }
         if (key.downArrow) {
-          const rows = scrollRows();
+          const rows = contentRows();
           if (rows > 0) scrollActivePane("down", rows);
         }
         return;
@@ -600,16 +611,26 @@ export const WorkspaceFileMode = () => {
       if (key.rightArrow) return;
       if (!selectedPath) return;
       if (key.upArrow) {
-        const rows = scrollRows();
+        const rows = contentRows();
         if (rows > 0) scrollActivePane("up", rows);
         return;
       }
       if (key.downArrow) {
-        const rows = scrollRows();
+        const rows = contentRows();
         if (rows > 0) scrollActivePane("down", rows);
       }
     },
-    [imageViewActive, imageZoom, panImage, selectedPath, scrollActivePane, setPaneFocus, scrollRows, guardDiscreteKey]
+    [
+      imageViewActive,
+      imageZoom,
+      panImage,
+      selectedPath,
+      scrollActivePane,
+      setPaneFocus,
+      contentRows,
+      cursorAdmits,
+      guardDiscreteKey,
+    ]
   );
 
   /** Zoom keys, only while an image preview is on screen. Returns whether the key was consumed. */
