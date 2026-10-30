@@ -1,7 +1,7 @@
 export type { TokenUsage } from "./token-usage.js";
 export { calculateCost, extractTanStackProvider, extractTanStackUsage } from "./token-usage.js";
 
-export type { AgentStatus, RunFinalizeReason } from "./agent-status.js";
+export type { AgentRunOutcomeKind, AgentStatus, RunFinalizeReason } from "./agent-status.js";
 export {
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,

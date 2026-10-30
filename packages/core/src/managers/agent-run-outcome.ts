@@ -2,10 +2,18 @@
  * Typed end-of-run / mid-run status policies for {@link AgentStatusController}.
  */
 
+import type { AgentRunOutcomeKind } from "../runtime-types/agent-status.js";
 import type { UIMessage } from "@tanstack/ai";
 
-/** How a run ended (or paused) for status finalization. */
-export type AgentRunOutcomeKind = "finished" | "aborted" | "error" | "waiting";
+/**
+ * How a run ended (or paused) for status finalization.
+ *
+ * The union lives in `runtime-types/agent-status.ts` next to {@link RunFinalizeReason}, which it
+ * extends with `waiting`: the pause that is not a turn end. Declaring it beside the finalize
+ * reasons is what makes the relationship structural instead of two hand-maintained literals that
+ * merely looked alike.
+ */
+export type { AgentRunOutcomeKind };
 
 /**
  * Chat vs detached completion differ for leftover wait states:

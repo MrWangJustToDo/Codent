@@ -13,6 +13,7 @@
 
 import { AgentUIChannel } from "../ui/ui-channel.js";
 
+import type { AgentRunOutcomeKind } from "../../runtime-types/agent-status.js";
 import type { AgentManager, ManagedAgent } from "../../runtime-types/hosts.js";
 import type { AgentStreamHub } from "../stream-hub";
 import type { ModelMessage, StreamChunk, UIMessage } from "@tanstack/ai";
@@ -80,7 +81,8 @@ export async function consumeAgentStream(options: ConsumeAgentStreamOptions): Pr
 
 export interface RunAgentOnceOutcome {
   path: "chat" | "detached";
-  kind: "finished" | "aborted" | "error" | "waiting";
+  /** Ended-or-paused kind — the same vocabulary the finalizer applies (`AgentRunOutcomeKind`). */
+  kind: AgentRunOutcomeKind;
   errorMessage?: string;
   /** Override messages passed to applyRunOutcome (defaults to consumed messages). */
   messages?: UIMessage[];

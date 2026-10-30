@@ -67,15 +67,21 @@ type AgentStatus =
   | "waiting" | "awaiting_user" | "compacting" | "thinking" | "responding";
 ```
 
-`RunFinalizeReason = "finished" | "aborted" | "error"`（同文件 `:17`）——**没有** `"waiting"`：
+`RunFinalizeReason = "finished" | "aborted" | "error"`（同文件 `:24`）——**没有** `"waiting"`：
 等待不是 turn 的结束，见 §3.5 与 §7 第 11 条。
+
+`AgentRunOutcomeKind = RunFinalizeReason | "waiting"`（同文件 `:34`）是**同一套词汇**，不是第二套：
+`waiting` 是唯一“结束或暂停”里不属于 turn 结束的成员，所以它只出现在 outcome 侧，
+永远进不了 `ManagedAgent.finalizeRun(reason: RunFinalizeReason)`（`finalizeChat` 的
+`input.kind !== "waiting"` 之后 `input.kind` 被类型缩窄成 `RunFinalizeReason`）。
+新增一个终态原因会自动同时成为 outcome kind；新增一种暂停必须只在 `AgentRunOutcomeKind` 里声明。
 
 ### 2.1 三个谓词，回答三个不同问题
 
 | 谓词 | 集合 | 回答的问题 | 用在哪 |
 |---|---|---|---|
-| `isTerminalStatus` (`:36`) | `aborted` `error` `waiting` `awaiting_user` | "流正常结束时**不许被覆盖**" | `resolveFinishStatus` (`:45`)、`onRunFinish` |
-| `isActiveStatus` (`:40`) | `running` `thinking` `responding` `waiting` `awaiting_user` `compacting` | "现在有活可干，abort 能改变点什么" | abort 监听器 (`managed-agent-run-lifecycle.ts:87`)、`abortManagedAgentRun` (`:197`)、`ctx.isIdle()` (`managed-agent.ts:1580`) |
+| `isTerminalStatus` (`:88`) | `aborted` `error` `waiting` `awaiting_user` | "流正常结束时**不许被覆盖**" | `resolveFinishStatus` (`:97`)、`onRunFinish` |
+| `isActiveStatus` (`:92`) | `running` `thinking` `responding` `waiting` `awaiting_user` `compacting` | "现在有活可干，abort 能改变点什么" | abort 监听器 (`managed-agent-run-lifecycle.ts:87`)、`abortManagedAgentRun` (`:197`)、`ctx.isIdle()` (`managed-agent.ts:1580`) |
 | `shouldDeferMidRunQueue` (`agent/queue/defer-mid-run-queue.ts:11`) | `pumpDepth > 0` 或 `waiting`/`awaiting_user` | "这条新输入该排队还是直接开跑" | `shouldDeferQueue` (`agent-chat-controller.ts:398`) |
 
 关键点：**`completed` 不在 `TERMINAL_STATUSES` 里，也不在 `ACTIVE_STATUSES` 里**。
@@ -114,7 +120,7 @@ type AgentStatus =
 | `running` `thinking` | `responding` | `chunk:text` | `:85-89` |
 | 任意非粘性 | `running` | `chunk:tool` | `:75-78` |
 | 非终止 | `completed` | `run-finish`（`resolveFinishStatus`，无 error） | `:135-140` |
-| 非终止 + error 文本 | `error` | `run-finish` | `runtime-types/agent-status.ts:45-49` |
+| 非终止 + error 文本 | `error` | `run-finish` | `runtime-types/agent-status.ts:97-101` |
 | `running` 等 | `waiting` | `approvals-pending` / `reconcile` | `:196-219`、`:254-257` |
 | `waiting` | `running` | `approvals-cleared` / `before-tool-call` / `run-prepare` | `:200-203`、`:221-226` |
 | 任意 | `awaiting_user` | `client-tool-wait` / `reconcile` | `:228-237`、`:258-261` |
@@ -702,7 +708,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 
 | 文件 | 负责 |
 |---|---|
-| `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`resolveFinishStatus` |
+| `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`/`AgentRunOutcomeKind`（后者 = 前者 + `"waiting"`）、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`resolveFinishStatus` |
 | `packages/core/src/managers/controllers/agent-status-controller.ts` | 所有状态跳转的唯一实现、审批/交互状态同步、`applyRunOutcome` |
 | `packages/core/src/managers/controllers/agent-chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
 | `packages/core/src/managers/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |

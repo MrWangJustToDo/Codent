@@ -7,7 +7,7 @@
 
 import type { AgentEventType } from "./agent-events.js";
 import type { AgentRetryStrategy } from "./agent-retry.js";
-import type { AgentStatusTrigger } from "./agent-status.js";
+import type { AgentStatusTrigger, RunFinalizeReason } from "./agent-status.js";
 import type { McpConfigSourceKind, McpServerStatus } from "./mcp-status.js";
 import type { SessionJobSummary } from "./session-payloads.js";
 
@@ -523,7 +523,7 @@ export type AgentEventPayloadMap = {
     fallback?: string;
   };
   "turn:summary": {
-    outcome?: "finished" | "aborted" | "error";
+    outcome?: RunFinalizeReason;
     /**
      * The turn stopped to wait for something (approval / `ask_user`), so it has no outcome yet.
      *

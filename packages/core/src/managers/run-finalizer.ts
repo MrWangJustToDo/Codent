@@ -107,7 +107,9 @@ export class RunFinalizer {
     });
     input.persist();
 
-    // Waiting (approval / ask_user) keeps turn context for the resume pump.
+    // Waiting (approval / ask_user) keeps turn context for the resume pump: it is the one outcome
+    // that is not a `RunFinalizeReason`, which is why the narrowed set below is derived from
+    // `AgentRunOutcomeKind` by type rather than trusted from this comment.
     if (input.kind !== "waiting") {
       this.deps.finalizeRun(input.kind);
     }

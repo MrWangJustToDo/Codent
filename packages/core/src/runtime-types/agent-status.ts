@@ -14,7 +14,24 @@ export type AgentStatus =
   | "thinking"
   | "responding";
 
+/**
+ * Why a run's **turn** ended: the reasons that finalize it.
+ *
+ * Deliberately the primary vocabulary: `waiting` cannot appear here, because a pause for an
+ * approval or a client tool is not a turn end — `RunFinalizer.finalizeChat` skips turn
+ * finalization for it and keeps turn context for the resume pump.
+ */
 export type RunFinalizeReason = "finished" | "aborted" | "error";
+
+/**
+ * How a run ended **or paused**, for status finalization.
+ *
+ * One vocabulary, not two: this is `RunFinalizeReason` plus the single pause that must never reach
+ * `ManagedAgent.finalizeRun`. Deriving it here is what keeps the two from drifting — a fourth
+ * terminal reason is admitted to both sides at once, while a new pause flavour has exactly one
+ * place to be declared and stays out of the finalize path by construction.
+ */
+export type AgentRunOutcomeKind = RunFinalizeReason | "waiting";
 
 /** Compaction paths that move the status via `compaction:<kind>`. */
 export type StatusCompactionKind = "auto" | "manual" | "reactive";
