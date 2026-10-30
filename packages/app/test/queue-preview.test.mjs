@@ -68,15 +68,14 @@ const short = nextQueuedPreview({ steer: [], followUp: [long] }, 20);
 assert.equal(short?.length, 20, "the preview fits the budget it is given");
 assert.ok(short?.endsWith("…"), "…and says it was cut");
 
-// The busy hint names the queue and what Esc costs. Both halves matter: the count alone never told a
-// user WHAT they queued, and `Esc` silently dropped it.
+// The busy hint names the queue and the one action that matters while it exists: cancelling it.
+// The secondary chords (recall / force-submit) come back once the queue is empty — the row shares
+// its line with the status, so it carries exactly two facts while something is waiting.
 const hint = busyQueueHint(1, 1, "fix the flaky test");
 assert.ok(hint.includes(`Queued (2): "fix the flaky test"`), hint);
-assert.ok(hint.includes("drops them"), `the abort entry refers back to the count it clears: ${hint}`);
-assert.ok(hint.includes("force submit"), hint);
-// With a queue, "Enter queues" (how you got here) gives way to the thing you cannot guess: taking one
-// back. The line stays the same width.
-assert.ok(hint.includes("Ctrl+Q recall"), hint);
+assert.ok(hint.endsWith("Esc cancel queue"), `the only action offered is cancelling the queue: ${hint}`);
+assert.ok(!hint.includes("force submit"), hint);
+assert.ok(!hint.includes("Ctrl+Q recall"), hint);
 assert.ok(!hint.includes("Enter queue"), hint);
 // The count is stated exactly once: it appeared three times when the preview was added to a hint that
 // already counted follow-ups and repeated the total in the abort warning.

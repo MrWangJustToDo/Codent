@@ -199,26 +199,37 @@ export function workspacePanelHint(options?: { edit?: boolean }): string {
 }
 
 /**
- * Busy-agent footer: what is queued, then follow-up / force-submit / abort.
+ * Busy-agent footer: what is queued, or how to queue when nothing is.
  *
  * `nextPreview` is the head of the queue (see `utils/queue-preview`), which is what turns "2" into
- * "that thing I typed". The abort entry names the queue it clears: dropping pending input is a real
- * consequence of Esc, and the count is the only warning the user gets.
+ * "that thing I typed".
+ *
+ * WITH a queue the line carries exactly two facts — what is waiting, and how to cancel it. The
+ * queue hint shares one row with the status and must never wrap, so the secondary chords (recall /
+ * force-submit) are dropped while they would push it over: the user can see what they would lose,
+ * and the only action that matters then is the one that drops it. The preview is shortened to the
+ * room left (`previewMax`), never wrapped.
  */
-export function busyQueueHint(steerCount: number, followUpCount: number, nextPreview?: string | null): string {
+export function busyQueueHint(
+  steerCount: number,
+  followUpCount: number,
+  nextPreview?: string | null,
+  options?: { previewMax?: number }
+): string {
   const queued = steerCount + followUpCount;
-  // One count, stated once: it leads the line, and the abort warning refers back to it rather than
-  // repeating the number (the first version said it three times, in ~110 columns).
-  // With a queue, the useful facts change: "Enter queues" is how you got here, and taking one back is what
-  // you cannot guess. Swapping the two keeps the line the same width.
-  const parts =
-    queued > 0
-      ? [`${KeyLabel.ctrlQ} recall`, `${modifiedEnterLabel()} force submit`, `${KeyLabel.esc} abort (drops them)`]
-      : [`${KeyLabel.enter} queue`, `${modifiedEnterLabel()} force submit`, `${KeyLabel.esc} abort`];
   if (queued > 0) {
-    parts.unshift(nextPreview ? `Queued (${queued}): "${nextPreview}"` : `Queued (${queued})`);
+    const preview = clampPreview(nextPreview, options?.previewMax ?? 28);
+    const label = preview ? `Queued (${queued}): "${preview}"` : `Queued (${queued})`;
+    return `${label} \u00b7 ${KeyLabel.esc} cancel queue`;
   }
-  return parts.join(" \u00b7 ");
+  return [`${KeyLabel.enter} queue`, `${modifiedEnterLabel()} force submit`, `${KeyLabel.esc} abort`].join(" \u00b7 ");
+}
+
+/** One-line preview, ellipsised to `max` — the footer row has no room to wrap. */
+function clampPreview(preview: string | null | undefined, max: number): string | null {
+  if (!preview) return null;
+  if (preview.length <= max) return preview;
+  return `${preview.slice(0, Math.max(1, max - 1))}…`;
 }
 
 export function freeformSubmitHint(): string {

@@ -272,12 +272,6 @@ export const WelcomePanel = ({
       <Box flexDirection="column" alignItems="center" width="100%">
         <Wordmark tier={tier} />
 
-        <Box marginTop={1}>
-          <Text color={COLORS.accent} italic>
-            AI-Powered Coding Agent
-          </Text>
-        </Box>
-
         {showBadge && (
           <Box marginTop={1}>
             <Text color={COLORS.warning} dimColor>

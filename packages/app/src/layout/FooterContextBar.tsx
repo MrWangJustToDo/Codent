@@ -5,6 +5,7 @@ import { toRaw } from "reactivity-store";
 import { Spinner } from "../components/Spinner.js";
 import { useAgent } from "../hooks/use-agent.js";
 import { useRetryTicker } from "../hooks/use-retry-ticker.js";
+import { useSize } from "../hooks/use-size.js";
 import { useUserInput } from "../hooks/use-user-input.js";
 import { COLORS } from "../theme/colors.js";
 import { formatDuration } from "../utils/format.js";
@@ -70,6 +71,11 @@ export const FooterContextBar = ({
   const lastRunDurationMs = snap?.lastStreamDurationMs || 0;
   const _error = snap?.error || "";
   const retry = snap?.retry;
+
+  // The queued line shares this row with the status text and must stay on ONE line: shrink the
+  // preview to the room left instead of letting the row overflow / wrap.
+  const screenWidth = useSize((s) => s.state.screenWidth);
+  const queuePreviewMax = screenWidth > 0 ? Math.max(12, screenWidth - 52) : 28;
 
   const inputError = useUserInput((s) => s.inputError);
   const inputFeedback = useUserInput((s) => s.inputFeedback);
@@ -146,12 +152,12 @@ export const FooterContextBar = ({
 
           {/* Contextual shortcuts */}
           {isAgentBusy && !isPendingApproval && !showFreeformInput && !showSelectList && (
-            <Text color={COLORS.muted} dimColor>
-              {busyQueueHint(steerCount, followUpCount, queuePreview)}
+            <Text color={COLORS.muted} dimColor wrap="truncate-end">
+              {busyQueueHint(steerCount, followUpCount, queuePreview, { previewMax: queuePreviewMax })}
             </Text>
           )}
           {(steerCount > 0 || followUpCount > 0) && !isAgentBusy && !isPendingApproval && (
-            <Text color={COLORS.primary} dimColor>
+            <Text color={COLORS.primary} dimColor wrap="truncate-end">
               {queuePreview
                 ? `Queued (${steerCount + followUpCount}): "${queuePreview}"`
                 : `Queued: ${steerCount > 0 ? `${steerCount} steer` : ""}${
