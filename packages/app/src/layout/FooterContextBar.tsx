@@ -120,7 +120,11 @@ export const FooterContextBar = ({
               Ready
             </Text>
           )}
-          {status === "error" && <Text color={COLORS.danger}>{error}</Text>}
+          {status === "error" && (
+            <Text color={COLORS.danger} wrap="truncate-end">
+              {error}
+            </Text>
+          )}
 
           {/* LLM retry visibility — attempt counts + triggering error. Hidden for
               terminal statuses and for the interactive pauses (a stale retry must
@@ -143,12 +147,17 @@ export const FooterContextBar = ({
                     : COLORS.primary
               }
               dimColor={inputFeedback.level === "info"}
+              wrap="truncate-end"
             >
               {inputFeedback.message}
             </Text>
           )}
 
-          {showSaveError && <Text color={COLORS.warning}>Save failed: {saveError}</Text>}
+          {showSaveError && (
+            <Text color={COLORS.warning} wrap="truncate-end">
+              Save failed: {saveError}
+            </Text>
+          )}
 
           {/* Contextual shortcuts */}
           {isAgentBusy && !isPendingApproval && !showFreeformInput && !showSelectList && (

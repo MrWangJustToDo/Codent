@@ -2,6 +2,7 @@ import { Box } from "ink";
 
 import { ExtensionRenderSurface } from "../components/ExtensionRenderSurface.js";
 import { useExtensionUI } from "../hooks/use-extension-ui.js";
+import { BG } from "../theme/colors.js";
 
 /**
  * Extension render surface for the `footer` region — one slot per key, sorted so
@@ -15,10 +16,22 @@ export const FooterExtensionSurface = () => {
   if (keys.length === 0) return null;
 
   return (
-    <Box flexDirection="column" paddingX={1}>
-      {keys.map((key) => (
-        <ExtensionRenderSurface key={key} payload={slots![key]} />
-      ))}
-    </Box>
+    <>
+      <Box
+        borderLeft={false}
+        borderRight={false}
+        borderBottom={false}
+        borderTop
+        borderTopColor={BG.border}
+        borderStyle="single"
+        borderTopDimColor
+        width="full"
+      />
+      <Box flexDirection="column" paddingX={1}>
+        {keys.map((key) => (
+          <ExtensionRenderSurface key={key} payload={slots![key]} />
+        ))}
+      </Box>
+    </>
   );
 };
