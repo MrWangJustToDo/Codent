@@ -18,7 +18,7 @@ minimumReleaseAgeExclude:
   - "@my-react/react-terminal@0.0.30"
   - "@my-react/react-vite@0.0.36"
   - "@my-react/react@0.3.30"
-  - ink-stream-markdown@0.0.14
+  - ink-stream-markdown@0.0.15
   - "@git-diff-view/core@0.1.8"
   - "@git-diff-view/file@0.1.8"
   - "@git-diff-view/lowlight@0.1.8"
