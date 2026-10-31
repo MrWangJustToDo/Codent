@@ -295,8 +295,11 @@ export {
 export {
   parseModeCommand,
   parseModelsCommand,
+  parseUsageCommand,
+  USAGE_HISTORY_MAX_WEEKS,
   type ModeCommandIntent,
   type ModelsCommandIntent,
+  type UsageCommandIntent,
 } from "./agent/commands/arguments.js";
 export { decodeModelChoice, encodeModelChoice } from "./agent/commands/arguments.js";
 export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/session-reference.js";

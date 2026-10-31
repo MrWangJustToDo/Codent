@@ -19,9 +19,11 @@ import {
   offerableReasoningEfforts,
   parseModeCommand,
   parseModelsCommand,
+  parseUsageCommand,
   REASONING_EFFORT_VALUES,
   resolveSessionRef,
   supportedReasoningEfforts,
+  USAGE_HISTORY_MAX_WEEKS,
 } from "../dist/index.mjs";
 
 // ============================================================================
@@ -124,6 +126,36 @@ assert.equal(
   undefined,
   "/effort is not a built-in command any more — /models owns the thinking depth"
 );
+
+// ============================================================================
+// /usage
+// ============================================================================
+//
+// The catalog advertises `/usage [Nw]`, and the headless host used to dispatch `usage.history` with no
+// span at all — the argument never left the host. This is the grammar that closes that: both surfaces
+// ask core what the argument means instead of each carrying a regex.
+{
+  const usageEntry = BUILTIN_COMMAND_CATALOG.find((entry) => entry.name === "usage");
+  assert.ok(usageEntry, "/usage is a built-in");
+  assert.match(usageEntry.usage, /\[Nw\]/, "the advertised form is the one the parser has to accept");
+}
+
+assert.deepEqual(parseUsageCommand(""), { kind: "history" }, "no argument means the surface's own default span");
+assert.deepEqual(parseUsageCommand("4w"), { kind: "history", weeks: 4 }, "`4w` is the documented form");
+assert.deepEqual(parseUsageCommand(" 12 W "), { kind: "history", weeks: 12 }, "case and spacing are tolerated");
+assert.deepEqual(parseUsageCommand("4weeks"), { kind: "history", weeks: 4 }, "the long word form too");
+assert.deepEqual(parseUsageCommand("0w"), { kind: "history", weeks: 1 }, "a zero span clamps to one week, not to none");
+assert.deepEqual(
+  parseUsageCommand("999w"),
+  { kind: "history", weeks: USAGE_HISTORY_MAX_WEEKS },
+  "the span clamps to the store's year"
+);
+assert.deepEqual(
+  parseUsageCommand("forever"),
+  { kind: "invalid", value: "forever" },
+  "an unknown argument is the host's usage error, not a silent default"
+);
+assert.deepEqual(parseUsageCommand("4 square"), { kind: "invalid", value: "4 square" }, "trailing junk is not a span");
 
 // ============================================================================
 // offerableReasoningEfforts — what a MENU may offer (stricter than validation)

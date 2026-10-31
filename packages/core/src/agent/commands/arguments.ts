@@ -183,3 +183,41 @@ export function parseModelsCommand(rawArgs = ""): ModelsCommandIntent {
   if (!isReasoningEffort(effort)) return { kind: "invalid", value: `${head} ${tail}` };
   return { kind: "set", model, ...(entryIndex !== undefined ? { entryIndex } : {}), effort };
 }
+
+// ============================================================================
+// /usage
+// ============================================================================
+
+/**
+ * Longest span `/usage` may ask for.
+ *
+ * One year: the history store is written per year and a weekly graph spanning longer than that
+ * draws columns nobody can read. The clamp sits in the grammar so no host can widen it.
+ */
+export const USAGE_HISTORY_MAX_WEEKS = 52;
+
+/**
+ * What `/usage <args>` asks for: a report over the last `weeks` weeks.
+ *
+ * `weeks` is omitted when the argument named none — the span is then the SURFACE's default (the TUI
+ * sizes the heatmap to the terminal width, a headless host has no width to consult). No message text
+ * here, same as the other intents.
+ */
+export type UsageCommandIntent = { kind: "history"; weeks?: number } | { kind: "invalid"; value: string };
+
+/**
+ * Parse `/usage [Nw]` into an intent.
+ *
+ * `4w` is the documented form; `4week` / `4weeks` read the same. A span outside 1…{@link
+ * USAGE_HISTORY_MAX_WEEKS} is clamped rather than rejected, because "the last 0 weeks" and "the last
+ * 300 weeks" are both a span the user meant, just out of range.
+ */
+export function parseUsageCommand(rawArgs = ""): UsageCommandIntent {
+  const raw = rawArgs.trim();
+  if (raw === "") return { kind: "history" };
+  const match = /^(\d+)\s*(?:w|weeks?)$/i.exec(raw);
+  if (!match) return { kind: "invalid", value: raw };
+  const weeks = Number(match[1]);
+  if (!Number.isFinite(weeks)) return { kind: "invalid", value: raw };
+  return { kind: "history", weeks: Math.min(USAGE_HISTORY_MAX_WEEKS, Math.max(1, weeks)) };
+}
