@@ -26,6 +26,8 @@ export interface AgentLogBindingDeps {
 
 export class AgentLogBinding {
   private detachHandle: (() => void) | null = null;
+  /** Whether any sink was ever attached. Distinguishes "never bound" from "bound, then detached". */
+  private everBound = false;
 
   constructor(private readonly deps: AgentLogBindingDeps) {}
 
@@ -53,6 +55,7 @@ export class AgentLogBinding {
       ...(options?.sessionBoundary === false ? { sessionBoundary: false } : {}),
     };
     this.detachHandle = this.deps.attachViaManager?.(log, sinkOptions) ?? log.attachFileSink(sinkOptions);
+    this.everBound = true;
     // Track for the process-level crash/exit guards.
     registerActiveAgentLog(log);
   }
@@ -64,6 +67,7 @@ export class AgentLogBinding {
   setExternalDetach(detach: () => void): void {
     this.detachHandle?.();
     this.detachHandle = detach;
+    this.everBound = true;
   }
 
   /** Release the active sink binding. Idempotent; the handle is cleared first. */
@@ -82,6 +86,19 @@ export class AgentLogBinding {
    */
   async flushOnDestroy(): Promise<void> {
     const log = this.deps.getLog();
+    // A build that failed BEFORE any sink was ever bound (memory init, an ownership conflict, a
+    // dispose race) drops the pending buffer with the object: `flushSync` is a no-op without a
+    // sink. That buffer is exactly the bootstrap diagnostics the buffer exists for, so the loss
+    // must at least be visible — the overflow path already writes a warn for the same reason.
+    //
+    // Guarded on `everBound` rather than `hasSink()` alone: a second, idempotent destroy AFTER
+    // `detach()` would otherwise report every entry logged in between as "dropped".
+    if (!this.everBound && !log.hasSink() && log.getPendingEntryCount() > 0) {
+      const count = log.getPendingEntryCount();
+      console.warn(
+        `[agent] dropping ${count} buffered log entr${count === 1 ? "y" : "ies"}: no sink was bound before teardown`
+      );
+    }
     log.flushSync();
     try {
       await log.flush();

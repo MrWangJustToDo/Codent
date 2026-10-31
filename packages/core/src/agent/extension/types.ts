@@ -699,6 +699,12 @@ export interface ExtensionAPI {
    * Release this extension's resources. Runs **after** the flush phase, so anything buffered has
    * already landed — land state in `ctx.registerFlush(...)` instead of here if teardown can be
    * asynchronous.
+   *
+   * **Must be idempotent, and may run more than once per incarnation.** A disable or `destroyAll`
+   * during `activate` runs it immediately (revoking the lease), and again when the in-flight
+   * `activate` settles: anything that activation acquired *after* the revoke has no other owner,
+   * and the runner deliberately gives you the second call to release it. A teardown that closes a
+   * handle, deletes a temp file or unsubscribes a socket must tolerate the repeat call.
    */
   deactivate?(): Promise<void> | void;
 }

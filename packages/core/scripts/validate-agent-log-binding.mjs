@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 
 import { AgentLogBinding } from "../dist/dev.mjs";
 
-function makeLog() {
+function makeLog({ hasSink = true, pending = 0 } = {}) {
   const calls = [];
   let dir = "";
   return {
@@ -27,6 +27,9 @@ function makeLog() {
       return () => calls.push({ op: "detach" });
     },
     flushSync: () => calls.push({ op: "flush" }),
+    // The destroy path reads these to report a bootstrap that never bound a sink.
+    hasSink: () => hasSink,
+    getPendingEntryCount: () => pending,
   };
 }
 
@@ -154,6 +157,49 @@ function makeBinding({ log, parentId, sessionId, attachViaManager }) {
     ["external-1", "flush", "external-2", "flush"],
     "detach is idempotent (no second external release)"
   );
+}
+
+// ---------------------------------------------------------------------------
+// 5. A destroy that never bound a sink reports the dropped bootstrap entries
+// ---------------------------------------------------------------------------
+{
+  const log = makeLog({ hasSink: false, pending: 2 });
+  const binding = makeBinding({
+    log,
+    parentId: () => undefined,
+    sessionId: () => "ses_boot",
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    await binding.flushOnDestroy();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1, "the loss is reported once, not silently dropped");
+  assert.match(warnings[0], /2 buffered log entries/, "…with the count that was lost");
+}
+
+// A bound-then-detached binding must not report entries logged in between as dropped.
+{
+  const log = makeLog();
+  const binding = makeBinding({
+    log,
+    parentId: () => undefined,
+    sessionId: () => "ses_bound",
+  });
+  binding.bind();
+  await binding.flushOnDestroy();
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    await binding.flushOnDestroy();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 0, "an idempotent second destroy stays silent");
 }
 
 console.log("agent-log-binding validation passed");

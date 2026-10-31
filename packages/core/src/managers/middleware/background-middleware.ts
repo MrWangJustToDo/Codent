@@ -21,7 +21,12 @@
  */
 
 import { truncateString } from "../../agent/tools/shared/output-limits.js";
-import { TURN_CONTEXT_KINDS, formatContextSectionUserContent, formatSectionTag } from "../../agent/turn-context";
+import {
+  TURN_CONTEXT_KINDS,
+  captureSessionStaleness,
+  formatContextSectionUserContent,
+  formatSectionTag,
+} from "../../agent/turn-context";
 import { collectAnnouncedJobIds } from "../../agent/turn-context/background-jobs.js";
 import {
   injectSyntheticMessages,
@@ -49,6 +54,11 @@ export interface BackgroundMiddlewareDeps {
   getCommandService: () => AgentCommandService;
   /** Parent id of the owning agent — subagents get neither the pointer nor jobs. */
   getParentId: () => string | undefined;
+  /**
+   * Whether a `/new` or `/resume` is in flight. The job reads below are async, and a write that
+   * lands after the switch starts would be persisted into the target transcript.
+   */
+  isSessionSwitching?: () => boolean;
   /** Record a degraded step as `session:diagnostic` (the policy owns the row). */
   emitDiagnostic?: (
     area: "jobs",
@@ -68,12 +78,18 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
     onConfig: async (_ctx, config) => {
       let messages = config.messages as ModelMessage[];
       const commandService = deps.getCommandService();
+      // Anything collected for the session being unloaded is garbage once a switch starts: it is
+      // dropped, never written into the target (see `captureSessionStaleness`).
+      const isStaleSession = captureSessionStaleness(deps.getUIChannel(), deps.isSessionSwitching);
 
       // --- 1. Completions (core): one-shot push per finished job ---
       // Do not mark yet: the channel row must exist first. The session write behind it is
       // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
       // queued", not "on disk" — a crash in between is recovered by the pointer below.
       const completed = await commandService.collectCompleted();
+      // A switch during the read means these completions belong to the session being left; the
+      // registry is reset by the switch, so dropping them (un-notified) is the whole cleanup.
+      if (isStaleSession()) return {};
       if (completed.length > 0) {
         const ui = deps.getUIChannel();
         if (!ui) {
@@ -97,6 +113,8 @@ export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): Chat
       if (!deps.getParentId()) {
         const announced = collectAnnouncedJobIds(messages);
         const section = await buildJobsSection(deps, messages, announced);
+        // Same guard after the section build (it reads job state through the env).
+        if (isStaleSession()) return messages === config.messages ? {} : { messages };
         const ui = deps.getUIChannel();
         const admission = section ? selectChangedSections(messages, [section])[0] : undefined;
         if (admission && ui) {

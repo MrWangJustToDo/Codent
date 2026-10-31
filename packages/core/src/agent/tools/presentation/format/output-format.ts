@@ -96,7 +96,11 @@ function formatRunCommandOutput(output: RunCommandOutput): string {
   // returns a full output with `cancelled: true` and `exitCode: -1`.
   if (timedOut) {
     lines.push(typeof timeoutMs === "number" ? `Command timed out after ${timeoutMs}ms` : "Command timed out");
-  } else if (!success && !cancelled) {
+  } else if (cancelled) {
+    // The reason deliberately does NOT ride in `stderr` (that field is the program's own output),
+    // so the body states it here; the row summary alone is easy to miss once output is expanded.
+    lines.push(TOOL_CANCELLED_MESSAGE);
+  } else if (!success) {
     lines.push(`Exit code: ${exitCode}`);
   }
 

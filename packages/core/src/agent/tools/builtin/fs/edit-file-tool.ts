@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { writeFileAtomic } from "../../../../utils/atomic-write.js";
 import { truncateText } from "../../../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { editFileOutputSchema } from "../../shared/schemas.js";
@@ -125,7 +126,17 @@ export const createEditFileTool = () => {
             }
           }
 
-          await coreEnv.fs.writeFile(path, content);
+          // Whole-file rewrite of an edit that was 95% applied: a crash mid-write must not truncate
+          // the file, so it goes through the same temp+rename path as `write_file`, with the same
+          // fail-loudly policy (a silent non-atomic fallback would hide the failure).
+          //
+          // The destination exists (it was read above), so carry its permission bits onto the temp
+          // file: a fresh temp takes the umask default and would strip `+x` from a script.
+          const existingMode = coreEnv.fs.stat ? (await coreEnv.fs.stat(path).catch(() => undefined))?.mode : undefined;
+          await writeFileAtomic(coreEnv.fs, path, content, {
+            onError: "throw",
+            ...(existingMode !== undefined ? { mode: existingMode } : {}),
+          });
 
           const totalReplacements = results.reduce((sum, r) => sum + r.count, 0);
 

@@ -91,10 +91,25 @@ export async function loadPlanFromWorkspace(
     // what turns auto mode off, so the two can never be on at once (auto would bypass every
     // approval prompt during the read-only planning/review phases).
     const entering = host.planMode.getPhase() === "off";
+    // Entering disables auto (the two are mutually exclusive). A failed load must put BOTH back:
+    // the previous rollback only undid the phase, so a user in Auto who mistyped a plan name ended
+    // in Normal mode with no message saying so.
+    const wasAuto = host.mode.isAutoEnabled();
+    const rollbackEntry = (): void => {
+      if (!entering) return;
+      host.mode.disablePlan();
+      if (wasAuto) host.mode.setAuto(true);
+    };
     if (entering) host.mode.enablePlan();
-    const result = await host.planMode.loadPlanMarkdown(markdown, { relativePath: path });
+    let result: Awaited<ReturnType<typeof host.planMode.loadPlanMarkdown>>;
+    try {
+      result = await host.planMode.loadPlanMarkdown(markdown, { relativePath: path });
+    } catch (error) {
+      rollbackEntry();
+      throw error;
+    }
     if (!result.ok) {
-      if (entering) host.mode.disablePlan();
+      rollbackEntry();
       return { ok: false, error: result.error, path };
     }
     return { ok: true, path, stepCount: result.stepCount };

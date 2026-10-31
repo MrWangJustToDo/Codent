@@ -27,7 +27,12 @@ import type { DispatchRank } from "../dispatch-order.js";
  */
 class EventBusScopeNode {
   readonly observers = new Emitter<Record<string, AgentEvent>>();
-  readonly wildcards = new Set<AgentEventWildcardListener>();
+  /**
+   * Wrapper objects, not raw functions: a `Set` keyed by the function collapsed two subscribers
+   * that share a callback (a module-level handler, a re-mounted panel) into one entry, so the first
+   * disposer silently cancelled both. `Emitter` was fixed for the same reason; wildcards were not.
+   */
+  readonly wildcards = new Set<{ listener: AgentEventWildcardListener }>();
   /**
    * Interceptors in **dispatch order** (declared order, then load sequence) — kept sorted on
    * mutation so the hot `intercept` walk stays a plain array scan. A registration that declares
@@ -113,10 +118,12 @@ export class DefaultAgentEventBus implements AgentEventBus {
     options?: { replay?: boolean; includeParents?: boolean }
   ): () => void {
     if (type === "*") {
-      const wildcard = listener as AgentEventWildcardListener;
-      this.node.wildcards.add(wildcard);
+      // One wrapper per registration, so the same function subscribed twice stays two entries and
+      // each disposer removes only its own.
+      const entry = { listener: listener as AgentEventWildcardListener };
+      this.node.wildcards.add(entry);
       return () => {
-        this.node.wildcards.delete(wildcard);
+        this.node.wildcards.delete(entry);
       };
     }
 
@@ -220,7 +227,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
         )
       );
       if (!deliverToWildcards) continue;
-      for (const listener of [...node.wildcards]) {
+      for (const { listener } of [...node.wildcards]) {
         try {
           // A wildcard listener typed `void` may still be async (`agentManager.on("*", …)` is a
           // public entry). Its rejection is not caught here, so attach a handler like `Emitter`.

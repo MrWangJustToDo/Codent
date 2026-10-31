@@ -604,8 +604,9 @@ export class ExtensionRunner {
         // and mark it inactive — an instance that reports `active` with no tools left.
         if (instance.context === ctx) {
           // `destroyExtension` ran `deactivate` BEFORE this promise resolved, so anything the rest of
-          // `activate` acquired after the revoke has no other owner: release it here (the extension
-          // contract makes teardown idempotent) and drop any artifact that still landed on a race.
+          // `activate` acquired after the revoke has no other owner: release it here (the documented
+          // teardown contract is idempotent, see `ExtensionAPI.deactivate`) and drop any artifact
+          // that still landed on a race.
           await this.deactivateExtension(instance);
           this.unregisterInstanceArtifacts(instance);
           // Anything the tail of `activate` rendered after the teardown would otherwise be replayed
@@ -685,7 +686,8 @@ export class ExtensionRunner {
   /**
    * Release an extension's resources. Runs before artifact rollback/unregistration so a
    * `deactivate()` can still use the registrations it owns, and is safe after a failed
-   * `activate()` — the extension contract makes teardown idempotent.
+   * `activate()`. It may run twice for one incarnation (revoke during activation); the extension
+   * contract requires teardown to be idempotent.
    */
   private async deactivateExtension(instance: ExtensionInstance): Promise<void> {
     if (!instance.api.deactivate) return;

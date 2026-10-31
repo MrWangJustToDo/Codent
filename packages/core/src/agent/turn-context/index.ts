@@ -36,6 +36,8 @@ export {
 } from "./instruction-context.js";
 export type { InstructionContextState, InstructionFile, LoadedInstructionContent } from "./instruction-context.js";
 
+export { captureSessionStaleness } from "./session-staleness.js";
+
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "./background-jobs.js";
 export {
   buildCounterReminderSection,

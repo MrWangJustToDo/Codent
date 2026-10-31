@@ -188,7 +188,15 @@ export function createNativeFilesystem(
         isDirectory: stats.isDirectory(),
         isFile: stats.isFile(),
         mtime: stats.mtime,
+        // Permission bits only: callers restore them onto a temp file before renaming it into
+        // place, so file-type bits from `stats.mode` would be wrong input.
+        mode: stats.mode & 0o777,
       };
+    },
+
+    chmod: async (filePath: string, mode: number) => {
+      const fullPath = resolvePath(filePath);
+      await fs.chmod(fullPath, mode);
     },
 
     // External search binaries bypass `CoreEnv.fs`; expose the same real-path gate so

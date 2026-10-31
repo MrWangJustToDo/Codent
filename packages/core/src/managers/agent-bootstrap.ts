@@ -309,7 +309,17 @@ export class AgentBootstrap {
       for (const api of fromDisk.loaded) {
         // The runner emits `agent:extension-error` when `activate` throws; bootstrap only accounts.
         // The event is visible now because the log is bound before bootstrap (bindConstructionLog).
-        recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api));
+        //
+        // Guarded like the `config.extensions` and built-in loops below: `loadExtension` contains an
+        // `activate` failure, but it builds the context BEFORE that try, so one malformed disk
+        // extension could otherwise escape this loop and skip every remaining extension AND all
+        // built-ins — one bad file would silently disable the feature set.
+        try {
+          recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api));
+        } catch (err) {
+          recordExtensionError(report, api.id, err);
+          this.extensionError("disk", errorMessage(err), api.id);
+        }
       }
     }
 

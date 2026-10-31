@@ -38,6 +38,8 @@ export interface RunLifecycleHost {
   getStreamStartedAt: () => number;
   setStreamStartedAt: (value: number) => void;
   persistSession: () => void;
+  /** Active disk session id; read live so a switch during a side query is observable. */
+  getSessionData: () => { id?: string } | null;
   clearTurnContext: () => void;
   getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
   collectExtensionPromptHooks: (prompt: string) => Promise<void>;
@@ -166,6 +168,9 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
       // Extraction and consolidation are real LLM spend; the tracker is what makes it
       // show up in the session's lifetime totals.
       usage: host.usage,
+      // Read live, so a `/new` or `/resume` that lands while the query is in flight stops the
+      // result from being booked to the session that did not spend it.
+      getSessionId: () => host.getSessionData()?.id,
       resolveTextAdapter: host.resolveTextAdapter,
       // Best-effort pass-through of the run's controller. Note the limit: this
       // runs from `finalize`, which only happens once the turn has settled (and

@@ -285,7 +285,9 @@ export async function extractMemories(
   textAdapter: TextAdapterConfig,
   onSideQuery?: SideQueryTelemetry,
   abortSignal?: AbortSignal,
-  usage?: UsageTracker | null
+  usage?: UsageTracker | null,
+  /** Whether the owning agent is still on the session that started the query (see {@link MemoryExtractionInput}). */
+  shouldRecordUsage?: () => boolean
 ): Promise<number> {
   // Take only recent messages
   const recentMessages = messages.slice(-EXTRACTION_WINDOW);
@@ -337,7 +339,11 @@ export async function extractMemories(
     // observability — not the owning agent's lifetime totals. Accounting for the call
     // here is what keeps memory extraction from being the one LLM call in the run no
     // `UsageTracker` ever sees. Same contract as `memory-retrieval.selectWithLLM`.
-    if (usage && queryUsage) usage.addTotal(queryUsage);
+    //
+    // Only while the agent is still on the session that spent it: the tracker is reset and
+    // re-seeded when a `/new` or `/resume` adopts another session, so recording after that point
+    // bills the new conversation for the old one's query.
+    if (usage && queryUsage && (shouldRecordUsage?.() ?? true)) usage.addTotal(queryUsage);
   } catch {
     // Transport and schema failures both land here. The port has already logged
     // the reason; an abort is expected, not a fault, so neither is re-reported.
@@ -389,7 +395,8 @@ export async function consolidateMemories(
   memoryManager: MemoryManager,
   textAdapter: TextAdapterConfig,
   onSideQuery?: SideQueryTelemetry,
-  usage?: UsageTracker | null
+  usage?: UsageTracker | null,
+  shouldRecordUsage?: () => boolean
 ): Promise<ConsolidationResult> {
   const memories = await memoryManager.listMemories();
   if (memories.length < memoryManager.getConsolidateThreshold()) {
@@ -399,7 +406,7 @@ export async function consolidateMemories(
   // Phase 1: LLM consolidation via lightweight catalog (frontmatter only).
   // This avoids the token-truncation problem where sending full bodies would
   // exceed the context and cause the LLM to only see a subset of memories.
-  const llmChanged = await llmConsolidate(memories, memoryManager, textAdapter, onSideQuery, usage);
+  const llmChanged = await llmConsolidate(memories, memoryManager, textAdapter, onSideQuery, usage, shouldRecordUsage);
 
   // Phase 2: Hard-cap eviction. If LLM consolidation didn't reduce enough,
   // evict oldest memories by updatedAt to stay under the hard limit.
@@ -454,7 +461,8 @@ async function llmConsolidate(
   memoryManager: MemoryManager,
   textAdapter: TextAdapterConfig,
   onSideQuery?: SideQueryTelemetry,
-  usage?: UsageTracker | null
+  usage?: UsageTracker | null,
+  shouldRecordUsage?: () => boolean
 ): Promise<boolean> {
   // Build a lightweight catalog: filename + name + type + description (no body).
   // 59 memories × ~80 chars each ≈ 5KB — well within token limits.
@@ -479,7 +487,7 @@ async function llmConsolidate(
     });
     decisions = data as ConsolidationDecisions;
     // Accounted for the same reason as the extraction query — see `extractMemories`.
-    if (usage && queryUsage) usage.addTotal(queryUsage);
+    if (usage && queryUsage && (shouldRecordUsage?.() ?? true)) usage.addTotal(queryUsage);
   } catch {
     // The port logged the reason. Reporting "no change" keeps the existing
     // memories exactly as they are rather than half-applying a failed response.

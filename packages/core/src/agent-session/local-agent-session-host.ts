@@ -126,7 +126,12 @@ async function resolveBootstrapSessionId(
   try {
     const store = new SessionStore(env);
     if (options.continueSession) {
-      return (await store.getLatest())?.id;
+      const latest = await store.getLatest();
+      // The same ownership rule as the empty branch: a session another live root is running is not
+      // a candidate, or `create` would fail with "already active in another live session" instead
+      // of starting the fresh session the caller asked for.
+      if (!latest || isTaken(latest.id)) return undefined;
+      return latest.id;
     }
     const empty = await store.getLatestEmpty();
     if (!empty || isTaken(empty.id)) return undefined;

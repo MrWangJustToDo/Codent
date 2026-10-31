@@ -101,6 +101,14 @@ export interface CoreEnvFsStat {
   isFile: boolean;
   size: number;
   mtime: Date;
+  /**
+   * POSIX permission bits (`mode & 0o777`), when the host can report them.
+   *
+   * Optional so every existing implementation keeps compiling. Used by the crash-safe whole-file
+   * write to preserve an executable bit across a temp+rename replacement (a fresh temp file takes
+   * its mode from the umask, so without this an edit silently strips `+x`).
+   */
+  mode?: number;
 }
 
 export interface CoreEnvFs {
@@ -155,6 +163,12 @@ export interface CoreEnvFs {
    * then rename it into place) instead of truncating the destination in place.
    */
   rename?(oldPath: string, newPath: string): Promise<void>;
+  /**
+   * Change a file's permission bits. Optional: paired with {@link CoreEnvFsStat.mode} so a
+   * temp+rename replacement can keep the destination's mode. Hosts without it degrade to the
+   * umask default (what a plain `writeFile` did).
+   */
+  chmod?(path: string, mode: number): Promise<void>;
   /**
    * Synchronously append content to a file (creating parent dirs when
    * supported). Optional: only runtimes that can write synchronously (Node)

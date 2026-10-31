@@ -576,6 +576,14 @@ export class AgentChatController {
   }
 
   private shouldDeferQueue(): boolean {
+    const status = this.managed.getStatus();
+    // A manual `/compact` owns the agent with NO pump, and it must be honoured before the
+    // stale-token shortcut below: `interruptCurrentRun` invalidates the token and zeroes
+    // `pumpDepth` while the aborted pump is still unwinding, so a token check first would let a
+    // message typed in that window open a turn BESIDE the summarizer — exactly the race
+    // `shouldDeferMidRunQueue`'s `compacting` clause exists to prevent. Deferring here is released
+    // by `resumeAfterCompaction` like any other message queued during compaction.
+    if (status === "compacting") return true;
     // A stale (interrupted/superseded) pump still unwinding must not swallow new
     // input into the queues — new submissions execute immediately.
     if (this.currentToken && !this.currentToken.isCurrent) return false;
@@ -583,7 +591,7 @@ export class AgentChatController {
     // but has not started, so `pumpDepth` is still 0 while the status is already
     // waiting. Deferring here queues the message for that pump instead of enqueueing
     // a second one that would find nothing to do.
-    return this.runPending() || shouldDeferMidRunQueue({ pumpDepth: this.pumpDepth, status: this.managed.getStatus() });
+    return this.runPending() || shouldDeferMidRunQueue({ pumpDepth: this.pumpDepth, status });
   }
 
   private notifyQueueListeners(): void {

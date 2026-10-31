@@ -1,3 +1,4 @@
+import { captureSessionStaleness } from "../../agent/turn-context/session-staleness.js";
 import {
   injectSyntheticMessages,
   nextSyntheticNonces,
@@ -37,7 +38,7 @@ export interface TurnContextMiddlewareDeps {
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (no-op for subagents without a session store). */
   persistMessages: (next: UIMessage[]) => void;
-  getManagedAgent: () => { parentId?: string } | undefined;
+  getManagedAgent: () => { parentId?: string; isSessionSwitching?: () => boolean } | undefined;
   /** Agent-doc content for subagents (their own agentDocContent is empty). */
   getProjectInstructions?: () => string | undefined;
 }
@@ -77,7 +78,16 @@ export function createTurnContextMiddleware(deps: TurnContextMiddlewareDeps): Ch
       // admission input — never the durable channel, which keeps pre-cut rows.
       const wire = config.messages as ModelMessage[];
 
+      // Everything computed for the session being unloaded is garbage once a switch starts: it is
+      // DISCARDED, never written into the target. See `captureSessionStaleness` for why both the
+      // switching flag and the session generation are needed.
+      const isStaleSession = captureSessionStaleness(
+        deps.getUIChannel(),
+        () => managed?.isSessionSwitching?.() === true
+      );
+
       const sections = [...(await deps.getSections())];
+      if (isStaleSession()) return result;
       const admitted: TurnContextSection[] = isSubagent
         ? [...sections.filter((section) => SUBAGENT_ALLOWED_KINDS.has(section.key))]
         : [...sections];

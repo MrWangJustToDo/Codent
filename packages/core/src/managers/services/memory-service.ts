@@ -45,6 +45,15 @@ export interface MemoryExtractionInput {
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   /** Abort signal from the owning run — lets abort interrupt the queries. */
   abortSignal?: AbortSignal;
+  /**
+   * The agent's active session id, read live.
+   *
+   * Extraction and consolidation finish AFTER the turn that started them, and the usage tracker is
+   * reset/re-seeded when a `/new` or `/resume` adopts another session. The token count is therefore
+   * recorded only while the agent is still on the session that spent it — otherwise one session's
+   * LLM spend lands in another session's lifetime totals and is persisted there.
+   */
+  getSessionId?: () => string | undefined;
 }
 
 export class MemoryService implements MemorySelectionPort {
@@ -190,6 +199,10 @@ export class MemoryService implements MemorySelectionPort {
     const messages = llmMessages.slice(-80);
     const memoryManager = this.manager;
     const { onSideQuery, resolveTextAdapter, abortSignal, usage } = input;
+    // The session that will be charged. A switch can complete before the query returns, and the
+    // tracker is re-seeded for the new session at adoption — see `MemoryExtractionInput.getSessionId`.
+    const sessionIdAtStart = input.getSessionId?.();
+    const stillOnStartSession = (): boolean => input.getSessionId?.() === sessionIdAtStart;
 
     this.extractionInProgress = true;
     this.emitEvent?.("memory:extract", { status: "start" });
@@ -203,7 +216,15 @@ export class MemoryService implements MemorySelectionPort {
           return;
         }
 
-        const count = await extractMemories(messages, memoryManager, textAdapter, onSideQuery, abortSignal, usage);
+        const count = await extractMemories(
+          messages,
+          memoryManager,
+          textAdapter,
+          onSideQuery,
+          abortSignal,
+          usage,
+          stillOnStartSession
+        );
         if (count > 0) {
           await memoryManager.flushIndex();
           this.emitEvent?.("memory:extract", { status: "complete", count });
@@ -214,7 +235,7 @@ export class MemoryService implements MemorySelectionPort {
         const memoryCount = await memoryManager.getMemoryCount();
         if (memoryCount >= memoryManager.getConsolidateThreshold()) {
           this.emitEvent?.("memory:consolidate", { status: "start", count: memoryCount });
-          const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage);
+          const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage, stillOnStartSession);
           if (result.changed) {
             await memoryManager.flushIndex();
             this.emitEvent?.("memory:consolidate", {

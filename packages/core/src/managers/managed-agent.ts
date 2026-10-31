@@ -773,7 +773,14 @@ export class ManagedAgent {
       bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
       emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
       emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
-        this.emitEvent("session:switch", { fromSessionId, toSessionId, messageCount, reason }),
+        // The departure belongs to the session being left: the envelope must say so too, because
+        // the sink was pointed at it for this one row and the default would stamp the TARGET (the
+        // adoption already ran), making the line contradict its own payload.
+        this.emitEvent(
+          "session:switch",
+          { fromSessionId, toSessionId, messageCount, reason },
+          { sessionId: fromSessionId }
+        ),
       refreshState: () => this.refreshState(),
       refreshSubagents: () => this.refreshSubagents(),
       beginStateBatch: () => this.beginStateBatch(),
@@ -984,6 +991,11 @@ export class ManagedAgent {
     // A switch is unload → load: the waiting flag describes the turn being replaced, and setting
     // it after the target is adopted would park the new session on a question it never asked.
     if (this.isSessionSwitching()) return;
+    // A compaction owns the status. `/compact` is refused while a real client tool is pending, so
+    // a flag arriving now is stale host state; applying it moves `compacting → awaiting_user`,
+    // where the compaction can neither restore its status (it no longer owns the field) nor clear
+    // the wait — and `shouldDeferMidRunQueue` would then defer every later message forever.
+    if (this.compactions.isRunning()) return;
     this.statusController.setClientToolWaiting(active);
   }
 
@@ -1244,7 +1256,17 @@ export class ManagedAgent {
   emitEvent<T extends AgentEventType>(
     type: T,
     payload?: AgentEventPayloadMap[T],
-    options?: { parentId?: string; agentId?: string }
+    options?: {
+      parentId?: string;
+      agentId?: string;
+      /**
+       * Override the envelope's session id. The telemetry funnel defaults it to the agent's
+       * CURRENT session, which is wrong for a fact about the session being left — notably
+       * `session:switch`, whose row is written to the departing session's log while the adoption
+       * has already moved `getEventSessionId()` to the target.
+       */
+      sessionId?: string;
+    }
   ): void {
     // Default the parent link to this agent's own parent: a child's events up-flow into the parent's
     // scope, and without this the envelope dropped `parentId` for everything except the explicit
@@ -1361,7 +1383,9 @@ export class ManagedAgent {
    * (`config.model`, resolved at bootstrap) is the fallback, because a resume that reintroduces an
    * id the provider refuses would fail on the first request rather than degrade. Under
    * remote-provider the STYLE is not adopted: the server owns it, and a persisted `anthropic`
-   * style against an OpenAI-style proxy is a hard error.
+   * style against an OpenAI-style proxy is a hard error. The same applies to a fallback on any
+   * plane: a persisted style belongs to the model it was saved with, so it is not carried onto a
+   * model the runtime kept.
    *
    * A no-op when the effective model already matches the live config.
    *
@@ -1372,13 +1396,24 @@ export class ManagedAgent {
    */
   applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): boolean {
     const remote = this.config.providerMode === "remote";
-    const selection = remote
-      ? selectModel({
-          requested: next.model,
-          fallback: this.config.model,
-          allowed: selectableModelIds(this.runtime?.models),
-        })
-      : { model: next.model };
+    // The catalog check is NOT remote-only: a direct runtime also carries the model list it was
+    // built from (`CodentAgent({ models })`, wired by the CLI/ACP hosts), and a session can be
+    // resumed after `models.json` was edited. An id the catalog no longer offers would be sent
+    // against the current connection and fail on the first request, so it falls back to the model
+    // the session was created with — the same rule the provider plane uses. `selectModel` already
+    // trusts a request when the catalog is absent or empty, so direct hosts that pass no catalog
+    // keep their old behaviour.
+    //
+    // Residual (host-owned, not fixable here): the catalog is the UNION of the entries' model
+    // lists, while the connection (`modelBaseURL` / `modelApiKey`) is the one resolved for the
+    // ACTIVE entry. A persisted model that belongs to a different entry is therefore "offered" and
+    // adopted with the active entry's connection. Fixing that needs the active entry's identity,
+    // which this runtime is not given.
+    const selection = selectModel({
+      requested: next.model,
+      fallback: this.config.model,
+      allowed: selectableModelIds(this.runtime?.models),
+    });
 
     if (selection.fallback) {
       this.emitEvent("model:change", {
@@ -1390,7 +1425,10 @@ export class ManagedAgent {
       });
     }
 
-    const style = remote ? this.config.modelStyle : next.modelStyle;
+    // The persisted STYLE belongs to the persisted model: adopting it alongside a fallback model
+    // would pair one entry's style with another's connection. Under remote-provider the proxy owns
+    // the style regardless.
+    const style = remote || selection.fallback ? this.config.modelStyle : next.modelStyle;
     const sameModel = selection.model === this.config.model;
     const sameStyle = !style || style === this.config.modelStyle;
     if (sameModel && sameStyle) return false;
@@ -2584,6 +2622,13 @@ export class ManagedAgent {
     // request rather than running it against the leaving channel or the target before its commit.
     if (this.isSessionSwitching()) {
       return { ok: false, error: "Session is switching — try again when it finishes" };
+    }
+    // Same predicate the session dispatch uses. A manual compaction is only legal on a settled
+    // agent: started beside a live pump it writes its checkpoint into a half-finished turn, and
+    // started from a parked approval/client tool the restored status would contradict the still
+    // pending interaction. Dispatch checked this; a programmatic host could bypass it.
+    if (this.getChatController()?.isRunActive()) {
+      return { ok: false, error: "Cannot compact while the agent is running — stop it first." };
     }
     const lease = this.compactions.begin("manual");
     if (!lease) {

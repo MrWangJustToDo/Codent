@@ -145,15 +145,22 @@ export function createExtensionContext(
       // user's tokens after the panel says "disabled". `complete` is async by contract, so a revoked
       // call REJECTS with a typed error instead of throwing synchronously — the caller's `try/catch`
       // or `.catch` sees the same shape as any other failure.
-      complete: (request: ExtensionLlmRequest) =>
-        host.isLive(context)
+      complete: (request: ExtensionLlmRequest) => {
+        const pending = host.isLive(context)
           ? host.completeLlm(api.id, request)
           : Promise.reject(
               new ExtensionLlmError(
                 "revoked",
                 `Extension "${api.id}" is no longer active; its \`ctx.llm.complete\` call was refused.`
               )
-            ),
+            );
+        // A retained timer firing after teardown typically calls this as `void ctx.llm.complete(...)`.
+        // Hosts install an `unhandledRejection` guard that exits the process (lifecycle-guards), so a
+        // rejection nobody awaits would kill the CLI/ACP host. Marking it handled here does not
+        // swallow it: callers that await still observe the same rejection on the same promise.
+        pending.catch(() => {});
+        return pending;
+      },
     } as ExtensionLlm,
 
     registerTool: (def: ExtensionToolDefinition) => {
@@ -163,8 +170,13 @@ export function createExtensionContext(
       }
       // The rank travels with the registration: the authoritative tool stack (which entry is live)
       // lives in the host's registry, which cannot see the extension's own order.
-      host.registerTool(api.id, def, host.rankOf(api.id));
+      //
+      // Record the claim BEFORE the host call. The runner takes its stack claim first and the host
+      // registration can throw (a tools-record conflict, an invalid definition); with the push
+      // after it, the activation's rollback iterates `registrations.tools` and never sees the
+      // name, leaving a claim that advertises a tool nothing can execute.
       registrations?.tools.push(def.name);
+      host.registerTool(api.id, def, host.rankOf(api.id));
     },
 
     registerToolOutputDecorator: (toolName, decorator) => {

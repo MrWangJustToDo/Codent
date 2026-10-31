@@ -316,6 +316,9 @@ export class SessionLifecycleService {
    *   anything, so a failed load leaves the leaving session intact and active.
    * - **load** reads + hydrates the target, prepares mode/approvals/model, and adopts it LAST
    *   (`restoreManagedSession`'s commit). Everything that can fail runs before that adoption.
+   * - **recovery** is the same load applied to the departure: a load that does not commit is a
+   *   failed load, and re-opening the session that is still active is what restores its model,
+   *   mode, approvals and transcript (see {@link recoverLeavingSession}).
    *
    * Ownership is acquired up front and handed over only after the commit; the old claim is released
    * at the same moment, so "active in another live session" always describes a real holder.
@@ -380,18 +383,52 @@ export class SessionLifecycleService {
       }
       return session;
     } catch (error) {
-      // No commit ⇒ the leaving session is still the active one. Give the target claim back and
-      // re-point the log sink at whatever session is active. A post-commit failure keeps the switch
-      // (the state is already coherent); it simply surfaces.
+      // No commit ⇒ the leaving session is still the active one. Give the target claim back,
+      // re-point the log sink at the departure (the recovery's own `session:restore` row belongs to
+      // it), then RE-OPEN it through the same load path the switch uses.
+      //
+      // A post-commit failure keeps the switch (the state is already coherent); it simply surfaces.
       //
       // A bootstrap stand-in must be dropped too: it refuses every write by design, so leaving it
       // behind after a failed load would turn one failed resume into a silently unsaved session.
       this.host.sessionPersistence.clearRestorePlaceholder();
       if (this.host.getSessionData()?.id !== sessionId) {
         this.host.releaseSessionOwnership(sessionId);
-        this.host.bindSessionLogSink();
+        this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
+        await this.recoverLeavingSession(leavingId);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Re-open the session a failed `/resume` never left.
+   *
+   * A switch is unload → load. A load that does not commit is simply a failed load, and the
+   * recovery is the SAME load applied to the session that is still active — not a hand-maintained
+   * snapshot of model / effort / mode / approvals / transcript, which would be a second copy of
+   * that state and the copy that can drift. The departure's disk record is authoritative because
+   * `unloadCurrent` stopped the run and drained every queued write before the target was read, so a
+   * failed load cannot have produced newer state worth preserving.
+   *
+   * A session that was never written (fresh, no content yet) has nothing to reload; nothing was
+   * adopted for it either, so it stays as it was.
+   */
+  private async recoverLeavingSession(leavingId: string | undefined): Promise<void> {
+    if (!leavingId) return;
+    try {
+      await this.host.sessionPersistence.restore(leavingId);
+    } catch (error) {
+      // Best-effort: the host still gets the original failure, and the in-memory state is already
+      // the departure's (the target was never adopted). The report is itself contained so a broken
+      // logger cannot replace the actionable error.
+      try {
+        this.host.warn?.("failed to re-open the previous session after a failed resume", {
+          error: errorMessage(error),
+        });
+      } catch {
+        // Nothing else to do.
+      }
     }
   }
 }

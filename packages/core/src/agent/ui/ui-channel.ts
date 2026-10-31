@@ -577,7 +577,11 @@ export class AgentUIChannel {
     this.revision += 1;
     this.onUpdate?.(messages);
     // Session `messages` projection — the bus is the single change mechanism.
-    this.eventBus?.emit("session:messages", messages);
+    //
+    // A shallow copy, like the retained provider above: the payload is documented read-only, and a
+    // host that sorts/patches its first frame must not edit the channel's own array (the next
+    // persist would write the mutation to disk). The copy is O(n) over references, not content.
+    this.eventBus?.emit("session:messages", [...messages]);
     // Summary streaming is driven by TEXT_MESSAGE_CONTENT chunks in processChunk —
     // do not diff UIMessage snapshots (that caused mid-stream flicker).
   }

@@ -22,13 +22,15 @@ import { readCommandJobRecords, removeCommandJobRecord, tailText, writeCommandJo
 import type { CommandJobLogWriter } from "./output-log.js";
 import type { PersistedCommandJob } from "./store.js";
 import type { ResolvedCoreEnv } from "../../../../../env";
+import type { CommandJobStatus } from "../../../../../env/types.js";
 
 /**
- * Mirrors `CoreEnv`'s `CommandJobStatus` (`env/types.ts`), which is the one the host contract and
- * the published surface use. Declared structurally rather than imported so this module stays
- * dependency-free — but keep the union in sync if the CoreEnv contract grows a state.
+ * Re-export of the CoreEnv union (`env/types.ts`), which is the one the host contract and the
+ * published surface use. It used to be declared structurally here "so this module stays
+ * dependency-free" — but this module already imported `env/teardown.js`, so the copy only meant
+ * two hand-synced unions waiting to drift when the contract grows a state.
  */
-export type CommandJobStatus = "running" | "exited" | "killed" | "failed";
+export type { CommandJobStatus };
 
 export interface CommandJobRecord {
   id: string;
@@ -173,13 +175,26 @@ export interface CommandJobRegistryOptions {
  * inverted rather than `env/` importing this module).
  */
 const liveRegistries = new Set<CommandJobRegistry>();
-registerEnvTeardownHook(() => {
-  for (const registry of [...liveRegistries]) {
-    // Best-effort and intentionally not awaited: the hook is synchronous. `destroyAll` preserves
-    // terminal un-notified records, so a subsequent resume can still deliver them.
-    void registry.destroyAll().catch(() => undefined);
-  }
-});
+let teardownHookRegistered = false;
+
+/**
+ * Register the process-level reaper lazily, on the first registry — NOT at module load.
+ *
+ * Importing a tool helper used to mutate global teardown state, which made import order behaviour
+ * (any module that merely imported this file installed the hook). Registering when there is
+ * something to reap is equivalent: with no registry alive there is nothing the hook could do.
+ */
+function ensureTeardownHook(): void {
+  if (teardownHookRegistered) return;
+  teardownHookRegistered = true;
+  registerEnvTeardownHook(() => {
+    for (const registry of [...liveRegistries]) {
+      // Best-effort and intentionally not awaited: the hook is synchronous. `destroyAll` preserves
+      // terminal un-notified records, so a subsequent resume can still deliver them.
+      void registry.destroyAll().catch(() => undefined);
+    }
+  });
+}
 
 export class CommandJobRegistry {
   /** Owning runtime's env, so durable job logs land under the runtime root. Ambient when omitted. */
@@ -187,6 +202,7 @@ export class CommandJobRegistry {
     private readonly env?: ResolvedCoreEnv,
     private readonly options: CommandJobRegistryOptions = {}
   ) {
+    ensureTeardownHook();
     liveRegistries.add(this);
   }
 

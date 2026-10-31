@@ -10,7 +10,7 @@
 import { createCompletePlanTool, createCreatePlanTool, createUpdatePlanTool } from "../agent/plan/create-plan-tool.js";
 import { createSubagentTools } from "../agent/subagent/subagent-tools.js";
 import { createTodoTool } from "../agent/todo/todo-tool.js";
-import { createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
+import { BUILTIN_TOOL_NAMES, createTools, createWebfetchTool, createWebsearchTool } from "../agent/tools";
 import { createAskUserTool } from "../agent/tools/builtin/interaction/ask-user-tool.js";
 
 import { createAgentToolContext } from "./agent-tool-context.js";
@@ -43,10 +43,16 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
 
   const context = createAgentToolContext(managed);
   const tools: ToolsRecord = { ...(await createTools({ usage: managed.usage, context })) };
+  // Keys come from `BUILTIN_TOOL_NAMES`, never literals: the record key IS the wire name the
+  // registry looks up for `present` / `toModelOutput`, and `create-base-tools` documents exactly
+  // why a second literal lets a rename de-register a tool's descriptors silently. These are the
+  // root-profile additions layered on top of the base table.
   const todoManager = context.getTodoManager();
-  if (profile !== "general" && todoManager) tools.todo = createTodoTool({ todoManager });
-  tools.webfetch = createWebfetchTool({ context });
-  tools.websearch = createWebsearchTool({ context });
+  if (profile !== "general" && todoManager) {
+    tools[BUILTIN_TOOL_NAMES.todo] = createTodoTool({ todoManager });
+  }
+  tools[BUILTIN_TOOL_NAMES.webfetch] = createWebfetchTool({ context });
+  tools[BUILTIN_TOOL_NAMES.websearch] = createWebsearchTool({ context });
 
   if (profile === "general") {
     // General is a writable child profile, but interactive/headless-incompatible tools stay out:
@@ -54,10 +60,10 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
     return tools;
   }
 
-  tools.ask_user = createAskUserTool();
-  tools.create_plan = createCreatePlanTool({ getPlanMode: () => context.getPlanMode() });
-  tools.update_plan = createUpdatePlanTool({ getPlanMode: () => context.getPlanMode() });
-  tools.complete_plan = createCompletePlanTool({
+  tools[BUILTIN_TOOL_NAMES.askUser] = createAskUserTool();
+  tools[BUILTIN_TOOL_NAMES.createPlan] = createCreatePlanTool({ getPlanMode: () => context.getPlanMode() });
+  tools[BUILTIN_TOOL_NAMES.updatePlan] = createUpdatePlanTool({ getPlanMode: () => context.getPlanMode() });
+  tools[BUILTIN_TOOL_NAMES.completePlan] = createCompletePlanTool({
     getPlanMode: () => context.getPlanMode(),
     // Through the coordinator so the phase-off transition is persisted, like `/mode done`.
     completePlan: () => managed.completePlan(),

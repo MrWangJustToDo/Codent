@@ -292,6 +292,7 @@ export function buildAgentRunner(
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
+      isSessionSwitching: () => managed?.isSessionSwitching() ?? false,
       emitDiagnostic: (area, message, options) =>
         emitEvent("session:diagnostic", {
           area,

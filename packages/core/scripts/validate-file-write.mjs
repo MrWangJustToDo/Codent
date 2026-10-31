@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { createWriteFileTool, defaultPath } from "../dist/dev.mjs";
 
 /** An in-memory host that records what the tool did, in order. */
-function makeEnv({ path = defaultPath, withRename = true, failRename = false } = {}) {
+function makeEnv({ path = defaultPath, withRename = true, failRename = false, mode } = {}) {
   const files = new Map();
   const ops = [];
   const fs = {
@@ -47,6 +47,17 @@ function makeEnv({ path = defaultPath, withRename = true, failRename = false } =
       const content = files.get(from);
       files.delete(from);
       files.set(to, content);
+    };
+  }
+  if (mode !== undefined) {
+    // A host that reports permission bits. The tool must carry them onto the temp file BEFORE the
+    // rename, or a replacement silently drops `+x`.
+    fs.stat = async (p) => {
+      if (!files.has(p)) throw new Error(`ENOENT: ${p}`);
+      return { isDirectory: false, isFile: true, size: 0, mtime: new Date(0), mode };
+    };
+    fs.chmod = async (p, next) => {
+      ops.push(`chmod:${p}:${next.toString(8)}`);
     };
   }
   return { env: { rootPath: "/ws", path, fs }, files, ops };
@@ -141,6 +152,25 @@ const write = (env, args) =>
     `the temp file is cleaned up on failure (${JSON.stringify(ops)})`
   );
   assert.equal(files.has("a.ts"), false, "and the destination was not created by a failed write");
+}
+
+{
+  // Replacing an existing file preserves its permission bits, on the TEMP file before the rename
+  // (never chmod-after-replace: the destination would briefly carry the umask default).
+  const { env, files, ops } = makeEnv({ mode: 0o755 });
+  await write(env, { path: "a.ts", content: "first" });
+  const before = ops.length;
+  await write(env, { path: "a.ts", content: "second", overwrite: true });
+
+  const replaceOps = ops.slice(before);
+  assert.ok(
+    replaceOps.some((op) => op.startsWith("chmod:a.ts.tmp-") && op.endsWith(":755")),
+    `the temp file carries the original mode (${JSON.stringify(replaceOps)})`
+  );
+  const chmodAt = replaceOps.findIndex((op) => op.startsWith("chmod:"));
+  const renameAt = replaceOps.findIndex((op) => op.startsWith("rename:"));
+  assert.ok(chmodAt >= 0 && renameAt > chmodAt, "chmod runs before the rename");
+  assert.equal(files.get("a.ts"), "second");
 }
 
 {

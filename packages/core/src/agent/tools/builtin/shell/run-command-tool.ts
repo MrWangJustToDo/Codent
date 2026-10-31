@@ -13,8 +13,6 @@ import { evaluateCommandApproval } from "./safety/command-approval-policy.js";
 import type { AgentToolContext } from "../../runtime/tool-context.js";
 import type { RunCommandOutput } from "../../shared/schemas.js";
 
-const COMMAND_CANCELLED_NOTICE = "[Command cancelled by user.]";
-
 /**
  * Foreground deadline applied when the model omits `timeout` (ms).
  *
@@ -277,7 +275,11 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
           return {
             command,
             stdout: stdoutResult.content,
-            stderr: stderrResult.content + "\n\n" + COMMAND_CANCELLED_NOTICE,
+            // `stderr` stays the command's own output, exactly like the timeout branch below:
+            // the cancel reason is carried by `cancelled: true` and rendered by the presenter /
+            // `toModelOutput`. Appending it here rendered the notice twice to the model and
+            // misattributed our text to the program.
+            stderr: stderrResult.content,
             // No exit code exists for a killed process; -1 is the schema's "not finished"
             // value and `success: false` keeps the run from reading as a clean exit.
             exitCode: -1,

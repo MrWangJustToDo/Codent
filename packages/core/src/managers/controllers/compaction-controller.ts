@@ -301,7 +301,12 @@ export class CompactionController {
       // A terminal status is not state to restore. `/compact` is allowed after a failed or
       // aborted turn, and writing `error`/`aborted` back after a SUCCESSFUL compaction made the
       // session look broken and contradicted the `compaction:manual-complete` that just fired.
-      if (isTerminalStatus(previous)) {
+      //
+      // `waiting` / `awaiting_user` are deliberately NOT treated as terminal here: they are states
+      // to RESTORE. They live in `TERMINAL_STATUSES` only to stop a normal stream finish from
+      // overwriting a parked turn. Reporting `idle` instead would contradict the approval table
+      // (an unanswered question with no wait status) and stop deferring the user's next message.
+      if (isTerminalStatus(previous) && previous !== "waiting" && previous !== "awaiting_user") {
         // The error belonged to that failed turn: leaving it set is the only way `idle` and a
         // non-empty `error` can coexist.
         this.deps.setError?.("");

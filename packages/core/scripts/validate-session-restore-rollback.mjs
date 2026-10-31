@@ -125,5 +125,52 @@ assert.deepEqual(released, ["ses_B"]);
   assert.ok(events.includes("usage.reset"), "…and it is what applies the restored counters");
 }
 
+// A failed target load is recovered by RE-OPENING the departure through the same load path — the
+// recovery is not a second, hand-maintained copy of model/mode/approvals/transcript.
+{
+  const loads = [];
+  const leavingA = { ...target, id: "ses_A", name: "A", model: "mA", uiMessages: [] };
+  const targetB = { ...target, id: "ses_B", name: "B", model: "mB", uiMessages: [] };
+  const recoverStore = {
+    load: async (id) => {
+      loads.push(id);
+      return id === "ses_B" ? { ...targetB } : id === "ses_A" ? { ...leavingA } : null;
+    },
+    // The TARGET's save fails; the departure's reload succeeds.
+    save: async (session) => {
+      if (session.id === "ses_B") throw new Error("disk full");
+    },
+    exists: async () => true,
+    getEnv: () => ({ rootPath: "/tmp/opencode/restore-rollback", path: { join: (...parts) => parts.join("/") } }),
+  };
+
+  const s = new SessionService();
+  s.setStore(recoverStore, { modelStyle: "openai", model: "mA" });
+  s.setSessionData({ ...leavingA });
+  const m = new ManagedAgent(
+    { name: "recover", model: "mA" },
+    { log: new AgentLog(), tools: {}, todoManager: null, session: s }
+  );
+  const claims = new Map([["ses_A", m.id]]);
+  m.manager = {
+    acquireSessionOwnership: (id, agentId) => {
+      const owner = claims.get(id);
+      if (owner && owner !== agentId) return false;
+      claims.set(id, agentId);
+      return true;
+    },
+    releaseSessionOwnership: (id, agentId) => {
+      if (claims.get(id) === agentId) claims.delete(id);
+    },
+    getLogExtension: () => ({ attachSink: () => () => {} }),
+  };
+
+  await assert.rejects(() => m.restoreSession("ses_B"), /disk full/);
+  assert.equal(m.getSessionData()?.id, "ses_A", "the departure stays active");
+  assert.deepEqual(loads, ["ses_B", "ses_A"], "the failed switch re-opens the departure through the same load");
+  assert.equal(m.config.model, "mA", "…and its own model is what is live again");
+  assert.equal(claims.get("ses_A"), m.id, "the departure claim was never handed over");
+}
+
 clearCoreEnv();
 console.log("session-restore-rollback validation passed");

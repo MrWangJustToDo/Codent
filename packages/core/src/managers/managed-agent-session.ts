@@ -180,6 +180,13 @@ export async function restoreManagedSession(
   // schema and keeps the current model on a rejection; without the preflight, a session written by
   // another build left the leaving session carrying the target's plan phase (and therefore its
   // auto-approve flag) and its approval table, while `getSessionData()` still named the leaving one.
+  //
+  // Nothing here is rolled back locally. A failure before the commit means the target was never
+  // adopted, so the agent is still on the session it was on — and the caller recovers it by running
+  // THIS SAME load against that session (`SessionLifecycleService.recoverLeavingSession`). Its disk
+  // record is authoritative because `unload` already stopped the run and drained every queued write.
+  // A hand-maintained snapshot of model/effort/mode/approvals/transcript would be a second copy of
+  // the same state, and the copy that can drift.
   const modelChanged =
     host.applyPersistedModel?.({
       model: session.model,
@@ -194,7 +201,7 @@ export async function restoreManagedSession(
   }
 
   // ---------------------------------------------------------------------------
-  // ADOPTION — synchronous and non-throwing from here to `adoptRestoredSession`.
+  // ADOPTION — synchronous from here to the commit below.
   //
   // The session data is adopted LAST, after the channel, tracker, mode and approvals all point at
   // the target; the previous order adopted inside the read, so a later failure left one session's
@@ -220,6 +227,9 @@ export async function restoreManagedSession(
   }
   applyRestoredSessionChatState(host, uiMessages);
   tracker.reset(uiMessages);
+
+  // COMMIT — the one adoption. A throw here propagates untouched: unlike the block above there is
+  // no coherent state to roll back to, and the caller reports the load as failed.
   host.session.adoptRestoredSession(restored, {
     usage: host.usage,
     todoManager: host.getTodoManager(),

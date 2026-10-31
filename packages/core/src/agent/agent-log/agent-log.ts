@@ -357,4 +357,14 @@ export class AgentLog {
   flushSync(): void {
     this.sinkFlushSync?.();
   }
+
+  /** Whether any sink has been attached (false during a bootstrap that never reached binding). */
+  hasSink(): boolean {
+    return this.sinkEntry !== null;
+  }
+
+  /** Entries still retained because no sink has been attached (bootstrap diagnostics). */
+  getPendingEntryCount(): number {
+    return this.pendingEntries.length;
+  }
 }
