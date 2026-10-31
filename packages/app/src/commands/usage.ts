@@ -1,3 +1,4 @@
+import { parseUsageCommand } from "@codent/core";
 import { Box } from "ink";
 import { createElement } from "react";
 
@@ -107,8 +108,14 @@ registerBuiltinCommand("usage", {
       return { ok: false, error: "Agent not initialized" };
     }
 
-    const weeksMatch = /^(\d+)\s*w(week)?$/i.exec(args.trim());
-    const weeks = weeksMatch ? Math.min(MAX_WEEKS, Math.max(1, parseInt(weeksMatch[1], 10))) : defaultWeeks();
+    // The `[Nw]` grammar is core's (`parseUsageCommand`) — the headless host dispatches the same
+    // argument, and a private regex here is how the two surfaces drift. No argument means "the span
+    // this surface can draw", which is the terminal's width and therefore NOT core's business.
+    const intent = parseUsageCommand(args);
+    if (intent.kind === "invalid") {
+      return { ok: false, error: `Unknown /usage argument "${intent.value}". Usage: /usage [Nw]` };
+    }
+    const weeks = intent.weeks ?? defaultWeeks();
 
     const snap = session.getSnapshot();
     const usage = snap.usage;
