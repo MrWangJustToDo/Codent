@@ -294,6 +294,7 @@ export {
   readInstructionContextState,
 } from "../agent/turn-context";
 export { TURN_CONTEXT_KINDS } from "../agent/turn-context";
+export { captureSessionStaleness } from "../agent/turn-context";
 export { collectRunCommandToolCallIds, formatBackgroundJobsSection } from "../agent/turn-context";
 export type { BackgroundJobContextRow } from "../agent/turn-context";
 export type { TurnContextKind } from "../agent/turn-context";

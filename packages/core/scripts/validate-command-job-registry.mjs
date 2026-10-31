@@ -618,7 +618,12 @@ console.log("teardown log deletion OK");
       { ...rows[1], jobId: "job_hidden", toolCallId: "call_hidden", command: "npm run dev", status: "running" },
     ];
     let messages = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
-    const ui = { getMessages: () => messages, setMessages: (next) => (messages = next) };
+    const ui = {
+      getMessages: () => messages,
+      setMessages: (next) => (messages = next),
+      // The staleness guard samples the session generation (a switch invalidates the injection).
+      getSessionGeneration: () => 0,
+    };
     const toolCallMessage = {
       role: "assistant",
       content: "",
@@ -691,7 +696,11 @@ console.log("teardown log deletion OK");
   // then omits the job it just announced (no duplicate result in the same prompt).
   {
     let channelRows = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hi" }] }];
-    const ui = { getMessages: () => channelRows, setMessages: (next) => (channelRows = next) };
+    const ui = {
+      getMessages: () => channelRows,
+      setMessages: (next) => (channelRows = next),
+      getSessionGeneration: () => 0,
+    };
     const notified = [];
     const completedJob = {
       id: "job_done",
@@ -768,7 +777,11 @@ console.log("teardown log deletion OK");
     await waitForFileContent(`${COMMAND_JOB_CACHE_DIR}/${secondJob.id}.json`, '"status":"exited"');
 
     let notificationMessages = [];
-    const ui = { getMessages: () => notificationMessages, setMessages: (next) => (notificationMessages = next) };
+    const ui = {
+      getMessages: () => notificationMessages,
+      setMessages: (next) => (notificationMessages = next),
+      getSessionGeneration: () => 0,
+    };
     const commandService = {
       collectCompleted: () => batch.collectCompleted(),
       markNotified: (ids) => batch.markNotified(ids),

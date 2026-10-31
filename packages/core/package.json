@@ -219,6 +219,7 @@
     "validate:session-switch-safety": "pnpm run build && node scripts/validate-session-switch-safety.mjs",
     "validate:session-delete-race": "pnpm run build && node scripts/validate-session-delete-race.mjs",
     "validate:session-restore-rollback": "pnpm run build && node scripts/validate-session-restore-rollback.mjs",
+    "validate:session-staleness": "pnpm run build && node scripts/validate-session-staleness.mjs",
     "validate:create-claim-rollback": "pnpm run build && node scripts/validate-create-claim-rollback.mjs",
     "validate:agent-registry": "pnpm run build && node scripts/validate-agent-registry.mjs",
     "validate:lifecycle-coordinator": "pnpm run build && node scripts/validate-lifecycle-coordinator.mjs",

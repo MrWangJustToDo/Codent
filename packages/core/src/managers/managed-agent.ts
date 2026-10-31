@@ -2623,6 +2623,12 @@ export class ManagedAgent {
     if (this.isSessionSwitching()) {
       return { ok: false, error: "Session is switching — try again when it finishes" };
     }
+    // A compaction in flight is its own answer, and it must be asked FIRST: `isRunActive()` below
+    // includes `compactions.isRunning()`, so checking it first reported a second `/compact` as
+    // "the agent is running" — telling the caller to stop a run that does not exist.
+    if (this.compactions.isRunning()) {
+      return { ok: false, error: "Compaction already in progress" };
+    }
     // Same predicate the session dispatch uses. A manual compaction is only legal on a settled
     // agent: started beside a live pump it writes its checkpoint into a half-finished turn, and
     // started from a parked approval/client tool the restored status would contradict the still

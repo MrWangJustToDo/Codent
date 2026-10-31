@@ -413,6 +413,13 @@ export class SessionLifecycleService {
    *
    * A session that was never written (fresh, no content yet) has nothing to reload; nothing was
    * adopted for it either, so it stays as it was.
+   *
+   * Deliberately does NOT run `resetTransientState`: that is the `resume` half of a COMPLETED
+   * switch, and its `resetCommandJobs` kills the session's running background jobs. Here the
+   * session did not change, so the jobs belong to the conversation the user is still looking at —
+   * killing them would turn a failed `/resume` into collateral damage. `unloadCurrent` already
+   * ended the aborted run's streams and cascaded the abort to its children; what it leaves
+   * (ended buffers, aborted children, extension slots) describes this same conversation.
    */
   private async recoverLeavingSession(leavingId: string | undefined): Promise<void> {
     if (!leavingId) return;
