@@ -52,7 +52,7 @@ function mockRunStream() {
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId,
-      toolName: "read_file",
+      toolCallName: "read_file",
       messageId,
       threadId,
       runId,
@@ -217,7 +217,7 @@ await summaryChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-bs",
-      toolName: "begin_summary",
+      toolCallName: "begin_summary",
       messageId: summaryMsgId,
       threadId: "thread-summary",
       runId: "run-summary",
@@ -240,7 +240,7 @@ await summaryChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-2",
-      toolName: "read_file",
+      toolCallName: "read_file",
       messageId: summaryMsgId,
       threadId: "thread-summary",
       runId: "run-summary",
@@ -304,7 +304,7 @@ await monoChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-bs-mono",
-      toolName: "begin_summary",
+      toolCallName: "begin_summary",
       messageId: "assistant-mono",
       threadId: "thread-mono",
       runId: "run-mono",
@@ -394,7 +394,7 @@ await retryChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-grep",
-      toolName: "grep",
+      toolCallName: "grep",
       messageId: "assistant-retry",
       threadId: "thread-retry",
       runId: "run-retry-1",
@@ -408,7 +408,7 @@ await retryChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-bs-retry",
-      toolName: "begin_summary",
+      toolCallName: "begin_summary",
       messageId: "assistant-retry",
       threadId: "thread-retry",
       runId: "run-retry-1",
@@ -447,7 +447,7 @@ await retryChannel.consumeRun({
     yield {
       type: EventType.TOOL_CALL_START,
       toolCallId: "tc-bs-retry-2",
-      toolName: "begin_summary",
+      toolCallName: "begin_summary",
       messageId: "assistant-retry-2",
       threadId: "thread-retry",
       runId: "run-retry-2",

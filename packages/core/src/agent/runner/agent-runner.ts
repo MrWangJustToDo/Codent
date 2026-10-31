@@ -87,6 +87,12 @@ export interface AgentRunnerRunInput {
    * MUST NOT be set by managed run paths — they pass `abortController` instead.
    */
   detached?: boolean;
+  /**
+   * AG-UI thread id — a stable per-conversation id that TanStack requires on every
+   * `chat()` call (1.0). The managed path supplies the disk session id; a direct
+   * caller that omits it falls back to {@link agentId} in {@link AgentRunner.run},
+   * which is still stable across the runs of one agent.
+   */
   threadId?: string;
   runId?: string;
   agentId: string;
@@ -156,7 +162,7 @@ export class AgentRunner {
       middleware: this.config.middleware,
       context: toolContext,
       abortController,
-      threadId: input.threadId,
+      threadId: input.threadId ?? input.agentId,
       runId: input.runId,
       agentLoopStrategy: maxIterations(this.config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS),
       lazyToolsConfig: this.config.lazyToolsConfig,

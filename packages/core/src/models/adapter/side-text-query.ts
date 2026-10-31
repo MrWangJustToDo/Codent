@@ -4,6 +4,7 @@ import { extractRunErrorMessage } from "../../agent/stream/stream-errors.js";
 import { sharedUsageHistory } from "../../agent/usage/usage-history-service.js";
 import { calculateCost, extractTanStackUsage, type TokenUsage } from "../../runtime-types/token-usage.js";
 import { errorMessage } from "../../utils/errors.js";
+import { generateId } from "../../utils/generate-id.js";
 import { truncateText } from "../../utils/text-truncation.js";
 import { maxTokensOption } from "../max-tokens-option.js";
 import { applySideQueryOutputFloor } from "../side-query-budget.js";
@@ -12,7 +13,7 @@ import { extractJsonDocument, renderSchemaContract } from "./schema-prompt.js";
 import { isStructuredOutputComplete } from "./structured-output-chunk.js";
 
 import type { TextAdapterConfig } from "./adapter-factory.js";
-import type { InferSchemaType, SchemaInput } from "@tanstack/ai";
+import type { InferSchemaType, SchemaInput, StreamChunk } from "@tanstack/ai";
 
 // ============================================================================
 // Types
@@ -398,8 +399,9 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
       text += chunk.delta;
     }
     // The object arrives as a CUSTOM event, already normalized by the engine
-    // (optional-field null widening undone). Validation is still ours to do —
-    // the streaming path deliberately does not validate, unlike `Promise<T>`.
+    // (optional-field null widening undone). TanStack >= 1.0 validates the `outputSchema`
+    // itself as soon as that event lands and *ends the run* on a failed check, so an invalid
+    // object now surfaces here as a RUN_ERROR instead — see {@link structuredRunErrorReason}.
     if (isStructuredOutputComplete(chunk)) {
       capture = { object: chunk.value.object, raw: chunk.value.raw };
     }
@@ -409,8 +411,11 @@ async function runStructuredModeQuery<TSchema extends SchemaInput>(
     }
     if (chunk.type === "RUN_ERROR") {
       throw new Error(
-        sideQueryError(extractRunErrorMessage(chunk), textAdapter, options, startTime, {
+        sideQueryError(structuredRunErrorReason(chunk, options.schema, text), textAdapter, options, startTime, {
           mode: "structured",
+          // The engine's `rawText` is the model's own text; the accumulated deltas are the
+          // fallback for a chunk that predates it (or a provider that emits no raw text).
+          raw: readStructuredRawText(chunk) ?? text,
           ...failureContext,
         })
       );
@@ -512,6 +517,45 @@ function formatIssue(issue: ValidationIssue): string {
   const path = issue.path;
   if (!path || path.length === 0) return message;
   return `${path.map(String).join(".")}: ${message}`;
+}
+
+/**
+ * The model text of a failed structured output, as `chat()` publishes it.
+ *
+ * TanStack >= 1.0 moves it to `metadata.tanstack.rawText` (it used to ride on the
+ * `structured-output.complete` chunk this port validated itself).
+ */
+function readStructuredRawText(chunk: StreamChunk): string | undefined {
+  const value = (chunk as { metadata?: { tanstack?: { rawText?: unknown } } }).metadata?.tanstack?.rawText;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * A structured `RUN_ERROR` described in our own terms.
+ *
+ * TanStack >= 1.0 validates the `outputSchema` itself and stops the run at the first failed
+ * check, so an object our schema rejects arrives as a `RUN_ERROR` ("Validation failed: …")
+ * *before* the `structured-output.complete` chunk this port used to validate. The engine's
+ * message carries no path, and a path is the only diagnostic a background extraction has
+ * ("merged.0.type: Invalid option: …" versus a bare "Invalid option: …"). The model text is
+ * still on the chunk, so re-running our own validation restores it. Any other failure — no
+ * raw text, or text that our schema accepts — keeps the engine's message.
+ *
+ * Deliberately NOT recovered here: the usage of the failed attempt. The engine breaks out of
+ * the stream before the provider's `RUN_FINISHED`, so those tokens never reach this port;
+ * {@link withUsage} can only attach what it was given.
+ */
+function structuredRunErrorReason(chunk: StreamChunk, schema: SchemaInput, accumulatedText: string): string {
+  const engineMessage = extractRunErrorMessage(chunk);
+  const modelText = readStructuredRawText(chunk) ?? accumulatedText;
+  if (!modelText) return engineMessage;
+
+  const located = extractJsonDocument(modelText);
+  if (!located) return engineMessage;
+
+  const validation = validateAgainstSchema(schema, located.value);
+  if (validation.ok) return engineMessage;
+  return `response failed schema validation: ${validation.issue}`;
 }
 
 // ============================================================================
@@ -620,6 +664,12 @@ function reportModeDecision<TSchema extends SchemaInput>(
 interface QueryRequestOptions {
   request: {
     abortController: AbortController;
+    /**
+     * AG-UI thread id, required by `chat()` since TanStack 1.0. A side query is a one-shot
+     * conversation of its own — it is not part of the agent's thread, and with
+     * `promptCache: "none"` no cache key rides on it — so each call gets its own id.
+     */
+    threadId: string;
     debug: false;
     promptCache: "none";
     modelOptions: Record<string, unknown>;
@@ -659,6 +709,7 @@ function createQueryRequest(
     request: {
       abortController,
       debug: false,
+      threadId: generateId("side-query"),
       // TanStack 0.69+ enables automatic prompt caching by default. Side queries are
       // one-shot and our cache policy belongs to the main agent's middleware.
       promptCache: "none" as const,

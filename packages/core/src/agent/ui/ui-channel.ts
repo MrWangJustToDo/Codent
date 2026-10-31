@@ -67,26 +67,7 @@ export interface ConsumeRunOptions {
 type ApprovalListener = (request: UIApprovalRequest) => void;
 
 function readToolCallName(chunk: StreamChunk): string | undefined {
-  if (chunk.type !== "TOOL_CALL_START") return undefined;
-  const record = chunk as { toolName?: string };
-  return typeof record.toolName === "string" ? record.toolName : undefined;
-}
-
-/**
- * Some adapters emit the `toolName` alias on `TOOL_CALL_START`; TanStack's
- * processor only reads `toolCallName`, so the created tool-call part would
- * end up nameless. Copy the alias over before feeding the processor.
- */
-function normalizeToolCallName(chunk: StreamChunk): StreamChunk {
-  if (
-    chunk.type === "TOOL_CALL_START" &&
-    !chunk.toolCallName &&
-    typeof chunk.toolName === "string" &&
-    chunk.toolName.length > 0
-  ) {
-    return { ...chunk, toolCallName: chunk.toolName };
-  }
-  return chunk;
+  return chunk.type === "TOOL_CALL_START" ? chunk.toolCallName : undefined;
 }
 
 /**
@@ -426,8 +407,7 @@ export class AgentUIChannel {
     // No snapshot repair here: the branch above has already returned for MESSAGES_SNAPSHOT, and
     // `repairMessagesSnapshotChunk` is a no-op for every other chunk type. Legacy stringified
     // snapshots are repaired on the restore path (`repairStringifiedMultimodalUIMessages`).
-    const normalized = normalizeToolCallName(chunk);
-    if (shouldSuppressReplayedToolChunk(this.getMessages(), normalized)) {
+    if (shouldSuppressReplayedToolChunk(this.getMessages(), chunk)) {
       return;
     }
     // TanStack >= 0.53 resumeAssistantState: a late chunk with a historical
@@ -438,12 +418,12 @@ export class AgentUIChannel {
     // array — within a run the first TEXT chunk materializes its message
     // immediately, so live-membership would suppress every legitimate delta
     // of the active message (and after abort + resend, the new reply too).
-    if (shouldSuppressStaleTextChunk(this.historicalMessageIds, normalized)) {
+    if (shouldSuppressStaleTextChunk(this.historicalMessageIds, chunk)) {
       return;
     }
-    this.trackSummaryStreamPhase(normalized);
-    this.appendSummaryDelta(normalized);
-    this.processor.processChunk(normalized);
+    this.trackSummaryStreamPhase(chunk);
+    this.appendSummaryDelta(chunk);
+    this.processor.processChunk(chunk);
   }
 
   /** Finalize an incrementally processed stream. */

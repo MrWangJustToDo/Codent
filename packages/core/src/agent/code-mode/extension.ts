@@ -59,12 +59,6 @@ export interface CodeModeExtensionConfig {
   memoryLimit?: number;
   /** Optional lazy-tool discovery config (defaults to `{ includeDescription: 'none' }`). */
   lazyToolsConfig?: LazyToolsConfig;
-  /**
-   * Expose tools that declare `needsApproval: true` inside the sandbox. Disabled by
-   * default: the sandbox calls a tool's raw `execute`, so it cannot participate in the
-   * host approval/interceptor chain. Enable only when the host accepts that boundary.
-   */
-  allowApprovalTools?: boolean;
   /** Hard-disable the extension regardless of driver availability. */
   disabled?: boolean;
 }
@@ -181,14 +175,16 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
       }
 
       const requestedTools = options.tools ?? [];
+      // Approval-gated tools can never be exposed: `@tanstack/ai-code-mode` >= 1.0 refuses the
+      // whole config outright ("Code Mode cannot expose tools that require approval"), because a
+      // sandbox `external_*` call runs a tool's raw `execute` and cannot raise the host approval
+      // interrupt. The previous `allowApprovalTools` opt-in therefore has no reachable behaviour
+      // and was removed rather than kept as a flag that only throws during activation.
       const approvalGated = requestedTools.filter(
         (tool) => (tool as { needsApproval?: boolean }).needsApproval === true
       );
-      const tools =
-        options.allowApprovalTools === true
-          ? requestedTools
-          : requestedTools.filter((tool) => (tool as { needsApproval?: boolean }).needsApproval !== true);
-      if (approvalGated.length > 0 && options.allowApprovalTools !== true) {
+      const tools = requestedTools.filter((tool) => (tool as { needsApproval?: boolean }).needsApproval !== true);
+      if (approvalGated.length > 0) {
         ctx.logger.warn(
           `Code Mode: skipped approval-gated tool(s) because the sandbox bypasses the approval chain: ${approvalGated
             .map((tool) => tool.name)

@@ -69,7 +69,7 @@
     "@codent/core": "workspace:*",
     "@my-react/react": "^0.3.30",
     "@my-react/react-terminal": "^0.0.31",
-    "@tanstack/ai": "^0.70.0",
+    "@tanstack/ai": "^1.0.1",
     "highlight.js": "^11.11.1",
     "lodash-es": "^4.17.23"
   },

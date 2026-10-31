@@ -168,9 +168,16 @@ export function stubNodeBuiltins(): Plugin {
     },
     load(id) {
       if (id === VIRTUAL_AGENT_TOOLSET) {
+        // Names imported by the SDK at module scope, from any file under
+        // `tools/agent-toolset/` (the matcher is a directory-wide catch-all, so every
+        // import from it has to resolve here). `checkMemorySyncInterval` comes from
+        // `sync-interval.mjs` in SDK >= 0.135, which the Anthropic adapter bundle reaches
+        // through `lib/environments/worker.mjs`; the Node-only toolset itself is never
+        // callable in the browser, so the validator is inert.
         return `
 export default {};
 export const betaAgentToolset20260401 = () => ({});
+export const checkMemorySyncInterval = () => {};
 `;
       }
 

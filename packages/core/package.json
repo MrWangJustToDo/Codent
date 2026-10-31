@@ -312,11 +312,11 @@
     "validate:extension-context-sections": "pnpm run build && node scripts/validate-extension-context-sections.mjs"
   },
   "dependencies": {
-    "@tanstack/ai": "^0.70.0",
-    "@tanstack/ai-anthropic": "^0.22.1",
-    "@tanstack/ai-code-mode": "^0.5.4",
-    "@tanstack/ai-mcp": "^0.9.1",
-    "@tanstack/openai-base": "^0.15.0",
+    "@tanstack/ai": "^1.0.1",
+    "@tanstack/ai-anthropic": "^1.0.0",
+    "@tanstack/ai-code-mode": "^1.0.1",
+    "@tanstack/ai-mcp": "^1.0.0",
+    "@tanstack/openai-base": "^1.0.0",
     "htmlparser2": "^12.0.0",
     "openai": "^7.30.0",
     "pathe": "^2.0.3",

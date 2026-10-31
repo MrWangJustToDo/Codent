@@ -860,7 +860,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   );
 
   // Now the duplicate arrives the way the engine produces one: start chunk → end chunk.
-  await middleware.onChunk({}, { type: "TOOL_CALL_START", toolCallId: "call-dup", toolName: "task" });
+  await middleware.onChunk({}, { type: "TOOL_CALL_START", toolCallId: "call-dup", toolCallName: "task" });
   await middleware.onChunk({}, { type: "TOOL_CALL_END", toolCallId: "call-dup", input: { prompt: "again" } });
 
   assert.equal(removals, 1, "the duplicate spawn removes the parent-abort listener it attached");

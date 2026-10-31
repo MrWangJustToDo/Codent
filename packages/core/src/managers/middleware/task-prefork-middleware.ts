@@ -158,7 +158,7 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
       }
 
       if (chunk.type === "TOOL_CALL_START") {
-        if ((chunk.toolName ?? chunk.toolCallName) === BUILTIN_TOOL_NAMES.task) {
+        if (chunk.toolCallName === BUILTIN_TOOL_NAMES.task) {
           pendingCalls.set(chunk.toolCallId, { argsText: "" });
         }
         return chunk;

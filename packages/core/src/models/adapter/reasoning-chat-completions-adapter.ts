@@ -15,10 +15,14 @@ export type ReasoningChatCompletionsConfig = ChatCompletionsTextAdapterConfig;
  * Chat Completions adapter that round-trips DeepSeek thinking mode `reasoning_content`.
  *
  * Fixes stay in the adapter (no chat/compaction/UI pipeline changes):
- * 1. Buffer stream reasoning and emit `STEP_FINISHED.delta` so TanStack’s engine
- *    keeps `message.thinking` on the in-run tool-call assistant.
- * 2. Cache reasoning by `toolCallId` so `convertMessage` can echo `reasoning_content`
- *    even when UI→model conversion dropped `thinking` parts.
+ * 1. Cache streamed reasoning by `toolCallId` so `convertMessage` can echo
+ *    `reasoning_content` even when UI→model conversion dropped `thinking` parts.
+ *
+ * Thinking *display* is not this adapter's job: the engine builds the thinking part from
+ * `REASONING_MESSAGE_CONTENT`, which passes through untouched. An earlier version also
+ * synthesized a `STEP_FINISHED.delta` here on the belief that the engine read it — it never
+ * did (0.70's handler reads the signature only, and TanStack 1.0 dropped the handler
+ * entirely), so that stream rewrite was removed rather than kept as dead code.
  *
  * Inherits tool-result image lifting from {@link ChatCompletionsTextAdapter}.
  */
@@ -50,7 +54,6 @@ export class ReasoningChatCompletionsTextAdapter extends ChatCompletionsTextAdap
     }
   ): AsyncIterable<StreamChunk> {
     let reasoningBuffer = "";
-    let sawStepFinishedWithDelta = false;
     const toolCallIds: string[] = [];
 
     for await (const chunk of super.processStreamChunks(stream, options, aguiState)) {
@@ -72,48 +75,8 @@ export class ReasoningChatCompletionsTextAdapter extends ChatCompletionsTextAdap
         continue;
       }
 
-      if (chunk.type === EventType.STEP_FINISHED) {
-        const existingDelta =
-          typeof (chunk as { delta?: unknown }).delta === "string" ? (chunk as { delta: string }).delta : "";
-        const content =
-          typeof (chunk as { content?: unknown }).content === "string" ? (chunk as { content: string }).content : "";
-        const delta = existingDelta || content || reasoningBuffer;
-        if (delta) {
-          // Necessary cast: `delta` / `content` are runtime extras TanStack reads off a
-          // STEP_FINISHED event, but neither AG-UI's `StepFinishedEvent` nor TanStack's
-          // extension of it declares them — there is no precise type to spell this with.
-          yield {
-            ...(chunk as object),
-            type: EventType.STEP_FINISHED,
-            delta,
-            content: delta,
-          } as unknown as StreamChunk;
-          sawStepFinishedWithDelta = true;
-          reasoningBuffer = reasoningBuffer || delta;
-        } else {
-          yield chunk;
-        }
-        continue;
-      }
-
-      if (chunk.type === EventType.RUN_FINISHED) {
-        if (reasoningBuffer) {
-          if (!sawStepFinishedWithDelta) {
-            // Same reason as above: `stepId` / `model` / `delta` are not in the protocol's
-            // StepFinishedEvent. This one is synthesized from scratch, so it also has to carry
-            // the `stepName` the protocol does require.
-            yield {
-              type: EventType.STEP_FINISHED,
-              stepName: "thinking",
-              stepId: "thinking",
-              delta: reasoningBuffer,
-              content: reasoningBuffer,
-              model: (chunk as { model?: string }).model,
-              timestamp: Date.now(),
-            } as unknown as StreamChunk;
-          }
-          this.reasoningCache.remember(reasoningBuffer, toolCallIds);
-        }
+      if (chunk.type === EventType.RUN_FINISHED && reasoningBuffer) {
+        this.reasoningCache.remember(reasoningBuffer, toolCallIds);
       }
 
       yield chunk;

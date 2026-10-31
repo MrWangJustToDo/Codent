@@ -430,7 +430,6 @@ export class AgentBootstrap {
               timeout: codeModeConfig?.timeout,
               memoryLimit: codeModeConfig?.memoryLimit,
               lazyToolsConfig: codeModeConfig?.lazyToolsConfig,
-              allowApprovalTools: codeModeConfig?.allowApprovalTools,
             })
           )
         );

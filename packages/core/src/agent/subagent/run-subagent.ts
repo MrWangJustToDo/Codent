@@ -410,7 +410,7 @@ async function* tapBeginSummary(
     return;
   }
   for await (const chunk of stream) {
-    if (chunk.type === "TOOL_CALL_START" && (chunk.toolName ?? chunk.toolCallName) === BEGIN_SUMMARY_TOOL_NAME) {
+    if (chunk.type === "TOOL_CALL_START" && chunk.toolCallName === BEGIN_SUMMARY_TOOL_NAME) {
       onBeginSummary();
     }
     yield chunk;

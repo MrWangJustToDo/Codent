@@ -38,7 +38,11 @@ const completeChunk = (object, raw) => ({
   value: { object, raw },
 });
 
-const runErrorChunk = (message) => ({ type: "RUN_ERROR", error: new Error(message) });
+// `message` is the AG-UI contract (`RunErrorEvent.message`); `error` is the wrapped shape
+// `extractRunErrorMessage` also tolerates. TanStack >= 1.0 rebuilds the chunk from `message`
+// before it reaches a consumer, so a fixture carrying *only* `error` would arrive as
+// "Unknown error" and stop testing what it names.
+const runErrorChunk = (message) => ({ type: "RUN_ERROR", message, error: new Error(message) });
 
 /**
  * Build a text-adapter config whose underlying adapter yields `chunks`.

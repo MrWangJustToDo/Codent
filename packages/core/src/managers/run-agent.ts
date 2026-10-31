@@ -407,7 +407,7 @@ async function executeManagedAgentRun(
         agentId,
         messages: runMessages,
         abortController,
-        threadId: input.threadId,
+        threadId: input.threadId ?? managed.getEventSessionId(),
         runId: input.runId,
         maxOutputTokens: managed.run.getMaxOutputTokensOverride(),
       }),

@@ -50,6 +50,7 @@ try {
     adapter,
     model,
     messages: [{ role: "user", content: "Reply with exactly: pong" }],
+    threadId: "validate-tanstack-adapter",
     abortController: controller,
   });
 
