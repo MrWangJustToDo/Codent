@@ -101,6 +101,40 @@ export function applyOptionsToState(
 }
 
 /**
+ * Follow a shrinking path text back up the level stack.
+ *
+ * The typed text is what names the level on screen, so deleting characters out of the path
+ * (`/models 0:gpt-5.1` → `/models 0:gpt-`) means the menu can no longer describe that level: every
+ * segment the text no longer carries is popped, exactly as `Esc` pops it, and the level that is left
+ * is filtered by the text the user kept. Without this a divergence closed the menu outright, so
+ * backspacing inside a model id threw the model list away instead of returning to it — a two-level
+ * menu could only be left downwards.
+ *
+ * Only a DELETION retreats: the text must be a truncation of the level's path. Text that left the
+ * level some other way (an edited path, a hand-written argument list) named a level the user never
+ * opened, so the caller closes the menu instead.
+ *
+ * A level load still in flight is dropped by the pop: `descend`'s continuation compares the stack
+ * depth it captured, so late rows cannot land in a level the user has already retreated out of.
+ *
+ * `optionPrefix` is the typed text after the command, already lowercased by the caller.
+ *
+ * @returns `false` when the text left the level without being a truncation of its path.
+ */
+export function retreatToTypedText(state: AutocompleteState, optionPrefix: string): boolean {
+  while (state.optionPath.length > 0) {
+    const pathPrefix = state.optionPath.join(" ").toLowerCase();
+    // The text still names this level — equal, or extended past it by typed args.
+    if (optionPrefix.startsWith(pathPrefix)) return true;
+    // Diverged rather than deleted: nothing on this stack describes where the user is now.
+    if (!pathPrefix.startsWith(optionPrefix)) return false;
+    state.optionPath = state.optionPath.slice(0, -1);
+    state.levels = state.levels.slice(0, -1);
+  }
+  return true;
+}
+
+/**
  * Enter a level: push it on the stack and render it.
  *
  * Returns `false` only when the level is known to be EMPTY — the caller then executes the row as a

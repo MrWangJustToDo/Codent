@@ -88,6 +88,22 @@ registerExtensionCommand({
   execute: () => ({ ok: true }),
 });
 
+// Three levels deep, so one edit can pop more than one: `outer` → `middle` → depth.
+registerExtensionCommand({
+  name: "chain-probe",
+  description: "probe",
+  usage: "/chain-probe",
+  immediate: false,
+  getOptions: () => [
+    {
+      label: "outer",
+      value: "outer",
+      getOptions: () => [{ label: "middle", value: "middle", getOptions: () => buildDepth() }],
+    },
+  ],
+  execute: () => ({ ok: true }),
+});
+
 /** A submenu whose promise the test settles by hand, to drive the in-flight window. */
 function makeDeferred() {
   let settle;
@@ -310,4 +326,69 @@ console.log("nested-command-menu: ok");
   autocomplete.update("/case-probe Upper-Model ");
   assert.equal(state().visible, true, "the level survives the case difference");
   assert.deepEqual(labels(), ["high"], "the level's rows are shown");
+}
+
+// ---------------------------------------------------------------------------
+// 14. DELETING the path text retreats, exactly as Esc does
+//
+// The typed text is what names the level on screen, so backspacing out of `/nested-probe branch` must
+// return to the root level — filtered by the text that is left — instead of closing the menu. Closing
+// made a two-level menu one-way: the list you came from was gone the moment a model id lost a
+// character, which is the `/models` depth list throwing the model list away.
+// ---------------------------------------------------------------------------
+{
+  reset();
+  select("branch");
+  autocomplete.accept("/nested-probe ");
+  assert.deepEqual(state().optionPath, ["branch"]);
+
+  // One character short of the level's value.
+  autocomplete.update("/nested-probe branc");
+  assert.deepEqual(state().optionPath, [], "the level the text no longer names is popped");
+  assert.equal(state().visible, true, "the menu retreats instead of closing");
+  assert.deepEqual(labels(), ["branch", "type custom…"], "the parent level is filtered by the text left over");
+  assert.equal(state().levels.length, state().optionPath.length + 1, "stack and path stay in step");
+
+  // Deleting back to the bare command keeps the root level, unfiltered — the text still names a
+  // command that has options, so there is nothing to retreat out of.
+  autocomplete.update("/nested-probe ");
+  assert.equal(state().visible, true);
+  assert.ok(labels().includes("leaf"), "the whole root level is back");
+
+  autocomplete.update("/nested-probe");
+  assert.equal(state().mode, "options");
+  assert.ok(labels().includes("leaf"), "the root level is still there");
+}
+
+// ---------------------------------------------------------------------------
+// 15. One edit can pop SEVERAL levels, and text that diverged still closes
+// ---------------------------------------------------------------------------
+{
+  autocomplete.dismiss();
+  autocomplete.update("/chain-probe ");
+  select("outer");
+  autocomplete.accept("/chain-probe ");
+  select("middle");
+  autocomplete.accept("/chain-probe outer ");
+  assert.deepEqual(state().optionPath, ["outer", "middle"], "two levels deep");
+  assert.deepEqual(labels(), DEPTHS, "the innermost level is shown");
+
+  autocomplete.update("/chain-probe outer");
+  assert.deepEqual(state().optionPath, ["outer"], "the deepest segment pops first");
+  assert.deepEqual(labels(), ["middle"], "its parent is filtered by the text left over");
+
+  autocomplete.update("/chain-probe oute");
+  assert.deepEqual(state().optionPath, [], "the second segment pops in the same walk");
+  assert.equal(state().visible, true, "still retreating, not closing");
+  assert.deepEqual(labels(), ["outer"], "the root is filtered by what is left (no typed-arg row on this probe)");
+  assert.equal(state().levels.length, state().optionPath.length + 1, "stack and path stay in step");
+
+  // Divergence is not a truncation: `app-command-menu` says an edited path leaves the menu.
+  autocomplete.dismiss();
+  autocomplete.update("/nested-probe ");
+  select("branch");
+  autocomplete.accept("/nested-probe ");
+  autocomplete.update("/nested-probe brunch");
+  assert.equal(state().visible, false, "an edited path closes instead of retreating");
+  assert.equal(state().mode, "commands", "the menu is gone, not filtered");
 }

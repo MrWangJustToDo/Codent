@@ -3,7 +3,7 @@ import { createState } from "reactivity-store";
 import { getAllCommands } from "../commands";
 import { COMMAND_FREEFORM_VALUE, typedArgsAfterCommand } from "../commands/utils/command-options.js";
 
-import { applyOptionsToState, closeMenu, descend, openLevel } from "./option-levels.js";
+import { applyOptionsToState, closeMenu, descend, openLevel, retreatToTypedText } from "./option-levels.js";
 
 import type { Command, CommandOption } from "../commands";
 
@@ -134,12 +134,14 @@ export const useAutocomplete = createState(() => ({ ...initialState }), {
       const opened = state.mode === "options" ? state.currentCommand : null;
       if (opened) {
         // Already in the menu: the rows are the level we are on, so only re-filter when the typed
-        // text still sits inside it. Typing past the level means the user is writing args by hand
-        // (`/models 0:x high`), and the menu steps aside rather than match against a level it no
-        // longer describes.
-        // Lowercased for the same reason as the filter: the path keeps the option's spelling.
-        const pathPrefix = state.optionPath.join(" ").toLowerCase();
-        if (pathPrefix && !optionPrefix.startsWith(pathPrefix)) {
+        // text still describes it. Two kinds of edit step out of a level:
+        // - DELETING its path text retreats, one level per popped segment (`/models 0:gpt-5.1` →
+        //   `/models 0:gpt-`), and the text that is left filters the parent level. Deleting used to
+        //   close the menu instead, so backspacing inside a model id threw the model list away.
+        // - Text that no longer sits inside the level at all is the user writing args by hand
+        //   (`/models 0:x high`): the menu closes rather than match against a level the text does not
+        //   describe.
+        if (!retreatToTypedText(state, optionPrefix)) {
           closeMenu(state);
           return;
         }
