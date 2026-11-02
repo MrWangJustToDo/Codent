@@ -320,6 +320,7 @@ export { resolveSummarizationBudget } from "./agent/compaction";
 // ============================================================================
 
 export { previewEdit, type PreviewEditResult } from "./agent/tools/builtin/fs/edit/preview-edit.js";
+export { normalizeEditArguments } from "./agent/tools/builtin/fs/edit/arguments.js";
 export { describeToolPresentations, presentationFromInfo } from "./agent/tools/presentation/describe.js";
 export { getBuiltinToolPresentation } from "./agent/tools/presentation/builtin.js";
 export { keepsCompactRow } from "./agent/tools/presentation/row-rules.js";

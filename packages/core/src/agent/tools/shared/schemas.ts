@@ -148,8 +148,13 @@ export const editFileOutputSchema = z.object({
         found: z.boolean().describe("Whether the string was found in the file."),
         replaced: z.boolean().describe("Whether the replacement was made."),
         count: z.number().describe("Number of occurrences replaced."),
+        /** @deprecated Kept so restored outputs from older builds still parse; never produced now. */
         startLine: z.number().optional().describe("Expected start line (1-indexed)."),
         actualLine: z.number().optional().describe("Actual line where match was found (1-indexed)."),
+        /** Which matching level located the edit (absent for an identical no-op). */
+        mode: z.enum(["exact", "trimEnd", "trim", "unicode", "unicodeTrim"]).optional(),
+        /** True when oldString and newString were identical: the file already matched, nothing written for this entry. */
+        skipped: z.boolean().optional(),
       })
     )
     .describe("Details of each edit operation."),

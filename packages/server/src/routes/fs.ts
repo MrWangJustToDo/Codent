@@ -91,6 +91,10 @@ export const fsRoutes = new Hono()
         isFile: stat.isFile,
         size: stat.size,
         mtime: stat.mtime.toISOString(),
+        // Permission bits, when the host reports them. `edit_file` / `write_file` carry the
+        // destination's mode onto their temp file; dropping it here silently disabled that on every
+        // remote workspace (the tools saw `undefined`).
+        ...(stat.mode !== undefined ? { mode: stat.mode } : {}),
       });
     } catch (err) {
       const { body, status } = handleFsError(err);

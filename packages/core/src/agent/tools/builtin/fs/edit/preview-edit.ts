@@ -1,23 +1,20 @@
 /**
  * Edit Preview — compute the before/after file content for a set of edits.
  *
- * Used by the UI to show a full-file diff during the approval phase, before
- * the edit_file tool's `execute()` runs. It reads the file from disk (via CoreEnv) and resolves each
- * edit through the tool's own matcher ({@link resolveEditMatch} / {@link applyResolvedEdit}), so the
- * approved diff is what the tool writes.
+ * Used by the UI to show a full-file diff during the approval phase, before the edit_file tool's
+ * `execute()` runs. It runs the SAME pipeline as the tool (`applyEditsToText`: BOM split, LF view,
+ * matching ladder, non-overlap, splice, line-ending restore), so the approved diff is byte-identical
+ * to what the tool writes — including the cases where the tool refuses and writes nothing.
  *
- * It used to re-implement the matching (exact `includes` → fuzzy), which drifted from the tool in
- * three ways that all pointed the same direction — a diff that is not the write: it never tried the
- * over-escape variants the tool tries (so an escaped `oldString` previewed as *no change* while the
- * tool would have written one), it ignored `startLine` (so with several matches the preview rewrote
- * the first while the tool rewrote the one near that line), and it did not enforce uniqueness (so an
- * edit the tool refuses previewed as an applied change).
+ * The earlier version re-implemented matching and drifted from the tool (escape variants,
+ * `startLine`, uniqueness). Re-implementing it again would repeat that; there is exactly one
+ * matcher, and both sides call it.
  */
 
 import { getEnv, type CoreEnv } from "../../../../../env";
 
-import { applyResolvedEdit, isErrorResult, resolveEditMatch } from "./find-edit-match.js";
-import { normalizeForFuzzyMatch } from "./fuzzy-match.js";
+import { normalizeEditArguments } from "./arguments.js";
+import { applyEditsToText, type EditOperation } from "./find-edit-match.js";
 
 // ============================================================================
 // Types
@@ -27,14 +24,8 @@ import { normalizeForFuzzyMatch } from "./fuzzy-match.js";
 export interface PreviewEditInput {
   /** File path relative to the project root. */
   path: string;
-  /** Array of edit operations to apply sequentially. */
-  edits: Array<{
-    oldString: string;
-    newString: string;
-    replaceAll?: boolean;
-    /** 1-indexed line the edit is expected at, as the tool receives it (disambiguates matches). */
-    startLine?: number;
-  }>;
+  /** Array of edit operations, all matched against the original file. */
+  edits: EditOperation[];
 }
 
 /** Result of previewing an edit operation. */
@@ -55,13 +46,7 @@ export interface PreviewEditResult {
 // ============================================================================
 
 /**
- * Compute the before/after file content for a set of edits without writing
- * to disk.
- *
- * Mirrors the edit_file tool's matching/replacement logic (exact match first,
- * then fuzzy match fallback) so the preview matches what the tool would
- * actually produce. Reuses a single normalized-content cache across all edits
- * to avoid re-scanning the whole file on every edit.
+ * Compute the before/after file content for a set of edits without writing to disk.
  *
  * @param input - The edit operation parameters (path + edits array).
  * @returns The original and modified file content.
@@ -75,42 +60,22 @@ export interface PreviewEditResult {
  * ```
  */
 export async function previewEdit(input: PreviewEditInput, env?: CoreEnv): Promise<PreviewEditResult> {
-  const { path, edits } = input;
-
-  const oldFile = await (env ?? getEnv()).fs.readFile(path);
-
-  let content = oldFile;
-  // Normalize once and reuse; invalidated whenever `content` changes.
-  let normalizedContent = normalizeForFuzzyMatch(content);
-  let normalizedContentValid = true;
-
-  for (const edit of edits) {
-    // Ensure the normalized cache reflects the current `content`.
-    if (!normalizedContentValid) {
-      normalizedContent = normalizeForFuzzyMatch(content);
-      normalizedContentValid = true;
-    }
-
-    const match = resolveEditMatch(content, edit.oldString, edit.newString, {
-      replaceAll: edit.replaceAll,
-      startLine: edit.startLine,
-      normalizedContent,
-    });
-
-    if (isErrorResult(match)) {
-      // The tool throws on the first unresolved edit and writes nothing at all (its
-      // `fs.writeFile` sits after the loop), so the honest preview of this set is the original file,
-      // plus the reason. Reporting a partial application would show a diff for a write that never
-      // happens.
-      return { oldFile, newFile: oldFile, error: match.error };
-    }
-
-    const next = applyResolvedEdit(content, match, Boolean(edit.replaceAll), normalizedContent);
-    if (next !== content) {
-      content = next;
-      normalizedContentValid = false; // content changed, invalidate cache
-    }
+  // The tool accepts JSON-string / single-object / legacy shapes; the preview must see the same
+  // edits the tool will run, or it previews a different change (or none) than the one written.
+  const { path, edits } = normalizeEditArguments(input) as { path: string; edits?: unknown };
+  if (!Array.isArray(edits) || edits.length === 0) {
+    const oldFile = await (env ?? getEnv()).fs.readFile(path);
+    return { oldFile, newFile: oldFile, error: "edits: must contain at least 1 edit operation" };
   }
 
-  return { oldFile, newFile: content };
+  const oldFile = await (env ?? getEnv()).fs.readFile(path);
+  const applied = applyEditsToText(oldFile, edits as EditOperation[]);
+  if (!applied.ok) {
+    // The tool throws on the first unresolved edit and writes nothing at all, so the honest preview
+    // of this set is the original file plus the reason. A partial application would show a diff for
+    // a write that never happens.
+    return { oldFile, newFile: oldFile, error: applied.message };
+  }
+
+  return { oldFile, newFile: applied.content };
 }

@@ -6,9 +6,9 @@
  * parallel. Uses `path.resolve` to normalize paths so that the same file
  * accessed via different relative paths shares the same queue.
  *
- * There is no external-concurrent-modification detection (no mtime, no content
- * hash). If the file is modified outside the agent session, the oldString
- * won't match, and the tool will error naturally — the LLM re-reads and retries.
+ * The queue itself does not detect external modification (no mtime, no content hash). The edit tool
+ * covers that separately: it re-reads just before writing and refuses if the bytes changed since it
+ * matched them.
  */
 
 import type { ResolvedCoreEnv } from "../../../../../env";

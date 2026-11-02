@@ -55,11 +55,15 @@ export {
   tryReadImageDimensions,
 } from "../models/estimate-image-tokens.js";
 export {
-  applyResolvedEdit,
+  applyEdits,
+  applyEditsToText,
+  detectLineEnding,
   expandMatchVariants,
+  findEditMatch,
   formatNotFoundHint,
-  resolveEditMatch,
-  START_LINE_TOLERANCE,
+  fromLF,
+  splitBom,
+  toLF,
   unescapeCommonEscapes,
 } from "../agent/tools/builtin/fs/edit/find-edit-match.js";
 export { BEGIN_SUMMARY_TOOL_NAME } from "../agent/subagent/begin-summary-tool.js";

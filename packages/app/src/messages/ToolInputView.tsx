@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, normalizeEditArguments } from "@codent/core";
 
 import { useTranscriptDisplayMode } from "../context/transcript-display-context.js";
 import { useSize } from "../hooks";
@@ -68,9 +68,11 @@ export const ToolInputView = ({
 
   if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.editFile) {
     if (!showFileDiffs) return null;
-    const content = toolInput as {
+    // The server coerces a JSON-string / single-object / legacy argument shape; normalize here too
+    // so the preview sees the edits that will actually run (and so `edits.map` never gets a string).
+    const content = normalizeEditArguments(toolInput) as {
       path?: string;
-      edits?: Array<{ oldString: string; newString: string; startLine?: number; replaceAll?: boolean }>;
+      edits?: Array<{ oldString: string; newString: string; replaceAll?: boolean }>;
     };
 
     if (!content || uiState === "input-streaming") return null;

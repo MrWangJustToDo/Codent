@@ -36,7 +36,7 @@ export const EditFilePreview = memo(function EditFilePreview({
 }: {
   toolCallId: string;
   path: string;
-  edits: Array<{ oldString: string; newString: string; startLine?: number; replaceAll?: boolean }>;
+  edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }>;
   bodyWidth: number;
   /** Whether the call has not executed yet — see {@link isPreExecutionToolState}. */
   canPreview: boolean;
@@ -57,7 +57,7 @@ export const EditFilePreview = memo(function EditFilePreview({
 
   return (
     <Box flexDirection="column">
-      {preview?.error ? (
+      {preview?.error && !hasOutput ? (
         /* The tool would refuse this set, so nothing will be written: an empty diff here is the
            truth, and the reason is what makes it readable instead of confusing. */
         <Text color={COLORS.warning} wrap="wrap">
@@ -79,7 +79,6 @@ export const EditFilePreview = memo(function EditFilePreview({
                   oldFile={edit.oldString}
                   newPath={path}
                   newFile={edit.newString}
-                  startLine={edit.startLine}
                 />
               )}
             </Fragment>

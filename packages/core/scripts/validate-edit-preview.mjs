@@ -3,19 +3,14 @@
  *
  * Run: pnpm --filter @codent/core run validate:edit-preview
  *
- * `previewEdit` renders the before/after diff a user approves *before* `edit_file` runs. It re-implemented
- * the tool's matching (exact `includes` → fuzzy) instead of calling it, and drifted in three ways that
- * all point the same direction — a diff that is not the write:
+ * `previewEdit` renders the before/after diff a user approves *before* `edit_file` runs. Both sides
+ * call the SAME pipeline (`applyEditsToText`: BOM split, LF view, matching ladder, non-overlap,
+ * splice, line-ending restore), so they cannot disagree about which bytes would be written.
  *
- *   - it never tried the over-escape variants the tool tries, so an escaped `oldString` previewed as
- *     "no change" while the tool would have written one;
- *   - it ignored `startLine`, so with several matches the preview rewrote the first while the tool
- *     rewrote the one near that line;
- *   - it did not enforce uniqueness, so an edit the tool refuses previewed as an applied change.
- *
- * This drives the REAL tool and the preview over one in-memory file and asserts they agree: same
- * `newFile`, or (when the tool refuses and writes nothing) an unchanged preview plus the tool's own
- * reason. The assertion is on the bytes, so it cannot pass by both sides describing the same mistake.
+ * This drives the REAL tool and the preview over one in-memory file and asserts they agree on the
+ * bytes: same `newFile`, or (when the tool refuses and writes nothing) an unchanged preview plus the
+ * tool's own reason. The assertion is on the bytes, so it cannot pass by both sides describing the
+ * same mistake.
  */
 
 import assert from "node:assert/strict";
@@ -44,10 +39,16 @@ function makeEnv(content) {
   return { env, files };
 }
 
-/** Run the real tool, returning either its result or the error it threw (it throws to refuse). */
-async function runTool(env, edits) {
+/**
+ * Run the real tool the way the runtime does: parse the raw input through the tool's schema (which
+ * performs the argument coercion) and execute with a run context. Returns the result or the thrown
+ * error (it throws to refuse).
+ */
+async function runTool(env, edits, extra = {}) {
+  const tool = createEditFileTool();
   try {
-    const result = await createEditFileTool().execute({ path: FILE, edits }, { coreEnv: env, toolCallId: "call-1" });
+    const parsed = tool.inputSchema.parse({ path: FILE, edits, ...extra });
+    const result = await tool.execute(parsed, { toolCallId: "call-1", context: { coreEnv: env } });
     return { result, error: null };
   } catch (error) {
     return { result: null, error: error instanceof Error ? error.message : String(error) };
@@ -65,16 +66,9 @@ const CASES = [
     edits: [{ oldString: "const b = 2;", newString: "const b = 3;" }],
   },
   {
-    // The tool's match order tries `\\n` → newline. The preview used to look for the literal `\\n`.
     label: "an over-escaped oldString (the tool unescapes it)",
     content: "one\ntwo\n",
     edits: [{ oldString: "one\\ntwo", newString: "ONE\\nTWO" }],
-  },
-  {
-    // Two identical hits; the tool rewrites the one near `startLine`. The preview rewrote the first.
-    label: "startLine selects the occurrence",
-    content: "keep\nsame\nkeep\nsame\nkeep\n",
-    edits: [{ oldString: "same", newString: "SAME", startLine: 4 }],
   },
   {
     label: "replaceAll rewrites every occurrence",
@@ -82,13 +76,34 @@ const CASES = [
     edits: [{ oldString: "same", newString: "SAME", replaceAll: true }],
   },
   {
-    // Fuzzy: the file has a typographic apostrophe, the model typed ASCII.
-    label: "a fuzzy (typographic) match",
+    // Fuzzy: the file has typographic quotes, the model typed ASCII.
+    label: "a typographic (Unicode) match",
     content: "it\u2019s here\n",
     edits: [{ oldString: "it's here", newString: "it is here" }],
   },
   {
-    label: "an ambiguous match with no startLine — the tool refuses",
+    // The failure that dominated real sessions: indentation drift.
+    label: "indentation drift (trim level)",
+    content: "if (x) {\n    doThing();\n}\n",
+    edits: [{ oldString: "if (x) {\n  doThing();\n}", newString: "if (x) {\n  doOther();\n}" }],
+  },
+  {
+    label: "trailing whitespace in the file (trimEnd level)",
+    content: "const a = 1;   \n",
+    edits: [{ oldString: "const a = 1;", newString: "const a = 9;" }],
+  },
+  {
+    label: "a CRLF file edited with LF text",
+    content: "a = 1;\r\nb = 2;\r\n",
+    edits: [{ oldString: "b = 2;", newString: "b = 3;" }],
+  },
+  {
+    label: "identical old/new is a no-op, not a failure",
+    content: "unchanged\n",
+    edits: [{ oldString: "unchanged", newString: "unchanged" }],
+  },
+  {
+    label: "an ambiguous match — the tool refuses",
     content: "same\nsame\n",
     edits: [{ oldString: "same", newString: "SAME" }],
   },
@@ -108,11 +123,21 @@ const CASES = [
     ],
   },
   {
-    label: "two edits applied in sequence",
+    // Both edits are matched against the ORIGINAL file: the first inserts a line the second edits,
+    // which would become ambiguous under sequential matching.
+    label: "edits are matched against the original, not incrementally",
     content: "alpha\nbeta\n",
     edits: [
-      { oldString: "alpha", newString: "ALPHA" },
+      { oldString: "alpha", newString: "alpha\nbeta" },
       { oldString: "beta", newString: "BETA" },
+    ],
+  },
+  {
+    label: "overlapping edits are refused",
+    content: "alpha beta\n",
+    edits: [
+      { oldString: "alpha beta", newString: "A B" },
+      { oldString: "beta", newString: "B" },
     ],
   },
 ];
@@ -149,38 +174,129 @@ for (const { label, content, edits } of CASES) {
 }
 
 // ============================================================================
-// The two shapes that motivated this: a diff that showed no change, and one that
-// showed the change somewhere else
+// The shapes that motivated the rewrite
 // ============================================================================
 
 {
-  const { env, files } = makeEnv("one\ntwo\n");
+  // A CRLF file must come back as CRLF, and the preview must show those exact bytes.
+  const content = "function f() {\r\n  return 1;\r\n}\r\n";
+  const { env, files } = makeEnv(content);
   clearCoreEnv();
   registerCoreEnv(env);
-  const edits = [{ oldString: "one\\ntwo", newString: "ONE\\nTWO" }];
+  const edits = [{ oldString: "function f() {\n  return 1;\n}", newString: "function f() {\n  return 2;\n}" }];
   const preview = await previewEdit({ path: FILE, edits }, env);
-  assert.equal(preview.oldFile, "one\ntwo\n", "the preview reports the file as it was");
-  assert.equal(files.get(FILE), "one\ntwo\n", "and writes nothing by itself");
-  assert.notEqual(
-    preview.newFile,
-    preview.oldFile,
-    "an escaped oldString the tool would unescape must not preview as 'no change'"
-  );
+  assert.equal(files.get(FILE), content, "the preview writes nothing by itself");
+  const tool = await runTool(env, edits);
+  assert.equal(tool.error, null, "a CRLF file edited with LF text succeeds");
+  assert.equal(files.get(FILE), "function f() {\r\n  return 2;\r\n}\r\n", "line endings are preserved");
+  assert.equal(preview.newFile, files.get(FILE), "the preview and the write agree byte-for-byte");
 }
 
 {
-  const { env } = makeEnv("keep\nsame\nkeep\nsame\nkeep\n");
+  // Identical old/new: the tool succeeds with zero replacements and leaves the file alone.
+  const { env, files } = makeEnv("same\n");
+  clearCoreEnv();
+  registerCoreEnv(env);
+  const tool = await runTool(env, [{ oldString: "same", newString: "same" }]);
+  assert.ok(tool.error === null, "an identical pair is not an error");
+  assert.equal(tool.result.replacements, 0);
+  assert.equal(tool.result.results[0].skipped, true, "it is reported as skipped");
+  assert.equal(files.get(FILE), "same\n", "and the file is untouched");
+}
+
+{
+  // The diff must show the block the ladder actually matched, including indentation that differs.
+  const { env } = makeEnv("if (x) {\n    doThing();\n}\n");
   clearCoreEnv();
   registerCoreEnv(env);
   const preview = await previewEdit(
-    { path: FILE, edits: [{ oldString: "same", newString: "SAME", startLine: 4 }] },
+    { path: FILE, edits: [{ oldString: "if (x) {\n  doThing();\n}", newString: "if (x) {\n  doOther();\n}" }] },
     env
   );
-  assert.equal(
-    preview.newFile,
-    "keep\nsame\nkeep\nSAME\nkeep\n",
-    "startLine decides WHICH occurrence changes — the diff must show that one"
-  );
+  assert.notEqual(preview.newFile, preview.oldFile, "an indentation-drifted match must preview as a change");
+  assert.match(preview.newFile, /doOther/, "and the diff shows the replacement");
+}
+
+// ============================================================================
+// Accepted argument shapes reach BOTH the tool and the preview
+// ============================================================================
+
+{
+  const tool = createEditFileTool();
+  const shapes = [
+    ["stringified edits", JSON.stringify([{ oldString: "a", newString: "b" }])],
+    ["single edit object", { oldString: "a", newString: "b" }],
+  ];
+
+  for (const [label, edits] of shapes) {
+    const parsed = tool.inputSchema.parse({ path: FILE, edits });
+    assert.deepEqual(parsed.edits, [{ oldString: "a", newString: "b" }], `${label}: coerced by the schema`);
+
+    const { env: previewEnv } = makeEnv("a\n");
+    const preview = await previewEdit({ path: FILE, edits }, previewEnv);
+    assert.equal(preview.newFile, "b\n", `${label}: the preview sees the coerced edit`);
+
+    const { env, files } = makeEnv("a\n");
+    clearCoreEnv();
+    registerCoreEnv(env);
+    const outcome = await runTool(env, edits);
+    assert.equal(outcome.error, null, `${label}: the tool runs`);
+    assert.equal(files.get(FILE), "b\n", `${label}: the tool writes the same bytes the preview showed`);
+  }
+
+  // Legacy top-level oldText/newText pair.
+  const parsed = tool.inputSchema.parse({ path: FILE, oldText: "a", newText: "b" });
+  assert.deepEqual(parsed.edits, [{ oldString: "a", newString: "b" }], "legacy top-level pair is coerced");
+  const { env: legacyEnv } = makeEnv("a\n");
+  const legacyPreview = await previewEdit({ path: FILE, oldText: "a", newText: "b" }, legacyEnv);
+  assert.equal(legacyPreview.newFile, "b\n", "the legacy pair previews the edit");
+
+  const { env: legacyRunEnv, files: legacyFiles } = makeEnv("a\n");
+  clearCoreEnv();
+  registerCoreEnv(legacyRunEnv);
+  const legacyRun = await runTool(legacyRunEnv, undefined, { oldText: "a", newText: "b" });
+  assert.equal(legacyRun.error, null, "the legacy pair runs");
+  assert.equal(legacyFiles.get(FILE), "b\n");
+}
+
+// ============================================================================
+// Write safety: external change is refused; an all-identical batch writes nothing
+// ============================================================================
+
+{
+  let reads = 0;
+  const env = {
+    rootPath: "/repo",
+    path: { resolve: (p) => p },
+    fs: {
+      readFile: async () => (++reads === 2 ? "a\nexternal\n" : "a\n"),
+      writeFile: async () => {
+        throw new Error("must not write after an external change");
+      },
+    },
+  };
+  clearCoreEnv();
+  registerCoreEnv(env);
+  const outcome = await runTool(env, [{ oldString: "a", newString: "b" }]);
+  assert.match(outcome.error ?? "", /changed since it was read/);
+}
+
+{
+  const env = {
+    rootPath: "/repo",
+    path: { resolve: (p) => p },
+    fs: {
+      readFile: async () => "same\n",
+      writeFile: async () => {
+        throw new Error("an all-identical batch must not write");
+      },
+    },
+  };
+  clearCoreEnv();
+  registerCoreEnv(env);
+  const outcome = await runTool(env, [{ oldString: "same", newString: "same" }]);
+  assert.equal(outcome.error, null, "an all-identical batch succeeds");
+  assert.equal(outcome.result.replacements, 0);
 }
 
 console.log("edit-preview validation passed");

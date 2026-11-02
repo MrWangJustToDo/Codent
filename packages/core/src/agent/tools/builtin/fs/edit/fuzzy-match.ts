@@ -1,34 +1,34 @@
 /**
- * Fuzzy matching utilities for edit operations.
+ * Unicode normalization for the "typographic equivalents" match level.
  *
- * Handles common Unicode normalization issues like smart quotes,
- * dashes, and special spaces that LLMs sometimes produce.
+ * **Every mapping here is 1:1** (one code point → one character of the same UTF-16 length). That is
+ * a hard requirement of the matcher: it works on an LF-normalized view and splices by offset, and a
+ * length-changing normalization would make a normalized index point at a different place in the
+ * original text. The previous map removed zero-width characters (`\u200B` and friends), so a match
+ * after one of them spliced one character early and silently corrupted the file. Those entries are
+ * gone; a file containing zero-width characters simply falls back to the exact/whitespace levels.
+ *
+ * Only the Unicode comparison levels use this; it is never applied to the text that is written.
  */
 
 // ============================================================================
-// Normalization Maps
+// Normalization map (1:1 only)
 // ============================================================================
 
 /** Map of smart/curly quotes to ASCII equivalents */
 const SMART_QUOTES: Record<string, string> = {
-  // Left double quotes
-  "\u201C": '"', // "
-  "\u201D": '"', // "
-  // Right double quotes
-  "\u2018": "'", // '
-  "\u2019": "'", // '
-  // Single angle quotes
-  "\u2039": "'",
-  "\u203A": "'",
-  // Double angle quotes
-  "\u00AB": '"',
-  "\u00BB": '"',
-  // Low double comma quotes
-  "\u201E": '"',
-  "\u201F": '"',
-  // Fullwidth quotation marks
-  "\uFF02": '"',
-  "\uFF07": "'",
+  "\u201C": '"', // left double quote
+  "\u201D": '"', // right double quote
+  "\u2018": "'", // left single quote
+  "\u2019": "'", // right single quote
+  "\u2039": "'", // single left angle quote
+  "\u203A": "'", // single right angle quote
+  "\u00AB": '"', // double left angle quote
+  "\u00BB": '"', // double right angle quote
+  "\u201E": '"', // low double comma quote
+  "\u201F": '"', // high double comma quote
+  "\uFF02": '"', // fullwidth quotation mark
+  "\uFF07": "'", // fullwidth apostrophe
 };
 
 /** Map of Unicode dashes to ASCII hyphen */
@@ -59,15 +59,12 @@ const SPECIAL_SPACES: Record<string, string> = {
   "\u2008": " ", // punctuation space
   "\u2009": " ", // thin space
   "\u200A": " ", // hair space
-  "\u200B": "", // zero-width space (remove)
-  "\u200C": "", // zero-width non-joiner (remove)
-  "\u200D": "", // zero-width joiner (remove)
-  "\u2060": "", // word joiner (remove)
-  "\u2061": "", // function application (remove)
-  "\uFEFF": "", // BOM / zero-width no-break space (remove)
+  "\u202F": " ", // narrow no-break space
+  "\u205F": " ", // medium mathematical space
+  "\u3000": " ", // ideographic space
 };
 
-/** Combined normalization map */
+/** Combined normalization map. */
 const NORMALIZATION_MAP: Record<string, string> = {
   ...SMART_QUOTES,
   ...UNICODE_DASHES,
@@ -79,210 +76,25 @@ const NORMALIZATION_MAP: Record<string, string> = {
 // ============================================================================
 
 /**
- * Normalize Unicode characters to their ASCII equivalents.
- *
- * Handles smart quotes, Unicode dashes, and special spaces that
- * LLMs sometimes produce when editing code.
+ * Normalize Unicode punctuation to its ASCII equivalent, preserving length.
  *
  * @param text - The text to normalize
- * @returns The normalized text with ASCII equivalents
+ * @returns The normalized text with ASCII equivalents (same length as the input)
  */
 export function normalizeForFuzzyMatch(text: string): string {
   // Fast path: if no normalizable character is present, return as-is.
-  // This avoids allocating a new string for the common case (pure ASCII code).
-  if (!needsNormalization(text)) {
-    return text;
-  }
+  if (!needsNormalization(text)) return text;
   let result = "";
   for (const char of text) {
-    const normalized = NORMALIZATION_MAP[char];
-    if (normalized !== undefined) {
-      result += normalized;
-    } else {
-      result += char;
-    }
+    result += NORMALIZATION_MAP[char] ?? char;
   }
   return result;
 }
 
-/**
- * Quick check whether a string contains any character that would be changed
- * by normalization. Used to skip the per-character loop for pure-ASCII text.
- */
+/** Quick check whether a string contains any character that normalization would change. */
 function needsNormalization(text: string): boolean {
-  // All normalizable chars are outside the ASCII range (>= 0x80).
-  // Scan with charCodeAt (faster than for...of for ASCII-heavy text).
   for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) >= 0x80) {
-      return true;
-    }
+    if (text.charCodeAt(i) >= 0x80 && NORMALIZATION_MAP[text[i]!] !== undefined) return true;
   }
   return false;
-}
-
-/**
- * Find the index of a fuzzy match in a string.
- *
- * @param haystack - The string to search in
- * @param needle - The string to search for
- * @returns The index of the first fuzzy match, or -1 if not found
- */
-export function fuzzyIndexOf(haystack: string, needle: string): number {
-  const normalizedHaystack = normalizeForFuzzyMatch(haystack);
-  const normalizedNeedle = normalizeForFuzzyMatch(needle);
-  return normalizedHaystack.indexOf(normalizedNeedle);
-}
-
-/**
- * Check if a string contains a fuzzy match.
- *
- * Accepts an optional pre-normalized haystack to avoid re-normalizing the
- * (potentially large) file content on every call.
- *
- * @param haystack - The string to search in
- * @param needle - The string to search for
- * @param normalizedHaystack - Optional pre-normalized haystack for reuse
- * @returns true if the haystack contains the needle (fuzzy)
- */
-export function fuzzyIncludes(haystack: string, needle: string, normalizedHaystack?: string): boolean {
-  const nh = normalizedHaystack ?? normalizeForFuzzyMatch(haystack);
-  const nn = normalizeForFuzzyMatch(needle);
-  return nh.indexOf(nn) !== -1;
-}
-
-/**
- * Replace the first fuzzy match in a string.
- *
- * Accepts an optional pre-normalized haystack to avoid re-normalizing the
- * (potentially large) file content on every call.
- *
- * @param haystack - The string to search in
- * @param needle - The string to replace
- * @param replacement - The replacement string
- * @param normalizedHaystack - Optional pre-normalized haystack for reuse
- * @returns The string with the first fuzzy match replaced
- */
-export function fuzzyReplace(
-  haystack: string,
-  needle: string,
-  replacement: string,
-  normalizedHaystack?: string
-): string {
-  const nh = normalizedHaystack ?? normalizeForFuzzyMatch(haystack);
-  const normalizedNeedle = normalizeForFuzzyMatch(needle);
-  const index = nh.indexOf(normalizedNeedle);
-  if (index === -1) {
-    return haystack;
-  }
-
-  const needleLength = normalizedNeedle.length;
-
-  // Find the actual end position in the original string
-  let endPos = index;
-  let normalizedCount = 0;
-  while (endPos < haystack.length && normalizedCount < needleLength) {
-    const char = haystack[endPos];
-    const normalized = NORMALIZATION_MAP[char];
-    if (normalized !== undefined) {
-      normalizedCount += normalized.length;
-    } else {
-      normalizedCount += 1;
-    }
-    endPos++;
-  }
-
-  return haystack.substring(0, index) + replacement + haystack.substring(endPos);
-}
-
-/**
- * Replace all fuzzy matches in a string.
- *
- * Single-pass scan: collect all match spans in the normalized haystack, then
- * build the result by slicing the original haystack around the spans. This is
- * O(M) instead of the previous O(k×M) which re-normalized the whole result
- * after every single replacement.
- *
- * @param haystack - The string to search in
- * @param needle - The string to replace
- * @param replacement - The replacement string
- * @param normalizedHaystack - Optional pre-normalized haystack for reuse
- * @returns The string with all fuzzy matches replaced
- */
-export function fuzzyReplaceAll(
-  haystack: string,
-  needle: string,
-  replacement: string,
-  normalizedHaystack?: string
-): string {
-  const nh = normalizedHaystack ?? normalizeForFuzzyMatch(haystack);
-  const normalizedNeedle = normalizeForFuzzyMatch(needle);
-
-  if (normalizedNeedle.length === 0) {
-    return haystack;
-  }
-
-  // Collect [start, end) spans (in original-string coordinates) for every
-  // match in the normalized haystack.
-  const spans: Array<{ start: number; end: number }> = [];
-  let pos = 0;
-  while ((pos = nh.indexOf(normalizedNeedle, pos)) !== -1) {
-    // Map the normalized match back to the original string's char range.
-    let endPos = pos;
-    let normalizedCount = 0;
-    while (endPos < haystack.length && normalizedCount < normalizedNeedle.length) {
-      const char = haystack[endPos];
-      const normalized = NORMALIZATION_MAP[char];
-      if (normalized !== undefined) {
-        normalizedCount += normalized.length;
-      } else {
-        normalizedCount += 1;
-      }
-      endPos++;
-    }
-    spans.push({ start: pos, end: endPos });
-    pos = endPos;
-  }
-
-  if (spans.length === 0) {
-    return haystack;
-  }
-
-  // Build the result by interleaving untouched segments with replacements.
-  let result = "";
-  let cursor = 0;
-  for (const span of spans) {
-    result += haystack.substring(cursor, span.start);
-    result += replacement;
-    cursor = span.end;
-  }
-  result += haystack.substring(cursor);
-  return result;
-}
-
-/**
- * Count fuzzy matches in a string.
- *
- * Accepts an optional pre-normalized haystack to avoid re-normalizing the
- * (potentially large) file content on every call.
- *
- * @param haystack - The string to search in
- * @param needle - The string to count
- * @param normalizedHaystack - Optional pre-normalized haystack for reuse
- * @returns The number of fuzzy matches
- */
-export function fuzzyCount(haystack: string, needle: string, normalizedHaystack?: string): number {
-  const nh = normalizedHaystack ?? normalizeForFuzzyMatch(haystack);
-  const normalizedNeedle = normalizeForFuzzyMatch(needle);
-
-  if (normalizedNeedle.length === 0) {
-    return 0;
-  }
-
-  let count = 0;
-  let pos = 0;
-  while ((pos = nh.indexOf(normalizedNeedle, pos)) !== -1) {
-    count++;
-    pos += normalizedNeedle.length;
-  }
-  return count;
 }

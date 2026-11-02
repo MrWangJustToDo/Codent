@@ -118,7 +118,13 @@ function createRemoteFs(client: Client): CoreEnvFs {
 
     stat: async (path: string): Promise<CoreEnvFsStat> => {
       const res = await client.fs.stat.$post({ json: { path } });
-      const data = await unwrap<{ isDirectory: boolean; isFile: boolean; size: number; mtime: string }>(res);
+      const data = await unwrap<{
+        isDirectory: boolean;
+        isFile: boolean;
+        size: number;
+        mtime: string;
+        mode?: number;
+      }>(res);
       return { ...data, mtime: new Date(data.mtime) };
     },
 
