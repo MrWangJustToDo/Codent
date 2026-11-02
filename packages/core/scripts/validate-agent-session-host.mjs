@@ -446,6 +446,19 @@ assert.ok(childSession);
 assert.equal(childSession.id, "agent_child");
 assert.equal((await host.list()).length, 2);
 
+// --- a destroyed child is never handed back from the host's cache ----------
+//
+// A session switch destroys the conversation's subagents OUTSIDE this host
+// (`destroyChildAgents` → `manager.destroyAgent`). `connect()` used to return the cached session
+// without asking the manager, so the caller got a handle whose agent no longer existed — and the
+// whole object graph (UI channel, log sink, tool state) stayed reachable behind it.
+const ghost = createFake("agent_ghost", session.id);
+agents.set(ghost.id, ghost);
+assert.ok(host.connect(ghost.id), "the ghost is connectable while it is live");
+agents.delete(ghost.id); // what `manager.destroyAgent` does to the registry
+assert.equal(host.connect(ghost.id), null, "a destroyed child is not resurrected from the cache");
+assert.equal((await host.list()).length, 2, "and it is gone from the catalog as well");
+
 const listed = await host.list();
 assert.ok(listed.some((e) => e.agentId === session.id && !e.parentId));
 assert.ok(listed.some((e) => e.agentId === child.id && e.parentId === session.id));

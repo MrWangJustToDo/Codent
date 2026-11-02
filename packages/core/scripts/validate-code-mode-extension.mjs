@@ -29,6 +29,7 @@ const fakeDriver = {
 
 function makeCtx({ driver = null, _tools = [] }) {
   const registered = [];
+  const defs = [];
   const providers = [];
   const warns = [];
   const ctx = {
@@ -38,13 +39,16 @@ function makeCtx({ driver = null, _tools = [] }) {
     logger: {
       warn: (msg) => warns.push(String(msg)),
     },
-    registerTool: (def) => registered.push(def.name),
+    registerTool: (def) => {
+      registered.push(def.name);
+      defs.push(def);
+    },
     registerContextProvider: (provider) => {
       providers.push(provider);
       return () => {};
     },
   };
-  return { ctx, registered, providers, warns };
+  return { ctx, registered, defs, providers, warns };
 }
 
 // Dummy tools shaped like AnyServerTool (only name/execute are consumed here).
@@ -60,7 +64,7 @@ function check(label, cond) {
 
 // ---- Path 1: driver present ------------------------------------------------
 {
-  const { ctx, registered, providers } = makeCtx({
+  const { ctx, registered, defs, providers } = makeCtx({
     driver: fakeDriver,
     tools: [],
   });
@@ -72,6 +76,20 @@ function check(label, cond) {
 
   check("driver present -> registers execute_typescript", registered.includes("execute_typescript"));
   check("driver present -> registers discover_tools (lazy present)", registered.includes("discover_tools"));
+
+  // An extension-registered tool does NOT inherit the built-in fallback table (`getToolPresentation`
+  // consults it only for an incumbent), and an undeclared tool is treated as workspace-editing
+  // (fail-closed) — so without a declaration plan mode silently withheld both of these.
+  const execute = defs.find((def) => def.name === "execute_typescript");
+  const discovery = defs.find((def) => def.name === "discover_tools");
+  check(
+    "execute_typescript declares a non-editing presentation (plan mode keeps it)",
+    execute?.present?.category === "commands"
+  );
+  check(
+    "discover_tools declares a non-editing presentation (plan mode keeps it)",
+    discovery?.present?.category === "searches"
+  );
 
   const provider = providers.find((p) => typeof p.content === "function");
   check("driver present -> registers a context provider", Boolean(provider));

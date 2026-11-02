@@ -798,6 +798,16 @@ export interface ExtensionInfo {
 
 export interface ExtensionConfig {
   id: string;
+  /**
+   * Whether the extension is activated at load. `false` registers the instance without calling
+   * `activate` (no tool/command/interceptor/section lands, and the model is told it is disabled);
+   * it can still be turned on later through `setEnabled(id, true)`. Omitted means enabled.
+   */
   enabled?: boolean;
+  /**
+   * The extension's own configuration map, exposed as `ctx.env`. Only string values are kept
+   * (the field is a string map); everything else is dropped. Not a process-environment snapshot —
+   * use `ctx.coreEnv.getEnv()` for the workspace environment.
+   */
   config?: Record<string, unknown>;
 }

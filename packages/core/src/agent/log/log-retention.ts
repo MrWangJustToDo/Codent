@@ -34,9 +34,23 @@ export { AGENT_LOG_DIR };
  */
 export const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
+/**
+ * Which entries in a session directory are log files.
+ *
+ * A session directory holds the root timeline (`agent.log`) plus one file per subagent
+ * (`<subagentId>.log`). Both rotate, and a rotated segment (`agent.log.1`) does **not** end with
+ * `.log` — so the sweeper's default suffix test silently left every segment behind, and a long-idle
+ * session kept its whole rotated history forever (the exact leak this directory rule exists to
+ * bound).
+ */
+function isSessionLogFile(name: string): boolean {
+  return name.endsWith(".log") || /\.log\.\d+$/.test(name);
+}
+
 const LOG_SWEEPER = createStaleFileSweeper({
   dir: AGENT_LOG_DIR,
   suffix: ".log",
+  match: isSessionLogFile,
   maxAgeMs: LOG_MAX_AGE_MS,
   nested: true,
 });

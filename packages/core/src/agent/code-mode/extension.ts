@@ -244,12 +244,22 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
       // `external_*` bindings call a tool's RAW execute, bypassing its own `toModelOutput`, so
       // media a script returns arrives wrapped as `{ success, result: { type: "image", base64 } }`.
       // Lift it back to multimodal parts here or the model only ever sees base64 text.
+      //
+      // `present` is declared here, not left to the built-in fallback table: that table is only
+      // consulted for an *incumbent* tool (`ManagedAgent.getToolPresentation`), and these are
+      // extension-registered. An undeclared tool is treated as workspace-editing (fail-closed), so
+      // plan mode used to withhold both `execute_typescript` and the only lazy-tool discovery
+      // entry — a display omission silently became a capability boundary.
       ctx.registerTool({
         ...toExtensionTool(tool),
+        present: { category: "commands" },
         toModelOutput: ({ output }) => projectCodeModeModelOutput(output),
       });
       if (discoveryTool) {
-        ctx.registerTool(toExtensionTool(discoveryTool));
+        ctx.registerTool({
+          ...toExtensionTool(discoveryTool),
+          present: { category: "searches" },
+        });
       }
 
       // Inject code-mode guidance each turn as its own context section. Disabled

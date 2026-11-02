@@ -1,11 +1,22 @@
 import type { AgentEvent } from "../../agent/agent-event-bus";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
-import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
+import type { EmitAgentTelemetryFn, PayloadRequired } from "../../runtime-types/agent-events.js";
 
 /** Telemetry event names (payload-map keys); excludes session-projection events. */
 type TelemetryEventType = keyof AgentEventPayloadMap;
 
 export type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
+
+/**
+ * Args tuple for `emitAgentTelemetry`, with the payload requirement resolved from its type.
+ *
+ * Declared here (not as `[...EmitPayloadArgs<T>, options?]`) because spreading a conditional tuple
+ * and appending an optional element is not reliably reduced by the checker.
+ */
+type TelemetryArgs<T> =
+  PayloadRequired<T> extends true
+    ? [payload: T, options?: EmitAgentTelemetryOptions]
+    : [payload?: T, options?: EmitAgentTelemetryOptions];
 
 /**
  * Telemetry emitted before the agent had a bus to dispatch on.
@@ -62,15 +73,34 @@ export function createEmitTelemetryFn(emitter: AgentTelemetryEmitter): EmitAgent
   // The parent link travels with the emitter: middleware and domain objects receive this bound fn
   // (`deps.emitEvent`), and a child's compaction/tool events must carry the parent too.
   const parentId = emitter.parentId;
-  return (type, payload) =>
-    emitAgentTelemetry(emitter, type, payload, parentId !== undefined ? { parentId } : undefined);
+  return (type, ...args) =>
+    dispatchAgentTelemetry(emitter, type, args[0], parentId !== undefined ? { parentId } : undefined);
 }
 
 /**
- * Unified telemetry emission helper.
- * Injects `ts` and `sessionId` when session data is available.
+ * Unified telemetry emission helper — the strict entry point.
+ *
+ * The payload is mandatory for every event whose payload type has a required field
+ * (`EmitPayloadArgs`), so a frame can no longer be dispatched as `payload: {}`. All the real work
+ * lives in {@link dispatchAgentTelemetry}, which takes the loose shape the generic plumbing
+ * (services/middleware forwarding a `(type, payload)` pair) needs.
  */
 export function emitAgentTelemetry<T extends TelemetryEventType>(
+  emitter: AgentTelemetryEmitter,
+  type: T,
+  ...args: TelemetryArgs<AgentEventPayloadMap[T]>
+): void {
+  dispatchAgentTelemetry(emitter, type, args[0], args[1]);
+}
+
+/**
+ * Assemble and dispatch one telemetry frame.
+ *
+ * @internal Loose by design: `ManagedAgent.emitEvent` and `createEmitTelemetryFn` forward a
+ * caller-supplied `(type, payload)` pair, which cannot satisfy a per-event conditional tuple. The
+ * compile-time guarantee lives on the two public entry points; this is the single dispatch body.
+ */
+export function dispatchAgentTelemetry<T extends TelemetryEventType>(
   emitter: AgentTelemetryEmitter,
   type: T,
   payload?: AgentEventPayloadMap[T],

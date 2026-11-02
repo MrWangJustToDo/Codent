@@ -38,10 +38,9 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // The run identity comes from the envelope, never from seam state: the producer stamps it once and
   // every consumer reads the same value.
   const run = event.runId;
-  // `data` strings are bounded; `message` was not. Several rules interpolate a raw provider error
-  // (`Stream error: ${error}`), and a gateway that answers with an HTML/JSON body turned one log
-  // line into an arbitrarily long blob. Truncated here so EVERY rule is covered at once (the full
-  // text, when it matters, is already in `data.error` under the same 500-char cap).
+  // `data` strings are bounded by `summarizePayload`; the message itself is truncated at the seam
+  // (`AgentLog.log`) for EVERY writer. It is bounded again here because this text is also reused
+  // as the `error` message below, and an error object's `message` is not bounded by the schema.
   message = truncateText(message, MAX_LOG_MESSAGE_CHARS);
 
   // A `cancelled` payload is not a fault: it must not go through the error path (that attaches the

@@ -185,6 +185,12 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
   const freshLog = await writeAged(`${AGENT_LOG_DIR}/ses_fresh/agent.log`, 0);
   // Old enough to be collected, but this session is being appended to right now.
   const keptLog = await writeAged(`${AGENT_LOG_DIR}/ses_kept/agent.log`, staleAge(LOG_MAX_AGE_MS));
+  // Rotation shards. `agent.log.1` does NOT end with `.log`, so the sweeper's default suffix test
+  // left every segment behind: the active file was reaped and the session kept ~4 × 5 MiB forever.
+  // Both spellings are covered here — the root timeline and a subagent's independent file.
+  const staleShard = await writeAged(`${AGENT_LOG_DIR}/ses_stale/agent.log.1`, staleAge(LOG_MAX_AGE_MS));
+  const staleSubagentShard = await writeAged(`${AGENT_LOG_DIR}/ses_shard/subagent_abc.log.2`, staleAge(LOG_MAX_AGE_MS));
+  const keptShard = await writeAged(`${AGENT_LOG_DIR}/ses_kept/agent.log.1`, staleAge(LOG_MAX_AGE_MS));
 
   const present = async (rel) =>
     fs.promises
@@ -193,10 +199,17 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
       .catch(() => false);
 
   const removed = await sweepAgentLogs(env, { force: true, keepDir: `${AGENT_LOG_DIR}/ses_kept` });
-  assert.equal(removed, 1, "only the idle session's timeline is collected");
+  assert.equal(removed, 3, "the idle sessions' timelines and their rotation shards are collected");
   assert.equal(await present(staleLog), false, "a stale timeline is removed");
+  assert.equal(await present(staleShard), false, "a rotated segment of a stale timeline is removed");
+  assert.equal(
+    await present(staleSubagentShard),
+    false,
+    "a subagent's rotated segment (its own file, same directory) is removed"
+  );
   assert.equal(await present(freshLog), true, "a live timeline is kept");
   assert.equal(await present(keptLog), true, "the session being appended to is never reaped");
+  assert.equal(await present(keptShard), true, "and neither are its rotated segments");
   // The directory is deliberately kept: `remove` is recursive, so deleting a directory that gained a
   // file between the emptiness check and the delete would lose it. An empty session dir is inert.
   assert.equal(

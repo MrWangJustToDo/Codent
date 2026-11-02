@@ -93,7 +93,7 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     autoMode: host.mode?.getPersistedAutoMode() ?? (planOn ? false : host.isAutoModeEnabled()),
     reasoningEffort: host.getReasoningEffort(),
     resolveTextAdapter: host.resolveTextAdapter,
-    emitEvent: (type, data) => host.emitEvent(type, data),
+    emitEvent: (type, ...args) => host.emitEvent(type, ...args),
     emitSessionTitle: (payload) => host.emitEvent("session:title", payload),
     // The auto-title path writes `SessionData.name`; mirror it onto the agent so
     // live UI / snapshots pick it up (previously only manual rename broadcast).

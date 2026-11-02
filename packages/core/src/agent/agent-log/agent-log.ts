@@ -1,5 +1,7 @@
 import { createSequentialIdGenerator } from "../../utils/generate-id.js";
+import { truncateText } from "../../utils/text-truncation.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
+import { MAX_LOG_MESSAGE_CHARS } from "../log/payload.js";
 
 import { configuredLogLevel } from "./log-level-env.js";
 
@@ -154,7 +156,12 @@ export class AgentLog {
       timestamp: Date.now(),
       level,
       category,
-      message,
+      // Bounded HERE because this is the one builder every writer passes through. The Event→Log
+      // bridge was the only guard, so the specialized handlers — `extension:log` (an extension's
+      // arbitrary string), `session:diagnostic`, memory — could write a single JSONL line of any
+      // size, and a provider body returned by an extension turned the timeline into an unreadable
+      // blob. `data` values are bounded separately by `summarizePayload`.
+      message: truncateText(message, MAX_LOG_MESSAGE_CHARS),
     };
 
     if (options?.data) entry.data = options.data;

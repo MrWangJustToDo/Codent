@@ -655,4 +655,29 @@ console.log("approval request + resolution bridged: OK");
   console.log("policy suppression + mode/thinking/subagent rows — ok");
 }
 
+// ---------------------------------------------------------------------------
+// Every row is length-bounded, including the specialized handlers
+//
+// The bridge's generic path truncated its message; the specialized handlers (extension logs,
+// diagnostics, memory) wrote through a shared helper that did not, so `ctx.logger.info(<provider
+// body>)` produced a single JSONL line of any size. The bound now lives in the seam
+// (`AgentLog.log`), which is the one builder every writer passes through.
+// ---------------------------------------------------------------------------
+{
+  const before = (await readEntries()).length;
+  bus.emit(
+    "extension:log",
+    { extensionId: "noisy", level: "info", message: "x".repeat(20_000) },
+    { agentId: "agent-1" }
+  );
+  await waitFor(readEntries, (rows) => rows.length > before);
+  const row = (await readEntries()).find((entry) => entry.event === "extension:log");
+  assert.ok(row, "the specialized extension row is written");
+  assert.ok(
+    row.message.length <= 400,
+    `a specialized row is truncated like any other (got ${row.message.length} chars)`
+  );
+  console.log("specialized rows are length-bounded — ok");
+}
+
 console.log("event-log-bridge validation passed");

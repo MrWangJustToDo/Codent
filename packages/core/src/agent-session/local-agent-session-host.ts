@@ -209,10 +209,18 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
   }
 
   connect(agentId: string): AgentSession | null {
+    // Resolve the live agent FIRST: a session switch destroys the conversation's subagents
+    // (`destroyChildAgents` → `manager.destroyAgent`), which happens outside this host. A cached
+    // entry can therefore outlive the agent it wraps, and handing it back would give the caller a
+    // handle whose `dispatch`/`getSnapshot` target a registry-less agent (and pin its whole object
+    // graph: UI channel, runner, tool state) for the life of the process.
+    const managed = this.manager.getAgent(agentId);
+    if (!managed) {
+      this.sessions.delete(agentId);
+      return null;
+    }
     const cached = this.sessions.get(agentId);
     if (cached) return cached;
-    const managed = this.manager.getAgent(agentId);
-    if (!managed) return null;
     const session = createLocalAgentSession({
       managed,
       manager: this.manager,

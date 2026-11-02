@@ -121,7 +121,7 @@ import { MemoryService } from "./services/memory-service.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "./services/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
 import { SessionPersistence } from "./session-persistence.js";
-import { emitAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
+import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
@@ -171,7 +171,7 @@ import type {
   SessionDiagnosticArea,
   SessionSwitchReason,
 } from "../runtime-types/agent-event-payloads.js";
-import type { AgentEventType } from "../runtime-types/agent-events.js";
+import type { AgentEventType, PayloadRequired } from "../runtime-types/agent-events.js";
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type {
@@ -197,6 +197,28 @@ import type {
  * that followed). Kept as an exclusion set, so a new event type refreshes by default.
  */
 const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", "subagent:prefork-discarded"]);
+
+/** Envelope overrides accepted by {@link ManagedAgent.emitEvent}. */
+interface EmitEventOptions {
+  parentId?: string;
+  agentId?: string;
+  /**
+   * Override the envelope's session id. The telemetry funnel defaults it to the agent's CURRENT
+   * session, which is wrong for a fact about the session being left — notably `session:switch`,
+   * whose row is written to the departing session's log while the adoption has already moved
+   * `getEventSessionId()` to the target.
+   */
+  sessionId?: string;
+}
+
+/**
+ * Args tuple for {@link ManagedAgent.emitEvent}: the payload is mandatory when its type has a
+ * required field, so `emitEvent("job:changed")` no longer compiles into a `{}` frame.
+ */
+type EmitEventArgs<T extends AgentEventType> =
+  PayloadRequired<AgentEventPayloadMap[T]> extends true
+    ? [payload: AgentEventPayloadMap[T], options?: EmitEventOptions]
+    : [payload?: AgentEventPayloadMap[T], options?: EmitEventOptions];
 
 /** When the turn context payload hasn't changed, re-admit every N messages to keep context fresh. */
 export type { RunFinalizeReason } from "./agent-types.js";
@@ -668,14 +690,14 @@ export class ManagedAgent {
       },
       // The controller is built before `this.mode`; the callback is read per call, at runtime.
       shouldAutoApprove: () => this.mode.shouldAutoApprove(),
-      emitEvent: (type, data) => this.emitEvent(type, data),
+      emitEvent: (type, ...args) => this.emitEvent(type, ...args),
     });
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       setError: (error) => this.setError(error),
       onUserCancel: () => this.statusController.onUserCancel(),
-      emitEvent: (type, data) => this.emitEvent(type, data),
+      emitEvent: (type, ...args) => this.emitEvent(type, ...args),
     });
     this.runFinalizer = new RunFinalizer({
       status: this.statusController,
@@ -683,14 +705,14 @@ export class ManagedAgent {
       getError: () => this.getError(),
       finalizeRun: (reason) => this.finalizeRun(reason),
       discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
-      emitEvent: (type, data) => this.emitEvent(type, data),
+      emitEvent: (type, ...args) => this.emitEvent(type, ...args),
       usage: this.usage,
     });
 
     this.planMode = new PlanModeController({
       getTodoManager: () => this.getTodoManager(),
       getCoreEnv: () => this.getCoreEnv(),
-      emitEvent: (type, data) => this.emitEvent(type, data),
+      emitEvent: (type, ...args) => this.emitEvent(type, ...args),
       onPhaseChange: () => {
         this.invalidateRunner();
         this.emitStateChange();
@@ -1267,25 +1289,14 @@ export class ManagedAgent {
     });
   }
 
-  emitEvent<T extends AgentEventType>(
-    type: T,
-    payload?: AgentEventPayloadMap[T],
-    options?: {
-      parentId?: string;
-      agentId?: string;
-      /**
-       * Override the envelope's session id. The telemetry funnel defaults it to the agent's
-       * CURRENT session, which is wrong for a fact about the session being left — notably
-       * `session:switch`, whose row is written to the departing session's log while the adoption
-       * has already moved `getEventSessionId()` to the target.
-       */
-      sessionId?: string;
-    }
-  ): void {
+  emitEvent<T extends AgentEventType>(type: T, ...args: EmitEventArgs<T>): void;
+  emitEvent(type: AgentEventType, payload?: AgentEventPayloadMap[AgentEventType], options?: EmitEventOptions): void {
     // Default the parent link to this agent's own parent: a child's events up-flow into the parent's
     // scope, and without this the envelope dropped `parentId` for everything except the explicit
     // `subagent:*` emits — so an extension could not tell a child's turn from its own by envelope alone.
-    emitAgentTelemetry(this, type, payload, {
+    // The loose dispatch is reached directly: this implementation is what the generic `(type,
+    // payload)` plumbing calls, and it cannot satisfy the per-event conditional tuple.
+    dispatchAgentTelemetry(this, type, payload, {
       ...(this.parentId ? { parentId: this.parentId } : {}),
       ...options,
     });
@@ -2968,7 +2979,7 @@ export class ManagedAgent {
     resetSystemPrompt: () => managed.resetSystemPrompt(),
     persistSession: () => managed.persistSession(),
     maybeSaveSessionUIMessages: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
-    emitEvent: (type, data) => managed.emitEvent(type, data),
+    emitEvent: (type, ...args) => managed.emitEvent(type, ...args),
   };
 }
 

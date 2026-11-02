@@ -315,4 +315,42 @@ const toolDef = (name) => ({
   await runner.destroyAll();
 }
 
+// ----------------------------------------------------------------------------
+// A load config can declare the extension disabled
+//
+// `ExtensionConfig.enabled` was part of the public type and read nowhere, so a host passing
+// `{ id, enabled: false }` activated the extension anyway — and `ctx.env` (the other half of the
+// same config object) had no source. The instance must exist for the management panel and for a
+// later `setEnabled(id, true)`, but register nothing and own no live context.
+// ----------------------------------------------------------------------------
+{
+  const { runner, tools } = makeRunner();
+  let activated = 0;
+  const api = {
+    id: "pre-disabled",
+    name: "Pre-disabled",
+    version: "1.0.0",
+    description: "",
+    async activate(ctx) {
+      activated += 1;
+      ctx.registerTool({ ...toolDef("pre-disabled-tool") });
+    },
+  };
+  const instance = await runner.loadExtension(api, { id: "pre-disabled", enabled: false });
+  assert.equal(instance.state, "inactive", "a disabled load is registered but not activated");
+  assert.equal(activated, 0, "activate() is never called");
+  assert.deepEqual(runner.getTools(), [], "no tool is registered");
+  assert.equal(tools.size, 0, "and nothing reaches the host registry");
+  const info = runner.getExtensionInfos().find((entry) => entry.id === "pre-disabled");
+  assert.ok(info, "the management panel still sees the instance");
+  assert.equal(info.enabled, false);
+  assert.equal(runner.contextFor("pre-disabled"), undefined, "a disabled load owns no live context");
+
+  const enabled = await runner.setEnabled("pre-disabled", true);
+  assert.equal(enabled.ok, true, "the instance can be enabled later");
+  assert.equal(activated, 1);
+  assert.ok(tools.has("pre-disabled-tool"), "enabling activates it for real");
+  await runner.destroyAll();
+}
+
 console.log("\nvalidate-extension-lifecycle-lease: all assertions passed");

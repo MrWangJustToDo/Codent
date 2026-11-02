@@ -591,6 +591,21 @@ export class ExtensionRunner {
     };
 
     this.extensions.push(instance);
+
+    // A load can declare the extension disabled. The instance still exists — the management panel
+    // and `setEnabled(id, true)` must see it — but nothing is activated, so it registers no tool,
+    // command, interceptor or section. This used to be ignored entirely (`enabled` was part of the
+    // public config type and read nowhere), so `{ id, enabled: false }` activated the extension
+    // anyway. No live context either: the lease is what every registration is gated on, and a
+    // disabled instance owns none until `applyEnabled` builds a fresh one.
+    if (config?.enabled === false) {
+      this.contexts.delete(api.id);
+      this.turnContextSections.setDisabledNotice(
+        api.id,
+        `Extension "${api.name ?? api.id}" is disabled — its tools and commands are unavailable.`
+      );
+      return instance;
+    }
     this.activating.add(api.id);
     this.refusedRegistrations.delete(api.id);
 
