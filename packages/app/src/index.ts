@@ -126,7 +126,7 @@ export {
   type WorkspacePathDetail,
 } from "./utils/workspace-header-layout.js";
 export { resolveStopDecision, type StopDecision } from "./utils/stop-decision.js";
-export { resolveTaskSubagent } from "./utils/task-subagent.js";
+export { isTaskRowLive, resolveTaskSubagent } from "./utils/task-subagent.js";
 export {
   CONVERSATION_SUMMARY_START,
   CONVERSATION_SUMMARY_END,

@@ -21,13 +21,15 @@ import { z } from "zod";
 
 import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
 import { generateId } from "../../utils/generate-id.js";
+import { truncateText } from "../../utils/text-truncation.js";
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
-import { maybeCacheOutput } from "../tools/shared/cache/tool-output-cache.js";
 import { toolOutputBaseSchema } from "../tools/shared/schemas.js";
 import { withDuration } from "../tools/shared/tool-result.js";
 
 import { runSubagent } from "./run-subagent.js";
 import { getTaskPreforkCoordinator } from "./subagent-runs.js";
+import { startBackgroundTask } from "./task-background.js";
+import { buildTaskOutput, formatRunningTaskText, formatTaskModelText, runningTaskOutput } from "./task-output.js";
 import { SUBAGENT_NO_TRUNCATE } from "./types.js";
 
 import type { AgentManager } from "../../runtime-types/hosts.js";
@@ -102,6 +104,19 @@ export const taskOutputSchema = z.object({
     .describe("Token usage for this subtask"),
   /** Execution duration in milliseconds */
   durationMs: z.number().describe("Execution duration in milliseconds"),
+  /**
+   * Background start handle: `running` means this is NOT the result yet.
+   *
+   * Present only for a `run_in_background` call, so a host (and a restored transcript) can tell a
+   * handle from a finished row without guessing from empty fields. Mirrors `run_command`'s
+   * `status: "running"` + `exitCode: -1` background shape.
+   */
+  status: z
+    .enum(["running", "completed"])
+    .optional()
+    .describe("`running` for a background start handle; absent/`completed` for a finished result"),
+  /** Whether the call was started with `run_in_background` (the phase, not the outcome). */
+  runInBackground: z.boolean().optional().describe("Whether this call was started in the background"),
   ...toolOutputBaseSchema.shape,
 });
 
@@ -142,6 +157,14 @@ Parallelism: independent tasks SHOULD be emitted together as multiple tool calls
 in the same message — they run concurrently and the results arrive as one batch.
 Only sequence tasks when one depends on another's findings.
 
+Background (run_in_background: true): use it for work you do not need in order to answer this
+turn — a long exploration, or a task whose result only matters once it lands. The call returns a
+handle immediately, and when the subagent finishes its summary is pushed back to you as a
+completion notification (an idle session is woken for it; the task row in the transcript is updated
+with the result at the same time). Do NOT poll: there is no get/kill tool for a task, and a
+background task ends with its session. Runs beyond the concurrency cap queue and start as slots
+free.
+
 Keep each task narrow: one question, or one file set, per call. The subagent has a fixed step
 budget, and a broad audit can exhaust it before it summarizes — you then get a flagged partial
 report instead of the answer.
@@ -176,11 +199,50 @@ Example use cases:
         .string()
         .optional()
         .describe("Short description of the task (shown in UI). Defaults to 'subtask'."),
+      run_in_background: z
+        .boolean()
+        .optional()
+        .describe(
+          "Return a handle immediately and receive the summary later as a completion notification (default: wait for the result)."
+        ),
     }),
 
     outputSchema: taskOutputSchema,
 
-    execute: async ({ prompt, description }, { toolCallId, coreEnv, abortSignal }) => {
+    execute: async ({ prompt, description, run_in_background }, { toolCallId, coreEnv, abortSignal }) => {
+      const parentManaged = manager.getAgent(parentAgentId);
+
+      // Background: hand the call to the background-work trunk and return a handle. The run is
+      // already started (the pre-fork middleware spawned it at TOOL_CALL_END), so this is a detach,
+      // not a spawn — which is why the completion path can reuse the exact same result shaping.
+      if (run_in_background) {
+        if (!parentManaged) throw new Error("Background tasks require a live parent agent");
+        startBackgroundTask({
+          managed: parentManaged,
+          coreEnv,
+          toolCallId,
+          label: taskLabel({ prompt, description }),
+          input: { prompt, description },
+          // Serial fallback (no pre-fork seat): still capped by the coordinator's window inside
+          // `startBackgroundTask`, and driven by its own controller so a parent abort cannot end it.
+          spawn: (signal) =>
+            runSubagent(
+              {
+                subagentId: generateId("subagent", { exists: (id) => manager.getAgent(id) != null }),
+                prompt,
+                description,
+                parentAgentId,
+                parentTaskToolCallId: toolCallId,
+                autoDestroy: false,
+                maxOutputLength: SUBAGENT_NO_TRUNCATE,
+                abortSignal: signal,
+              },
+              { manager }
+            ),
+        });
+        return runningTaskOutput();
+      }
+
       // Prefer the subagent's own wall-clock run duration — for pre-forked
       // tasks the join wait would undercount (or be ~0 when already done).
       let runDurationMs: number | undefined;
@@ -188,7 +250,6 @@ Example use cases:
         // Join a pre-forked run when the task-prefork middleware already
         // started this subagent while args were streaming (parallel task
         // calls). Falls back to a serial spawn for uncapped/unseen calls.
-        const parentManaged = manager.getAgent(parentAgentId);
         const preforked = parentManaged ? await getTaskPreforkCoordinator(parentManaged).join(toolCallId) : null;
 
         // The child owns its RunCoordinator AbortController, but the serial fallback must still
@@ -222,33 +283,10 @@ Example use cases:
             : await executeTask());
         runDurationMs = result.durationMs;
 
-        let summary = result.output;
-        // Length truncation from subagent (maxOutputLength). Separate from disk-cache preview below.
-        const truncated = result.truncated;
-        let cachedOutputPath: string | null = null;
-
-        // Large summaries are previewed for the parent context; full text stays on disk.
-        // Do NOT flip `truncated` here — that flag means maxOutputLength cut the summary.
-        const cached = await maybeCacheOutput(coreEnv, result.output, `${toolCallId}-task`);
-        cachedOutputPath = cached.cachedOutputPath;
-        if (cachedOutputPath) {
-          summary = cached.content;
-        }
-
-        return {
-          subagentId: result.subagentId,
-          ...(result.profile ? { profile: result.profile } : {}),
-          summary,
-          truncated,
-          iterations: result.iterations,
-          maxIterations: result.maxIterations,
-          reachedLimit: result.reachedLimit,
-          incomplete: result.incomplete,
-          aborted: result.aborted,
-          ...(result.stopReason ? { stopReason: result.stopReason } : {}),
-          usage: result.usage,
-          cachedOutputPath,
-        };
+        // One shaping path for both delivery modes (`task-output.ts`): the disk-cache preview is
+        // written once per call, so the blocking result and the background write-back cannot
+        // disagree about `truncated` / `cachedOutputPath` / the status flags.
+        return await buildTaskOutput(coreEnv, toolCallId, result);
       }).then((output) => {
         if (runDurationMs != null) output.durationMs = runDurationMs;
         return output;
@@ -264,22 +302,25 @@ Example use cases:
     // persisted on the output for a restored `used/budget` readout.
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: TaskOutput }) {
       if (isProjectedModelContent(output)) return output;
-      // `truncated` is NOT here: the task tool runs with `SUBAGENT_NO_TRUNCATE`, so it is always
-      // false, while the summary the model actually receives may still be a cached PREVIEW. Listing
-      // a dead flag beside the live ones invited a model to read `truncated=false` as "complete".
-      // The preview announces itself in the text (`Full output saved to …`), which is the honest signal.
-      const status = [
-        `reachedLimit=${output.reachedLimit}`,
-        `incomplete=${output.incomplete}`,
-        `aborted=${output.aborted}`,
-        ...(output.stopReason ? [`stopReason=${output.stopReason}`] : []),
-      ].join(" ");
+      // A background start handle is not a result: telling the model to wait for a summary that is
+      // already in `summary` would be a lie, and telling it nothing would make it poll (there is no
+      // get/kill tool for tasks).
       return [
         {
           type: "text" as const,
-          content: `${output.summary}\n\n[task status: ${status}]`,
+          content: output.status === "running" ? formatRunningTaskText() : formatTaskModelText(output),
         },
       ];
     },
   });
 };
+
+/** Human label for a task row / footer entry: the spawn description, else the prompt's first line. */
+function taskLabel(input: { prompt: string; description?: string }): string {
+  const described = input.description?.trim();
+  if (described) return described;
+  const firstLine = input.prompt.trim().split("\n")[0] ?? "";
+  // The shared truncation rule, not a local slice: the omission marker and the exact width are one
+  // definition (`utils/text-truncation.ts`), so a footer label and a log line cannot disagree.
+  return truncateText(firstLine, 80);
+}

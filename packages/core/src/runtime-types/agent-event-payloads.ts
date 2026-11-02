@@ -607,22 +607,28 @@ export type AgentEventPayloadMap = {
     error?: string;
   };
   /**
-   * A turn nobody prompted (a background job finished, or a reminder fired). It explains why the
-   * agent started working without a `prompt:submit`, which was otherwise unreadable.
+   * A turn nobody prompted (background work finished). It explains why the agent started working
+   * without a `prompt:submit`, which was otherwise unreadable. `unknown` is the wire-side fallback
+   * for a value this build does not recognise; producers emit `job` or `task`.
    */
   "run:wake": {
-    cause: "job" | "reminder" | "unknown";
+    cause: "job" | "task" | "unknown";
   };
   /**
-   * A background job changed lifecycle state (created, or reached a terminal status).
+   * A background unit of work changed lifecycle state (created, or reached a terminal status).
    *
    * `session:jobs` is the retained SNAPSHOT and is deliberately not logged; this is the
    * append-only row. Without it a finished job existed only as a wake turn, and the timeline could
    * not say which command finished or how it ended.
+   *
+   * Both kinds report here (`kind` distinguishes them) — one append-only row per transition is what
+   * keeps the log a story rather than two parallel ones.
    */
   "job:changed": {
     jobId: string;
-    command?: string;
+    kind: SessionJobSummary["kind"];
+    /** The command line, or the task's label — never rendered into the payload's attrs. */
+    label: string;
     status: SessionJobSummary["status"];
     /** Absent on the first observation (the job was just created). */
     previousStatus?: SessionJobSummary["status"];

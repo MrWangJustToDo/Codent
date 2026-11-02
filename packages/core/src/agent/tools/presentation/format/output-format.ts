@@ -79,7 +79,11 @@ function truncateLine(line: string, maxWidth: number = MAX_LINE_WIDTH): string {
 
 function formatRunCommandOutput(output: RunCommandOutput): string {
   if (output.runInBackground && output.jobId) {
-    return `Background job ${output.jobId} (${output.status ?? "running"}): ${output.command}`;
+    const status = output.status ?? "running";
+    // A settled background job (restored after its session ended) names why it stopped; a running one
+    // has no reason to print and must keep the plain "still going" line.
+    const reason = status === "running" ? "" : (output.stderr?.trim().split("\n")[0] ?? "");
+    return `Background job ${output.jobId} (${status}): ${output.command}${reason ? ` — ${truncateLine(reason)}` : ""}`;
   }
 
   const { stdout, stderr, exitCode, success, cancelled, timedOut, timeoutMs } = output;
@@ -260,6 +264,13 @@ function formatAskUserOutput(output: {
 }
 
 function formatTaskOutput(output: TaskOutput): string {
+  // A background start handle is not a result: it carries no summary and every scored field is zero,
+  // so the ordinary path below would render the empty string — a row that looks like an empty,
+  // finished task. The settle handler overwrites this same part with the real output when the child
+  // ends, so "running" (or "queued", before a concurrency slot admits it) is the honest interim.
+  if (output.status === "running") {
+    return output.subagentId ? `[running in background: ${output.subagentId}]` : "[queued in background]";
+  }
   const { summary, iterations, truncated, reachedLimit, incomplete, aborted, usage, cachedOutputPath } = output;
   const lines: string[] = [];
   const statusParts: string[] = [];

@@ -187,7 +187,7 @@ assert.equal(
     resetIterationProgress: markReset("iteration"),
     destroyChildAgents: markReset("childAgents"),
     clearTaskRuns: markReset("taskRuns"),
-    resetCommandJobs: markReset("commandJobs"),
+    resetBackgroundWork: markReset("backgroundWork"),
     emitSessionSwitch: () => {},
     refreshState: () => {},
     bindSessionLogSink: (sessionId, options) => sinkBinds.push({ sessionId, options }),
@@ -230,7 +230,7 @@ assert.equal(
     "iteration",
     "childAgents",
     "taskRuns",
-    "commandJobs",
+    "backgroundWork",
   ]) {
     assert.equal(resetCalls.includes(name), true, `resume must clear volatile state: ${name}`);
   }
@@ -297,7 +297,7 @@ assert.equal(
     clearTaskRuns: () => {
       taskRunsCleared = true;
     },
-    resetCommandJobs: () => {},
+    resetBackgroundWork: () => {},
     emitSessionNew: () => {},
     refreshState: () => {},
     refreshSubagents: () => {},
@@ -374,7 +374,7 @@ assert.equal(
     resetIterationProgress: () => {},
     destroyChildAgents: () => {},
     clearTaskRuns: () => {},
-    resetCommandJobs: () => {},
+    resetBackgroundWork: () => {},
     emitSessionNew: () => {},
     refreshState: () => {},
     refreshSubagents: () => {},

@@ -1,18 +1,20 @@
 /**
- * Built-in Jobs extension — keeps background command jobs visible in the footer.
+ * Built-in Jobs extension — keeps background work visible in the footer, both kinds in one line.
  *
- * A `run_in_background` job outlives the `run_command` call that started it, and its output
- * deliberately does not stream onto the `tool` channel. So without a surface of its own a job
- * that runs for minutes is invisible until someone polls it — and its *end* is invisible
- * entirely to anything that cannot reach {@link CommandJobRegistry} (an extension, a remote
+ * A `run_in_background` command job or a `run_in_background` task outlives the tool call that
+ * started it, and neither streams its output onto the `tool` channel. So without a surface of its
+ * own, a unit that runs for minutes is invisible until someone polls it — and its *end* is
+ * invisible entirely to anything that cannot reach the job registry (an extension, a remote
  * client): there is nothing to subscribe to.
  *
- * Core therefore pushes the list — the registry notifies its owning agent, which emits
- * `session:jobs` (retained, projected onto the session `jobs` channel) — and this extension
- * renders ONE line into the `footer` surface:
+ * Core therefore pushes the list — the background-work facade notifies its owning agent, which
+ * emits `session:jobs` (retained, projected onto the session `jobs` channel) — and this extension
+ * renders ONE line into the `footer` surface. One line, not two, because the user's question is
+ * "what of mine is still running?" and the answer is the same sentence for a command and a task:
  *
  *     ⏳ 2 running · 1 failed · 2m 14s
  *     ✓ 1 pending
+ *     ⏳ 1 command · 1 task · 12s          (both kinds present — see below)
  *
  * (rendered ANSI-styled: an amber glyph, the counts in bright-black gray — see {@link AMBER} /
  * {@link GRAY})
@@ -25,20 +27,22 @@
  *   dedupe identical payloads (`default-extension-ui.ts`), so a tick's cost is this summarizer,
  *   never a host repaint — and the timer is `unref`'d plus cleared in `deactivate()`, so it can
  *   neither hold a host process open nor outlive the extension.
- * - **A job's row ends when its result is PICKED UP, not when its process exits.** The slot used
- *   to be removed the instant nothing was running, so a job that finished while the session was
+ * - **A unit's row ends when its result is PICKED UP, not when its process exits.** The slot used
+ *   to be removed the instant nothing was running, so a unit that finished while the session was
  *   parked (approval pending, `ask_user`, a run the user aborted) vanished exactly when it owed
  *   the most: its completion had not reached the transcript yet. The line now stays, counting
- *   those jobs as `pending` ("待消费"), until `background-middleware` hands the completion to the
- *   message window — the same transition that sets the durable `notified` flag.
+ *   those units as `pending` ("待消费"), until `background-middleware` hands the completion to the
+ *   message window — the same transition that sets the durable delivered flag.
  *
- * A finished job is not listed twice: `pending` counts the finished-and-owed ones, `failed` /
- * `killed` count the outcomes, and an `exited` job that was picked up contributes nothing (its
+ * A finished unit is not listed twice: `pending` counts the finished-and-owed ones, `failed` /
+ * `killed` count the outcomes, and an `exited` unit that was picked up contributes nothing (its
  * outcome lives in the transcript).
  */
 
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 import { formatDuration } from "../tools/presentation/format/format.js";
+
+import { COMMAND_JOB_KIND, TASK_JOB_KIND } from "./background-work.js";
 
 import type { SessionJobSummary } from "../../runtime-types/session-payloads.js";
 import type { ExtensionAPI } from "../extension/types.js";
@@ -85,6 +89,12 @@ const RESET = "\u001b[0m";
 const COUNT_ORDER = ["running", "failed", "killed"] as const;
 
 /**
+ * Order the per-kind split appears in when both kinds are live. `command` first: it is the older,
+ * better-understood kind, so a glance at the line starts with the familiar one.
+ */
+const KIND_ORDER = [COMMAND_JOB_KIND, TASK_JOB_KIND] as const;
+
+/**
  * What the pending count is called.
  *
  * `pending` is short enough for a footer and states the thing the user needs: the job is over and
@@ -99,19 +109,35 @@ const PENDING_LABEL = "pending";
  * running and nothing is waiting to be picked up). ANSI-styled: amber glyph, bright-black counts,
  * reset-terminated.
  *
- * Elapsed time is the oldest *running* job's age — the number the user is waiting on. Finished jobs
- * are not counted into it, so a long-dead completion cannot inflate the line; a line with nothing
- * running therefore carries no duration at all (`✓ 1 pending`), and its glyph becomes a tick
- * because there is no wait in progress. The age is reported in whole seconds
+ * Elapsed time is the oldest *running* unit's age — the number the user is waiting on. Finished
+ * units are not counted into it, so a long-dead completion cannot inflate the line; a line with
+ * nothing running therefore carries no duration at all (`✓ 1 pending`), and its glyph becomes a
+ * tick because there is no wait in progress. The age is reported in whole seconds
  * (`formatDuration(..., { wholeSeconds: true })`): it re-renders on a 1s tick, so tenths would
  * change on every frame while telling the user nothing a second cannot.
+ *
+ * **One kind is the common case and must not change.** With a single kind live the line is exactly
+ * what the command-only version printed (byte for byte — it is the regression baseline the task
+ * support was added behind). Only when both kinds are live does the running count split into one
+ * `1 command · 1 task` segment instead of `2 running`, because "2 running" then hides the thing the
+ * user wants to know (which kind is still holding the session). Failures/kills/pending stay status
+ * words: they are terminal, so which kind produced them is in the transcript, not in the count.
  */
 export function summarizeJobs(jobs: readonly SessionJobSummary[], now: number): string | null {
   const counts: Record<SessionJobSummary["status"], number> = { running: 0, exited: 0, killed: 0, failed: 0 };
+  const runningByKind: Record<SessionJobSummary["kind"], number> = { command: 0, task: 0 };
+  // Running rows only. The split exists to say which kind is still HOLDING the session, so a
+  // terminal row must not enter it: counting every row made the line turn `2 running` into
+  // `2 task` for the rest of the session the moment one task had finished.
+  const runningKinds = new Set<SessionJobSummary["kind"]>();
   let pending = 0;
   let oldestRunningStartedAt = Number.POSITIVE_INFINITY;
   for (const job of jobs) {
     counts[job.status] += 1;
+    if (job.status === "running") {
+      runningKinds.add(job.kind);
+      runningByKind[job.kind] += 1;
+    }
     if (job.pendingPickup) pending += 1;
     if (job.status === "running" && job.startedAt < oldestRunningStartedAt) {
       oldestRunningStartedAt = job.startedAt;
@@ -119,7 +145,15 @@ export function summarizeJobs(jobs: readonly SessionJobSummary[], now: number): 
   }
   if (counts.running === 0 && pending === 0) return null;
 
-  const parts = COUNT_ORDER.filter((status) => counts[status] > 0).map((status) => `${counts[status]} ${status}`);
+  const parts: string[] = [];
+  if (runningKinds.size > 1) {
+    for (const kind of KIND_ORDER) if (runningByKind[kind] > 0) parts.push(`${runningByKind[kind]} ${kind}`);
+  } else if (counts.running > 0) {
+    parts.push(`${counts.running} running`);
+  }
+  for (const status of COUNT_ORDER) {
+    if (status !== "running" && counts[status] > 0) parts.push(`${counts[status]} ${status}`);
+  }
   if (pending > 0) parts.push(`${pending} ${PENDING_LABEL}`);
   if (counts.running > 0) parts.push(formatDuration(now - oldestRunningStartedAt, { wholeSeconds: true }));
   const glyph = counts.running > 0 ? "⏳" : "✓";
@@ -154,7 +188,7 @@ export function createJobsExtension(): ExtensionAPI {
     order: BUILTIN_EXTENSION_ORDER,
     name: "Jobs",
     version: "1.0.0",
-    description: "Background command jobs: a one-line running summary in the footer surface",
+    description: "Background work (command jobs and tasks): a one-line running summary in the footer surface",
     activate(ctx) {
       // Redraw from the current list; `render(null)` clears the slot (and is a no-op on an
       // absent slot, so an empty state costs no notification).

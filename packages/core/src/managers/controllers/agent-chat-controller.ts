@@ -25,6 +25,7 @@ import {
   shouldContinueAgentPump,
 } from "../../agent/stream/tool-phase-utils.js";
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
+import { reconcileSettledTaskParts } from "../../agent/subagent/task-background.js";
 import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
@@ -32,6 +33,7 @@ import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js
 import { countToolCalls } from "../run-finalizer.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
+import type { BackgroundWakeCause } from "../../agent/jobs/background-work.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 import type { AgentManager } from "../agent-manager.js";
@@ -195,7 +197,9 @@ export class AgentChatController {
     // already started), nor emit `agent:abort` for a run that does not exist. A run PARKED on an
     // approval has no live pump but is still the user's Esc target, so a pending interaction is
     // reason enough — as is a live pump, a queued pump, or an eagerly started `task` subagent.
-    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
+    // Foreground only: a background task must survive Esc, so its detached seat is not a reason to
+    // interrupt anything.
+    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.foregroundSize ?? 0;
     if (!this.isPumpLive() && registeredPrefork === 0 && !hasPendingInteraction(this.channel.getMessages())) return;
     this.interruptCurrentRun("user-cancelled");
   }
@@ -230,7 +234,10 @@ export class AgentChatController {
    * absent here: a session switch replaces a parked session instead of fabricating an abort for it.
    */
   stopIfActive(reason = "session-switch"): void {
-    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.size ?? 0;
+    // Foreground only: a detached background seat is not part of this run, so it must not turn a
+    // plain `/new` or `/resume` into a fabricated abort + finalize. The session-switch transaction
+    // ends background work separately (`resetBackgroundWork` → `abortDetached`).
+    const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.foregroundSize ?? 0;
     if (!this.isPumpLive() && registeredPrefork === 0) return;
     this.interruptCurrentRun(reason);
   }
@@ -480,7 +487,7 @@ export class AgentChatController {
    *
    * @returns whether a pump was enqueued.
    */
-  wakeForBackgroundCompletion(): boolean {
+  wakeForBackgroundCompletion(cause: BackgroundWakeCause = "job"): boolean {
     // A switch is replacing the transcript; the completion is delivered on the next turn.
     if (this.managed.isSessionSwitching()) return false;
     // A live pump delivers the notification at its next model call (the old behavior), and a
@@ -496,7 +503,9 @@ export class AgentChatController {
     const planPhase = this.managed.planMode.getPhase();
     if (planPhase === "ready" || planPhase === "planning") return false;
     // A wake is a new turn with no prompt: `startsNewTurn` gives it a run id and turn boundaries
-    // even though the channel's last message is an assistant message.
+    // even though the channel's last message is an assistant message. The cause is recorded here,
+    // where the turn is actually decided, so a refused wake cannot mislabel the next one.
+    this.managed.setPendingWakeCause(cause);
     void this.enqueueRunOnce({ startsNewTurn: true });
     return true;
   }
@@ -773,6 +782,11 @@ export class AgentChatController {
         if (hasError) break;
         if (!token.isCurrent || epoch !== this.lifecycleEpoch) return;
 
+        // Repair a settled background task whose part the previous phase's batched tool result
+        // overwrote. This is the one boundary that is always after that write and always before the
+        // next wire projection, so the model never sees the `running` handle for a finished run.
+        reconcileSettledTaskParts(this.managed);
+
         let currentMessages = this.channel.getMessages();
         if (hasPendingInteraction(currentMessages)) break;
 
@@ -900,8 +914,8 @@ export class AgentChatController {
         // call left to ride along with, and the registry's notification was refused ("a live pump
         // delivers it"). Re-check now that the pump is gone; the wake is refused again if the turn
         // ended parked on the user (`waiting` / `awaiting_user`), where delivery belongs to the
-        // resume pump. No service yet ⇒ nothing running ⇒ the check is a no-op.
-        void this.managed.wakeForBackgroundJobs();
+        // resume pump. No facade yet ⇒ nothing running ⇒ the check is a no-op.
+        void this.managed.wakeForBackgroundWork();
       }
       // Forget the token this pump began. `shouldDeferQueue` reads a stale token as "a pump is
       // still unwinding" and short-circuits before the queued-pump / `compacting` / `waiting`

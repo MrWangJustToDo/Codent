@@ -72,6 +72,7 @@ export { SessionLifecycleService } from "../managers/services/session-lifecycle-
 export { MemoryService } from "../managers/services/memory-service.js";
 export { ExtensionRegistryService } from "../managers/services/extension-registry-service.js";
 export { AgentCommandService } from "../managers/services/agent-command-service.js";
+export { formatCommandBody } from "../managers/services/agent-command-service.js";
 export { resolveTextAdapterForManaged } from "../managers/run-agent.js";
 export {
   armCapabilityStrip,

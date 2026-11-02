@@ -10,6 +10,7 @@
  */
 
 import { truncateText } from "../../utils/text-truncation.js";
+import { backgroundWorkKind, backgroundWorkNoun } from "../jobs/background-work.js";
 
 import { eventError } from "./event-error.js";
 import { hookEchoesEnabled } from "./hooks-echo.js";
@@ -124,14 +125,19 @@ function logJobChanged(log: AgentLog, event: AgentEvent): void {
   const previous = typeof d.previousStatus === "string" ? d.previousStatus : undefined;
   const terminal = status !== "running";
   const exit = typeof d.exitCode === "number" ? ` (exit ${d.exitCode})` : "";
-  const command = typeof d.command === "string" ? ` — ${truncateText(d.command, 80)}` : "";
-  const what = terminal ? `Job ${d.jobId ?? "?"} ${status}` : `Job ${d.jobId ?? "?"} started`;
+  const label = typeof d.label === "string" ? ` — ${truncateText(d.label, 80)}` : "";
+  // Both background kinds report through this one event, so the noun has to travel with it — a task
+  // row logged as "Job job_x" would send anyone reading the timeline to the wrong surface.
+  const kind = backgroundWorkKind(d.kind);
+  const noun = backgroundWorkNoun(kind);
+  const what = terminal ? `${noun} ${d.jobId ?? "?"} ${status}` : `${noun} ${d.jobId ?? "?"} started`;
   const from = previous && previous !== status ? ` (from ${previous})` : "";
-  // A start is a debug fact (the `run_command` row already shows it); a terminal transition is the
-  // row the timeline needs, and a restored job's first observation is not a transition at all.
-  entry(log, event, terminal ? "info" : "debug", "tool", `${what}${exit}${from}${command}`, {
+  // A start is a debug fact (the `run_command` / `task` row already shows it); a terminal transition
+  // is the row the timeline needs, and a restored job's first observation is not a transition at all.
+  entry(log, event, terminal ? "info" : "debug", "tool", `${what}${exit}${from}${label}`, {
     jobId: d.jobId,
     status,
+    kind,
     ...(previous ? { previousStatus: previous } : {}),
     ...(d.exitCode !== undefined ? { exitCode: d.exitCode } : {}),
   });

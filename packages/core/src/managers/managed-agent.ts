@@ -58,6 +58,7 @@ import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.j
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
 import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { scopeExtensionOwnerId } from "../agent/extension/owner-id.js";
+import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
@@ -65,11 +66,12 @@ import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
-  clearSubagentRuns,
+  clearTaskRuns,
   discardRegisteredPrefork,
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/subagent-runs.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
+import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
@@ -112,6 +114,7 @@ import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
 import { AgentCommandService } from "./services/agent-command-service.js";
 import { AgentToolService } from "./services/agent-tool-service.js";
+import { BackgroundWorkService, type BackgroundWorkChange } from "./services/background-work-service.js";
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
@@ -487,8 +490,16 @@ export class ManagedAgent {
    * stuck in `compacting`.
    */
   readonly compactions: CompactionController;
-  /** Per-agent background work ownership (registry + durable restore + turn-context pointer). */
+  /** Per-agent background work ownership: one facade, two sources (commands + tasks). */
+  private backgroundWork?: BackgroundWorkService;
+  /** The command source handle (tools' `AgentCommandPort`, registry, `<background_jobs>` pointer). */
   private commandService?: AgentCommandService;
+  /**
+   * Why the next promptless turn exists (`job` / `task` / `reminder`), recorded by whoever starts it
+   * and consumed once by `run:wake`. A refused wake never records, so a later reminder cannot inherit
+   * someone else's cause.
+   */
+  private pendingWakeCause?: BackgroundWakeCause;
   /** Set by AgentManager to route events to listeners. */
   dispatchEvent?: (event: AgentEvent) => void;
   /** Scoped unified event bus for this agent (set by the factory). */
@@ -820,7 +831,7 @@ export class ManagedAgent {
       resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
       resetIterationProgress: () => this.resetIterationProgress(),
       // Task phase records and pre-fork seats belong to the conversation being left.
-      clearTaskRuns: () => clearSubagentRuns(this),
+      clearTaskRuns: () => clearTaskRuns(this),
       // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
       // preview, so a switch is the only point that can release the child (UI channel, log sink,
       // tool state) without destroying a preview the user is still looking at.
@@ -839,11 +850,14 @@ export class ManagedAgent {
           }
         }
       },
-      resetCommandJobs: (reason) => {
-        const service = this.commandService;
+      resetBackgroundWork: (reason) => {
+        // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the next
+        // session builds a fresh pair (same lifecycle the command registry always had).
+        const work = this.backgroundWork;
+        this.backgroundWork = undefined;
         this.commandService = undefined;
-        void service?.reset(reason).catch((error: unknown) => {
-          this.emitDiagnostic("jobs", "Failed to reset command jobs", {
+        void work?.reset(reason).catch((error: unknown) => {
+          this.emitDiagnostic("jobs", "Failed to reset background work", {
             level: "warn",
             data: { reason },
             error: String(error),
@@ -1087,7 +1101,7 @@ export class ManagedAgent {
    * registry the answer is an explicit empty list instead.
    */
   readJobs(): SessionJobsSnapshot {
-    return { jobs: this.commandService?.list() ?? [] };
+    return { jobs: this.backgroundWork?.list() ?? [] };
   }
 
   /**
@@ -2215,7 +2229,7 @@ export class ManagedAgent {
       // Best-effort teardown.
     }
     try {
-      await this.destroyCommandService();
+      await this.destroyBackgroundWork();
     } catch {
       // Best-effort teardown.
     }
@@ -2233,70 +2247,133 @@ export class ManagedAgent {
     }
   }
 
-  /** Lazily build the command service (registry is created on first use). */
+  /** Record why a promptless turn is starting (called by whoever enqueues it). */
+  setPendingWakeCause(cause: BackgroundWakeCause): void {
+    this.pendingWakeCause = cause;
+  }
+
+  /** Read and clear the wake cause — `run:wake` is the one consumer, so it reads once. */
+  takePendingWakeCause(): BackgroundWakeCause | undefined {
+    const cause = this.pendingWakeCause;
+    this.pendingWakeCause = undefined;
+    return cause;
+  }
+
+  /**
+   * The command source of the trunk, built on first use.
+   *
+   * Resolving it always ensures the facade exists first: a source's changes have nowhere to go unless
+   * something is listening, and the tool surface only ever asks for this port. Building the source
+   * alone is exactly how a finished job would end up with no `job:changed`, no footer row and no wake.
+   */
   getCommandService(): AgentCommandService {
+    this.getBackgroundWork();
+    return this.buildCommandService();
+  }
+
+  /** The command source itself — the one place its options (env + owner) are defined. */
+  private buildCommandService(): AgentCommandService {
     if (!this.commandService) {
       this.commandService = new AgentCommandService({
         env: () => this.getCoreEnv(),
         ownerSessionId: () => this.getSessionData?.()?.id,
-        onJobsChange: ({ jobs, finished }) => {
-          const seen = new Set<string>();
-          for (const job of jobs) {
-            seen.add(job.jobId);
-            const previousStatus = this.lastJobStatuses.get(job.jobId);
-            if (previousStatus === job.status) continue;
-            this.lastJobStatuses.set(job.jobId, job.status);
-            // First observation of a terminal row = a restored job, not a transition.
-            if (previousStatus === undefined && job.status !== "running") continue;
-            this.emitEvent("job:changed", {
-              jobId: job.jobId,
-              command: job.command,
-              status: job.status,
-              ...(previousStatus !== undefined ? { previousStatus } : {}),
-              exitCode: job.exitCode,
-            });
-          }
-          for (const id of [...this.lastJobStatuses.keys()]) if (!seen.has(id)) this.lastJobStatuses.delete(id);
-          this.eventBus?.emit("session:jobs", { jobs });
-          if (finished.length > 0) void this.wakeForBackgroundJobs();
-        },
       });
     }
     return this.commandService;
   }
 
   /**
-   * Deliver a finished background job to a session that is not running.
+   * The ONE background-work entry point for this agent.
    *
-   * The notification itself belongs to `background-middleware`, which injects it at the next
-   * model call — so a job that ends while the agent is idle would wait for the user to type
-   * before anyone saw the result. An idle session is therefore WOKEN: the pump starts a turn,
-   * the middleware injects the notification at its first `onConfig`, and the model reports back.
-   * Nothing is delivered here; this only supplies the missing reason to start a turn (one
-   * delivery path, one formatter).
-   *
-   * A live pump or a session parked on the user keeps the old behavior — the notification rides
-   * along with the next model call of that same turn (`wakeForBackgroundCompletion` answers
-   * false). Never for a subagent: it has no user, and a worker turn belongs to its parent.
-   *
-   * Called from two places, because the finish can land in either window: the jobs registry's
-   * change notification (idle), and the chat pump's exit (a job that ended after that pump's last
-   * model call — otherwise nothing would ever re-check and the result waited for the user to type).
-   * Both paths peek only; delivery stays the middleware's.
+   * Creating it registers both sources (commands + tasks) on the trunk, so every question a host asks
+   * — the `jobs` snapshot, the undelivered completions, the session-switch reset, the destroy — has a
+   * single implementation here regardless of which kind produced the row. The facade is dropped (not
+   * reopened) by {@link resetBackgroundWork}; the next session builds a fresh one.
    */
-  async wakeForBackgroundJobs(): Promise<void> {
+  getBackgroundWork(): BackgroundWorkService {
+    if (!this.backgroundWork) {
+      const work = new BackgroundWorkService({
+        onChange: (change) => this.publishBackgroundWork(change),
+        onError: (message, error) =>
+          this.emitDiagnostic("jobs", message, { level: "warn", error: errorMessage(error) }),
+      });
+      // Assigned before the sources are registered: registering wires a sink, and a source that
+      // notified during that wiring would otherwise re-enter this method with no facade to find.
+      this.backgroundWork = work;
+      work.register(this.buildCommandService());
+      work.register(createTaskWorkSource(this));
+    }
+    return this.backgroundWork;
+  }
+
+  /**
+   * Publish a background-work change: one append-only row per transition, the retained snapshot, and
+   * the idle wake when something actually ended. Both kinds come through here, which is why the log,
+   * the footer and the wake cannot disagree about what happened.
+   */
+  private publishBackgroundWork({ jobs, finished }: BackgroundWorkChange): void {
+    const seen = new Set<string>();
+    for (const job of jobs) {
+      seen.add(job.jobId);
+      const previousStatus = this.lastJobStatuses.get(job.jobId);
+      if (previousStatus === job.status) continue;
+      this.lastJobStatuses.set(job.jobId, job.status);
+      // First observation of a terminal row = a restored job, not a transition.
+      if (previousStatus === undefined && job.status !== "running") continue;
+      this.emitEvent("job:changed", {
+        jobId: job.jobId,
+        kind: job.kind,
+        label: job.label,
+        status: job.status,
+        ...(previousStatus !== undefined ? { previousStatus } : {}),
+        exitCode: job.exitCode,
+      });
+    }
+    for (const id of [...this.lastJobStatuses.keys()]) if (!seen.has(id)) this.lastJobStatuses.delete(id);
+    this.eventBus?.emit("session:jobs", { jobs });
+    if (finished.length > 0) {
+      // The kind of what just ended is known HERE (the rows carry it), while the pump-exit path only
+      // sees what is still pending. Passing it keeps this publication exact; the other caller keeps
+      // the fallback.
+      void this.wakeForBackgroundWork(backgroundWakeCause(jobs, finished));
+    }
+  }
+
+  /**
+   * Deliver finished background work to a session that is not running.
+   *
+   * The notification itself belongs to `background-middleware`, which injects it at the next model
+   * call — so work that finishes while the agent is idle would wait for the user to type before anyone
+   * saw the result. An idle session is therefore WOKEN: the pump starts a turn, the middleware injects
+   * the notification at its first `onConfig`, and the model reports back. Nothing is delivered here;
+   * this only supplies the missing reason to start a turn (one delivery path, one formatter, for both
+   * kinds).
+   *
+   * A live pump or a session parked on the user keeps the old behavior — the notification rides along
+   * with the next model call of that same turn (`wakeForBackgroundCompletion` answers false). Never
+   * for a subagent: it has no user, and a worker turn belongs to its parent.
+   *
+   * Called from two places, because the finish can land in either window: the change publication
+   * (idle), and the chat pump's exit (work that ended after that pump's last model call — otherwise
+   * nothing would ever re-check). Both paths peek only; delivery stays the middleware's.
+   *
+   * The cause describes whichever completion is actually pending (a task reads as `task` on the pump's
+   * path too, which has no change publication to learn it from). A caller that already knows passes
+   * its own — the publication does, from the rows that just reached a terminal state.
+   */
+  async wakeForBackgroundWork(cause?: BackgroundWakeCause): Promise<void> {
     if (this.parentId) return;
     const chat = this.chatController;
-    // The service that reported this finish — never re-created here: a session switch sets the
-    // field to undefined while the old registry is still winding down, and minting a new service
-    // would restore the previous session's records into the new (or leaving) one.
-    const service = this.commandService;
-    if (!chat || !service) return;
+    // The facade that reported this finish — never re-created here: a session switch drops the field
+    // while its sources are still winding down, and minting a new one would restore the previous
+    // session's rows into the new (or leaving) one.
+    const work = this.backgroundWork;
+    if (!chat || !work) return;
     try {
-      // Peek, do not mark: delivery (and the notified flag) stays the middleware's.
-      const completed = await service.collectCompleted();
-      if (completed.length === 0) return;
-      chat.wakeForBackgroundCompletion();
+      // Peek, do not mark: delivery (and the delivered flag) stays the middleware's.
+      const pending = await work.pending();
+      if (pending.length === 0) return;
+      chat.wakeForBackgroundCompletion(cause ?? (pending[0]?.kind === TASK_JOB_KIND ? "task" : "job"));
     } catch (error) {
       this.emitDiagnostic("jobs", "Background completion wake skipped", { level: "warn", error: errorMessage(error) });
     }
@@ -2494,6 +2571,12 @@ export class ManagedAgent {
     for (const childId of [...this.childIds]) {
       const child = manager.getAgent(childId);
       if (!child) continue;
+      // A background task is not the run's to stop. Its parity is a background command: Esc leaves it
+      // running and its own completion still arrives; `SubagentRuns.reset()` (the session-switch
+      // transaction) is what ends it. Without this, one Esc would kill work the caller was explicitly
+      // told would keep running.
+      const taskCallId = child.parentTaskId;
+      if (taskCallId && peekTaskPreforkCoordinator(this)?.isDetached(taskCallId)) continue;
       const status = child.getStatus();
       if (status !== "running" && status !== "compacting" && status !== "thinking" && status !== "responding") {
         continue;
@@ -2536,7 +2619,7 @@ export class ManagedAgent {
    */
   discardPreforkRuns(cause: PreforkDiscardCause = "run-abort"): void {
     const coordinator = peekTaskPreforkCoordinator(this);
-    if (!coordinator || coordinator.size === 0) return;
+    if (!coordinator || coordinator.foregroundSize === 0) return;
     discardRegisteredPrefork(this, cause, (discard) => {
       this.emitEvent("subagent:prefork-discarded", {
         toolCallId: discard.toolCallId,
@@ -2570,13 +2653,19 @@ export class ManagedAgent {
   }
 
   /**
-   * Kill this agent's background jobs and drop the command service (no-op if none was ever
-   * created). Called on destroy so a disposed runtime does not leak child processes.
+   * Kill this agent's background work and drop the facade (no-op if none was ever created).
+   *
+   * Called on destroy so a disposed runtime leaks neither child processes (command jobs) nor
+   * streaming subagents (background tasks).
    */
-  destroyCommandService(): Promise<void> {
-    const service = this.commandService;
+  destroyBackgroundWork(): Promise<void> {
+    const work = this.backgroundWork;
+    this.backgroundWork = undefined;
     this.commandService = undefined;
-    return service?.destroy() ?? Promise.resolve();
+    // No command-source fallback: the source is only ever built through the facade
+    // (`getCommandService()` ensures it first), and the two fields are dropped together, so
+    // "a source without a facade" does not exist.
+    return work?.destroy() ?? Promise.resolve();
   }
 
   /**

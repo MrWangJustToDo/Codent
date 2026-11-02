@@ -129,33 +129,33 @@ const userRow = () => [{ id: "u1", role: "user", parts: [{ type: "text", content
   const channel = new AgentUIChannel();
   channel.setMessages(userRow());
   const persisted = [];
-  const marked = [];
-  const job = {
+  const delivered = [];
+  const completion = {
     id: "job_1",
-    command: "npm test",
+    kind: "command",
+    label: "npm test",
     status: "exited",
     exitCode: 0,
-    stdout: "all good\n",
-    stderr: "",
+    body: "all good\n",
   };
   const middleware = createBackgroundMiddleware({
     getUIChannel: () => channel,
     persistMessages: (next) => persisted.push(next),
-    getCommandService: () => ({
-      // The switch commits while the registry is being read.
-      collectCompleted: async () => {
+    getBackgroundWork: () => ({
+      // The switch commits while the undelivered queue is being read.
+      pending: async () => {
         channel.advanceSessionGeneration();
-        return [job];
+        return [completion];
       },
-      markNotified: async (ids) => marked.push(...ids),
-      sectionFor: async () => undefined,
+      markDelivered: async (items) => delivered.push(...items.map((item) => item.id)),
     }),
+    getCommandService: () => ({ sectionFor: async () => undefined }),
     getParentId: () => undefined,
   });
 
   const result = await middleware.onConfig({}, { messages: [{ role: "user", content: "hello" }] });
   assert.deepEqual(result, {}, "the whole patch is dropped");
-  assert.deepEqual(marked, [], "a dropped completion stays un-notified (the registry is reset by the switch)");
+  assert.deepEqual(delivered, [], "a dropped completion stays undelivered (the source is reset by the switch)");
   assert.equal(persisted.length, 0);
   assert.equal(channel.getMessages().length, 1);
   console.log("✓ background drops a completion read across a session commit");

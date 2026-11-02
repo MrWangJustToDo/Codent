@@ -14,6 +14,7 @@ import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
+import type { BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 
@@ -34,6 +35,8 @@ export interface RunLifecycleHost {
   clearPrepareAsContinuation: () => void;
   /** A pump started without a user prompt (background-completion wake) — new run scope, no hooks. */
   consumePrepareAsNewTurn: () => boolean;
+  /** Why that promptless turn exists, read once when `run:wake` is emitted. */
+  takePendingWakeCause: () => BackgroundWakeCause | undefined;
   beginTurnFinalize: () => boolean;
   getStreamStartedAt: () => number;
   setStreamStartedAt: (value: number) => void;
@@ -119,7 +122,7 @@ export async function prepareManagedAgentForRun(
     // explanation of why the agent is working, and it has to slice with the run it explains.
     if (forcedNewTurn) {
       // Debug-level on purpose — it explains a run without being part of the readable story.
-      host.emitEvent("run:wake", { cause: "job" });
+      host.emitEvent("run:wake", { cause: host.takePendingWakeCause() ?? "job" });
     }
   }
 

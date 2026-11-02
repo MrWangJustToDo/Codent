@@ -140,9 +140,12 @@ assert.equal(resolveSubagentStopReason({ aborted: true, reason: "some-other" }),
   );
   const toolSrc = readFileSync(join(SRC, "agent/subagent/task-tool.ts"), "utf8");
   assert.ok(/stopReason: z\s*\.enum/.test(toolSrc), "the task output schema accepts it");
+  // …and the pass-through lives in the ONE place a settled output is built (`buildTaskOutput`), which
+  // is why the blocking call and the background settle handler cannot disagree about it.
+  const outputSrc = readFileSync(join(SRC, "agent/subagent/task-output.ts"), "utf8");
   assert.ok(
-    /result\.stopReason \? \{ stopReason: result\.stopReason \}/.test(toolSrc),
-    "…and the tool passes it through"
+    /\.\.\.\(result\.stopReason \? \{ stopReason: result\.stopReason \} : \{\}\)/.test(outputSrc),
+    "…and the settled-output builder passes it through"
   );
 }
 

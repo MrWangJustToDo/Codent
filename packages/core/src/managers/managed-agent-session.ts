@@ -6,6 +6,8 @@ import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table
 import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
+import { cancelInterruptedBackgroundTasks } from "../agent/subagent/task-background.js";
+import { cancelInterruptedBackgroundCommands } from "../agent/tools/builtin/shell/run-command-tool.js";
 import { isReasoningEffort } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
 
@@ -154,7 +156,13 @@ export async function restoreManagedSession(
   // (or a truncated arg stream). No run exists to settle it, so the UI would render an
   // executing spinner forever and `isToolInFlight` would keep resurfacing it. Settle both
   // in-flight and incomplete calls before the channel and approvals are restored.
-  const uiMessages = settleInterruptedToolCalls(restored.uiMessages);
+  //
+  // A background `task` is the one part that carries an output and still cannot be running: it wrote
+  // its `running` handle at start, and a session end drops the ledger that would ever settle it. That
+  // pass runs FIRST — the generic one skips any part with an output, so it would leave the handle.
+  const restoredMessages = cancelInterruptedBackgroundCommands(restored.uiMessages);
+  const taskMessages = cancelInterruptedBackgroundTasks(restoredMessages);
+  const uiMessages = settleInterruptedToolCalls(taskMessages);
 
   const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
   if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {

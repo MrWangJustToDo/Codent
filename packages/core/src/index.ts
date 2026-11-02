@@ -108,7 +108,12 @@ export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from 
 // able to NAME the config it passes, so the union is public even though the manager is not.
 export type { McpServerConfig, McpServerConfigStdio, McpServerConfigHttp } from "./agent/mcp";
 export type { McpConfigSourceKind, McpServerStatus } from "./runtime-types/mcp-status.js";
-export type { SessionJobSummary, SessionJobsSnapshot } from "./runtime-types/session-payloads.js";
+export type {
+  BackgroundJobKind,
+  SessionJobStatus,
+  SessionJobSummary,
+  SessionJobsSnapshot,
+} from "./runtime-types/session-payloads.js";
 export type { UsageRecord, UsageRecordInput } from "./agent/usage";
 export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage";
 

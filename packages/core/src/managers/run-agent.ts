@@ -285,11 +285,13 @@ export function buildAgentRunner(
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
     }),
-    // Background class: the `<background_jobs>` pointer (hash-admitted against the wire) and
-    // one-shot completion pushes, both persisted so they survive across turns.
+    // Background class: one trunk for both kinds — the `<background_jobs>` pointer (hash-admitted
+    // against the wire, commands only) and one-shot completion pushes, both persisted so they
+    // survive across turns.
     createBackgroundMiddleware({
       getUIChannel: () => deps.getUIChannel() ?? undefined,
       persistMessages: (next) => deps.shouldPersistUIMessage(next, "user-message"),
+      getBackgroundWork: () => deps.getBackgroundWork(),
       getCommandService: () => deps.getCommandService(),
       getParentId: () => parentId,
       isSessionSwitching: () => managed?.isSessionSwitching() ?? false,

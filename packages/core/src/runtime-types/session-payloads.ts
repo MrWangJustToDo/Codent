@@ -133,25 +133,46 @@ export interface SessionInteractionsSnapshot {
 }
 
 /**
- * A background command job, as seen by a status surface.
+ * Lifecycle vocabulary shared by every background work kind.
+ *
+ * One union for both sources on purpose: the footer counts and colours them together, so a task and
+ * a command that both ended badly must land in the same bucket. `exited` is the clean finish (a task
+ * has no exit code, so it maps there too), `killed` is a stop someone asked for.
+ */
+export type SessionJobStatus = "running" | "exited" | "killed" | "failed";
+
+/** Which background work source produced a row. */
+export type BackgroundJobKind = "command" | "task";
+
+/**
+ * One background unit of work, as seen by a status surface.
  *
  * Deliberately summary-only (no output): the snapshot is projected onto the retained
  * `jobs` channel, so it crosses process boundaries and is replayed to late subscribers.
- * Output stays reachable via `get_command_output` / the job's log file.
+ * Output stays reachable via `get_command_output` / the job's log file, or — for a task — the
+ * `task` tool result the completion was written back into.
+ *
+ * `kind` + `label` are what let both sources share this row (and the footer line built from it):
+ * the alternative was a second, structurally identical type per source, which is exactly the drift
+ * `validate:module-organization` exists to prevent.
  */
 export interface SessionJobSummary {
   jobId: string;
-  command: string;
-  status: "running" | "exited" | "killed" | "failed";
+  kind: BackgroundJobKind;
+  /** Human label: the command line, or the task's description / prompt first line. */
+  label: string;
+  status: SessionJobStatus;
   exitCode: number | null;
   startedAt: number;
   endedAt: number | null;
   /**
-   * The process finished but its completion has not been handed to the message window yet.
+   * The unit finished but its completion has not been handed to the message window yet.
    *
-   * A status surface shows this as "waiting to be picked up" instead of dropping the row: the job
-   * is over, and what it produced is still owed to the transcript (see `CommandJobSummary` for why
-   * it is derived from the delivery flag rather than from a poll).
+   * A status surface shows this as "waiting to be picked up" instead of dropping the row: the work
+   * is over, and what it produced is still owed to the transcript. Derived from the source's
+   * delivery flag rather than from a poll (`get_command_output` reads incremental output and does not
+   * consume a completion), and never true for another session's row: this session's model can never
+   * be handed it, so counting it would be a line that can never clear.
    */
   pendingPickup: boolean;
 }

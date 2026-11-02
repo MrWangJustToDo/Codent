@@ -16,6 +16,7 @@ import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamHub } from "../agent/stream-hub";
 import type { TodoManager } from "../agent/todo";
 import type { AgentCommandService } from "./services/agent-command-service.js";
+import type { BackgroundWorkService } from "./services/background-work-service.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
@@ -73,6 +74,12 @@ export interface AgentRunDeps {
   getExtensionRunner: () => ExtensionRunner | null;
   /** The agent's background-job registry (drained by the notification middleware). */
   getCommandService: () => AgentCommandService;
+  /**
+   * The agent's background-work facade — the one trunk behind both kinds. Read live, not captured: a
+   * session switch drops the facade (`resetBackgroundWork`) while the cached runner stays alive, and a
+   * captured reference would keep draining the previous session's queue.
+   */
+  getBackgroundWork: () => BackgroundWorkService;
   getCompactionConfig: () => CompactionConfig | null;
   getModelInfo: () => ModelInfo | null;
   getToolCompactCache: () => ToolCompactCache;
@@ -146,6 +153,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
     getCommandService: () => managed.getCommandService(),
+    getBackgroundWork: () => managed.getBackgroundWork(),
     getCompactionConfig: () => managed.getCompactionConfig(),
     getModelInfo: () => managed.getModelInfo(),
     getToolCompactCache: () => managed.getToolCompactCache(),

@@ -80,6 +80,7 @@ export { subagentResultToTaskOutput } from "../agent/subagent/run-subagent.js";
 // The three tools that settle their own abort, so the cancellation contract can be driven
 // through their real factories (their `toModelOutput` must tell the model, not only the UI).
 export {
+  cancelInterruptedBackgroundCommands,
   createRunCommandTool,
   buildTimedOutCommandResult,
   commandTimeoutNotice,
@@ -136,7 +137,6 @@ export {
 export {
   beginTaskRun,
   clearTaskRuns,
-  clearSubagentRuns,
   enterTaskLimitPhase,
   enterTaskPhase,
   enterTaskSummaryPhase,
@@ -411,13 +411,48 @@ export {
   agentStreamKey,
 } from "../agent/stream-hub";
 export { createJobsExtension, summarizeJobs } from "../agent/jobs/extension.js";
+// The background-work trunk: the facade, its two sources, and the task output shapes. Validators
+// drive the real objects (`validate:background-task`), so they must be reachable from here rather
+// than re-implemented against a replica.
+export { BackgroundWorkService } from "../managers/services/background-work-service.js";
+export type { BackgroundWorkChange } from "../managers/services/background-work-service.js";
+export type {
+  BackgroundWorkCompletion,
+  BackgroundWorkRow,
+  BackgroundWorkSource,
+  BackgroundWorkTerminalStatus,
+} from "../agent/jobs/background-work.js";
+export {
+  backgroundWakeCause,
+  backgroundWorkKind,
+  settledTerminalStatus,
+  SESSION_END_CANCELLED_MESSAGE,
+  TASK_JOB_KIND,
+  COMMAND_JOB_KIND,
+} from "../agent/jobs/background-work.js";
+export { peekSubagentRuns, SubagentRuns, subagentRuns } from "../agent/subagent/subagent-runs.js";
+export {
+  failedTaskOutput,
+  formatRunningTaskText,
+  formatTaskModelText,
+  interruptedTaskOutput,
+  isRunningTaskOutput,
+  runningTaskOutput,
+} from "../agent/subagent/task-output.js";
+export {
+  cancelInterruptedBackgroundTasks,
+  reconcileSettledTaskParts,
+  startBackgroundTask,
+  taskStatusForResult,
+} from "../agent/subagent/task-background.js";
+export { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
+export { formatNotifications } from "../managers/middleware/background-middleware.js";
 export { CommandJobRegistry } from "../agent/tools/builtin/shell/jobs/registry.js";
 export type {
   CommandJobChange,
   CommandJobChangeListener,
   CommandJobRecord,
   CommandJobPollResult,
-  CommandJobSummary,
 } from "../agent/tools/builtin/shell/jobs/registry.js";
 export { sweepStaleJobLogs } from "../agent/tools/builtin/shell/jobs/output-log.js";
 export { sweepStaleJobRecords } from "../agent/tools/builtin/shell/jobs/store.js";

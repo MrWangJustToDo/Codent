@@ -62,17 +62,24 @@ function plain(line) {
   return line === null ? null : line.replace(STYLE, "");
 }
 
-/** A registry job summary, shaped exactly as the channel payload carries it. */
+/**
+ * A jobs-channel row, shaped exactly as the channel payload carries it.
+ *
+ * One shape for both kinds (`SessionJobSummary`): `kind` says which source produced it, `label` is the
+ * human line (`command` / task description). The row used to carry a `command` field, which was a
+ * second name for the same thing and made a task row impossible to express without a second type.
+ */
 function summary({
   jobId,
-  command = "sleep 30",
+  kind = "command",
+  label = "sleep 30",
   status,
   exitCode = null,
   startedAt,
   endedAt = null,
   pendingPickup = status !== "running",
 }) {
-  return { jobId, command, status, exitCode, startedAt, endedAt, pendingPickup };
+  return { jobId, kind, label, status, exitCode, startedAt, endedAt, pendingPickup };
 }
 
 // ============================================================================
@@ -108,16 +115,20 @@ function summary({
   assert.equal(notified.length, 1, "(a) output appends do not notify");
 
   // `kill` handles and raw output must not cross the boundary: the payload is replayed to remote
-  // clients and persisted nowhere, so it stays JSON-serializable and summary-only.
+  // clients and persisted nowhere, so it stays JSON-serializable and summary-only. `kind` is what lets
+  // the footer put both sources on one line, and `label` is the shared name for "what this is".
   assert.deepEqual(Object.keys(jobsOf(notified[0])[0]).sort(), [
-    "command",
     "endedAt",
     "exitCode",
     "jobId",
+    "kind",
+    "label",
     "pendingPickup",
     "startedAt",
     "status",
   ]);
+  assert.equal(jobsOf(notified[0])[0].kind, "command", "a command-source row declares its kind");
+  assert.equal(jobsOf(notified[0])[0].label, "sleep 30", "and carries the command as its label");
 
   registry.markExited(job.id, 0);
   assert.equal(notified.length, 2, "(a) markExited notifies");
@@ -425,6 +436,48 @@ function createHarness() {
     "⏳ 1 running · 1m 0s",
     "rounding to a whole seconds value carries into the minute unit"
   );
+
+  // --- both kinds on one line -------------------------------------------------
+  // A single kind keeps the exact line the command-only version printed, for a task as much as for a
+  // command: that byte-for-byte equality is the regression baseline the task support was added behind.
+  const taskRunning = (ms, id = `t-${ms}`) =>
+    summary({ jobId: id, kind: "task", label: "explore the parser", status: "running", startedAt: now - ms });
+  assert.equal(
+    plain(summarizeJobs([taskRunning(2000)], now)),
+    "⏳ 1 running · 2s",
+    "a task-only line is byte-identical to the command-only one"
+  );
+
+  // Both kinds live: the running count splits per kind, because "2 running" would hide the thing the
+  // user wants to know — which kind is still holding the session. The elapsed time still follows the
+  // oldest running unit of either kind, and terminal counts stay status words.
+  assert.equal(
+    plain(summarizeJobs([running(12_000), taskRunning(5000)], now)),
+    "⏳ 1 command · 1 task · 12s",
+    "two kinds split the running count"
+  );
+  assert.equal(
+    plain(summarizeJobs([running(1000), running(3000), taskRunning(5000), finished("failed", 1)], now)),
+    "⏳ 2 command · 1 task · 1 failed · 1 pending · 5s",
+    "the split counts each kind, and the outcome counts stay status words"
+  );
+
+  // A task that finished and is still owed keeps the line alive with no duration — same rule as a
+  // command, because the reason for the line is "the result is owed", not "a process is running".
+  const taskOwed = {
+    ...summary({
+      jobId: "t-owed",
+      kind: "task",
+      label: "explore",
+      status: "exited",
+      startedAt: now - 5000,
+      endedAt: now - 1000,
+    }),
+    pendingPickup: true,
+  };
+  assert.equal(plain(summarizeJobs([taskOwed], now)), "✓ 1 pending");
+  // …and delivery (the flag the ledger flips) revokes the line.
+  assert.equal(summarizeJobs([{ ...taskOwed, pendingPickup: false }], now), null);
 }
 
 console.log("command-jobs-channel validation passed");

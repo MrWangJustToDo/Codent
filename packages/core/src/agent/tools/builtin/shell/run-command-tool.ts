@@ -2,6 +2,9 @@ import { DISCOVERY_TOOL_NAME } from "@tanstack/ai";
 import { z } from "zod";
 
 import { isAbortError, isTimeoutError } from "../../../../runtime-types/abort.js";
+import { SESSION_END_CANCELLED_MESSAGE } from "../../../jobs/background-work.js";
+import { settleToolCallsAs } from "../../../stream/incomplete-tool-calls.js";
+import { BUILTIN_TOOL_NAMES } from "../../catalog/tool-names.js";
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
 import { maybeCacheOutput } from "../../shared/cache/tool-output-cache.js";
 import { runCommandOutputSchema } from "../../shared/schemas.js";
@@ -12,6 +15,61 @@ import { evaluateCommandApproval } from "./safety/command-approval-policy.js";
 
 import type { AgentToolContext } from "../../runtime/tool-context.js";
 import type { RunCommandOutput } from "../../shared/schemas.js";
+import type { UIMessage } from "@tanstack/ai";
+
+/**
+ * Settle background `run_command` handles that cannot still be running: the session ended.
+ *
+ * The job side has its own recovery (a durable record is restored and marked killed), but that record
+ * is DELETED by a graceful teardown — a running job is killed and its record removed, so after
+ * `/resume` there is neither a record nor a notification, while the part still says `running` and its
+ * `toModelOutput` still tells the model to wait. This is the part-side half, run at restore next to
+ * the task one, with the same reason so the two kinds cannot disagree.
+ *
+ * Only a background START is touched (`runInBackground` + `status: "running"`); a foreground result
+ * has no `status`, and a settled one is already terminal.
+ */
+export function cancelInterruptedBackgroundCommands(
+  messages: UIMessage[],
+  reason: string = SESSION_END_CANCELLED_MESSAGE
+): UIMessage[] {
+  return settleToolCallsAs(
+    messages,
+    (part) => part.name === BUILTIN_TOOL_NAMES.runCommand && isRunningBackgroundCommand(part.output),
+    reason,
+    (part, message) => interruptedBackgroundCommandOutput(part.output, message)
+  );
+}
+
+function isRunningBackgroundCommand(output: unknown): boolean {
+  if (typeof output !== "object" || output === null) return false;
+  const candidate = output as { runInBackground?: unknown; status?: unknown };
+  return candidate.runInBackground === true && candidate.status === "running";
+}
+
+/**
+ * The settled shape of a background command whose session ended.
+ *
+ * Keeps `jobId` and the log path (both still readable), and reports `killed` — the same status the
+ * job record uses for the same event. `cancelled` is deliberately NOT set: that marker means "the
+ * user stopped it" and renders as "Cancelled by user.".
+ */
+function interruptedBackgroundCommandOutput(output: unknown, reason: string): RunCommandOutput {
+  const handle = (typeof output === "object" && output !== null ? output : {}) as Partial<RunCommandOutput>;
+  return {
+    command: handle.command ?? "",
+    stdout: handle.stdout ?? "",
+    stderr: reason,
+    exitCode: -1,
+    durationMs: 0,
+    success: false,
+    status: "killed",
+    runInBackground: true,
+    ...(handle.jobId ? { jobId: handle.jobId } : {}),
+    // Required by the shared output base; keep the handle's log so the partial output stays readable.
+    cachedOutputPath: handle.cachedOutputPath ?? null,
+  };
+}
 
 /**
  * Foreground deadline applied when the model omits `timeout` (ms).
@@ -194,7 +252,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
       if (run_in_background) {
         // Resolve per call, never at construction: the tool set is built once per agent, but a
         // session switch (`/new`, `/resume`) closes the command service and drops the field
-        // (`resetCommandJobs`). A captured instance kept accepting `startBackground` on a CLOSED
+        // (`resetBackgroundWork`). A captured instance kept accepting `startBackground` on a CLOSED
         // service, so every background command failed after the first switch while
         // `get_command_output` / `kill_command` — which resolve lazily — kept working.
         const commandService = options?.context?.getCommandService();
@@ -364,6 +422,24 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
     toModelOutput({ output }: { toolCallId: string; input: unknown; output: RunCommandOutput }) {
       if (isProjectedModelContent(output)) return output;
       if (output.runInBackground && output.jobId) {
+        // A background START (the only shape `execute` returns for one) tells the model not to poll.
+        // A SETTLED background output is the restore path's (`cancelInterruptedBackgroundCommands`):
+        // the job is already over, so repeating the delivery contract would point the model at a job
+        // that no longer exists.
+        if (output.status !== undefined && output.status !== "running") {
+          return [
+            {
+              type: "text" as const,
+              content:
+                `Background job ${output.jobId} for: ${output.command}\n` +
+                `Status: ${output.status}\n` +
+                (output.stderr?.trim?.() ? `${output.stderr}\n` : "") +
+                (output.cachedOutputPath
+                  ? `Whatever it produced before it stopped is in ${output.cachedOutputPath} — read it with read_file.`
+                  : ""),
+            },
+          ];
+        }
         return [
           {
             type: "text" as const,
@@ -372,7 +448,7 @@ export const createRunCommandTool = (options?: { subagentSafe?: boolean; context
               `Status: ${output.status ?? "running"}\n` +
               // The delivery contract, stated where the model reads it right after starting the job:
               // `background-middleware` pushes the completion, and an idle session is woken for it
-              // (`ManagedAgent.wakeForBackgroundJobs`). The polling route is for intermediate output —
+              // (`ManagedAgent.wakeForBackgroundWork`). The polling route is for intermediate output —
               // not for waiting, which is what the old text implied.
               `You do not need to poll to wait for it: its completion is pushed back to you as a notification ` +
               `(an idle session is woken for it), so end the turn and report what you started. ` +

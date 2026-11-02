@@ -101,10 +101,20 @@ chat.enqueueRunOnce = async () => {
   wakes += 1;
 };
 
-/** Let the wake path's `collectCompleted()` promise chain settle. */
+/** Let the wake path's `pending()` promise chain settle. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const commandService = managed.getCommandService();
+/**
+ * The trunk facade. Undelivered completions live here (one queue, both kinds), so the validator asks
+ * the same object the middleware does instead of reaching into the command registry.
+ */
+const work = managed.getBackgroundWork();
+const pendingIds = async () => (await work.pending()).map((completion) => completion.id);
+/** Hand one completion over — what `background-middleware` does after it persists the row. */
+const deliver = async (id) => {
+  await work.markDelivered((await work.pending()).filter((completion) => completion.id === id));
+};
 
 /** Start a job and return its id (the exit callback waits in `exits`). */
 async function startJob(command) {
@@ -139,14 +149,14 @@ assert.equal(wakes, 0, "starting a job is not a completion and must not start a 
 await finishLastJob(0);
 assert.equal(wakes, 1, "a job finishing while the agent is idle starts exactly one turn");
 assert.deepEqual(
-  (await commandService.collectCompleted()).map((job) => job.id),
+  await pendingIds(),
   [firstJob],
   "the wake peeks — delivery (and the notified flag) still belong to the middleware"
 );
 
 // With nothing left to deliver, a wake is a no-op rather than a bare model turn.
-await commandService.markNotified([firstJob]);
-await managed.wakeForBackgroundJobs();
+await deliver(firstJob);
+await managed.wakeForBackgroundWork();
 assert.equal(wakes, 1, "no un-notified completion ⇒ no turn");
 
 // ============================================================================
@@ -156,7 +166,7 @@ assert.equal(wakes, 1, "no un-notified completion ⇒ no turn");
 chat.pumpDepth = 1;
 const duringRun = await runJob("npm test");
 assert.equal(wakes, 1, "a finishing job never starts a second turn while one is running");
-await commandService.markNotified([duringRun]);
+await deliver(duringRun);
 chat.pumpDepth = 0;
 
 // ============================================================================
@@ -167,7 +177,7 @@ for (const parked of ["waiting", "awaiting_user"]) {
   managed.setStatus(parked, "validator");
   const jobId = await runJob(`parked ${parked}`);
   assert.equal(wakes, 1, `a ${parked} session is not woken (the answer's pump delivers instead)`);
-  await commandService.markNotified([jobId]);
+  await deliver(jobId);
 }
 
 // ============================================================================
@@ -182,7 +192,7 @@ for (const stopped of ["aborted", "error"]) {
     1,
     `a ${stopped} session is not woken — the user stopped it (or it failed), and a finishing job must not restart it`
   );
-  await commandService.markNotified([jobId]);
+  await deliver(jobId);
 }
 managed.setStatus("idle", "validator");
 
@@ -193,7 +203,7 @@ managed.setStatus("idle", "validator");
 managed.setStatus("compacting", "manual-compact");
 const duringCompact = await runJob("npm run lint");
 assert.equal(wakes, 1, "a turn is not started on top of a running compaction");
-await commandService.markNotified([duringCompact]);
+await deliver(duringCompact);
 managed.setStatus("idle", "validator");
 
 // ============================================================================
@@ -211,7 +221,7 @@ assert.equal(managed.planMode.getPhase(), "ready");
 
 const duringReview = await runJob("echo reviewed");
 assert.equal(wakes, 1, "plan review is not woken — the model would revise the plan unprompted");
-await commandService.markNotified([duringReview]);
+await deliver(duringReview);
 managed.planMode.disable();
 
 // `planning` has no approved plan yet: a promptless turn there could author one.
@@ -219,7 +229,7 @@ managed.planMode.enable();
 assert.equal(managed.planMode.getPhase(), "planning");
 const duringPlanning = await runJob("echo planning");
 assert.equal(wakes, 1, "planning is not woken — nothing is approved, so no unprompted turn");
-await commandService.markNotified([duringPlanning]);
+await deliver(duringPlanning);
 managed.planMode.disable();
 managed.setStatus("idle", "validator");
 
@@ -230,7 +240,7 @@ managed.setStatus("idle", "validator");
 managed.parentId = "parent-agent";
 const fromWorker = await runJob("echo worker");
 assert.equal(wakes, 1, "a subagent's completion never starts a turn");
-await commandService.markNotified([fromWorker]);
+await deliver(fromWorker);
 delete managed.parentId;
 
 // ============================================================================
@@ -239,7 +249,7 @@ delete managed.parentId;
 
 const afterAll = await runJob("echo done");
 assert.equal(wakes, 2, "the session wakes again once it is idle and something is pending");
-await commandService.markNotified([afterAll]);
+await deliver(afterAll);
 
 // ============================================================================
 // 8. End to end: the wake produces a real turn that delivers the notification
@@ -282,6 +292,7 @@ function makeCapturingAdapter() {
   const e2eChat = e2e.initChat(manager);
   e2eChat.getUIChannel().addUserMessage("start the build in the background");
   const e2eService = e2e.getCommandService();
+  const e2eWork = e2e.getBackgroundWork();
 
   // What a status surface sees, per `session:jobs` emission — the states the footer line renders.
   const jobStates = [];
@@ -308,14 +319,14 @@ function makeCapturingAdapter() {
     "the notification reaches the model on the wake turn"
   );
   assert.deepEqual(
-    await e2eService.collectCompleted(),
+    await e2eWork.pending(),
     [],
     "the injected notification is marked notified, so it is delivered exactly once"
   );
 
   // The UI half of the same fact: the job stays "finished, still owed" until the notification is in
   // the message window, then it is cleared — the transition is the delivery, not the exit and not a
-  // poll. Without the `markNotified` notification the last state would still read `exited+pending`,
+  // poll. Without the delivery notification the last state would still read `exited+pending`,
   // which is what the footer showed before this state existed (nothing: the line was removed).
   assert.ok(
     jobStates.some((states) => states.includes("exited+pending")),

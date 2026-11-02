@@ -34,6 +34,38 @@ import { isActiveStatus } from "@codent/core";
 
 import type { AgentSessionSubagentSummary } from "@codent/core";
 
+/**
+ * Whether a `task` row is still working, i.e. must render as in-progress rather than as a result.
+ *
+ * Three signals, because a task can be live while none of the others says so:
+ *
+ * 1. **`isExecuting`** — a blocking call, still awaited by the framework. The ordinary case.
+ * 2. **A background start handle** (`status: "running"` on the frozen output) — a
+ *   `run_in_background` call settles the moment it starts, so `isExecuting` is already `false` while
+ *   the child is still (or still queued) working. The settle handler overwrites the same tool part
+ *   with `status: "completed"`, and that write — not a timer — is the transition out of this state.
+ * 3. **A resolved child that is still active** — the part can be rewritten a moment before the
+ *   child's final event lands, and a live child is the strongest evidence of all.
+ *
+ * Signal 2 is why `agent` alone is not enough: a queued background task has no child row yet (spawn
+ * order admits it only when a concurrency slot frees up), so "no agent" must not read as "finished".
+ *
+ * Keeping this a pure function lets the row render itself from the same answer the transcript uses
+ * for the elapsed clock and the summary stream — three call sites that would otherwise each
+ * re-derive "is it running?" from a different field and disagree.
+ */
+export function isTaskRowLive(input: {
+  isExecuting: boolean;
+  /** The frozen output's `status`; `"running"` is the background start handle. */
+  outputStatus?: string | null;
+  /** The child row this call resolves to, when it exists yet. */
+  agent?: Pick<AgentSessionSubagentSummary, "status"> | null;
+}): boolean {
+  if (input.isExecuting) return true;
+  if (input.outputStatus === "running") return true;
+  return input.agent != null && isActiveStatus(input.agent.status);
+}
+
 /** Live rows outrank stopped ones; ties break toward the later (newer) row. */
 function rank(row: AgentSessionSubagentSummary): number {
   return isActiveStatus(row.status) ? 1 : 0;

@@ -42,13 +42,25 @@ void commands;
 
 const job: SessionJobSummary = {
   jobId: "j1",
-  command: "echo",
+  kind: "command",
+  label: "echo",
   status: "exited",
   exitCode: 0,
   startedAt: 1,
   endedAt: 2,
   pendingPickup: false,
 };
+const jobWithoutExitCode: SessionJobSummary = {
+  jobId: "t1",
+  kind: "task",
+  label: "explore",
+  status: "exited",
+  exitCode: null,
+  startedAt: 1,
+  endedAt: 2,
+  pendingPickup: true,
+};
+void jobWithoutExitCode;
 const jobs: SessionJobsSnapshot = { jobs: [job] };
 void jobs;
 

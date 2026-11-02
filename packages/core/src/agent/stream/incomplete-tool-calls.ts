@@ -79,6 +79,16 @@ interface CancelToolCallOptions {
   state: "error" | "complete";
   /** Whether to include `cancelled: true` in the synthetic result. */
   cancelled?: boolean;
+  /**
+   * Build the settled result for one call instead of the shared cancel marker.
+   *
+   * A tool with a REAL output schema (a background `task` handle) cannot take the marker: its own
+   * `toModelOutput` would read fields the marker does not have and put `undefined` on the wire. Such a
+   * tool supplies a shape it can render, and the paired tool-result carries the same value.
+   */
+  outputFor?: (part: ToolCallPart, message: string) => unknown;
+  /** Drop the host-facing display payload, which describes the output being replaced. */
+  clearDisplay?: boolean;
 }
 
 const DEFAULT_CANCEL_OPTIONS: CancelToolCallOptions = { state: "error", cancelled: true };
@@ -103,6 +113,9 @@ function applyToolCallCancellation(
       if (!isToolCallPart(part) || !isCancellable(part)) continue;
 
       partsChanged = true;
+      const synthetic = options.outputFor
+        ? options.outputFor(part, message)
+        : { success: false, error: message, cancelled: options.cancelled === true };
       // Carry the `cancelled` marker on the PART's output too, not only on the appended
       // `tool-result`: the part output is what the UI renders (and what a host reads),
       // while the tool-result content is consumed by the model wire. Without it here, a
@@ -111,7 +124,8 @@ function applyToolCallCancellation(
       parts[i] = {
         ...part,
         state: options.state,
-        output: { success: false, error: message, cancelled: options.cancelled === true },
+        output: synthetic,
+        ...(options.clearDisplay ? { display: undefined } : {}),
       };
 
       if (
@@ -121,11 +135,7 @@ function applyToolCallCancellation(
         const result: ToolResultPart = {
           type: "tool-result",
           toolCallId: part.id,
-          content: JSON.stringify({
-            success: false,
-            error: message,
-            cancelled: options.cancelled === true,
-          }),
+          content: JSON.stringify(synthetic),
           state: "complete",
         };
         parts.splice(i + 1, 0, result);
@@ -246,5 +256,26 @@ export function cancelInFlightToolCalls(
   return applyToolCallCancellation(messages, shouldCancel, reason, {
     state: "complete",
     cancelled: true,
+  });
+}
+
+/**
+ * Settle calls with a result their own tool can render, instead of the shared cancel marker.
+ *
+ * The marker (`{ success, error, cancelled }`) is not any tool's output schema, so a tool whose
+ * `toModelOutput` reads its own fields would put `undefined` on the wire. A caller that knows the
+ * shape (a background `task` handle) supplies it, and the display payload is dropped because it
+ * described the output being replaced.
+ */
+export function settleToolCallsAs(
+  messages: UIMessage[],
+  shouldSettle: (part: ToolCallPart) => boolean,
+  reason: string,
+  outputFor: (part: ToolCallPart, message: string) => unknown
+): UIMessage[] {
+  return applyToolCallCancellation(messages, shouldSettle, reason, {
+    state: "complete",
+    clearDisplay: true,
+    outputFor,
   });
 }

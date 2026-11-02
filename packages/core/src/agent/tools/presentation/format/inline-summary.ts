@@ -109,6 +109,10 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       // like it needed per-tool handling.
       if (output.reachedLimit === true) return "limit reached";
       if (output.incomplete === true) return "stalled";
+      // A background start handle: the row is live, not finished, until the settle handler rewrites
+      // this part. Without this the `reachedLimit=false` / `incomplete=false` zeros fall through to
+      // `null`, and the row would read as a completed task with no summary.
+      if (output.status === "running") return "running";
       return null;
     }
     case BUILTIN_TOOL_NAMES.webfetch: {

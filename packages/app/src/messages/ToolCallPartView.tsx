@@ -22,6 +22,7 @@ import {
   isBudgetCutoffTaskPhase,
   LIVE_DURATION_THRESHOLD_MS,
 } from "../utils/format.js";
+import { isTaskRowLive } from "../utils/task-subagent.js";
 import { getUiToolState, isCancelledToolCall, isToolExecuting, parseToolInput } from "../utils/tool-part.js";
 import { isBuiltinTool } from "../utils/tool-presentation.js";
 
@@ -123,7 +124,6 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
   // column paddingLeft=2 → width compensates so the right edge aligns with
   // user message boxes (screenWidth - 2).
   const boxWidth = Math.max(screenWidth - 4, 1);
-  const liveElapsedMs = useToolElapsed(toolCallId, isExecuting, LIVE_DURATION_THRESHOLD_MS);
   const {
     phase: taskPhase,
     usage: taskUsage,
@@ -132,10 +132,25 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
   } = useTask({
     taskId: isTask ? part.id : "",
   });
+  // A background task's call settles the instant it starts, so `isExecuting` alone would freeze the
+  // clock and hide the preview on a row that is still working. One answer drives all three live
+  // surfaces below — see `isTaskRowLive`.
+  const taskRowLive =
+    isTask &&
+    isTaskRowLive({
+      isExecuting,
+      outputStatus: (part.output as { status?: string } | undefined)?.status ?? null,
+      agent: taskAgent,
+    });
+  const liveElapsedMs = useToolElapsed(
+    toolCallId,
+    isTask ? Boolean(taskRowLive) : isExecuting,
+    LIVE_DURATION_THRESHOLD_MS
+  );
   // Authoritative per-task phase machine (running → summary | limit): the
   // `begin_summary` call and the progress-summary fallback both transition it, so
   // the panel view no longer depends on message inference.
-  const showTaskSummaryStream = isTask && isExecuting && taskPhase === "summary";
+  const showTaskSummaryStream = Boolean(taskRowLive) && taskPhase === "summary";
   const taskSummary = useSummaryStream({
     source: "task",
     toolCallId: isTask ? toolCallId : undefined,
@@ -301,7 +316,7 @@ export const ToolCallPartView = memo(({ part, streamingThrottleMs }: ToolCallPar
         </HalfLinePaddedBox>
       )}
 
-      {hasOutput && <ToolOutputView part={part} uiState={uiState} />}
+      {hasOutput && !taskRowLive && <ToolOutputView part={part} uiState={uiState} />}
 
       {hasDenied && errorText && (
         <Box paddingLeft={2}>

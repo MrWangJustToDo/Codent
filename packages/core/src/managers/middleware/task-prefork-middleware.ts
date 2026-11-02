@@ -266,16 +266,20 @@ function trySpawn(
 ): void {
   let prompt: string | undefined;
   let description: string | undefined;
+  let runInBackground = false;
 
-  const direct = endInput as { prompt?: unknown; description?: unknown } | undefined;
+  type TaskArgs = { prompt?: unknown; description?: unknown; run_in_background?: unknown };
+  const direct = endInput as TaskArgs | undefined;
   if (direct && typeof direct === "object" && typeof direct.prompt === "string") {
     prompt = direct.prompt;
     if (typeof direct.description === "string") description = direct.description;
+    runInBackground = direct.run_in_background === true;
   } else {
     try {
-      const parsed = JSON.parse(pending.argsText) as { prompt?: unknown; description?: unknown };
+      const parsed = JSON.parse(pending.argsText) as TaskArgs;
       if (typeof parsed.prompt === "string") prompt = parsed.prompt;
       if (typeof parsed.description === "string") description = parsed.description;
+      runInBackground = parsed.run_in_background === true;
     } catch {
       return;
     }
@@ -289,7 +293,12 @@ function trySpawn(
   queue.remember(toolCallId, description);
   // Tie the subagent to the parent's current run so a parent abort cascades.
   const controller = new AbortController();
-  const parentSignal = deps.manager.getAgent(managed.id)?.run.currentAbortController?.signal;
+  // A background task is NOT tied to the parent run: its parity is a background command, where Esc
+  // leaves the work running and only a session switch ends it. Tying it here (and registering it on
+  // the parent's pending-abort surface below) is exactly what would let one Esc kill it.
+  const parentSignal = runInBackground
+    ? undefined
+    : deps.manager.getAgent(managed.id)?.run.currentAbortController?.signal;
   // Forward the parent's abort *reason*, not just the abort: the subagent reads
   // `signal.reason` to say why it stopped (a user cancel vs the parent run moving on vs the
   // parent agent stopping). `() => controller.abort()` dropped it, so every cascaded stop
@@ -299,10 +308,21 @@ function trySpawn(
 
   const started = coordinator.start(
     toolCallId,
-    () => controller.abort(),
+    // The only caller that reaches a DETACHED seat's abort handle is the session-switch reset, so a
+    // background task names its reason there: without it the subagent reads an empty `signal.reason`
+    // and files the stop as a user cancel — the exact misattribution the forwarding above fixes for
+    // cascaded stops. A foreground pre-fork keeps the bare abort: its callers are run-lifecycle
+    // discards, which are not a user cancel either, but that is the pre-existing shape and not this
+    // change's to reclassify.
+    runInBackground ? () => controller.abort("session-ended") : () => controller.abort(),
     () =>
-      runPreForked(deps, managed.id, toolCallId, { prompt: prompt as string, description }, controller, () =>
-        parentSignal?.removeEventListener("abort", onParentAbort)
+      runPreForked(
+        deps,
+        managed.id,
+        toolCallId,
+        { prompt: prompt as string, description, background: runInBackground },
+        controller,
+        () => parentSignal?.removeEventListener("abort", onParentAbort)
       ),
     // Fires when the queued run actually acquires a concurrency slot.
     () => {
@@ -329,7 +349,7 @@ async function runPreForked(
   deps: TaskPreforkMiddlewareDeps,
   parentAgentId: string,
   toolCallId: string,
-  args: { prompt: string; description?: string },
+  args: { prompt: string; description?: string; background?: boolean },
   controller: AbortController,
   cleanup: () => void
 ): ReturnType<typeof runSubagent> {
@@ -357,7 +377,12 @@ async function runPreForked(
     // Registered here, at ADMISSION, rather than at spawn: a pre-fork discarded while still queued
     // never reaches this function, and would otherwise register a controller nothing ever
     // deregisters.
-    managed?.addPendingAbortController(controller);
+    //
+    // Skipped for a background task: this surface is drained by `RunCoordinator.abort()` (Esc), and a
+    // background task must outlive the run that started it — `SubagentRuns.reset()` ends it at the
+    // session boundary instead.
+    const cascadeAbort = args.background !== true;
+    if (cascadeAbort) managed?.addPendingAbortController(controller);
 
     const result = await runSubagent(
       {
@@ -375,7 +400,10 @@ async function runPreForked(
     // Mirror the finished result into the UI immediately — TanStack batches
     // authoritative TOOL_CALL_END chunks until ALL tools finish, so a task
     // completing before its siblings would otherwise stay a spinner.
-    if (!result.aborted) {
+    //
+    // A background run writes its own result (`task-background.ts`), with the disk-cache preview and
+    // the final display payload; mirroring here as well would publish a second, poorer shape first.
+    if (!result.aborted && cascadeAbort) {
       deps.getUIChannel?.()?.addToolResult(toolCallId, subagentResultToTaskOutput(result));
     }
     return result;

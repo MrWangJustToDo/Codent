@@ -87,7 +87,11 @@ export interface SessionLifecycleHost {
    * run), which makes this the only place that can release them without losing the live preview.
    */
   destroyChildAgents(reason: string): void;
-  resetCommandJobs(reason: string): void;
+  /**
+   * The session boundary for background work: drop the merged ledger (both kinds), end running seats,
+   * clear the pending queue, and clear the `jobs` channel without waking anyone.
+   */
+  resetBackgroundWork(reason: string): void;
   /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
   warn?(message: string, data?: Record<string, unknown>): void;
 }
@@ -214,7 +218,7 @@ export class SessionLifecycleService {
     this.host.destroyChildAgents(reason);
     this.host.clearTaskRuns();
     this.host.resetRunOutcome?.();
-    this.host.resetCommandJobs(reason);
+    this.host.resetBackgroundWork(reason);
   }
 
   /**
@@ -415,7 +419,7 @@ export class SessionLifecycleService {
    * adopted for it either, so it stays as it was.
    *
    * Deliberately does NOT run `resetTransientState`: that is the `resume` half of a COMPLETED
-   * switch, and its `resetCommandJobs` kills the session's running background jobs. Here the
+   * switch, and its `resetBackgroundWork` kills the session's running background jobs and tasks. Here the
    * session did not change, so the jobs belong to the conversation the user is still looking at —
    * killing them would turn a failed `/resume` into collateral damage. `unloadCurrent` already
    * ended the aborted run's streams and cascaded the abort to its children; what it leaves

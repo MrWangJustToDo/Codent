@@ -10,7 +10,6 @@ import { TaskRunState } from "../dist/dev.mjs";
 
 const {
   beginTaskRun,
-  clearSubagentRuns,
   clearTaskRuns,
   countSubagentRuns,
   enterTaskLimitPhase,
@@ -111,13 +110,14 @@ assert.equal(getTaskRunState(parent, "drop-me"), undefined);
     "the phase record and the pre-fork seats share one registry (a session clear drops both)"
   );
 
-  clearSubagentRuns(parent);
+  // One entry point for both scopes: no id means the whole conversation.
+  clearTaskRuns(parent);
   assert.equal(countSubagentRuns(parent), 0, "a session switch drops every task record");
   assert.equal(readTaskRunPhase(parent, "t-a"), "running", "and the phases are gone");
 
   // Non-creating: clearing an agent that never ran a task must not allocate a registry.
   const untouched = {};
-  clearSubagentRuns(untouched);
+  clearTaskRuns(untouched);
   assert.equal(countSubagentRuns(untouched), 0);
   assert.equal(peekTaskPreforkCoordinator(untouched), undefined, "no registry is created just to clear it");
 }

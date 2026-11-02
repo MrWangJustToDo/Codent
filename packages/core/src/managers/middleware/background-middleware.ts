@@ -1,26 +1,28 @@
 /**
- * Background middleware — everything the background-job class injects.
+ * Background middleware — everything the background-work trunk injects into the wire.
  *
- * Two layers, in this order:
+ * ONE delivery block, for both kinds, in this order:
  *
- * 1. **Completion notification (core)** — a one-shot push per finished job, carrying the status
- *    and the output tail. Delivered exactly once (the registry marks it) and persisted, so it
- *    survives across turns.
- * 2. **`<background_jobs>` pointer (safety net)** — compaction summarizes a prefix away, so a
- *    delivery is usually still the model's only record of a job *until* a later cut drops it.
- *    The pointer lists the jobs this wire does **not** already announce (running jobs included:
- *    they have no notification yet), so after such a cut the model can rediscover the id and
- *    read the log — and it never duplicates a result it can already see. Only jobs whose
- *    `run_command` call is still in the wire are listed; once the call is gone, re-listing is
- *    noise. Admission is the shared hash rule (`selectChangedSections`), not remembered state.
+ * 1. **Completion notification (core)** — a one-shot push per finished unit, carrying the status and
+ *    the result. Delivered exactly once (the facade marks it after the row is persisted), so it
+ *    survives across turns — and across a compaction that dropped the tool call that started it.
+ * 2. **`<background_jobs>` pointer (safety net, commands only)** — compaction summarizes a prefix
+ *    away, so a delivery is usually still the model's only record of a job *until* a later cut drops
+ *    it. The pointer lists the jobs this wire does **not** already announce (running jobs included:
+ *    they have no notification yet), so after such a cut the model can rediscover the id and read the
+ *    log — and it never duplicates a result it can already see. Only jobs whose `run_command` call is
+ *    still in the wire are listed; once the call is gone, re-listing is noise. Admission is the shared
+ *    hash rule (`selectChangedSections`), not remembered state.
  *
- * The model can also poll any job through `get_command_output`, so the pointer is deliberately
- * cheap and metadata-only.
+ * Tasks have no pointer on purpose: a task has no poll/kill tool to point at, and its completion is
+ * written back into the `task` tool result at the same moment, so the call itself is the record.
  *
- * Background *tasks* land in the same class when they exist.
+ * Both kinds share the block because they share the question ("what did my background work produce
+ * while I was away?"). Two blocks would mean two formatters, two mark-after-persist paths and two
+ * chances to lose a completion — the drift the trunk's port exists to prevent.
  */
 
-import { truncateString } from "../../agent/tools/shared/output-limits.js";
+import { backgroundWorkLabelPrefix, backgroundWorkNoun, COMMAND_JOB_KIND } from "../../agent/jobs/background-work.js";
 import {
   TURN_CONTEXT_KINDS,
   captureSessionStaleness,
@@ -37,25 +39,26 @@ import { errorMessage } from "../../utils/errors.js";
 
 import { defineMiddleware } from "./phase.js";
 
-import type { CompletedCommandJob } from "../../agent/tools/builtin/shell/jobs/registry.js";
+import type { BackgroundWorkCompletion } from "../../agent/jobs/background-work.js";
 import type { TurnContextSection } from "../../agent/turn-context";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import type { AgentCommandService } from "../services/agent-command-service.js";
+import type { BackgroundWorkService } from "../services/background-work-service.js";
 import type { ChatMiddleware, ModelMessage, UIMessage } from "@tanstack/ai";
 
 export interface BackgroundMiddlewareDeps {
-  /** Cap per-notification output length to avoid inflating the prompt. */
-  maxOutputChars?: number;
   /** Live access to the UI channel (to persist the synthetic messages). */
   getUIChannel: () => AgentUIChannel | undefined;
   /** Persist the updated UI messages (dehydrate session to disk). */
   persistMessages: (next: UIMessage[]) => void;
-  /** The owning agent's background-job registry (pointer + completions). */
+  /** Undelivered completions + the delivered flag, merged over both sources. */
+  getBackgroundWork: () => BackgroundWorkService;
+  /** The command source, for the `<background_jobs>` pointer (`sectionFor`). */
   getCommandService: () => AgentCommandService;
-  /** Parent id of the owning agent — subagents get neither the pointer nor jobs. */
+  /** Parent id of the owning agent — subagents get neither the pointer nor the notifications. */
   getParentId: () => string | undefined;
   /**
-   * Whether a `/new` or `/resume` is in flight. The job reads below are async, and a write that
+   * Whether a `/new` or `/resume` is in flight. The work reads below are async, and a write that
    * lands after the switch starts would be persisted into the target transcript.
    */
   isSessionSwitching?: () => boolean;
@@ -71,45 +74,43 @@ const NOTIFICATION_KIND = TURN_CONTEXT_KINDS.backgroundNotification;
 const JOBS_KIND = TURN_CONTEXT_KINDS.backgroundJobs;
 
 export function createBackgroundMiddleware(deps: BackgroundMiddlewareDeps): ChatMiddleware {
-  const maxOutputChars = deps.maxOutputChars ?? 2000;
-
   return defineMiddleware("tools", {
     name: "background",
     onConfig: async (_ctx, config) => {
       let messages = config.messages as ModelMessage[];
-      const commandService = deps.getCommandService();
+      const work = deps.getBackgroundWork();
       // Anything collected for the session being unloaded is garbage once a switch starts: it is
       // dropped, never written into the target (see `captureSessionStaleness`).
       const isStaleSession = captureSessionStaleness(deps.getUIChannel(), deps.isSessionSwitching);
 
-      // --- 1. Completions (core): one-shot push per finished job ---
+      // --- 1. Completions (core): one-shot push per finished unit, both kinds ---
       // Do not mark yet: the channel row must exist first. The session write behind it is
       // fire-and-forget, so the persistence guarantee here is "the row is in the channel and
       // queued", not "on disk" — a crash in between is recovered by the pointer below.
-      const completed = await commandService.collectCompleted();
+      const completed = await work.pending();
       // A switch during the read means these completions belong to the session being left; the
-      // registry is reset by the switch, so dropping them (un-notified) is the whole cleanup.
+      // facade is reset by the switch, so dropping them (undelivered) is the whole cleanup.
       if (isStaleSession()) return {};
       if (completed.length > 0) {
         const ui = deps.getUIChannel();
         if (!ui) {
           // No channel: transient wire-only injection, with no durable copy behind it (and no
-          // pointer either). Marking here is the deliberate best-effort for a channel-less
-          // caller; callers that can lose a turn should provide a channel.
-          await commandService.markNotified(completed.map((job) => job.id));
-          messages = [...messages, { role: "user", content: formatNotifications(completed, maxOutputChars) }];
+          // pointer either). Marking here is the deliberate best-effort for a channel-less caller;
+          // callers that can lose a turn should provide a channel.
+          await work.markDelivered(completed);
+          messages = [...messages, { role: "user", content: formatNotifications(completed) }];
         } else {
           const injected = injectSyntheticMessages(
             messages,
-            [{ kind: NOTIFICATION_KIND, content: formatNotifications(completed, maxOutputChars) }],
+            [{ kind: NOTIFICATION_KIND, content: formatNotifications(completed) }],
             { ui, persist: deps.persistMessages }
           );
           messages = injected.messages;
-          await commandService.markNotified(completed.map((job) => job.id));
+          await work.markDelivered(completed);
         }
       }
 
-      // --- 2. Pointer (safety net): visible jobs this wire does not announce yet ---
+      // --- 2. Pointer (safety net): visible command jobs this wire does not announce yet ---
       if (!deps.getParentId()) {
         const announced = collectAnnouncedJobIds(messages);
         const section = await buildJobsSection(deps, messages, announced);
@@ -157,25 +158,48 @@ async function buildJobsSection(
   }
 }
 
-function formatNotifications(jobs: CompletedCommandJob[], maxOutputChars: number): string {
-  const sections = jobs.map((job) => {
-    const status = job.status === "exited" ? "completed" : job.status;
-    const exit = job.exitCode == null ? "n/a" : String(job.exitCode);
-    const body = [`Job ${job.id} finished with status ${status} (exit code ${exit}).`, `Command: ${job.command}`];
-    // Keep the tail (most recent output) within the per-job cap.
-    const out = truncateString(job.stdout, maxOutputChars, true).text;
-    const err = truncateString(job.stderr, maxOutputChars, true).text;
-    if (out) body.push(`stdout:\n${out}`);
-    if (err) body.push(`stderr:\n${err}`);
-    if (job.logPath) body.push(`log: ${job.logPath} (full output)`);
-    return body.join("\n");
+/**
+ * The one notification format, for both kinds.
+ *
+ * The shared half is the headline (noun + id + status), the label-line prefix and the tool-call
+ * binding; the source supplies `body` because only it knows what its result looks like (a command's
+ * output tail and log path, a task's summary and status flags). The ids ride in the tag's `jobs`
+ * attribute, machine-readable, so the pointer can tell "already announced" from "announcement
+ * compacted away" without parsing the prose above.
+ *
+ * **No cap here, deliberately.** The body arrives already bounded by its SOURCE using the tool-output
+ * contract (`maybeCacheOutput`: spill past the threshold, head+tail preview, `Full output saved to:
+ * <path>`; a command keeps its durable `log:` line). Truncating again here cut a 2k–10k task summary
+ * with no pointer at all — content lost, and nothing to read it back from — while the tool result of
+ * the same call carried it whole. One owner for "how much text, and where the rest is".
+ *
+ * ONE id list for both kinds, because that attribute answers one question: "which of my background
+ * work does this wire already announce?" The pointer only lists command jobs, so a task id in the set
+ * is simply never looked up — but a second `tasks` attribute would be a field no reader has, i.e. a
+ * promise that the notification carries something it does not.
+ *
+ * `Tool call:` is printed only when it differs from the headline id: a task's id IS its call id, while
+ * a command's id is the `jobId` its tool result returned. Naming the call is what lets the model map
+ * each unit in a multi-completion block back to the exact tool result that started it.
+ */
+export function formatNotifications(items: BackgroundWorkCompletion[]): string {
+  const sections = items.map((item) => {
+    const status = item.status === "exited" ? "completed" : item.status;
+    // Only a command has an exit code; printing a task's `null` would read as a failed run.
+    const exit = item.kind === COMMAND_JOB_KIND ? ` (exit code ${item.exitCode ?? "n/a"})` : "";
+    const lines = [
+      `${backgroundWorkNoun(item.kind)} ${item.id} finished with status ${status}${exit}.`,
+      `${backgroundWorkLabelPrefix(item.kind)} ${item.label}`,
+    ];
+    if (item.toolCallId && item.toolCallId !== item.id) lines.push(`Tool call: ${item.toolCallId}`);
+    if (item.body) lines.push(item.body);
+    return lines.join("\n");
   });
 
+  const announced = items.map((item) => item.id);
   return formatContextSectionUserContent({
     key: NOTIFICATION_KIND,
     content: formatSectionTag(NOTIFICATION_KIND, sections.join("\n\n")),
-    // Machine-readable job ids: the pointer uses them to tell "already announced" from
-    // "announcement compacted away" without parsing the prose above.
-    attrs: { jobs: jobs.map((job) => job.id).join(",") },
+    attrs: { ...(announced.length > 0 ? { jobs: announced.join(",") } : {}) },
   });
 }

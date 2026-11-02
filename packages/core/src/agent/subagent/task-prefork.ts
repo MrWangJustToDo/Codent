@@ -92,6 +92,18 @@ interface PreforkEntry {
 
 export class TaskPreforkCoordinator {
   private readonly entries = new Map<string, PreforkEntry>();
+  /**
+   * Seats handed over to the background-work trunk (`run_in_background: true`).
+   *
+   * A detached seat is deliberately OUT of `entries`: every seat in `entries` may be thrown away by
+   * {@link abortAll} / {@link discard}, and those are the run-lifecycle boundaries that must NOT stop
+   * a background task (its parity is a background command: Esc does not kill it, a session switch
+   * does). Only {@link abortDetached} — reached from `SubagentRuns.reset()` — ends one.
+   *
+   * The entry object itself is shared with the map it came from: `drive()` still releases its slot in
+   * its `finally`, so moving a seat here changes nothing about concurrency accounting.
+   */
+  private readonly detached = new Map<string, PreforkEntry>();
   private readonly waiting = new Set<PreforkEntry>();
   /** Serial `task` calls waiting for the same cap (they are not registered pre-forks). */
   private readonly serialWaiters: Array<() => void> = [];
@@ -107,7 +119,24 @@ export class TaskPreforkCoordinator {
    */
   constructor(private readonly getMaxActive: () => number = () => MAX_ACTIVE_TASK_PREFORKS) {}
 
+  /**
+   * Every seat this coordinator holds, foreground and background.
+   *
+   * Includes detached seats because they still occupy a concurrency slot and still belong to this
+   * agent; a caller asking "is there anything here?" usually means {@link foregroundSize} instead.
+   */
   get size(): number {
+    return this.entries.size + this.detached.size;
+  }
+
+  /**
+   * Seats that belong to the CURRENT run — the ones a run-lifecycle boundary may throw away.
+   *
+   * This is the count run control must use: a detached seat has no pump and no joining tool phase, so
+   * treating it as "the run is active" made an idle agent look abortable and turned `/new` or
+   * `/resume` into a fabricated abort + finalize (see `stopIfActive`).
+   */
+  get foregroundSize(): number {
     return this.entries.size;
   }
 
@@ -122,10 +151,15 @@ export class TaskPreforkCoordinator {
    * Read from `waiting` rather than the entries' `state`: an entry is admitted by opening its
    * gate, and `state` only flips to `running` when the drive loop next runs — so `state` briefly
    * reports "queued" for a run that already holds a slot.
-   */ queuedToolCallIds(): string[] {
+   */
+  queuedToolCallIds(): string[] {
     const queued: string[] = [];
-    for (const [toolCallId, entry] of this.entries) {
-      if (!entry.aborted && this.waiting.has(entry)) queued.push(toolCallId);
+    // Both maps: a background task waiting for a slot is still waiting — the one case where its row
+    // has to read `running` instead of "waiting to start" in the footer.
+    for (const map of [this.entries, this.detached]) {
+      for (const [toolCallId, entry] of map) {
+        if (!entry.aborted && this.waiting.has(entry)) queued.push(toolCallId);
+      }
     }
     return queued;
   }
@@ -146,8 +180,15 @@ export class TaskPreforkCoordinator {
     this.onChange?.();
   }
 
+  /**
+   * Whether this call still has a seat — foreground OR detached.
+   *
+   * Both maps: a background task that was just detached is still registered for its call (its queue
+   * description, its concurrency slot), and answering `false` for it made the queue snapshot drop the
+   * label of a task that is still waiting for one.
+   */
   has(toolCallId: string): boolean {
-    return this.entries.has(toolCallId);
+    return this.entries.has(toolCallId) || this.detached.has(toolCallId);
   }
 
   /**
@@ -161,9 +202,72 @@ export class TaskPreforkCoordinator {
    * registered, e.g. the serial fallback path).
    */
   recordSpawn(toolCallId: string, subagentId: string): void {
-    const entry = this.entries.get(toolCallId);
+    const entry = this.entries.get(toolCallId) ?? this.detached.get(toolCallId);
     if (!entry) return;
     entry.spawned.push(subagentId);
+  }
+
+  /**
+   * Move a registered pre-fork out of the discard / join paths, so it outlives the run that started
+   * it. Returns its promise (the caller attaches the completion handler), or `null` when nothing is
+   * registered for that call — the serial fallback then starts one and detaches it.
+   *
+   * A seat that has not been admitted yet keeps its place in the queue: this only changes which map
+   * owns it, so promotion still admits it and `drive` still releases the slot.
+   *
+   * Idempotent: detaching an already-detached call returns the SAME entry. Overwriting it would drop
+   * the abort handle (nothing could end that run) and the promise the first caller is already
+   * awaiting — one call would appear to have two runs.
+   */
+  detach(toolCallId: string): Promise<SubagentResult> | null {
+    const existing = this.detached.get(toolCallId);
+    if (existing) return existing.promise;
+    const entry = this.entries.get(toolCallId);
+    if (!entry) return null;
+    this.entries.delete(toolCallId);
+    this.detached.set(toolCallId, entry);
+    this.notify();
+    return entry.promise;
+  }
+
+  /** Whether this tool call's run was handed over to the background-work trunk. */
+  isDetached(toolCallId: string | undefined): boolean {
+    return toolCallId !== undefined && this.detached.has(toolCallId);
+  }
+
+  /** Drop a detached seat after its run settled (nothing is aborted). */
+  forgetDetached(toolCallId: string): void {
+    if (!this.detached.delete(toolCallId)) return;
+    this.notify();
+  }
+
+  /**
+   * End every background run and drop its seat.
+   *
+   * The one caller is the session-switch transaction (`SubagentRuns.reset()`) — the same boundary
+   * that kills a background *command*. {@link abortAll} must never reach these seats, and this must
+   * never be reached from a run boundary: otherwise Esc would kill the work it was told to leave
+   * running.
+   */
+  abortDetached(): void {
+    const entries = [...this.detached.values()];
+    this.detached.clear();
+    for (const entry of entries) {
+      if (!entry.aborted) {
+        entry.aborted = true;
+        if (!entry.occupying) {
+          // Never started: settle without consuming a slot.
+          this.waiting.delete(entry);
+          entry.openGate();
+        }
+      }
+      try {
+        entry.abortHandle();
+      } catch {
+        // Cleanup must never mask the caller's own failure.
+      }
+    }
+    this.notify();
   }
 
   /**
@@ -296,7 +400,10 @@ export class TaskPreforkCoordinator {
     factory: () => Promise<SubagentResult>,
     onRunStart?: () => void
   ): boolean {
-    if (this.entries.has(toolCallId)) return false;
+    // Both maps: a call already handed to the background trunk must not register a SECOND seat for the
+    // same id (a duplicate `TOOL_CALL_END`, a retried stream). The registration would shadow the
+    // detached entry in `detach()` — one run would be joined, the other left unobservable.
+    if (this.entries.has(toolCallId) || this.detached.has(toolCallId)) return false;
 
     let openGate!: () => void;
     const gate = new Promise<void>((resolve) => {

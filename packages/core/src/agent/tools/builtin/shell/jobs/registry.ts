@@ -14,6 +14,11 @@
 
 import { registerEnvTeardownHook } from "../../../../../env/teardown.js";
 import { generateId } from "../../../../../utils/generate-id.js";
+import {
+  COMMAND_JOB_KIND,
+  isVisibleToSession,
+  SESSION_END_CANCELLED_MESSAGE,
+} from "../../../../jobs/background-work.js";
 import { sweepWorkspaceCaches } from "../../../shared/cache/workspace-cache.js";
 
 import { appendJobLogFooter, createCommandJobLogWriter, readJobLogFooter } from "./output-log.js";
@@ -23,6 +28,7 @@ import type { CommandJobLogWriter } from "./output-log.js";
 import type { PersistedCommandJob } from "./store.js";
 import type { ResolvedCoreEnv } from "../../../../../env";
 import type { CommandJobStatus } from "../../../../../env/types.js";
+import type { SessionJobSummary } from "../../../../../runtime-types/session-payloads.js";
 
 /**
  * Re-export of the CoreEnv union (`env/types.ts`), which is the one the host contract and the
@@ -76,49 +82,16 @@ export interface CommandJobPollResult {
 }
 
 /**
- * Serializable per-job summary — everything a status surface needs and nothing more.
- *
- * Deliberately excludes `stdout` / `stderr` / `kill`: this shape is emitted on the
- * unified bus and projected onto the session `jobs` channel, so it crosses process
- * boundaries (remote session, server) and is replayed to late subscribers. Output
- * stays reachable through `get_command_output` / the job's log file.
- */
-export interface CommandJobSummary {
-  jobId: string;
-  command: string;
-  status: CommandJobStatus;
-  exitCode: number | null;
-  startedAt: number;
-  endedAt: number | null;
-  /**
-   * Finished, but its completion has not reached the message window yet.
-   *
-   * This is the "待消费" state a status surface shows between a process exiting and
-   * `background-middleware` handing the result to the model: the job is done, and its outcome is
-   * still owed to the transcript. It clears when `markNotified` persists the delivery — not on poll,
-   * because polling is `get_command_output` reading incremental output, which does not consume the
-   * completion.
-   *
-   * Derived rather than stored: `notified` is the persisted fact (a restart must not re-deliver),
-   * and `running` jobs are never pending — they have not finished, so nothing is owed yet. A job owned
-   * by another session is not pending either: this session's model can never be handed it
-   * (`collectCompleted` filters by owner), so counting it would be a line that can never clear. The
-   * job stays listed and queryable — only the "owed here" claim is dropped.
-   */
-  pendingPickup: boolean;
-}
-
-/**
- * One change notification: the full job list, plus which jobs reached a terminal state in THIS
+ * One change notification: the full work list, plus which units reached a terminal state in THIS
  * transition.
  *
- * `finished` is what separates "a job just ended" from "a record was restored": `ready()` replays
+ * `finished` is what separates "a unit just ended" from "a record was restored": `ready()` replays
  * a session's durable records through the same notification, and a consumer that treats every
  * terminal row as news (the idle wake in `ManagedAgent`) would otherwise start a model turn the
  * moment a session is resumed.
  */
 export interface CommandJobChange {
-  jobs: CommandJobSummary[];
+  jobs: SessionJobSummary[];
   /** Ids that just reached `exited` / `failed` / `killed`; empty for restore / eviction / clear. */
   finished: string[];
 }
@@ -263,10 +236,15 @@ export class CommandJobRegistry {
           job.exitCode = footer.exitCode;
           job.endedAt = footer.endedAt ?? Date.now();
         } else {
-          job.status = "failed";
+          // A `running` record with no terminal footer means the owning session ended while the job
+          // ran (unload, `/new`, `/resume`, or the process dying). That is NOT a command failure: a
+          // `failed` status made the model diagnose a crash that never happened, and it disagreed
+          // with the task side's "session ended" verdict. `killed` + one shared reason line is the
+          // parity both kinds promise.
+          job.status = "killed";
           job.exitCode = null;
           job.endedAt = Date.now();
-          job.stderr = `${job.stderr}${job.stderr ? "\n" : ""}Interrupted by a process restart.`;
+          job.stderr = `${job.stderr}${job.stderr ? "\n" : ""}${SESSION_END_CANCELLED_MESSAGE}`;
           if (job.logPath) {
             await appendJobLogFooter(job.logPath, "interrupted", null, job.endedAt, this.env);
           }
@@ -389,19 +367,22 @@ export class CommandJobRegistry {
   /**
    * A job belongs to the conversation that started it. `/new`/`/resume` can switch the registry's
    * current owner while a job runs; it must not surface (or notify) in the new conversation.
+   *
+   * The rule itself is the trunk's (`isVisibleToSession`) so the task source cannot answer the same
+   * question differently.
    */
   private isCurrentOwner(job: CommandJobRecord): boolean {
-    const current = this.ownerSessionId;
-    return !job.ownerSessionId || !current || job.ownerSessionId === current;
+    return isVisibleToSession(job.ownerSessionId, this.ownerSessionId);
   }
 
   /** Serializable status list (no output, no kill handles). */
-  list(): CommandJobSummary[] {
-    const out: CommandJobSummary[] = [];
+  list(): SessionJobSummary[] {
+    const out: SessionJobSummary[] = [];
     for (const job of this.jobs.values()) {
       out.push({
         jobId: job.id,
-        command: job.command,
+        kind: COMMAND_JOB_KIND,
+        label: job.command,
         status: job.status,
         exitCode: job.exitCode,
         startedAt: job.startedAt,

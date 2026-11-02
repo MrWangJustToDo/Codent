@@ -228,6 +228,7 @@
     "validate:agent-iteration-progress": "pnpm run build && node scripts/validate-agent-iteration-progress.mjs",
     "validate:command-jobs-channel": "pnpm run build && node scripts/validate-command-jobs-channel.mjs",
     "validate:background-wake": "pnpm run build && node scripts/validate-background-wake.mjs",
+    "validate:background-task": "pnpm run build && node scripts/validate-background-task.mjs",
     "validate:search-ignore-policy": "pnpm run build && node scripts/validate-search-ignore-policy.mjs",
     "validate:l1-state-display-name": "pnpm run build && node scripts/validate-l1-state-display-name.mjs",
     "validate:media-missing-and-compaction": "pnpm run build && node scripts/validate-media-missing-and-compaction.mjs",

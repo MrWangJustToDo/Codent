@@ -282,11 +282,18 @@ const CATCHER_TOOLS = [
     file: "agent/subagent/task-tool.ts",
     name: "task",
     marker: "aborted",
-    // The task tool does not catch anything: its subagent cancels without throwing, so the flag
-    // comes from the run result and is a required boolean on the output schema.
+    // The task tool does not catch anything: its subagent cancels without throwing, so the flag comes
+    // from the run result and is a required boolean on the output schema. The verdict is copied in
+    // `buildTaskOutput` — one builder for the blocking call AND the background settle handler, which
+    // is why the evidence names that file rather than the tool: a second copy of the mapping is
+    // exactly what the single builder exists to prevent.
     evidence: [
-      [/aborted: result\.aborted/, "passes the subagent's cancel verdict through untouched"],
       [/aborted: z\.boolean\(\)/, "declares it as a required boolean status flag"],
+      [
+        /aborted: result\.aborted/,
+        "passes the subagent's cancel verdict through untouched",
+        "agent/subagent/task-output.ts",
+      ],
     ],
   },
 ];
@@ -471,8 +478,12 @@ function walk(dir) {
 
   for (const { file, name, evidence } of CATCHER_TOOLS) {
     const src = readFileSync(join(SRC, file), "utf8");
-    for (const [pattern, why] of evidence) {
-      assert.ok(pattern.test(src), `${name}: ${why}`);
+    for (const [pattern, why, evidenceFile] of evidence) {
+      // An item may name its own file: a tool that hands its result shaping to a shared builder is
+      // still answering the question, and pinning the answer to the wrong file would make the check
+      // assert a copy of the truth instead of the truth.
+      const source = evidenceFile ? readFileSync(join(SRC, evidenceFile), "utf8") : src;
+      assert.ok(pattern.test(source), `${name}: ${why}`);
     }
   }
 

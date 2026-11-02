@@ -16,6 +16,7 @@ import {
   COMMAND_JOB_CACHE_DIR,
   MAX_JOB_LOG_AGE_MS,
   AgentCommandService,
+  BackgroundWorkService,
   CommandJobRegistry,
   TURN_CONTEXT_KINDS,
   clearCoreEnv,
@@ -518,9 +519,13 @@ console.log("teardown log deletion OK");
   const resumed = new CommandJobRegistry(env, { ownerSessionId: owner });
   await resumed.ready();
   const restored = resumed.get(running.id);
-  assert.equal(restored?.status, "failed", "a running record from a dead process is interrupted");
+  assert.equal(restored?.status, "killed", "a running record from a closed session is a cancel, not a command failure");
   assert.equal(restored?.toolCallId, "call_running", "…and keeps its tool-call id");
-  assert.match(restored?.stderr ?? "", /Interrupted by a process restart/);
+  assert.match(
+    restored?.stderr ?? "",
+    /Cancelled because the session ended/,
+    "with the reason both background kinds share — nobody pressed Esc"
+  );
   const completed = await resumed.collectCompleted();
   assert.equal(completed.filter((j) => j.id === running.id).length, 1, "the interruption is notified");
   const logAfter = await waitForLog(running.logPath, "· interrupted ·");
@@ -539,7 +544,7 @@ console.log("teardown log deletion OK");
     },
   });
   const out = await getTool.execute({ jobId: running.id }, {});
-  assert.equal(out.status, "failed");
+  assert.equal(out.status, "killed", "polling a job whose session ended reports the cancel");
   assert.equal(out.cachedOutputPath, running.logPath, "the log path survives the restart");
 
   await first.clear();
@@ -646,11 +651,18 @@ console.log("teardown log deletion OK");
       collectCompleted: async () => [],
       markNotified: async () => {},
     };
+    // The completion queue lives on the trunk facade now (`pending` / `markDelivered`); the command
+    // service below is only the source, kept for the `<background_jobs>` pointer.
+    const backgroundWork = {
+      pending: async () => [],
+      markDelivered: async () => {},
+    };
     // The pointer belongs to the background middleware now — turn-context is hash-admitted
     // sections only.
     const middleware = createBackgroundMiddleware({
       getUIChannel: () => ui,
       persistMessages: () => {},
+      getBackgroundWork: () => backgroundWork,
       getCommandService: () => commandService,
       getParentId: () => undefined,
     });
@@ -719,12 +731,26 @@ console.log("teardown log deletion OK");
         const content = formatBackgroundJobsSection(rows);
         return content ? { key: TURN_CONTEXT_KINDS.backgroundJobs, content } : undefined;
       },
-      collectCompleted: async () => [completedJob],
-      markNotified: async (ids) => notified.push(...ids),
+    };
+    // The undelivered queue lives on the trunk facade now; the command service above is only the
+    // source the pointer reads. A completion crosses as the port's shape (`body` already rendered by
+    // the source), not as the source's own record.
+    const completion = {
+      id: "job_done",
+      kind: "command",
+      label: "npm test",
+      status: "exited",
+      exitCode: 0,
+      body: "all good",
+    };
+    const backgroundWork = {
+      pending: async () => [completion],
+      markDelivered: async (completions) => notified.push(...completions.map((entry) => entry.id)),
     };
     const middleware = createBackgroundMiddleware({
       getUIChannel: () => ui,
       persistMessages: () => {},
+      getBackgroundWork: () => backgroundWork,
       getCommandService: () => service,
       getParentId: () => undefined,
     });
@@ -782,14 +808,32 @@ console.log("teardown log deletion OK");
       setMessages: (next) => (notificationMessages = next),
       getSessionGeneration: () => 0,
     };
-    const commandService = {
-      collectCompleted: () => batch.collectCompleted(),
-      markNotified: (ids) => batch.markNotified(ids),
+    // The registry as a trunk SOURCE (its real behaviour, the port's shape): a background command's
+    // completion is one entry in the merged queue, not a separate collection path.
+    const batchSource = {
+      kind: "command",
+      list: () => batch.list(),
+      pending: async () =>
+        (await batch.collectCompleted()).map((job) => ({
+          id: job.id,
+          kind: "command",
+          label: job.command,
+          status: job.status,
+          exitCode: job.exitCode,
+          body: `${job.stdout}${job.stderr}`,
+        })),
+      markDelivered: async (completions) => batch.markNotified(completions.map((entry) => entry.id)),
+      reset: () => batch.clear(),
+      destroy: () => batch.clear(),
+      setChangeSink: () => {},
     };
+    const batchWork = new BackgroundWorkService({ onChange: () => {} });
+    batchWork.register(batchSource);
     const middleware = createBackgroundMiddleware({
       getUIChannel: () => ui,
       persistMessages: (next) => (notificationMessages = next),
-      getCommandService: () => ({ ...commandService, sectionFor: async () => undefined }),
+      getBackgroundWork: () => batchWork,
+      getCommandService: () => ({ sectionFor: async () => undefined }),
       getParentId: () => undefined,
     });
     await middleware.onConfig({}, { messages: [], systemPrompts: [] });
@@ -890,16 +934,13 @@ console.log("teardown log deletion OK");
 }
 
 // ---------------------------------------------------------------------------
-// 17. AgentCommandService: the agent-facing owner (registry + section)
+// 17. AgentCommandService as the command SOURCE of the background-work trunk
 // ---------------------------------------------------------------------------
 {
   const owner = "ses_background_service";
   const events = [];
-  const service = new AgentCommandService({
-    env: () => env,
-    ownerSessionId: () => owner,
-    onJobsChange: ({ jobs }) => events.push(jobs.map((job) => job.jobId)),
-  });
+  const work = new BackgroundWorkService({ onChange: ({ jobs }) => events.push(jobs.map((job) => job.jobId)) });
+  const service = work.register(new AgentCommandService({ env: () => env, ownerSessionId: () => owner }));
   const startEnv = {
     ...env,
     startCommand: async (_command, options) => {
@@ -927,19 +968,20 @@ console.log("teardown log deletion OK");
     0
   );
   assert.ok(section?.content.includes(job.id), "the service builds the in-context section");
-  assert.ok(events.length > 0, "the registry's change listener is wired by the service");
-  assert.equal(service.list().length, 1, "the non-creating list sees the job");
+  assert.ok(events.length > 0, "the source's change notifications reach the trunk facade");
+  assert.equal(work.list().length, 1, "the non-creating list sees the job");
   assert.equal(await service.sectionFor([], 0), undefined, "an empty wire has no pointer");
 
-  const completed = await service.collectCompleted();
+  const completed = await work.pending();
   assert.ok(
     completed.some((entry) => entry.id === job.id),
-    "the service exposes the completion queue"
+    "the trunk exposes the completion queue"
   );
-  await service.markNotified([job.id]);
-  assert.deepEqual(await service.collectCompleted(), [], "marking is exactly-once");
-  await service.reset("session-switch");
-  assert.deepEqual(service.list(), [], "reset tears the session registry down");
+  await work.markDelivered(completed);
+  assert.deepEqual(await work.pending(), [], "marking is exactly-once");
+  await work.reset("session-switch");
+  assert.deepEqual(work.list(), [], "reset tears the session registry down");
+  assert.deepEqual(service.list(), [], "…and the source reports nothing afterwards");
 }
 
 // ---------------------------------------------------------------------------
@@ -950,7 +992,6 @@ console.log("teardown log deletion OK");
   const service = new AgentCommandService({
     env: () => env,
     ownerSessionId: () => owner,
-    onJobsChange: () => {},
   });
   const startEnv = {
     ...env,
@@ -993,7 +1034,6 @@ console.log("teardown log deletion OK");
   const service = new AgentCommandService({
     env: () => env,
     ownerSessionId: () => owner,
-    onJobsChange: () => {},
   });
   let releaseStart;
   const startGate = new Promise((resolve) => {

@@ -27,7 +27,7 @@ function fakeAgent(id, parentId) {
       emitSessionShutdown: async (agentId) => events.push(`shutdown:${agentId}`),
       destroyAll: async () => events.push(`destroyAll:${id}`),
     }),
-    destroyCommandService: async () => events.push(`jobs:${id}`),
+    destroyBackgroundWork: async () => events.push(`jobs:${id}`),
     session: {
       close: async () => events.push(`close:${id}`),
       awaitPersistIdle: async () => events.push(`persist:${id}`),
@@ -120,7 +120,7 @@ await lifecycle.settleTeardowns();
     markDestroyed: () => {},
     abort: () => {},
     getExtensionRunner: () => null,
-    destroyCommandService: async () => {
+    destroyBackgroundWork: async () => {
       throw new Error("job teardown failed");
     },
     flushLogOnDestroy: () => events2.push("flush"),
