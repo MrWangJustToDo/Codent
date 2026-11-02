@@ -2,7 +2,11 @@
  * Rebuild TanStack `resumeToolState.approvals` from the session approval table.
  *
  * `onConfig` is shallow-merged, so this composes with compaction `{ messages }`.
- * Pending rows are omitted — they are not resolutions.
+ *
+ * Only ANSWERED rows become resolutions. `pending` rows deliberately stay out: the engine must still
+ * interrupt on them, and the mode-level auto-approval path writes its decision through
+ * `ApprovalDecisionCoordinator` (channel + table) before the pump resumes — the engine-side map is
+ * not a second place to invent one.
  */
 
 import { approvalsToResumeMap } from "../../agent/approval/tool-approval-table.js";

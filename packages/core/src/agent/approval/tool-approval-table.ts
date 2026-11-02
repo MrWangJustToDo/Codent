@@ -172,7 +172,11 @@ export function recordFromToolCallPart(part: ToolCallPart, now = Date.now()): Up
 
 /**
  * Translate answered rows into TanStack `resumeToolState.approvals`.
- * Pending rows are omitted so `executeToolCalls` still interrupts.
+ *
+ * Pending rows are omitted so `executeToolCalls` still interrupts. A batch that mixes a gated call
+ * with a plain one therefore parks on the gate and holds the plain calls (TanStack's `held` list);
+ * `AgentChatController.pumpToolPhases` settles those as CANCELLED when the turn ends, which is the
+ * deliberate contract — a held call is not silently executed later, and the model can retry.
  */
 export function approvalsToResumeMap(records: readonly ToolApprovalRecord[]): Map<string, ToolApprovalResolution> {
   const approvals = new Map<string, ToolApprovalResolution>();

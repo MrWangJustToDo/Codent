@@ -854,6 +854,18 @@ export class AgentChatController {
           return;
         }
 
+        // A settled turn cannot still be waiting on a tool the engine never ran. TanStack parks a
+        // whole batch on its approval-gated call and holds every plain call beside it; when the
+        // approval is answered in the same run, a held call can be left `input-complete` with no
+        // result — no error, no output, so its row spins forever and the wire carries an
+        // unanswered call. `waitingForUser === false` proves no later phase can produce that
+        // result, so settle it: the model sees a cancelled result and can retry, and the UI stops
+        // loading. A parked turn keeps its calls (the resume still owes them).
+        if (outcomeKind === "finished" && !waitingForUser) {
+          this.applyCancelledIncompleteTools(true);
+          messages = this.channel.getMessages();
+        }
+
         this.managed.runFinalizer.finalizeChat({
           kind: outcomeKind,
           messages,
