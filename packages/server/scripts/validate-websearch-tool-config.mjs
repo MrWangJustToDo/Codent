@@ -10,7 +10,6 @@
  *
  * Run: pnpm --filter @codent/server run validate:websearch-tool-config
  */
-/* eslint-disable no-undef */
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";

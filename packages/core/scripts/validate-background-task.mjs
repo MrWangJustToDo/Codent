@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- one end-to-end scenario per layer of the background-work trunk (facade, ledger, detached seat, wake, footer, running handle). They share the same temp workspace, a real ManagedAgent and the same fake CoreEnv; splitting them across files would duplicate that fixture setup and make the scenarios order-dependent. */
 /**
  * `task` (subagent) can run in the background — and it does so on the SAME trunk as a background
  * command, not beside it.

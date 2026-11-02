@@ -15,7 +15,6 @@
  *
  * Run: pnpm --filter @codent/core run validate:provider-model-list
  */
-/* eslint-disable no-undef */
 
 import assert from "node:assert/strict";
 
