@@ -23,6 +23,8 @@
  *   It is reported as `skipped` so the rest of a batch still applies.
  */
 
+import { truncateText } from "../../../../../utils/text-truncation.js";
+
 import { normalizeForFuzzyMatch } from "./fuzzy-match.js";
 
 // ============================================================================
@@ -623,7 +625,7 @@ export function formatNotFoundHint(content: string, oldString: string, newString
   return [
     " Closest lines in the file:",
     ...lines.slice(from, to).map((line, offset) => {
-      const rendered = line.length > 200 ? `${line.slice(0, 200)}…` : line;
+      const rendered = truncateText(line, 200, { marker: "…" });
       return ` ${from + offset + 1}: ${rendered}`;
     }),
   ].join("\n");

@@ -5,6 +5,8 @@
  * session, so it must not depend on the clock or on the file's current contents.
  */
 
+import { truncateText } from "../../../../../utils/text-truncation.js";
+
 import { splitBom } from "./find-edit-match.js";
 
 import type { EditFileOutput } from "../../../shared/schemas.js";
@@ -51,10 +53,10 @@ export function formatEditResultForModel(output: EditFileOutput): string {
     const to = Math.min(contentLines.length, changedLine + SNIPPET_CONTEXT_LINES);
     for (let index = from; index < to; index++) {
       // A CRLF file keeps its `\r` when split on `\n`; it is not part of the visible line.
-      const line = (contentLines[index] ?? "").replace(/\r$/, "");
-      lines.push(
-        `${index + 1}: ${line.length > SNIPPET_MAX_LINE_CHARS ? `${line.slice(0, SNIPPET_MAX_LINE_CHARS)}…` : line}`
-      );
+      const line = truncateText((contentLines[index] ?? "").replace(/\r$/, ""), SNIPPET_MAX_LINE_CHARS, {
+        marker: "…",
+      });
+      lines.push(`${index + 1}: ${line}`);
     }
   } else if (results.some((result) => result.skipped)) {
     lines.push("No change was needed: oldString and newString were identical.");

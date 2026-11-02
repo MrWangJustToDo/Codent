@@ -724,8 +724,11 @@ const runs = subagentRuns(managed);
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.name.endsWith(".ts"))
-        files.push({ path: path.relative(SRC, full), text: fs.readFileSync(full, "utf8") });
+      else if (entry.name.endsWith(".ts")) {
+        // The expectations below are POSIX; `path.relative` uses `\` on Windows.
+        const relative = path.relative(SRC, full).split(path.sep).join("/");
+        files.push({ path: relative, text: fs.readFileSync(full, "utf8") });
+      }
     }
   };
   walk(SRC);
