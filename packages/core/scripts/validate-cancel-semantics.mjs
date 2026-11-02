@@ -661,13 +661,24 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
 // session log says.
 
 {
-  const payloadSrc = readFileSync(join(SRC, "runtime-types/agent-event-payloads.ts"), "utf8");
+  // The payload map is composed from one file per event family (`event-payloads/`); a block can
+  // live in any of them, so search each file on its own rather than one concatenated buffer (a
+  // lazy `[\s\S]*?` would otherwise match across a family boundary and hide a dropped field).
+  const payloadPaths = [
+    join(SRC, "runtime-types/agent-event-payloads.ts"),
+    ...readdirSync(join(SRC, "runtime-types/event-payloads")).map((name) =>
+      join(SRC, "runtime-types/event-payloads", name)
+    ),
+  ];
+  const payloadSources = payloadPaths.map((path) => readFileSync(path, "utf8"));
 
   for (const [eventType, why] of [
     ["agent:tool-end", "a tool that catches its own abort returns normally, so `ok` cannot express it"],
     ["subagent:error", "the abort path reuses this event, and its `error` field then holds narration"],
   ]) {
-    const block = new RegExp(`"${eventType}": \\{([\\s\\S]*?)\\n  \\};`).exec(payloadSrc);
+    const block = payloadSources
+      .map((src) => new RegExp(`"${eventType}": \\{([\\s\\S]*?)\\n  \\};`).exec(src))
+      .find((match) => match !== null);
     assert.ok(block, `${eventType} payload block still exists`);
     assert.ok(/cancelled\?: boolean/.test(block[1]), `${eventType} declares the cancel flag — ${why}`);
   }

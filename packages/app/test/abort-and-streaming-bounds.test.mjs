@@ -412,11 +412,14 @@ const part = (name, output) => ({
     "and it must consult the run's signal — the error shape alone is not enough"
   );
 
-  // And the payload declares the field, so a typed consumer can read it.
-  const payloads = readFileSync(
-    new URL("../../core/src/runtime-types/agent-event-payloads.ts", import.meta.url),
-    "utf8"
-  );
+  // And the payload declares the field, so a typed consumer can read it. The payload map is
+  // composed from one file per event family (`event-payloads/`), so read the family files rather
+  // than the aggregate — the keys no longer live there.
+  const { readdirSync } = await import("node:fs");
+  const payloadDir = new URL("../../core/src/runtime-types/event-payloads/", import.meta.url);
+  const payloads = readdirSync(payloadDir)
+    .map((name) => readFileSync(new URL(name, payloadDir), "utf8"))
+    .join("\n");
   const block = payloads.slice(payloads.indexOf('"agent:tool-error"'));
   assert.ok(
     /cancelled\?: boolean/.test(block.slice(0, block.indexOf("};"))),

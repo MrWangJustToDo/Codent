@@ -409,9 +409,13 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
 
 - Domain directories expose `index.ts` where the domain is consumed as a unit; import from
   the directory root when consuming 2+ symbols from it. That 2+ rule is a guideline, not a
-  gate: the enforced rule is that a barrel which exists is consumed through its directory
-  root (`validate:module-organization`). The top-level `src/agent/` namespace is
-  intentionally barrel-free — cross-domain imports use direct module paths there.
+  gate: the enforced rule is that a barrel which exists is imported by an **internal**
+  module (`validate:module-organization`). The package entry is not a consumer that
+  justifies one — `src/index.ts` / `src/dev.ts` already are the curated surface, so a barrel
+  they alone import is a second curation layer with one place more to forget a symbol
+  (`models`, `agent-session`, `agent/subagent`, `agent/persistence`, `agent/plan`,
+  `agent/usage` and the websearch sub-barrel were exactly that). The top-level `src/agent/`
+  namespace is intentionally barrel-free — cross-domain imports use direct module paths there.
 
 **Import layering** (`packages/core/scripts/validate-layer-boundaries.mjs`)
 

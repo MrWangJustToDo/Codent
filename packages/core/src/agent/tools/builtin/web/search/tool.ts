@@ -21,7 +21,8 @@ import { defineServerTool, isProjectedModelContent } from "../../../runtime/defi
 import { toolOutputBaseSchema } from "../../../shared/schemas.js";
 import { withDuration } from "../../../shared/tool-result.js";
 
-import { createConfiguredProviderManager, filterResultsByDomain } from ".";
+import { filterResultsByDomain } from "./domain-filter.js";
+import { createConfiguredProviderManager } from "./provider-manager.js";
 
 import type { AgentToolContext } from "../../../runtime/tool-context.js";
 

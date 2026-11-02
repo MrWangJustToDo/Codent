@@ -5,8 +5,8 @@ import {
 } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
 import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
+import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
 import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
-import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/tools/runtime/tool-sets.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
 import { DEFAULT_BASE_URLS } from "../models/config/model-config.js";

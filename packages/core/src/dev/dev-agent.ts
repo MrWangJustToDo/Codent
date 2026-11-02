@@ -193,14 +193,11 @@ export {
   wireSourceFingerprint,
 } from "../agent/compaction";
 export { extractTextFromContent } from "../utils/message-content.js";
-export {
-  createConfiguredProviderManager,
-  ProviderManager,
-  filterResultsByDomain,
-  hashToIndex,
-  PROVIDER_KEY_FIELDS,
-  PROVIDER_REGISTRY,
-} from "../agent/tools/builtin/web/search/index.js";
+export { createConfiguredProviderManager } from "../agent/tools/builtin/web/search/provider-manager.js";
+export { ProviderManager, hashToIndex } from "../agent/tools/builtin/web/search/provider.js";
+export { filterResultsByDomain } from "../agent/tools/builtin/web/search/domain-filter.js";
+export { PROVIDER_KEY_FIELDS } from "../agent/tools/builtin/web/search/key-fields.js";
+export { PROVIDER_REGISTRY } from "../agent/tools/builtin/web/search/registry.js";
 export { createTimeoutAbort, withTimeoutAbort } from "../agent/tools/shared/abort-timeout.js";
 export { braveProvider } from "../agent/tools/builtin/web/search/providers/brave.js";
 export { tavilyProvider } from "../agent/tools/builtin/web/search/providers/tavily.js";
@@ -401,7 +398,6 @@ export {
   resolvePendingInteractions,
 } from "../agent/stream/tool-phase-utils.js";
 export { shouldDeferMidRunQueue } from "../agent/queue/defer-mid-run-queue.js";
-export { getReadOnlyTanStackToolNames } from "../agent/tools/runtime/tool-sets.js";
 export { BUILTIN_TOOL_NAMES, type BuiltinToolName } from "../agent/tools/catalog/tool-names.js";
 export {
   AGENT_STREAM_SNAPSHOT_LINE_CAP,
@@ -486,50 +482,19 @@ export {
   resetToolOutputSweepForTesting,
   sweepStaleToolOutput,
 } from "../agent/tools/shared/cache/tool-output-cache.js";
-export {
-  PlanModeController,
-  cleanStepText,
-  extractDoneSteps,
-  extractPlan,
-  getPlanModeToolExcludeSet,
-  getPlanModeToolBlockReason,
-  isMcpToolName,
-  isPlanModeForbiddenTool,
-  isWorkspaceEditingTool,
-  PLAN_AUTHORING_TOOL_NAMES,
-  PLAN_COMPLETION_TOOL_NAMES,
-  PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES,
-  PLAN_STORE_DIR,
-  PLAN_TODO_TITLE,
-  formatPlanModeFooterLabel,
-  todoProgressFromItems,
-  formatStructuredPlanMarkdown,
-  formatPlanSummary,
-  extractGoalFromPlanMarkdown,
-  slugifyPlanName,
-  planFilePath,
-  stepsFromTexts,
-  stripLeadingStepNumber,
-  buildModeInactivePrompt,
-  buildPlanModePrompt,
-  buildPlanModePlanningPrompt,
-  buildPlanModeReadyPrompt,
-  buildPlanModeRetroPrompt,
-  gateCompletePlanVerification,
-  isUsableVerification,
-  parseVerificationItemsFromPlanMarkdown,
-  parseVerificationItemsFromText,
-} from "../agent/plan";
-export type {
-  BeginPlanExecutionResult,
-  ApplyPlanResult,
-  PlanModePhase,
-  PlanModeState,
-  PlanStep,
-  ExtractedPlan,
-  StructuredPlanInput,
-  VerificationResultItem,
-} from "../agent/plan";
+export { PlanModeController, PLAN_TODO_TITLE } from "../agent/plan/plan-mode-controller.js";
+export { cleanStepText, extractDoneSteps, extractPlan } from "../agent/plan/extract-plan.js";
+export { getPlanModeToolExcludeSet, getPlanModeToolBlockReason, isMcpToolName, isPlanModeForbiddenTool, isWorkspaceEditingTool, PLAN_AUTHORING_TOOL_NAMES, PLAN_COMPLETION_TOOL_NAMES, PLAN_MODE_EXCLUDED_NON_EDIT_TOOL_NAMES } from "../agent/plan/plan-tools.js";
+export { PLAN_STORE_DIR, slugifyPlanName, planFilePath } from "../agent/plan/plan-store.js";
+export { formatPlanModeFooterLabel, todoProgressFromItems } from "../agent/plan/plan-footer-label.js";
+export { formatStructuredPlanMarkdown, stepsFromTexts, stripLeadingStepNumber } from "../agent/plan/plan-format.js";
+export { formatPlanSummary, extractGoalFromPlanMarkdown } from "../agent/plan/plan-summary.js";
+export { buildModeInactivePrompt, buildPlanModePrompt, buildPlanModePlanningPrompt, buildPlanModeReadyPrompt, buildPlanModeRetroPrompt } from "../agent/plan/plan-prompts.js";
+export { gateCompletePlanVerification, isUsableVerification, parseVerificationItemsFromPlanMarkdown, parseVerificationItemsFromText } from "../agent/plan/plan-verification.js";
+export type { BeginPlanExecutionResult, ApplyPlanResult, PlanModePhase, PlanModeState } from "../agent/plan/plan-mode-controller.js";
+export type { PlanStep, ExtractedPlan } from "../agent/plan/extract-plan.js";
+export type { StructuredPlanInput } from "../agent/plan/plan-format.js";
+export type { VerificationResultItem } from "../agent/plan/plan-verification.js";
 export { TodoManager } from "../agent/todo";
 export { createTodoTool } from "../agent/todo/todo-tool.js";
 export { extractBase64Content, buildDataUrl, sha256Stable } from "../agent/media/media-store.js";

@@ -29,7 +29,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -122,7 +122,7 @@ check("agent/tools root holds only tool factories and the assembler", () => {
 });
 
 // ============================================================================
-// Rule 2 — a barrel that exists is consumed
+// Rule 2 — a barrel that exists is consumed by an internal module
 // ============================================================================
 //
 // Deliberately *not* "every domain directory exposes index.ts". AGENTS.md says the opposite
@@ -131,8 +131,15 @@ check("agent/tools root holds only tool factories and the assembler", () => {
 // everywhere contradicts that policy and would have flagged a documented decision. What is
 // worth catching is the other half: an aggregation file that nothing imports. It reads as
 // an API, so its exports look supported while being unreachable by any consumer — dead
-// weight with a misleading shape. (`agent/compaction/index.ts` and
-// `agent/persistence/index.ts`, by contrast, are consumed from `managers/` and stay.)
+// weight with a misleading shape.
+//
+// The consumer must be an INTERNAL module, not the package entry. `src/index.ts` / `src/dev.ts`
+// are already the curated surface; a barrel whose only importer is one of them is a second
+// curation layer over the first, and the entry can import the defining modules directly. That is
+// what `models/index.ts`, `agent-session/index.ts`, `agent/subagent/index.ts`,
+// `agent/persistence/index.ts`, `agent/plan/index.ts`, `agent/usage/index.ts` and
+// `agent/tools/builtin/web/search/index.ts` were: 85 / 10 / 48 / 26 / 21 / 7 re-exports with no
+// internal consumer, which is also why 76% of cross-directory imports bypassed barrels.
 
 /**
  * A barrel is "consumed" when some other module imports the *directory* it backs — i.e. a
@@ -144,8 +151,12 @@ check("agent/tools root holds only tool factories and the assembler", () => {
  */
 check("every barrel is imported as a directory (no dead barrels)", () => {
   const problems = [];
-  // The package entry (`src/index.ts`) is the published surface, not an internal barrel.
+  // The package entry (`src/index.ts`) is the published surface, not an internal barrel — and not
+  // a consumer that justifies one either (see above).
   const barrels = files.filter((file) => file.endsWith("/index.ts") && file !== join(srcRoot, "index.ts"));
+  const ENTRY_FILES = new Set([join(srcRoot, "index.ts"), join(srcRoot, "dev.ts")]);
+  const devRoot = join(srcRoot, "dev");
+  const isEntrySurface = (file) => ENTRY_FILES.has(file) || file.startsWith(devRoot + sep);
 
   const SPECIFIER = /from\s+"([^"]+)"/g;
 
@@ -153,7 +164,7 @@ check("every barrel is imported as a directory (no dead barrels)", () => {
     const targetDir = dirname(barrel);
 
     const consumed = files.some((file) => {
-      if (file === barrel) return false;
+      if (file === barrel || isEntrySurface(file)) return false;
       const text = readFileSync(file, "utf8");
       for (const match of text.matchAll(SPECIFIER)) {
         const specifier = match[1];
@@ -169,7 +180,9 @@ check("every barrel is imported as a directory (no dead barrels)", () => {
     });
 
     if (!consumed) {
-      problems.push(`${rel(barrel)} — nothing imports its directory; delete the barrel or point consumers at it`);
+      problems.push(
+        `${rel(barrel)} — only the package entry imports its directory; delete the barrel and import the modules directly`
+      );
     }
   }
 

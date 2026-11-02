@@ -103,7 +103,7 @@ export {
   type BuiltinCommandInfo,
   type BuiltinCommandScope,
 } from "./agent/commands/catalog.js";
-export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from "./agent/persistence";
+export type { SessionMeta, SessionData, ResumeResult, ToolApprovalRecord } from "./agent/persistence/types.js";
 // A host that supplies MCP servers per session (`AgentSessionCreateOptions.mcpServers`) must be
 // able to NAME the config it passes, so the union is public even though the manager is not.
 export type { McpServerConfig, McpServerConfigStdio, McpServerConfigHttp } from "./agent/mcp";
@@ -114,46 +114,47 @@ export type {
   SessionJobSummary,
   SessionJobsSnapshot,
 } from "./runtime-types/session-payloads.js";
-export type { UsageRecord, UsageRecordInput } from "./agent/usage";
-export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage";
+export type { UsageRecord, UsageRecordInput } from "./agent/usage/usage-store.js";
+export type { DailyUsageBucket, ModelUsageTotal, UsageHistoryResult } from "./agent/usage/usage-store.js";
 
 // ============================================================================
 // Agent Session API (host-facing transport-agnostic surface)
 // ============================================================================
 
-export {
-  AGENT_SESSION_CHANNELS,
-  DEFAULT_AGENT_SESSION_CHANNELS,
-  createLocalAgentSession,
-  createLocalAgentSessionHost,
-  sessionForSubagent,
-  type AgentSession,
-  type AgentSessionChannel,
-  type AgentSessionCommand,
-  type AgentSessionBuiltins,
-  type AgentSessionCommandResult,
-  type AgentSessionCommandResultData,
-  type AgentSessionCommandResultFor,
-  type AgentSessionCommandFailure,
-  type AgentSessionListRow,
-  type AgentSessionCreateOptions,
-  type AgentSessionCreateResult,
-  type AgentSessionEvent,
-  type AgentSessionExtensionsSummary,
-  type AgentSessionHost,
-  type AgentSessionListEntry,
-  type AgentSessionMcpSummary,
-  type AgentSessionMessageContent,
-  type AgentSessionSnapshot,
-  type AgentSessionSubagentSummary,
-  type AgentSessionSubscribeOptions,
-  type AgentSessionSubscriber,
-  type CreateLocalAgentSessionHostOptions,
-  type CreateLocalAgentSessionOptions,
-  type DiskSessionId,
-  type LocalAgentSessionHostManager,
-  type LocalAgentSessionManager,
-} from "./agent-session";
+export { AGENT_SESSION_CHANNELS, DEFAULT_AGENT_SESSION_CHANNELS } from "./agent-session/types.js";
+export { createLocalAgentSession, sessionForSubagent } from "./agent-session/local-agent-session.js";
+export { createLocalAgentSessionHost } from "./agent-session/local-agent-session-host.js";
+export type {
+  AgentSession,
+  AgentSessionChannel,
+  AgentSessionCommand,
+  AgentSessionCommandResult,
+  AgentSessionCommandResultData,
+  AgentSessionCommandResultFor,
+  AgentSessionCommandFailure,
+  AgentSessionListRow,
+  AgentSessionEvent,
+  AgentSessionExtensionsSummary,
+  AgentSessionMcpSummary,
+  AgentSessionMessageContent,
+  AgentSessionSnapshot,
+  AgentSessionSubagentSummary,
+  AgentSessionSubscribeOptions,
+  AgentSessionSubscriber,
+  DiskSessionId,
+} from "./agent-session/types.js";
+export type {
+  AgentSessionBuiltins,
+  AgentSessionCreateOptions,
+  AgentSessionCreateResult,
+  AgentSessionHost,
+  AgentSessionListEntry,
+} from "./agent-session/host-types.js";
+export type {
+  CreateLocalAgentSessionHostOptions,
+  LocalAgentSessionHostManager,
+} from "./agent-session/local-agent-session-host.js";
+export type { CreateLocalAgentSessionOptions, LocalAgentSessionManager } from "./agent-session/local-agent-session.js";
 
 /**
  * `isContextUIMessage` answers "is this row a synthetic `<ctx kind=…>` context block?" — persisted
@@ -233,6 +234,12 @@ export {
 export {
   DEFAULT_BASE_URLS,
   DEFAULT_LOCAL_OPENAI_BASE_URL,
+  parseModelStyle,
+  resolveModelConfig,
+  resolveModelConnection,
+  resolveModelConnectionFromEnv,
+} from "./models/config/model-config.js";
+export {
   loadModelEntries,
   loadModels,
   loadModelsConfigFromFile,
@@ -240,21 +247,17 @@ export {
   MODELS_CONFIG_FILE,
   normalizeGlobalToolConfig,
   normalizeRawGlobalToolConfig,
-  parseModelStyle,
   parseModelsConfig,
   readModelsConfigFile,
   registerModelProviderForEntry,
-  resolveModelConfig,
-  resolveModelConnection,
-  resolveModelConnectionFromEnv,
   resolveModelInfoFromModelsDev,
   resolveModelsConfig,
   resolveModelsConfigFromProvider,
   saveModelsConfig,
-  selectModel,
   selectableModelIds,
   writeModelsConfigFile,
-} from "./models";
+} from "./models/config/models-config.js";
+export { selectModel } from "./models/config/model-selection.js";
 
 /**
  * Every `ModelCapability` as a runtime value — the single source of truth that
@@ -269,26 +272,25 @@ export type {
   DirectModelsConfigEntry,
   LoadedModelEntry,
   LoadedModelsState,
-  ModelCapability,
-  ModelInfo,
-  ModelPricing,
-  ModelStyle,
-  ModelConnection,
-  ModelSelection,
-  ModelSelectionRequest,
   ModelsConfig,
   ModelsConfigActive,
   ModelsConfigEntry,
   ModelsConfigGlobal,
   ModelsConfigSource,
-  ProviderInfo,
   RawModelsConfig,
+  RemoteProviderConfigEntry,
+} from "./models/config/models-config.js";
+export type {
+  ModelCapability,
+  ModelInfo,
+  ModelPricing,
+  ModelStyle,
   ReasoningConfig,
   ReasoningEffort,
-  RemoteProviderConfigEntry,
-  ResolveModelConfigInput,
-  ResolvedModelConfig,
-} from "./models";
+} from "./models/types.js";
+export type { ModelConnection, ResolveModelConfigInput, ResolvedModelConfig } from "./models/config/model-config.js";
+export type { ModelSelection, ModelSelectionRequest } from "./models/config/model-selection.js";
+export type { ProviderInfoResponse as ProviderInfo } from "./provider/remote-model-provider.js";
 export { mergeModelsConfigToolConfig, websearchToolConfigFromEnv } from "./agent/tools/tool-config.js";
 export type { AgentToolConfig, WebsearchToolConfig } from "./agent/tools/tool-config.js";
 export {
@@ -312,7 +314,7 @@ export { askUserOutputSchema } from "./agent/tools/builtin/interaction/ask-user-
 export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/builtin/interaction/ask-user-output.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";
 export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "./managers/agent-types.js";
-export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent";
+export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent/types.js";
 export { resolveSummarizationBudget } from "./agent/compaction";
 
 // ============================================================================

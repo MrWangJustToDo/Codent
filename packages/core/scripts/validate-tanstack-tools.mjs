@@ -10,7 +10,6 @@ import {
   createExtensionsMiddleware,
   createSubagentTools,
   createTools,
-  getReadOnlyTanStackToolNames,
   resolveToolsRecord,
   SUBAGENT_READ_ONLY_TOOL_NAMES,
   SUBAGENT_TOOL_NAMES,
@@ -20,17 +19,12 @@ const subagentTools = resolveToolsRecord(createSubagentTools());
 const subagentNames = subagentTools.map((tool) => tool.name).sort();
 assert.deepEqual([...SUBAGENT_TOOL_NAMES].sort(), subagentNames, "the declared subagent set matches the tools built");
 assert.deepEqual(
-  [...getReadOnlyTanStackToolNames()].sort(),
   [...SUBAGENT_READ_ONLY_TOOL_NAMES].sort(),
-  "the read-only projection is the declared one"
-);
-assert.deepEqual(
-  [...getReadOnlyTanStackToolNames()].sort(),
   subagentNames.filter((name) => name !== "begin_summary"),
   "the read-only projection is every built subagent tool except the begin_summary marker"
 );
-assert.ok(getReadOnlyTanStackToolNames().includes("run_command"), "the restricted read-only run_command is included");
-assert.ok(!getReadOnlyTanStackToolNames().includes("begin_summary"), "the summary marker is not a read-only tool");
+assert.ok(SUBAGENT_READ_ONLY_TOOL_NAMES.includes("run_command"), "the restricted read-only run_command is included");
+assert.ok(!SUBAGENT_READ_ONLY_TOOL_NAMES.includes("begin_summary"), "the summary marker is not a read-only tool");
 
 const baseTools = resolveToolsRecord(await createTools());
 const baseNames = baseTools.map((t) => t.name).sort();
@@ -39,7 +33,7 @@ assert.ok(baseNames.includes("run_command"));
 assert.ok(baseNames.includes("glob"));
 
 const subagentNameSet = new Set(subagentNames);
-for (const name of getReadOnlyTanStackToolNames()) {
+for (const name of SUBAGENT_READ_ONLY_TOOL_NAMES) {
   assert.ok(subagentNameSet.has(name), `missing subagent tool: ${name}`);
 }
 assert.ok(subagentNameSet.has("webfetch"), "missing subagent tool: webfetch");

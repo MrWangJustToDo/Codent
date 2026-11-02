@@ -36,7 +36,7 @@ export {
   resetDroppedTelemetryEventCount,
 } from "../managers/telemetry/emit-agent-telemetry.js";
 export { UsageTracker } from "../managers/telemetry/usage-tracker.js";
-export { UsageStore } from "../agent/usage/index.js";
+export { UsageStore } from "../agent/usage/usage-store.js";
 // The one convention-aware reading of prompt/total tokens, so a validation can assert a
 // display surface against the rule rather than against a formatted string.
 export { promptTokensOf, totalTokensOf } from "../runtime-types/token-usage.js";

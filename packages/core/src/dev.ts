@@ -62,13 +62,9 @@ export { defaultPath } from "./env";
 // Root-level modules
 export { Emitter } from "./utils/emitter.js";
 export { createEmitTelemetryFn } from "./managers/telemetry/emit-agent-telemetry.js";
-export {
-  AGENT_SESSION_CHANNELS,
-  DEFAULT_AGENT_SESSION_CHANNELS,
-  createLocalAgentSession,
-  createLocalAgentSessionHost,
-  sessionForSubagent,
-} from "./agent-session";
+export { AGENT_SESSION_CHANNELS, DEFAULT_AGENT_SESSION_CHANNELS } from "./agent-session/types.js";
+export { createLocalAgentSession, sessionForSubagent } from "./agent-session/local-agent-session.js";
+export { createLocalAgentSessionHost } from "./agent-session/local-agent-session-host.js";
 export { branchSession, startNewDiskSession } from "./agent-session/session-lifecycle-commands.js";
 export { generateId, resetGeneratedIdsForTesting } from "./utils/generate-id.js";
 export { toPosixPath, toPosixPathKey } from "./utils/posix-path.js";
