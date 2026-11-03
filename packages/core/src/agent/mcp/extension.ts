@@ -62,6 +62,9 @@ export function createMcpExtension(options: CreateMcpExtensionOptions): Extensio
       await activateMcp(ctx, mcpManager, configPath, servers ?? null);
     },
     deactivate() {
+      // Drop the sink before shutdown: the ctx (and its logger) is going away, and shutdown can
+      // still report a transport failure.
+      mcpManager.setDiagnosticSink(undefined);
       return mcpManager.shutdown();
     },
   };
@@ -73,6 +76,11 @@ async function activateMcp(
   configPath?: string,
   explicit?: McpConfig | null
 ): Promise<void> {
+  // The manager has no logger; this extension owns one. Installing the sink here makes a declined
+  // elicitation or a rejected policy value land in `agent.log` at the moment it happens instead of
+  // being buffered until the next activation.
+  mcpManager.setDiagnosticSink((message) => ctx.logger.warn(message));
+
   let config: McpConfig | null = null;
 
   if (explicit) {
@@ -113,12 +121,23 @@ async function activateMcp(
 
   const tools = await mcpManager.initialize(config);
 
+  // Anything buffered before the sink was installed (or by a host that never installs one) is
+  // drained here rather than lost.
+  for (const note of mcpManager.takeDiagnostics()) {
+    ctx.logger.warn(note);
+  }
+
   for (const [name, tool] of Object.entries(tools)) {
     ctx.registerTool({
       name,
       description: tool.description ?? `MCP tool "${name}"`,
       inputSchema: tool.inputSchema,
       outputSchema: tool.outputSchema,
+      // The MCP client stamps `needsApproval` on the tools its policy gates (annotations or the
+      // per-server override). THIS is where that flag enters the registry — `isToolNeedsApproval`
+      // reads the registered definition, not the client's tool object — so dropping it here makes
+      // the whole policy inert while every layer below still looks correct.
+      ...(isApprovalGated(tool) ? { needsApproval: true } : {}),
       // MCP tools are the runtime case this descriptor exists for: their names and
       // schemas come from a remote server, so there is no `defineServerTool` call site
       // to declare presentation at. Without it the tool resolves no descriptor at all,
@@ -150,7 +169,7 @@ async function activateMcp(
   ctx.registerCommand({
     name: "mcp",
     description: "List configured MCP servers and their connection status",
-    execute: async () => formatMcpStatus(mcpManager.getServerStatuses()),
+    execute: async () => formatMcpStatus(mcpManager.getServerStatuses(), mcpManager.isElicitationAvailable()),
   });
 }
 
@@ -169,7 +188,18 @@ function formatMcpInstructions(entries: Array<{ server: string; instructions: st
   return `The connected MCP servers provided the following usage instructions:\n\n${body}`;
 }
 
-function formatMcpStatus(servers: McpServerStatus[]): string {
+/**
+ * The MCP client's per-tool approval flag.
+ *
+ * `McpServerTool` declares `needsApproval` as `false` (it has to stay assignable to a plain
+ * `ServerTool`), and the client sets it at runtime — hence the structural read rather than a
+ * property access the type would reject as an impossible comparison.
+ */
+function isApprovalGated(tool: unknown): boolean {
+  return (tool as { needsApproval?: boolean }).needsApproval === true;
+}
+
+export function formatMcpStatus(servers: McpServerStatus[], elicitationAvailable: boolean): string {
   if (servers.length === 0) {
     return "No MCP servers configured.";
   }
@@ -177,7 +207,9 @@ function formatMcpStatus(servers: McpServerStatus[]): string {
   const lines: string[] = [];
   for (const s of servers) {
     const status = String(s.status ?? "");
-    const icon = status === "connected" ? "✓" : "✗";
+    // A disabled server is deliberate, not broken: it gets its own glyph so an intentional
+    // `enabled: false` does not read as a failure.
+    const icon = status === "connected" ? "✓" : status === "disabled" ? "–" : "✗";
     let target = "";
     if (s.command) {
       target = `${s.command}${Array.isArray(s.args) ? " " + s.args.join(" ") : ""}`;
@@ -187,8 +219,10 @@ function formatMcpStatus(servers: McpServerStatus[]): string {
     const name = String(s.name ?? "");
     const transport = String(s.transport ?? "");
     const toolCount = Number(s.toolCount ?? 0);
+    const approval = String(s.approvalMode ?? "annotations");
     lines.push(
-      `  ${icon} ${name.padEnd(20)} ${transport.padEnd(6)} ${String(toolCount).padStart(3)} tools  ${target}`.trimEnd()
+      `  ${icon} ${name.padEnd(20)} ${transport.padEnd(6)} ${String(toolCount).padStart(3)} tools  ` +
+        `approval=${approval.padEnd(11)} ${target}`.trimEnd()
     );
     if (status === "failed" && s.error) {
       lines.push(`      └─ failed: ${s.error}`);
@@ -196,6 +230,13 @@ function formatMcpStatus(servers: McpServerStatus[]): string {
   }
 
   const connected = servers.filter((s) => s.status === "connected").length;
-  const header = `MCP servers (${connected}/${servers.length} connected)`;
-  return `${header}:\n${lines.join("\n")}`;
+  const disabled = servers.filter((s) => s.status === "disabled").length;
+  const counts =
+    disabled > 0
+      ? `${connected}/${servers.length} connected, ${disabled} disabled`
+      : `${connected}/${servers.length} connected`;
+  // Truth about the capability, once: a server that needs user input cannot work when this says
+  // "unavailable", and that is the fastest way to explain a tool that keeps refusing.
+  const elicitation = elicitationAvailable ? "available" : "unavailable (no elicit hook)";
+  return `MCP servers (${counts}; elicitation ${elicitation}):\n${lines.join("\n")}`;
 }

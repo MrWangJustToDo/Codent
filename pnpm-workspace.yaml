@@ -51,3 +51,6 @@ overrides:
   # `@tanstack/ai` dependency range of its own and would otherwise pull a second
   # copy beside the one the workspace resolves from the package.json ranges.
   "@tanstack/ai": 1.0.1
+
+patchedDependencies:
+  '@tanstack/ai-mcp@1.0.0': patches/@tanstack__ai-mcp@1.0.0.patch

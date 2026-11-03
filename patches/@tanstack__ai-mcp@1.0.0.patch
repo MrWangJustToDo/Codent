@@ -1,0 +1,35 @@
+diff --git a/dist/esm/client.js b/dist/esm/client.js
+index 10386ba7c145fa144eacbbd76e676dc8a10d77bf..e147b1d930f420fe6f010fe8036d5a825d3eabaa 100644
+--- a/dist/esm/client.js
++++ b/dist/esm/client.js
+@@ -282,7 +282,7 @@ function applyToolFilter(listed, toolFilter, supportsTasks) {
+ }
+ async function createMCPClient(options) {
+ 	if ("server" in options) return directMCPClient(options.server);
+-	return connectTransport(options);
++	return connectTransport(options, options.onElicit);
+ }
+ /**
+ * Connects a client to a transport. The harness passes `onElicit` to answer
+diff --git a/dist/esm/types.d.ts b/dist/esm/types.d.ts
+index 07515be39a1df126ba667bb0f4b49b242d023cb6..3fa62c711d817e9eeed9347f689b2d638a4f2737 100644
+--- a/dist/esm/types.d.ts
++++ b/dist/esm/types.d.ts
+@@ -85,6 +85,17 @@ export interface ServerDescriptor {
+ export type AutomaticDescriptor = ServerDescriptor;
+ export interface MCPClientOptions {
+     transport: TransportInput;
++    /**
++     * Answers a spec 2025 `elicitation/create` request.
++     *
++     * [tanstack-local patch] Upstream 1.0.0 declares the capability but offers no way to
++     * register a handler: `createMCPClient` calls `connectTransport(options)` without the
++     * second argument. This option is threaded through so a host can answer.
++     */
++    onElicit?: (params: unknown) => Promise<{
++        action: "accept" | "decline" | "cancel";
++        content?: Record<string, unknown>;
++    }>;
+     /** Tool-name prefix (e.g. 'github' → 'github_search'). Default: none. */
+     prefix?: string;
+     /**

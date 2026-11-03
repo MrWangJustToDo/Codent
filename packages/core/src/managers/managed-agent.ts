@@ -146,7 +146,7 @@ import type {
 } from "../agent/extension/types.js";
 import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
-import type { McpExtensionConfig, McpServerConfig } from "../agent/mcp";
+import type { McpElicitHook, McpExtensionConfig, McpServerConfig } from "../agent/mcp";
 import type { McpManager } from "../agent/mcp/manager.js";
 import type { MemoryExtensionConfig } from "../agent/memory";
 import type { MemoryManager } from "../agent/memory/memory-manager.js";
@@ -242,6 +242,16 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    * product surface today.
    */
   setUp?: (instance: T) => T;
+  /**
+   * Answers an MCP server's `elicitation/create` request for this agent.
+   *
+   * Reachable from hosts through `AgentSessionCreateOptions.mcpElicit`. Supplying it is what lets
+   * the MCP client advertise the `elicitation` capability at all: without a hook the handshake
+   * claims nothing and the SDK answers a server's request with a protocol error (it refuses to
+   * register a handler for an undeclared capability). Core ships no UI for this — answering means
+   * showing one, and the UI is per host.
+   */
+  mcpElicit?: McpElicitHook;
   /** Toolset family (root/explore/internal/general). */
   toolsetProfile?: AgentToolsetProfile;
   /** Profile id used for log/task attribution. */

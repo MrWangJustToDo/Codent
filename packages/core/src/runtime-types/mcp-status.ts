@@ -16,7 +16,17 @@ export interface McpServerStatus {
   name: string;
   transport: string;
   toolCount: number;
-  status: "connected" | "failed";
+  /** `disabled` means the entry is configured with `enabled: false`: no connection was made. */
+  status: "connected" | "failed" | "disabled";
+  /** Whether the entry is enabled. Duplicated from the status so a host can filter without a union check. */
+  enabled: boolean;
+  /**
+   * Effective approval policy for this server's tools.
+   *
+   * A literal union rather than an import of the MCP domain's enum: this file is a shared leaf
+   * that every layer may import, and it cannot depend on `agent/mcp/` without inverting that.
+   */
+  approvalMode: "annotations" | "always" | "never";
   error?: string;
   command?: string;
   args?: string[];

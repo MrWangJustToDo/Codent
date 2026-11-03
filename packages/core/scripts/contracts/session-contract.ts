@@ -64,7 +64,17 @@ void jobWithoutExitCode;
 const jobs: SessionJobsSnapshot = { jobs: [job] };
 void jobs;
 
-const mcp: McpServerStatus = { name: "m", transport: "stdio", toolCount: 0, status: "connected" };
+// `enabled` / `approvalMode` are required, not optional: every server row is produced by the
+// manager, and a host that cannot tell a deliberately disabled server from a broken one would
+// render both as a failure.
+const mcp: McpServerStatus = {
+  name: "m",
+  transport: "stdio",
+  toolCount: 0,
+  status: "connected",
+  enabled: true,
+  approvalMode: "annotations",
+};
 void mcp;
 
 const sessionList: AgentSessionCommandResultFor<"session.list"> = {

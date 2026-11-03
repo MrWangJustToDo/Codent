@@ -124,6 +124,10 @@ const MCP_TOOLS = {
     name: "mcp__probe_do_thing",
     description: "probe tool",
     inputSchema: { type: "object", properties: {} },
+    // The shape `toServerTools` produces for a tool the client's policy gates (`annotations`
+    // default, or `approval: "always"`): the flag is set on the tool object by the MCP client and
+    // means nothing until the registration carries it.
+    needsApproval: true,
     execute: async () => ({ ok: true }),
   },
   // Deliberately a built-in name: this is the case where a wrong owner leaves the stale
@@ -157,6 +161,11 @@ function makeStubManager() {
       return undefined;
     },
     getServerStatuses: () => [{ name: "probe", transport: "stdio", toolCount: 2, status: "connected" }],
+    // Diagnostics travel out of the manager two ways now: a live sink the extension installs at
+    // activation, and a buffer drained right after. A double must carry both, or activation throws
+    // and the tools under test never register.
+    setDiagnosticSink: () => {},
+    takeDiagnostics: () => [],
     // Handshake instructions (`MCPClient.instructions`, `@tanstack/ai-mcp` 0.8+); the
     // extension surfaces these as a turn-context section.
     getServerInstructions: () => [{ server: "probe", instructions: "Call mcp__probe_do_thing to do the thing." }],
@@ -199,6 +208,15 @@ async function activateMcpExtension() {
 const { manager, toolDefs, extension, runner } = await activateMcpExtension();
 
 assert.ok(toolDefs.length > 0, "the MCP extension registered its tools through the runner");
+
+// The registry is where an MCP tool's approval gate becomes real: the client stamps
+// `needsApproval` on the tool, `ctx.registerTool` has to carry it, and `isToolNeedsApproval` reads
+// the REGISTERED definition — so a dropped flag makes the whole policy inert with every layer
+// below still looking correct.
+const gated = toolDefs.find((def) => def.name === "mcp__probe_do_thing");
+assert.equal(gated?.needsApproval, true, "a gated MCP tool reaches the registry as approval-gated");
+const ungated = toolDefs.find((def) => def.name === "read_file");
+assert.notEqual(ungated?.needsApproval, true, "an ungated MCP tool does not ask for approval");
 
 for (const def of toolDefs) {
   assert.ok(def.present, `MCP tool "${def.name}" declares a presentation descriptor`);

@@ -11,7 +11,7 @@ import { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES, createCodeModeExtensio
 import { ExtensionLoader, ExtensionRunner, getDefaultExtensionDirs } from "../agent/extension";
 import { createJobsExtension } from "../agent/jobs/extension.js";
 import { createLspExtension } from "../agent/lsp";
-import { createMcpExtension, mcpConfigFromServers, type McpExtensionConfig } from "../agent/mcp";
+import { createMcpExtension, mcpConfigFromServers, type McpElicitHook, type McpExtensionConfig } from "../agent/mcp";
 import { McpManager } from "../agent/mcp/manager.js";
 import { createMemoryExtension } from "../agent/memory/extension.js";
 import { MemoryManager } from "../agent/memory/memory-manager.js";
@@ -91,6 +91,11 @@ export interface AgentBootstrapOptions {
   rootPath: string;
   manager: AgentManager;
   getDefaultSkillDirs: (env?: ResolvedCoreEnv) => Promise<SkillDirectory[]>;
+  /**
+   * Answers MCP `elicitation/create` requests (from `ManagedAgentConfig.mcpElicit`). Absent ⇒ the
+   * MCP client advertises no `elicitation` capability, which is the truth for a host with no UI.
+   */
+  mcpElicit?: McpElicitHook;
 }
 
 export class AgentBootstrap {
@@ -214,7 +219,7 @@ export class AgentBootstrap {
   private loadMcp(): void {
     // Created (but not connected) here — connection + tool registration happens in the built-in MCP
     // extension, so MCP participates in the unified extension lifecycle.
-    const mcpManager = new McpManager(this.deps.env);
+    const mcpManager = new McpManager(this.deps.env, this.deps.mcpElicit ? { elicit: this.deps.mcpElicit } : {});
     this.deps.managed.setMcpManager(mcpManager);
   }
 

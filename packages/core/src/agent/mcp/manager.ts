@@ -4,13 +4,21 @@ import { getEnv } from "../../env";
 import { toError } from "../../utils/errors.js";
 
 import { wrapMcpToolForMultimodalContent } from "./prefer-multimodal-content.js";
+import { resolveServerPolicy } from "./types.js";
 
 import type { McpConfigSourceKind } from "./options.js";
-import type { McpConfig, McpServerConfig } from "./types.js";
+import type {
+  McpApprovalMode,
+  McpConfig,
+  McpElicitAnswer,
+  McpElicitHook,
+  McpServerConfig,
+  McpServerPolicy,
+} from "./types.js";
 import type { McpProcessHandle, ResolvedCoreEnv } from "../../env";
 import type { McpServerStatus } from "../../runtime-types/mcp-status.js";
 import type { AnyServerTool } from "@tanstack/ai";
-import type { MCPClient, TransportInput } from "@tanstack/ai-mcp";
+import type { MCPClient, MCPClientOptions, ToolAnnotations, TransportInput } from "@tanstack/ai-mcp";
 
 // ============================================================================
 // McpServerStatus — public data for display in CLI /mcp command
@@ -22,6 +30,9 @@ export type { McpServerStatus };
 
 export type McpToolsRecord = Record<string, AnyServerTool>;
 
+/** How many undrained diagnostics the manager keeps before dropping the oldest (see `note`). */
+const MAX_BUFFERED_DIAGNOSTICS = 50;
+
 /**
  * Legacy owner id used by standalone MCP-presentation tests.
  *
@@ -31,8 +42,53 @@ export type McpToolsRecord = Record<string, AnyServerTool>;
 export const MCP_TOOL_OWNER = "codent-mcp";
 
 // ============================================================================
+// Approval policy
+// ============================================================================
+
+/** The slice of an MCP tool definition the approval rule reads. */
+type AnnotatedTool = { annotations?: ToolAnnotations };
+
+/**
+ * Whether one server tool must be approved before it runs.
+ *
+ * Order is deliberate: an explicit per-server mode wins, then `destructiveHint` (a server that
+ * claims both read-only and destructive is not evidence of safety), then `readOnlyHint`, then the
+ * fail-closed default. `annotations` are server claims, not guarantees — `approval: "always"` exists
+ * for servers we do not trust to describe themselves.
+ */
+export function deriveNeedsApproval(tool: AnnotatedTool, mode: McpApprovalMode): boolean {
+  if (mode === "never") return false;
+  if (mode === "always") return true;
+  const annotations = tool.annotations;
+  if (annotations?.destructiveHint === true) return true;
+  if (annotations?.readOnlyHint === true) return false;
+  // Absent (or contradictory-but-not-destructive) metadata: gate. "The server did not say
+  // read-only" is not evidence that it is, and an older server may send no annotations at all.
+  return true;
+}
+
+// ============================================================================
 // Transport Factory
 // ============================================================================
+
+/** Display fields for one server entry, whichever transport it uses. */
+function transportDetails(config: McpServerConfig): { command?: string; args?: string[]; url?: string } {
+  return config.transport === "stdio" ? { command: config.command, args: config.args } : { url: config.url };
+}
+
+/**
+ * Client capabilities with `elicitation` removed — the only spelling that works.
+ *
+ * `@tanstack/ai-mcp` builds `{ elicitation: { form: {} }, sampling: {}, ...clientOptions?.capabilities }`,
+ * so it spreads its defaults FIRST: a spread cannot delete a key, and `{ sampling: {} }` therefore
+ * leaves `elicitation` declared (measured: `JSON.stringify` → `{"elicitation":{"form":{}},"sampling":{}}`).
+ * An own key whose value is `undefined` does overwrite the default, and JSON drops that member, so
+ * this states "no elicitation" on the wire. `validate:mcp-client` mirrors the SDK's merge, asserts
+ * the installed SDK still holds those defaults, and asserts the serialized result.
+ */
+function withoutElicitationCapability(): MCPClientOptions["clientOptions"] {
+  return { capabilities: { elicitation: undefined } } as MCPClientOptions["clientOptions"];
+}
 
 function createTransportInput(env: ResolvedCoreEnv, config: McpServerConfig): TransportInput {
   if (config.transport === "stdio") {
@@ -55,18 +111,138 @@ function createTransportInput(env: ResolvedCoreEnv, config: McpServerConfig): Tr
   };
 }
 
+/**
+ * Answer one server's request.
+ *
+ * Module-level (not a method) so the same rule is reachable from `mcpClientOptions` and therefore
+ * from `validate:mcp-client`: a throwing hook becomes `decline` with the error recorded, because a
+ * hook that fails must neither turn a tool call into a hang nor be read as consent.
+ *
+ * The hook is required: the handler is only registered when elicitation is advertised (see
+ * {@link mcpClientOptions}), so there is no "no hook" case to answer here.
+ */
+async function answerElicitationWith(
+  hook: McpElicitHook,
+  server: string,
+  params: unknown,
+  note: (message: string) => void
+): Promise<McpElicitAnswer> {
+  try {
+    const answered = await hook({ server, params });
+    return typeof answered === "string" ? { action: answered } : answered;
+  } catch (error) {
+    note(`MCP server "${server}" elicit hook failed; declined: ${toError(error).message}`);
+    return { action: "decline" };
+  }
+}
+
+/**
+ * Client options for one server: approval policy, the honest capability set, and the elicit hook.
+ *
+ * Exported so `validate:mcp-client` asserts the object the manager actually sends, instead of a
+ * copy of the wiring that could drift from it.
+ */
+export function mcpClientOptions(
+  server: string,
+  transport: TransportInput,
+  policy: McpServerPolicy,
+  elicit?: McpElicitHook,
+  note: (message: string) => void = () => undefined
+): MCPClientOptions {
+  return {
+    transport,
+    name: `codent-mcp-${server}`,
+    prefix: `mcp__${server}_`,
+    // Approval is derived per tool from the server's own annotations, with the config override
+    // applied first. See `deriveNeedsApproval` for the ordering.
+    needsApproval: (tool: AnnotatedTool) => deriveNeedsApproval(tool, policy.approval),
+    // The handler and the capability are ONE decision. Measured against
+    // `@modelcontextprotocol/client` 2.3.1: `setRequestHandler("elicitation/create")` throws
+    // `CAPABILITY_NOT_SUPPORTED` when the capability is not declared, so wiring a handler under an
+    // honest handshake would fail every MCP connection at construction. Without a hook we declare
+    // nothing and register nothing; a server that asks anyway gets that protocol error as its
+    // answer — still an answer, and the tool fails instead of parking.
+    ...(elicit
+      ? { onElicit: (params: unknown) => answerElicitationWith(elicit, server, params, note) }
+      : { clientOptions: withoutElicitationCapability() }),
+  };
+}
+
 // ============================================================================
 // McpManager
 // ============================================================================
 
+/** Runtime-supplied hooks. An absent hook means the matching capability is not advertised. */
+export interface McpManagerOptions {
+  /**
+   * Answers `elicitation/create` for any connected server.
+   *
+   * Supplying it is what lets the client advertise the capability: without a handler the
+   * handshake must not claim it (see {@link McpManager.initialize}). Hosts supply this; core does
+   * not, because answering means showing UI and the UI is per host.
+   */
+  elicit?: McpElicitHook;
+}
+
 export class McpManager {
   /** Workspace env for stdio transports (runtime-provided; ambient by default). */
-  constructor(private readonly env: ResolvedCoreEnv = getEnv()) {}
+  constructor(
+    private readonly env: ResolvedCoreEnv = getEnv(),
+    private readonly options: McpManagerOptions = {}
+  ) {}
 
   private clients: Map<string, MCPClient> = new Map();
   private stdioTransports: unknown[] = [];
 
   private serverStatuses: Map<string, McpServerStatus> = new Map();
+
+  /**
+   * Diagnostics this manager could not report itself (no logger here).
+   *
+   * Drained by the MCP extension after `initialize` when no live sink is installed, so a declined
+   * elicitation or a rejected policy value lands in `agent.log` instead of disappearing.
+   */
+  private notes: string[] = [];
+
+  /** Live destination for diagnostics, when a host installed one (see {@link setDiagnosticSink}). */
+  private diagnosticSink?: (message: string) => void;
+
+  /**
+   * Route diagnostics to a live sink (the extension's logger).
+   *
+   * With a sink, notes go out as they happen: a declined elicitation belongs next to the tool call
+   * that hit it, not at the next activation. Without one they are buffered for
+   * {@link takeDiagnostics}, because the manager has no logger of its own and a refusal must not
+   * vanish silently.
+   */
+  setDiagnosticSink(sink?: (message: string) => void): void {
+    this.diagnosticSink = sink;
+  }
+
+  /** Record one diagnostic through the installed sink, or buffer it. */
+  private note(message: string): void {
+    if (this.diagnosticSink) {
+      this.diagnosticSink(message);
+      return;
+    }
+    // Bounded: a manager used without a sink (a host that never installs one, or a request arriving
+    // after teardown) would otherwise grow one line per declined elicitation for the process
+    // lifetime. The last lines are the useful ones.
+    this.notes.push(message);
+    if (this.notes.length > MAX_BUFFERED_DIAGNOSTICS) this.notes.shift();
+  }
+
+  /** Whether this runtime can answer an `elicitation/create` request. */
+  isElicitationAvailable(): boolean {
+    return typeof this.options.elicit === "function";
+  }
+
+  /** Drain collected diagnostics (each is one log line). */
+  takeDiagnostics(): string[] {
+    const drained = this.notes;
+    this.notes = [];
+    return drained;
+  }
 
   /**
    * Server-provided usage instructions captured from the MCP connect handshake
@@ -138,6 +314,41 @@ export class McpManager {
     // own error signal in `serverStatuses` and a failure never blocks others.
     await Promise.allSettled(
       servers.map(async ([name, serverConfig]) => {
+        const base = { name, transport: serverConfig.transport, ...transportDetails(serverConfig) };
+
+        let policy: McpServerPolicy;
+        try {
+          policy = resolveServerPolicy(name, serverConfig);
+        } catch (error) {
+          // A policy value we cannot honour is reported as a failed server rather than silently
+          // falling back to a default: "approval: sometimes" must not become "annotations".
+          // `approvalMode` stays the documented default and the offending value travels in `error`:
+          // this field is typed as one of the modes, and a session-supplied config reaches here
+          // through an untyped route, so echoing the raw value would put `42` on `/mcp`.
+          this.serverStatuses.set(name, {
+            ...base,
+            toolCount: 0,
+            status: "failed",
+            enabled: serverConfig.enabled !== false,
+            approvalMode: "annotations",
+            error: toError(error).message,
+          });
+          return;
+        }
+
+        if (!policy.enabled) {
+          // Disabled servers are still listed: "I turned it off" and "it is not configured" are
+          // different answers to "why is this tool missing?"
+          this.serverStatuses.set(name, {
+            ...base,
+            toolCount: 0,
+            status: "disabled",
+            enabled: false,
+            approvalMode: policy.approval,
+          });
+          return;
+        }
+
         try {
           const transport = createTransportInput(this.env, serverConfig);
 
@@ -145,11 +356,9 @@ export class McpManager {
             this.stdioTransports.push(transport);
           }
 
-          const client = await createMCPClient({
-            transport,
-            name: `codent-mcp-${name}`,
-            prefix: `mcp__${name}_`,
-          });
+          const client = await createMCPClient(
+            mcpClientOptions(name, transport, policy, this.options.elicit, (message) => this.note(message))
+          );
 
           const tools = await client.tools().catch(async (error: unknown) => {
             // `createMCPClient` has already connected; a failed `tools()` would otherwise leave
@@ -170,26 +379,22 @@ export class McpManager {
           }
 
           this.serverStatuses.set(name, {
-            name,
-            transport: serverConfig.transport,
+            ...base,
             toolCount: tools.length,
             status: "connected",
-            command: serverConfig.transport === "stdio" ? serverConfig.command : undefined,
-            args: serverConfig.transport === "stdio" ? serverConfig.args : undefined,
-            url: serverConfig.transport !== "stdio" ? serverConfig.url : undefined,
+            enabled: true,
+            approvalMode: policy.approval,
           });
         } catch (err) {
           const error = toError(err);
 
           this.serverStatuses.set(name, {
-            name,
-            transport: serverConfig.transport,
+            ...base,
             toolCount: 0,
             status: "failed",
+            enabled: true,
+            approvalMode: policy.approval,
             error: error.message,
-            command: serverConfig.transport === "stdio" ? serverConfig.command : undefined,
-            args: serverConfig.transport === "stdio" ? serverConfig.args : undefined,
-            url: serverConfig.transport !== "stdio" ? serverConfig.url : undefined,
           });
         }
       })
@@ -233,6 +438,10 @@ export class McpManager {
     this.closeStdioTransports();
     this.serverStatuses.clear();
     this.serverInstructions.clear();
+    // The sink is a closure over the extension's `ctx`, and the ctx dies with the extension. A
+    // teardown path that does not go through `deactivate` (force-kill, runtime dispose) would
+    // otherwise keep calling a logger that no longer owns a live session.
+    this.diagnosticSink = undefined;
   }
 
   /** Close/kill every stdio transport and forget them. Best-effort; idempotent. */

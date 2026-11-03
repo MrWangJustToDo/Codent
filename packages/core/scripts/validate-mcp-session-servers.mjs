@@ -31,6 +31,8 @@ import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:
 
 import {
   ExtensionRunner,
+  getEnv,
+  loadMcpConfig,
   McpManager,
   bridgeTelemetryToAgentLog,
   createAgentEventBus,
@@ -291,6 +293,11 @@ assert.equal(empty.manager.configSourceKind, "file", "an empty map is treated as
     initialize: async () => ({ mcp__good_tool: { name: "mcp__good_tool", description: "ok" } }),
     getServerStatuses: () => statuses,
     getServerInstructions: () => [],
+    // The extension installs its logger as the manager's diagnostic sink and drains whatever was
+    // buffered before that. A double must carry the surface the extension touches, or activation
+    // throws and the tools under test never register.
+    setDiagnosticSink: () => {},
+    takeDiagnostics: () => [],
     shutdown: async () => {},
   };
 
@@ -317,6 +324,31 @@ assert.equal(empty.manager.configSourceKind, "file", "an empty map is treated as
   assert.equal(byName.bad, "failed", "the failing server is recorded as failed");
   assert.equal(byName.good, "connected", "the other server is still connected");
   assert.ok(registeredToolNames.includes("mcp__good_tool"), "the healthy server's tools were registered");
+}
+
+// ============================================================================
+// One invalid server entry must not remove the others
+// ============================================================================
+
+{
+  // Validating the whole document with `mcpConfigSchema` made one typo throw for the entire file:
+  // `loadMcpConfig` returned null and every MCP tool vanished for the session, with only a warn to
+  // explain it. The entry is now skipped and named, and its neighbours still load.
+  await writeFile(
+    join(root, ".agents", "mcp-partial.json"),
+    JSON.stringify({
+      mcpServers: {
+        good: { transport: "stdio", command: "/bin/good" },
+        bad: { transport: "stdio", command: "/bin/bad", approval: "alwayss" },
+      },
+    })
+  );
+  const loaded = await loadMcpConfig(getEnv(), ".agents/mcp-partial.json");
+  assert.ok(loaded, "the document still loads");
+  assert.deepEqual(Object.keys(loaded.config.mcpServers), ["good"], "the healthy server survives");
+  assert.equal(loaded.loadErrors?.length, 1, "the invalid entry is reported once");
+  assert.match(loaded.loadErrors[0], /"bad"/, "the error names the server");
+  assert.match(loaded.loadErrors[0], /alwayss/, "the error quotes the rejected value");
 }
 
 await rm(root, TEMP_RM_OPTIONS);

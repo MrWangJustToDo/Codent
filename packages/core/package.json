@@ -98,6 +98,7 @@
     "validate:extract-assistant-text": "pnpm run build && node scripts/validate-extract-assistant-text.mjs",
     "validate:tanstack-adapter": "pnpm run build && node scripts/validate-tanstack-adapter.mjs",
     "validate:lift-tool-media": "pnpm run build && node scripts/validate-lift-tool-media.mjs",
+    "validate:mcp-client": "pnpm run build && node scripts/validate-mcp-client.mjs",
     "validate:estimate-image-tokens": "pnpm run build && node scripts/validate-estimate-image-tokens.mjs",
     "validate:read-file-model-output": "pnpm run build && node scripts/validate-read-file-model-output.mjs",
     "validate:code-mode-model-output": "pnpm run build && node scripts/validate-code-mode-model-output.mjs",

@@ -12,7 +12,7 @@
 import type { AgentSession, DiskSessionId } from "./types.js";
 import type { CompactionConfigInput } from "../agent/compaction/types.js";
 import type { ExtensionFactory } from "../agent/extension/types.js";
-import type { McpServerConfig } from "../agent/mcp";
+import type { McpElicitHook, McpServerConfig } from "../agent/mcp";
 import type { SessionMeta } from "../agent/persistence/types.js";
 import type { AgentToolConfig } from "../agent/tools/tool-config.js";
 import type { CoreEnv } from "../env";
@@ -133,6 +133,14 @@ export interface AgentSessionCreateOptions {
    * project defaults are not added); omit to use those defaults.
    */
   skillDirs?: string[];
+  /**
+   * Answers an MCP server's `elicitation/create` request for this session.
+   *
+   * Omit and the MCP client advertises no `elicitation` capability: a server that needs user input
+   * then fails its tool call with the protocol error instead of being left unanswered. Supplying a
+   * hook is therefore the whole opt-in for that capability — core provides no UI.
+   */
+  mcpElicit?: McpElicitHook;
   /** Lazy-tool catalog detail for top-level `lazy` tools (code mode / discovery). */
   lazyToolsConfig?: LazyToolsConfig;
   /** Instruction-file names to probe (default: `CLAUDE.md`, then `AGENTS.md`). */

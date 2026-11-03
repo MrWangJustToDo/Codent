@@ -53,6 +53,7 @@ export async function buildManagedAgent({
     compaction,
     mcpConfigPath,
     mcpServers,
+    mcpElicit,
     initialSessionId,
     ...restConfig
   } = config;
@@ -151,6 +152,7 @@ export async function buildManagedAgent({
         rootPath: fsRootPath,
         manager,
         getDefaultSkillDirs,
+        ...(mcpElicit ? { mcpElicit } : {}),
       }).bootstrapRoot();
     }
 

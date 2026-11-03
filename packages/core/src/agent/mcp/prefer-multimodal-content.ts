@@ -7,9 +7,12 @@
  */
 
 import { isContentPartArray } from "@tanstack/ai";
+import { isMCPInputRequiredError } from "@tanstack/ai-mcp";
+
+import { toError } from "../../utils/errors.js";
 
 import type { AnyServerTool, ContentPart } from "@tanstack/ai";
-import type { MCPClient } from "@tanstack/ai-mcp";
+import type { MCPInputRequiredError, MCPClient } from "@tanstack/ai-mcp";
 
 // ============================================================================
 // Types
@@ -181,6 +184,28 @@ function readServerToolName(tool: AnyServerTool): string | undefined {
 }
 
 /**
+ * Describe a server's request for user input as a tool failure the model can act on.
+ *
+ * `@tanstack/ai-mcp` converts a spec-2026 `input_required` result into
+ * `MCPInputRequiredError`; without this mapping it reaches the model as a generic tool failure
+ * whose only content is the SDK's internal wording, which names neither the server nor the request.
+ * Throwing (rather than returning text) is deliberate: a returned string would be recorded as a
+ * successful call, and the model would believe the action happened.
+ */
+export function describeInputRequired(serverToolName: string, error: MCPInputRequiredError): string {
+  let body: string;
+  try {
+    body = JSON.stringify(error.request ?? null);
+  } catch {
+    body = String(error.request);
+  }
+  if (error.kind === "sampling") {
+    return `MCP tool "${serverToolName}" asked for a model sampling request, which this runtime cannot answer. Request: ${body}`;
+  }
+  return `MCP tool "${serverToolName}" needs user input before it can continue — ask the user, then retry. Request: ${body}`;
+}
+
+/**
  * Replace TanStack MCP tool execute so multimodal content[] is not discarded.
  */
 export function wrapMcpToolForMultimodalContent(tool: AnyServerTool, client: MCPClient): AnyServerTool {
@@ -195,11 +220,20 @@ export function wrapMcpToolForMultimodalContent(tool: AnyServerTool, client: MCP
       ctx?.abortSignal?.throwIfAborted();
       // Forward the run's abort signal: without it, Esc could not reach a slow/hung `tools/call`
       // and the row (and the pump) stayed parked on the server until it finished on its own.
-      const result = (await client.callTool(
-        serverToolName,
-        (args ?? {}) as Record<string, unknown>,
-        ctx?.abortSignal ? { signal: ctx.abortSignal } : undefined
-      )) as McpCallToolResult;
+      let result: McpCallToolResult;
+      try {
+        result = (await client.callTool(
+          serverToolName,
+          (args ?? {}) as Record<string, unknown>,
+          ctx?.abortSignal ? { signal: ctx.abortSignal } : undefined
+        )) as McpCallToolResult;
+      } catch (error) {
+        // A server that needs input mid-call is not a generic tool failure: name the server and
+        // keep the request so the model can ask the user (or report the sampling gap) instead of
+        // retrying blind. Every other error keeps its original shape.
+        if (isMCPInputRequiredError(error)) throw new Error(describeInputRequired(serverToolName, error));
+        throw toError(error);
+      }
       return resolveMcpToolExecuteResult(serverToolName, result);
     },
   };

@@ -87,6 +87,10 @@ function logSessionMcp(log: AgentLog, event: AgentEvent): void {
   for (const server of servers) {
     if (server.status === "connected") {
       entry(log, event, "info", "system", `MCP server: ${server.name} (${server.toolCount ?? 0} tools)`);
+    } else if (server.status === "disabled") {
+      // A deliberate `enabled: false` is not a failure. Logging it as one put a false "MCP server
+      // failed" line in every session's agent.log for a server the user switched off on purpose.
+      entry(log, event, "debug", "system", `MCP server disabled: ${server.name}`);
     } else {
       entry(log, event, "warn", "system", `MCP server failed: ${server.name} — ${server.error ?? "unknown"}`);
     }

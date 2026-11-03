@@ -8,6 +8,9 @@ overrides:
   isolated-vm: 7.0.1
   '@tanstack/ai': 1.0.1
 
+patchedDependencies:
+  '@tanstack/ai-mcp@1.0.0': 50e265b9479f33ad4063a141393c80c89454c9c966dff021c4e93aebd02f2ffd
+
 importers:
 
   .:
@@ -262,7 +265,7 @@ importers:
         version: 1.0.1(@tanstack/ai@1.0.1(@opentelemetry/api@1.9.1)(zod@4.6.5))(zod@4.6.5)
       '@tanstack/ai-mcp':
         specifier: ^1.0.0
-        version: 1.0.0(@opentelemetry/api@1.9.1)(zod@4.6.5)
+        version: 1.0.0(patch_hash=50e265b9479f33ad4063a141393c80c89454c9c966dff021c4e93aebd02f2ffd)(@opentelemetry/api@1.9.1)(zod@4.6.5)
       '@tanstack/openai-base':
         specifier: ^1.0.0
         version: 1.0.0(@tanstack/ai@1.0.1(@opentelemetry/api@1.9.1)(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
@@ -413,7 +416,7 @@ importers:
         version: 1.0.1(@tanstack/ai@1.0.1(@opentelemetry/api@1.9.1)(zod@4.6.5))(zod@4.6.5)
       '@tanstack/ai-mcp':
         specifier: ^1.0.0
-        version: 1.0.0(@opentelemetry/api@1.9.1)(zod@4.6.5)
+        version: 1.0.0(patch_hash=50e265b9479f33ad4063a141393c80c89454c9c966dff021c4e93aebd02f2ffd)(@opentelemetry/api@1.9.1)(zod@4.6.5)
       mime-types:
         specifier: ^3.0.2
         version: 3.0.2
@@ -6720,7 +6723,7 @@ snapshots:
       isolated-vm: 7.0.1
     optional: true
 
-  '@tanstack/ai-mcp@1.0.0(@opentelemetry/api@1.9.1)(zod@4.6.5)':
+  '@tanstack/ai-mcp@1.0.0(patch_hash=50e265b9479f33ad4063a141393c80c89454c9c966dff021c4e93aebd02f2ffd)(@opentelemetry/api@1.9.1)(zod@4.6.5)':
     dependencies:
       '@modelcontextprotocol/client': 2.3.1
       '@modelcontextprotocol/server': 2.3.1

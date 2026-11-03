@@ -109,3 +109,16 @@ export { normalizeBindingName, renameCodeModeTools } from "./agent/code-mode/bin
 // The curated binding subset the agent actually wires up: the validator asserts the prompt is
 // built from the real list, not a copy that can drift from `agent-bootstrap`.
 export { CODE_MODE_LAZY_TOOL_NAMES, CODE_MODE_TOOL_NAMES } from "./agent/code-mode/curated-tools.js";
+
+// MCP client wiring. `validate:mcp-client` asserts the exact options the manager sends — approval
+// derivation, the capability set on the wire, and what an elicit answer becomes — instead of a
+// replica of that wiring, which is how a guard stops guarding.
+export { mcpClientOptions, deriveNeedsApproval } from "./agent/mcp/manager.js";
+export { resolveServerPolicy, MCP_APPROVAL_MODES } from "./agent/mcp/types.js";
+export { describeInputRequired } from "./agent/mcp/prefer-multimodal-content.js";
+// `/mcp` is the only place a user learns a server's policy, and its columns are new: asserted rather
+// than eyeballed, because a status line that lies about `enabled` is the bug this change fixes.
+export { formatMcpStatus } from "./agent/mcp/extension.js";
+// Config loading is asserted for its per-server tolerance: one bad entry must cost one server, not
+// the whole file (which is how a single `"approval": "alwayss"` used to hide every MCP tool).
+export { loadMcpConfig } from "./agent/mcp/config.js";
