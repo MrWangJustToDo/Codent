@@ -52,7 +52,6 @@ import {
   type UIMessage as TanStackUIMessage,
 } from "@tanstack/ai";
 
-import { resolveApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
@@ -83,8 +82,6 @@ import {
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
 import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
-import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
-import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
@@ -112,6 +109,7 @@ import { CompactionController, type CompactionLease } from "./controllers/compac
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
+import { ExtensionFacet } from "./managed-agent-extensions.js";
 import { ModeFacet } from "./managed-agent-mode.js";
 import { ModelFacet } from "./managed-agent-model.js";
 import {
@@ -130,6 +128,7 @@ import {
 } from "./managed-agent-run-lifecycle.js";
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
 import { SessionFacet } from "./managed-agent-session-state.js";
+import { ToolFacet } from "./managed-agent-tools.js";
 import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
@@ -604,6 +603,10 @@ export class ManagedAgent {
   private readonly sessionFacet: SessionFacet;
   /** Plan/auto/approval-policy facet (owns the coordinator-facing view). */
   private readonly modeFacet: ModeFacet;
+  /** Tool registry/presentation/decorator facet. */
+  private readonly toolFacet: ToolFacet;
+  /** Extension registry read surface. */
+  private readonly extensionFacet: ExtensionFacet;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
 
@@ -677,6 +680,7 @@ export class ManagedAgent {
     // outright. Keeping it un-injectable makes "one registry per agent" unexpressible rather than
     // merely conventional. MCP / todo / skill state lives on this agent, not the extension service.
     this.extensions = new ExtensionRegistryService(this.toolService);
+    this.extensionFacet = new ExtensionFacet({ getRegistry: () => this.extensions });
     this.parentId = init.parentId;
     this.runtime = init.runtime;
     this.usage = init.usage ?? new UsageTracker();
@@ -851,6 +855,12 @@ export class ManagedAgent {
     // ============================================================================
     this.compaction = init.compaction ?? new CompactionService();
     this.toolCompactCache = new ToolCompactCache();
+    this.toolFacet = new ToolFacet({
+      getToolService: () => this.toolService,
+      getTools: () => this.tools,
+      getToolCompactCache: () => this.toolCompactCache,
+      getManagedTools: () => this.extensions.getManagedToolsProvider()?.() ?? {},
+    });
 
     // ============================================================================
     // (Run lifecycle flags + timing inits moved into RunCoordinator)
@@ -2049,7 +2059,7 @@ export class ManagedAgent {
   }
 
   getExtensionRunner(): ExtensionRunner | null {
-    return this.extensions.getExtensionRunner();
+    return this.extensionFacet.getRunner();
   }
 
   /**
@@ -2125,7 +2135,7 @@ export class ManagedAgent {
 
   /** The live context of the extension that owns a command (commands are dispatched by the session). */
   getExtensionContextForCommand(name: string): ExtensionContext | undefined {
-    return this.extensions.getExtensionRunner()?.contextForCommand(name);
+    return this.extensionFacet.getContextForCommand(name);
   }
 
   /**
@@ -2169,7 +2179,7 @@ export class ManagedAgent {
   }
 
   getExtensionLoader(): ExtensionLoader | null {
-    return this.extensions.getExtensionLoader();
+    return this.extensionFacet.getLoader();
   }
 
   /**
@@ -2257,7 +2267,7 @@ export class ManagedAgent {
 
   /** Unregister a command previously added by an extension (used when disabling). */
   getExtensionCommands(): ExtensionCommand[] {
-    return this.extensions.getExtensionCommands();
+    return this.extensionFacet.getCommands();
   }
 
   setCompactionConfig(config: CompactionConfig): void {
@@ -3001,24 +3011,16 @@ export class ManagedAgent {
 
   /** The registered tool's declarative approval requirement (the pipeline reads this). */
   getApprovalRequirement(toolName: string): ApprovalRequirement | undefined {
-    return this.toolService.getApprovalRequirement(toolName);
+    return this.toolFacet.getApprovalRequirement(toolName);
   }
 
   isToolNeedsApproval(toolName: string): boolean {
-    const requirement = this.toolService.getApprovalRequirement(toolName);
-    if (requirement) return requirement.requiresApproval;
-    // The live record can be filled by the host before the service sees it; keep the fallback
-    // narrow (no policy is decided from it — only the legacy accessor).
-    const tools = this.extensions.getManagedToolsProvider()?.() ?? {};
-    const tool = tools[toolName];
-    return tool != null && resolveApprovalRequirement(tool).requiresApproval;
+    return this.toolFacet.isToolNeedsApproval(toolName);
   }
 
   /** Agent-local model-output shaping; the live tool entry wins. */
   getToolModelOutput(toolName: string): ToModelOutputFn | undefined {
-    const toolService = this.toolService;
-    toolService.useTools(this.tools);
-    return toolService.resolve(toolName)?.toModelOutput ?? getToolMetadata(this.tools[toolName])?.toModelOutput;
+    return this.toolFacet.getToolModelOutput(toolName);
   }
 
   /**
@@ -3029,13 +3031,7 @@ export class ManagedAgent {
    * and only the registry knows which implementation actually runs.
    */
   isBuiltinTool(toolName: string): boolean {
-    const toolService = this.toolService;
-    toolService.useTools(this.tools);
-    // A name this agent does not register at all is "unknown", and hosts treat unknown as the
-    // built-in default (a historical row whose tool no longer exists keeps its built-in rendering;
-    // a remote client answers `true` for the same case). Only a LIVE registration owned by an
-    // extension answers `false`.
-    return toolService.isIncumbent(toolName) || !toolService.resolve(toolName);
+    return this.toolFacet.isBuiltinTool(toolName);
   }
 
   /**
@@ -3048,11 +3044,7 @@ export class ManagedAgent {
    * formatter written for a different schema, producing confident but false summaries.
    */
   getToolPresentation(toolName: string): ToolPresentation | undefined {
-    const toolService = this.toolService;
-    toolService.useTools(this.tools);
-    const declared = toolService.resolve(toolName)?.present ?? getToolMetadata(this.tools[toolName])?.present;
-    if (declared) return declared;
-    return toolService.isIncumbent(toolName) ? getBuiltinToolPresentation(toolName) : undefined;
+    return this.toolFacet.getToolPresentation(toolName);
   }
 
   /** Register a decorator on this agent's tool service (owner-scoped). */
@@ -3061,26 +3053,17 @@ export class ManagedAgent {
     fn: Parameters<AgentToolService["registerDecorator"]>[1],
     ownerId = this.id
   ): () => void {
-    const dispose = this.toolService.registerDecorator(toolName, fn, ownerId);
-    // A decorator changes the model-facing projection; cached entries were built without it.
-    this.toolCompactCache.clear();
-    return () => {
-      dispose();
-      this.toolCompactCache.clear();
-    };
+    return this.toolFacet.registerToolOutputDecorator(toolName, fn, ownerId);
   }
 
   /** Remove every decorator belonging to an owner (extension disable/destroy). */
   removeToolOutputDecoratorOwner(ownerId = this.id): void {
-    this.toolService.removeDecoratorOwner(ownerId);
-    this.toolCompactCache.clear();
+    this.toolFacet.removeToolOutputDecoratorOwner(ownerId);
   }
 
   /** Presentation catalog for this agent's live tools, not the process-wide union. */
   getToolPresentationCatalog() {
-    const toolService = this.toolService;
-    toolService.useTools(this.tools);
-    return toolService.catalog();
+    return this.toolFacet.getToolPresentationCatalog();
   }
 
   /** Create or replace the core-owned main chat session (StreamProcessor + run loop). */
