@@ -8,7 +8,7 @@
 
 import { errorMessage } from "../../utils/errors.js";
 
-import type { SessionRuntime } from "./session-runtime.js";
+import type { SessionRuntime } from "../session-runtime.js";
 import type { SessionData } from "../../agent/persistence/types.js";
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
 
