@@ -89,8 +89,6 @@ import { type TurnContextSection } from "../agent/turn-context/turn-context-mess
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
 import { getEnv, resolveCoreEnv } from "../env";
-import { selectModel } from "../models/config/model-selection.js";
-import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import {
   deriveAgentState,
@@ -728,23 +726,22 @@ export class ManagedAgent {
         this.bindSessionLogSink(sessionId, options);
       },
     });
-    const self = this;
     this.modelFacet = new ModelFacet({
-      // `config` is mutated in place (Object.assign), and `runtime` is set before this facet is
+      // `config` is mutated in place (Object.assign) and `runtime` is assigned before this facet is
       // constructed, so capturing both keeps live values without property getters (forbidden on
       // ManagedAgent by the accessor convention).
-      config: self.config,
-      usage: self.usage,
-      runtime: self.runtime,
-      getModelInfo: () => self.modelInfo,
+      config: this.config,
+      usage: this.usage,
+      runtime: this.runtime,
+      getModelInfo: () => this.modelInfo,
       applyModelInfo: (info) => {
-        self.modelInfo = info;
+        this.modelInfo = info;
       },
-      setModel: (next, options) => self.setModel(next, options),
-      getCompactionConfig: () => self.getCompactionConfig(),
-      emitEvent: (type, payload) => self.emitEvent(type, payload as never),
+      setModel: (next, options) => this.setModel(next, options),
+      getCompactionConfig: () => this.getCompactionConfig(),
+      emitEvent: (type, payload) => this.emitEvent(type, payload as never),
       emitDiagnostic: (area, message, options) =>
-        self.emitDiagnostic(area, message, options as Parameters<typeof self.emitDiagnostic>[2]),
+        this.emitDiagnostic(area, message, options as Parameters<typeof this.emitDiagnostic>[2]),
     });
     this.childIds = [];
     this.createdAt = Date.now();
