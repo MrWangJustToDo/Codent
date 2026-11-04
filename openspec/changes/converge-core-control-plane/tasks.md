@@ -75,7 +75,7 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 ## 7. P5 — ManagedAgent facade and domain layout
 
 - [x] 7.1 Extract the model facet (`applyPersistedModel` / metadata / compaction-budget cluster) (depends: 6.4)
-- [ ] 7.2 Extract the session facet (session data / tracker / ownership view) (depends: 4.11)
+- [x] 7.2 Extract the session facet (session data / tracker / ownership view) (depends: 4.11)
 - [ ] 7.3 Extract the run facet (delegate to `RunCoordinator`, drop duplicated fields) (depends: 2.9, 6.7)
 - [ ] 7.4 Extract the mode facet (plan/auto/approval views) (depends: 3.4)
 - [ ] 7.5 Extract the tool and extension facets (depends: 5.9)

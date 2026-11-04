@@ -128,6 +128,7 @@ import {
   prepareManagedAgentForRun,
 } from "./managed-agent-run-lifecycle.js";
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
+import { SessionFacet } from "./managed-agent-session-state.js";
 import { ModeCoordinator } from "./mode-coordinator.js";
 import { RunCoordinator } from "./run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
@@ -139,12 +140,12 @@ import { ExtensionRegistryService } from "./services/extension-registry-service.
 import { MemoryService } from "./services/memory-service.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "./services/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
-import { SessionPersistence } from "./session-persistence.js";
 import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentConfig } from "./agent-types.js";
+import type { SessionPersistence } from "./session-persistence.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
@@ -607,6 +608,8 @@ export class ManagedAgent {
    */
   private readonly lastJobStatuses = new Map<string, SessionJobSummary["status"]>();
   readonly sessionPersistence: SessionPersistence;
+  /** Session identity + tracker facet (persistence, setSessionData, placeholders). */
+  private readonly sessionFacet: SessionFacet;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
 
@@ -700,7 +703,11 @@ export class ManagedAgent {
         this.emitEvent(type, data);
       });
     this.session = init.session ?? new SessionService();
-    this.sessionPersistence = new SessionPersistence(this);
+    this.sessionFacet = new SessionFacet(this, {
+      hasManager: () => Boolean(this.manager),
+      bindSessionLogSink: (sessionId) => this.bindSessionLogSink(sessionId),
+    });
+    this.sessionPersistence = this.sessionFacet.persistence;
     // The store resolves the runtime env when bound, else ambient lazily at first write.
     this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
     this.run = new RunCoordinator();
@@ -717,7 +724,7 @@ export class ManagedAgent {
         this.getUI()?.advanceSessionGeneration();
       },
       onAdopt: (_sessionId, uiMessages) => {
-        if (uiMessages) this.sessionPersistence.resetTracker(uiMessages);
+        if (uiMessages) this.sessionFacet.resetSessionSyncTracker(uiMessages);
       },
       bindSink: (sessionId, options) => {
         // `setSessionData` may already have bound the target (new session); the lease asks for the
@@ -1555,7 +1562,7 @@ export class ManagedAgent {
   }
 
   getSessionData(): SessionData | null {
-    return this.session.getSessionData();
+    return this.sessionFacet.getSessionData();
   }
 
   /**
@@ -1932,9 +1939,7 @@ export class ManagedAgent {
    * leave a sink the extension does not know about.
    */
   setSessionData(data: SessionData): void {
-    const previousId = this.getSessionData()?.id;
-    this.session.setSessionData(data);
-    if (this.manager && data.id && data.id !== previousId) this.bindSessionLogSink(data.id);
+    this.sessionFacet.setSessionData(data);
   }
 
   /**
@@ -1945,9 +1950,7 @@ export class ManagedAgent {
    * target. @internal Used by the agent factory.
    */
   setSessionDataPlaceholder(data: SessionData): void {
-    const previousId = this.getSessionData()?.id;
-    this.session.setSessionDataPlaceholder(data);
-    if (this.manager && data.id && data.id !== previousId) this.bindSessionLogSink(data.id);
+    this.sessionFacet.setSessionDataPlaceholder(data);
   }
 
   /**
@@ -1956,7 +1959,7 @@ export class ManagedAgent {
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   maybeSaveSessionUIMessages(uiMessages: TanStackUIMessage[], reason: SessionSaveReason): void {
-    this.sessionPersistence.maybeSave(uiMessages, reason);
+    this.sessionFacet.maybeSaveSessionUIMessages(uiMessages, reason);
   }
 
   /**
@@ -1964,17 +1967,17 @@ export class ManagedAgent {
    * Fire-and-forget — dehydrate + disk write happen in the background.
    */
   saveSessionUIMessages(uiMessages: TanStackUIMessage[]): void {
-    this.sessionPersistence.save(uiMessages);
+    this.sessionFacet.saveSessionUIMessages(uiMessages);
   }
 
   /** Reset fingerprint tracking after restore, clear, or new chat bootstrap. */
   resetSessionSyncTracker(uiMessages?: TanStackUIMessage[]): void {
-    this.sessionPersistence.resetTracker(uiMessages);
+    this.sessionFacet.resetSessionSyncTracker(uiMessages);
   }
 
   /** Persist model state only (usage, todos). Does not write `uiMessages`. */
   persistSession(): void {
-    this.sessionPersistence.persistState();
+    this.sessionFacet.persistSession();
   }
 
   /**
