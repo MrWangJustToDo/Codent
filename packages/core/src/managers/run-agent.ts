@@ -1,7 +1,6 @@
 import { getPlanModeToolExcludeSet } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
 import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
-import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
 import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
@@ -35,7 +34,7 @@ import { createEmitTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent } from "./managed-agent.js";
-import type { ModeState } from "../agent/mode/mode-state.js";
+import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelMessage, ServerTool, StreamChunk, UIMessage } from "@tanstack/ai";
@@ -96,25 +95,22 @@ export async function resolveTextAdapterForManaged(managed: ManagedAgent): Promi
 function resolveTanStackTools(
   managed: ManagedAgent,
   resolveToolPresentation: (name: string) => ToolPresentation | undefined,
-  getModeState: () => ModeState
+  getPolicyFacts: () => AgentPolicyFacts
 ): ServerTool[] {
-  const toolset = managed.config.toolsetProfile ?? (managed.parentId ? "explore" : "root");
-  if (toolset === "explore") {
-    return resolveToolsRecord(managed.tools, { exclude: SUBAGENT_EXCLUDED_TOOL_NAMES }) as ServerTool[];
+  const facts = getPolicyFacts();
+  const toolset = facts.profile;
+  if (toolset !== "root" && toolset !== "general" && toolset !== "explore" && toolset !== "internal") {
+    throw new Error(`Unsupported toolset profile: "${String(toolset)}"`);
   }
   if (toolset === "internal") {
     // Internal one-shot workers are caller-supplied; the caller owns their safety policy. Do not
     // silently drop a tool through the explore read-only filter here.
     return resolveToolsRecord(managed.tools) as ServerTool[];
   }
-  if (toolset !== "root" && toolset !== "general") {
-    throw new Error(`Unsupported toolset profile: "${String(toolset)}"`);
-  }
-  // One projection of the mode's availability: phase-specific hidden names, plus the
-  // registry-dependent mutating/MCP set while plan mode restricts edits.
-  const availability = getModeState().toolAvailability();
-  const exclude = new Set(availability.hiddenTools);
-  if (availability.restrictsMutations) {
+  // One projection of the policy: the profile's unavailable set (explore's read-only filter, the
+  // mode's hidden names), plus the registry-dependent mutating/MCP set while plan restricts edits.
+  const exclude = new Set(facts.unavailableTools);
+  if (facts.toolAvailability.restrictsMutations) {
     for (const name of getPlanModeToolExcludeSet(managed.tools, resolveToolPresentation)) exclude.add(name);
   }
   return resolveToolsRecord(managed.tools, { exclude }) as ServerTool[];
@@ -311,7 +307,7 @@ export function buildAgentRunner(
     model: textAdapter.model,
     maxIterations: midIterationMax,
     systemPrompts: systemPrompt ? [systemPrompt] : undefined,
-    tools: resolveTanStackTools(managed, deps.resolveToolPresentation, deps.getModeState),
+    tools: resolveTanStackTools(managed, deps.resolveToolPresentation, deps.getPolicyFacts),
     middleware: instrumentMiddlewareLog(middleware, emitEvent),
     temperature: config.temperature,
     maxOutputTokens,

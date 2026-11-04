@@ -21,3 +21,22 @@ export function fakeModeState({ planPhase = "off", auto = false, todosSeeded = f
     toolAvailability: () => ({ phase: planPhase, restrictsMutations: false, hiddenTools: new Set() }),
   };
 }
+
+export function fakePolicyFacts({ profile = "root", isSubagent = false, unavailableTools = [], ...modeInput } = {}) {
+  const mode = fakeModeState(modeInput);
+  const snapshot = mode.snapshot();
+  const availability = mode.toolAvailability();
+  return {
+    planPhase: snapshot.planPhase,
+    auto: snapshot.auto,
+    todosSeeded: snapshot.todosSeeded,
+    planExecutionAutoApprove:
+      (snapshot.planPhase === "executing" || snapshot.planPhase === "retro") && snapshot.todosSeeded,
+    toolAvailability: availability,
+    profile,
+    isSubagent,
+    capabilities: null,
+    unavailableTools: new Set([...availability.hiddenTools, ...unavailableTools]),
+    env: {},
+  };
+}

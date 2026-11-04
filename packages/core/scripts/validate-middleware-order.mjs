@@ -71,7 +71,7 @@ function makeStub() {
   return stub;
 }
 
-import { fakeModeState } from "./helpers/mode-state.mjs";
+import { fakeModeState, fakePolicyFacts } from "./helpers/mode-state.mjs";
 const FACTORIES = [
   createStatusMiddleware,
   createApprovalResumeMiddleware,
@@ -129,6 +129,7 @@ function makeManagedStub() {
     getWireProjectionCache: () => ({}),
     planMode: { isRestrictingTools: () => false, getPhase: () => "off" },
     getModeState: () => fakeModeState(),
+    getPolicyFacts: () => fakePolicyFacts(),
     getSystemPrompt: () => "",
     getFrozenSystemPrompt: () => "",
     getCompactionConfig: () => ({}),

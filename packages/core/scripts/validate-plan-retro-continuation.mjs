@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 import {
   AgentStreamHub,
   createModeState,
+  resolveAgentPolicyFacts,
   PLAN_TODO_TITLE,
   PlanModeController,
   TodoManager,
@@ -139,6 +140,8 @@ function makeManagedStub(controller) {
     getWireProjectionCache: () => ({}),
     planMode: controller,
     getModeState: () => createModeState({ planMode: controller, autoMode: { isEnabled: () => false } }),
+    getPolicyFacts: () =>
+      resolveAgentPolicyFacts(createModeState({ planMode: controller, autoMode: { isEnabled: () => false } })),
     getSystemPrompt: () => "",
     getFrozenSystemPrompt: () => "",
     getCompactionConfig: () => ({}),
@@ -203,7 +206,19 @@ function runnerToolNames(controller) {
 
   // Counter-check on the other side of the same branch: the tool must NOT leak into
   // `executing`, or invariant 1 would pass for the wrong reason (available in both).
-  const executingTools = runnerToolNames({ getPhase: () => "executing", isRestrictingTools: () => false });
+  const executingTools = runnerToolNames({
+    getPhase: () => "executing",
+    isRestrictingTools: () => false,
+    getState: () => ({
+      phase: "executing",
+      planMarkdown: null,
+      steps: [],
+      enabledAt: null,
+      todosSeeded: true,
+      preservedExistingTodos: false,
+      planFilePath: null,
+    }),
+  });
   assert.ok(
     !executingTools.includes("complete_plan"),
     "complete_plan must stay excluded while executing, otherwise the phase-gated tool set " +
