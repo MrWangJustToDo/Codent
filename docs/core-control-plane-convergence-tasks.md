@@ -376,7 +376,7 @@ agent/
 ### 8.3 参考位置（分析报告引用）
 
 - `runtime-types/agent-status.ts`（状态/trigger/TERMINAL·ACTIVE）
-- `managers/run-coordinator.ts`、`managers/controllers/agent-chat-controller.ts`、`agent/ui/ui-channel.ts`、`agent/turn-context/session-staleness.ts`
+- `managers/run-coordinator.ts`、`agent/run/chat-controller.ts`、`agent/ui/ui-channel.ts`、`agent/turn-context/session-staleness.ts`
 - `managers/services/session-lifecycle-service.ts`（38 成员 host）
 - `managers/approval-decision-coordinator.ts`、`managers/middleware/extensions-middleware.ts`、`managers/run-agent.ts`
 - `managers/managed-agent.ts`、`agent-session/types.ts`

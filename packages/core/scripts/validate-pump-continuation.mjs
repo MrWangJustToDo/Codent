@@ -176,10 +176,7 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
 // (private methods, no seam a unit test can drive), and the failure they prevent is silent.
 // ---------------------------------------------------------------------------
 {
-  const src = readFileSync(
-    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
-    "utf8"
-  );
+  const src = readFileSync(fileURLToPath(new URL("../src/agent/run/chat-controller.ts", import.meta.url)), "utf8");
 
   // One preserve rule: the abort fallback and `interruptCurrentRun` used to disagree, and the
   // fallback undid the park. Assert the default is FORWARDED to `settleToolCalls`, not merely that

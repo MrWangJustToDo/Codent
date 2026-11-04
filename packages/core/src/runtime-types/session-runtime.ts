@@ -12,13 +12,13 @@ import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js
 import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { SessionData } from "../agent/persistence/types.js";
+import type { AgentChatController } from "../agent/run/chat-controller.js";
 import type { RunCoordinator } from "../agent/run/run-coordinator.js";
 import type { SessionLease } from "../agent/session/session-lease.js";
 import type { SessionPersistence } from "../agent/session/session-persistence.js";
 import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import type { TodoManager } from "../agent/todo";
-import type { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
 import type { CompactionService } from "../managers/services/compaction-service.js";
 import type { MemoryService } from "../managers/services/memory-service.js";
 import type { UsageTracker } from "../managers/telemetry/usage-tracker.js";

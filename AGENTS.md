@@ -441,7 +441,7 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   mandatory to say why not: the `/* eslint-disable max-lines */` at the top of such a file must
   be paired with a written justification naming what the file composes and which parts were
   extracted instead — the current members are `agent/extension/runner.ts`,
-  `managers/managed-agent.ts`, `managers/controllers/agent-chat-controller.ts`,
+  `managers/managed-agent.ts`, `agent/run/chat-controller.ts`,
   `packages/acp/src/agent.ts` and `packages/acp/src/projector.ts`, and
   their headers name what was split out — and `validate:file-size` fails an allowlisted file that
   drops back under the ceiling so the list cannot go stale. The guard scans **every** package's

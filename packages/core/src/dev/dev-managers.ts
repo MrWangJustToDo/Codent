@@ -40,7 +40,7 @@ export { UsageStore } from "../agent/usage/usage-store.js";
 // The one convention-aware reading of prompt/total tokens, so a validation can assert a
 // display surface against the rule rather than against a formatted string.
 export { promptTokensOf, totalTokensOf } from "../runtime-types/token-usage.js";
-export { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
+export { AgentChatController } from "../agent/run/chat-controller.js";
 export { RunFinalizer, countToolCalls } from "../managers/run-finalizer.js";
 export { ApprovalDecisionCoordinator } from "../agent/approval/approval-decision-coordinator.js";
 export { ModeCoordinator } from "../agent/mode/mode-coordinator.js";

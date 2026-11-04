@@ -70,9 +70,7 @@ const PATTERNS = [
     id: "epoch-guard-lifecycle",
     re: /\badvanceLifecycleEpoch\s*\(/,
     owner: "E2/E9 (Epoch source)",
-    allowed: new Map([
-      ["managers/controllers/agent-chat-controller.ts", "pump lifecycle generation — the Epoch source"],
-    ]),
+    allowed: new Map([["agent/run/chat-controller.ts", "pump lifecycle generation — the Epoch source"]]),
   },
   {
     id: "epoch-guard-staleness",
@@ -99,7 +97,8 @@ const PATTERNS = [
     owner: "E9 (Epoch)",
     allowed: new Map([
       ["agent/approval/tool-authorization.ts", "synchronous admission — keeps the predicate"],
-      ["managers/controllers/agent-chat-controller.ts", "pump admission — keeps the synchronous predicate"],
+      ["runtime-types/chat-host.ts", "port declaration — keeps the predicate"],
+      ["agent/run/chat-controller.ts", "pump admission — keeps the synchronous predicate"],
       ["managers/managed-agent.ts", "definition — the flag itself"],
       ["managers/run-agent.ts", "background-middleware delivery wiring (synchronous)"],
     ]),

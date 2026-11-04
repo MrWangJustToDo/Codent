@@ -83,6 +83,7 @@ import {
   savePlanToWorkspace as savePlanToWorkspaceHelper,
 } from "../agent/plan/managed-agent-plan.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
+import { AgentChatController } from "../agent/run/chat-controller.js";
 import { RunCoordinator } from "../agent/run/run-coordinator.js";
 import { SessionFacet } from "../agent/session/managed-agent-session-state.js";
 import { SessionLease } from "../agent/session/session-lease.js";
@@ -120,7 +121,6 @@ import { copyModelMessages } from "../utils/model-messages.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
-import { AgentChatController } from "./controllers/agent-chat-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import { ExtensionFacet } from "./managed-agent-extensions.js";

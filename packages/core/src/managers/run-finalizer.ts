@@ -9,8 +9,8 @@
  * to a microtask). This class owns it so a new caller cannot reorder it by accident.
  */
 
+import { countToolCalls } from "../agent/run/run-stats.js";
 import { deriveRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
-import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
 
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
 import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
@@ -20,6 +20,8 @@ import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";
 import type { UIMessage } from "@tanstack/ai";
+
+export { countToolCalls } from "../agent/run/run-stats.js";
 
 export interface RunFinalizerDeps {
   status: AgentStatusController;
@@ -53,23 +55,6 @@ export interface ChatRunFinalizeInput {
   toolCallsBefore: number;
   /** Chat controller-owned persistence (channel → session store). */
   persist: () => void;
-}
-
-/**
- * Tool calls that reached an outcome in a channel snapshot.
- *
- * A pump reports `countToolCalls(end) - countToolCalls(start)` in `turn:summary`, so this has to be
- * "settled", not "created": an approval-split turn requests its tools in one pump (they stay
- * pending) and runs them in the next, and counting created parts reported `0 tools` for the pump
- * that actually executed them.
- */
-export function countToolCalls(messages: readonly UIMessage[]): number {
-  let count = 0;
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) if (isToolCallPart(part) && isSettledToolCallPart(part)) count += 1;
-  }
-  return count;
 }
 
 export class RunFinalizer {

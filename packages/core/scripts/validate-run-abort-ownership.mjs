@@ -278,7 +278,7 @@ function createManaged(id) {
 // here while section 5 drives the method itself.
 
 {
-  const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  const controller = readFileSync(join(SRC, "agent/run/chat-controller.ts"), "utf8");
   const finalizer = readFileSync(join(SRC, "managers/run-finalizer.ts"), "utf8");
   assert.match(
     controller,

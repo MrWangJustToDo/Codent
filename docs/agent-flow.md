@@ -31,7 +31,7 @@ pump），只有 `finalizeRun` 才写 `agent:stop`。
 | Host / `AgentSession` | `packages/core/src/agent-session/local-agent-session.ts:1`、`types.ts:73` | 订阅与命令入口。把 agent 作用域的 `AgentEventBus` 事件按 `AGENT_EVENT_META.channel` 投影成 session channel | 不推导状态、不扫消息找审批（`interaction` channel 由 core 派生） |
 | `AgentManager` | `packages/core/src/managers/agent-manager.ts:198` | agent 注册表、per-agent scoped bus（`of(agentId, parentId)`）、磁盘 session 归属表（`sessionId → agentId`）、root log 扩展 | 不驱动单次 run |
 | `ManagedAgent` | `packages/core/src/managers/managed-agent.ts` | 组合根：status、error、UI channel、usage，以及 session 级状态（todos / plan / approvals / mode）、`RunCoordinator`、`RunFinalizer`、各 service | 不做工具相位循环（那是 controller） |
-| `AgentChatController` | `packages/core/src/managers/controllers/agent-chat-controller.ts:50` | 对话消息链（`AgentUIChannel`）、steer/follow-up 队列、run chain/epoch/token、工具相位循环、turn 级 finalize 调用 | 不拥有 abort controller（`RunCoordinator` 是唯一创建点） |
+| `AgentChatController` | `packages/core/src/agent/run/chat-controller.ts:50` | 对话消息链（`AgentUIChannel`）、steer/follow-up 队列、run chain/epoch/token、工具相位循环、turn 级 finalize 调用 | 不拥有 abort controller（`RunCoordinator` 是唯一创建点） |
 | `AgentRunner` | `packages/core/src/agent/runner/agent-runner.ts:103` | 只持有不可变配置 + `chat()` 包装。**run 之间无状态** | 不持有 status/session/usage |
 | TanStack `chat()` | `packages/core/src/agent/runner/agent-runner.ts:151` | AG-UI chunk 流、工具执行、`agentLoopStrategy: maxIterations(...)`、middleware 调度 | 不决定 turn 何时结束 |
 | `runManagedSpan` / `runAgentOnce` | `packages/core/src/agent/run/managed-span.ts:40`、`run-agent-skeleton.ts:124` | 一次 LLM span：attach channel → 拉流 → 归一化 abort/error/empty | 不拥有队列/审批（chat pump）或 task 结果投影（subagent） |
@@ -710,7 +710,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 |---|---|
 | `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`/`AgentRunOutcomeKind`（后者 = 前者 + `"waiting"`）、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`resolveFinishStatus` |
 | `packages/core/src/managers/controllers/agent-status-controller.ts` | 所有状态跳转的唯一实现、审批/交互状态同步、`applyRunOutcome` |
-| `packages/core/src/managers/controllers/agent-chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
+| `packages/core/src/agent/run/chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
 | `packages/core/src/managers/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |
 | `packages/core/src/managers/run-finalizer.ts` | `deriveChatOutcome`、`finalizeChat`、`finalizeDetached` 的顺序契约 |
 | `packages/core/src/managers/managed-agent-run-lifecycle.ts` | `prepareManagedAgentForRun` / `finalizeManagedAgentRun` / `abortManagedAgentRun` |

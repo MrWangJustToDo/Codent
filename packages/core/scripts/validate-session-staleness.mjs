@@ -173,7 +173,7 @@ const userRow = () => [{ id: "u1", role: "user", parts: [{ type: "text", content
 // restored `ask_user` and leaving the session parked on a question nothing could answer.
 {
   const controller = readFileSync(
-    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
+    fileURLToPath(new URL("../src/agent/run/chat-controller.ts", import.meta.url)),
     "utf8"
   );
   assert.match(

@@ -82,7 +82,7 @@ export type { AgentEventPayloadMap, EmptyAgentEventPayload } from "./runtime-typ
 export { ManagedAgent, type ManagedAgentConfig, type AgentMode } from "./managers/managed-agent.js";
 export { isActiveStatus } from "./runtime-types/agent-status.js";
 export type { AgentStatus } from "./runtime-types/agent-status.js";
-export type { QueuedMessageContent, QueuedMessagesSnapshot } from "./managers/controllers/agent-chat-controller.js";
+export type { QueuedMessageContent, QueuedMessagesSnapshot } from "./agent/run/chat-controller.js";
 export type { PlanModePhase, PlanModeState, BeginPlanExecutionResult } from "./agent/plan/plan-mode-controller.js";
 // The footer label is a pure projection of the plan phase (+ todo progress), and the TUI is not its
 // only possible consumer: keeping the one definition in core is what stops a host copy drifting from

@@ -41,7 +41,7 @@ const PRODUCERS = [
     id: "lifecycle-generation",
     re: /\badvanceLifecycleEpoch\s*\(/,
     why: "the chat controller owns the pump/session-switch lifecycle generation",
-    allowed: new Map([["managers/controllers/agent-chat-controller.ts", "owner + internal call sites"]]),
+    allowed: new Map([["agent/run/chat-controller.ts", "owner + internal call sites"]]),
   },
   {
     id: "session-generation-producer",
@@ -58,7 +58,7 @@ const PRODUCERS = [
     why: "the run token is minted by the coordinator and by the chat pump that begins a run",
     allowed: new Map([
       ["agent/run/run-coordinator.ts", "definition"],
-      ["managers/controllers/agent-chat-controller.ts", "the pump that begins the run"],
+      ["agent/run/chat-controller.ts", "the pump that begins the run"],
     ]),
   },
   {

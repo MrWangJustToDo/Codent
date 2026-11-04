@@ -474,7 +474,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // controller flips to `waiting` from `this.channel.getMessages()`, and `AgentChatController` wires
 // that very channel onto the agent — which is the chain `onFinish` asks.
 {
-  const controller = readFileSync(join(SRC, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  const controller = readFileSync(join(SRC, "agent/run/chat-controller.ts"), "utf8");
   assert.ok(
     /setUIChannel\(this\.channel\)/.test(controller),
     "the agent's UI channel IS the chat controller's chain, so `managed.getChatController().getMessages()` " +

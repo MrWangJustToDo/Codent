@@ -35,7 +35,6 @@ import { TaskRunState } from "./task-run-state.js";
 
 import type { PreforkDiscard, PreforkDiscardCause } from "./task-prefork.js";
 import type { TaskRunPhase, TaskRunTerminalPhase } from "./task-run-state.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 import type { SessionJobStatus } from "../../runtime-types/session-payloads.js";
 import type { BackgroundWorkChangeSink, BackgroundWorkTerminalStatus } from "../jobs/background-work.js";
 import type { ToolDisplayPayload } from "../tools/presentation/types.js";
@@ -279,10 +278,18 @@ export class SubagentRuns {
   }
 }
 
-const registries = new WeakMap<ManagedAgent, SubagentRuns>();
+/** Minimal identity the registry needs; any object can own a run set. */
+export interface SubagentRegistryHost {
+  config?: { maxConcurrentTasks?: number };
+  getCurrentRunId?(): string | null;
+  getEventSessionId?(): string | undefined;
+  getSessionData?(): { id?: string } | null;
+}
+
+const registries = new WeakMap<object, SubagentRuns>();
 
 /** Get (or lazily create) the run registry for a parent agent. */
-export function subagentRuns(parentManaged: ManagedAgent): SubagentRuns {
+export function subagentRuns(parentManaged: SubagentRegistryHost): SubagentRuns {
   let runs = registries.get(parentManaged);
   if (!runs) {
     // Read the cap through the parent so an `updateConfig` after creation is honored; the owner id is
@@ -297,7 +304,7 @@ export function subagentRuns(parentManaged: ManagedAgent): SubagentRuns {
 }
 
 /** The run registry for a parent, when one already exists (non-creating). */
-export function peekSubagentRuns(parentManaged: ManagedAgent): SubagentRuns | undefined {
+export function peekSubagentRuns(parentManaged: object): SubagentRuns | undefined {
   return registries.get(parentManaged);
 }
 
@@ -305,11 +312,11 @@ export function peekSubagentRuns(parentManaged: ManagedAgent): SubagentRuns | un
 // Phase accessors (thin, so call sites read as before)
 // ============================================================================
 
-export function getTaskRunState(parentManaged: ManagedAgent, toolCallId: string): TaskRunState | undefined {
+export function getTaskRunState(parentManaged: SubagentRegistryHost, toolCallId: string): TaskRunState | undefined {
   return subagentRuns(parentManaged).state(toolCallId);
 }
 
-export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): TaskRunState {
+export function beginTaskRun(parentManaged: SubagentRegistryHost, toolCallId: string): TaskRunState {
   const state = subagentRuns(parentManaged).begin(toolCallId);
   // Assigned once: a re-entry (tool phase retry, background wake) must not move the attribution.
   // Optional: validators and hosts may drive the registry with a structural fake that has no run
@@ -320,35 +327,42 @@ export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): T
 }
 
 /** The parent run that spawned a task, for settle-time rows (undefined for an unknown task). */
-export function readTaskRunSpawnId(parentManaged: ManagedAgent, toolCallId: string | undefined): string | undefined {
+export function readTaskRunSpawnId(
+  parentManaged: SubagentRegistryHost,
+  toolCallId: string | undefined
+): string | undefined {
   if (!toolCallId) return undefined;
   return subagentRuns(parentManaged).state(toolCallId)?.spawnRunId;
 }
 
 /** The disk session that spawned a task; settle-time rows compare against it. */
 export function readTaskRunSpawnSessionId(
-  parentManaged: ManagedAgent,
+  parentManaged: SubagentRegistryHost,
   toolCallId: string | undefined
 ): string | undefined {
   if (!toolCallId) return undefined;
   return subagentRuns(parentManaged).state(toolCallId)?.spawnSessionId;
 }
 
-export function enterTaskPhase(parentManaged: ManagedAgent, toolCallId: string, phase: TaskRunTerminalPhase): boolean {
+export function enterTaskPhase(
+  parentManaged: SubagentRegistryHost,
+  toolCallId: string,
+  phase: TaskRunTerminalPhase
+): boolean {
   return subagentRuns(parentManaged).enter(toolCallId, phase);
 }
 
 /** Move a task to the `summary` phase (the subagent is writing its own report). */
-export function enterTaskSummaryPhase(parentManaged: ManagedAgent, toolCallId: string): boolean {
+export function enterTaskSummaryPhase(parentManaged: SubagentRegistryHost, toolCallId: string): boolean {
   return enterTaskPhase(parentManaged, toolCallId, "summary");
 }
 
 /** Move a task to the `limit` phase (budget cutoff; report comes from the fallback). */
-export function enterTaskLimitPhase(parentManaged: ManagedAgent, toolCallId: string): boolean {
+export function enterTaskLimitPhase(parentManaged: SubagentRegistryHost, toolCallId: string): boolean {
   return enterTaskPhase(parentManaged, toolCallId, "limit");
 }
 
-export function readTaskRunPhase(parentManaged: ManagedAgent, toolCallId: string | undefined): TaskRunPhase {
+export function readTaskRunPhase(parentManaged: SubagentRegistryHost, toolCallId: string | undefined): TaskRunPhase {
   return subagentRuns(parentManaged).read(toolCallId);
 }
 
@@ -359,7 +373,7 @@ export function readTaskRunPhase(parentManaged: ManagedAgent, toolCallId: string
  * same registry operation at two scopes; two exported names for it invited a caller to clear twice
  * per switch. Non-creating: an agent that never ran a task must not gain a registry just to clear it.
  */
-export function clearTaskRuns(parentManaged: ManagedAgent, toolCallId?: string): void {
+export function clearTaskRuns(parentManaged: SubagentRegistryHost, toolCallId?: string): void {
   const runs = peekSubagentRuns(parentManaged);
   if (!runs) return;
   if (toolCallId) runs.forget(toolCallId);
@@ -367,7 +381,7 @@ export function clearTaskRuns(parentManaged: ManagedAgent, toolCallId?: string):
 }
 
 /** Test/observability seam: how many task phase records this parent still holds. */
-export function countSubagentRuns(parentManaged: ManagedAgent): number {
+export function countSubagentRuns(parentManaged: SubagentRegistryHost): number {
   return peekSubagentRuns(parentManaged)?.size ?? 0;
 }
 
@@ -376,7 +390,7 @@ export function countSubagentRuns(parentManaged: ManagedAgent): number {
 // ============================================================================
 
 /** Get (or lazily create) the pre-fork coordinator for a parent agent. */
-export function getTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator {
+export function getTaskPreforkCoordinator(parentManaged: SubagentRegistryHost): TaskPreforkCoordinator {
   return subagentRuns(parentManaged).prefork;
 }
 
@@ -387,7 +401,7 @@ export function getTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPref
  * call is already pre-forked (the extensions middleware deferring its eager `agent:tool-start`) must
  * not bring a coordinator into existence for an agent that never pre-forked anything.
  */
-export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPreforkCoordinator | undefined {
+export function peekTaskPreforkCoordinator(parentManaged: SubagentRegistryHost): TaskPreforkCoordinator | undefined {
   return peekSubagentRuns(parentManaged)?.prefork;
 }
 
@@ -426,7 +440,7 @@ export function peekTaskPreforkCoordinator(parentManaged: ManagedAgent): TaskPre
  * in `entries`.
  */
 export function discardRegisteredPrefork(
-  managed: ManagedAgent,
+  managed: SubagentRegistryHost,
   cause: PreforkDiscardCause,
   emit: (discard: PreforkDiscard) => void = () => {}
 ): void {

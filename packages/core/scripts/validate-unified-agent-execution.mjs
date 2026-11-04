@@ -69,12 +69,12 @@ assert.deepEqual(directCalls, [], `only the managed span may call runAgentOnce; 
 assert.match(read("agent/run/managed-span.ts"), /\brunAgentOnce\s*\(/, "the helper owns the run call");
 assert.match(read("agent/run/managed-span.ts"), /abortErrorAsCancel/, "the helper parameterizes abort-shaped errors");
 assert.match(
-  read("managers/controllers/agent-chat-controller.ts"),
+  read("agent/run/chat-controller.ts"),
   /abortErrorAsCancel: false/,
   "root keeps abort-shaped errors as errors"
 );
 assert.match(
-  read("managers/controllers/agent-chat-controller.ts"),
+  read("agent/run/chat-controller.ts"),
   /onExternalError\(message\)/,
   "the root's abort-shaped error is terminal (status error), not text-only"
 );

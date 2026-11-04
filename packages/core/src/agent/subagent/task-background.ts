@@ -276,7 +276,18 @@ export function taskStatusForResult(
  * the previous phase's batched write and always before the next wire projection. Cheap when nothing is
  * wrong: one ledger scan plus one part lookup per settled row.
  */
-export function reconcileSettledTaskParts(managed: ManagedAgent): void {
+export interface TaskBackgroundHost {
+  getUI?():
+    | {
+        getMessages(): UIMessage[];
+        addToolResult(id: string, output: unknown): void;
+        attachToolDisplay(id: string, display: ToolDisplayPayload): void;
+      }
+    | undefined;
+  isSessionSwitching?(): boolean;
+}
+
+export function reconcileSettledTaskParts(managed: TaskBackgroundHost): void {
   const runs = peekSubagentRuns(managed);
   if (!runs) return;
   const channel = managed.getUI?.();

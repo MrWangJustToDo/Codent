@@ -154,18 +154,18 @@ const ALLOWED_EDGES = {
     mode: "type-only",
     reason:
       "hosts.ts declares the manager-side ports that domain modules consume; session-runtime.ts is the session switch's four ports, whose collaborators still live in managers until they are extracted.",
-    onlySources: ["hosts", "session-runtime", "session-host"],
+    onlySources: ["hosts", "session-runtime", "session-host", "chat-host"],
   },
   "runtime-types → agent": {
     mode: "type-only",
     reason:
       "hosts.ts exposes the AgentUIChannel port (`agent/ui/ui-channel.ts` implements it); session-runtime.ts names the agent-side collaborators of the session switch.",
-    onlySources: ["hosts", "session-runtime", "session-host"],
+    onlySources: ["hosts", "session-runtime", "session-host", "chat-host"],
   },
   "runtime-types → env": {
     mode: "type-only",
     reason: "session-host.ts types the owning runtime's CoreEnv (the session helpers read under its root).",
-    onlySources: ["session-host"],
+    onlySources: ["session-host", "chat-host"],
   },
   "runtime-types → models": {
     mode: "type-only",

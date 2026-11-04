@@ -23,7 +23,6 @@
 import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
 
 import type { SubagentResult } from "./types.js";
-import type { ManagedAgent } from "../../runtime-types/hosts.js";
 
 /** Max subagent runs executing LLM loops concurrently per parent. */
 export const MAX_ACTIVE_TASK_PREFORKS = 4;
@@ -523,7 +522,7 @@ export class TaskPreforkCoordinator {
  * Resolve a parent's concurrent-task cap: a finite integer `>= 1`, else the default.
  * A missing/0/negative/fractional/NaN value must not stall admission.
  */
-export function resolveMaxConcurrentTasks(parentManaged: ManagedAgent): number {
+export function resolveMaxConcurrentTasks(parentManaged: { config?: { maxConcurrentTasks?: number } }): number {
   const configured = parentManaged.config?.maxConcurrentTasks;
   if (typeof configured !== "number" || !Number.isFinite(configured)) return MAX_ACTIVE_TASK_PREFORKS;
   return Math.max(1, Math.floor(configured));

@@ -19,11 +19,11 @@ import type {
 } from "../agent/extension/types.js";
 import type { McpServerStatus } from "../agent/mcp/manager.js";
 import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
+import type { QueuedMessagesSnapshot } from "../agent/run/chat-controller.js";
 import type { AgentStreamEvent, AgentStreamSnapshot, StreamingChunk } from "../agent/stream-hub/types.js";
 import type { TodoItem } from "../agent/todo/types.js";
 import type { ToolPresentation, ToolPresentationInfo } from "../agent/tools/presentation/types.js";
 import type { UsageHistoryResult } from "../agent/usage/usage-store.js";
-import type { QueuedMessagesSnapshot } from "../managers/controllers/agent-chat-controller.js";
 import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
 import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js";
 import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";

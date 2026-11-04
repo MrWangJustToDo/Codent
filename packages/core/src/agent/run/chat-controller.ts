@@ -4,20 +4,20 @@
    moving one out would separate a decision from the loop that enforces it. The refusal gate and
    the queue drain helpers are the next extracted unit; the `SendMessageOutcome` contract added here
    is what pushed the file over the ceiling. */
-import { ApprovalDecisionCoordinator } from "../../agent/approval/approval-decision-coordinator.js";
-import { assertNotCompactionSummaryInput } from "../../agent/compaction";
-import { shouldDeferMidRunQueue } from "../../agent/queue/defer-mid-run-queue.js";
-import { PendingMessageQueue, type QueueMode } from "../../agent/queue/pending-message-queue.js";
-import { runManagedSpan } from "../../agent/run/managed-span.js";
-import { stripEmptyAssistantShells } from "../../agent/stream/empty-assistant-shell.js";
-import { extractAssistantText } from "../../agent/stream/extract-assistant-text.js";
+import { toError } from "../../utils/errors.js";
+import { ApprovalDecisionCoordinator } from "../approval/approval-decision-coordinator.js";
+import { assertNotCompactionSummaryInput } from "../compaction";
+import { shouldDeferMidRunQueue } from "../queue/defer-mid-run-queue.js";
+import { PendingMessageQueue, type QueueMode } from "../queue/pending-message-queue.js";
+import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
+import { extractAssistantText } from "../stream/extract-assistant-text.js";
 import {
   TOOL_CANCELLED_MESSAGE,
   settleToolCalls,
   hasCancellableIncompleteToolCalls,
   hasInFlightToolCalls,
-} from "../../agent/stream/incomplete-tool-calls.js";
-import { findToolCallPart } from "../../agent/stream/suppress-replayed-tool-chunks.js";
+} from "../stream/incomplete-tool-calls.js";
+import { findToolCallPart } from "../stream/suppress-replayed-tool-chunks.js";
 import {
   countPendingToolApprovals,
   hasPendingAskUser,
@@ -25,21 +25,22 @@ import {
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
   shouldContinueAgentPump,
-} from "../../agent/stream/tool-phase-utils.js";
-import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
-import { reconcileSettledTaskParts } from "../../agent/subagent/task-background.js";
-import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
-import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
-import { toError } from "../../utils/errors.js";
-import { countToolCalls } from "../run-finalizer.js";
+} from "../stream/tool-phase-utils.js";
+import { peekTaskPreforkCoordinator } from "../subagent/subagent-runs.js";
+import { reconcileSettledTaskParts } from "../subagent/task-background.js";
+import { CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { AgentUIChannel } from "../ui/ui-channel.js";
 
-import type { AgentEventBus } from "../../agent/agent-event-bus";
-import type { BackgroundWakeCause } from "../../agent/jobs/background-work.js";
-import type { RunToken } from "../../agent/run/run-coordinator.js";
+import { runManagedSpan } from "./managed-span.js";
+import { countToolCalls } from "./run-stats.js";
+
+import type { AgentEventBus } from "../agent-event-bus";
+import type { RunToken } from "./run-coordinator.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
+import type { AgentChatHost } from "../../runtime-types/chat-host.js";
+import type { AgentManager } from "../../runtime-types/hosts.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
-import type { AgentManager } from "../agent-manager.js";
-import type { ManagedAgent } from "../managed-agent.js";
+import type { BackgroundWakeCause } from "../jobs/background-work.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;
@@ -130,7 +131,7 @@ export class AgentChatController {
   }
 
   constructor(
-    private readonly managed: ManagedAgent,
+    private readonly managed: AgentChatHost,
     private readonly manager: AgentManager,
     initialMessages?: UIMessage[]
   ) {

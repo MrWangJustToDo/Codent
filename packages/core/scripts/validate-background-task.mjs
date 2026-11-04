@@ -760,7 +760,7 @@ const runs = subagentRuns(managed);
   );
   assert.deepEqual(
     withPattern(/wakeForBackgroundCompletion\(/).sort(),
-    ["managers/controllers/agent-chat-controller.ts", "managers/managed-agent.ts"],
+    ["agent/run/chat-controller.ts", "managers/managed-agent.ts"],
     "the decision lives in the controller; its one caller is the publication/peek path"
   );
 }

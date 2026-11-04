@@ -91,7 +91,7 @@ assert.equal(resolveSubagentStopReason({ aborted: true, reason: "some-other" }),
     "managers/agent-manager.ts",
     "managers/managed-agent.ts",
     "agent-session/local-session-dispatch.ts",
-    "managers/controllers/agent-chat-controller.ts",
+    "agent/run/chat-controller.ts",
   ];
   const callSite = /(\.abort|interruptCurrentRun)\(\s*"([^"]+)"/g;
   let checked = 0;

@@ -88,7 +88,7 @@ packages/app/src/adapter/session-bootstrap.ts
 
 | API                                                                                | File                                | Use                                                 |
 | ---------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------- |
-| `ManagedAgent.initChat(manager, initialMessages?)`                                 | `managers/controllers/agent-chat-controller.ts` | Main CLI chat session                               |
+| `ManagedAgent.initChat(manager, initialMessages?)`                                 | `agent/run/chat-controller.ts` | Main CLI chat session                               |
 | `AgentChatController.sendMessage` / `steer` / `followUp` / `respondToToolApproval` | same                                | User turns, mid-run queues, tool-phase continuation |
 | `agentManager.runAgentStream(agentId, input)`                                      | `managers/run-agent.ts`             | Core streaming entry                                |
 | `AgentSession` / `AgentSessionHost`                                                | `agent-session/`                    | Preferred host/UI control surface                   |

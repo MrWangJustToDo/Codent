@@ -31,7 +31,7 @@ keeps the pattern so a reintroduction fails immediately.
 
 | file | sites |
 |---|---:|
-| `managers/controllers/agent-chat-controller.ts` | 3 |
+| `agent/run/chat-controller.ts` | 3 |
 
 ### `epoch-guard-staleness` → owner E8/E9 (Epoch) — 3 sites
 
@@ -56,7 +56,7 @@ old helper until they receive the epoch through their deps.
 | file | sites |
 |---|---:|
 | `managers/approval-decision-coordinator.ts` | 2 |
-| `managers/controllers/agent-chat-controller.ts` | 3 |
+| `agent/run/chat-controller.ts` | 3 |
 | `managers/managed-agent.ts` | 4 |
 | `managers/run-agent.ts` | 1 |
 

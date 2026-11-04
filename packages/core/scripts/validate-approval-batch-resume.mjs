@@ -284,7 +284,7 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
 // ============================================================================
 {
   const controllerSrc = fs.readFileSync(
-    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
+    fileURLToPath(new URL("../src/agent/run/chat-controller.ts", import.meta.url)),
     "utf8"
   );
   assert.match(

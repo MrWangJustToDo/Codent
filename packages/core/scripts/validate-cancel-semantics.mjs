@@ -750,10 +750,7 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
 // its unwinding pump (`currentToken && !isCurrent`) — both correct, and both out of reach of a unit
 // validator without a stub provider.
 {
-  const controllerSrc = readFileSync(
-    new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url),
-    "utf8"
-  );
+  const controllerSrc = readFileSync(new URL("../src/agent/run/chat-controller.ts", import.meta.url), "utf8");
   assert.ok(
     /interruptCurrentRun\("force-submit", \{ keepQueue: true \}\)/.test(controllerSrc),
     "forceSubmit interrupts the run WITHOUT clearing the queue"
@@ -767,10 +764,7 @@ assert.equal(taskOutputSchema.shape.cancelled, undefined, "task declares ONE mar
 // The queue is also not a one-way door: Ctrl+Q takes the last message back, which has to reach the queues
 // through a command that RETURNS it (the pop) rather than clearing them.
 {
-  const controllerSrc = readFileSync(
-    new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url),
-    "utf8"
-  );
+  const controllerSrc = readFileSync(new URL("../src/agent/run/chat-controller.ts", import.meta.url), "utf8");
   const dispatchSrc = readFileSync(new URL("../src/agent-session/local-session-dispatch.ts", import.meta.url), "utf8");
   assert.ok(
     /popQueuedMessage\(\): \{ kind: "steer" \| "followUp"; content: QueuedMessageContent \} \| null/.test(

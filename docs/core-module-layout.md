@@ -10,8 +10,8 @@ then one commit.
 ## 1. Controllers out of `managers/controllers`
 - [x] `compaction-controller.ts` → `agent/compaction/compaction-controller.ts`
 - [x] `turn-context-controller.ts` → `agent/turn-context/turn-context-controller.ts`
-- [ ] `agent-chat-controller.ts` → `agent/run/chat-controller.ts` (narrow `AgentChatHost` port)
-- [ ] delete the empty `managers/controllers/`
+- [x] `agent-chat-controller.ts` → `agent/run/chat-controller.ts` (narrow `AgentChatHost` port)
+- [x] delete the empty `managers/controllers/`
 
 ## 2. `managed-agent-*` facets
 - [ ] `managed-agent-tools.ts` → `agent/tools/runtime/tool-facet.ts`

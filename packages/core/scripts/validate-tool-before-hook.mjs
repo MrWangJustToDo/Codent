@@ -75,7 +75,7 @@ const srcRoot = resolve(here, "../src");
   const runAgent = readFileSync(resolve(srcRoot, "managers/run-agent.ts"), "utf8");
   assert.match(runAgent, /getToolBeforeHooks: deps\.getToolBeforeHooks/, "the middleware receives the ledger");
 
-  const controller = readFileSync(resolve(srcRoot, "managers/controllers/agent-chat-controller.ts"), "utf8");
+  const controller = readFileSync(resolve(srcRoot, "agent/run/chat-controller.ts"), "utf8");
   assert.match(
     controller,
     /runToolBeforeHook: \(toolCallId, toolName, args\)/,
