@@ -241,7 +241,7 @@ pump 入口 (`agent-chat-controller.ts:502-524`)：
 
 真正的 `prepareForRun` 在 `executeManagedAgentRun` 里 (`managers/run-agent.ts:345`)，
 而 `runAgentStream` 是惰性 async generator（`run-agent.ts:387-398`），因此它在消费者第一次拉流时才执行
-（以下四条的行号指 `packages/core/src/managers/managed-agent-run-lifecycle.ts`）：
+（以下四条的行号指 `packages/core/src/agent/run/run-lifecycle.ts`）：
 
 - `RunCoordinator.setupAbortController(signal, { onAborted })` —— **abort controller 的唯一创建点**
   (`run-coordinator.ts:38`)；监听器只在 `isActiveStatus` 时写 `aborted` (`:87`)。
@@ -713,7 +713,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `packages/core/src/agent/run/chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
 | `packages/core/src/managers/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |
 | `packages/core/src/managers/run-finalizer.ts` | `deriveChatOutcome`、`finalizeChat`、`finalizeDetached` 的顺序契约 |
-| `packages/core/src/managers/managed-agent-run-lifecycle.ts` | `prepareManagedAgentForRun` / `finalizeManagedAgentRun` / `abortManagedAgentRun` |
+| `packages/core/src/agent/run/run-lifecycle.ts` | `prepareManagedAgentForRun` / `finalizeManagedAgentRun` / `abortManagedAgentRun` |
 | `packages/core/src/managers/managed-agent.ts` | 组合根、`setStatus` + `agent:state` 发布、`abort`、`finalizeRun` |
 | `packages/core/src/managers/run-agent.ts` | runner 装配、middleware 顺序、`executeManagedAgentRun`、`runAgentStream` |
 | `packages/core/src/managers/run-stream-recovery.ts` | 恢复阶梯、退避、截断、重启式重试 |

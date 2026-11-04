@@ -154,13 +154,13 @@ const ALLOWED_EDGES = {
     mode: "type-only",
     reason:
       "hosts.ts declares the manager-side ports that domain modules consume; session-runtime.ts is the session switch's four ports, whose collaborators still live in managers until they are extracted.",
-    onlySources: ["hosts", "session-runtime", "session-host", "chat-host"],
+    onlySources: ["hosts", "session-runtime", "session-host", "chat-host", "run-host"],
   },
   "runtime-types → agent": {
     mode: "type-only",
     reason:
       "hosts.ts exposes the AgentUIChannel port (`agent/ui/ui-channel.ts` implements it); session-runtime.ts names the agent-side collaborators of the session switch.",
-    onlySources: ["hosts", "session-runtime", "session-host", "chat-host"],
+    onlySources: ["hosts", "session-runtime", "session-host", "chat-host", "run-host"],
   },
   "runtime-types → env": {
     mode: "type-only",
@@ -170,7 +170,7 @@ const ALLOWED_EDGES = {
   "runtime-types → models": {
     mode: "type-only",
     reason: "ModelInfo / ModelPricing / adapter config shape the shared payloads and the session host port.",
-    onlySources: ["session-payloads", "token-usage", "session-host"],
+    onlySources: ["session-payloads", "token-usage", "session-host", "run-host"],
   },
 
   // env is the runtime abstraction at the bottom of the stack. It declares the LSP

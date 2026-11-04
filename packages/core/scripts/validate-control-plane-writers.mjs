@@ -57,7 +57,7 @@ const PATTERNS = [
       ],
       ["agent/compaction/compaction-controller.ts", "compaction restores the status through the controller"],
       ["managers/managed-agent.ts", "ManagedAgent forwards to the controller / session reset"],
-      ["managers/managed-agent-run-lifecycle.ts", "run finalization applies the terminal status"],
+      ["agent/run/run-lifecycle.ts", "run finalization applies the terminal status"],
     ]),
   },
   {

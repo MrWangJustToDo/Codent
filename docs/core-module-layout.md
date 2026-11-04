@@ -14,12 +14,12 @@ then one commit.
 - [x] delete the empty `managers/controllers/`
 
 ## 2. `managed-agent-*` facets
-- [ ] `managed-agent-tools.ts` → `agent/tools/runtime/tool-facet.ts`
-- [ ] `managed-agent-extensions.ts` → `agent/extension/extension-facet.ts`
-- [ ] `managed-agent-compact.ts` → `agent/compaction/compact-facet.ts`
-- [ ] `managed-agent-run-lifecycle.ts` → `agent/run/run-lifecycle.ts`
-- [ ] `managed-agent-runner-wiring.ts` → `agent/run/runner-wiring.ts`
-- [ ] `managed-agent-model.ts` → `managers/model-facet.ts` (stays with the composition root)
+- [x] `managed-agent-tools.ts` → `managers/tool-facet.ts` (service stays in managers)
+- [x] `managed-agent-extensions.ts` → `managers/extension-facet.ts`
+- [x] `managed-agent-compact.ts` → `managers/compact-facet.ts`
+- [x] `managed-agent-run-lifecycle.ts` → `agent/run/run-lifecycle.ts`
+- [x] `managed-agent-runner-wiring.ts` → `agent/run/runner-wiring.ts`
+- [x] `managed-agent-model.ts` → `managers/model-facet.ts` (stays with the composition root)
 
 ## 3. Naming / cleanup
 - [x] `managers/managed-agent-prompt.ts` → `agent/turn-context/prompt-builder.ts`

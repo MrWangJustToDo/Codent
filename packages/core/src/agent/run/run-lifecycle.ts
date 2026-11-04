@@ -4,65 +4,18 @@
 
 import { type UIMessage as TanStackUIMessage, type ModelMessage } from "@tanstack/ai";
 
-import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
-import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
-import { isActiveStatus } from "../runtime-types/agent-status.js";
+import { isActiveStatus } from "../../runtime-types/agent-status.js";
+import { isToolContinuationPrepare } from "../stream/tool-phase-utils.js";
+import { lastGenuineUserText } from "../turn-context/turn-context-message.js";
 
-import type { RunCoordinator } from "../agent/run/run-coordinator.js";
-import type { AgentStateEventType, AgentTransitionEvent } from "../runtime-types/agent-state.js";
-import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
-import type { Epoch } from "../runtime-types/epoch.js";
-import type { CompactionService } from "./services/compaction-service.js";
-import type { MemoryService } from "./services/memory-service.js";
-import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
-import type { UsageTracker } from "./telemetry/usage-tracker.js";
-import type { BackgroundWakeCause } from "../agent/jobs/background-work.js";
-import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
-import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
+import type { RunFinalizeReason } from "../../runtime-types/agent-status.js";
+import type { RunLifecycleHost } from "../../runtime-types/run-host.js";
 
 /**
  * Narrow interface capturing only the methods/fields lifecycle helpers need.
  * ManagedAgent structurally satisfies this via its public API surface.
  * This prevents lifecycle helpers from depending on the full ManagedAgent class.
  */
-export interface RunLifecycleHost {
-  readonly id: string;
-  parentId?: string;
-  /** Capture the session/run identity before an async continuation (see `runtime-types/epoch.ts`). */
-  captureEpoch?: () => Epoch;
-  getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
-  /** The single state writer; when present, abort goes through the state machine. */
-  transitionStatus?: (event: AgentTransitionEvent) => AgentStatus;
-  /** Re-assert a pending `ask_user` as the wait after a run finalizes (see WaitKind). */
-  syncPendingWait?: (messages: TanStackUIMessage[]) => void;
-  /** Track the active run id (log run-scoping); pass null to clear. */
-  setCurrentRunId: (runId: string | null) => void;
-  recordStreamDuration: () => void;
-  consumePrepareAsContinuation: () => boolean;
-  clearPrepareAsContinuation: () => void;
-  /** A pump started without a user prompt (background-completion wake) — new run scope, no hooks. */
-  consumePrepareAsNewTurn: () => boolean;
-  /** Why that promptless turn exists, read once when `run:wake` is emitted. */
-  takePendingWakeCause: () => BackgroundWakeCause | undefined;
-  beginTurnFinalize: () => boolean;
-  getStreamStartedAt: () => number;
-  setStreamStartedAt: (value: number) => void;
-  persistSession: () => void;
-  /** Active disk session id; read live so a switch during a side query is observable. */
-  getSessionData: () => { id?: string } | null;
-  clearTurnContext: () => void;
-  getMessagesForLLM: (canon?: ModelMessage[]) => ModelMessage[];
-  collectExtensionPromptHooks: (prompt: string) => Promise<void>;
-  emitEvent: EmitAgentTelemetryFn;
-  resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  usage: UsageTracker;
-  getUI?: () => AgentUIChannel | undefined;
-  run: RunCoordinator;
-  getCompaction(): CompactionService;
-  memory: MemoryService;
-}
-
 export async function prepareManagedAgentForRun(
   host: RunLifecycleHost,
   options: {

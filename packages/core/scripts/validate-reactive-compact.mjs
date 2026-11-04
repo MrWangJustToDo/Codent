@@ -35,7 +35,7 @@ import {
 // ---------------------------------------------------------------------------
 {
   const lifecycleSrc = readFileSync(
-    fileURLToPath(new URL("../src/managers/managed-agent-run-lifecycle.ts", import.meta.url)),
+    fileURLToPath(new URL("../src/agent/run/run-lifecycle.ts", import.meta.url)),
     "utf8"
   );
   const blockSource = (marker) => {

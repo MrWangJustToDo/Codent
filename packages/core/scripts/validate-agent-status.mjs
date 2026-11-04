@@ -394,7 +394,7 @@ assert.equal(managed.getStatus(), "waiting");
 // Asserted at the source because both defects are about placement and predicate choice, which
 // no value assertion of the pure helper can see.
 {
-  const src = readFileSync(join(SRC, "managers/managed-agent-run-lifecycle.ts"), "utf8");
+  const src = readFileSync(join(SRC, "agent/run/run-lifecycle.ts"), "utf8");
   const listener = /onAborted: \(\) => \{([\s\S]*?)\n {6}\}/.exec(src);
   assert.ok(listener, "the abort listener is present");
   const body = listener[1];

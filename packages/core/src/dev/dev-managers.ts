@@ -58,13 +58,13 @@ export {
 } from "../managers/agent-bootstrap.js";
 export { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 export { TurnContextController } from "../agent/turn-context/turn-context-controller.js";
-export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/managed-agent-run-lifecycle.js";
+export { abortManagedAgentRun, finalizeManagedAgentRun } from "../agent/run/run-lifecycle.js";
 export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
 export { completePlan, loadPlanFromWorkspace } from "../agent/plan/managed-agent-plan.js";
 export { createManualCompactHost } from "../managers/managed-agent.js";
-export { RunnerWiring } from "../managers/managed-agent-runner-wiring.js";
+export { RunnerWiring } from "../agent/run/runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../agent/run/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";
 export { SessionService } from "../managers/services/session-service.js";
@@ -151,8 +151,8 @@ export { CompactionController } from "../agent/compaction/compaction-controller.
 // The `ManagedAgent` end of the reactive path (gates, retry budget, event pair, status
 // unwind). `validate:reactive-compact` drives this against a fake host, because the
 // helper-only coverage it had before could not see a broken gate or a stuck status.
-export { handleManagedReactiveCompact } from "../managers/managed-agent-compact.js";
-export type { ReactiveCompactHost } from "../managers/managed-agent-compact.js";
+export { handleManagedReactiveCompact } from "../managers/compact-facet.js";
+export type { ReactiveCompactHost } from "../managers/compact-facet.js";
 
 // Tool presentation (internal validation exports): pure descriptor helpers over the static
 // built-in table plus a supplied resolver.

@@ -20,7 +20,7 @@ are listed at the end as migration context.
 | `managers/controllers/agent-status-controller.ts` | 26 |
 | `managers/controllers/compaction-controller.ts` | 4 |
 | `managers/managed-agent.ts` | 3 |
-| `managers/managed-agent-run-lifecycle.ts` | 2 |
+| `agent/run/run-lifecycle.ts` | 2 |
 
 ### `epoch-guard-session-id` → retired by E9
 

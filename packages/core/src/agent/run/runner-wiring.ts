@@ -18,10 +18,10 @@
  * composition root and can be validated on its own.
  */
 
-import type { AgentEventBus } from "../agent/agent-event-bus";
-import type { AgentRunner } from "../agent/runner/agent-runner.js";
-import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
-import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
+import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
+import type { AgentEventBus } from "../agent-event-bus";
+import type { AgentRunner } from "../runner/agent-runner.js";
+import type { AgentUIChannel } from "../ui/ui-channel.js";
 
 /** What {@link RunnerWiring} needs from the agent that owns it. */
 export interface RunnerWiringHost {

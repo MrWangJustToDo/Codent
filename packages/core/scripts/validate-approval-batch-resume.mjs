@@ -300,7 +300,7 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
   // A preserved question must also be named in the status on the abort path. That sync lives in
   // `finalizeManagedAgentRun` (one place for every finalize path, not a chat-controller special case).
   const lifecycleSrc = fs.readFileSync(
-    fileURLToPath(new URL("../src/managers/managed-agent-run-lifecycle.ts", import.meta.url)),
+    fileURLToPath(new URL("../src/agent/run/run-lifecycle.ts", import.meta.url)),
     "utf8"
   );
   assert.match(
