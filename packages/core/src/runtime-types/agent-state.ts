@@ -33,13 +33,18 @@ export interface AgentState {
 export type AgentTransitionEvent =
   | { type: "prepare" }
   | { type: "stream-start" }
-  | { type: "stream-chunk"; stream: "thinking" | "responding" }
+  | { type: "stream-chunk"; stream: "thinking" | "responding" | "tooling" }
   | { type: "stream-end"; result: "completed" | "error" | "aborted"; error?: string }
+  /** Settle a turn from a state that has no live stream (client-tool resume, reconcile). */
+  | { type: "settle"; result: "completed" | "error" | "aborted"; error?: string; clearWait?: boolean }
+  /** A failure that did not come from a normal stream end (external error, apply-outcome). */
+  | { type: "fail"; error: string }
   | { type: "pause"; wait: "approval" | "question" }
   | { type: "resume" }
   | { type: "interrupt"; error?: string }
   | { type: "compaction-start" }
   | { type: "compaction-end" }
+  | { type: "reset" }
   | { type: "teardown" };
 
 export const INITIAL_AGENT_STATE: AgentState = {
@@ -152,8 +157,12 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       return { ...state, lifecycle: "busy", run: "streaming", stream: "none" };
 
     case "stream-chunk":
-      if (state.run !== "streaming") reject(`stream-chunk requires streaming, got ${state.run}`, event, options);
-      return { ...state, stream: event.stream };
+      // A chunk implies a stream even when the caller missed `stream-start` (a retry resumes
+      // mid-stream), so promote instead of rejecting.
+      if (event.stream === "tooling") {
+        return { ...state, lifecycle: "busy", run: "tooling", stream: "none" };
+      }
+      return { ...state, lifecycle: "busy", run: "streaming", stream: event.stream };
 
     case "stream-end":
       if (state.lifecycle !== "busy" || state.run === "idle") {
@@ -175,6 +184,26 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         outcome: event.result,
         stream: "none",
         ...(event.error !== undefined ? { errorMessage: event.error } : {}),
+      };
+
+    case "settle":
+      return {
+        ...state,
+        run: "finalizing",
+        outcome: event.result,
+        stream: "none",
+        ...(event.clearWait ? { wait: "none" } : {}),
+        ...(event.error !== undefined ? { errorMessage: event.error } : {}),
+      };
+
+    case "fail":
+      return {
+        ...state,
+        lifecycle: "ready",
+        run: "finalizing",
+        outcome: "error",
+        stream: "none",
+        errorMessage: event.error,
       };
 
     case "pause":
@@ -209,6 +238,9 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
     case "compaction-end":
       if (state.run !== "compacting") reject(`compaction-end requires compacting, got ${state.run}`, event, options);
       return { ...state, run: state.resumeRun ?? "idle", resumeRun: undefined };
+
+    case "reset":
+      return { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" };
 
     case "teardown":
       return { ...state, lifecycle: "destroyed", run: "idle", wait: "none", stream: "none" };

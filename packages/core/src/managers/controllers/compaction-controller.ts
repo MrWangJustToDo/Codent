@@ -28,6 +28,7 @@
 
 import { isTerminalStatus } from "../../runtime-types/agent-status.js";
 
+import type { AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus, AgentStatusTrigger } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
@@ -70,6 +71,8 @@ export type CompactionOutcome =
 export interface CompactionControllerDeps {
   getStatus: () => AgentStatus;
   setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
+  /** The single state writer; compaction is a run phase, not a status of its own. */
+  transition?: (event: AgentTransitionEvent, trigger?: AgentStatusTrigger) => AgentStatus;
   /**
    * Clear the last error when a compaction restores a terminal status to `idle`.
    *
@@ -120,7 +123,8 @@ export class CompactionController {
     };
     this.active = { lease, previousStatus: this.deps.getStatus(), ...(controller ? { controller } : {}) };
 
-    this.deps.setStatus("compacting", `compaction:${kind}`);
+    if (this.deps.transition) this.deps.transition({ type: "compaction-start" }, `compaction:${kind}`);
+    else this.deps.setStatus("compacting", `compaction:${kind}`);
     if (kind === "auto") {
       this.deps.emitEvent(
         "compaction:auto-start",
@@ -297,6 +301,18 @@ export class CompactionController {
     // Only an owner may restore, and only from the status it published. A cancel (aborted), a
     // session switch (reset) or a newer run (running) already moved on.
     if (this.deps.getStatus() !== "compacting") return;
+    if (this.deps.transition) {
+      const terminalPrevious =
+        previous !== undefined && isTerminalStatus(previous) && previous !== "waiting" && previous !== "awaiting_user";
+      if (kind === "manual" && terminalPrevious) {
+        // A successful manual compact after a failed turn clears the old fault and settles idle.
+        this.deps.setError?.("");
+        this.deps.transition({ type: "reset" }, "compaction-end");
+        return;
+      }
+      this.deps.transition({ type: "compaction-end" }, "compaction-end");
+      return;
+    }
     if (kind === "manual" && previous !== undefined && previous !== "compacting") {
       // A terminal status is not state to restore. `/compact` is allowed after a failed or
       // aborted turn, and writing `error`/`aborted` back after a SUCCESSFUL compaction made the

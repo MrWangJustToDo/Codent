@@ -64,10 +64,10 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 
 - [x] 6.1 Define `LifecyclePhase` / `RunPhase` / `WaitKind` and the transition table (depends: 1.2)
 - [x] 6.2 Add the read-only projection to `AgentStatus` (and optional snapshot fields) without changing writers (depends: 6.1)
-- [ ] 6.3 Route every status write through `transition(event)` and remove direct assignment (depends: 6.2, 2.9, 4.6, 5.1)
-- [ ] 6.4 Remove the `TERMINAL/ACTIVE` overlap and `resolveFinishStatus` special cases; derive terminality from the axes (depends: 6.3)
+- [x] 6.3 Route every status write through `transition(event)` and remove direct assignment (depends: 6.2, 2.9, 4.6, 5.1)
+- [x] 6.4 Remove the `TERMINAL/ACTIVE` overlap and `resolveFinishStatus` special cases; derive terminality from the axes (depends: 6.3)
 - [ ] 6.5 Collapse the 23 status triggers to the transition-event set and update log policy (depends: 6.3, 6.4)
-- [ ] 6.6 Move compaction out of `AgentStatus` into the run phase / operation lease (depends: 6.3, 4.1)
+- [x] 6.6 Move compaction out of `AgentStatus` into the run phase / operation lease (depends: 6.3, 4.1)
 - [ ] 6.7 Replace the pump's manual outcome derivation with transition events (depends: 6.3, 6.6, 2.8)
 - [ ] 6.8 Model approval / `ask_user` waits as `WaitKind` and remove the `parkOnPendingQuestion` special case (depends: 6.3, 5.7)
 - [ ] 6.9 Add `validate:state-transition-matrix` plus old-status equivalence assertions (depends: 1.4, 6.1–6.8)

@@ -92,7 +92,13 @@ import { getEnv, resolveCoreEnv } from "../env";
 import { selectModel } from "../models/config/model-selection.js";
 import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
-import { deriveAgentState } from "../runtime-types/agent-state.js";
+import {
+  deriveAgentState,
+  projectAgentStatus,
+  transition,
+  type AgentState,
+  type AgentTransitionEvent,
+} from "../runtime-types/agent-state.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { createEpoch, type Epoch } from "../runtime-types/epoch.js";
 import { errorMessage } from "../utils/errors.js";
@@ -412,6 +418,8 @@ export class ManagedAgent {
 
   /** Lifecycle — hosts read via getter; mutate through {@link setStatus}. */
   private currentStatus: AgentStatus;
+  /** Explicit axes behind {@link currentStatus}; `transitionStatus` is the writer. */
+  private agentState: AgentState = deriveAgentState("idle");
   private error: string;
   /** The last run's model finish reason, projected on the state channel. */
   private lastFinishReason: string | null = null;
@@ -722,6 +730,7 @@ export class ManagedAgent {
     this.extensions.setManagedToolsProvider(() => this.tools);
     this.statusController = createAgentStatusController({
       getStatus: () => this.getStatus(),
+      transition: (event, trigger) => this.transitionStatus(event, trigger),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       getError: () => this.error,
       setError: (error) => this.setError(error),
@@ -738,6 +747,7 @@ export class ManagedAgent {
     });
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
+      transition: (event, trigger) => this.transitionStatus(event, trigger),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       setError: (error) => this.setError(error),
       onUserCancel: () => this.statusController.onUserCancel(),
@@ -1044,7 +1054,44 @@ export class ManagedAgent {
     logSubagentLifecycle(this.log, phase, details, run, details.sessionId ?? liveSessionId);
   }
 
+  /**
+   * Legacy status writer (compaction's `compacting` value and host compatibility).
+   *
+   * Re-derives the axes from the status; new writers use {@link transitionStatus}.
+   */
   setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
+    this.agentState = deriveAgentState(status, this.error);
+    this.applyStatus(status, trigger);
+  }
+
+  /**
+   * The one state writer: apply a closed-set event, project `AgentStatus`, publish the change.
+   *
+   * An illegal event is recorded through diagnostics and leaves the axes untouched (production
+   * never corrupts state on a missed path); tests assert the strict throw directly on `transition`.
+   */
+  transitionStatus(event: AgentTransitionEvent, trigger?: AgentStatusTrigger): AgentStatus {
+    const next = transition(this.agentState, event, {
+      strict: false,
+      onReject: (reason) => {
+        this.emitDiagnostic("session", "Rejected state transition", {
+          level: "warn",
+          data: { reason, event: event.type },
+        });
+      },
+    });
+    this.agentState = next;
+    const status = projectAgentStatus(next);
+    this.applyStatus(status, trigger);
+    return status;
+  }
+
+  /** The explicit axes behind the current status (read-only). */
+  getAgentState(): AgentState {
+    return this.agentState;
+  }
+
+  private applyStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
     const prev = this.currentStatus;
     if (status === "completed" || status === "aborted" || status === "error") {
       this.recordStreamDuration();
@@ -1155,7 +1202,7 @@ export class ManagedAgent {
   getL1State(): AgentL1State {
     return {
       status: this.currentStatus,
-      state: deriveAgentState(this.currentStatus, this.error),
+      state: this.agentState,
       name: this.name,
       sessionId: this.getSessionData()?.id ?? null,
       error: this.error,

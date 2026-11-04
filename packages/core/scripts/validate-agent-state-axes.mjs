@@ -151,10 +151,9 @@ for (const status of STATUSES) {
   assert.equal(same, destroyed, "a rejected event leaves the state untouched");
   assert.equal(rejected.length, 1);
 
-  assert.throws(
-    () => transition(deriveAgentState("idle"), { type: "stream-chunk", stream: "thinking" }),
-    /requires streaming/
-  );
+  // A chunk implies a stream even if the caller missed `stream-start` (retry resumes mid-stream).
+  const promoted = transition(deriveAgentState("idle"), { type: "stream-chunk", stream: "thinking" });
+  assert.equal(projectAgentStatus(promoted), "thinking");
 }
 
 // --- the snapshot carries the axes next to the wire status -----------------

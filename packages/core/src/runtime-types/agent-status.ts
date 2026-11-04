@@ -2,6 +2,12 @@
 // Agent Status
 // ============================================================================
 
+// ============================================================================
+// Status predicates (shared — importable from agent/ domain modules)
+// ============================================================================
+
+import { deriveAgentState, isActiveState, isTerminalState } from "./agent-state.js";
+
 export type AgentStatus =
   | "idle"
   | "running"
@@ -69,22 +75,30 @@ export type AgentStatusTrigger =
   | "chunk:tool"
   | "chunk:reasoning";
 
-// ============================================================================
-// Status predicates (shared — importable from agent/ domain modules)
-// ============================================================================
-
-/** Statuses that must not be overwritten when a stream finishes normally. */
-export const TERMINAL_STATUSES = new Set<AgentStatus>(["aborted", "error", "waiting", "awaiting_user"]);
-
-/** Statuses indicating an agent is actively doing work (used for cancellation ordering). */
-export const ACTIVE_STATUSES = new Set<AgentStatus>([
+const ALL_STATUSES: readonly AgentStatus[] = [
+  "idle",
   "running",
-  "thinking",
-  "responding",
+  "completed",
+  "error",
+  "aborted",
   "waiting",
   "awaiting_user",
   "compacting",
-]);
+  "thinking",
+  "responding",
+];
+
+/**
+ * Derived, not a hand-maintained overlapping set: `waiting`/`awaiting_user` are ACTIVE waits, not
+ * terminal. Kept as sets for the consumers (registry cancellation ordering) that ask by value.
+ */
+export const TERMINAL_STATUSES: ReadonlySet<AgentStatus> = new Set(
+  ALL_STATUSES.filter((status) => isTerminalState(deriveAgentState(status)))
+);
+
+export const ACTIVE_STATUSES: ReadonlySet<AgentStatus> = new Set(
+  ALL_STATUSES.filter((status) => isActiveState(deriveAgentState(status)))
+);
 
 export function isTerminalStatus(status: AgentStatus): boolean {
   return TERMINAL_STATUSES.has(status);
@@ -94,13 +108,14 @@ export function isActiveStatus(status: AgentStatus): boolean {
   return ACTIVE_STATUSES.has(status);
 }
 
-/** Resolve the status to apply when an agent run finishes. */
+/**
+ * Resolve the status to apply when an agent run finishes.
+ *
+ * Terminal/parked/compacting states are kept; otherwise the result is the run's error or success.
+ * The axes decide the first three, so a new wait/terminal state does not need a fourth special case.
+ */
 export function resolveFinishStatus(current: AgentStatus, errorMessage: string): AgentStatus {
-  if (isTerminalStatus(current)) return current;
-  // `compacting` is an owner-held state, not a run outcome. Writing `completed` over it made the
-  // compaction lease's `finish` a silent no-op (it only restores from `compacting`), so the turn's
-  // terminal value could be lost. The lease always restores in its producer's `finally`.
-  if (current === "compacting") return current;
-  if (errorMessage) return "error";
-  return "completed";
+  const state = deriveAgentState(current, errorMessage);
+  if (isTerminalState(state) || state.wait !== "none" || state.run === "compacting") return current;
+  return errorMessage ? "error" : "completed";
 }

@@ -22,7 +22,7 @@ import {
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
 assert.equal(isTerminalStatus("aborted"), true);
-assert.equal(isTerminalStatus("waiting"), true);
+assert.equal(isTerminalStatus("waiting"), false, "a paused run is active, not terminal (P4)");
 assert.equal(isTerminalStatus("running"), false);
 
 assert.equal(isActiveStatus("thinking"), true);
@@ -504,10 +504,16 @@ assert.equal(managed.getStatus(), "waiting");
     return { controller, status: () => current };
   };
 
-  for (const active of ["running", "thinking", "responding", "waiting", "awaiting_user", "compacting"]) {
+  for (const active of ["running", "thinking", "responding", "waiting", "compacting"]) {
     const { controller, status } = makeController(active);
     controller.onUserCancel();
     assert.equal(status(), "aborted", `Esc during ${active} is an abort`);
+  }
+  {
+    // P4: an abort does not discard an unanswered `ask_user`; the question still owns the turn.
+    const { controller, status } = makeController("awaiting_user");
+    controller.onUserCancel();
+    assert.equal(status(), "awaiting_user", "Esc while parked on a question keeps awaiting_user");
   }
   for (const settled of ["completed", "aborted", "error", "idle"]) {
     const { controller, status } = makeController(settled);
