@@ -347,12 +347,7 @@ export class AgentChatController {
       this.persistMessages("pump-complete");
       this.managed.finalizeRun(kind);
     }
-    // An `ask_user` is a question addressed to the USER: abandoning the run does not answer or
-    // withdraw it, and cancelling it would discard both the question and the input. The turn is
-    // over, but the agent is still parked on the user — name that, or `sendMessage` is admitted
-    // against `aborted` and the next pump breaks on the pending question without ever calling the
-    // model (the dead-looking session this rule exists to prevent).
-    this.managed.statusController.parkOnPendingQuestion(this.channel.getMessages());
+    // A pending `ask_user` is re-asserted by `finalizeManagedAgentRun` after the status finalize.
   }
 
   /** How steering messages are drained at each drain point. */

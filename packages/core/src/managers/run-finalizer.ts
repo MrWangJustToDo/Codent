@@ -11,7 +11,10 @@
 
 import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
 
+import { deriveRunOutcomeKind } from "./agent-run-outcome.js";
+
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "./agent-run-outcome.js";
+import type { AgentState } from "../runtime-types/agent-state.js";
 import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
@@ -22,6 +25,8 @@ import type { UIMessage } from "@tanstack/ai";
 export interface RunFinalizerDeps {
   status: AgentStatusController;
   getStatus: () => AgentStatus;
+  /** The state axes; the outcome reads these instead of re-deriving from status strings. */
+  getAgentState?: () => AgentState;
   getError: () => string;
   /** Turn-level finalization (agent:stop / persistence / memory extraction); idempotent. */
   finalizeRun: (reason: RunFinalizeReason) => void;
@@ -76,6 +81,9 @@ export class RunFinalizer {
    * inline expression: aborted > error > waiting > finished.
    */
   deriveChatOutcome(input: { hasError: boolean; waitingForUser: boolean }): AgentRunOutcomeKind {
+    const state = this.deps.getAgentState?.();
+    if (state) return deriveRunOutcomeKind(state, input);
+    // Legacy fixture without axes: keep the old status fallback until the writer is injected.
     const status = this.deps.getStatus();
     if (status === "aborted") return "aborted";
     if (input.hasError || status === "error") return "error";

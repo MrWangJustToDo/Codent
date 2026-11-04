@@ -239,7 +239,13 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
 
     case "compaction-end":
       if (state.run !== "compacting") reject(`compaction-end requires compacting, got ${state.run}`, event, options);
-      return { ...state, run: state.resumeRun ?? "idle", resumeRun: undefined };
+      // A finish that landed while the compaction owned the phase is applied now; otherwise the
+      // phase the compaction interrupted resumes.
+      return {
+        ...state,
+        run: state.outcome === "none" ? (state.resumeRun ?? "idle") : "finalizing",
+        resumeRun: undefined,
+      };
 
     case "reset":
       return { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" };

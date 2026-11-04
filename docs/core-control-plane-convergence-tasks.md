@@ -297,8 +297,8 @@ graph TD
 
 ### P4（状态三轴）
 - [ ] `setStatus` 只剩 `transition()` 内部调用。
-- [ ] 无 TERMINAL/ACTIVE 重叠、无 `compacting` 特判、无 `error+ask_user` 特例。
-- [ ] 事件 × phase 迁移矩阵全绿。
+- [x] 无 TERMINAL/ACTIVE 重叠、无 `compacting` 特判、无 `error+ask_user` 特例。
+- [x] 事件 × phase 迁移矩阵全绿（`validate:state-transition-matrix`）。
 
 ### P5（Facade/目录）
 - [ ] `ManagedAgent` < 400 行；facets 可单测。

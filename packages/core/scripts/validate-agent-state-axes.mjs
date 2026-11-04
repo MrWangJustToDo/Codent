@@ -111,7 +111,15 @@ for (const status of STATUSES) {
   assert.equal(projectAgentStatus(state), "compacting");
 
   state = transition(state, { type: "compaction-end" });
-  assert.equal(state.run, "streaming", "the previous run phase is restored");
+  assert.equal(state.run, "finalizing", "the finish that landed during compaction is applied");
+  assert.equal(projectAgentStatus(state), "completed");
+
+  // Without a finish, the phase the compaction interrupted is restored.
+  let resumed = transition(INITIAL_AGENT_STATE, { type: "prepare" });
+  resumed = transition(resumed, { type: "stream-start" });
+  resumed = transition(resumed, { type: "compaction-start" });
+  resumed = transition(resumed, { type: "compaction-end" });
+  assert.equal(resumed.run, "streaming", "the previous run phase is restored");
 }
 
 // --- completion / error / abort --------------------------------------------

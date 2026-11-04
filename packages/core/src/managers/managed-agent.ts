@@ -757,6 +757,7 @@ export class ManagedAgent {
     this.runFinalizer = new RunFinalizer({
       status: this.statusController,
       getStatus: () => this.getStatus(),
+      getAgentState: () => this.agentState,
       getError: () => this.getError(),
       finalizeRun: (reason) => this.finalizeRun(reason),
       discardPreforkRuns: (cause) => this.discardPreforkRuns(cause),
@@ -1171,6 +1172,11 @@ export class ManagedAgent {
     // the wait — and `shouldDeferMidRunQueue` would then defer every later message forever.
     if (this.compactions.isRunning()) return;
     this.statusController.setClientToolWaiting(active);
+  }
+
+  /** @internal Re-assert a pending `ask_user` wait after the run finalizes. */
+  syncPendingWait(messages: TanStackUIMessage[]): void {
+    this.statusController.syncPendingQuestionWait(messages);
   }
 
   /** Sync approval / client-tool pause status from loaded UIMessages (e.g. session resume). */

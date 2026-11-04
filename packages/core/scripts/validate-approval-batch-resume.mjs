@@ -297,12 +297,16 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
     /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true\)/,
     "the pump's catch path settles them too, but preserves a pending ask_user"
   );
-  // A preserved question must also be named in the status on the abort path (interruptCurrentRun
-  // finalizes directly and never reaches `applyRunOutcome`).
+  // A preserved question must also be named in the status on the abort path. That sync lives in
+  // `finalizeManagedAgentRun` (one place for every finalize path, not a chat-controller special case).
+  const lifecycleSrc = fs.readFileSync(
+    fileURLToPath(new URL("../src/managers/managed-agent-run-lifecycle.ts", import.meta.url)),
+    "utf8"
+  );
   assert.match(
-    controllerSrc,
-    /finalizeChat\(\{[\s\S]{0,1400}?parkOnPendingQuestion\(this\.channel\.getMessages\(\)\)/,
-    "the Esc path parks on a still-pending ask_user instead of reporting aborted"
+    lifecycleSrc,
+    /finalizeManagedAgentRun[\s\S]{0,4000}?syncPendingWait\?\.\(messages\)/,
+    "the abort path re-asserts a still-pending ask_user instead of reporting aborted"
   );
 }
 

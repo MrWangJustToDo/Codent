@@ -369,7 +369,7 @@ export class AgentStatusController {
    * appended to the transcript and never sent, with no visible change. Naming the wait keeps input
    * queued (released when the question is answered) and matches the interaction snapshot.
    */
-  parkOnPendingQuestion(messages: UIMessage[]): void {
+  syncPendingQuestionWait(messages: UIMessage[]): void {
     if (firstPendingInteraction(messages)?.kind !== "clientTool") return;
     if (this.deps.getStatus() === "awaiting_user") return;
     this.dispatch({ type: "pause", wait: "question" });
@@ -389,8 +389,8 @@ export class AgentStatusController {
 
     if (kind === "aborted") {
       this.onRunAbort();
-      // Chat only: a detached worker must not stay in an active wait (see `parkOnPendingQuestion`).
-      if (path !== "detached") this.parkOnPendingQuestion(messages);
+      // Chat only: a detached worker must not stay in an active wait (see `syncPendingQuestionWait`).
+      if (path !== "detached") this.syncPendingQuestionWait(messages);
       return;
     }
 
@@ -407,7 +407,7 @@ export class AgentStatusController {
       }
       // Chat only: `finalizeDetached` right after this must end on a terminal status, and a
       // detached worker has no UI that could answer a `clientTool` anyway.
-      if (path !== "detached") this.parkOnPendingQuestion(messages);
+      if (path !== "detached") this.syncPendingQuestionWait(messages);
       return;
     }
 

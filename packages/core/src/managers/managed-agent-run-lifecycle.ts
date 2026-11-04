@@ -2,7 +2,8 @@
  * Prepare / finalize / abort run lifecycle for {@link ManagedAgent}.
  */
 
-import { type UIMessage as TanStackUIMessage, type ModelMessage } from "@tanstack/ai";
+import type { UIMessage } from "@tanstack/ai";
+import { type UIMessage as TanStackUIMessage, type ModelMessage  } from "@tanstack/ai";
 
 import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
@@ -34,6 +35,8 @@ export interface RunLifecycleHost {
   setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
   /** The single state writer; when present, abort goes through the state machine. */
   transitionStatus?: (event: AgentTransitionEvent) => AgentStatus;
+  /** Re-assert a pending `ask_user` as the wait after a run finalizes (see WaitKind). */
+  syncPendingWait?: (messages: UIMessage[]) => void;
   /** Track the active run id (log run-scoping); pass null to clear. */
   setCurrentRunId: (runId: string | null) => void;
   recordStreamDuration: () => void;
@@ -217,6 +220,11 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   queueMicrotask(() => {
     host.setCurrentRunId(null);
   });
+  // An `ask_user` is a question addressed to the USER: a terminal turn does not answer it, and
+  // the session must keep naming that wait (WaitKind.question) or input is admitted against a
+  // "failed" status and the next pump breaks on the question without calling the model.
+  const messages = host.getUI?.()?.getMessages();
+  if (messages) host.syncPendingWait?.(messages);
   return true;
 }
 
