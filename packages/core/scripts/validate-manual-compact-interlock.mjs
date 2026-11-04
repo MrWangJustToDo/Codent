@@ -407,6 +407,90 @@ function observeRunEvents(events) {
   manager.destroyAgent(managed.id);
 }
 
+// ============================================================================
+// 8. A compaction that starts from `idle` settles back to `idle`
+// ============================================================================
+//
+// The restore only reset the RUN phase, leaving the `busy` lifecycle the lease had claimed. The
+// projection then read "lifecycle busy + no outcome" and reported `running` — a phase with no run
+// behind it, which made `abort()` emit an `agent:abort` for a turn that never existed, made
+// `isIdle()` false forever, and (because `WAKEABLE_STATUSES` is an allowlist) permanently refused
+// the background-completion wake. `/resume` or `/new` followed by `/compact` is the plain path
+// into it.
+{
+  const { managed, chat } = await makeAgent("manual-compact-from-idle");
+  assert.equal(managed.getStatus(), "idle", "fixture: a fresh/resumed agent is idle");
+
+  const compacting = managed.compact();
+  assert.equal(managed.getStatus(), "compacting", "and the compaction owns the status");
+  const result = await compacting;
+
+  assert.equal(result.ok, true, "the short transcript is a no-op compaction, not a failure");
+  assert.equal(managed.getStatus(), "idle", "a compaction started from idle must settle back to idle");
+  assert.equal(managed.getAgentState().lifecycle, "ready", "the axis agrees with the projection");
+  assert.equal(chat.isRunActive(), false, "no run is left behind");
+
+  manager.destroyAgent(managed.id);
+}
+
+// ============================================================================
+// 9. A compaction that starts from a terminal status still publishes `compacting`
+// ============================================================================
+//
+// `/compact` is legal after a failed or aborted turn, but the projection checked `outcome` BEFORE
+// the compaction phase, so the status stayed `error` while the summarizer ran. Two consequences:
+// the lease's restore guard (`getStatus() === "compacting"`) never matched, so the terminal-outcome
+// unwind was dead code and `run` stayed stuck at `compacting`; and `shouldDeferMidRunQueue` did not
+// queue, so the user's next message opened a turn beside the summarizer.
+{
+  const { managed } = await makeAgent("manual-compact-from-error");
+  managed.statusController.onExternalError("upstream exploded");
+  assert.equal(managed.getStatus(), "error", "fixture: the turn failed");
+
+  const compacting = managed.compact();
+  assert.equal(managed.getStatus(), "compacting", "the compaction takes over the terminal status while it runs");
+
+  const result = await compacting;
+  assert.equal(result.ok, true, "the short transcript is a no-op compaction, not a failure");
+  assert.equal(managed.getStatus(), "idle", "a successful post-error compaction clears the old fault");
+  assert.equal(managed.getError(), "", "the fault text goes with it");
+  assert.equal(managed.getAgentState().run, "idle", "the run phase is not left suspended at `compacting`");
+
+  manager.destroyAgent(managed.id);
+}
+
+// ============================================================================
+// 10. The interlock also holds while a post-error compaction runs
+// ============================================================================
+{
+  const { managed, chat } = await makeAgent("manual-compact-interlock-from-error");
+  const { config } = makeCapturingAdapter();
+  managed.setTextAdapter(config);
+  managed.statusController.onExternalError("upstream exploded");
+
+  const compacting = managed.compact();
+  chat.followUp("typed during a post-error compaction");
+  assert.equal(
+    hasUserText(chat, "typed during a post-error compaction"),
+    false,
+    "a terminal status must not disable the compaction interlock"
+  );
+  assert.deepEqual(
+    chat.getQueuedMessages().followUp.map((content) => (typeof content === "string" ? content : "")),
+    ["typed during a post-error compaction"],
+    "the message queues until the compaction ends"
+  );
+
+  const result = await compacting;
+  assert.equal(result.ok, true, "the short transcript is a no-op compaction, not a failure");
+  assert.equal(hasUserText(chat, "typed during a post-error compaction"), true, "the queued message is released");
+
+  await chat.runChain;
+  assert.equal(managed.getStatus(), "completed", "and the released turn settles normally");
+
+  manager.destroyAgent(managed.id);
+}
+
 clearCoreEnv();
 fs.rmSync(rootPath, TEMP_RM_OPTIONS);
 console.log("\nvalidate-manual-compact-interlock: all assertions passed");

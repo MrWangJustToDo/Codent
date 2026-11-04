@@ -28,6 +28,15 @@ export interface AgentState {
   errorMessage?: string;
   /** Run phase to restore when a compaction lease ends. */
   resumeRun?: RunPhase;
+  /**
+   * Run outcome to restore when a compaction lease ends.
+   *
+   * The compaction owns `run`, so it must also own `outcome`: leaving a terminal `error`/`aborted`
+   * in place made the projection report the fault instead of `compacting`, which silently disabled
+   * the manual-compaction interlock (`shouldDeferMidRunQueue`) and made the lease's restore guard
+   * (`getStatus() === "compacting"`) unreachable.
+   */
+  resumeOutcome?: RunOutcome;
 }
 
 export type AgentTransitionEvent =
@@ -203,9 +212,14 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...state,
         lifecycle: "ready",
         run: "finalizing",
+        // An approval gate belongs to the run that asked for it; the run is over. A pending
+        // `ask_user` question is kept — the session still owns the unanswered prompt.
+        ...(state.wait === "approval" ? { wait: "none" as const } : {}),
         outcome: "error",
         stream: "none",
         errorMessage: event.error,
+        resumeRun: undefined,
+        resumeOutcome: undefined,
       };
 
     case "pause":
@@ -222,9 +236,14 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       return {
         ...state,
         run: "finalizing",
+        // Same rule as `fail`: an approval wait dies with the run it gated; a question is still
+        // the user's to answer, and the projection keeps reporting `awaiting_user` for it.
+        ...(state.wait === "approval" ? { wait: "none" as const } : {}),
         outcome: "aborted",
         stream: "none",
         ...(event.error !== undefined ? { errorMessage: event.error } : {}),
+        resumeRun: undefined,
+        resumeOutcome: undefined,
       };
 
     case "compaction-start":
@@ -233,19 +252,34 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         ...state,
         lifecycle: "busy",
         resumeRun: state.run === "idle" ? undefined : state.run,
+        resumeOutcome: state.outcome,
         run: "compacting",
+        // The lease owns the run, so it also owns the outcome: a compaction started from `error` /
+        // `aborted` must project `compacting` (the interlock and the lease's restore guard both read
+        // the status). The previous outcome comes back in `compaction-end`.
+        outcome: "none",
         stream: "none",
       };
 
-    case "compaction-end":
+    case "compaction-end": {
       if (state.run !== "compacting") reject(`compaction-end requires compacting, got ${state.run}`, event, options);
       // A finish that landed while the compaction owned the phase is applied now; otherwise the
-      // phase the compaction interrupted resumes.
+      // phase and outcome the compaction interrupted resume.
+      if (state.outcome !== "none") {
+        return { ...state, run: "finalizing", resumeRun: undefined, resumeOutcome: undefined };
+      }
+      const run = state.resumeRun ?? "idle";
       return {
         ...state,
-        run: state.outcome === "none" ? (state.resumeRun ?? "idle") : "finalizing",
+        // `idle` is only reachable with `lifecycle: "ready"` — leaving the compaction's `busy` here
+        // projected an idle axis set as `running` (no run exists to clear it).
+        lifecycle: run === "idle" ? "ready" : "busy",
+        run,
+        outcome: state.resumeOutcome ?? "none",
         resumeRun: undefined,
+        resumeOutcome: undefined,
       };
+    }
 
     case "reset":
       return { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" };

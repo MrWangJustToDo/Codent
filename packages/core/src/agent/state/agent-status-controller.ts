@@ -81,7 +81,12 @@ function applyChunkStatus(
   const current = getStatus();
 
   // Keep interactive pauses and user cancel sticky — leftover chunks must not resurrect "running".
-  if (current === "waiting" || current === "awaiting_user" || current === "aborted") return;
+  // A compaction lease owns the run phase: a late chunk must not promote `run` to streaming/tooling,
+  // or the lease's restore guard (`status === "compacting"`) stops matching and the phase is
+  // abandoned by `finish()` without ever being restored.
+  if (current === "waiting" || current === "awaiting_user" || current === "aborted" || current === "compacting") {
+    return;
+  }
 
   // Each branch names the status its chunk implies and moves only when the agent
   // is not already there. A run streams hundreds of reasoning/text chunks in a
