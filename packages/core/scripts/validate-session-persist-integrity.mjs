@@ -45,6 +45,8 @@ import {
   saveSessionUIMessages,
 } from "../dist/dev.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
+
 const files = new Map();
 
 // 1x1 red pixel PNG.
@@ -317,6 +319,7 @@ function newService() {
     usage: new UsageTracker(),
     getTodoManager: () => null,
     planMode: { getPhase: () => "off", getState: () => null },
+    getModeState: () => fakeModeState(),
     isAutoModeEnabled: () => false,
     setAutoModeEnabled: () => {},
     getReasoningEffort: () => undefined,
@@ -352,6 +355,7 @@ function newService() {
     usage: new UsageTracker(),
     getTodoManager: () => null,
     planMode: { getPhase: () => "off", getState: () => null },
+    getModeState: () => fakeModeState(),
     isAutoModeEnabled: () => false,
     setAutoModeEnabled: () => {},
     getReasoningEffort: () => undefined,

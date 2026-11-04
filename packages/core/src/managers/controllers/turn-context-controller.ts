@@ -27,7 +27,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
 
 import type { ExtensionRunner, ExtensionTurnContextSection } from "../../agent/extension";
-import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
+import type { ModeState } from "../../agent/mode/mode-state.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
 import type { AgentConfig } from "../agent-types.js";
@@ -38,8 +38,8 @@ export interface TurnContextControllerOptions {
   getConfig: () => AgentConfig;
   getCoreEnv: () => ResolvedCoreEnv;
   getSessionId: () => string | undefined;
-  getPlanState: () => PlanModeState;
-  isAutoModeEnabled: () => boolean;
+  /** Single mode read surface; the plan artifact and auto flag both come from it. */
+  getModeState: () => ModeState;
   getExtensionRunner: () => ExtensionRunner | null;
   getParentId: () => string | undefined;
   onPromptBefore: (input: { prompt: string; hasTurnContext: boolean }) => void;
@@ -234,13 +234,14 @@ export class TurnContextController {
     const currentDate = getCurrentDate();
     const { branch: gitBranch, status: gitStatus } = await getGitInfo(this.options.getCoreEnv());
 
-    const planState = this.options.getPlanState();
+    const modeState = this.options.getModeState().snapshot();
+    const planState = modeState.plan;
     const planModeContent = buildPlanModePrompt(planState.phase, planState.planMarkdown, planState.planFilePath);
     // Plan turn-context wins when plan is active; auto prompt only in pure auto mode.
     // The mode section is always present (inactive declaration when neither is
     // active) so mode exits are explicitly communicated and re-entries with
     // identical instructions still re-inject (content reflects state).
-    const autoModeContent = !planModeContent && this.options.isAutoModeEnabled() ? buildAutoModePrompt() : undefined;
+    const autoModeContent = !planModeContent && modeState.auto ? buildAutoModePrompt() : undefined;
     const modeContent = planModeContent ?? autoModeContent ?? buildModeInactivePrompt();
 
     // Instruction files are frozen into the system prompt at startup; if the model

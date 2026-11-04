@@ -150,6 +150,9 @@ function createFake(id, parentId) {
     getPlanModeState() {
       return managed.planMode.getState();
     },
+    getModeState() {
+      return fakeModeState();
+    },
     isAutoModeEnabled() {
       return false;
     },
@@ -161,6 +164,7 @@ function createFake(id, parentId) {
 }
 
 /** @type {Map<string, any>} */
+import { fakeModeState } from "./helpers/mode-state.mjs";
 const agents = new Map();
 let seq = 0;
 /** @type {any} */

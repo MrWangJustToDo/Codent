@@ -10,7 +10,7 @@ import { cancelInterruptedBackgroundCommands } from "../agent/tools/builtin/shel
 import { isReasoningEffort } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
 
-import type { SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
+import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
 import type { Epoch } from "../runtime-types/epoch.js";
@@ -20,6 +20,7 @@ import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { AgentLog } from "../agent/agent-log";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
+import type { SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import type { SessionData } from "../agent/persistence/types.js";
 import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../agent/todo";
@@ -52,6 +53,8 @@ export interface SessionHost {
   /** Owning runtime's env, so plan files are read under the runtime root. */
   getCoreEnv: () => ResolvedCoreEnv;
   planMode: PlanModeController;
+  /** Single mode read surface (mode reads must not inspect the controllers directly). */
+  getModeState: () => ModeState;
   /** Mode owner; optional for hosts that only need the plan/auto fields below. */
   mode?: ModeCoordinator;
   isAutoModeEnabled: () => boolean;
@@ -104,13 +107,13 @@ export interface SessionHost {
 }
 
 export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackUIMessage[]): SessionPersistInput {
-  const planOn = host.planMode.getPhase() !== "off";
+  const mode = host.getModeState().snapshot();
   return {
     usage: host.usage,
     todoManager: host.getTodoManager(),
-    planMode: host.planMode.getState(),
+    planMode: mode.plan,
     // Mutual exclusivity: never persist auto while plan is active.
-    autoMode: host.mode?.getPersistedAutoMode() ?? (planOn ? false : host.isAutoModeEnabled()),
+    autoMode: mode.planPhase === "off" && mode.auto,
     reasoningEffort: host.getReasoningEffort(),
     epoch: host.captureEpoch?.(),
     resolveTextAdapter: host.resolveTextAdapter,
@@ -272,7 +275,7 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
     host.mode.restore(planSnapshot, wantAuto);
   } else {
     host.planMode.restoreState(planSnapshot);
-    host.setAutoModeEnabled(host.planMode.getPhase() === "off" && wantAuto);
+    host.setAutoModeEnabled(planSnapshot?.phase !== "off" ? false : wantAuto);
   }
   host.getApprovals().restore(approvals);
 
@@ -317,12 +320,13 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
     if (session.name) {
       host.setDisplayName?.(session.name);
     }
+    const mode = host.getModeState().snapshot();
     host.emitEvent("session:restore", {
       sessionId,
       messageCount: uiMessages.length,
       tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
-      planPhase: host.planMode.getPhase(),
-      autoMode: host.isAutoModeEnabled(),
+      planPhase: mode.planPhase,
+      autoMode: mode.auto,
       model: session.model,
       ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
       ...(modelFallback ? { modelFallback: true } : {}),

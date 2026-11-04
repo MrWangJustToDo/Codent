@@ -43,6 +43,8 @@ import {
 // ---------------------------------------------------------------------------
 // 1. Frozen system prompt stays frozen — dynamic content never appended.
 // ---------------------------------------------------------------------------
+import { fakeModeState } from "./helpers/mode-state.mjs";
+
 const frozen = buildFrozenSystemPrompt({
   config: { systemPrompt: "You are helpful." },
   agentDocContent: "",
@@ -474,16 +476,7 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     getConfig: () => config,
     getCoreEnv: () => ({}),
     getSessionId: () => "ses_turn_context",
-    getPlanState: () => ({
-      phase: "off",
-      planMarkdown: null,
-      steps: [],
-      enabledAt: null,
-      todosSeeded: false,
-      preservedExistingTodos: false,
-      planFilePath: null,
-    }),
-    isAutoModeEnabled: () => false,
+    getModeState: () => fakeModeState(),
     getRelevantMemoryContent: () => "",
     getExtensionRunner: () => runner,
     getParentId: () => parentId,

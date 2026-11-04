@@ -155,6 +155,7 @@ import type { McpElicitHook, McpExtensionConfig, McpServerConfig } from "../agen
 import type { McpManager } from "../agent/mcp/manager.js";
 import type { MemoryExtensionConfig } from "../agent/memory";
 import type { MemoryManager } from "../agent/memory/memory-manager.js";
+import type { ModeState } from "../agent/mode/mode-state.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
@@ -818,8 +819,7 @@ export class ManagedAgent {
       getConfig: () => this.config,
       getCoreEnv: () => this.getCoreEnv(),
       getSessionId: () => this.getSessionData()?.id,
-      getPlanState: () => this.planMode.getState(),
-      isAutoModeEnabled: () => this.autoMode.isEnabled(),
+      getModeState: () => this.mode.getState(),
       getExtensionRunner: () => this.extensions.getExtensionRunner(),
       getParentId: () => this.parentId,
       onPromptBefore: (input) => this.emitEvent("prompt:before", input),
@@ -1279,7 +1279,7 @@ export class ManagedAgent {
       this.lastStateSignature = stateSignature;
       this.eventBus?.emit("agent:state", state);
     }
-    const mode = this.modeState();
+    const mode = this.readModeProjection();
     const modeSignature = JSON.stringify(mode);
     if (modeSignature !== this.lastModeSignature) {
       this.lastModeSignature = modeSignature;
@@ -1427,7 +1427,7 @@ export class ManagedAgent {
     this.getTodoManager()?.setEventBus(bus);
     this.chatController?.setEventBus(bus);
     bus.retain("agent:state", () => this.getL1State());
-    bus.retain("session:mode", () => this.modeState());
+    bus.retain("session:mode", () => this.readModeProjection());
     bus.retain("session:extensions", () => readExtensionSummary(this.extensions.getExtensionRunner()));
     bus.retain("session:tool-presentation", () => ({ descriptors: this.getToolPresentationCatalog() }));
     bus.retain("session:mcp", () => ({ servers: this.getMcpManager()?.getServerStatuses() ?? [] }));
@@ -1458,8 +1458,8 @@ export class ManagedAgent {
   }
 
   /** Derived mode projection payload (plan phase + auto mode). */
-  private modeState(): { mode: AgentMode; autoMode: boolean } {
-    return { mode: this.getAgentMode(), autoMode: this.isAutoModeEnabled() };
+  private readModeProjection(): { mode: AgentMode; autoMode: boolean } {
+    return { mode: this.getAgentMode(), autoMode: this.getModeState().snapshot().auto };
   }
 
   getSessionData(): SessionData | null {
@@ -1648,7 +1648,7 @@ export class ManagedAgent {
     if (previous !== effort) {
       this.emitEvent("mode:change", {
         field: "effort",
-        auto: this.mode.isAutoEnabled(),
+        auto: this.getModeState().snapshot().auto,
         ...(effort ? { reasoningEffort: effort } : {}),
       });
     }
@@ -2544,8 +2544,13 @@ export class ManagedAgent {
   // Auto-approve mode (skip all tool approvals)
   // ============================================================================
 
+  /** Single mode read surface (plan phase, auto, approval policy, tool availability). */
+  getModeState(): ModeState {
+    return this.mode.getState();
+  }
+
   isAutoModeEnabled(): boolean {
-    return this.mode.isAutoEnabled();
+    return this.getModeState().snapshot().auto;
   }
 
   setAutoModeEnabled(enabled: boolean): void {

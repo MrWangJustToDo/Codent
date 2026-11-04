@@ -9,6 +9,7 @@ import { PLAN_STORE_DIR } from "./plan-store.js";
 import { isUsableVerification, gateCompletePlanVerification } from "./plan-verification.js";
 
 import type { PlanModeController } from "./plan-mode-controller.js";
+import type { ModeState } from "../mode/mode-state.js";
 
 const VERIFICATION_DESCRIBE =
   "Required checklist of how to prove the plan outcome succeeded after execution " +
@@ -42,6 +43,8 @@ const planToolOutputSchema = z.object({
 
 export type CreatePlanToolDeps = {
   getPlanMode: () => PlanModeController;
+  /** Read-only mode facts: the phase/artifact reported by the tool come from here. */
+  getModeState: () => ModeState;
   /**
    * End the plan through its coordinator (phase exit + the session write it implies). The
    * controller's own `complete()` cannot persist the phase-off transition — no auto-mode change
@@ -68,7 +71,7 @@ function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: Crea
         if (!isUsableVerification(input.verification)) {
           return {
             ok: false,
-            phase: planMode.getPhase(),
+            phase: deps.getModeState().snapshot().planPhase,
             stepCount: 0,
             message: "verification is required (non-empty checklist)",
             error: "verification is required (non-empty checklist)",
@@ -87,14 +90,14 @@ function createPlanAuthoringTool(name: "create_plan" | "update_plan", deps: Crea
         if (!result.ok) {
           return {
             ok: false,
-            phase: planMode.getPhase(),
+            phase: deps.getModeState().snapshot().planPhase,
             stepCount: 0,
             message: result.error ?? "Failed to apply plan",
             error: result.error,
           };
         }
 
-        const state = planMode.getState();
+        const state = deps.getModeState().snapshot().plan;
         return {
           ok: true,
           phase: state.phase,
@@ -165,15 +168,16 @@ export const createCompletePlanTool = (deps: CreatePlanToolDeps) => {
     execute: async (input) => {
       return withDuration(async () => {
         const planMode = deps.getPlanMode();
-        if (planMode.getPhase() !== "retro") {
+        const snapshot = deps.getModeState().snapshot();
+        if (snapshot.planPhase !== "retro") {
           return {
             ok: false,
-            message: `complete_plan only works in retro phase (current: ${planMode.getPhase()})`,
-            error: `complete_plan only works in retro phase (current: ${planMode.getPhase()})`,
+            message: `complete_plan only works in retro phase (current: ${snapshot.planPhase})`,
+            error: `complete_plan only works in retro phase (current: ${snapshot.planPhase})`,
           };
         }
 
-        const gate = gateCompletePlanVerification(planMode.getState().planMarkdown, input.verificationResults);
+        const gate = gateCompletePlanVerification(snapshot.plan.planMarkdown, input.verificationResults);
         if (!gate.ok) {
           return { ok: false, message: gate.error, error: gate.error };
         }

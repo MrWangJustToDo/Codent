@@ -53,6 +53,7 @@
     "validate:epoch-equivalence": "pnpm run build && node scripts/validate-epoch-equivalence.mjs",
     "validate:epoch-single-source": "node scripts/validate-epoch-single-source.mjs",
     "validate:session-lease-matrix": "node scripts/validate-session-lease-matrix.mjs",
+    "validate:mode-single-read": "node scripts/validate-mode-single-read.mjs",
     "metrics:control-plane": "node scripts/control-plane-metrics.mjs",
     "validate:agent-session-types": "pnpm run build && pnpm exec tsc --project tsconfig.typecheck.json && node scripts/validate-agent-session-types.mjs",
     "validate:local-agent-session": "pnpm run build && node scripts/validate-local-agent-session.mjs",

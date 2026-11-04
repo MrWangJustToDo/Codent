@@ -136,6 +136,9 @@ function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}
     getPlanModeState() {
       return managed.planMode.getState();
     },
+    getModeState() {
+      return fakeModeState();
+    },
     isAutoModeEnabled() {
       return managed.autoModeEnabled;
     },
@@ -190,6 +193,7 @@ function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}
   return managed;
 }
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
 const managed = createFake("agent_root");
 const session = createLocalAgentSession({ managed, manager: null });
 assert.equal(session.id, "agent_root");

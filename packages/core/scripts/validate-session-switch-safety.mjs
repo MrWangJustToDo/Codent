@@ -15,6 +15,8 @@ import {
   dispatchLocalAgentSessionCommand,
 } from "../dist/dev.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
+
 /** A lease already active on `id`, like a live agent's before a switch. */
 function activeLease(id, onRelease = () => {}) {
   const lease = new SessionLease("agent", { acquire: () => true, release: onRelease });
@@ -156,6 +158,7 @@ const host = {
   usage,
   getTodoManager: () => null,
   planMode: { getPhase: () => "off", getState: () => null },
+  getModeState: () => fakeModeState(),
   mode: { getPersistedAutoMode: () => false },
   isAutoModeEnabled: () => false,
   setAutoModeEnabled: () => {},

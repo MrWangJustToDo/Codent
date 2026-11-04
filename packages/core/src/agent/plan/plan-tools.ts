@@ -1,7 +1,7 @@
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 
-import type { PlanModeController } from "./plan-mode-controller.js";
+import type { ModeState } from "../mode/mode-state.js";
 import type { ToolsRecord } from "../tools/catalog/tool-set.js";
 
 /**
@@ -71,16 +71,28 @@ export function isPlanModeForbiddenTool(toolName: string, resolve = getBuiltinTo
 }
 
 /**
- * Defense-in-depth check before tool execution while restricting tools.
+ * Defense-in-depth check before tool execution.
  * Returns an error message when the call must be skipped, else null.
+ *
+ * Takes the mode read surface rather than the controller: availability is a projection of the mode
+ * (which tools the phase withholds), and the phase is read once per call.
  */
 export function getPlanModeToolBlockReason(
-  planMode: PlanModeController | null | undefined,
+  modeState: ModeState | null | undefined,
   toolName: string,
   args: unknown,
   resolve = getBuiltinToolPresentation
 ): string | null {
-  if (!planMode?.isRestrictingTools()) return null;
+  const availability = modeState?.toolAvailability();
+  if (!availability) return null;
+
+  // A tool the phase withholds is denied even if the model calls it directly (the offered list
+  // already excludes it): retro hides plan authoring, planning/ready hide completion.
+  if (availability.hiddenTools.has(toolName)) {
+    return `Plan mode: "${toolName}" is not available during ${availability.phase}.`;
+  }
+
+  if (!availability.restrictsMutations) return null;
 
   if (isPlanModeForbiddenTool(toolName, resolve)) {
     return `Plan mode: "${toolName}" is blocked while planning. Use /mode execute after the plan is ready.`;

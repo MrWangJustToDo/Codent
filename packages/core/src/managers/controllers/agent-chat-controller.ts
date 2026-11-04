@@ -562,7 +562,7 @@ export class AgentChatController {
     // `ready` is review — the user is reading the plan. `planning` has no approved plan yet, so a
     // promptless turn there could author one. `executing` / `retro` stay wakeable: that plan was
     // approved, and the mode already auto-approves its tools.
-    const planPhase = this.managed.planMode.getPhase();
+    const planPhase = this.managed.getModeState().snapshot().planPhase;
     if (planPhase === "ready" || planPhase === "planning") return false;
     // A wake is a new turn with no prompt: `startsNewTurn` gives it a run id and turn boundaries
     // even though the channel's last message is an assistant message. The cause is recorded here,
@@ -1159,7 +1159,7 @@ export class AgentChatController {
 
   /** Extract ## Plan / [DONE:n] from the latest assistant text while plan mode is active. */
   private syncPlanModeFromMessages(): void {
-    if (this.managed.planMode.getPhase() === "off") return;
+    if (this.managed.getModeState().snapshot().planPhase === "off") return;
     const text = extractAssistantText(this.channel.getMessages());
     if (text) this.managed.planMode.onAssistantText(text);
   }

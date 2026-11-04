@@ -7,6 +7,7 @@ import { listPlanFiles, loadPlanFile, savePlanFile } from "../agent/plan/plan-st
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { toError } from "../utils/errors.js";
 
+import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentChatController } from "./controllers/agent-chat-controller.js";
 import type { ModeCoordinator } from "./mode-coordinator.js";
@@ -19,6 +20,8 @@ import type { AgentStatus } from "../runtime-types/agent-status.js";
 
 export interface PlanApiHost {
   planMode: PlanModeController;
+  /** Single mode read surface; this facade only ever READS the phase/artifact through it. */
+  getModeState: () => ModeState;
   /** Plan/auto arbitration: the only writer that may leave `off` (auto must go off with it). */
   mode: ModeCoordinator;
   getStatus: () => AgentStatus;
@@ -30,7 +33,7 @@ export interface PlanApiHost {
 }
 
 export function getPlanModeState(host: PlanApiHost): PlanModeState {
-  return host.planMode.getState();
+  return host.getModeState().snapshot().plan;
 }
 
 export function beginPlanExecution(host: PlanApiHost, options: { sendSteer?: boolean } = {}): BeginPlanExecutionResult {
@@ -54,7 +57,7 @@ export async function savePlanToWorkspace(
   host: PlanApiHost,
   nameHint?: string
 ): Promise<{ ok: boolean; path?: string; error?: string }> {
-  const { planMarkdown, phase, planFilePath } = host.planMode.getState();
+  const { planMarkdown, phase, planFilePath } = host.getModeState().snapshot().plan;
   if (!planMarkdown?.trim()) {
     return { ok: false, error: "No plan markdown to save — create a plan first" };
   }
@@ -98,11 +101,11 @@ export async function loadPlanFromWorkspace(
     // `/mode load` is an entry point as much as `/mode plan` is. Going through the coordinator is
     // what turns auto mode off, so the two can never be on at once (auto would bypass every
     // approval prompt during the read-only planning/review phases).
-    const entering = host.planMode.getPhase() === "off";
+    const entering = host.getModeState().snapshot().planPhase === "off";
     // Entering disables auto (the two are mutually exclusive). A failed load must put BOTH back:
     // the previous rollback only undid the phase, so a user in Auto who mistyped a plan name ended
     // in Normal mode with no message saying so.
-    const wasAuto = host.mode.isAutoEnabled();
+    const wasAuto = host.getModeState().snapshot().auto;
     const rollbackEntry = (): void => {
       if (!entering) return;
       host.mode.disablePlan();

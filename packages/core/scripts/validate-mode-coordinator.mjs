@@ -135,6 +135,7 @@ const fakeEnv = {
 const host = {
   planMode: plan,
   mode,
+  getModeState: () => mode.getState(),
   getStatus: () => "idle",
   getChatController: () => undefined,
   getCoreEnv: () => fakeEnv,
@@ -166,3 +167,65 @@ assert.equal(persistCalls, beforeComplete + 1, "leaving plan mode writes the ses
 assert.equal(mode.shouldAutoApprove(), false);
 
 console.log("mode-coordinator validation passed");
+
+// ---------------------------------------------------------------------------
+// 7. Mode facts: plan-execution auto approval needs BOTH phase and seeded todos
+// ---------------------------------------------------------------------------
+{
+  const planState = (phase, todosSeeded) => ({
+    phase,
+    planMarkdown: null,
+    steps: [],
+    enabledAt: null,
+    todosSeeded,
+    preservedExistingTodos: false,
+    planFilePath: null,
+  });
+
+  mode.setMode("normal");
+  plan.restoreState(planState("executing", false));
+  let facts = mode.getPolicyFacts();
+  assert.equal(facts.planExecutionAutoApprove, false, "executing without seeded todos must not auto-approve");
+  assert.equal(mode.getState().approvalPolicy("write_file"), "ask");
+
+  plan.restoreState(planState("executing", true));
+  facts = mode.getPolicyFacts();
+  assert.equal(
+    facts.planExecutionAutoApprove,
+    true,
+    "executing + seeded todos is the one plan auto-approval condition"
+  );
+  assert.equal(mode.getState().approvalPolicy("write_file"), "auto");
+  assert.equal(
+    mode.getState().approvalPolicy("complete_plan"),
+    "ask",
+    "a tool the phase withholds is never auto-approved"
+  );
+  const executing = mode.getState().toolAvailability();
+  assert.equal(executing.restrictsMutations, false);
+  assert.ok(executing.hiddenTools.has("complete_plan"), "executing hides plan completion");
+
+  plan.restoreState(planState("ready", true));
+  facts = mode.getPolicyFacts();
+  assert.equal(facts.planExecutionAutoApprove, false, "review never inherits an earlier execution's approval");
+  const ready = mode.getState().toolAvailability();
+  assert.equal(ready.restrictsMutations, true, "planning/ready withhold mutating tools");
+  assert.ok(ready.hiddenTools.has("complete_plan"), "ready hides plan completion");
+  assert.equal(ready.hiddenTools.has("create_plan"), false, "ready offers plan authoring");
+
+  plan.restoreState(planState("retro", false));
+  facts = mode.getPolicyFacts();
+  assert.equal(facts.planExecutionAutoApprove, false, "retro without seeded todos must not auto-approve");
+  const retro = mode.getState().toolAvailability();
+  assert.equal(retro.restrictsMutations, false, "retro runs the verification commands");
+  assert.ok(retro.hiddenTools.has("create_plan"), "retro hides plan authoring");
+  assert.equal(retro.hiddenTools.has("complete_plan"), false, "retro offers plan completion");
+
+  mode.setAuto(true);
+  facts = mode.getPolicyFacts();
+  assert.equal(facts.auto, true);
+  assert.equal(mode.getState().approvalPolicy("write_file"), "auto", "auto mode bypasses approvals");
+  mode.setMode("normal");
+}
+
+console.log("mode facts: phase + todosSeeded drive approval and availability");

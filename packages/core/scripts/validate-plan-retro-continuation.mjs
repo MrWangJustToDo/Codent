@@ -42,6 +42,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   AgentStreamHub,
+  createModeState,
   PLAN_TODO_TITLE,
   PlanModeController,
   TodoManager,
@@ -137,6 +138,7 @@ function makeManagedStub(controller) {
     }),
     getWireProjectionCache: () => ({}),
     planMode: controller,
+    getModeState: () => createModeState({ planMode: controller, autoMode: { isEnabled: () => false } }),
     getSystemPrompt: () => "",
     getFrozenSystemPrompt: () => "",
     getCompactionConfig: () => ({}),

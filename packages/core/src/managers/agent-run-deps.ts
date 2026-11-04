@@ -12,11 +12,11 @@ import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-com
 import type { CompactionConfig } from "../agent/compaction/types.js";
 import type { WireProjectionCache } from "../agent/compaction/wire-projection-cache.js";
 import type { ExtensionRunner } from "../agent/extension/runner.js";
-import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import type { AgentStreamHub } from "../agent/stream-hub";
 import type { TodoManager } from "../agent/todo";
 import type { AgentCommandService } from "./services/agent-command-service.js";
 import type { BackgroundWorkService } from "./services/background-work-service.js";
+import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
@@ -61,7 +61,8 @@ export interface AgentRunDeps {
   compactions: CompactionController;
   approvals: ToolApprovalTable;
   run: RunCoordinator;
-  planMode: PlanModeController;
+  /** The mode read surface; read live because a phase flip must reach a cached runner. */
+  getModeState: () => ModeState;
   /** Agent-local tool presentation, for plan-mode policy decisions. */
   resolveToolPresentation: (name: string) => ToolPresentation | undefined;
   /**
@@ -147,7 +148,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     compactions: managed.compactions,
     approvals: managed.getApprovals(),
     run: managed.run,
-    planMode: managed.planMode,
+    getModeState: () => managed.getModeState(),
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
     isToolNeedsApproval: (toolName) => managed.isToolNeedsApproval(toolName),
     getTodoManager: () => managed.getTodoManager(),

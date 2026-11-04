@@ -2,13 +2,13 @@ import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import { getPlanModeToolBlockReason } from "./plan-tools.js";
 
-import type { PlanModeController } from "./plan-mode-controller.js";
+import type { ModeState } from "../mode/mode-state.js";
 import type { ToolRunContext } from "../runner/run-context.js";
 import type { ToolPresentation } from "../tools/presentation/types.js";
 import type { ChatMiddleware } from "@tanstack/ai";
 
 export interface PlanModeMiddlewareDeps {
-  getPlanMode: () => PlanModeController | null;
+  getModeState: () => ModeState | null;
   resolveToolPresentation?: (name: string) => ToolPresentation | undefined;
 }
 
@@ -17,8 +17,13 @@ export function createPlanModeMiddleware(deps: PlanModeMiddlewareDeps): ChatMidd
   return defineMiddleware("tools", {
     name: "plan-mode",
     onBeforeToolCall: async (_ctx, hookCtx) => {
-      const planMode = deps.getPlanMode();
-      const reason = getPlanModeToolBlockReason(planMode, hookCtx.toolName, hookCtx.args, deps.resolveToolPresentation);
+      const modeState = deps.getModeState();
+      const reason = getPlanModeToolBlockReason(
+        modeState,
+        hookCtx.toolName,
+        hookCtx.args,
+        deps.resolveToolPresentation
+      );
       if (!reason) return;
       return {
         type: "skip",

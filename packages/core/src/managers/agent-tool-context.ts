@@ -20,6 +20,7 @@ export function createAgentToolContext(managed: ManagedAgent): AgentToolContext 
     removePendingAbortController: (controller) => managed.removePendingAbortController(controller),
     getWebsearchConfig: () => managed.config?.toolConfig?.websearch,
     getPlanMode: () => managed.planMode,
+    getModeState: () => managed.getModeState(),
     getTodoManager: () => managed.getTodoManager(),
   };
 }

@@ -116,7 +116,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | No single authorization decision matrix | A10 | planned |
 | No state transition matrix / illegal-transition check | T9 | planned |
 | No epoch single-source guard | E10 | `validate:epoch-single-source` (created) |
-| No mode single-read guard | M5 | planned |
+| No mode single-read guard | M5 | `validate:mode-single-read` (created) |
 
 A task's DoD is the union of its row here and the matrix gate it adds; a matrix gate is only
 accepted after it fails on a deliberately broken implementation (the repo's "guard rot" rule).

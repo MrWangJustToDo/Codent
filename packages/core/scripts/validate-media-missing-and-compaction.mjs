@@ -27,6 +27,7 @@ import {
 // Mock CoreEnv (in-memory file system)
 // ============================================================================
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
 const inMemoryFs = new Map();
 
 function setupMockEnv() {
@@ -183,6 +184,7 @@ async function testRestoreReportsMediaMissing() {
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
+      getModeState: () => fakeModeState(),
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
       getApprovals: () => ({ restore: () => {} }),
@@ -216,6 +218,7 @@ async function testRestoreReportsMediaMissing() {
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
+      getModeState: () => fakeModeState(),
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
       getApprovals: () => ({ restore: () => {} }),

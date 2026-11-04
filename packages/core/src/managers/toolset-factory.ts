@@ -61,10 +61,17 @@ export async function buildToolset({ profile, managed }: BuildToolsetOptions): P
   }
 
   tools[BUILTIN_TOOL_NAMES.askUser] = createAskUserTool();
-  tools[BUILTIN_TOOL_NAMES.createPlan] = createCreatePlanTool({ getPlanMode: () => context.getPlanMode() });
-  tools[BUILTIN_TOOL_NAMES.updatePlan] = createUpdatePlanTool({ getPlanMode: () => context.getPlanMode() });
+  tools[BUILTIN_TOOL_NAMES.createPlan] = createCreatePlanTool({
+    getPlanMode: () => context.getPlanMode(),
+    getModeState: () => context.getModeState(),
+  });
+  tools[BUILTIN_TOOL_NAMES.updatePlan] = createUpdatePlanTool({
+    getPlanMode: () => context.getPlanMode(),
+    getModeState: () => context.getModeState(),
+  });
   tools[BUILTIN_TOOL_NAMES.completePlan] = createCompletePlanTool({
     getPlanMode: () => context.getPlanMode(),
+    getModeState: () => context.getModeState(),
     // Through the coordinator so the phase-off transition is persisted, like `/mode done`.
     completePlan: () => managed.completePlan(),
   });

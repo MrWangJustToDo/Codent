@@ -1,8 +1,4 @@
-import {
-  getPlanModeToolExcludeSet,
-  PLAN_AUTHORING_TOOL_NAMES,
-  PLAN_COMPLETION_TOOL_NAMES,
-} from "../agent/plan/plan-tools.js";
+import { getPlanModeToolExcludeSet } from "../agent/plan/plan-tools.js";
 import { AgentRunner } from "../agent/runner/agent-runner.js";
 import { peekTaskPreforkCoordinator } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
@@ -39,6 +35,7 @@ import { createEmitTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent } from "./managed-agent.js";
+import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelMessage, ServerTool, StreamChunk, UIMessage } from "@tanstack/ai";
@@ -98,7 +95,8 @@ export async function resolveTextAdapterForManaged(managed: ManagedAgent): Promi
 
 function resolveTanStackTools(
   managed: ManagedAgent,
-  resolveToolPresentation: (name: string) => ToolPresentation | undefined
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined,
+  getModeState: () => ModeState
 ): ServerTool[] {
   const toolset = managed.config.toolsetProfile ?? (managed.parentId ? "explore" : "root");
   if (toolset === "explore") {
@@ -112,19 +110,13 @@ function resolveTanStackTools(
   if (toolset !== "root" && toolset !== "general") {
     throw new Error(`Unsupported toolset profile: "${String(toolset)}"`);
   }
-  if (managed.planMode.isRestrictingTools()) {
-    const exclude = getPlanModeToolExcludeSet(managed.tools, resolveToolPresentation);
-    for (const name of PLAN_COMPLETION_TOOL_NAMES) exclude.add(name);
-    return resolveToolsRecord(managed.tools, { exclude }) as ServerTool[];
+  // One projection of the mode's availability: phase-specific hidden names, plus the
+  // registry-dependent mutating/MCP set while plan mode restricts edits.
+  const availability = getModeState().toolAvailability();
+  const exclude = new Set(availability.hiddenTools);
+  if (availability.restrictsMutations) {
+    for (const name of getPlanModeToolExcludeSet(managed.tools, resolveToolPresentation)) exclude.add(name);
   }
-  if (managed.planMode.getPhase() === "retro") {
-    // Retro: allow mutate tools + complete_plan; hide authoring tools
-    return resolveToolsRecord(managed.tools, {
-      exclude: PLAN_AUTHORING_TOOL_NAMES,
-    }) as ServerTool[];
-  }
-  // Agent / executing / off: hide plan-authoring and complete_plan
-  const exclude = new Set([...PLAN_AUTHORING_TOOL_NAMES, ...PLAN_COMPLETION_TOOL_NAMES]);
   return resolveToolsRecord(managed.tools, { exclude }) as ServerTool[];
 }
 
@@ -143,7 +135,7 @@ export function buildAgentRunner(
   // Set-once collaborators are captured once here as local aliases; everything that can
   // change while the (cached) runner is alive stays behind a `deps.getX()` call at the
   // consumer, mirroring the liveness contract on `AgentRunDeps`.
-  const { config, parentId, session, usage, usageHistory, statusController, approvals, run, planMode } = deps;
+  const { config, parentId, session, usage, usageHistory, statusController, approvals, run } = deps;
   // `systemPrompt` is genuinely build-time (memoized on the agent and part of the runner
   // key's inputs), so it is read once and passed on.
   const systemPrompt = deps.getSystemPrompt();
@@ -270,7 +262,7 @@ export function buildAgentRunner(
       getUIChannel: () => deps.getUIChannel() ?? undefined,
     }),
     createPlanModeMiddleware({
-      getPlanMode: () => planMode,
+      getModeState: () => deps.getModeState(),
       resolveToolPresentation: deps.resolveToolPresentation,
     }),
     // Condition + counter reminder: the todo list has gone stale for too many rounds. Reads
@@ -319,7 +311,7 @@ export function buildAgentRunner(
     model: textAdapter.model,
     maxIterations: midIterationMax,
     systemPrompts: systemPrompt ? [systemPrompt] : undefined,
-    tools: resolveTanStackTools(managed, deps.resolveToolPresentation),
+    tools: resolveTanStackTools(managed, deps.resolveToolPresentation, deps.getModeState),
     middleware: instrumentMiddlewareLog(middleware, emitEvent),
     temperature: config.temperature,
     maxOutputTokens,
@@ -344,7 +336,7 @@ function runnerConfigKey(managed: ManagedAgent): string {
     modelBaseURL: managed.config.modelBaseURL,
     reasoningEffort: managed.config.reasoningEffort,
     // Rebuild when plan mode hides/restores tools
-    planPhase: managed.planMode.getPhase(),
+    planPhase: managed.getModeState().toolAvailability().phase,
   });
 }
 

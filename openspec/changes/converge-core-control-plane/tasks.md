@@ -27,11 +27,11 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 
 ## 3. Mode facts
 
-- [ ] 3.1 Introduce the `ModeState` read API (`planPhase`, `auto`, `approvalPolicy(tool)`, `toolAvailability()`) in the mode domain (depends: 1.1)
-- [ ] 3.2 Define `AgentPolicyFacts` and move `todosSeeded` / plan-execution auto-approval into it (depends: 3.1)
-- [ ] 3.3 Make persistence, turn context, status and plan tools read `ModeState` only (depends: 3.1)
-- [ ] 3.4 Remove direct `planMode.*` / `isAutoModeEnabled()` reads outside the mode domain (depends: 3.1, 3.3)
-- [ ] 3.5 Add the mode single-read source guard (depends: 3.4)
+- [x] 3.1 Introduce the `ModeState` read API (`planPhase`, `auto`, `approvalPolicy(tool)`, `toolAvailability()`) in the mode domain (depends: 1.1)
+- [x] 3.2 Define `AgentPolicyFacts` and move `todosSeeded` / plan-execution auto-approval into it (depends: 3.1)
+- [x] 3.3 Make persistence, turn context, status and plan tools read `ModeState` only (depends: 3.1)
+- [x] 3.4 Remove direct `planMode.*` / `isAutoModeEnabled()` reads outside the mode domain (depends: 3.1, 3.3)
+- [x] 3.5 Add the mode single-read source guard (depends: 3.4)
 
 ## 4. P2 — SessionLease: one session owner
 

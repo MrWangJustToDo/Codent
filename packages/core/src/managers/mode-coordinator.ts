@@ -8,6 +8,9 @@
  * AutoModeController change fire its persist, so the write cannot capture `plan on + auto on`.
  */
 
+import { createModeState, type ModeState } from "../agent/mode/mode-state.js";
+import { resolveAgentPolicyFacts, type AgentPolicyFacts } from "../agent/mode/policy-facts.js";
+
 import type { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import type { PlanModeController, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentMode } from "../runtime-types/session-payloads.js";
@@ -20,27 +23,45 @@ export interface ModeCoordinatorDeps {
 }
 
 export class ModeCoordinator {
-  constructor(private readonly deps: ModeCoordinatorDeps) {}
+  /** Live read model over the two controllers (see `agent/mode/mode-state.ts`). */
+  private readonly state: ModeState;
+
+  constructor(private readonly deps: ModeCoordinatorDeps) {
+    this.state = createModeState({ planMode: deps.planMode, autoMode: deps.autoMode });
+  }
+
+  /** The single read surface consumers use instead of inspecting the controllers. */
+  getState(): ModeState {
+    return this.state;
+  }
+
+  /** One authorization-policy snapshot (mode facts today; the pipeline adds the rest). */
+  getPolicyFacts(): AgentPolicyFacts {
+    return resolveAgentPolicyFacts(this.state);
+  }
 
   isAutoEnabled(): boolean {
-    return this.deps.autoMode.isEnabled();
+    return this.state.snapshot().auto;
   }
 
   /** Plan wins over auto; normal is the fallback. */
   getMode(): AgentMode {
-    if (this.deps.planMode.getPhase() !== "off") return "plan";
-    if (this.deps.autoMode.isEnabled()) return "auto";
+    const snapshot = this.state.snapshot();
+    if (snapshot.planPhase !== "off") return "plan";
+    if (snapshot.auto) return "auto";
     return "normal";
   }
 
   /** True when auto mode or plan execution should bypass per-tool approvals. */
   shouldAutoApprove(): boolean {
-    return this.deps.autoMode.isEnabled() || this.deps.planMode.shouldAutoApproveTools();
+    const facts = this.getPolicyFacts();
+    return facts.auto || facts.planExecutionAutoApprove;
   }
 
   setAuto(enabled: boolean): void {
-    const planWasOn = this.deps.planMode.getPhase() !== "off";
-    const autoChanged = this.deps.autoMode.isEnabled() !== enabled;
+    const snapshot = this.state.snapshot();
+    const planWasOn = snapshot.planPhase !== "off";
+    const autoChanged = snapshot.auto !== enabled;
     // Mutually exclusive: leave plan before auto turns on, so the auto-mode change (and its
     // persist callback) observes the final state rather than `plan on + auto on`.
     if (enabled && planWasOn) this.deps.planMode.disable();
@@ -84,7 +105,7 @@ export class ModeCoordinator {
     } else if (mode === "auto") {
       this.setAuto(true);
     } else {
-      if (this.deps.planMode.getPhase() !== "off") this.disablePlan();
+      if (this.state.snapshot().planPhase !== "off") this.disablePlan();
       this.setAuto(false);
     }
     return this.getMode();
@@ -103,7 +124,8 @@ export class ModeCoordinator {
 
   /** The auto flag as it must be persisted: never true while a plan phase is active. */
   getPersistedAutoMode(): boolean {
-    return this.deps.planMode.getPhase() === "off" && this.deps.autoMode.isEnabled();
+    const snapshot = this.state.snapshot();
+    return snapshot.planPhase === "off" && snapshot.auto;
   }
 
   /** Restore both modes; a restored plan phase wins over the persisted auto flag. */
@@ -113,6 +135,6 @@ export class ModeCoordinator {
     // here wrote `mode:change` into the TARGET's log while its envelope still named the departure
     // (the sink is re-bound before the load, adoption happens after), and attempted a persist the
     // service rejects — the target's own `session:restore` is the record.
-    this.deps.autoMode.restore(this.deps.planMode.getPhase() === "off" && auto);
+    this.deps.autoMode.restore(this.state.snapshot().planPhase === "off" && auto);
   }
 }

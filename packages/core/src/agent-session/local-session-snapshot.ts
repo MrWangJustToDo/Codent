@@ -48,7 +48,7 @@ export function readLocalAgentSessionSnapshot(
     todos: todos?.getItems() ?? [],
     todosTitle: todos?.getTitle() ?? null,
     plan: managed.getPlanModeState(),
-    autoMode: managed.isAutoModeEnabled(),
+    autoMode: managed.getModeState().snapshot().auto,
     mcp: { servers: managed.getMcpManager()?.getServerStatuses() ?? [] },
     extensions: readExtensionSummary(managed.getExtensionRunner()),
     toolDescriptors:

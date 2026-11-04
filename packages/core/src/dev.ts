@@ -12,6 +12,10 @@ export { analyzeCommand, createAnalysisContext } from "./agent/tools/builtin/she
 export { isAbortError, isTimeoutError } from "./runtime-types/abort.js";
 export { createEpoch } from "./runtime-types/epoch.js";
 export { SessionLease } from "./agent/session/session-lease.js";
+// The mode read surface: validators build it over a real controller (or a fake) and assert the
+// consumers below it, instead of reaching into the controllers themselves.
+export { createModeState, ModeStateReader } from "./agent/mode/mode-state.js";
+export { resolveAgentPolicyFacts } from "./agent/mode/policy-facts.js";
 export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";

@@ -40,8 +40,13 @@ import {
 // tool rendered as a green success row with no body while the extension refusal (which carries
 // `denied: true`) rendered as denied. One refusal, two looks — and this one looked successful.
 {
+  const planningMode = {
+    toolAvailability: () => ({ phase: "planning", restrictsMutations: true, hiddenTools: new Set() }),
+    snapshot: () => ({}),
+    approvalPolicy: () => "ask",
+  };
   const middleware = createPlanModeMiddleware({
-    getPlanMode: () => ({ isRestrictingTools: () => true }),
+    getModeState: () => planningMode,
   });
   const action = await middleware.onBeforeToolCall?.({}, { toolName: "write_file", args: {} });
   assert.equal(action?.type, "skip", "plan mode skips a blocked tool");
@@ -102,7 +107,11 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
   assert.ok(!exclude.has("run_command"), "run_command is governed by the command allowlist, not withheld");
 
   // …and the end that catches a call arriving anyway (a stale record, a queued call).
-  const restricting = { isRestrictingTools: () => true };
+  const restricting = {
+    toolAvailability: () => ({ phase: "planning", restrictsMutations: true, hiddenTools: new Set() }),
+    snapshot: () => ({}),
+    approvalPolicy: () => "ask",
+  };
   for (const name of editing) {
     assert.match(
       getPlanModeToolBlockReason(restricting, name, {}) ?? "",
@@ -111,7 +120,15 @@ for (const expected of ["write_file", "edit_file", "delete_file", "code_rewrite"
     );
   }
   assert.equal(
-    getPlanModeToolBlockReason({ isRestrictingTools: () => false }, "write_file", {}),
+    getPlanModeToolBlockReason(
+      {
+        toolAvailability: () => ({ phase: "off", restrictsMutations: false, hiddenTools: new Set() }),
+        snapshot: () => ({}),
+        approvalPolicy: () => "ask",
+      },
+      "write_file",
+      {}
+    ),
     null,
     "nothing is refused when plan mode is not restricting"
   );

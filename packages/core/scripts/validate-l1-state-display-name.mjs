@@ -19,6 +19,7 @@ import {
   restoreManagedSession,
 } from "../dist/dev.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function fakeUsage() {
@@ -117,6 +118,7 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
     usage: fakeUsage(),
     getTodoManager: () => null,
     planMode: { getPhase: () => "off", getState: () => null },
+    getModeState: () => fakeModeState(),
     isAutoModeEnabled: () => false,
     getReasoningEffort: () => undefined,
     approvals: { toArray: () => [] },
@@ -144,6 +146,7 @@ assert.equal(AGENT_EVENT_META["subagent:error"]?.channel, "lifecycle");
       usage: fakeUsage(),
       getTodoManager: () => null,
       planMode: { restoreState: () => {}, getPhase: () => "off", getState: () => null },
+      getModeState: () => fakeModeState(),
       setAutoModeEnabled: () => {},
       isAutoModeEnabled: () => false,
       getApprovals: () => ({ restore: () => {} }),

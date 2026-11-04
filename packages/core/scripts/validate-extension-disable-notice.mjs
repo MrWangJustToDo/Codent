@@ -14,6 +14,8 @@ import assert from "node:assert/strict";
 
 import { clearCoreEnv, ExtensionRunner, registerCoreEnv, TurnContextController } from "../dist/dev.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
+
 async function collect(runner, id) {
   await runner.setEnabled(id, false);
   const collected = await runner.collectBeforeAgentStart("x", "id");
@@ -158,8 +160,7 @@ async function disableText(runner, id) {
       getConfig: () => ({ model: "m", modelStyle: "openai" }),
       getCoreEnv: () => env,
       getSessionId: () => "s",
-      getPlanState: () => ({ phase: "off" }),
-      isAutoModeEnabled: () => false,
+      getModeState: () => fakeModeState(),
       getExtensionRunner: () => runner,
       getParentId: () => undefined,
       onPromptBefore: () => {},

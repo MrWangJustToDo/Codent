@@ -7,6 +7,7 @@
 
 import type { AgentCommandPort } from "./command-service.js";
 import type { ResolvedCoreEnv } from "../../../env";
+import type { ModeState } from "../../mode/mode-state.js";
 import type { PlanModeController } from "../../plan/plan-mode-controller.js";
 import type { TodoManager } from "../../todo";
 import type { AgentToolConfig } from "../tool-config.js";
@@ -29,5 +30,7 @@ export interface AgentToolContext {
   removePendingAbortController(controller: AbortController): void;
   getWebsearchConfig(): AgentToolConfig["websearch"] | undefined;
   getPlanMode(): PlanModeController;
+  /** Read-only mode facts; plan tools report phase/artifact through this, not the controller. */
+  getModeState(): ModeState;
   getTodoManager(): TodoManager | null;
 }
