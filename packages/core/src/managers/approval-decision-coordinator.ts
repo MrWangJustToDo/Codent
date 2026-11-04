@@ -84,6 +84,12 @@ export interface ApprovalDecisionCoordinatorDeps {
    * indistinguishable from the policy never having run.
    */
   reportDiagnostic?: (message: string, details?: Record<string, string>) => void;
+  /** Shared `tool:before:*` ledger entry point (pipeline stage; the middleware reuses it). */
+  runToolBeforeHook?: (
+    toolCallId: string,
+    toolName: string,
+    args: unknown
+  ) => Promise<{ skip: boolean; reason?: string }>;
 }
 
 export class ApprovalDecisionCoordinator {
@@ -99,6 +105,7 @@ export class ApprovalDecisionCoordinator {
       getCoreEnv: deps.getCoreEnv,
       ...(deps.evaluateCommandSafety ? { evaluateCommandSafety: deps.evaluateCommandSafety } : {}),
       ...(deps.reportDiagnostic ? { reportDiagnostic: deps.reportDiagnostic } : {}),
+      ...(deps.runToolBeforeHook ? { runToolBeforeHook: deps.runToolBeforeHook } : {}),
       recordDecision: (input) => this.recordDecision(input),
       settle: () => this.settle(),
     });

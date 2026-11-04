@@ -291,9 +291,9 @@ graph TD
 - [ ] host 接口 ≤15 成员；`SessionRuntime` 端口可独立 fake。
 
 ### P3（Authorize）
-- [ ] 一次工具调用的决定只来自管线，记录只有一份。
-- [ ] plan/subagent/code-mode 的"不可用"与"需审批"共用 facts。
-- [ ] 拦截器 deny 与审批 deny 在同一决策模型里可区分。
+- [x] 一次工具调用的决定只来自管线，记录只有一份。
+- [x] plan/subagent/code-mode 的"不可用"与"需审批"共用 facts。
+- [x] 拦截器 deny 与审批 deny 在同一决策模型里可区分。
 
 ### P4（状态三轴）
 - [ ] `setStatus` 只剩 `transition()` 内部调用。

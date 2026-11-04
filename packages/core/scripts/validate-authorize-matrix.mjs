@@ -134,6 +134,36 @@ const cases = [
     expect: { action: "deny", source: "command-analysis" },
   },
   {
+    name: "env rule / an override is a hard deny before auto",
+    input: {
+      toolName: "run_command",
+      facts: facts({ auto: true, env: { CI: "1" } }),
+      approval: GATED,
+      hardPolicy: { action: "deny", source: "policy", reason: "env override changes the program" },
+    },
+    expect: { action: "deny", source: "policy" },
+  },
+  {
+    name: "rules / destructive deny is not auto-approved",
+    input: {
+      toolName: "run_command",
+      facts: facts({ auto: true }),
+      approval: GATED,
+      hardPolicy: { action: "deny", source: "policy", reason: "destructive rule" },
+    },
+    expect: { action: "deny", source: "policy" },
+  },
+  {
+    name: "auto / extension skip still denies",
+    input: {
+      toolName: "run_command",
+      facts: facts({ auto: true }),
+      approval: GATED,
+      extensionHooks: async () => ({ action: "deny", source: "extension", reason: "blocked" }),
+    },
+    expect: { action: "deny", source: "extension" },
+  },
+  {
     name: "extension skip / deny beats an analysis allow",
     input: {
       toolName: "run_command",

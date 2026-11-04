@@ -8,9 +8,9 @@
 
 import { errorMessage } from "../../utils/errors.js";
 
-import type { SessionRuntime } from "../session-runtime.js";
 import type { SessionData } from "../../agent/persistence/types.js";
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
+import type { SessionRuntime } from "../session-runtime.js";
 
 export type SessionLifecycleReason = "session-switch" | "session-new" | "session-resume" | "agent-destroy";
 
@@ -146,6 +146,7 @@ export class SessionLifecycleService {
     // drops the phase records/pre-fork seats that pointed at them.
     this.rt.sidecars.destroyChildAgents(reason);
     this.rt.sidecars.clearTaskRuns();
+    this.rt.sidecars.clearToolBeforeHooks?.();
     this.rt.run.resetRunOutcome?.();
     this.pendingBackgroundReset = Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
   }

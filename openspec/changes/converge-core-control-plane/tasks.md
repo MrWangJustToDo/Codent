@@ -53,12 +53,12 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 - [x] 5.2 Add `RegisteredTool.approval: ApprovalRequirement`, composing the static flag and MCP annotations at registration (depends: 1.1)
 - [x] 5.3 Implement `authorizeToolCall()` as a stage composer that first calls the existing decision functions unchanged (depends: 5.1, 5.2)
 - [x] 5.4 Move command-safety analysis into a pipeline stage and remove the chat controller's separate `applyCommandSafetyPolicy` call (depends: 5.3)
-- [ ] 5.5 Move the `tool:before:*` extension hook into the pipeline as a deny source (including the `modifiedArgs` refusal) (depends: 5.3)
+- [x] 5.5 Move the `tool:before:*` extension hook into the pipeline as a deny source (including the `modifiedArgs` refusal) (depends: 5.3)
 - [x] 5.6 Move plan/subagent/code-mode availability into policy facts and make the offered tool list a projection of them (depends: 3.1, 5.1)
 - [x] 5.7 Move auto / plan-execution auto-approval into the pipeline; reduce `ApprovalDecisionCoordinator` to the answer writer (depends: 5.3, 3.2)
 - [x] 5.8 Make the approval table the single decision store; derive the tool part, resume map, JSONL row and event `source` from it (depends: 5.3)
 - [x] 5.9 Delete duplicate gates and raw `needsApproval` policy reads (depends: 5.4–5.8)
-- [ ] 5.10 Add `validate:authorize-matrix` (tool × mode × path × env × subagent × rules × annotations) (depends: 1.4, 5.1–5.9)
+- [x] 5.10 Add `validate:authorize-matrix` (tool × mode × path × env × subagent × rules × annotations) (depends: 1.4, 5.1–5.9)
 
 ## 6. P4 — Three state axes and derived status
 

@@ -43,6 +43,7 @@ import { fileURLToPath } from "node:url";
 import {
   AgentStreamHub,
   createModeState,
+  ToolBeforeHookLedger,
   resolveAgentPolicyFacts,
   PLAN_TODO_TITLE,
   PlanModeController,
@@ -140,6 +141,7 @@ function makeManagedStub(controller) {
     getWireProjectionCache: () => ({}),
     planMode: controller,
     getModeState: () => createModeState({ planMode: controller, autoMode: { isEnabled: () => false } }),
+    getToolBeforeHooks: () => new ToolBeforeHookLedger(),
     getPolicyFacts: () =>
       resolveAgentPolicyFacts(createModeState({ planMode: controller, autoMode: { isEnabled: () => false } })),
     getSystemPrompt: () => "",

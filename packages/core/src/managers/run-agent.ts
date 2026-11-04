@@ -226,6 +226,7 @@ export function buildAgentRunner(
     }),
     createExtensionsMiddleware({
       getExtensionRunner: deps.getExtensionRunner,
+      getToolBeforeHooks: deps.getToolBeforeHooks,
       getSessionId: () => session.getSessionData()?.id ?? deps.agentId,
       emitEvent,
       getAbortSignal: () => run.currentAbortController?.signal,

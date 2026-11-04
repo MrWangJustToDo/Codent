@@ -1,3 +1,4 @@
+import { emitToolBeforeHook, ToolBeforeHookLedger } from "../../agent/extension/tool-before-hook.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
 import { errorMessage } from "../../utils/errors.js";
@@ -5,7 +6,7 @@ import { errorMessage } from "../../utils/errors.js";
 import { defineMiddleware } from "./phase.js";
 
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
-import type { ToolAfterEvent, ToolBeforeEvent } from "../../agent/extension/types.js";
+import type { ToolAfterEvent } from "../../agent/extension/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { ChatMiddleware } from "@tanstack/ai";
@@ -13,6 +14,8 @@ import type { ChatMiddleware } from "@tanstack/ai";
 export interface ExtensionsMiddlewareDeps {
   getExtensionRunner: () => ExtensionRunner | null;
   getSessionId: () => string;
+  /** Shared with the authorization pipeline so `tool:before:*` runs once per call. */
+  getToolBeforeHooks?: () => ToolBeforeHookLedger;
   emitEvent?: EmitAgentTelemetryFn;
   /**
    * The in-flight run's abort signal, so a tool throw can be classified as the user's abort
@@ -58,6 +61,9 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
   // builds the tool-result messages), because onAfterToolCall returns void and cannot
   // rewrite the result back to the model (TanStack 0.43.1 API constraint).
   const modifiedResults = new Map<string, unknown>();
+  // A standalone middleware (validators, ad-hoc hosts) keeps its own ledger; production injects
+  // the agent's so the authorization pipeline and this seam share one outcome.
+  const toolBeforeHooks = deps.getToolBeforeHooks?.() ?? new ToolBeforeHookLedger();
 
   return defineMiddleware("tools", {
     name: "extensions",
@@ -77,20 +83,18 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       const runner = deps.getExtensionRunner();
       if (!runner) return;
 
-      const eventBus = runner.getEventBus();
-      const event: ToolBeforeEvent = {
-        type: `tool:before:${hookCtx.toolName}`,
-        payload: {
+      // The authorization pipeline may already have run this hook (before the approval prompt).
+      // `runOnce` joins that outcome instead of emitting a second time.
+      const outcome = await toolBeforeHooks.runOnce(hookCtx.toolCallId, () =>
+        emitToolBeforeHook(runner, {
+          toolCallId: hookCtx.toolCallId,
           toolName: hookCtx.toolName,
           args: hookCtx.args,
           sessionId: deps.getSessionId(),
-        },
-        defaultReturn: undefined,
-      };
+        })
+      );
 
-      await eventBus.emit(event);
-
-      if (event.skip) {
+      if (outcome.skip) {
         // A marker, not `{ error }`: the row is rendered by `formatToolOutput`, which must be able
         // to tell "an extension refused this" from "the tool failed" without reading a schema the
         // refusal does not have. `cancelled: false` keeps it out of the cancel rendering.
@@ -100,12 +104,12 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
             success: false,
             cancelled: false,
             denied: true,
-            error: event.reason ?? "Tool denied by extension",
+            error: outcome.reason ?? "Tool denied by extension",
           },
         };
       }
 
-      if (event.modifiedArgs !== undefined) {
+      if (outcome.modifiedArgs !== undefined) {
         // An approval-gated call was already decided on `hookCtx.args`; a preforked `task` already
         // started on them. Rewriting now cannot be honoured honestly, so keep the original args.
         if (!canRewriteArgs(deps, hookCtx.toolName)) {
@@ -114,7 +118,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
         }
         return {
           type: "transformArgs",
-          args: event.modifiedArgs,
+          args: outcome.modifiedArgs,
         };
       }
 
@@ -201,11 +205,14 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
     // for the life of the process — and their ids can never match a later result.
     onAbort: () => {
       modifiedResults.clear();
+      toolBeforeHooks.clear();
     },
     onError: () => {
       modifiedResults.clear();
+      toolBeforeHooks.clear();
     },
     onToolPhaseComplete: async (_ctx, info) => {
+      toolBeforeHooks.clear();
       if (modifiedResults.size === 0) return;
       for (const result of info.results) {
         const modified = modifiedResults.get(result.toolCallId);

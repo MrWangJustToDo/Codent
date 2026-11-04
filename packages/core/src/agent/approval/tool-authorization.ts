@@ -53,6 +53,12 @@ export interface ToolAuthorizationDeps {
   getCoreEnv: () => ResolvedCoreEnv;
   /** Test/alternate-host seam; defaults to the tree-sitter command policy. */
   evaluateCommandSafety?: (input: RunCommandApprovalInput) => Promise<CommandApprovalDecision>;
+  /** `tool:before:*` for a gated call; the pipeline records a skip as a deny. */
+  runToolBeforeHook?: (
+    toolCallId: string,
+    toolName: string,
+    args: unknown
+  ) => Promise<{ skip: boolean; reason?: string }>;
   recordDecision: (input: ToolAuthorizationRecord) => void;
   settle: () => void;
   reportDiagnostic?: (message: string, details?: Record<string, string>) => void;
@@ -96,6 +102,24 @@ export class ToolAuthorizationService {
         facts,
         ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(toolCall.name) } : {}),
         persisted,
+        ...(this.deps.runToolBeforeHook
+          ? {
+              extensionHooks: async () => {
+                const hooked = await this.deps.runToolBeforeHook!(
+                  toolCall.id,
+                  toolCall.name,
+                  input ?? ({} as Record<string, unknown>)
+                );
+                return hooked.skip
+                  ? {
+                      action: "deny" as const,
+                      source: "extension" as const,
+                      reason: hooked.reason ?? "Tool denied by extension",
+                    }
+                  : undefined;
+              },
+            }
+          : {}),
         ...(isCommand && input?.command
           ? {
               analyzeCommand: async () => {

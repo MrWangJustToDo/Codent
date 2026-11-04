@@ -62,6 +62,11 @@ import { WireProjectionCache } from "../agent/compaction/wire-projection-cache.j
 import { projectWireFromChannel } from "../agent/compaction/wire-projection.js";
 import { readExtensionSummary } from "../agent/extension/extension-summary.js";
 import { scopeExtensionOwnerId } from "../agent/extension/owner-id.js";
+import {
+  emitToolBeforeHook,
+  ToolBeforeHookLedger,
+  type ToolBeforeHookOutcome,
+} from "../agent/extension/tool-before-hook.js";
 import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
@@ -445,6 +450,9 @@ export class ManagedAgent {
   /** Global (cross-session) LLM usage persistence — contribution-graph source. */
   readonly usageHistory: UsageHistoryService;
   readonly run: RunCoordinator;
+  /** `tool:before:*` outcomes shared by the authorization pipeline and the execution middleware. */
+  private readonly toolBeforeHooks = new ToolBeforeHookLedger();
+
   /** Session ownership/identity state machine (see `agent/session/session-lease.ts`). */
   readonly sessionLease: SessionLease;
   /** The session id the log sink is currently bound to (mirrors `AgentLogBinding`). */
@@ -899,6 +907,7 @@ export class ManagedAgent {
         clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
         // Task phase records and pre-fork seats belong to the conversation being left.
         clearTaskRuns: () => clearTaskRuns(this),
+        clearToolBeforeHooks: () => this.toolBeforeHooks.clear(),
         // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
         // preview, so a switch is the only point that can release the child (UI channel, log sink,
         // tool state) without destroying a preview the user is still looking at.
@@ -2547,6 +2556,30 @@ export class ManagedAgent {
   // ============================================================================
   // Auto-approve mode (skip all tool approvals)
   // ============================================================================
+
+  getToolBeforeHooks(): ToolBeforeHookLedger {
+    return this.toolBeforeHooks;
+  }
+
+  /**
+   * Run (or join) the `tool:before:*` interception for one call.
+   *
+   * The authorization pipeline calls this before an approval prompt; the extensions middleware
+   * calls the ledger again and reads the same outcome, so an interceptor's side effects happen
+   * exactly once.
+   */
+  async runToolBeforeHook(toolCallId: string, toolName: string, args: unknown): Promise<ToolBeforeHookOutcome> {
+    const runner = this.getExtensionRunner();
+    if (!runner) return { skip: false };
+    return this.toolBeforeHooks.runOnce(toolCallId, () =>
+      emitToolBeforeHook(runner, {
+        toolCallId,
+        toolName,
+        args,
+        sessionId: this.getSessionData()?.id ?? "",
+      })
+    );
+  }
 
   /** Single mode read surface (plan phase, auto, approval policy, tool availability). */
   getModeState(): ModeState {

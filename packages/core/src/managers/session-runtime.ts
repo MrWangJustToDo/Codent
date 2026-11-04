@@ -85,6 +85,8 @@ export interface SessionSidecarPort {
   clearExtensionUi?(): void;
   destroyChildAgents(reason: string): void;
   clearTaskRuns(): void;
+  /** Drop per-call `tool:before:*` outcomes from the conversation being left. */
+  clearToolBeforeHooks?(): void;
   resetBackgroundWork(reason: string): Promise<void> | void;
   resumeBackgroundWork?(): void;
   warn?(message: string, data?: Record<string, unknown>): void;

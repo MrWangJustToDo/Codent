@@ -158,6 +158,7 @@ export class AgentChatController {
         ),
       getPolicyFacts: () => this.managed.getPolicyFacts(),
       getApprovalRequirement: (toolName) => this.managed.getApprovalRequirement(toolName),
+      runToolBeforeHook: (toolCallId, toolName, args) => this.managed.runToolBeforeHook(toolCallId, toolName, args),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
       persist: () => this.persistMessages("pump-complete"),
       enqueueRun: () => this.enqueueRunOnce(),

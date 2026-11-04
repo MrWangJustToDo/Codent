@@ -75,21 +75,24 @@ export async function authorizeToolCall(input: AuthorizeToolCallInput): Promise<
     return { action: "deny", source: "persisted", reason: "denied by the recorded decision" };
   }
 
-  // 4. Auto modes (auto, or plan execution with seeded todos).
-  if (facts.auto || facts.planExecutionAutoApprove) {
-    return { action: "allow", source: "auto", reason: facts.auto ? "auto mode" : "plan execution" };
-  }
+  // 4. Auto modes (auto, or plan execution with seeded todos). This is a candidate, not a terminal
+  // allow: an extension hook may still deny (auto mode does not bypass a hard/extension deny), and
+  // command analysis is deliberately skipped to keep auto's "no prompts, no analyzer" behavior.
+  const autoApprove = facts.auto || facts.planExecutionAutoApprove;
+  let candidate: ToolAuthorizationDecision | undefined = autoApprove
+    ? { action: "allow", source: "auto", reason: facts.auto ? "auto mode" : "plan execution" }
+    : undefined;
 
   // 5. Declarative requirement: this is an `ask` candidate, not a final verdict — command analysis
   // may still allow a read-only command that the tool gates by default.
   const requiresApproval = input.approval?.requiresApproval ?? false;
-  let candidate: ToolAuthorizationDecision | undefined = requiresApproval
-    ? { action: "ask", source: "declarative", reason: input.approval?.reason ?? "tool requires approval" }
-    : undefined;
+  if (!autoApprove && requiresApproval) {
+    candidate = { action: "ask", source: "declarative", reason: input.approval?.reason ?? "tool requires approval" };
+  }
 
   // 6. Command analysis (existing analyzer) can allow, deny or ask. A deny is terminal; an allow
   // replaces the declarative ask and stays open to a later extension deny.
-  if (input.analyzeCommand) {
+  if (!autoApprove && input.analyzeCommand) {
     const analyzed = await input.analyzeCommand();
     if (analyzed?.action === "deny") return analyzed;
     if (analyzed) candidate = analyzed;
@@ -105,7 +108,9 @@ export async function authorizeToolCall(input: AuthorizeToolCallInput): Promise<
   // 8. Persisted decision: an answer already recorded executes once without re-prompting. It is
   // last, so a command/extension deny above still wins; it only settles an ask candidate.
   if (input.persisted === "approved") {
-    return { action: "allow", source: "persisted", reason: "approved by the recorded decision" };
+    return candidate?.source === "auto"
+      ? candidate
+      : { action: "allow", source: "persisted", reason: "approved by the recorded decision" };
   }
   if (input.persisted === "pending" && candidate?.action !== "allow") {
     return { action: "ask", source: "persisted", reason: "approval is still pending" };

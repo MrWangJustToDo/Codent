@@ -17,6 +17,7 @@ import type { AgentStreamHub } from "../agent/stream-hub";
 import type { TodoManager } from "../agent/todo";
 import type { AgentCommandService } from "./services/agent-command-service.js";
 import type { BackgroundWorkService } from "./services/background-work-service.js";
+import type { ToolBeforeHookLedger } from "../agent/extension/tool-before-hook.js";
 import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
@@ -62,6 +63,8 @@ export interface AgentRunDeps {
   compactions: CompactionController;
   approvals: ToolApprovalTable;
   run: RunCoordinator;
+  /** Shared `tool:before:*` ledger: pipeline and middleware must emit once per call. */
+  getToolBeforeHooks: () => ToolBeforeHookLedger;
   /** The mode read surface; read live because a phase flip must reach a cached runner. */
   getModeState: () => ModeState;
   /** The same facts authorization sees; the offered tool list is a projection of them. */
@@ -151,6 +154,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     compactions: managed.compactions,
     approvals: managed.getApprovals(),
     run: managed.run,
+    getToolBeforeHooks: () => managed.getToolBeforeHooks(),
     getModeState: () => managed.getModeState(),
     getPolicyFacts: () => managed.getPolicyFacts(),
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
