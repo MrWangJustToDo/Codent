@@ -41,7 +41,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 /** A runner whose host side keeps a simple name → owner map, plus the rows its log received. */
-function makeRunner() {
+function makeRunner(overrides = {}) {
   const tools = new Map();
   const commands = new Map();
   const logEntries = [];
@@ -65,6 +65,7 @@ function makeRunner() {
     onRegisterCommand: (cmd) => commands.set(cmd.name, cmd),
     onUnregisterCommand: (name) => commands.delete(name),
     onExtensionDisabled: (extensionId, notice) => disabledCalls.push({ extensionId, notice }),
+    ...overrides,
   });
   return { runner, tools, commands, logEntries, bus, disabledCalls };
 }
@@ -516,6 +517,43 @@ const toolDef = (name) => ({
     logEntries.some((entry) => entry.level === "error" && /retry exploded/.test(entry.message)),
     "a failed re-enable emits agent:extension-error, like an initial load failure"
   );
+  await runner.destroyAll();
+}
+
+// ----------------------------------------------------------------------------
+// A lifecycle callback that never settles is bounded
+// ----------------------------------------------------------------------------
+// Extensions are third-party code and none of these callbacks has a bounded-work contract, while
+// bootstrap awaits `activate` serially: one promise that never settles kept the agent — and every
+// later extension — from ever existing. A hung `deactivate` was worse: `pendingToggles` kept its
+// token forever, so the extension could never be toggled again.
+{
+  const { runner } = makeRunner({ callbackTimeoutMs: 20 });
+  const instance = await runner.loadExtension({
+    id: "hung-activate",
+    name: "hung-activate",
+    activate: () => new Promise(() => {}),
+  });
+  assert.equal(instance.state, "error", "a hung activate is a failed activation, not an unbounded wait");
+  assert.match(String(instance.error?.message), /did not settle/, "and says it timed out");
+  assert.equal(runner.getExtensionInfos()[0].enabled, false, "the panel reflects the failure");
+  await runner.destroyAll();
+}
+{
+  const { runner } = makeRunner({ callbackTimeoutMs: 20 });
+  await runner.loadExtension({
+    id: "hung-deactivate",
+    name: "hung-deactivate",
+    activate() {},
+    deactivate: () => new Promise(() => {}),
+  });
+
+  const off = await runner.setEnabled("hung-deactivate", false);
+  assert.equal(off.ok, true, "a hung deactivate does not fail the disable");
+  assert.equal(runner.getExtensionInfos()[0].enabled, false, "and the extension is disabled");
+
+  const on = await runner.setEnabled("hung-deactivate", true);
+  assert.equal(on.ok, true, "a hung deactivate must not lock the toggle token forever");
   await runner.destroyAll();
 }
 

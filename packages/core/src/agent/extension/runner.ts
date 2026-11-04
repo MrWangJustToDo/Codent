@@ -68,6 +68,33 @@ const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 /** Result of one activation transaction — see {@link ExtensionRunner.activateInstance}. */
 type ActivationOutcome = { kind: "active" } | { kind: "revoked" } | { kind: "failed"; error: Error };
 
+/**
+ * Upper bound on one extension lifecycle callback (`activate` / `deactivate` / flush).
+ *
+ * Extensions are third-party code and the contract bounds none of these, while the runner awaits
+ * them on the session's critical path: bootstrap activates serially, so one `activate` that never
+ * settles kept the agent (and every later extension) from ever existing, and a hung `deactivate`
+ * left `pendingToggles` locked so the extension could never be disabled again. Timeout is not
+ * cancellation — there is no signal in the contract — it only stops the runner from waiting
+ * forever; the failure is reported like any other callback error.
+ */
+const EXTENSION_CALLBACK_TIMEOUT_MS = 60_000;
+
+/** Settle `promise`, or reject with a labelled timeout. A late rejection is consumed by the race. */
+function withCallbackTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs: number = EXTENSION_CALLBACK_TIMEOUT_MS
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} did not settle within ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 /** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
 
 export interface ExtensionRunnerOptions {
@@ -165,6 +192,13 @@ export interface ExtensionRunnerOptions {
    * idle/empty facts and `ctx.llm` rejects with a typed error.
    */
   getRuntime?: () => ExtensionRuntimeAccess | undefined;
+  /**
+   * Override the lifecycle-callback watchdog (see `EXTENSION_CALLBACK_TIMEOUT_MS`).
+   *
+   * Exists so a validation script can assert the timeout without waiting a minute; production
+   * never sets it.
+   */
+  callbackTimeoutMs?: number;
 }
 
 export class ExtensionRunner {
@@ -685,7 +719,10 @@ export class ExtensionRunner {
     this.turnContextSections.clearNotices(instance.api.id);
 
     try {
-      await instance.api.activate(context);
+      await withCallbackTimeout(
+        Promise.resolve(instance.api.activate(context)),
+        `extension "${instance.api.id}" activate`
+      );
       // A teardown during activation (disable / destroyAll) revokes the lease; the activation must
       // not resurrect the instance afterwards.
       if (!this.isContextLive(context)) {
@@ -803,7 +840,10 @@ export class ExtensionRunner {
     const flush = instance.registrations.flush;
     if (!flush) return;
     try {
-      await flush(this.contexts.get(instance.api.id));
+      await withCallbackTimeout(
+        Promise.resolve(flush(this.contexts.get(instance.api.id))),
+        `extension "${instance.api.id}" flush`
+      );
     } catch (err) {
       const error = toError(err);
       this.emitExtensionEvent("agent:extension-error", {
@@ -823,7 +863,10 @@ export class ExtensionRunner {
   private async deactivateExtension(instance: ExtensionInstance): Promise<void> {
     if (!instance.api.deactivate) return;
     try {
-      await instance.api.deactivate();
+      await withCallbackTimeout(
+        Promise.resolve(instance.api.deactivate()),
+        `extension "${instance.api.id}" deactivate`
+      );
     } catch (err) {
       // Do not swallow: surface deactivation failures for observability.
       const error = toError(err);
