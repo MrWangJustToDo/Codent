@@ -66,6 +66,7 @@ import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
+import { SessionLease } from "../agent/session/session-lease.js";
 import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
@@ -432,6 +433,8 @@ export class ManagedAgent {
   /** Global (cross-session) LLM usage persistence — contribution-graph source. */
   readonly usageHistory: UsageHistoryService;
   readonly run: RunCoordinator;
+  /** Session ownership/identity state machine (see `agent/session/session-lease.ts`). */
+  readonly sessionLease: SessionLease;
   /** Cached live accessors handed to extensions (`ctx.llm`, run/session facts). */
   private extensionRuntime: ExtensionRuntimeAccess | null = null;
   /**
@@ -668,6 +671,14 @@ export class ManagedAgent {
     // The store resolves the runtime env when bound, else ambient lazily at first write.
     this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
     this.run = new RunCoordinator();
+    this.sessionLease = new SessionLease(this.id, {
+      acquire: (sessionId, ownerId) => this.manager?.acquireSessionOwnership(sessionId, ownerId) ?? true,
+      release: (sessionId, ownerId) => this.manager?.releaseSessionOwnership(sessionId, ownerId),
+      releaseReservation: (sessionId) => {
+        const store = this.getSessionStore();
+        if (store) void store.releaseReservation(sessionId).catch(() => undefined);
+      },
+    });
     this.childIds = [];
     this.createdAt = Date.now();
     this.updatedAt = Date.now();
@@ -800,8 +811,7 @@ export class ManagedAgent {
       getSessionStore: () => this.getSessionStore(),
       awaitSessionPersistIdle: () => this.session.awaitPersistIdle(),
       getChatController: () => this.getChatController(),
-      acquireSessionOwnership: (sessionId) => this.manager?.acquireSessionOwnership(sessionId, this.id) ?? true,
-      releaseSessionOwnership: (sessionId) => this.manager?.releaseSessionOwnership(sessionId, this.id),
+      lease: this.sessionLease,
       bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
       emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
       emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
@@ -878,11 +888,14 @@ export class ManagedAgent {
       },
       resetBackgroundWork: (reason) => {
         // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the next
-        // session builds a fresh pair (same lifecycle the command registry always had).
+        // session builds a fresh pair (same lifecycle the command registry always had). Return the
+        // promise: the switch transaction awaits it before completing (a re-resume must not race a
+        // late job-record deletion).
         const work = this.backgroundWork;
         this.backgroundWork = undefined;
         this.commandService = undefined;
-        void work?.reset(reason).catch((error: unknown) => {
+        if (!work) return Promise.resolve();
+        return work.reset(reason).catch((error: unknown) => {
           this.emitDiagnostic("jobs", "Failed to reset background work", {
             level: "warn",
             data: { reason },

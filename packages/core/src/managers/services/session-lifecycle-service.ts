@@ -13,6 +13,7 @@ import type { MemoryService } from "./memory-service.js";
 import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
+import type { SessionLease } from "../../agent/session/session-lease.js";
 import type { AgentStreamHub } from "../../agent/stream-hub/agent-stream-hub.js";
 import type { TodoManager } from "../../agent/todo";
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
@@ -34,8 +35,8 @@ export interface SessionLifecycleHost {
   getSessionStore(): SessionStore | null;
   awaitSessionPersistIdle(): Promise<void>;
   getChatController(): AgentChatController | undefined;
-  acquireSessionOwnership(sessionId: string): boolean;
-  releaseSessionOwnership(sessionId: string): void;
+  /** Session ownership/identity: the only place a claim is acquired, committed or released. */
+  readonly lease: SessionLease;
   bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void;
   emitSessionNew(sessionId: string, reason: "session-new"): void;
   emitSessionSwitch(
@@ -109,7 +110,7 @@ export interface SessionLifecycleHost {
    * The session boundary for background work: drop the merged ledger (both kinds), end running seats,
    * clear the pending queue, and clear the `jobs` channel without waking anyone.
    */
-  resetBackgroundWork(reason: string): void;
+  resetBackgroundWork(reason: string): Promise<void> | void;
   /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
   warn?(message: string, data?: Record<string, unknown>): void;
 }
@@ -119,6 +120,13 @@ export class SessionLifecycleService {
   private switchInFlight: Promise<unknown> = Promise.resolve();
   /** Set by {@link settle}; prevents a teardown window from admitting a new switch. */
   private disposed = false;
+  /**
+   * The background-work reset started by the last {@link resetTransientState}.
+   *
+   * The reset kills processes and removes records asynchronously; the switch awaits it before
+   * completing, or a re-resume of the leaving id can race a late deletion against a fresh restore.
+   */
+  private pendingBackgroundReset: Promise<void> = Promise.resolve();
   /**
    * Admitted transitions that have not settled. Counted at ADMISSION (synchronously), not when
    * `runTransition` starts a microtask later: a send/compact arriving in that gap used to see
@@ -240,7 +248,12 @@ export class SessionLifecycleService {
     this.host.destroyChildAgents(reason);
     this.host.clearTaskRuns();
     this.host.resetRunOutcome?.();
-    this.host.resetBackgroundWork(reason);
+    this.pendingBackgroundReset = Promise.resolve(this.host.resetBackgroundWork(reason));
+  }
+
+  /** Await the background-work reset started by the last transient reset (switch transactions only). */
+  private async settleTransientReset(): Promise<void> {
+    await this.pendingBackgroundReset;
   }
 
   /**
@@ -296,7 +309,7 @@ export class SessionLifecycleService {
       modelStyle: current?.modelStyle ?? "openai",
       model: current?.model ?? "unknown",
     });
-    if (!this.host.acquireSessionOwnership(next.id)) {
+    if (!this.host.lease.claim(next.id)) {
       throw new Error(`Session "${next.id}" is already active in another live session and cannot be started here.`);
     }
 
@@ -311,22 +324,24 @@ export class SessionLifecycleService {
       // used to carry the old session id.
       this.host.setSessionData(next);
       adopted = true;
+      // Commit the claim at the adoption point: the departure claim is released here, exactly once.
+      this.host.lease.commit();
       this.host.getChatController()?.clearTranscript();
       this.resetTransientState(reason, "full");
+      // The reset kills background jobs/tasks asynchronously; the switch is not complete until
+      // they are gone (an immediate re-resume must not race a late record deletion).
+      await this.settleTransientReset();
       this.host.refreshSubagents?.();
-      if (current?.id) this.host.releaseSessionOwnership(current.id);
       this.host.emitSessionNew(next.id, reason);
       this.host.refreshState();
       return next;
     } catch (error) {
       if (!adopted) {
-        this.host.releaseSessionOwnership(next.id);
+        this.host.lease.abortClaim();
       } else {
-        // The switch committed when `setSessionData(next)` ran. A later reset step failing does
-        // not un-switch it, so the departure claim must be released here exactly as the resume
-        // path does — otherwise the old id stays "active in another live session" for the life
-        // of the agent and can never be resumed. Point writers at the adopted id too.
-        if (current?.id) this.host.releaseSessionOwnership(current.id);
+        // The switch committed when `setSessionData(next)` ran (and the lease released the
+        // departure). A later reset step failing does not un-switch it; just point writers at the
+        // adopted id.
         this.host.bindSessionLogSink(next.id);
       }
       throw error;
@@ -381,7 +396,7 @@ export class SessionLifecycleService {
   }
 
   private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {
-    if (!this.host.acquireSessionOwnership(sessionId)) {
+    if (!this.host.lease.claim(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
 
@@ -400,6 +415,7 @@ export class SessionLifecycleService {
 
       // Restore-time logs belong to the target. A load that never commits re-points the sink at the
       // still-active leaving session in the catch below.
+      this.host.lease.beginRestore();
       this.host.bindSessionLogSink(sessionId);
       this.host.beginSessionRestore?.();
       let session: SessionData;
@@ -409,13 +425,15 @@ export class SessionLifecycleService {
         this.host.endSessionRestore?.();
       }
 
-      // COMMITTED: the restore adopted the target last, so the old claim is free from here on.
-      if (leavingId && leavingId !== sessionId) this.host.releaseSessionOwnership(leavingId);
+      // COMMITTED: the restore adopted the target last. The lease releases the departure claim and
+      // advances the generation here, exactly once.
+      this.host.lease.commit();
 
       try {
         // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
         // the restore just adopted those.
         this.resetTransientState("session-resume", "resume");
+        await this.settleTransientReset();
         // The reset makes the status idle; re-apply the restored interaction state so a session that
         // was waiting on approval/ask_user does not come back as idle.
         this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);
@@ -452,7 +470,7 @@ export class SessionLifecycleService {
       // behind after a failed load would turn one failed resume into a silently unsaved session.
       this.host.sessionPersistence.clearRestorePlaceholder();
       if (this.host.getSessionData()?.id !== sessionId) {
-        this.host.releaseSessionOwnership(sessionId);
+        this.host.lease.abortClaim();
         this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
         await this.recoverLeavingSession(leavingId);
       }

@@ -8,11 +8,20 @@
 import assert from "node:assert/strict";
 
 import {
+  SessionLease,
   SessionLifecycleService,
   SessionPersistence,
   SessionService,
   dispatchLocalAgentSessionCommand,
 } from "../dist/dev.mjs";
+
+/** A lease already active on `id`, like a live agent's before a switch. */
+function activeLease(id, onRelease = () => {}) {
+  const lease = new SessionLease("agent", { acquire: () => true, release: onRelease });
+  lease.claim(id);
+  lease.commit();
+  return lease;
+}
 
 const saves = [];
 const existing = new Set();
@@ -147,8 +156,7 @@ assert.equal(
 
   const lifecycleHost = {
     getSessionData: () => leaving,
-    acquireSessionOwnership: () => true,
-    releaseSessionOwnership: () => {},
+    lease: activeLease("ses_resume_leave"),
     awaitSessionPersistIdle: async () => {
       persistDrainCalls += 1;
       await Promise.all(pendingPersists);
@@ -263,10 +271,9 @@ assert.equal(
       model: "m",
       modelStyle: "openai",
     }),
-    acquireSessionOwnership: () => true,
-    releaseSessionOwnership: (id) => {
+    lease: activeLease("ses_old", (id) => {
       released = id;
-    },
+    }),
     // No clearPersistedSession in this host: newSession must not look for one.
     awaitSessionPersistIdle: async () => {
       persistDrains += 1;
@@ -349,8 +356,7 @@ assert.equal(
     getSessionStore: () => ({
       create: () => ({ id: `ses_flag_new_${drains}`, uiMessages: [], model: "m", modelStyle: "openai" }),
     }),
-    acquireSessionOwnership: () => true,
-    releaseSessionOwnership: () => {},
+    lease: activeLease("ses_flag_old"),
     awaitSessionPersistIdle: () => drainGates[Math.min(drains++, drainGates.length - 1)],
     stopActiveRun: () => {},
     abortManualCompaction: () => {},

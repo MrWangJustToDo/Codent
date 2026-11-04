@@ -335,13 +335,14 @@ export class AgentManager {
         // resumable by another live agent once it hit disk). `restoreSession` re-acquires the same
         // id idempotently when bootstrap resumed one.
         const activeSessionId = managed.getSessionData()?.id;
-        if (activeSessionId && !this.acquireSessionOwnership(activeSessionId, managed.id)) {
+        if (activeSessionId && !managed.sessionLease.claim(activeSessionId)) {
           // The target is already held by another live agent. The catch below tears down the
           // half-built agent so it cannot appear in the catalog or share the target's log sink.
           throw new Error(
             `Session "${activeSessionId}" is already active in another live session and cannot be created here.`
           );
         }
+        if (activeSessionId) managed.sessionLease.commit();
         managed.bindSessionLogSink();
       }
 

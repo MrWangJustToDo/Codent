@@ -106,9 +106,8 @@ const PATTERNS = [
     re: /\b(acquire|release)SessionOwnership\s*\(/,
     owner: "S2 (SessionLease)",
     allowed: new Map([
-      ["managers/agent-manager.ts", "manager facade"],
-      ["managers/managed-agent.ts", "agent facade"],
-      ["managers/services/session-lifecycle-service.ts", "switch transaction — moves into the lease"],
+      ["managers/agent-manager.ts", "manager facade (bootstrap claim)"],
+      ["managers/managed-agent.ts", "agent facade / lease wiring"],
     ]),
   },
 ];

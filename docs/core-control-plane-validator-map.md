@@ -47,7 +47,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | `validate:session-reuse-log`, `validate:session-message-log` | log sink / journal on reuse |
 | `validate:local-agent-session`, `validate:agent-session-host`, `validate:agent-session-types` | host surface |
 | `validate:restore-session-chat-state` | approved/denied/pending reconciliation |
-| **New (S10)** | `validate:session-lease-matrix` (per-phase fault injection × side effects) |
+| **New (S10, in progress)** | `validate:session-lease-matrix` (lease transitions; switch side effects pending) |
 
 ## P3 — Authorize (A1–A10)
 

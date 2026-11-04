@@ -35,14 +35,14 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 
 ## 4. P2 — SessionLease: one session owner
 
-- [ ] 4.1 Implement the `SessionLease` state machine (`unclaimed → claimed → restoring → active → draining → released`) with a monotonic generation (depends: 2.1)
-- [ ] 4.2 Wrap `SessionOwnership` behind the lease (depends: 4.1)
+- [x] 4.1 Implement the `SessionLease` state machine (`unclaimed → claimed → restoring → active → draining → released`) with a monotonic generation (depends: 2.1)
+- [x] 4.2 Wrap `SessionOwnership` behind the lease (depends: 4.1)
 - [ ] 4.3 Move disk reservation and restore placeholder into the lease; release only self-made reservations on failure (depends: 4.1, 4.2)
 - [ ] 4.4 Move log-sink binding into lease phases (depends: 4.1)
 - [ ] 4.5 Move the persistence baseline / sync tracker reset into `lease.commit` (depends: 4.1)
 - [ ] 4.6 Define `SessionRuntime` with four ports (`RunControl`, `TranscriptPort`, `ModePort`, `SidecarPort`) (depends: 4.1–4.5)
 - [ ] 4.7 Rewrite the switch transaction (`new` / `resume` / `clone` / `fork`) as ordered lease phases with rollback (depends: 4.6)
-- [ ] 4.8 Await background-work reset inside the transaction and remove the fire-and-forget reset (depends: 4.6, 4.7)
+- [x] 4.8 Await background-work reset inside the transaction and remove the fire-and-forget reset (depends: 4.6, 4.7)
 - [ ] 4.9 Narrow the former 38-member host to at most four ports and update `ManagedAgent` wiring (depends: 4.7)
 - [ ] 4.10 Add `validate:session-lease-matrix` (new/resume/same-id/different-id/failure-per-phase/clone/fork × ownership, sink, tracker, background, log boundary, events) (depends: 1.4, 4.1–4.9)
 - [ ] 4.11 Delete duplicate ownership/reservation guards and fold `local-agent-session-host` reservation logic into the lease (depends: 4.9)

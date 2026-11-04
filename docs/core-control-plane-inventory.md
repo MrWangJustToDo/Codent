@@ -11,7 +11,7 @@ The gate freezes the current scatter so the migration cannot silently add anothe
 entry names the task that removes it. Non-gated mechanisms (approval flags, session-host members)
 are listed at the end as migration context.
 
-## Gated mechanisms (68 tracked sites)
+## Gated mechanisms (58 tracked sites)
 
 ### `status-write` → owner T3 (single transition writer) — 35 sites
 
@@ -60,13 +60,15 @@ old helper until they receive the epoch through their deps.
 | `managers/managed-agent.ts` | 4 |
 | `managers/run-agent.ts` | 1 |
 
-### `ownership-write` → owner S2 (SessionLease) — 14 sites
+### `ownership-write` → owner S2 (SessionLease) — 4 sites
+
+The switch transaction and the bootstrap claim now go through `SessionLease`; what remains are the
+manager/agent facade definitions that the lease's ports call.
 
 | file | sites |
 |---|---:|
-| `managers/agent-manager.ts` | 3 |
+| `managers/agent-manager.ts` | 2 |
 | `managers/managed-agent.ts` | 2 |
-| `managers/services/session-lifecycle-service.ts` | 9 |
 
 ## Not yet gated (tracked by analysis, migrate next)
 

@@ -11,6 +11,7 @@ export * from "./dev/dev-models.js";
 export { analyzeCommand, createAnalysisContext } from "./agent/tools/builtin/shell/safety/command-analyzer.js";
 export { isAbortError, isTimeoutError } from "./runtime-types/abort.js";
 export { createEpoch } from "./runtime-types/epoch.js";
+export { SessionLease } from "./agent/session/session-lease.js";
 export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";
