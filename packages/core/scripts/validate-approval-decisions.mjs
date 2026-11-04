@@ -324,3 +324,76 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 }
 
 console.log("approval-decisions validation passed");
+
+// ---------------------------------------------------------------------------
+// 7. The table is the decision store; the transcript part is its projection
+// ---------------------------------------------------------------------------
+{
+  const calls = [];
+  let stored = { id: "ap", toolCallId: "call", status: "approved", updatedAt: 42 };
+  const coordinator = new ApprovalDecisionCoordinator({
+    getMessages: () => [
+      {
+        id: "a",
+        role: "assistant",
+        parts: [toolCall("call", "run_command", "git status", "ap")],
+      },
+    ],
+    addToolApprovalResponse: () => {
+      throw new Error("the channel-first path must not run when projectApproval is supplied");
+    },
+    upsertApproval: (input) => {
+      calls.push(["table", input.status]);
+      return stored;
+    },
+    projectApproval: (input) => calls.push(["part", input.approved, input.decidedAt, input.overwrite ?? null]),
+    shouldAutoApprove: () => false,
+    reconcile: () => {},
+    persist: () => {},
+    enqueueRun: async () => {},
+    isSessionSwitching: () => false,
+    getCoreEnv: () => ({}),
+  });
+
+  await coordinator.respondToToolApproval("ap", true);
+  assert.deepEqual(
+    calls,
+    [
+      ["table", "approved"],
+      ["part", true, 42, null],
+    ],
+    "the table is written before the transcript, and the part reuses its timestamp"
+  );
+}
+
+{
+  // First decision wins in the STORE: a late deny must not rewrite a part to contradict it.
+  const calls = [];
+  const stored = { id: "ap", toolCallId: "call", status: "approved", updatedAt: 7 };
+  const coordinator = new ApprovalDecisionCoordinator({
+    getMessages: () => [
+      {
+        id: "a",
+        role: "assistant",
+        parts: [toolCall("call", "run_command", "git status", "ap")],
+      },
+    ],
+    addToolApprovalResponse: () => 7,
+    upsertApproval: () => {
+      calls.push("table");
+      return stored;
+    },
+    projectApproval: () => calls.push("part"),
+    shouldAutoApprove: () => false,
+    reconcile: () => {},
+    persist: () => {},
+    enqueueRun: async () => {},
+    isSessionSwitching: () => false,
+    getCoreEnv: () => ({}),
+  });
+
+  await coordinator.respondToToolApproval("ap", false, "too late");
+  assert.deepEqual(calls, ["table"], "a refused table write is not projected onto the transcript");
+}
+
+console.log("approval table is the decision store");

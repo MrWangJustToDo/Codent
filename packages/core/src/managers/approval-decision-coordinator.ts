@@ -12,6 +12,7 @@ import { ToolAuthorizationService } from "../agent/approval/tool-authorization.j
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
 
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
+import type { ToolApprovalRecord } from "../agent/persistence/types.js";
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
 import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "../agent/approval/tool-authorization.js";
 import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
@@ -30,7 +31,21 @@ export interface ApprovalDecisionCoordinatorDeps {
    * command-safety policy when it resolves after the user already answered.
    */
   addToolApprovalResponse: (approvalId: string, approved: boolean, reason?: string, overwrite?: "deny") => number;
-  upsertApproval: (input: UpsertToolApprovalInput) => void;
+  upsertApproval: (input: UpsertToolApprovalInput) => ToolApprovalRecord | void;
+  /**
+   * Project the table's record onto the transcript part.
+   *
+   * When present, the table is the decision store: it is written first, and this only mirrors the
+   * stored verdict (a first-decision-wins refusal is not projected). Without it, the legacy
+   * channel-first path below is used.
+   */
+  projectApproval?: (input: {
+    approvalId: string;
+    approved: boolean;
+    reason?: string;
+    decidedAt: number;
+    overwrite?: "deny";
+  }) => void;
   shouldAutoApprove: () => boolean;
   /** Policy snapshot for the one authorization pipeline (mode + profile + capabilities). */
   getPolicyFacts?: () => AgentPolicyFacts;
@@ -195,7 +210,31 @@ export class ApprovalDecisionCoordinator {
   }
 
   private recordDecision(input: ToolAuthorizationRecord): void {
-    // The channel resolves the time; the table reuses it (one time value for log + memory).
+    const status = input.approved ? "approved" : "denied";
+    if (this.deps.projectApproval) {
+      // Table first: it is the decision store. A first-decision-wins refusal returns the existing
+      // row, and the transcript must not be rewritten to contradict it.
+      const record = this.deps.upsertApproval({
+        id: input.approvalId,
+        toolCallId: input.toolCallId,
+        status,
+        ...(status === "denied" && input.reason ? { reason: input.reason } : {}),
+        toolName: input.toolName,
+        source: input.source,
+        ...(input.overwrite ? { overwrite: input.overwrite } : {}),
+      });
+      if (record && record.status !== status) return;
+      this.deps.projectApproval({
+        approvalId: input.approvalId,
+        approved: record ? record.status === "approved" : input.approved,
+        ...((record?.reason ?? input.reason) ? { reason: record?.reason ?? input.reason } : {}),
+        decidedAt: record?.updatedAt ?? Date.now(),
+        ...(input.overwrite ? { overwrite: input.overwrite } : {}),
+      });
+      return;
+    }
+
+    // Legacy: the channel resolves the time; the table reuses it (one time value for log + memory).
     const decidedAt = this.deps.addToolApprovalResponse(
       input.approvalId,
       input.approved,
@@ -205,8 +244,8 @@ export class ApprovalDecisionCoordinator {
     this.deps.upsertApproval({
       id: input.approvalId,
       toolCallId: input.toolCallId,
-      status: input.approved ? "approved" : "denied",
-      ...(!input.approved && input.reason ? { reason: input.reason } : {}),
+      status,
+      ...(status === "denied" && input.reason ? { reason: input.reason } : {}),
       toolName: input.toolName,
       source: input.source,
       updatedAt: decidedAt,

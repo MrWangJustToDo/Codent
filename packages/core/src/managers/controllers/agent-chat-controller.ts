@@ -147,6 +147,15 @@ export class AgentChatController {
           overwrite ? { overwrite } : undefined
         ),
       upsertApproval: (input) => this.managed.getApprovals().upsert(input),
+      // The table is the decision store; the channel part is its projection.
+      projectApproval: (input) =>
+        this.channel.addToolApprovalResponse(
+          input.approvalId,
+          input.approved,
+          input.reason,
+          input.decidedAt,
+          input.overwrite ? { overwrite: input.overwrite } : undefined
+        ),
       shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
       getPolicyFacts: () => this.managed.getPolicyFacts(),
       getApprovalRequirement: (toolName) => this.managed.getApprovalRequirement(toolName),
