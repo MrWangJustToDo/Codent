@@ -27,6 +27,7 @@ export function readLocalAgentSessionSnapshot(
     ...(managed.parentId ? { parentId: managed.parentId } : {}),
     name: l1.name,
     status: l1.status,
+    state: l1.state,
     ...(l1.sessionId ? { activeSessionId: l1.sessionId } : {}),
     error: l1.error,
     pendingApprovalCount: l1.pendingApprovalCount,

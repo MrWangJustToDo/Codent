@@ -16,6 +16,15 @@ export { SessionLease } from "./agent/session/session-lease.js";
 // consumers below it, instead of reaching into the controllers themselves.
 export { createModeState, ModeStateReader } from "./agent/mode/mode-state.js";
 export { resolveAgentPolicyFacts } from "./agent/mode/policy-facts.js";
+// State axes + projection; the matrix asserts the round-trip and the transition table.
+export {
+  deriveAgentState,
+  INITIAL_AGENT_STATE,
+  isActiveState,
+  isTerminalState,
+  projectAgentStatus,
+  transition,
+} from "./runtime-types/agent-state.js";
 // The authorization pipeline and the declarative requirement it reads. Validators assert the stage
 // order, deny precedence and fail-closed default against the real composer.
 export { authorizeToolCall } from "./agent/approval/authorize-tool-call.js";

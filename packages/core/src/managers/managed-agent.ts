@@ -92,6 +92,7 @@ import { getEnv, resolveCoreEnv } from "../env";
 import { selectModel } from "../models/config/model-selection.js";
 import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
+import { deriveAgentState } from "../runtime-types/agent-state.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { createEpoch, type Epoch } from "../runtime-types/epoch.js";
 import { errorMessage } from "../utils/errors.js";
@@ -1154,6 +1155,7 @@ export class ManagedAgent {
   getL1State(): AgentL1State {
     return {
       status: this.currentStatus,
+      state: deriveAgentState(this.currentStatus, this.error),
       name: this.name,
       sessionId: this.getSessionData()?.id ?? null,
       error: this.error,

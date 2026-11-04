@@ -8,6 +8,7 @@
 
 import type { AgentProfileId } from "./agent-profile.js";
 import type { AgentRetryState } from "./agent-retry.js";
+import type { AgentState } from "./agent-state.js";
 import type { AgentStatus } from "./agent-status.js";
 import type { TokenUsage } from "./token-usage.js";
 import type { ModelInfo, ReasoningEffort } from "../models/types.js";
@@ -19,6 +20,11 @@ export type AgentMode = "normal" | "auto" | "plan";
 /** L1 runtime status surface projected to AgentSession `state` channel. */
 export interface AgentL1State {
   status: AgentStatus;
+  /**
+   * The same state as explicit axes. `status` stays the wire projection for compatibility; this is
+   * the additive read model (see `runtime-types/agent-state.ts`).
+   */
+  state: AgentState;
   /** Agent display name (lets remote clients track renames via the state channel). */
   name: string;
   /**

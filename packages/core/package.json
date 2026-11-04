@@ -58,6 +58,7 @@
     "validate:authorize-matrix": "node scripts/validate-authorize-matrix.mjs",
     "validate:approval-descriptor": "node scripts/validate-approval-descriptor.mjs",
     "validate:tool-before-hook": "node scripts/validate-tool-before-hook.mjs",
+    "validate:agent-state-axes": "node scripts/validate-agent-state-axes.mjs",
     "metrics:control-plane": "node scripts/control-plane-metrics.mjs",
     "validate:agent-session-types": "pnpm run build && pnpm exec tsc --project tsconfig.typecheck.json && node scripts/validate-agent-session-types.mjs",
     "validate:local-agent-session": "pnpm run build && node scripts/validate-local-agent-session.mjs",

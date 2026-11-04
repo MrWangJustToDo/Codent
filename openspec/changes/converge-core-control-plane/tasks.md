@@ -62,8 +62,8 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 
 ## 6. P4 — Three state axes and derived status
 
-- [ ] 6.1 Define `LifecyclePhase` / `RunPhase` / `WaitKind` and the transition table (depends: 1.2)
-- [ ] 6.2 Add the read-only projection to `AgentStatus` (and optional snapshot fields) without changing writers (depends: 6.1)
+- [x] 6.1 Define `LifecyclePhase` / `RunPhase` / `WaitKind` and the transition table (depends: 1.2)
+- [x] 6.2 Add the read-only projection to `AgentStatus` (and optional snapshot fields) without changing writers (depends: 6.1)
 - [ ] 6.3 Route every status write through `transition(event)` and remove direct assignment (depends: 6.2, 2.9, 4.6, 5.1)
 - [ ] 6.4 Remove the `TERMINAL/ACTIVE` overlap and `resolveFinishStatus` special cases; derive terminality from the axes (depends: 6.3)
 - [ ] 6.5 Collapse the 23 status triggers to the transition-event set and update log policy (depends: 6.3, 6.4)

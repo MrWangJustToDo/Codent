@@ -28,6 +28,7 @@ import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
 import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js";
 import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
+import type { AgentState } from "../runtime-types/agent-state.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type {
   AgentSessionSubagentSummary,
@@ -141,6 +142,8 @@ export interface AgentSessionSnapshot {
   parentId?: string;
   name: string;
   status: AgentStatus;
+  /** Explicit axes behind `status` (additive; hosts may keep reading `status`). */
+  state: AgentState;
   /**
    * The disk session ({@link DiskSessionId}) this agent is currently attached to; absent before
    * one exists. Named `active…` on purpose: the binding is one-at-a-time and can switch

@@ -75,7 +75,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | `validate:pump-continuation`, `validate:task-run-state`, `validate:task-prefork` | pump phases/continuations |
 | `validate:manual-compact-interlock`, `validate:reactive-compact`, `validate:auto-compact-noop` | compaction ownership/status restore |
 | `validate:middleware-order` | middleware adjacency |
-| **New (T9)** | `validate:state-transition-matrix` + old-status equivalence |
+| **New (T1/T9)** | `validate:agent-state-axes` (created; projection round-trip + transition table) and `validate:state-transition-matrix` + old-status equivalence (planned) |
 
 ## Mode facts (M1–M5)
 
@@ -115,7 +115,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | No old/new equivalence harness | E10 / S10 / A10 / T9 | `helpers/equivalence.mjs` (created); epoch equivalence (created); session/authorize/state matrices (planned) |
 | No session-switch failure matrix (rollback per phase) | S10 | `validate:session-lease-matrix` (created) |
 | No single authorization decision matrix | A10 | `validate:authorize-matrix` (created) |
-| No state transition matrix / illegal-transition check | T9 | planned |
+| No state transition matrix / illegal-transition check | T9 | `validate:agent-state-axes` (created; full matrix pending) |
 | No epoch single-source guard | E10 | `validate:epoch-single-source` (created) |
 | No mode single-read guard | M5 | `validate:mode-single-read` (created) |
 
