@@ -1,5 +1,4 @@
 import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
-import { parseToolArguments } from "../../../utils/parse-tool-arguments.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
@@ -58,10 +57,6 @@ export function isCancelledToolCall(part: ToolCallPart | { output?: unknown }): 
   // A tool that rethrows the shared cancel message has no marker and no abort-shaped name; the
   // message itself is the only trace left after the framework wrapped it as `{ error }`.
   return output.error === TOOL_CANCELLED_MESSAGE || isAbortError(new Error(output.error));
-}
-
-export function parseToolInput(part: { arguments?: string }): unknown {
-  return parseToolArguments(part.arguments);
 }
 
 export function getUiToolState(part: ToolCallPart): UiToolState {

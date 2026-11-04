@@ -225,6 +225,12 @@ const SINGLE_DEFINITION_SYMBOLS = [
   "padLatestLines",
   "hiddenLinesIndicator",
   "buildLineWindow",
+  // Tool-call argument parsing (`utils/parse-tool-arguments.ts`): the approval gate, the UI
+  // presentation and every host read the same `arguments`/`input` pair. A second definition is how
+  // the approval hook ended up receiving `{}` while the tool executed the real arguments.
+  "parseToolArguments",
+  "tryParseToolArguments",
+  "parseToolInput",
 ];
 
 function countDefinitions(symbol) {

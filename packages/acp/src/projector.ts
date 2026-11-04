@@ -78,14 +78,6 @@ const STREAM_FLUSH_MS = 300;
 const COMPACTION_NOTICE = "[Context compacted — earlier turns are summarized in the model's context.]";
 
 /**
- * The call's input: the parsed field when the engine has it, else the raw `arguments` JSON.
- *
- * While a call streams, only `arguments` exists — reading `input` alone is why a `grep`/`read_file`
- * row arrived with a bare "Search"/"Read" and no parameters, and with no `rawInput` either.
- */
-const toolInputOf = (part: ToolCallPartLike): unknown => part.input ?? parseToolInput(part);
-
-/**
  * A stand-in `ToolState` for a result whose call part has not been seen yet.
  *
  * Only the fields `toolContentFor` reads matter, and it reads the NAME only to derive a `diff` — which a
@@ -644,7 +636,7 @@ export class AcpProjector {
     const state = this.tools.get(id);
     if (!state) this.createToolCall(part, replay);
     else {
-      state.input = toolInputOf(part) ?? state.input;
+      state.input = parseToolInput(part) ?? state.input;
       // The preview is a function of the INPUT, so it goes out as soon as the input is final — not when
       // the call reaches a terminal status. `content` on an update REPLACES what the client holds, and
       // the two writers (this transition, and the result part below) run in the engine's order, not
@@ -700,7 +692,9 @@ export class AcpProjector {
     // live tick then downgraded it to `pending` — a terminal row the client had already frozen, so the
     // approval row could not be answered at all (reported as a stuck session with a "hidden" tool call).
     const status: ToolCallStatus = this.toolStatusOf(part);
-    const input = toolInputOf(part);
+    // One helper for both shapes (see `@codent/core`'s `parseToolInput`): the parsed field exists
+    // from the moment the engine has it, `arguments` from the first tick.
+    const input = parseToolInput(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     // The SAME description an approval prompt gets (`toolCallInfo`): a `run_command` whose command the
     // transcript shows but an approval cannot is exactly the divergence that sharing it prevents.
@@ -713,9 +707,8 @@ export class AcpProjector {
     this.tools.set(part.id, {
       status,
       name: part.name,
-      // `toolInputOf`, not `part.input`: the parsed field only exists once the engine has parsed the
-      // call, while the raw `arguments` are there from the first tick. Everything downstream (title,
-      // preview) reads this, so it holds the best-known input rather than the strictest one.
+      // The best-known input (parsed field or raw `arguments`) rather than the strictest one:
+      // everything downstream (title, preview) reads it.
       input,
       streamBuffer: "",
       lastStreamFlush: 0,
@@ -788,7 +781,9 @@ export class AcpProjector {
   /** Prime a tool call from a snapshot without emitting it (`resume` / post-fork). */
   private primeToolCall(part: ToolCallPartLike): void {
     if (this.tools.has(part.id)) return;
-    const input = toolInputOf(part);
+    // One helper for both shapes (see `@codent/core`'s `parseToolInput`): the parsed field exists
+    // from the moment the engine has it, `arguments` from the first tick.
+    const input = parseToolInput(part);
     const display = (part as { display?: { summary?: string; text?: string } }).display;
     const info = toolCallInfo(part.name, input, this.options.rootPath, display?.text, this.toolLookup());
     this.tools.set(part.id, {
@@ -1185,7 +1180,7 @@ export class AcpProjector {
       if (message.role !== "assistant") continue;
       for (const part of message.parts) {
         if (part.type !== "tool-call" || part.id !== toolCallId) continue;
-        const input = toolInputOf(part as ToolCallPartLike);
+        const input = parseToolInput(part as ToolCallPartLike);
         const record = input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
         const description = typeof record?.description === "string" ? record.description : undefined;
         const prompt = typeof record?.prompt === "string" ? record.prompt : undefined;

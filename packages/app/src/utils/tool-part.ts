@@ -1,9 +1,9 @@
 /**
  * Thin re-exports of the core-owned tool-part helpers, plus the app's own presentation predicates.
  *
- * The implementation moved to `@codent/core` (`agent/tools/presentation/state.ts`)
- * so hosts that render off-process share exactly one implementation; this module keeps
- * the app's public surface stable.
+ * The implementation moved to `@codent/core` (`agent/tools/presentation/state.ts` for the UI
+ * predicates, `utils/parse-tool-arguments.ts` for `parseToolInput`) so hosts that render
+ * off-process share exactly one implementation; this module keeps the app's public surface stable.
  */
 
 import type { UiToolState } from "@codent/core";

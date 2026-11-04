@@ -85,6 +85,21 @@ const srcRoot = resolve(here, "../src");
   const service = readFileSync(resolve(srcRoot, "agent/approval/tool-authorization.ts"), "utf8");
   assert.match(service, /extensionHooks: async/, "the pipeline has an extension stage");
   assert.match(service, /source: "extension"/, "a skip is recorded as an extension denial");
+  // The hook sees the WHOLE call. It used to receive `parseRunCommandApprovalInput`, the
+  // command-analysis projection `{command,cwd,env}`, so every non-command gated tool (write_file,
+  // edit_file, MCP) reached extensions as `{}` — and the ledger caches that outcome, so the
+  // execution seam never re-emitted with the real arguments.
+  assert.match(
+    service,
+    /import \{ parseToolInput \} from "\.\.\/\.\.\/utils\/parse-tool-arguments\.js"/,
+    "the hook's input comes from the one shared parser"
+  );
+  assert.match(service, /parseToolInput\(toolCall\)/, "the full call input is parsed for the hook");
+  assert.match(
+    service,
+    /runToolBeforeHook!\(toolCall\.id, toolCall\.name, hookArgs/,
+    "the hook receives the full input, not the command projection"
+  );
 }
 
 console.log("tool:before hook ledger validation passed");

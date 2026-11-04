@@ -392,9 +392,9 @@ export {
   isPendingToolApproval,
   isToolCallPart,
   isToolExecuting,
-  parseToolInput,
   type UiToolState,
 } from "./agent/tools/presentation/state.js";
+export { parseToolInput } from "./utils/parse-tool-arguments.js";
 export {
   isAbortError,
   isTimeoutError,

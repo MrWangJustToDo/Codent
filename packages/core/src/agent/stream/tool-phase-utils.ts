@@ -1,4 +1,4 @@
-import { parseToolArguments as parseToolArgumentsShared } from "../../utils/parse-tool-arguments.js";
+import { parseToolArguments } from "../../utils/parse-tool-arguments.js";
 import { BUILTIN_TOOL_NAMES, CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import { findLastMeaningfulAssistant, isEmptyAssistantShell } from "./empty-assistant-shell.js";
@@ -295,13 +295,6 @@ export function hasPendingAskUser(messages: UIMessage[]): boolean {
     }
   }
   return false;
-}
-
-/** Parse a tool call's JSON `arguments` string; returns the raw string on failure. */
-function parseToolArguments(args: string | undefined): unknown {
-  // One rule for every consumer — see `utils/parse-tool-arguments.ts`. This used to be a second,
-  // same-named copy; a policy change here would have applied only to one of them.
-  return parseToolArgumentsShared(args);
 }
 
 /**

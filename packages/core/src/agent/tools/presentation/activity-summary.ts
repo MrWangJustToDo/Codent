@@ -1,3 +1,4 @@
+import { parseToolInput } from "../../../utils/parse-tool-arguments.js";
 import { truncateText } from "../../../utils/text-truncation.js";
 import { isBuiltinToolName } from "../catalog/tool-names.js";
 
@@ -5,7 +6,7 @@ import { getBuiltinToolPresentation } from "./builtin.js";
 import { formatDuration } from "./format/format.js";
 import { DURATION_THRESHOLD_MS, getDurationMs } from "./format/inline-summary.js";
 import { keepsCompactRow } from "./row-rules.js";
-import { getUiToolState, isCancelledToolCall, parseToolInput } from "./state.js";
+import { getUiToolState, isCancelledToolCall } from "./state.js";
 
 import type { ToolDisplayPayload, ToolPresentation } from "./types.js";
 import type { ToolCallPart } from "@tanstack/ai";

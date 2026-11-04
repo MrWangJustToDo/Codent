@@ -28,7 +28,7 @@
  *   *client* cannot be credited with authorising a signal we send ourselves.
  */
 
-import { BUILTIN_TOOL_NAMES } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, parseToolInput } from "@codent/core";
 
 import type { AcpClientCapabilities } from "./client-env.js";
 
@@ -138,14 +138,6 @@ export function toolInputFor(
 ): ApprovalToolInput | undefined {
   const part = toolPartFor(messages, toolCallId);
   if (!part) return undefined;
-  if (part.input && typeof part.input === "object") return part.input as ApprovalToolInput;
-  if (typeof part.arguments === "string") {
-    try {
-      const parsed = JSON.parse(part.arguments) as ApprovalToolInput;
-      return parsed && typeof parsed === "object" ? parsed : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
+  const parsed = parseToolInput(part);
+  return parsed && typeof parsed === "object" ? (parsed as ApprovalToolInput) : undefined;
 }

@@ -6,6 +6,7 @@ import { StreamProcessor } from "@tanstack/ai";
 
 import { deliverContained } from "../../utils/contained-report.js";
 import { generateId } from "../../utils/generate-id.js";
+import { parseToolInput } from "../../utils/parse-tool-arguments.js";
 import { applyToolApprovalDecision, applyToolDenialReason, approvalStamp } from "../stream/apply-tool-denial-reason.js";
 import { stripEmptyAssistantShells } from "../stream/empty-assistant-shell.js";
 import { type TaskSummaryStreamState } from "../stream/extract-assistant-text.js";
@@ -622,14 +623,9 @@ function attachMissingToolDisplays(
     if (!part.name || part.display) return undefined;
     if (!part.state || !displayableStates.has(part.state) || part.output === undefined) return undefined;
 
-    let input: unknown;
-    if (typeof part.arguments === "string" && part.arguments) {
-      try {
-        input = JSON.parse(part.arguments);
-      } catch {
-        input = undefined;
-      }
-    }
+    // `input` is the engine's parsed field; while a call streams only `arguments` exists. One helper
+    // for both, so a restored/streaming row shows the same parameters as the approval gate saw.
+    const input = parseToolInput(part);
 
     const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation, isBuiltinTool);
     return display ? { ...part, display } : undefined;
@@ -644,6 +640,7 @@ interface PatchableToolCallPart {
   state?: string;
   output?: unknown;
   arguments?: unknown;
+  input?: unknown;
   display?: ToolDisplayPayload;
 }
 

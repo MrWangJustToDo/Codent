@@ -6,6 +6,7 @@
  * be. Splitting them keeps the coordinator from becoming the place where four gates meet again.
  */
 
+import { parseToolInput } from "../../utils/parse-tool-arguments.js";
 import { analyzeCommand, createAnalysisContext } from "../tools/builtin/shell/safety/command-analyzer.js";
 import {
   evaluateCommandApproval,
@@ -89,7 +90,13 @@ export class ToolAuthorizationService {
       if (approval.approved === false) continue;
       if (toolCall.state === "complete" || toolCall.output !== undefined) continue;
 
-      const input = parseToolCallInput(toolCall);
+      const input = parseRunCommandApprovalInput(toolCall);
+      // The hook sees the WHOLE call. `input` above is the command-analysis projection
+      // (`{command,cwd,env}`), and handing that to `tool:before:*` gave every non-command gated
+      // tool (`write_file`, `edit_file`, MCP tools, …) an empty object — and because the ledger
+      // caches this outcome for the execution seam, the extension never got a second chance with
+      // the real arguments.
+      const hookArgs = parseToolInput(toolCall);
       const isCommand =
         toolCall.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(toolCall.name) ?? true);
       // An answered call is not re-decided, but a DENY may still replace it: the analyzer can
@@ -105,11 +112,7 @@ export class ToolAuthorizationService {
         ...(this.deps.runToolBeforeHook
           ? {
               extensionHooks: async () => {
-                const hooked = await this.deps.runToolBeforeHook!(
-                  toolCall.id,
-                  toolCall.name,
-                  input ?? ({} as Record<string, unknown>)
-                );
+                const hooked = await this.deps.runToolBeforeHook!(toolCall.id, toolCall.name, hookArgs ?? {});
                 return hooked.skip
                   ? {
                       action: "deny" as const,
@@ -221,18 +224,16 @@ export function findApprovalPart(messages: UIMessage[], approvalId: string): Too
   return undefined;
 }
 
-/** Safely extract a tool-call's parsed input, falling back to the raw `arguments` JSON string. */
-export function parseToolCallInput(
+/**
+ * The `run_command` slice of a tool-call's input: only these three fields decide its verdict.
+ *
+ * The rest of the call's input is deliberately dropped — the command analyzer must not see fields
+ * it would have to reason about — while interception gets the whole shape via `parseToolInput`.
+ */
+export function parseRunCommandApprovalInput(
   toolCall: ToolCallPart
 ): { command?: string; cwd?: string; env?: Record<string, string> } | undefined {
-  let raw: unknown = toolCall.input;
-  if (!raw) {
-    try {
-      raw = JSON.parse(toolCall.arguments ?? "{}");
-    } catch {
-      return undefined;
-    }
-  }
+  const raw = parseToolInput(toolCall);
   if (!raw || typeof raw !== "object") return undefined;
   const { command, cwd, env } = raw as { command?: unknown; cwd?: unknown; env?: unknown };
   return {

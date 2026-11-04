@@ -12,6 +12,7 @@
  * - valid `input-complete` tools waiting for a normal tool-phase pump
  */
 
+import { tryParseToolArguments } from "../../utils/parse-tool-arguments.js";
 import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 
 import { isSettledToolCallPart, isToolCallPart } from "./message-parts.js";
@@ -22,14 +23,8 @@ export const TOOL_CANCELLED_MESSAGE = "Cancelled by user.";
 
 /** Whether tool arguments are non-empty, parseable JSON (safe for TanStack executeToolCalls). */
 export function hasValidToolArguments(part: ToolCallPart): boolean {
-  const raw = typeof part.arguments === "string" ? part.arguments.trim() : "";
-  if (!raw) return false;
-  try {
-    JSON.parse(raw);
-    return true;
-  } catch {
-    return false;
-  }
+  if (typeof part.arguments !== "string") return false;
+  return tryParseToolArguments(part.arguments).ok;
 }
 
 /**
