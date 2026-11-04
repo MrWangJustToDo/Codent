@@ -15,7 +15,7 @@ import {
   type SessionSyncTracker,
 } from "../persistence/session-sync-tracker.js";
 
-import { getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "./managed-agent-session.js";
+import { getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "./session-restore.js";
 
 import type { SessionHost } from "../../runtime-types/session-host.js";
 import type { SessionData } from "../persistence/types.js";

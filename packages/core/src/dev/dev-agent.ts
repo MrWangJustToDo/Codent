@@ -123,7 +123,7 @@ export {
   summarizeProgress,
 } from "../agent/subagent/progress-summary.js";
 export { AGENT_PROFILE_IDS } from "../runtime-types/agent-profile.js";
-export { runManagedSpan } from "../agent/run/managed-span.js";
+export { runManagedSpan } from "../agent/run/run-span.js";
 export {
   MAX_ACTIVE_TASK_PREFORKS,
   resolveMaxConcurrentTasks,

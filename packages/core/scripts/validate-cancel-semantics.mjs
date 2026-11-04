@@ -516,7 +516,7 @@ function walk(dir) {
     /resolveSubagentStopReason\(\{[\s\S]{0,160}abortReason/.test(taskResultSrc),
     "task-result: the reason comes from the caller abort signal, falling back to the child's own"
   );
-  const spanSrc = readFileSync(join(SRC, "agent/run/managed-span.ts"), "utf8");
+  const spanSrc = readFileSync(join(SRC, "agent/run/run-span.ts"), "utf8");
   assert.ok(
     /managed\.getStatus\(\) === "aborted"[\s\S]{0,200}getAbortSignal\(\)\?\.aborted/.test(spanSrc),
     "managed span: derives the abort flag from the child status AND the abort signal"

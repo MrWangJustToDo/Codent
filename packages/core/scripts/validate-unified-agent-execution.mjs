@@ -62,12 +62,12 @@ function walk(dir) {
 const directCalls = [];
 for (const file of walk(SRC)) {
   const rel = relative(SRC, file).replaceAll("\\", "/");
-  if (rel === "agent/run/run-agent-skeleton.ts" || rel === "agent/run/managed-span.ts") continue;
+  if (rel === "agent/run/run-agent-skeleton.ts" || rel === "agent/run/run-span.ts") continue;
   if (/\brunAgentOnce\s*\(/.test(readFileSync(file, "utf8"))) directCalls.push(rel);
 }
 assert.deepEqual(directCalls, [], `only the managed span may call runAgentOnce; found: ${directCalls.join(", ")}`);
-assert.match(read("agent/run/managed-span.ts"), /\brunAgentOnce\s*\(/, "the helper owns the run call");
-assert.match(read("agent/run/managed-span.ts"), /abortErrorAsCancel/, "the helper parameterizes abort-shaped errors");
+assert.match(read("agent/run/run-span.ts"), /\brunAgentOnce\s*\(/, "the helper owns the run call");
+assert.match(read("agent/run/run-span.ts"), /abortErrorAsCancel/, "the helper parameterizes abort-shaped errors");
 assert.match(
   read("agent/run/chat-controller.ts"),
   /abortErrorAsCancel: false/,
@@ -83,10 +83,7 @@ assert.match(
   /abortErrorAsCancel: true/,
   "child keeps abort-shaped errors as cancels"
 );
-assert.ok(
-  !/from\s+["'][^"']*managers\//.test(read("agent/run/managed-span.ts")),
-  "the helper does not import managers"
-);
+assert.ok(!/from\s+["'][^"']*managers\//.test(read("agent/run/run-span.ts")), "the helper does not import managers");
 
 // ---------------------------------------------------------------------------
 // task adapter: explore-only, UI-only profile metadata

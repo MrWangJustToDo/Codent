@@ -69,8 +69,8 @@ import {
 } from "../agent/extension/tool-before-hook.js";
 import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
-import { ModeFacet } from "../agent/mode/managed-agent-mode.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
+import { ModeFacet } from "../agent/mode/mode-facet.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
 import {
@@ -81,7 +81,7 @@ import {
   listWorkspacePlans as listWorkspacePlansHelper,
   loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
   savePlanToWorkspace as savePlanToWorkspaceHelper,
-} from "../agent/plan/managed-agent-plan.js";
+} from "../agent/plan/plan-facet.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
 import { AgentChatController } from "../agent/run/chat-controller.js";
 import { RunCoordinator } from "../agent/run/run-coordinator.js";
@@ -91,7 +91,7 @@ import {
   prepareManagedAgentForRun,
 } from "../agent/run/run-lifecycle.js";
 import { RunnerWiring } from "../agent/run/runner-wiring.js";
-import { SessionFacet } from "../agent/session/managed-agent-session-state.js";
+import { SessionFacet } from "../agent/session/session-facet.js";
 import { SessionLease } from "../agent/session/session-lease.js";
 import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
 import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";

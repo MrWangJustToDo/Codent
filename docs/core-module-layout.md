@@ -23,9 +23,9 @@ then one commit.
 
 ## 3. Naming / cleanup
 - [x] `managers/managed-agent-prompt.ts` → `agent/turn-context/prompt-builder.ts`
-- [ ] only `managers/managed-agent.ts` keeps the `managed-` prefix
-- [ ] update `ARCHITECTURE.md`, `docs/`, validator source paths and the module map
-- [ ] full suite green; empty role directories removed
+- [x] only `managers/managed-agent.ts` keeps the `managed-` prefix
+- [x] update `ARCHITECTURE.md`, `docs/`, validator source paths and the module map
+- [x] full suite green; empty role directories removed
 
 ## Not moved (deliberate)
 - `managers/services/*` — the target map keeps the service layer in managers.

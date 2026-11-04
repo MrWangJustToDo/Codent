@@ -203,7 +203,7 @@ The same shape applies to the other hosts: `codent` (local release host), `acp` 
 
 ### Shared Managed Run
 
-Root and child runs share `agent/run/managed-span.ts`, a helper (not a layer) that owns the
+Root and child runs share `agent/run/run-span.ts`, a helper (not a layer) that owns the
 `runAgentOnce` call plus shared abort/error/empty-stream normalization. Root queueing/approvals and
 child task projection remain with their actual owners. A non-`internal` child projects into the
 parent task row when it carries the parent task id; `general` remains defined as an id but is not
@@ -846,7 +846,7 @@ Turning it **on** answers every approval the run is currently **parked on** and 
 
 The project supports **subagents** — context-isolated agents spawned to handle delegated tasks.
 
-**Run profiles:** InteractiveChat (`AgentChatController` pump) and Worker (`runSubagent`) share `agent/run/managed-span.ts`, which reuses `runAgentOnce` / `consumeAgentStream` in `agent/run/run-agent-skeleton.ts`. Workers use outcome path `"detached"`; chat finalizes with `"chat"` after the full pump. Hosts still observe via `AgentSession` only.
+**Run profiles:** InteractiveChat (`AgentChatController` pump) and Worker (`runSubagent`) share `agent/run/run-span.ts`, which reuses `runAgentOnce` / `consumeAgentStream` in `agent/run/run-agent-skeleton.ts`. Workers use outcome path `"detached"`; chat finalizes with `"chat"` after the full pump. Hosts still observe via `AgentSession` only.
 
 ### Subagent Characteristics
 
@@ -1390,6 +1390,8 @@ packages/
 │   ├── managers/                      # AgentManager, ManagedAgent, RunFinalizer, services/, middleware
 │   │   ├── services/                   # Session / memory / compaction / extension-registry / usage-history
 │   │   │                               # + background-work-service (the one facade over both sources)
+│   │   ├── model-facet.ts / tool-facet.ts / extension-facet.ts / compact-facet.ts
+│   │   │                               # agent-facing views over the manager-owned services
 │   │   └── telemetry/                  # Usage tracking + telemetry emit helpers (bus lives in agent/agent-event-bus)
 │   ├── models/                        # Model config (model-config.ts), adapters, cache
 │   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata

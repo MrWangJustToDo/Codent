@@ -318,7 +318,7 @@ These also map to hook scripts where applicable (`SessionStart`, `Notification`,
 Inner LLM/tool stream execution is shared. Outer orchestration differs by **profile**:
 
 ```
-agent/run/managed-span.ts (one managed span; only direct runAgentOnce caller)
+agent/run/run-span.ts (one managed span; only direct runAgentOnce caller)
   parentTaskToolCallId → ensureUIChannel → manager.runAgentStream
   → consumeAgentStream(channel) → optional applyRunOutcome(path: chat|detached)
 
@@ -1292,7 +1292,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Compaction          | `managers/services/compaction-service.ts`, `agent/compaction/*.ts`                                                                                     |
 | Plan                | `agent/plan/*` (domain + plan tool factories)                                                                                                         |
 | Tools               | `agent/tools/*.ts` (universal), `agent/tools/runtime/define-tool.ts`; domain tools under `plan/` / `skills/` / `subagent/` / `todo/`                     |
-| Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`; shared span in `agent/run/managed-span.ts`                              |
+| Subagent            | `agent/subagent/run-subagent.ts`, `agent/subagent/task-tool.ts`; shared span in `agent/run/run-span.ts`                              |
 | Models              | `models/config/model-config.ts`, `models/adapter/adapter-factory.ts`, `models/cache/prompt-cache.ts`                                                              |
 | CoreEnv             | `env/index.ts` (+ `@codent/node` / `@codent/server`)                                                                                           |
 

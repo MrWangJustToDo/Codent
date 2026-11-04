@@ -62,7 +62,7 @@ export { abortManagedAgentRun, finalizeManagedAgentRun } from "../agent/run/run-
 export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
-export { completePlan, loadPlanFromWorkspace } from "../agent/plan/managed-agent-plan.js";
+export { completePlan, loadPlanFromWorkspace } from "../agent/plan/plan-facet.js";
 export { createManualCompactHost } from "../managers/managed-agent.js";
 export { RunnerWiring } from "../agent/run/runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../agent/run/run-coordinator.js";
@@ -171,6 +171,6 @@ export type {
   StatusReconcilePolicy,
 } from "../agent/state/agent-run-outcome.js";
 export { whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
-export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../agent/session/managed-agent-session.js";
+export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../agent/session/session-restore.js";
 export { dispatchLocalAgentSessionCommand } from "../agent-session/local-session-dispatch.js";
 export { SKILL_DIRS_ENV_VAR, getDefaultSkillDirs } from "../managers/agent-manager.js";

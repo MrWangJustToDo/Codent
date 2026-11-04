@@ -7,8 +7,8 @@
 import { modelMessagesToUIMessages } from "@tanstack/ai";
 
 import { generateId } from "../../utils/generate-id.js";
-import { runManagedSpan } from "../run/managed-span.js";
 import { ensureUIChannel } from "../run/run-agent-skeleton.js";
+import { runManagedSpan } from "../run/run-span.js";
 import { agentStreamKey } from "../stream-hub";
 
 import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";

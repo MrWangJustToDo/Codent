@@ -41,7 +41,7 @@ Root, general, explore, and internal agents SHALL use one shared managed span fo
 
 ### Requirement: Shared managed span is a helper, not a layer
 
-The shared run helper SHALL live in `agent/run/managed-span.ts` and SHALL own only the
+The shared run helper SHALL live in `agent/run/run-span.ts` and SHALL own only the
 `runAgentOnce` call plus abort/error/empty-stream normalization. It MUST NOT become a new top-level
 layer, a profile framework, or a second finalizer. `AgentChatController` and `runSubagent` remain the
 owners of their respective pumps/adapters and MUST call the helper.
@@ -49,7 +49,7 @@ owners of their respective pumps/adapters and MUST call the helper.
 #### Scenario: Root and task use the helper
 
 - **WHEN** the root pump and a task child each execute a stream
-- **THEN** both call `agent/run/managed-span.ts`, and no `execution/` layer exists
+- **THEN** both call `agent/run/run-span.ts`, and no `execution/` layer exists
 
 #### Scenario: Helper does not own task state
 

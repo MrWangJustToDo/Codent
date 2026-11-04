@@ -34,7 +34,7 @@ pump），只有 `finalizeRun` 才写 `agent:stop`。
 | `AgentChatController` | `packages/core/src/agent/run/chat-controller.ts:50` | 对话消息链（`AgentUIChannel`）、steer/follow-up 队列、run chain/epoch/token、工具相位循环、turn 级 finalize 调用 | 不拥有 abort controller（`RunCoordinator` 是唯一创建点） |
 | `AgentRunner` | `packages/core/src/agent/runner/agent-runner.ts:103` | 只持有不可变配置 + `chat()` 包装。**run 之间无状态** | 不持有 status/session/usage |
 | TanStack `chat()` | `packages/core/src/agent/runner/agent-runner.ts:151` | AG-UI chunk 流、工具执行、`agentLoopStrategy: maxIterations(...)`、middleware 调度 | 不决定 turn 何时结束 |
-| `runManagedSpan` / `runAgentOnce` | `packages/core/src/agent/run/managed-span.ts:40`、`run-agent-skeleton.ts:124` | 一次 LLM span：attach channel → 拉流 → 归一化 abort/error/empty | 不拥有队列/审批（chat pump）或 task 结果投影（subagent） |
+| `runManagedSpan` / `runAgentOnce` | `packages/core/src/agent/run/run-span.ts:40`、`run-agent-skeleton.ts:124` | 一次 LLM span：attach channel → 拉流 → 归一化 abort/error/empty | 不拥有队列/审批（chat pump）或 task 结果投影（subagent） |
 | `RunFinalizer` | `packages/core/src/managers/run-finalizer.ts:72` | end-of-run 顺序：`applyRunOutcome` → persist → `finalizeRun` → `turn:summary`；`deriveChatOutcome` 的优先级也在这里 | 不决定 pump 要不要继续（controller 读消息链判定）；它只按给定的 `kind` 落定 |
 
 ### 1.1 两个 run profile
@@ -727,7 +727,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `packages/core/src/managers/managed-agent-session.ts` | 持久化输入、恢复事务、`session:restore` |
 | `packages/core/src/agent/runner/agent-runner.ts` | `chat()` 包装、abort controller 解析 |
 | `packages/core/src/agent/run/run-agent-skeleton.ts` | `runAgentOnce` / `consumeAgentStream` / `ensureUIChannel` |
-| `packages/core/src/agent/run/managed-span.ts` | 共享 span：abort/error/empty 归一化 |
+| `packages/core/src/agent/run/run-span.ts` | 共享 span：abort/error/empty 归一化 |
 | `packages/core/src/agent/stream/tool-phase-utils.ts` | "要不要再跑一次""是不是在等用户"的全部判定 |
 | `packages/core/src/agent/stream/incomplete-tool-calls.ts` | 取消/结算未完成与在飞工具调用 |
 | `packages/core/src/agent/stream/empty-model-stream.ts` | 空流判定 |

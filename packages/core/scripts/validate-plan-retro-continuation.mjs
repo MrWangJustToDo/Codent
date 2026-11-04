@@ -236,7 +236,7 @@ function runnerToolNames(controller) {
 {
   const controllerSource = readFileSync(join(srcRoot, "agent/plan/plan-mode-controller.ts"), "utf8");
   const managedSource = readFileSync(join(srcRoot, "managers/managed-agent.ts"), "utf8");
-  const restoreSource = readFileSync(join(srcRoot, "agent/session/managed-agent-session.ts"), "utf8");
+  const restoreSource = readFileSync(join(srcRoot, "agent/session/session-restore.ts"), "utf8");
 
   assert.ok(
     !controllerSource.includes("onEnterRetro"),

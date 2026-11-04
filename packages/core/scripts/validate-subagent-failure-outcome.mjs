@@ -93,7 +93,7 @@ const read = (rel) => readFileSync(join(SRC, rel), "utf8");
 
 // The managed span owns the catch/abort classification; the task projection still keeps the produced
 // work and applies the terminal verdict. Neither layer rethrows.
-const span = read("agent/run/managed-span.ts");
+const span = read("agent/run/run-span.ts");
 assert.match(span, /catch \(err\)/, "the managed span owns the stream catch");
 assert.match(span, /onError\?\.\(message, error\)/, "a non-abort failure is normalized to the host");
 assert.match(span, /managed\.isAbortError\(err\)/, "abort classification is shared");
