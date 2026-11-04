@@ -1357,7 +1357,7 @@ packages/
 │   │   ├── agent-event-bus/           # One event registry + scoped buses (observer emit / interceptor intercept); session projects every observer event
 │   │   ├── agent-log/                 # AgentLog — the emission seam only: level filter, run stamp, envelope
 │   │   ├── log/                       # Log policy: createLogExtension, entry schema, JSONL sink + rotation, "*" consumer
-│   │   ├── approval/                  # Auto-mode controller + tool-approval table
+│   │   ├── approval/                  # Authorization pipeline (authorize-tool-call), auto-mode controller, tool-approval table
 │   │   ├── code-mode/                 # Built-in code-mode extension (sandboxed TypeScript behind CoreEnv.createIsolateDriver)
 │   │   ├── commands/                  # Core-side builtin command catalog (`BUILTIN_COMMAND_CATALOG`)
 │   │   ├── compaction/                # Append SUMMARY + summary-first wire projection
@@ -1368,13 +1368,16 @@ packages/
 │   │   ├── mcp/                       # MCP integration
 │   │   ├── media/                     # Multimodal media store (media:// refs) + repair helpers
 │   │   ├── memory/                    # Memory management + built-in Memory extension
+│   │   ├── mode/                      # Agent mode domain: mode-state, ModeCoordinator/ModeFacet, auto-mode + policy facts
 │   │   ├── plan/                      # Plan domain + plan tool factories
 │   │   ├── persistence/               # Disk session persistence (SessionStore)
 │   │   ├── prompt/                    # System prompt builder, agent-doc loader, instruction files
 │   │   ├── queue/                     # Mid-run deferred messages (defer queue vs pending approval)
-│   │   ├── run/                       # runAgentOnce / consumeAgentStream (run skeleton)
+│   │   ├── run/                       # runAgentOnce / consumeAgentStream + RunCoordinator (run token, abort, timing)
 │   │   ├── runner/                    # AgentRunner + run context
+│   │   ├── session/                   # SessionLifecycleService, SessionLease, ownership/persistence facets
 │   │   ├── skills/                    # Skill loading + built-in Skills extension
+│   │   ├── state/                     # AgentStatusController (the single status writer) + run-outcome policy
 │   │   ├── stream/                    # Stream helpers (errors, assistant-text extract)
 │   │   ├── subagent/                  # Subagent spawning + task tool (+ prefork / phase state)
 │   │   ├── stream-hub/                # AgentStreamHub (command / task / compact)
@@ -1384,15 +1387,16 @@ packages/
 │   │   ├── ui/                        # AgentUIChannel (chat / subagent preview) + channel-write
 │   │   └── usage/                     # Global usage history + per-call pricing records
 │   ├── agent-session/                 # Host-facing AgentSession / Host API
-│   ├── managers/                      # AgentManager, ManagedAgent, RunCoordinator, services/, middleware
-│   │   ├── run-coordinator.ts          # Run lifecycle flags/timing (prepare/run/finalize)
+│   ├── managers/                      # AgentManager, ManagedAgent, RunFinalizer, services/, middleware
 │   │   ├── services/                   # Session / memory / compaction / extension-registry / usage-history
 │   │   │                               # + background-work-service (the one facade over both sources)
 │   │   └── telemetry/                  # Usage tracking + telemetry emit helpers (bus lives in agent/agent-event-bus)
 │   ├── models/                        # Model config (model-config.ts), adapters, cache
 │   ├── provider/                      # LLM plane: ModelProvider + registry + models.dev metadata
 │   ├── runtime/                       # Instantiable runtime: AgentRuntime + CodentAgent facade
-│   ├── runtime-types/                 # Shared status / event / usage types (no manager deps)
+│   ├── runtime-types/                 # Shared leaves (status / event / usage types); the three port modules
+│   │                                   # (hosts.ts, session-host.ts, session-runtime.ts) re-export manager
+│   │                                   # interfaces as `import type` — a recorded, type-only compromise
 │   ├── utils/                         # Cross-cutting single-definition helpers (bytes, text-truncation, errors, display-lines)
 │   ├── index.ts                       # Curated public API exports (hosts / adapters)
 │   └── dev*.ts                        # Internal-only re-exports for `pnpm validate:*` scripts
