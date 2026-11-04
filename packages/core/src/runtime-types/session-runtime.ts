@@ -7,21 +7,21 @@
  * transaction reads like the phase it is in.
  */
 
+import type { SessionSwitchReason } from "./agent-event-payloads.js";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
+import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { SessionData } from "../agent/persistence/types.js";
+import type { RunCoordinator } from "../agent/run/run-coordinator.js";
 import type { SessionLease } from "../agent/session/session-lease.js";
+import type { SessionPersistence } from "../agent/session/session-persistence.js";
+import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import type { TodoManager } from "../agent/todo";
-import type { SessionSwitchReason } from "../runtime-types/agent-event-payloads.js";
-import type { AgentChatController } from "./controllers/agent-chat-controller.js";
-import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
-import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
-import type { RunCoordinator } from "../agent/run/run-coordinator.js";
-import type { CompactionService } from "./services/compaction-service.js";
-import type { MemoryService } from "./services/memory-service.js";
-import type { SessionPersistence } from "./session-persistence.js";
-import type { UsageTracker } from "./telemetry/usage-tracker.js";
+import type { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
+import type { CompactionService } from "../managers/services/compaction-service.js";
+import type { MemoryService } from "../managers/services/memory-service.js";
+import type { UsageTracker } from "../managers/telemetry/usage-tracker.js";
 import type { UIMessage } from "@tanstack/ai";
 
 /** Stop/abort/reset the run and its visible status. */

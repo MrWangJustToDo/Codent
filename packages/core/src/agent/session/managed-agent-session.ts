@@ -2,109 +2,18 @@
  * Session persist / restore helpers for {@link ManagedAgent}.
  */
 
-import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table.js";
-import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
-import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
-import { cancelInterruptedBackgroundTasks } from "../agent/subagent/task-background.js";
-import { cancelInterruptedBackgroundCommands } from "../agent/tools/builtin/shell/run-command-tool.js";
-import { isReasoningEffort } from "../models/types.js";
-import { errorMessage } from "../utils/errors.js";
+import { isReasoningEffort } from "../../models/types.js";
+import { errorMessage } from "../../utils/errors.js";
+import { normalizeSessionApprovals } from "../approval/tool-approval-table.js";
+import { readPlanFileAtRelativePath } from "../plan/plan-store.js";
+import { settleInterruptedToolCalls } from "../stream/incomplete-tool-calls.js";
+import { cancelInterruptedBackgroundTasks } from "../subagent/task-background.js";
+import { cancelInterruptedBackgroundCommands } from "../tools/builtin/shell/run-command-tool.js";
 
-import type { ModeState } from "../agent/mode/mode-state.js";
-import type { ResolvedCoreEnv } from "../env";
-import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
-import type { Epoch } from "../runtime-types/epoch.js";
-import type { SessionPersistInput, SessionService } from "./services/session-service.js";
-import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
-import type { UsageTracker } from "./telemetry/usage-tracker.js";
-import type { AgentLog } from "../agent/agent-log";
-import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
-import type { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
-import type { SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
-import type { SessionData } from "../agent/persistence/types.js";
-import type { PlanModeController } from "../agent/plan/plan-mode-controller.js";
-import type { TodoManager } from "../agent/todo";
-import type { AgentUIChannel } from "../agent/ui/ui-channel.js";
-import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
-import type { ModelStyle, ReasoningEffort } from "../models/types.js";
+import type { SessionHost, SessionPersistInput } from "../../runtime-types/session-host.js";
+import type { SessionSyncTracker } from "../persistence/session-sync-tracker.js";
+import type { SessionData } from "../persistence/types.js";
 import type { UIMessage as TanStackUIMessage } from "@tanstack/ai";
-
-/** The model actually in force after adopting (or rejecting) a persisted selection. */
-export interface AppliedPersistedModel {
-  /** Whether the effective model/style differs from the one the agent was created with. */
-  changed: boolean;
-  /**
-   * The model to record on the session. This is the persisted id when it is still offered, or the
-   * fallback (`config.model`) when the catalog no longer lists it — recording the requested id in
-   * that case is what made every later resume repeat the same fallback.
-   */
-  model: string;
-  modelStyle?: ModelStyle;
-}
-
-export interface SessionHost {
-  getUI?: () => AgentUIChannel | undefined;
-  /** Capture the session/run generation before an async write (see `runtime-types/epoch.ts`). */
-  captureEpoch?: () => Epoch;
-  /** The restored transcript was adopted: reset the persistence baseline against it. */
-  onSessionAdopted?: (uiMessages: TanStackUIMessage[]) => void;
-  usage: UsageTracker;
-  getTodoManager: () => TodoManager | null;
-  /** Owning runtime's env, so plan files are read under the runtime root. */
-  getCoreEnv: () => ResolvedCoreEnv;
-  planMode: PlanModeController;
-  /** Single mode read surface (mode reads must not inspect the controllers directly). */
-  getModeState: () => ModeState;
-  /** Mode owner; optional for hosts that only need the plan/auto fields below. */
-  mode?: ModeCoordinator;
-  isAutoModeEnabled: () => boolean;
-  setAutoModeEnabled: (enabled: boolean) => void;
-  /** Read the agent's current reasoning-effort config (for persistence). */
-  getReasoningEffort: () => ReasoningEffort | undefined;
-  /** Set reasoning-effort config (restore path). Optional — older hosts may omit. */
-  setReasoningEffort?: (effort: ReasoningEffort | undefined) => void;
-  session: SessionService;
-  getApprovals: () => ToolApprovalTable;
-  getToolCompactCache: () => ToolCompactCache;
-  resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  emitEvent: EmitAgentTelemetryFn;
-  /**
-   * The agent's log, for side queries the helpers run on their own (session
-   * titles). Optional so hosts without logging keep compiling.
-   */
-  getLog?: () => AgentLog | undefined;
-  /** Update the agent's display name (broadcast via the state channel). */
-  setDisplayName?: (name: string) => void;
-  /** Re-emit the L1 state snapshot (after swapping the on-disk session id). */
-  refreshState?: () => void;
-  /** Persist current state only (no transcript) — used when a restore corrects the model. */
-  persistSession?: () => void;
-  /**
-   * Adopt the model a resumed session was saved with (no-op under remote-provider).
-   * The persisted record is kept in sync by {@link SessionService.setModelConfig}.
-   *
-   * @returns whether the effective model changed (the caller then resolves its metadata).
-   */
-  applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => AppliedPersistedModel;
-  /**
-   * Re-resolve capabilities / context window / pricing for the configured model.
-   * Optional so hosts that only restore sessions keep compiling.
-   */
-  refreshModelMetadata?: () => Promise<void>;
-  /**
-   * Record how many `media://` refs the restore could not hydrate (`0` clears it).
-   * The wire seam uses this to substitute text placeholders for refs no provider can fetch;
-   * optional so hosts without a wire path keep compiling.
-   */
-  setMediaHydrationMisses?: (count: number) => void;
-  /** Drop steer/follow-up queues without clearing the transcript (no-op before initChat). */
-  clearQueuedMessages: () => void;
-  /** Reconcile approval / ask_user pause from restored UIMessages. */
-  syncInteractionStateFromUIMessages: (
-    messages: TanStackUIMessage[],
-    options?: { whenClear?: "idle" | "running" | "completed" }
-  ) => void;
-}
 
 export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackUIMessage[]): SessionPersistInput {
   const mode = host.getModeState().snapshot();

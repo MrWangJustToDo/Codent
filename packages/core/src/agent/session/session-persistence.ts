@@ -8,17 +8,17 @@
  * sink rebinding) around {@link SessionPersistence.restore}.
  */
 
+import { errorMessage } from "../../utils/errors.js";
 import {
   createSessionSyncTracker,
   type SessionSaveReason,
   type SessionSyncTracker,
-} from "../agent/persistence/session-sync-tracker.js";
-import { errorMessage } from "../utils/errors.js";
+} from "../persistence/session-sync-tracker.js";
 
 import { getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "./managed-agent-session.js";
 
-import type { SessionHost } from "./managed-agent-session.js";
-import type { SessionData } from "../agent/persistence/types.js";
+import type { SessionHost } from "../../runtime-types/session-host.js";
+import type { SessionData } from "../persistence/types.js";
 import type { UIMessage } from "@tanstack/ai";
 
 export class SessionPersistence {

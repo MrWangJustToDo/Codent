@@ -2,21 +2,17 @@
  * Plan-mode helpers for {@link ManagedAgent} (workspace save/load + execution steer).
  */
 
-import { extractPlan } from "../agent/plan/extract-plan.js";
-import { listPlanFiles, loadPlanFile, savePlanFile } from "../agent/plan/plan-store.js";
-import { isActiveStatus } from "../runtime-types/agent-status.js";
-import { toError } from "../utils/errors.js";
+import { isActiveStatus } from "../../runtime-types/agent-status.js";
+import { toError } from "../../utils/errors.js";
 
-import type { ModeState } from "../agent/mode/mode-state.js";
-import type { ResolvedCoreEnv } from "../env";
-import type { AgentChatController } from "./controllers/agent-chat-controller.js";
-import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
-import type {
-  BeginPlanExecutionResult,
-  PlanModeController,
-  PlanModeState,
-} from "../agent/plan/plan-mode-controller.js";
-import type { AgentStatus } from "../runtime-types/agent-status.js";
+import { extractPlan } from "./extract-plan.js";
+import { listPlanFiles, loadPlanFile, savePlanFile } from "./plan-store.js";
+
+import type { BeginPlanExecutionResult, PlanModeController, PlanModeState } from "./plan-mode-controller.js";
+import type { ResolvedCoreEnv } from "../../env";
+import type { AgentStatus } from "../../runtime-types/agent-status.js";
+import type { ModeCoordinator } from "../mode/mode-coordinator.js";
+import type { ModeState } from "../mode/mode-state.js";
 
 export interface PlanApiHost {
   planMode: PlanModeController;
@@ -25,7 +21,8 @@ export interface PlanApiHost {
   /** Plan/auto arbitration: the only writer that may leave `off` (auto must go off with it). */
   mode: ModeCoordinator;
   getStatus: () => AgentStatus;
-  getChatController: () => AgentChatController | undefined;
+  /** Narrow chat port: plan execution only sends a steer message. */
+  getChatController: () => { sendMessage(content: string): Promise<unknown> } | undefined;
   /** Owning runtime's env, so plan files land under the runtime root. */
   getCoreEnv: () => ResolvedCoreEnv;
   /** Capture a staleness guard before a disk read that may outlive its session. */

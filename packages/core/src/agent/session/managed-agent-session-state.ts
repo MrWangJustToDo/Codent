@@ -8,9 +8,9 @@
 
 import { SessionPersistence } from "./session-persistence.js";
 
-import type { SessionHost } from "./managed-agent-session.js";
-import type { SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
-import type { SessionData } from "../agent/persistence/types.js";
+import type { SessionHost } from "../../runtime-types/session-host.js";
+import type { SessionSaveReason } from "../persistence/session-sync-tracker.js";
+import type { SessionData } from "../persistence/types.js";
 import type { UIMessage } from "@tanstack/ai";
 
 export interface SessionFacetOptions {

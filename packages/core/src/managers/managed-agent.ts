@@ -120,14 +120,14 @@ import {
   listWorkspacePlans as listWorkspacePlansHelper,
   loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
   savePlanToWorkspace as savePlanToWorkspaceHelper,
-} from "./managed-agent-plan.js";
+} from "../agent/plan/managed-agent-plan.js";
 import {
   abortManagedAgentRun,
   finalizeManagedAgentRun,
   prepareManagedAgentForRun,
 } from "./managed-agent-run-lifecycle.js";
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
-import { SessionFacet } from "./managed-agent-session-state.js";
+import { SessionFacet } from "../agent/session/managed-agent-session-state.js";
 import { ToolFacet } from "./managed-agent-tools.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { RunCoordinator } from "../agent/run/run-coordinator.js";
@@ -138,14 +138,14 @@ import { BackgroundWorkService, type BackgroundWorkChange } from "./services/bac
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
-import { SessionLifecycleService, type SessionLifecycleReason } from "./services/session-lifecycle-service.js";
+import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
 import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentConfig } from "./agent-types.js";
-import type { SessionPersistence } from "./session-persistence.js";
+import type { SessionPersistence } from "../agent/session/session-persistence.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";

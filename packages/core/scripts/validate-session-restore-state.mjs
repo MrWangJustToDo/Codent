@@ -414,7 +414,7 @@ let sessionId;
   // The behavioural assertion above cannot construct a live run on a fresh manager (so the abort
   // listener has nothing to write); lock the ordering that makes it true.
   const lifecycleSrc = await fs.promises.readFile(
-    new URL("../src/managers/services/session-lifecycle-service.ts", import.meta.url),
+    new URL("../src/agent/session/session-lifecycle-service.ts", import.meta.url),
     "utf8"
   );
   const idleAt = lifecycleSrc.indexOf("statusController.resetToIdle()");

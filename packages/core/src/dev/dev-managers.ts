@@ -44,8 +44,8 @@ export { AgentChatController } from "../managers/controllers/agent-chat-controll
 export { RunFinalizer, countToolCalls } from "../managers/run-finalizer.js";
 export { ApprovalDecisionCoordinator } from "../agent/approval/approval-decision-coordinator.js";
 export { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
-export { SessionPersistence } from "../managers/session-persistence.js";
-export { SessionOwnership } from "../managers/session-ownership.js";
+export { SessionPersistence } from "../agent/session/session-persistence.js";
+export { SessionOwnership } from "../agent/session/session-ownership.js";
 export { AgentRegistry } from "../managers/agent-registry.js";
 export { LifecycleCoordinator } from "../managers/lifecycle-coordinator.js";
 export { AgentEventBusScope } from "../managers/agent-event-bus-scope.js";
@@ -62,13 +62,13 @@ export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/manag
 export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
 export { ManagedAgent } from "../managers/managed-agent.js";
-export { completePlan, loadPlanFromWorkspace } from "../managers/managed-agent-plan.js";
+export { completePlan, loadPlanFromWorkspace } from "../agent/plan/managed-agent-plan.js";
 export { createManualCompactHost } from "../managers/managed-agent.js";
 export { RunnerWiring } from "../managers/managed-agent-runner-wiring.js";
 export { RunCoordinator, type RunToken } from "../agent/run/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";
 export { SessionService } from "../managers/services/session-service.js";
-export { SessionLifecycleService } from "../managers/services/session-lifecycle-service.js";
+export { SessionLifecycleService } from "../agent/session/session-lifecycle-service.js";
 export { MemoryService } from "../managers/services/memory-service.js";
 export { ExtensionRegistryService } from "../managers/services/extension-registry-service.js";
 export { AgentCommandService } from "../managers/services/agent-command-service.js";
@@ -171,6 +171,6 @@ export type {
   StatusReconcilePolicy,
 } from "../agent/state/agent-run-outcome.js";
 export { whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
-export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../managers/managed-agent-session.js";
+export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../agent/session/managed-agent-session.js";
 export { dispatchLocalAgentSessionCommand } from "../agent-session/local-session-dispatch.js";
 export { SKILL_DIRS_ENV_VAR, getDefaultSkillDirs } from "../managers/agent-manager.js";

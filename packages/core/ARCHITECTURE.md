@@ -781,7 +781,7 @@ Each log line is `{ t: "message", message: UIMessage | null, state }`: the messa
 
 **Single-process ownership:** a live agent claims its disk session in-process (`AgentManager.acquireSessionOwnership`, enforced by `restoreSession`), and an empty session carries a `reservedAt` window so a second process skips it during startup reuse. Writes from two processes bound to the *same* session id are **not** guarded (the last full state snapshot wins); running two hosts against one `.agents/` directory is unsupported.
 
-`SessionPersistence` (`managers/session-persistence.ts`) owns the per-agent sync fingerprint and the
+`SessionPersistence` (`agent/session/session-persistence.ts`) owns the per-agent sync fingerprint and the
 save / clear / persist / restore entry points; `SessionService` remains the serialized disk writer.
 `ManagedAgent.restoreSession` keeps only the lifecycle wrapper around it: ownership acquire/release,
 `session:switch`, and log-sink rebinding.
@@ -852,7 +852,7 @@ Host.create `{ continueSession }` resolves the latest id before calling the same
 App bootstrap resume still passes `initialMessages` from Host.create into `ManagedAgent.initChat()`.
 
 **Ownership dedup.** `AgentManager` delegates to `SessionOwnership`
-(`managers/session-ownership.ts`), a process-local claim table (`sessionId → agentId`) so a disk
+(`agent/session/session-ownership.ts`), a process-local claim table (`sessionId → agentId`) so a disk
 session is bound to at most **one** live agent at a time. A live root claims the active id at bootstrap and after `/new`; `restoreSession`
 acquires the target before the switch, releases the session being left **only after the restore
 succeeds**, and rolls the attempted target back when it fails. A refused target (already owned by

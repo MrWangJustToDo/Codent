@@ -12,54 +12,12 @@ import { errorMessage } from "../../utils/errors.js";
 
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
-import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../../agent/todo";
-import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
 import type { ModelStyle, ReasoningEffort } from "../../models/types.js";
-import type { Epoch } from "../../runtime-types/epoch.js";
+import type { SessionPersistInput } from "../../runtime-types/session-host.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
 import type { UIMessage } from "@tanstack/ai";
-
-export interface SessionPersistInput {
-  usage: UsageTracker;
-  todoManager: TodoManager | null;
-  /** Current plan-mode snapshot; null/undefined when off. */
-  planMode?: PlanModeState | null;
-  /** Auto-approve (skip all tool approvals) flag. */
-  autoMode?: boolean;
-  /** Reasoning effort level to persist with this session. */
-  reasoningEffort?: ReasoningEffort;
-  /**
-   * Identity captured when the write was requested.
-   *
-   * Passed to the async auto-title so a `/new`/`/resume` during the side query can drop its usage
-   * and name write without comparing session ids (see `runtime-types/epoch.ts`).
-   */
-  epoch?: Epoch;
-  resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
-  emitEvent?: EmitAgentTelemetryFn;
-  /**
-   * Report a title attempt's outcome (`session:title`).
-   *
-   * Injected as a fact emitters rather than an `AgentLog`: a failed title used to be written as a
-   * `side-query` warning, so "no title" and "the model call broke" were one row and neither said the
-   * title was missing.
-   */
-  emitSessionTitle?: (payload: { ok: boolean; name?: string; error?: string }, sessionId?: string) => void;
-  /**
-   * Invoked when the async auto-title resolves, so the agent can broadcast the
-   * new display name (the title lands on `SessionData.name` first).
-   */
-  onTitleResolved?: (name: string) => void;
-  uiMessages?: UIMessage[];
-  /**
-   * Session the caller intended to write. A queued persist may run after a `/resume`/`/new`
-   * has adopted a different session; refusing the stale target prevents the old transcript (or
-   * mode/todo state) from landing in the new session.
-   */
-  sessionId?: string;
-}
 
 export interface SessionRestoreInput {
   /** Report media refs that could not be hydrated from disk (read-side of media IO failure). */
