@@ -98,4 +98,24 @@ export interface AgentLogFileSinkOptions {
   sessionBoundary?: boolean;
   /** Owning runtime's env, so the log lands under the runtime root. Ambient when omitted. */
   env?: ResolvedCoreEnv;
+  /**
+   * Report an entry/batch the sink could not persist.
+   *
+   * The seam must never fail a run because logging did, so a write failure has no other way to
+   * reach the session: `console.error` is invisible to a host with no stderr reader (ACP, remote).
+   * Throttled by the sink — a full disk fails on every entry, and each report re-enters the log
+   * pipeline through the diagnostic it emits.
+   */
+  onPersistError?: (info: LogPersistErrorInfo) => void;
+}
+
+/** One persistence failure, as reported by the sink's {@link AgentLogFileSinkOptions.onPersistError}. */
+export interface LogPersistErrorInfo {
+  /** Which gate rejected the bytes. */
+  stage: "schema" | "serialize" | "write" | "write-sync";
+  error: string;
+  /** Buffered lines the retry cap had to drop because of this failure (0 on the first failure). */
+  dropped: number;
+  /** Consecutive failed batch writes at the moment of the report. */
+  consecutiveFailures: number;
 }

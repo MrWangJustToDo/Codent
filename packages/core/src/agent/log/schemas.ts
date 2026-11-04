@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AGENT_PROFILE_IDS } from "../../runtime-types/agent-profile.js";
 
-import type { LogCategory } from "../agent-log/types.js";
+import type { LogCategory, LogEntry } from "../agent-log/types.js";
 
 /**
  * Log **entry schemas** — the validation boundary of the log extension, not of the seam.
@@ -83,3 +83,18 @@ export const logEntrySchema = z.strictObject({
   sessionId: z.string().optional(),
   event: z.string().optional(),
 });
+
+/**
+ * Compile-time guard for the FIELD set, the same drift direction the category guard covers.
+ *
+ * `LogEntry` and this schema are two declarations of one shape. The schema is `strictObject` and
+ * the sink rejects an entry that fails it, so adding a field to `LogEntry` and forgetting this
+ * object does not corrupt a row — it silently drops EVERY row (the agent looks healthy and the
+ * log file stays empty). Keys must match in both directions.
+ */
+type LogEntrySchemaFieldCoverage = AssertNever<
+  | Exclude<keyof LogEntry, keyof z.infer<typeof logEntrySchema>>
+  | Exclude<keyof z.infer<typeof logEntrySchema>, keyof LogEntry>
+>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type LogEntrySchemaCoverage = LogEntrySchemaFieldCoverage;

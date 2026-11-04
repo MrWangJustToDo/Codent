@@ -26,7 +26,7 @@ import { sweepAgentLogs } from "./log-retention.js";
 import { logEntrySchema } from "./schemas.js";
 
 import type { ResolvedCoreEnv } from "../../env";
-import type { AgentLogFileSinkOptions, LogEntry } from "../agent-log/types.js";
+import type { AgentLogFileSinkOptions, LogEntry, LogPersistErrorInfo } from "../agent-log/types.js";
 
 /** Rotate when the active file exceeds this size (5 MiB). */
 export const DEFAULT_LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -45,6 +45,13 @@ export const DEFAULT_LOG_FLUSH_INTERVAL_MS = 250;
 const MAX_RETRY_BUFFER_LINES = 2_000;
 /** Consecutive automatic retries after a failed write before waiting for the next entry. */
 const MAX_WRITE_RETRIES = 5;
+/**
+ * Minimum gap between persistence-failure reports.
+ *
+ * A permanently unwritable directory fails on every flush; without this, each attempt would emit a
+ * diagnostic, which the log bridge would try to write, fail, and report again.
+ */
+const PERSIST_ERROR_REPORT_INTERVAL_MS = 60_000;
 /** Default log file name inside the bound directory. */
 export const DEFAULT_LOG_FILENAME = "agent.log";
 
@@ -107,6 +114,26 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   /** Whether the session-boundary divider has been decided for this sink. `false` means the
    * caller asked for a continuation (a temporary re-point), so no divider is ever written. */
   let boundaryWritten = options.sessionBoundary === false;
+  /** Last time a persistence failure was reported to the session (see the throttle constant). */
+  let lastPersistErrorAt = 0;
+
+  /**
+   * Surface a persistence failure to the owning session, throttled.
+   *
+   * `console.error` stays (it is the only channel before an agent exists), but it is not a failure
+   * signal a host can observe — so the sink also reports through the injected callback, which the
+   * log extension turns into a `session:diagnostic`.
+   */
+  const reportPersistError = (info: Omit<LogPersistErrorInfo, "consecutiveFailures">): void => {
+    const now = Date.now();
+    if (now - lastPersistErrorAt < PERSIST_ERROR_REPORT_INTERVAL_MS) return;
+    lastPersistErrorAt = now;
+    try {
+      options.onPersistError?.({ ...info, consecutiveFailures });
+    } catch {
+      // A reporter that throws must not turn a diagnostic into a failed run.
+    }
+  };
 
   /**
    * Move one log segment.
@@ -213,6 +240,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         buffer = buffer.slice(dropped);
       }
       consecutiveFailures += 1;
+      reportPersistError({ stage: "write", error: errorMessage(error), dropped });
       if (consecutiveFailures <= MAX_WRITE_RETRIES) {
         console.error(
           `[agent] log batch write failed: ${errorMessage(error)}` +
@@ -260,10 +288,9 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     // `schemas.ts`'s list; missing the second now drops the entries instead of writing them.
     const parsed = logEntrySchema.safeParse(entry);
     if (!parsed.success) {
-      console.error(
-        `[agent] log entry rejected by the persisted schema (${entry.level}/${entry.category}):`,
-        parsed.error.issues[0]?.message
-      );
+      const reason = parsed.error.issues[0]?.message ?? "invalid entry";
+      console.error(`[agent] log entry rejected by the persisted schema (${entry.level}/${entry.category}):`, reason);
+      reportPersistError({ stage: "schema", error: reason, dropped: 0 });
       return;
     }
     // Serialize inside the guard, not after it: `JSON.stringify` throws on a `BigInt`, a circular
@@ -276,6 +303,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       buffer.push(JSON.stringify(parsed.data));
     } catch (error) {
       console.error(`[agent] log entry is not serializable (${entry.level}/${entry.category}):`, errorMessage(error));
+      reportPersistError({ stage: "serialize", error: errorMessage(error), dropped: 0 });
       return;
     }
     schedule();
@@ -339,6 +367,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
         buffer = buffer.slice(buffer.length - MAX_RETRY_BUFFER_LINES);
       }
       console.error(`[agent] log sync flush failed: ${errorMessage(error)}`);
+      reportPersistError({ stage: "write-sync", error: errorMessage(error), dropped: 0 });
     }
   };
 

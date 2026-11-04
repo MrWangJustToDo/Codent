@@ -48,7 +48,7 @@ import { createJsonlFileSink } from "./jsonl-file-sink.js";
 import type { AgentEventBus } from "../agent-event-bus";
 import type { EventLogPolicy, EventLogResolver } from "./event-log-bridge.js";
 import type { AgentLog } from "../agent-log/agent-log.js";
-import type { AgentLogFileSinkOptions } from "../agent-log/types.js";
+import type { AgentLogFileSinkOptions, LogPersistErrorInfo } from "../agent-log/types.js";
 
 export type { EventLogPolicy, EventLogResolver, EventLogRule } from "./event-log-bridge.js";
 
@@ -59,6 +59,14 @@ export interface LogExtensionOptions {
   resolveLog: EventLogResolver;
   /** Rule overrides; `{ enabled: false }` suppresses event-driven logging entirely. */
   policy?: EventLogPolicy;
+  /**
+   * Report a sink persistence failure for `log`.
+   *
+   * Wired by the manager to that agent's `session:diagnostic`: the seam has no route to the session
+   * (and must not gain one), so without this a failing disk looks like a healthy agent with an
+   * empty `agent.log`. The sink throttles the reports.
+   */
+  onPersistError?: (log: AgentLog, info: LogPersistErrorInfo) => void;
 }
 
 export interface LogExtension {
@@ -133,7 +141,12 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       // landed by `detach()`), including the seam side — otherwise the seam keeps feeding a sink
       // that is no longer in this registry.
       sinks.get(log)?.();
-      const sink = createJsonlFileSink(sinkOptions);
+      const sink = createJsonlFileSink({
+        ...sinkOptions,
+        ...(options.onPersistError
+          ? { onPersistError: (info: LogPersistErrorInfo) => options.onPersistError?.(log, info) }
+          : {}),
+      });
       const detach = (): void => {
         if (sinks.get(log) !== detach) return; // superseded — nothing of ours to release
         sinks.delete(log);

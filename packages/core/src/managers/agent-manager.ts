@@ -167,6 +167,22 @@ export class AgentManager {
         this.constructionLogs.get(event.agentId) ??
         this.teardownLogs.get(event.agentId) ??
         null,
+      // A log that cannot be written used to be a `console.error` nobody sees (ACP / remote hosts
+      // have no stderr reader) while the agent looked healthy. Attribute it to the owning agent so
+      // the fact lands in the session timeline. Construction/teardown logs have no agent to report
+      // to yet — the console line stays their only channel.
+      onPersistError: (log, info) => {
+        const owner = this.agents.all().find((candidate) => candidate.log === log);
+        owner?.emitDiagnostic("session", "Agent log could not be persisted", {
+          level: "warn",
+          error: info.error,
+          data: {
+            stage: info.stage,
+            dropped: info.dropped,
+            consecutiveFailures: info.consecutiveFailures,
+          },
+        });
+      },
     });
     this.logExtension.start();
     this.lifecycle = new LifecycleCoordinator({

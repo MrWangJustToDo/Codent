@@ -281,6 +281,48 @@ console.log("rotation OK:", entries.join(", "));
 }
 
 // ----------------------------------------------------------------------------
+// 3b. A failed write is reported to the session, throttled.
+// ----------------------------------------------------------------------------
+// The seam must never fail a run, so a write failure's only other trace is `console.error` — which
+// a host with no stderr reader (ACP, remote) never sees. The agent then looks healthy while
+// `agent.log` stays empty. `onPersistError` is the observable half; it must be throttled, because a
+// full disk fails on every flush and each report re-enters the pipeline as a diagnostic.
+{
+  const failRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-persist-fail-"));
+  const failingEnv = createEnv(failRoot, { withAppendFile: true });
+  failingEnv.fs.appendFile = async () => {
+    throw new Error("disk on fire");
+  };
+  clearCoreEnv();
+  registerCoreEnv(failingEnv);
+
+  const reports = [];
+  const failLog = new AgentLog();
+  const failDetach = failLog.attachFileSink({
+    dir: path.join(failRoot, ".agents/logs/ses_fail"),
+    onPersistError: (info) => reports.push(info),
+  });
+
+  failLog.error("system", "first failure");
+  await sleep(400);
+  assert.ok(reports.length >= 1, "a failed batch write is reported");
+  assert.equal(reports[0].stage, "write", "with the stage that failed");
+  assert.match(String(reports[0].error), /disk on fire/, "and the underlying reason");
+  assert.ok(reports[0].consecutiveFailures >= 1, "and the consecutive-failure count");
+
+  const reportsBefore = reports.length;
+  failLog.error("system", "second failure");
+  await sleep(400);
+  assert.equal(reports.length, reportsBefore, "reports are throttled — one failing disk is one fact");
+
+  failDetach();
+  clearCoreEnv();
+  registerCoreEnv(createEnv(rootPath, { withAppendFile: true }));
+  await fs.promises.rm(failRoot, TEMP_RM_OPTIONS);
+  console.log("persist-error reporting OK (reported once, throttled)");
+}
+
+// ----------------------------------------------------------------------------
 // 4. Detach stops writes.
 // ----------------------------------------------------------------------------
 // Drain BEFORE detaching. `detach()` lands the pending buffer but queues whatever batch is already
