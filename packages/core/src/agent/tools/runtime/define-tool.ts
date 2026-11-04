@@ -1,6 +1,7 @@
 import { toolDefinition, type InferSchemaType, type SchemaInput, type ServerTool, type ClientTool } from "@tanstack/ai";
 
 import { getAmbientEnv } from "../../../env/ambient.js";
+import { resolveApprovalRequirement, type ApprovalRequirement } from "../../approval/approval-requirement.js";
 import { withTimeoutAbort } from "../shared/abort-timeout.js";
 
 import type { ModelToolContent, ToModelOutputContext, ToModelOutputFn } from "./contract.js";
@@ -12,6 +13,8 @@ import type { ToolPresentation } from "../presentation/types.js";
 export interface ToolMetadata {
   present?: ToolPresentation;
   toModelOutput?: ToModelOutputFn;
+  /** The declarative approval requirement, composed once at definition time. */
+  approval: ApprovalRequirement;
 }
 
 const toolMetadata = new WeakMap<object, ToolMetadata>();
@@ -167,6 +170,7 @@ export function defineServerTool<
   toolMetadata.set(serverTool, {
     ...(config.present ? { present: config.present } : {}),
     ...(modelOutput ? { toModelOutput: modelOutput } : {}),
+    approval: resolveApprovalRequirement(serverTool),
   });
   return serverTool;
 }
@@ -198,6 +202,9 @@ export function defineClientTool<
     lazy: config.lazy,
   }).client() as ClientTool<TInput, TOutput, TName>;
 
-  if (config.present) toolMetadata.set(clientTool, { present: config.present });
+  toolMetadata.set(clientTool, {
+    ...(config.present ? { present: config.present } : {}),
+    approval: resolveApprovalRequirement(clientTool),
+  });
   return clientTool;
 }

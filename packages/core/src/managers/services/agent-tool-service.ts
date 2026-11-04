@@ -12,6 +12,7 @@ import { describeToolPresentations } from "../../agent/tools/presentation/descri
 import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
 import { AgentToolRegistry, type ResolvedAgentTool } from "../../agent/tools/runtime/tool-registry.js";
 
+import type { ApprovalRequirement } from "../../agent/approval/approval-requirement.js";
 import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type { ExtensionToolDefinition } from "../../agent/extension";
 import type { ExtensionContext } from "../../agent/extension/types.js";
@@ -107,6 +108,11 @@ export class AgentToolService {
 
   list(): ResolvedAgentTool[] {
     return this.registry.list();
+  }
+
+  /** The live tool's declarative approval requirement (undefined when no tool is registered). */
+  getApprovalRequirement(name: string): ApprovalRequirement | undefined {
+    return this.resolve(name)?.approval;
   }
 
   /** Whether the live tool under `name` is still the seeded built-in (not an extension's). */

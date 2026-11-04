@@ -148,6 +148,8 @@ export class AgentChatController {
         ),
       upsertApproval: (input) => this.managed.getApprovals().upsert(input),
       shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
+      getPolicyFacts: () => this.managed.getPolicyFacts(),
+      getApprovalRequirement: (toolName) => this.managed.getApprovalRequirement(toolName),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),
       persist: () => this.persistMessages("pump-complete"),
       enqueueRun: () => this.enqueueRunOnce(),
@@ -905,11 +907,9 @@ export class AgentChatController {
 
         this.syncPlanModeFromMessages();
 
-        // Auto-approve tools during plan execution so the agent can
-        // run without waiting for user confirmation on each tool call.
-        this.approvalDecisions.autoApprovePending();
-        // Command-safety approval rules (no-op in auto mode / plan execution).
-        await this.approvalDecisions.applyCommandSafetyPolicy();
+        // One authorization pass: auto/plan auto-approval, declarative requirements and
+        // command-safety analysis are stages of the same decision.
+        await this.approvalDecisions.authorizePendingApprovals();
 
         const after = this.channel.getMessages();
         if (hasPendingInteraction(after)) break;

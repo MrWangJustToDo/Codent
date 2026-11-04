@@ -16,6 +16,10 @@ export { SessionLease } from "./agent/session/session-lease.js";
 // consumers below it, instead of reaching into the controllers themselves.
 export { createModeState, ModeStateReader } from "./agent/mode/mode-state.js";
 export { resolveAgentPolicyFacts } from "./agent/mode/policy-facts.js";
+// The authorization pipeline and the declarative requirement it reads. Validators assert the stage
+// order, deny precedence and fail-closed default against the real composer.
+export { authorizeToolCall } from "./agent/approval/authorize-tool-call.js";
+export { resolveApprovalRequirement } from "./agent/approval/approval-requirement.js";
 export { classifyShell, isShellParsable, resolveShellKind } from "./agent/tools/builtin/shell/safety/command-parser.js";
 export { tokenizeCommandString } from "./agent/tools/builtin/shell/safety/command-tokenizer.js";
 export { walkTree, formatAsTree } from "./agent/tools/builtin/fs/tree-tool.js";

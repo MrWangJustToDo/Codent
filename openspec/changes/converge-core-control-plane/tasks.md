@@ -49,10 +49,10 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 
 ## 5. P3 — Authorize: one permission pipeline
 
-- [ ] 5.1 Finalize `AgentPolicyFacts` for authorization (mode phase, auto, `todosSeeded`, subagent profile, rules, env, capabilities) (depends: 3.1, 3.2, 4.6)
-- [ ] 5.2 Add `RegisteredTool.approval: ApprovalRequirement`, composing the static flag and MCP annotations at registration (depends: 1.1)
-- [ ] 5.3 Implement `authorizeToolCall()` as a stage composer that first calls the existing decision functions unchanged (depends: 5.1, 5.2)
-- [ ] 5.4 Move command-safety analysis into a pipeline stage and remove the chat controller's separate `applyCommandSafetyPolicy` call (depends: 5.3)
+- [x] 5.1 Finalize `AgentPolicyFacts` for authorization (mode phase, auto, `todosSeeded`, subagent profile, rules, env, capabilities) (depends: 3.1, 3.2, 4.6)
+- [x] 5.2 Add `RegisteredTool.approval: ApprovalRequirement`, composing the static flag and MCP annotations at registration (depends: 1.1)
+- [x] 5.3 Implement `authorizeToolCall()` as a stage composer that first calls the existing decision functions unchanged (depends: 5.1, 5.2)
+- [x] 5.4 Move command-safety analysis into a pipeline stage and remove the chat controller's separate `applyCommandSafetyPolicy` call (depends: 5.3)
 - [ ] 5.5 Move the `tool:before:*` extension hook into the pipeline as a deny source (including the `modifiedArgs` refusal) (depends: 5.3)
 - [ ] 5.6 Move plan/subagent/code-mode availability into policy facts and make the offered tool list a projection of them (depends: 3.1, 5.1)
 - [ ] 5.7 Move auto / plan-execution auto-approval into the pipeline; reduce `ApprovalDecisionCoordinator` to the answer writer (depends: 5.3, 3.2)

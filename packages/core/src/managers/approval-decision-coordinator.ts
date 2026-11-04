@@ -9,6 +9,7 @@
  * ONE pump instead of scheduling one per decision — cannot drift from that sequence.
  */
 
+import { authorizeToolCall, type ToolAuthorizationDecision } from "../agent/approval/authorize-tool-call.js";
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
 import { analyzeCommand, createAnalysisContext } from "../agent/tools/builtin/shell/safety/command-analyzer.js";
 import {
@@ -17,7 +18,9 @@ import {
 } from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
 import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 
+import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
+import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { ToolApprovalSource } from "../runtime-types/agent-event-payloads.js";
 import type { ToolCallPart, UIMessage } from "@tanstack/ai";
@@ -33,6 +36,10 @@ export interface ApprovalDecisionCoordinatorDeps {
   addToolApprovalResponse: (approvalId: string, approved: boolean, reason?: string, overwrite?: "deny") => number;
   upsertApproval: (input: UpsertToolApprovalInput) => void;
   shouldAutoApprove: () => boolean;
+  /** Policy snapshot for the one authorization pipeline (mode + profile + capabilities). */
+  getPolicyFacts?: () => AgentPolicyFacts;
+  /** The registered tool's declarative requirement (falls back to the raw flag for old hosts). */
+  getApprovalRequirement?: (toolName: string) => ApprovalRequirement | undefined;
   /** Status reconcile + persistence after a batch of decisions. */
   reconcile: () => void;
   persist: () => void;
@@ -137,6 +144,81 @@ export class ApprovalDecisionCoordinator {
     }
   }
 
+  /**
+   * One pass over every pending approval through the authorization pipeline.
+   *
+   * This is the pump's decision step: auto/plan auto-approval, declarative requirements and
+   * command-safety analysis are stages of ONE decision instead of three gates racing the same row.
+   * `ask` stays pending for the user; the caller does not enqueue a pump for it.
+   */
+  async authorizePendingApprovals(): Promise<void> {
+    // Nothing read before the switch is safe to write after it.
+    if (this.deps.isSessionSwitching()) return;
+
+    const facts = this.deps.getPolicyFacts?.();
+    if (!facts) {
+      // Legacy hosts without a policy snapshot keep the two-step behaviour.
+      this.autoApprovePending();
+      await this.applyCommandSafetyPolicy();
+      return;
+    }
+
+    let handled = false;
+    for (const approval of collectPendingApprovals(this.deps.getMessages())) {
+      const part = findApprovalPart(this.deps.getMessages(), approval.approvalId);
+      if (!part) continue;
+      // Already executed: the verdict can no longer protect anything.
+      if (part.state === "complete" || part.output !== undefined) continue;
+      const input = parseToolCallInput(part);
+      const isCommand = part.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(part.name) ?? true);
+      const decision = await authorizeToolCall({
+        toolName: part.name,
+        args: (input ?? {}) as Record<string, unknown>,
+        facts,
+        ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(part.name) } : {}),
+        // `collectPendingApprovals` only returns unanswered calls.
+        persisted: "pending",
+        ...(isCommand && input?.command
+          ? {
+              analyzeCommand: async () => {
+                const analyzed = await this.evaluateCommand({ ...input, command: input.command! });
+                return {
+                  action: analyzed.action,
+                  source: "command-analysis" as const,
+                  ...(analyzed.reason ? { reason: analyzed.reason } : {}),
+                };
+              },
+            }
+          : {}),
+      });
+      if (this.deps.isSessionSwitching()) return;
+
+      if (decision.action === "allow") {
+        this.recordDecision({
+          approvalId: approval.approvalId,
+          toolCallId: approval.toolCallId,
+          toolName: approval.toolName,
+          approved: true,
+          source: decision.source === "auto" ? "auto" : "policy",
+        });
+        handled = true;
+      } else if (decision.action === "deny") {
+        this.recordDecision({
+          approvalId: approval.approvalId,
+          toolCallId: approval.toolCallId,
+          toolName: approval.toolName,
+          approved: false,
+          reason: decision.reason ?? `Denied by ${decision.source}`,
+          source: "policy",
+        });
+        handled = true;
+      }
+      // ask → keep pending so the user can approve/deny (y/n).
+    }
+
+    if (handled) this.settle();
+  }
+
   /** Auto mode / plan execution: approve everything pending, without scheduling a pump. */
   autoApprovePending(): void {
     if (!this.deps.shouldAutoApprove()) return;
@@ -198,7 +280,40 @@ export class ApprovalDecisionCoordinator {
       const command = input?.command;
       if (!approvalId || !command || !input) continue;
 
-      const decision = await this.evaluateCommand({ ...input, command });
+      const liveBefore = findApprovalPart(this.deps.getMessages(), approvalId);
+      if (!liveBefore) continue;
+
+      const facts = this.deps.getPolicyFacts?.();
+      let decision: ToolAuthorizationDecision;
+      if (facts) {
+        decision = await authorizeToolCall({
+          toolName: liveBefore.name,
+          args: input as Record<string, unknown>,
+          facts,
+          ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(liveBefore.name) } : {}),
+          persisted:
+            liveBefore.approval?.approved === true
+              ? "approved"
+              : liveBefore.approval?.approved === false
+                ? "denied"
+                : "pending",
+          analyzeCommand: async () => {
+            const analyzed = await this.evaluateCommand({ ...input, command });
+            return {
+              action: analyzed.action,
+              source: "command-analysis",
+              ...(analyzed.reason ? { reason: analyzed.reason } : {}),
+            };
+          },
+        });
+      } else {
+        const analyzed = await this.evaluateCommand({ ...input, command });
+        decision = {
+          action: analyzed.action,
+          source: "command-analysis",
+          ...(analyzed.reason ? { reason: analyzed.reason } : {}),
+        };
+      }
       // The analysis is an awaited CoreEnv call. A switch admitted while it ran replaces the
       // channel and the approval table, so this decision no longer has a row to settle.
       if (this.deps.isSessionSwitching()) return;

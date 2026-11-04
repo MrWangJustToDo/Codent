@@ -77,7 +77,7 @@ manager/agent facade definitions that the lease's ports call.
 | 23 `AgentStatusTrigger` values | `runtime-types/agent-status.ts` | T5 |
 | `TERMINAL_STATUSES` / `ACTIVE_STATUSES` overlap on `waiting` / `awaiting_user` | `runtime-types/agent-status.ts` | T4 |
 | `compacting` as a status value | `agents-status-controller`, `compaction-controller` | T6 |
-| Raw `needsApproval` reads (~39) | tool definitions, approval coordinator, run-agent | A2/A9 |
+| Raw `needsApproval` reads | the registered descriptor (`ApprovalRequirement`) is the policy read; remaining raw reads are transcript/status projections (A9) | A2 done / A9 |
 | Former 38-member host is now `SessionRuntime` (4 ports, 36 members, largest 16) | `managers/services/session-runtime.ts` | S9 (done) |
 | `ManagedAgent` public methods (~176) | `managers/managed-agent.ts` | F1–F5 |
 | Direct `planMode` / `isAutoModeEnabled` reads | now zero outside `agent/mode/` (gate: `validate:mode-single-read`) | M4 (done) |

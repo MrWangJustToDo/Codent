@@ -6,6 +6,7 @@
  */
 
 import { compareCodeUnits } from "../../../utils/code-unit-order.js";
+import { resolveApprovalRequirement, type ApprovalRequirement } from "../../approval/approval-requirement.js";
 import { INCUMBENT_RANK, pickTopByRank } from "../../dispatch-order.js";
 
 import { getToolMetadata } from "./define-tool.js";
@@ -25,6 +26,8 @@ export interface AgentToolEntry {
 export interface ResolvedAgentTool extends AgentToolEntry {
   present?: ToolPresentation;
   toModelOutput?: ToModelOutputFn;
+  /** Declarative approval requirement; policy reads this instead of the raw `needsApproval` flag. */
+  approval: ApprovalRequirement;
 }
 
 /** Who owns the entry that was already in the record before any extension registered. */
@@ -142,6 +145,7 @@ export class AgentToolRegistry {
       ...top,
       ...(metadata?.present ? { present: metadata.present } : {}),
       ...(metadata?.toModelOutput ? { toModelOutput: metadata.toModelOutput } : {}),
+      approval: metadata?.approval ?? resolveApprovalRequirement(top.tool),
     };
   }
 

@@ -75,6 +75,7 @@ import {
   peekTaskPreforkCoordinator,
 } from "../agent/subagent/subagent-runs.js";
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
+import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
 import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
@@ -133,6 +134,7 @@ import type { AgentManager } from "./agent-manager.js";
 import type { AgentConfig } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
+import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
 import type { CompactionConfig, CompactionConfigInput } from "../agent/compaction/types.js";
 import type { DispatchRank } from "../agent/dispatch-order.js";
@@ -156,6 +158,7 @@ import type { McpManager } from "../agent/mcp/manager.js";
 import type { MemoryExtensionConfig } from "../agent/memory";
 import type { MemoryManager } from "../agent/memory/memory-manager.js";
 import type { ModeState } from "../agent/mode/mode-state.js";
+import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
@@ -2549,6 +2552,24 @@ export class ManagedAgent {
     return this.mode.getState();
   }
 
+  /**
+   * The policy snapshot an authorization decision is made from.
+   *
+   * Mode facts come from `ModeState`; profile/capabilities are the agent's own, so a subagent's
+   * read-only profile denies a tool the root would be allowed to run.
+   */
+  getPolicyFacts(): AgentPolicyFacts {
+    const profile = this.config.toolsetProfile ?? (this.parentId ? "explore" : "root");
+    const unavailable = new Set<string>();
+    if (profile === "explore") for (const name of SUBAGENT_EXCLUDED_TOOL_NAMES) unavailable.add(name);
+    return this.mode.getPolicyFacts({
+      profile,
+      isSubagent: Boolean(this.parentId),
+      capabilities: this.modelInfo?.capabilities ?? null,
+      unavailableTools: unavailable,
+    });
+  }
+
   isAutoModeEnabled(): boolean {
     return this.getModeState().snapshot().auto;
   }
@@ -2985,10 +3006,19 @@ export class ManagedAgent {
     return this.sessionLifecycle.resume(sessionId, reason);
   }
 
+  /** The registered tool's declarative approval requirement (the pipeline reads this). */
+  getApprovalRequirement(toolName: string): ApprovalRequirement | undefined {
+    return this.toolService.getApprovalRequirement(toolName);
+  }
+
   isToolNeedsApproval(toolName: string): boolean {
+    const requirement = this.toolService.getApprovalRequirement(toolName);
+    if (requirement) return requirement.requiresApproval;
+    // The live record can be filled by the host before the service sees it; keep the fallback
+    // narrow (no policy is decided from it — only the legacy accessor).
     const tools = this.extensions.getManagedToolsProvider()?.() ?? {};
     const tool = tools[toolName];
-    return tool != null && "needsApproval" in tool && (tool as { needsApproval?: boolean }).needsApproval === true;
+    return tool != null && (tool as { needsApproval?: boolean }).needsApproval === true;
   }
 
   /** Agent-local model-output shaping; the live tool entry wins. */

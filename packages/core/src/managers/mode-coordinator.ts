@@ -9,7 +9,11 @@
  */
 
 import { createModeState, type ModeState } from "../agent/mode/mode-state.js";
-import { resolveAgentPolicyFacts, type AgentPolicyFacts } from "../agent/mode/policy-facts.js";
+import {
+  resolveAgentPolicyFacts,
+  type AgentPolicyFacts,
+  type AgentPolicyFactsInput,
+} from "../agent/mode/policy-facts.js";
 
 import type { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import type { PlanModeController, PlanModeState } from "../agent/plan/plan-mode-controller.js";
@@ -36,8 +40,8 @@ export class ModeCoordinator {
   }
 
   /** One authorization-policy snapshot (mode facts today; the pipeline adds the rest). */
-  getPolicyFacts(): AgentPolicyFacts {
-    return resolveAgentPolicyFacts(this.state);
+  getPolicyFacts(input: AgentPolicyFactsInput = {}): AgentPolicyFacts {
+    return resolveAgentPolicyFacts(this.state, input);
   }
 
   isAutoEnabled(): boolean {

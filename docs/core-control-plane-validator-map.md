@@ -54,6 +54,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | Existing gate | Covers |
 |---|---|
 | `validate:approval-decisions`, `validate:tool-approval-resume` | decision table + resume map |
+| **New (A3/A10)** | `validate:authorize-pipeline` (created; stage order + deny precedence), `validate:authorize-matrix` (planned) |
 | `validate:approval-batch-resume` | held calls on terminal; pending `ask_user` |
 | `validate:auto-mode-approvals` | auto mode answers pending approvals |
 | `validate:command-safety-portability`, `validate:command-safety-readonly`, `validate:command-env-safety`, `validate:safe-command` | command analysis + env overrides |
