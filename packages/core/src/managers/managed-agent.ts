@@ -723,6 +723,12 @@ export class ManagedAgent {
       },
       onAdopt: (_sessionId, uiMessages) => {
         if (uiMessages) this.sessionFacet.resetSessionSyncTracker(uiMessages);
+        // The transcript was replaced, so a run still unwinding belongs to the old one. This is
+        // also the ONLY boundary for a same-id `/resume`: `commit()` is idempotent for the session
+        // that is already active (it must not advance twice for a plain re-commit), so without this
+        // the generation stayed put and late tool chunks from the aborted run could append to the
+        // transcript that had just been restored — and be persisted with it.
+        this.getUI()?.advanceSessionGeneration();
       },
       bindSink: (sessionId, options) => {
         // `setSessionData` may already have bound the target (new session); the lease asks for the

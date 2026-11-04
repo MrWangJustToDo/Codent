@@ -421,6 +421,33 @@ assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and
 }
 
 // ============================================================================
+// 8. A same-id resume advances the UI generation
+// ============================================================================
+// `SessionLease.commit()` is deliberately idempotent for the session that is already active (a
+// plain re-commit must not advance twice), so a `/resume` of the CURRENT id never moved the
+// generation. The transcript is still replaced, and a run aborted a moment earlier can deliver
+// tool chunks with new ids — which no `historicalMessageIds` check covers — into the restored
+// transcript, and the next save writes them to disk. `adopt` is the boundary that knows the
+// transcript changed.
+{
+  const store = managed.getSessionStore();
+  const activeId = managed.getSessionData()?.id;
+  assert.ok(store && activeId, "same-id resume probe has a live session");
+  await store.save(managed.getSessionData());
+
+  const ui = managed.getUI();
+  assert.ok(ui, "the live session has a UI channel");
+  const before = ui.getSessionGeneration();
+
+  await managed.restoreSession(activeId, "resume");
+  assert.equal(
+    ui.getSessionGeneration(),
+    before + 1,
+    "resuming the session that is already active still invalidates the runs that belong to the old transcript"
+  );
+}
+
+// ============================================================================
 // Teardown
 // ============================================================================
 // The session/agent persistence (SessionStore journal, AgentLog JSONL sink) writes
