@@ -114,6 +114,7 @@ import { CompactionController, type CompactionLease } from "./controllers/compac
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
+import { ModelFacet } from "./managed-agent-model.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
   cancelPlanExecution as cancelPlanExecutionHelper,
@@ -419,6 +420,8 @@ export class ManagedAgent {
 
   /** Lifecycle — hosts read via getter; mutate through {@link setStatus}. */
   private currentStatus: AgentStatus;
+  /** Model adoption / metadata / compaction-budget facet. */
+  private readonly modelFacet: ModelFacet;
   /** Explicit axes behind {@link currentStatus}; `transitionStatus` is the writer. */
   private agentState: AgentState = deriveAgentState("idle");
   private error: string;
@@ -724,6 +727,24 @@ export class ManagedAgent {
         if (this.boundSinkSessionId === sessionId) return;
         this.bindSessionLogSink(sessionId, options);
       },
+    });
+    const self = this;
+    this.modelFacet = new ModelFacet({
+      // `config` is mutated in place (Object.assign), and `runtime` is set before this facet is
+      // constructed, so capturing both keeps live values without property getters (forbidden on
+      // ManagedAgent by the accessor convention).
+      config: self.config,
+      usage: self.usage,
+      runtime: self.runtime,
+      getModelInfo: () => self.modelInfo,
+      applyModelInfo: (info) => {
+        self.modelInfo = info;
+      },
+      setModel: (next, options) => self.setModel(next, options),
+      getCompactionConfig: () => self.getCompactionConfig(),
+      emitEvent: (type, payload) => self.emitEvent(type, payload as never),
+      emitDiagnostic: (area, message, options) =>
+        self.emitDiagnostic(area, message, options as Parameters<typeof self.emitDiagnostic>[2]),
     });
     this.childIds = [];
     this.createdAt = Date.now();
@@ -1583,86 +1604,7 @@ export class ManagedAgent {
     model: string;
     modelStyle?: ModelStyle;
   } {
-    const remote = this.config.providerMode === "remote";
-    // The catalog check is NOT remote-only: a direct runtime also carries the model list it was
-    // built from (`CodentAgent({ models })`, wired by the CLI/ACP hosts), and a session can be
-    // resumed after `models.json` was edited. An id the catalog no longer offers would be sent
-    // against the current connection and fail on the first request, so it falls back to the model
-    // the session was created with — the same rule the provider plane uses. `selectModel` already
-    // trusts a request when the catalog is absent or empty, so direct hosts that pass no catalog
-    // keep their old behaviour.
-    //
-    // Residual (host-owned, not fixable here): the catalog is the UNION of the entries' model
-    // lists, while the connection (`modelBaseURL` / `modelApiKey`) is the one resolved for the
-    // ACTIVE entry. A persisted model that belongs to a different entry is therefore "offered" and
-    // adopted with the active entry's connection. Fixing that needs the active entry's identity,
-    // which this runtime is not given.
-    const selection = selectModel({
-      requested: next.model,
-      fallback: this.config.model,
-      allowed: selectableModelIds(this.runtime?.models),
-    });
-
-    if (selection.fallback) {
-      this.emitEvent("model:change", {
-        from: selection.fallback.requested,
-        to: selection.model,
-        fallback: true,
-        reason: "resume",
-        ...(this.config.modelStyle ? { style: this.config.modelStyle } : {}),
-      });
-    }
-
-    // The persisted STYLE belongs to the persisted model: adopting it alongside a fallback model
-    // would pair one entry's style with another's connection. Under remote-provider the proxy owns
-    // the style regardless.
-    const style = remote || selection.fallback ? this.config.modelStyle : next.modelStyle;
-    const sameModel = selection.model === this.config.model;
-    const sameStyle = !style || style === this.config.modelStyle;
-    if (sameModel && sameStyle) return this.effectivePersistedModel(false);
-
-    // The adopted model is a change too (bootstrap ran on the default). Emitted here, not in
-    // `setModel`, because `from` is the SESSION's requested id rather than whatever the runtime
-    // happened to be configured with; `setModel`'s own emit is disabled below.
-    if (!selection.fallback && !sameModel) {
-      this.emitEvent("model:change", {
-        from: this.config.model,
-        to: selection.model,
-        reason: "resume",
-        ...(style ? { style } : {}),
-      });
-    }
-
-    // Preflight the same schema `updateConfig` will run. A session written by another build (or a
-    // hand-edited JSONL) can name a style this build no longer accepts, and `setModel` would throw
-    // out of the restore HALF-WAY. The caller treats a persisted-model miss as "keep the current
-    // model", so reject it here, before any config/usage/adapter mutation.
-    try {
-      AgentConfigSchema.parse({
-        ...this.config,
-        model: selection.model,
-        ...(style ? { modelStyle: style } : {}),
-      });
-    } catch (error) {
-      this.emitDiagnostic("model", "Persisted model could not be applied; keeping the current model", {
-        level: "warn",
-        error: errorMessage(error),
-        data: { model: selection.model, ...(style ? { modelStyle: style } : {}) },
-      });
-      return this.effectivePersistedModel(false);
-    }
-
-    this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) }, { emitChange: false });
-    return { changed: true, model: selection.model, ...(style ? { modelStyle: style } : {}) };
-  }
-
-  /** The model currently in force, for a restore that did not change anything. */
-  private effectivePersistedModel(changed: boolean): { changed: boolean; model: string; modelStyle?: ModelStyle } {
-    return {
-      changed,
-      model: this.config.model,
-      ...(this.config.modelStyle ? { modelStyle: this.config.modelStyle } : {}),
-    };
+    return this.modelFacet.applyPersistedModel(next);
   }
 
   /**
@@ -1678,23 +1620,8 @@ export class ManagedAgent {
    * Best-effort: an offline lookup keeps bootstrap metadata when it already describes this model,
    * and clears it only when it describes a different one.
    */
-  async refreshModelMetadata(): Promise<void> {
-    const model = this.config.model;
-    if (!model) return;
-
-    const info = await resolveModelInfoFromModelsDev(model, this.config.modelStyle).catch(() => undefined);
-    if (info) {
-      this.setModelInfo(info);
-      this.usage.setPricing(info.pricing ?? null);
-      this.usage.setCapabilities(info.capabilities);
-      return;
-    }
-
-    if (this.modelInfo && this.modelInfo.id !== model) {
-      this.setModelInfo(null);
-      this.usage.setPricing(null);
-      this.usage.setCapabilities(undefined);
-    }
+  refreshModelMetadata(): Promise<void> {
+    return this.modelFacet.refreshModelMetadata();
   }
 
   /** Current reasoning-effort level, or undefined when unset (model default). */
@@ -1730,36 +1657,7 @@ export class ManagedAgent {
 
   /** Replace the model metadata. Pass `null` to clear it (unknown model). */
   setModelInfo(info: ModelInfo | null): void {
-    this.modelInfo = info;
-    if (info) {
-      this.emitDiagnostic("model", "Setting model info", {
-        level: "debug",
-        data: {
-          id: info.id,
-          ...(info.style ? { style: info.style } : {}),
-          ...(info.contextWindow !== undefined ? { contextWindow: info.contextWindow } : {}),
-        },
-      });
-    }
-    // The footer's budget is `min(tokenThreshold, contextWindow)` — the same reading the trigger
-    // uses. Storing the raw threshold made a 200k model with a 1M configured threshold report
-    // "16%" while compacting at 160k, i.e. the number that exists to expose a missed trigger
-    // could never reach 100%.
-    this.syncCompactionBudget();
-  }
-
-  /**
-   * Clamp the persisted compaction budget to the model that is actually configured.
-   *
-   * Called whenever the window becomes known or changes (bootstrap, `/models`, resume). A model
-   * switch DOWN must lower the budget immediately: the trigger is clamped separately, but a stale
-   * `usage.tokenLimit` also makes the footer lie about how full the window is.
-   */
-  private syncCompactionBudget(): void {
-    const config = this.getCompactionConfig();
-    if (!config) return;
-    const window = this.modelInfo?.contextWindow;
-    this.usage.setTokenLimit(window ? Math.min(config.tokenThreshold, window) : config.tokenThreshold);
+    this.modelFacet.setModelInfo(info);
   }
 
   getModelInfo(): ModelInfo | null {
@@ -1808,7 +1706,7 @@ export class ManagedAgent {
     }
 
     if (next.modelInfo) {
-      this.setModelInfo(next.modelInfo);
+      this.modelFacet.setModelInfo(next.modelInfo);
       // Always replace (including "no price known"): `if (pricing) setPricing(...)` left the
       // PREVIOUS model's rate in place after a switch to an unpriced model, so every later call
       // was billed at a rate that model does not have.
@@ -1819,7 +1717,7 @@ export class ManagedAgent {
       // "same as the previous model": keeping the old gate would strip media the
       // new model accepts (old `[]`) or send media it rejects (old `[vision]`).
       // `undefined` restores the permissive default.
-      this.setModelInfo(null);
+      this.modelFacet.setModelInfo(null);
       this.usage.setPricing(null);
       this.usage.setCapabilities(undefined);
     }
@@ -2368,7 +2266,7 @@ export class ManagedAgent {
       data: { tokenThreshold: config.tokenThreshold },
     });
     this.compaction.setConfig(config);
-    this.syncCompactionBudget();
+    this.modelFacet.syncCompactionBudget();
   }
 
   getCompactionConfig(): CompactionConfig | null {
