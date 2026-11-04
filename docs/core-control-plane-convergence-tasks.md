@@ -19,7 +19,7 @@
 | 权限判定入口 | 13 | 1 管线 / 7 阶段 | A1–A9 |
 | session 端口成员 | 36（4 端口，最大 16） | ≤ 15（单端口，可选） | S6/S9 |
 | `ManagedAgent` | 3091 行 / ~176 方法 | facade < 400 行 + 6 facets | F1–F5 |
-| status trigger | 21 | ~8 迁移事件 | T5 |
+| status trigger | 0（已删除；12 个 transition event） | 12 个 transition event | T5（完成） |
 | plan/auto 散读 | 47 / 6 处（代码读点） | 收敛到 `ModeState` | M1–M5 |
 
 ### 0.2 全局前置条件（每个任务默认继承）

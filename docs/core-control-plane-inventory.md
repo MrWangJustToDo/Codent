@@ -74,7 +74,7 @@ manager/agent facade definitions that the lease's ports call.
 
 | Mechanism | Where | Target task |
 |---|---|---|
-| 23 `AgentStatusTrigger` values | `runtime-types/agent-status.ts` | T5 |
+| `AgentStatusTrigger` retired: 0 values (closed transition events) | `runtime-types/agent-state.ts` | T5 (done) |
 | `TERMINAL_STATUSES` / `ACTIVE_STATUSES` overlap on `waiting` / `awaiting_user` | `runtime-types/agent-status.ts` | T4 |
 | `compacting` as a status value | `agents-status-controller`, `compaction-controller` | T6 |
 | Raw `needsApproval` reads | the registered descriptor (`ApprovalRequirement`) is the policy read; remaining raw reads are transcript/status projections (A9) | A2 done / A9 |

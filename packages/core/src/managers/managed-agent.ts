@@ -197,7 +197,7 @@ import type {
 import type { AgentEventType, EmitAgentTelemetryOptions, EmitPayloadArgs } from "../runtime-types/agent-events.js";
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
-import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
+import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type {
   QueuedMessageContent,
   AgentIterationState,
@@ -731,7 +731,7 @@ export class ManagedAgent {
     this.extensions.setManagedToolsProvider(() => this.tools);
     this.statusController = createAgentStatusController({
       getStatus: () => this.getStatus(),
-      transition: (event, trigger) => this.transitionStatus(event, trigger),
+      transition: (event) => this.transitionStatus(event),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       getError: () => this.error,
       setError: (error) => this.setError(error),
@@ -748,7 +748,7 @@ export class ManagedAgent {
     });
     this.compactions = new CompactionController({
       getStatus: () => this.getStatus(),
-      transition: (event, trigger) => this.transitionStatus(event, trigger),
+      transition: (event) => this.transitionStatus(event),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       setError: (error) => this.setError(error),
       onUserCancel: () => this.statusController.onUserCancel(),
@@ -1060,9 +1060,9 @@ export class ManagedAgent {
    *
    * Re-derives the axes from the status; new writers use {@link transitionStatus}.
    */
-  setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
+  setStatus(status: AgentStatus, event?: AgentStateEventType): void {
     this.agentState = deriveAgentState(status, this.error);
-    this.applyStatus(status, trigger);
+    this.applyStatus(status, event);
   }
 
   /**
@@ -1071,7 +1071,7 @@ export class ManagedAgent {
    * An illegal event is recorded through diagnostics and leaves the axes untouched (production
    * never corrupts state on a missed path); tests assert the strict throw directly on `transition`.
    */
-  transitionStatus(event: AgentTransitionEvent, trigger?: AgentStatusTrigger): AgentStatus {
+  transitionStatus(event: AgentTransitionEvent): AgentStatus {
     const next = transition(this.agentState, event, {
       strict: false,
       onReject: (reason) => {
@@ -1083,7 +1083,7 @@ export class ManagedAgent {
     });
     this.agentState = next;
     const status = projectAgentStatus(next);
-    this.applyStatus(status, trigger, event.type, next.wait === "none" ? undefined : next.wait);
+    this.applyStatus(status, event.type, next.wait === "none" ? undefined : next.wait);
     return status;
   }
 
@@ -1092,12 +1092,7 @@ export class ManagedAgent {
     return this.agentState;
   }
 
-  private applyStatus(
-    status: AgentStatus,
-    trigger?: AgentStatusTrigger,
-    stateEvent?: AgentStateEventType,
-    wait?: "approval" | "question"
-  ): void {
+  private applyStatus(status: AgentStatus, stateEvent?: AgentStateEventType, wait?: "approval" | "question"): void {
     const prev = this.currentStatus;
     if (status === "completed" || status === "aborted" || status === "error") {
       this.recordStreamDuration();
@@ -1114,7 +1109,6 @@ export class ManagedAgent {
       this.emitEvent("agent:status", {
         from: prev,
         to: status,
-        ...(trigger ? { trigger } : {}),
         ...(stateEvent ? { event: stateEvent } : {}),
         ...(wait ? { wait } : {}),
       });

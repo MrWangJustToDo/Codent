@@ -106,8 +106,8 @@ console.log("persistence-only surface: OK");
   controller.onRunAbort();
   controller.onRecoveryRetry();
 
-  assert.deepEqual(transitions[0], { from: "idle", to: "running", trigger: "run-start" });
-  assert.deepEqual(transitions[1], { from: "running", to: "aborted", trigger: "run-abort" });
+  assert.deepEqual(transitions[0], { from: "idle", to: "running", trigger: "prepare" });
+  assert.deepEqual(transitions[1], { from: "running", to: "aborted", trigger: "interrupt" });
   // onRecoveryRetry only fires from "error" — no-op here, no transition recorded.
   assert.equal(transitions.length, 2);
   console.log("status transition triggers: OK");

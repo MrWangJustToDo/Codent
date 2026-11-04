@@ -28,8 +28,8 @@
 
 import { isTerminalStatus } from "../../runtime-types/agent-status.js";
 
-import type { AgentTransitionEvent } from "../../runtime-types/agent-state.js";
-import type { AgentStatus, AgentStatusTrigger } from "../../runtime-types/agent-status.js";
+import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
+import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
 export type CompactionKind = "auto" | "manual" | "reactive";
@@ -70,9 +70,9 @@ export type CompactionOutcome =
 
 export interface CompactionControllerDeps {
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
+  setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
   /** The single state writer; compaction is a run phase, not a status of its own. */
-  transition?: (event: AgentTransitionEvent, trigger?: AgentStatusTrigger) => AgentStatus;
+  transition?: (event: AgentTransitionEvent) => AgentStatus;
   /**
    * Clear the last error when a compaction restores a terminal status to `idle`.
    *
@@ -123,8 +123,8 @@ export class CompactionController {
     };
     this.active = { lease, previousStatus: this.deps.getStatus(), ...(controller ? { controller } : {}) };
 
-    if (this.deps.transition) this.deps.transition({ type: "compaction-start" }, `compaction:${kind}`);
-    else this.deps.setStatus("compacting", `compaction:${kind}`);
+    if (this.deps.transition) this.deps.transition({ type: "compaction-start" });
+    else this.deps.setStatus("compacting", "compaction-start");
     if (kind === "auto") {
       this.deps.emitEvent(
         "compaction:auto-start",
@@ -307,10 +307,10 @@ export class CompactionController {
       if (kind === "manual" && terminalPrevious) {
         // A successful manual compact after a failed turn clears the old fault and settles idle.
         this.deps.setError?.("");
-        this.deps.transition({ type: "reset" }, "compaction-end");
+        this.deps.transition({ type: "reset" });
         return;
       }
-      this.deps.transition({ type: "compaction-end" }, "compaction-end");
+      this.deps.transition({ type: "compaction-end" });
       return;
     }
     if (kind === "manual" && previous !== undefined && previous !== "compacting") {

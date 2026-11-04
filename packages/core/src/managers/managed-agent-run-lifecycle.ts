@@ -9,8 +9,8 @@ import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
 import type { RunCoordinator } from "./run-coordinator.js";
-import type { AgentTransitionEvent } from "../runtime-types/agent-state.js";
-import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
+import type { AgentStateEventType, AgentTransitionEvent } from "../runtime-types/agent-state.js";
+import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type { Epoch } from "../runtime-types/epoch.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
@@ -31,9 +31,9 @@ export interface RunLifecycleHost {
   /** Capture the session/run identity before an async continuation (see `runtime-types/epoch.ts`). */
   captureEpoch?: () => Epoch;
   getStatus: () => AgentStatus;
-  setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
+  setStatus: (status: AgentStatus, event?: AgentStateEventType) => void;
   /** The single state writer; when present, abort goes through the state machine. */
-  transitionStatus?: (event: AgentTransitionEvent, trigger?: AgentStatusTrigger) => AgentStatus;
+  transitionStatus?: (event: AgentTransitionEvent) => AgentStatus;
   /** Track the active run id (log run-scoping); pass null to clear. */
   setCurrentRunId: (runId: string | null) => void;
   recordStreamDuration: () => void;
@@ -95,8 +95,8 @@ export async function prepareManagedAgentForRun(
       // `signal.aborted`); rewriting its STATUS is not. A run that already has an outcome
       // (completed / aborted / error) or never started (idle) keeps the status it has.
       if (isActiveStatus(host.getStatus())) {
-        if (host.transitionStatus) host.transitionStatus({ type: "interrupt" }, "run-abort");
-        else host.setStatus("aborted", "run-abort");
+        if (host.transitionStatus) host.transitionStatus({ type: "interrupt" });
+        else host.setStatus("aborted", "interrupt");
       }
     },
   });
@@ -242,7 +242,7 @@ export function abortManagedAgentRun(host: RunLifecycleHost, reason?: string): v
   // match, or one of them undoes the other (an `error` agent was being relabelled `aborted`
   // here once the listener stopped pre-empting it).
   if (isActiveStatus(host.getStatus())) {
-    if (host.transitionStatus) host.transitionStatus({ type: "interrupt" }, "run-abort");
-    else host.setStatus("aborted", "run-abort");
+    if (host.transitionStatus) host.transitionStatus({ type: "interrupt" });
+    else host.setStatus("aborted", "interrupt");
   }
 }

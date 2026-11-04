@@ -64,56 +64,48 @@ function createManaged(log) {
 }
 
 /** Drive the policy the way the Event→Log bridge does: one envelope in, rows out. */
-function applyStatusPolicy(log, { from, to, trigger }) {
+function applyStatusPolicy(log, { from, to, event, wait }) {
   SPECIALIZED_EVENT_LOG_HANDLERS["agent:status"](log, {
     type: "agent:status",
     ts: Date.now(),
     agentId: "agent-1",
     sessionId: "ses-1",
     runId: "run-1",
-    payload: { from, to, ...(trigger ? { trigger } : {}) },
+    payload: { from, to, ...(event ? { event } : {}), ...(wait ? { wait } : {}) },
   });
 }
 
 // --- terminal outcomes stay visible, whatever moved the status there ---
 
-for (const [to, trigger] of [
-  ["error", "run-error"],
-  ["error", "external-error"],
-  ["aborted", "run-abort"],
-  ["aborted", "user-cancel"],
+for (const [to, event] of [
+  ["error", "fail"],
+  ["error", "stream-end"],
+  ["aborted", "interrupt"],
 ]) {
   const { written, log } = createCapture();
-  applyStatusPolicy(log, { from: "running", to, trigger });
-  assert.equal(written.length, 1, `a failure/abort is the line a reader scans for (${to}/${trigger})`);
+  applyStatusPolicy(log, { from: "running", to, event });
+  assert.equal(written.length, 1, `a failure/abort is the line a reader scans for (${to}/${event})`);
   assert.equal(written[0].level, "info");
   assert.equal(written[0].eventType, "agent:status", "the row is filterable by event type");
-  assert.equal(written[0].data.trigger, trigger);
+  assert.equal(written[0].data.event, event);
 }
 
 // --- the approval bracket is mechanical: the approval events are the record ---
 
-// Two rows per approval, on top of the approval events themselves; this pair alone was
-// ~12.5k entries across the recorded sessions.
-for (const [from, to, trigger] of [
-  ["running", "waiting", "approvals-pending"],
-  ["waiting", "running", "approvals-cleared"],
-  ["running", "running", "chunk:tool"],
-  ["thinking", "thinking", "chunk:reasoning"],
-  ["responding", "responding", "chunk:text"],
-  ["running", "running", "run-start"],
-  ["running", "running", "run-finish"],
-  ["running", "running", "run-abort"],
-  ["waiting", "waiting", "reconcile"],
-  ["completed", "completed", "reconcile-after-run"],
-  ["running", "running", "recovery-retry"],
-  ["compacting", "compacting", "compaction:manual"],
-  ["compacting", "compacting", "compaction:auto"],
+for (const [from, to, event, wait] of [
+  ["running", "waiting", "pause", "approval"],
+  ["waiting", "running", "resume", "approval"],
+  ["running", "running", "stream-chunk"],
+  ["thinking", "thinking", "stream-chunk"],
+  ["running", "running", "prepare"],
+  ["running", "completed", "settle"],
+  ["running", "idle", "reset"],
+  ["compacting", "compacting", "compaction-start"],
   ["running", "running", "compaction-end"],
 ]) {
   const { written, log } = createCapture();
-  applyStatusPolicy(log, { from, to, trigger });
-  assert.equal(written.length, 0, `${trigger} is already described by the event that caused it`);
+  applyStatusPolicy(log, { from, to, event, ...(wait ? { wait } : {}) });
+  assert.equal(written.length, 0, `${event} is already described by the event that caused it`);
 }
 
 // --- a pause on a client tool has NO dedicated event ---
@@ -121,13 +113,13 @@ for (const [from, to, trigger] of [
 // `ask_user` is a client tool: it emits neither `agent:tool-start` nor `agent:tool-end`, and
 // `session:interaction` is a suppressed projection. Suppressing both transitions left the pause
 // with no trace at all, so they are recorded.
-for (const [from, to, trigger] of [
-  ["running", "awaiting_user", "client-tool-wait"],
-  ["awaiting_user", "running", "client-tool-resume"],
+for (const [from, to, event] of [
+  ["running", "awaiting_user", "pause"],
+  ["awaiting_user", "running", "resume"],
 ]) {
   const { written, log } = createCapture();
-  applyStatusPolicy(log, { from, to, trigger });
-  assert.equal(written.length, 1, `${trigger} is the only record of the pause`);
+  applyStatusPolicy(log, { from, to, event, wait: "question" });
+  assert.equal(written.length, 1, `${event} is the only record of the question`);
   assert.equal(written[0].level, "info");
   assert.equal(written[0].eventType, "agent:status");
   assert.equal(written[0].data.from, from);
@@ -137,18 +129,18 @@ for (const [from, to, trigger] of [
 // --- the two escape hatches ---
 
 {
-  // A trigger nobody classified is recorded: silence must be a decision, never an omission.
+  // An event nobody classified is recorded: silence must be a decision, never an omission.
   const { written, log } = createCapture();
-  applyStatusPolicy(log, { from: "running", to: "running", trigger: "some-future-trigger" });
-  assert.equal(written.length, 1, "an unrecognized trigger defaults to VISIBLE");
+  applyStatusPolicy(log, { from: "running", to: "running", event: "some-future-event" });
+  assert.equal(written.length, 1, "an unrecognized event defaults to VISIBLE");
 }
 
 {
   // A set with no stated reason explains itself with nothing else — it stays.
   const { written, log } = createCapture();
   applyStatusPolicy(log, { from: "running", to: "completed" });
-  assert.equal(written.length, 1, "a trigger-less set is not silently dropped");
-  assert.equal(written[0].data.trigger, undefined);
+  assert.equal(written.length, 1, "a reason-less set is not silently dropped");
+  assert.equal(written[0].data.event, undefined);
   assert.equal(written[0].message, "Status: running → completed");
 }
 
@@ -160,14 +152,14 @@ for (const [from, to, trigger] of [
   const events = [];
   managed.dispatchEvent = (event) => events.push(event);
 
-  managed.setStatus("running", "run-start");
+  managed.setStatus("running", "prepare");
   assert.equal(events.length, 1, "a transition is published, not written");
   assert.equal(events[0].type, "agent:status");
-  assert.deepEqual(events[0].payload, { from: "idle", to: "running", trigger: "run-start" });
+  assert.deepEqual(events[0].payload, { from: "idle", to: "running", event: "prepare" });
   assert.equal(written.length, 0, "setStatus writes no log row of its own — that is the policy's job");
 
   const before = events.length;
-  managed.setStatus("running", "run-start");
+  managed.setStatus("running", "prepare");
   assert.equal(events.length, before, "a no-op set publishes nothing");
 
   managed.setStatus("aborted", "user-cancel");

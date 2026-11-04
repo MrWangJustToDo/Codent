@@ -394,7 +394,7 @@ function makeFinalizer({ status = "running", error = "", total } = {}) {
 
   // What `agent-chat-controller.onAbortError` does for an AbortError whose run signal is NOT ours.
   controller.onExternalError("AbortError: the operation was aborted");
-  assert.deepEqual(transitions, [["error", "external-error"]], "the external failure is terminal");
+  assert.deepEqual(transitions, [["error", "fail"]], "the external failure is terminal");
   assert.equal(error, "AbortError: the operation was aborted");
 
   const hasError = status === "error";

@@ -17,7 +17,6 @@ import { hookEchoesEnabled } from "./hooks-echo.js";
 import { readEventPayload as p, summarizePayload } from "./payload.js";
 
 import type { SessionDiagnosticArea } from "../../runtime-types/agent-event-payloads.js";
-import type { AgentStatusTrigger } from "../../runtime-types/agent-status.js";
 import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
 import type { AgentEvent } from "../agent-event-bus";
 import type { AgentLog } from "../agent-log/agent-log.js";
@@ -191,39 +190,6 @@ function logCompactionManualError(log: AgentLog, event: AgentEvent): void {
   entry(log, event, "error", "compaction", `Manual compact failed: ${error}`, undefined, eventError(error));
 }
 
-/**
- * Status transitions whose meaning is already carried by a dedicated event.
- *
- * These used to be written at `debug` ("still recorded either way"), which is why they stayed 31% of
- * the file under the default level: the approval they bracket had its own two rows. Suppressing them
- * removes a duplicate, not a fact — `aborted`/`error` and any unexplained transition still land.
- *
- * `client-tool-wait` / `client-tool-resume` are NOT in this set: `ask_user` is a client tool, so it
- * emits neither `agent:tool-start` nor `agent:tool-end`, and `session:interaction` is a projection
- * (suppressed). Suppressing both transitions made a pause on a user question leave no trace at all.
- */
-const MECHANICAL_STATUS_TRIGGERS: ReadonlySet<AgentStatusTrigger> = new Set([
-  "approvals-pending",
-  "approvals-cleared",
-  "chunk:text",
-  "chunk:tool",
-  "chunk:reasoning",
-  "run-prepare",
-  "run-start",
-  "run-finish",
-  "run-abort",
-  "run-error",
-  "reconcile",
-  "reconcile-after-run",
-  "apply-outcome",
-  "detached-terminal",
-  "reset",
-  "recovery-retry",
-  "external-error",
-  "compaction-end",
-  "before-tool-call",
-]);
-
 /** Transition events whose meaning is already carried by a dedicated event. */
 const MECHANICAL_STATE_EVENTS: ReadonlySet<string> = new Set([
   "prepare",
@@ -242,7 +208,6 @@ const NOTABLE_STATUSES: ReadonlySet<string> = new Set(["error", "aborted"]);
 function logAgentStatus(log: AgentLog, event: AgentEvent): void {
   const d = p(event);
   const to = typeof d.to === "string" ? d.to : "unknown";
-  const trigger = typeof d.trigger === "string" ? (d.trigger as AgentStatusTrigger) : undefined;
   const stateEvent = typeof d.event === "string" ? d.event : undefined;
   const wait = typeof d.wait === "string" ? d.wait : undefined;
   if (!NOTABLE_STATUSES.has(to)) {
@@ -252,15 +217,13 @@ function logAgentStatus(log: AgentLog, event: AgentEvent): void {
       // An approval pause is bracketed by the request/resolve rows; a client question is not
       // (ask_user emits neither), so its pause/resume stays visible.
       if ((stateEvent === "pause" || stateEvent === "resume") && wait !== "question") return;
-    } else if (trigger) {
-      if (trigger.startsWith("compaction:")) return;
-      if (MECHANICAL_STATUS_TRIGGERS.has(trigger)) return;
+    } else if (!stateEvent) {
+      // An unexplained transition is worth a row (legacy `setStatus` without an event).
     }
   }
   entry(log, event, "info", "agent", `Status: ${typeof d.from === "string" ? d.from : "?"} → ${to}`, {
     from: d.from,
     to,
-    ...(trigger ? { trigger } : {}),
     ...(stateEvent ? { event: stateEvent } : {}),
     ...(wait ? { wait } : {}),
   });

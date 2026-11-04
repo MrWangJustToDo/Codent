@@ -140,7 +140,7 @@ assert.equal(managed.getStatus(), "completed");
   assert.equal(status, "awaiting_user", "an unanswered client tool keeps the wait");
 
   controller.prepareRunPhase([askUserMessage({ answers: [{ id: "q1", value: "yes" }] })]);
-  assert.deepEqual(transitions.at(-1), ["running", "run-prepare"], "an answered client tool starts the run");
+  assert.deepEqual(transitions.at(-1), ["running", "prepare"], "an answered client tool starts the run");
 }
 
 // Conversation order decides which wait the status names.
@@ -206,7 +206,7 @@ assert.equal(managed.getStatus(), "completed");
   messages = [{ id: "a4", role: "assistant", parts: [answeredAsk, approvalPart] }];
   controller.setClientToolWaiting(false);
   assert.equal(status, "waiting", "the next pending interaction takes over");
-  assert.equal(transitions.at(-1)[1], "client-tool-wait");
+  assert.equal(transitions.at(-1)[1], "pause", "the wait is a transition event, not a trigger string");
 
   // Nothing pending: the wait ends through the normal reconcile policy.
   messages = [{ id: "a5", role: "assistant", parts: [answeredAsk] }];
@@ -219,7 +219,7 @@ assert.equal(managed.getStatus(), "completed");
   controller.prepareRunPhase([{ id: "a6", role: "assistant", parts: [approvalPart] }]);
   assert.deepEqual(transitions, [], "a pending interaction keeps the pump parked");
   controller.prepareRunPhase([{ id: "a7", role: "assistant", parts: [answeredAsk] }]);
-  assert.deepEqual(transitions.at(-1), ["running", "run-prepare"], "once nothing is pending the pump starts");
+  assert.deepEqual(transitions.at(-1), ["running", "prepare"], "once nothing is pending the pump starts");
 }
 
 // The run's finish reason rides the state payload; the ACP host maps `length` → max_tokens from it.
@@ -415,7 +415,7 @@ assert.equal(managed.getStatus(), "waiting");
     assert.equal(g[1], "isActiveStatus", "…and with the same predicate");
   }
   // No unguarded `setStatus("aborted")` may survive in this module. The write now carries a
-  // trigger (`setStatus("aborted", "run-abort")`, which the log rule consumes), so the pattern
+  // event (`setStatus("aborted", "interrupt")`, which the log rule consumes), so the pattern
   // matches the call prefix and tolerates arguments.
   for (const match of src.matchAll(/setStatus\("aborted"/g)) {
     const before = src.slice(Math.max(0, match.index - 500), match.index);

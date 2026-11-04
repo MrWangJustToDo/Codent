@@ -22,8 +22,8 @@ import {
   type WhenClearStatus,
 } from "../agent-run-outcome.js";
 
-import type { AgentTransitionEvent } from "../../runtime-types/agent-state.js";
-import type { AgentStatus, AgentStatusTrigger } from "../../runtime-types/agent-status.js";
+import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
+import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { StreamChunk, ToolPhaseCompleteInfo, UIMessage } from "@tanstack/ai";
 
@@ -41,8 +41,8 @@ export type {
 export interface AgentStatusControllerDeps {
   getStatus: () => AgentStatus;
   /** The one writer. Present in production; legacy fixtures may provide only `setStatus`. */
-  transition?: (event: AgentTransitionEvent, trigger?: AgentStatusTrigger) => AgentStatus;
-  setStatus?: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
+  transition?: (event: AgentTransitionEvent) => AgentStatus;
+  setStatus?: (status: AgentStatus, event?: AgentStateEventType) => void;
   getError: () => string;
   setError: (error: string) => void;
   setPendingApprovalCount: (count: number) => void;
@@ -78,7 +78,7 @@ export interface ReconcileFromUIMessagesOptions {
 
 function applyChunkStatus(
   getStatus: () => AgentStatus,
-  dispatch: (event: AgentTransitionEvent, trigger?: AgentStatusTrigger) => AgentStatus,
+  dispatch: (event: AgentTransitionEvent) => AgentStatus,
   chunk: StreamChunk
 ): void {
   const type = chunk.type;
@@ -94,18 +94,18 @@ function applyChunkStatus(
   // projections on every call, and recomputes the interaction snapshot (two full
   // passes over the message list) with them.
   if (type === "TOOL_CALL_START") {
-    if (current !== "running") dispatch({ type: "stream-chunk", stream: "tooling" }, "chunk:tool");
+    if (current !== "running") dispatch({ type: "stream-chunk", stream: "tooling" });
     return;
   }
 
   if (type === "REASONING_MESSAGE_CONTENT" || type === "REASONING_MESSAGE_START") {
-    if (current !== "thinking") dispatch({ type: "stream-chunk", stream: "thinking" }, "chunk:reasoning");
+    if (current !== "thinking") dispatch({ type: "stream-chunk", stream: "thinking" });
     return;
   }
 
   if (type === "TEXT_MESSAGE_CONTENT") {
     if (current === "running" || current === "thinking") {
-      dispatch({ type: "stream-chunk", stream: "responding" }, "chunk:text");
+      dispatch({ type: "stream-chunk", stream: "responding" });
     }
   }
 }
@@ -125,14 +125,14 @@ export class AgentStatusController {
    * Apply one state event. Production passes the agent's single transition writer; a legacy
    * fixture without one gets the same projection applied through `setStatus`.
    */
-  private dispatch(event: AgentTransitionEvent, trigger?: AgentStatusTrigger): AgentStatus {
-    if (this.deps.transition) return this.deps.transition(event, trigger);
+  private dispatch(event: AgentTransitionEvent): AgentStatus {
+    if (this.deps.transition) return this.deps.transition(event);
     if (!this.deps.setStatus) return this.deps.getStatus();
     const next = transition(deriveAgentState(this.deps.getStatus(), this.deps.getError?.() ?? ""), event, {
       strict: false,
     });
     const status = projectAgentStatus(next);
-    this.deps.setStatus(status, trigger);
+    this.deps.setStatus(status, event.type);
     return status;
   }
 
@@ -152,7 +152,7 @@ export class AgentStatusController {
       status === "error" ||
       status === "aborted"
     ) {
-      this.dispatch({ type: "prepare" }, "run-prepare");
+      this.dispatch({ type: "prepare" });
     }
   }
 
@@ -161,13 +161,13 @@ export class AgentStatusController {
     const status = this.deps.getStatus();
     if (status === "aborted") return;
     if (status !== "waiting" && status !== "awaiting_user") {
-      this.dispatch({ type: "prepare" }, "run-start");
+      this.dispatch({ type: "prepare" });
     }
     this.deps.setError("");
   }
 
   onStreamChunk(chunk: StreamChunk): StreamChunk {
-    applyChunkStatus(this.deps.getStatus, (event, trigger) => this.dispatch(event, trigger), chunk);
+    applyChunkStatus(this.deps.getStatus, (event) => this.dispatch(event), chunk);
     return chunk;
   }
 
@@ -180,16 +180,16 @@ export class AgentStatusController {
     if (isTerminalStatus(current) || current === "waiting" || current === "awaiting_user" || current === "compacting") {
       return;
     }
-    this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed" }, "run-finish");
+    this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed" });
   }
 
   onRunAbort(): void {
-    this.dispatch({ type: "interrupt" }, "run-abort");
+    this.dispatch({ type: "interrupt" });
   }
 
   onRunError(message: string, stack?: string): void {
     this.deps.setError(message);
-    this.dispatch({ type: "fail", error: message }, "run-error");
+    this.dispatch({ type: "fail", error: message });
     this.deps.emitEvent?.("agent:stream-error", {
       error: message,
       ...(stack ? { stack } : {}),
@@ -203,7 +203,7 @@ export class AgentStatusController {
   onRecoveryRetry(): void {
     this.deps.setError("");
     if (this.deps.getStatus() === "error") {
-      this.dispatch({ type: "prepare" }, "recovery-retry");
+      this.dispatch({ type: "prepare" });
     }
   }
 
@@ -220,7 +220,7 @@ export class AgentStatusController {
    */
   onExternalError(message: string): void {
     this.deps.setError(message);
-    this.dispatch({ type: "fail", error: message }, "external-error");
+    this.dispatch({ type: "fail", error: message });
   }
 
   onUserCancel(): void {
@@ -228,7 +228,7 @@ export class AgentStatusController {
     // (a run parked on an approval or `ask_user`), and an abort that reached here used to leave
     // them un-marked while the other abort writer (`abortManagedAgentRun`) did mark them.
     if (isActiveStatus(this.deps.getStatus())) {
-      this.dispatch({ type: "interrupt" }, "user-cancel");
+      this.dispatch({ type: "interrupt" });
     }
   }
 
@@ -238,7 +238,7 @@ export class AgentStatusController {
 
     if (count === 0) {
       if (this.deps.getStatus() === "waiting") {
-        this.dispatch({ type: "resume" }, "approvals-cleared");
+        this.dispatch({ type: "resume" });
       }
       return;
     }
@@ -250,7 +250,7 @@ export class AgentStatusController {
     const first = messages ? firstPendingInteraction(messages) : undefined;
     if (first === undefined || first.kind === "approval") {
       if (this.deps.getStatus() !== "waiting") {
-        this.dispatch({ type: "pause", wait: "approval" }, "approvals-pending");
+        this.dispatch({ type: "pause", wait: "approval" });
       }
     }
 
@@ -275,7 +275,7 @@ export class AgentStatusController {
     const messages = this.deps.getMessages?.();
     const remaining = messages ? countPendingToolApprovals(messages) : 0;
     this.deps.setPendingApprovalCount(remaining);
-    if (remaining === 0) this.dispatch({ type: "resume" }, "before-tool-call");
+    if (remaining === 0) this.dispatch({ type: "resume" });
   }
 
   setClientToolWaiting(active: boolean): void {
@@ -287,25 +287,25 @@ export class AgentStatusController {
       // Re-asserting the same status every time the host re-dispatches is cheap: `setStatus` emits
       // `agent:status` only on a real transition, and `emitStateChange` dedupes its frame by
       // signature, so this cannot feed an app↔core emit loop.
-      this.dispatch({ type: "pause", wait: first.kind === "approval" ? "approval" : "question" }, "client-tool-wait");
+      this.dispatch({ type: "pause", wait: first.kind === "approval" ? "approval" : "question" });
       return;
     }
     if (active) {
       // The caller asserts a question the transcript does not (yet) show — honour the only signal
       // we have rather than dropping the wait.
       if (this.deps.getStatus() !== "awaiting_user") {
-        this.dispatch({ type: "pause", wait: "question" }, "client-tool-wait");
+        this.dispatch({ type: "pause", wait: "question" });
       }
       return;
     }
     if (this.deps.getStatus() === "awaiting_user") {
-      this.dispatch({ type: "settle", result: "completed", clearWait: true }, "client-tool-resume");
+      this.dispatch({ type: "settle", result: "completed", clearWait: true });
     }
   }
 
   resetToIdle(): void {
     this.deps.setError("");
-    this.dispatch({ type: "reset" }, "reset");
+    this.dispatch({ type: "reset" });
   }
 
   reconcileFromUIMessages(messages: UIMessage[], options?: ReconcileFromUIMessagesOptions): void {
@@ -316,18 +316,17 @@ export class AgentStatusController {
     // Conversation order: the status describes the interaction the host is asking FIRST.
     const first = firstPendingInteraction(messages);
     if (first?.kind === "approval") {
-      this.dispatch({ type: "pause", wait: "approval" }, "reconcile");
+      this.dispatch({ type: "pause", wait: "approval" });
       return;
     }
     if (first?.kind === "clientTool") {
-      this.dispatch({ type: "pause", wait: "question" }, "reconcile");
+      this.dispatch({ type: "pause", wait: "question" });
       return;
     }
     if (this.deps.getStatus() === "waiting" || this.deps.getStatus() === "awaiting_user") {
-      if (whenClear === "running") this.dispatch({ type: "resume" }, "reconcile");
-      else if (whenClear === "completed")
-        this.dispatch({ type: "settle", result: "completed", clearWait: true }, "reconcile");
-      else this.dispatch({ type: "reset" }, "reconcile");
+      if (whenClear === "running") this.dispatch({ type: "resume" });
+      else if (whenClear === "completed") this.dispatch({ type: "settle", result: "completed", clearWait: true });
+      else this.dispatch({ type: "reset" });
     }
   }
 
@@ -353,8 +352,8 @@ export class AgentStatusController {
 
     if (status === "running" || status === "thinking" || status === "responding" || status === "compacting") {
       const result = this.deps.getError() ? "error" : "completed";
-      if (status === "compacting") this.dispatch({ type: "stream-end", result }, "reconcile-after-run");
-      else this.dispatch({ type: "settle", result }, "reconcile-after-run");
+      if (status === "compacting") this.dispatch({ type: "stream-end", result });
+      else this.dispatch({ type: "settle", result });
     }
   }
 
@@ -373,7 +372,7 @@ export class AgentStatusController {
   parkOnPendingQuestion(messages: UIMessage[]): void {
     if (firstPendingInteraction(messages)?.kind !== "clientTool") return;
     if (this.deps.getStatus() === "awaiting_user") return;
-    this.dispatch({ type: "pause", wait: "question" }, "pending-question");
+    this.dispatch({ type: "pause", wait: "question" });
   }
 
   /**
@@ -401,7 +400,7 @@ export class AgentStatusController {
         if (outcome.errorMessage) {
           this.onRunError(outcome.errorMessage);
         } else {
-          this.dispatch({ type: "fail", error: outcome.errorMessage ?? "Run failed" }, "apply-outcome");
+          this.dispatch({ type: "fail", error: outcome.errorMessage ?? "Run failed" });
         }
       } else if (outcome.errorMessage && !this.deps.getError()) {
         this.deps.setError(outcome.errorMessage);
@@ -433,18 +432,15 @@ export class AgentStatusController {
     const status = this.deps.getStatus();
     if (status === "waiting" || status === "awaiting_user") {
       // Subagent run is over — do not linger as "active" for the task panel.
-      this.dispatch(
-        { type: "settle", result: this.deps.getError() ? "error" : "completed", clearWait: true },
-        "detached-terminal"
-      );
+      this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed", clearWait: true });
       return;
     }
     if (isTerminalStatus(status) || status === "completed" || status === "idle") return;
 
     if (status === "running" || status === "thinking" || status === "responding" || status === "compacting") {
       const result = this.deps.getError() ? "error" : "completed";
-      if (status === "compacting") this.dispatch({ type: "stream-end", result }, "detached-terminal");
-      else this.dispatch({ type: "settle", result, clearWait: true }, "detached-terminal");
+      if (status === "compacting") this.dispatch({ type: "stream-end", result });
+      else this.dispatch({ type: "settle", result, clearWait: true });
     }
   }
 }
