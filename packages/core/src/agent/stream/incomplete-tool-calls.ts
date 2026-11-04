@@ -20,10 +20,6 @@ import type { ToolCallPart, ToolResultPart, UIMessage } from "@tanstack/ai";
 
 export const TOOL_CANCELLED_MESSAGE = "Cancelled by user.";
 
-function hasToolResult(message: UIMessage, toolCallId: string): boolean {
-  return message.parts.some((part) => part.type === "tool-result" && part.toolCallId === toolCallId);
-}
-
 /** Whether tool arguments are non-empty, parseable JSON (safe for TanStack executeToolCalls). */
 export function hasValidToolArguments(part: ToolCallPart): boolean {
   const raw = typeof part.arguments === "string" ? part.arguments.trim() : "";
@@ -128,10 +124,25 @@ function applyToolCallCancellation(
         ...(options.clearDisplay ? { display: undefined } : {}),
       };
 
-      if (
-        !hasToolResult(uiMessage, part.id) &&
-        !parts.some((p) => p.type === "tool-result" && p.toolCallId === part.id)
-      ) {
+      // The MODEL wire is built from the paired `tool-result`'s content, not from the call part's
+      // output (TanStack copies it verbatim into the `role: "tool"` message). A background command /
+      // task wrote its `running` handle through `addToolResult`, so that result already exists — and
+      // rewriting only the call part left the resumed session telling the model the job is still
+      // running forever. Replace the content when it is there, insert it when it is not.
+      const resultIndex = parts.findIndex((p) => p.type === "tool-result" && p.toolCallId === part.id);
+      if (resultIndex >= 0) {
+        const existing = parts[resultIndex] as ToolResultPart;
+        parts[resultIndex] = {
+          type: "tool-result",
+          toolCallId: part.id,
+          content: JSON.stringify(synthetic),
+          state: "complete",
+          // `outcome` / `error` described the result being replaced — keeping either would make the
+          // wire read "cancelled" while carrying a settled content, or vice versa.
+          ...(existing.name !== undefined ? { name: existing.name } : {}),
+          ...(existing.id !== undefined ? { id: existing.id } : {}),
+        };
+      } else {
         const result: ToolResultPart = {
           type: "tool-result",
           toolCallId: part.id,

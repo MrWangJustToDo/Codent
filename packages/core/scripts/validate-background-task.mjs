@@ -1065,6 +1065,55 @@ const runs = subagentRuns(managed);
   assert.equal(cancelInterruptedBackgroundTasks(settled), settled, "a second pass is a no-op");
 }
 
+// ============================================================================
+// 13b. The settle rewrites the PAIRED tool-result, not just the call part
+// ============================================================================
+//
+// `addToolResult` writes both the call's `output` and a `tool-result` part, and the model wire is
+// built from the RESULT's content (TanStack copies it into the `role: "tool"` message verbatim).
+// Rewriting only the call part left the UI saying "cancelled" while the resumed model still read
+// the `running` handle — and was told not to poll for a completion that would never arrive.
+{
+  const handle = runningTaskOutput();
+  const messages = [
+    { id: "u1", role: "user", parts: [{ type: "text", content: "go" }] },
+    {
+      id: "a1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "tc-paired",
+          name: "task",
+          state: "complete",
+          arguments: "{}",
+          output: handle,
+        },
+        {
+          type: "tool-result",
+          toolCallId: "tc-paired",
+          content: JSON.stringify(handle),
+          state: "complete",
+        },
+      ],
+    },
+  ];
+  const settled = cancelInterruptedBackgroundTasks(messages);
+  const result = settled
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === "tool-result" && part.toolCallId === "tc-paired");
+  assert.ok(result, "the paired result is still there");
+  const content = String(result.content);
+  assert.equal(content.includes('"status":"running"'), false, "the wire no longer carries a running handle");
+  assert.match(content, /session ended/, "it carries the session-end reason instead");
+  assert.equal(result.state, "complete", "and stays a settled result");
+  assert.equal(
+    settled.flatMap((message) => message.parts).filter((part) => part.type === "tool-result").length,
+    1,
+    "no duplicate result is appended"
+  );
+}
+
 /**
  * The command half of the same hand-off.
  *
