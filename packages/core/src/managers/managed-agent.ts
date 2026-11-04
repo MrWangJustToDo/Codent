@@ -68,10 +68,25 @@ import {
 } from "../agent/extension/tool-before-hook.js";
 import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
 import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
+import { ModeFacet } from "../agent/mode/managed-agent-mode.js";
+import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
 import { type SessionData } from "../agent/persistence/types.js";
+import {
+  beginPlanExecution as beginPlanExecutionHelper,
+  cancelPlanExecution as cancelPlanExecutionHelper,
+  completePlan as completePlanHelper,
+  getPlanModeState as getPlanModeStateHelper,
+  listWorkspacePlans as listWorkspacePlansHelper,
+  loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
+  savePlanToWorkspace as savePlanToWorkspaceHelper,
+} from "../agent/plan/managed-agent-plan.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
+import { RunCoordinator } from "../agent/run/run-coordinator.js";
+import { SessionFacet } from "../agent/session/managed-agent-session-state.js";
 import { SessionLease } from "../agent/session/session-lease.js";
+import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
+import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";
 import { collectPendingInteractions } from "../agent/stream/tool-phase-utils.js";
 import { AgentStreamHub } from "../agent/stream-hub/agent-stream-hub.js";
 import {
@@ -104,33 +119,19 @@ import { copyModelMessages } from "../utils/model-messages.js";
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
-import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";
 import { CompactionController, type CompactionLease } from "./controllers/compaction-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import { ExtensionFacet } from "./managed-agent-extensions.js";
-import { ModeFacet } from "../agent/mode/managed-agent-mode.js";
 import { ModelFacet } from "./managed-agent-model.js";
-import {
-  beginPlanExecution as beginPlanExecutionHelper,
-  cancelPlanExecution as cancelPlanExecutionHelper,
-  completePlan as completePlanHelper,
-  getPlanModeState as getPlanModeStateHelper,
-  listWorkspacePlans as listWorkspacePlansHelper,
-  loadPlanFromWorkspace as loadPlanFromWorkspaceHelper,
-  savePlanToWorkspace as savePlanToWorkspaceHelper,
-} from "../agent/plan/managed-agent-plan.js";
 import {
   abortManagedAgentRun,
   finalizeManagedAgentRun,
   prepareManagedAgentForRun,
 } from "./managed-agent-run-lifecycle.js";
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
-import { SessionFacet } from "../agent/session/managed-agent-session-state.js";
 import { ToolFacet } from "./managed-agent-tools.js";
-import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
-import { RunCoordinator } from "../agent/run/run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
 import { AgentCommandService } from "./services/agent-command-service.js";
 import { AgentToolService } from "./services/agent-tool-service.js";
@@ -138,14 +139,12 @@ import { BackgroundWorkService, type BackgroundWorkChange } from "./services/bac
 import { CompactionService } from "./services/compaction-service.js";
 import { ExtensionRegistryService } from "./services/extension-registry-service.js";
 import { MemoryService } from "./services/memory-service.js";
-import { SessionLifecycleService, type SessionLifecycleReason } from "../agent/session/session-lifecycle-service.js";
 import { SessionService } from "./services/session-service.js";
 import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { AgentConfig } from "./agent-types.js";
-import type { SessionPersistence } from "../agent/session/session-persistence.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
@@ -176,6 +175,7 @@ import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
 import type { SessionStore } from "../agent/persistence/session-store.js";
 import type { BeginPlanExecutionResult, PlanModeState } from "../agent/plan/plan-mode-controller.js";
 import type { AgentRunner } from "../agent/runner/agent-runner.js";
+import type { SessionPersistence } from "../agent/session/session-persistence.js";
 import type { SkillRegistry, SkillsExtensionConfig } from "../agent/skills";
 import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";
 import type { TodoManager } from "../agent/todo";

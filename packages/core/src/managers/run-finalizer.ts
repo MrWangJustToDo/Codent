@@ -9,14 +9,13 @@
  * to a microtask). This class owns it so a new caller cannot reorder it by accident.
  */
 
+import { deriveRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
 import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
 
-import { deriveRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
-
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
+import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { AgentState } from "../runtime-types/agent-state.js";
 import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
-import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";

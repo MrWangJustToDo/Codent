@@ -1,4 +1,5 @@
 import { createLogExtension, type LogExtension } from "../agent/log/extension.js";
+import { SessionOwnership } from "../agent/session/session-ownership.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 import { AGENT_DATA_DIR } from "../utils/workspace-paths.js";
 
@@ -8,7 +9,6 @@ import { AgentRegistry } from "./agent-registry.js";
 import { LifecycleCoordinator } from "./lifecycle-coordinator.js";
 import { runManagedAgent, runManagedAgentStream, type RunAgentStreamInput } from "./run-agent.js";
 import { emitSessionBootstrapEvents } from "./session-bootstrap-events.js";
-import { SessionOwnership } from "../agent/session/session-ownership.js";
 
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";

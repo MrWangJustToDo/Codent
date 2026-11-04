@@ -8,16 +8,17 @@
  * `ToolAuthorizationService` (the ordered pipeline), not this class.
  */
 
-import { ToolAuthorizationService } from "./tool-authorization.js";
 import { collectPendingApprovals } from "../stream/tool-phase-utils.js";
+
+import { ToolAuthorizationService } from "./tool-authorization.js";
 
 import type { ApprovalRequirement } from "./approval-requirement.js";
 import type { UpsertToolApprovalInput } from "./tool-approval-table.js";
 import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "./tool-authorization.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { AgentPolicyFacts } from "../mode/policy-facts.js";
 import type { ToolApprovalRecord } from "../persistence/types.js";
 import type { CommandApprovalDecision } from "../tools/builtin/shell/safety/command-approval-policy.js";
-import type { ResolvedCoreEnv } from "../../env";
 import type { UIMessage } from "@tanstack/ai";
 
 export type { RunCommandApprovalInput } from "./tool-authorization.js";

@@ -1,10 +1,8 @@
 import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
 
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { CompactionController } from "./controllers/compaction-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
-import type { RunCoordinator } from "../agent/run/run-coordinator.js";
 import type { SessionService } from "./services/session-service.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
@@ -19,6 +17,8 @@ import type { AgentCommandService } from "./services/agent-command-service.js";
 import type { BackgroundWorkService } from "./services/background-work-service.js";
 import type { ToolBeforeHookLedger } from "../agent/extension/tool-before-hook.js";
 import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
+import type { RunCoordinator } from "../agent/run/run-coordinator.js";
+import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { ToolPresentation } from "../agent/tools/presentation/types.js";
 import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import type { AgentUIChannel } from "../agent/ui/ui-channel.js";

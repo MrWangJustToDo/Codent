@@ -13,7 +13,7 @@ import { errorMessage } from "../../utils/errors.js";
 import type { SessionStore } from "../../agent/persistence/session-store.js";
 import type { SessionData } from "../../agent/persistence/types.js";
 import type { TodoManager } from "../../agent/todo";
-import type { ModelStyle, ReasoningEffort } from "../../models/types.js";
+import type { ModelStyle } from "../../models/types.js";
 import type { SessionPersistInput } from "../../runtime-types/session-host.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";

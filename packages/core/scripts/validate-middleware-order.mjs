@@ -41,6 +41,8 @@ import {
   registerCoreEnv,
 } from "../dist/dev.mjs";
 
+import { fakeModeState, fakePolicyFacts } from "./helpers/mode-state.mjs";
+
 registerCoreEnv({
   rootPath: "/tmp",
   fs: {},
@@ -72,7 +74,6 @@ function makeStub() {
   return stub;
 }
 
-import { fakeModeState, fakePolicyFacts } from "./helpers/mode-state.mjs";
 const FACTORIES = [
   createStatusMiddleware,
   createApprovalResumeMiddleware,

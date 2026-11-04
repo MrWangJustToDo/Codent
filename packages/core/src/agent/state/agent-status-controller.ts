@@ -7,14 +7,15 @@
  * {@link ManagedAgent}.
  */
 
+import { deriveAgentState, projectAgentStatus, transition } from "../../runtime-types/agent-state.js";
+import { isActiveStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
 import {
   countPendingToolApprovals,
   firstPendingInteraction,
   needsAgentResponseAfterTools,
   needsToolPhaseContinue,
 } from "../stream/tool-phase-utils.js";
-import { deriveAgentState, projectAgentStatus, transition } from "../../runtime-types/agent-state.js";
-import { isActiveStatus, isTerminalStatus } from "../../runtime-types/agent-status.js";
+
 import {
   whenClearForReconcilePolicy,
   type AgentRunOutcome,
@@ -22,17 +23,12 @@ import {
   type WhenClearStatus,
 } from "./agent-run-outcome.js";
 
+import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
-import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { StreamChunk, ToolPhaseCompleteInfo, UIMessage } from "@tanstack/ai";
 
-export type {
-  AgentRunOutcome,
-  AgentRunOutcomeKind,
-  AgentRunPath,
-  StatusReconcilePolicy,
-} from "./agent-run-outcome.js";
+export type { AgentRunOutcome, AgentRunOutcomeKind, AgentRunPath, StatusReconcilePolicy } from "./agent-run-outcome.js";
 
 // ============================================================================
 // Types

@@ -60,9 +60,9 @@ import { CONTINUATION_PROMPT } from "../stream-recovery/max-tokens-continue.js";
 
 import { defineMiddleware } from "./phase.js";
 
+import type { RunCoordinator } from "../../agent/run/run-coordinator.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
-import type { RunCoordinator } from "../../agent/run/run-coordinator.js";
 import type { ContentPart, ChatMiddleware, ModelMessage } from "@tanstack/ai";
 
 export interface WireRecoveryMiddlewareDeps {

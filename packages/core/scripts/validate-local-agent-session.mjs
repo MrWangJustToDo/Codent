@@ -21,6 +21,7 @@ import {
 } from "../dist/dev.mjs";
 import { AgentManager } from "../dist/index.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
 import { TEMP_RM_OPTIONS } from "./helpers/temp-cleanup.mjs";
 
 function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}) {
@@ -193,7 +194,6 @@ function createFake(id, parentId, { bus: busOverride, todoProvider = true } = {}
   return managed;
 }
 
-import { fakeModeState } from "./helpers/mode-state.mjs";
 const managed = createFake("agent_root");
 const session = createLocalAgentSession({ managed, manager: null });
 assert.equal(session.id, "agent_root");

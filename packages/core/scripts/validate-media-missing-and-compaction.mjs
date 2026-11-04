@@ -23,11 +23,12 @@ import {
   restoreManagedSession,
 } from "../dist/dev.mjs";
 
+import { fakeModeState } from "./helpers/mode-state.mjs";
+
 // ============================================================================
 // Mock CoreEnv (in-memory file system)
 // ============================================================================
 
-import { fakeModeState } from "./helpers/mode-state.mjs";
 const inMemoryFs = new Map();
 
 function setupMockEnv() {

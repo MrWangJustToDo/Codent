@@ -9,15 +9,11 @@
  */
 
 import { createModeState, type ModeState } from "./mode-state.js";
-import {
-  resolveAgentPolicyFacts,
-  type AgentPolicyFacts,
-  type AgentPolicyFactsInput,
-} from "./policy-facts.js";
+import { resolveAgentPolicyFacts, type AgentPolicyFacts, type AgentPolicyFactsInput } from "./policy-facts.js";
 
+import type { AgentMode } from "../../runtime-types/session-payloads.js";
 import type { AutoModeController } from "../approval/auto-mode-controller.js";
 import type { PlanModeController, PlanModeState } from "../plan/plan-mode-controller.js";
-import type { AgentMode } from "../../runtime-types/session-payloads.js";
 
 export interface ModeCoordinatorDeps {
   planMode: PlanModeController;

@@ -12,8 +12,8 @@ import { clearTaskRuns } from "../agent/subagent/subagent-runs.js";
 import { SUBAGENT_ABORT_REASONS } from "../agent/subagent/subagent-stop-reason.js";
 
 import type { AgentRegistry } from "./agent-registry.js";
-import type { SessionOwnership } from "../agent/session/session-ownership.js";
 import type { AgentLog } from "../agent/agent-log/agent-log.js";
+import type { SessionOwnership } from "../agent/session/session-ownership.js";
 
 export interface LifecycleCoordinatorDeps {
   registry: AgentRegistry;

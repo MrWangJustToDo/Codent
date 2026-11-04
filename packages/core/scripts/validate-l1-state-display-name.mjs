@@ -20,6 +20,7 @@ import {
 } from "../dist/dev.mjs";
 
 import { fakeModeState } from "./helpers/mode-state.mjs";
+
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function fakeUsage() {

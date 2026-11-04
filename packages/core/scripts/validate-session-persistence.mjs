@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { SessionPersistence } from "../dist/dev.mjs";
 
 import { fakeModeState } from "./helpers/mode-state.mjs";
+
 const messages = [{ id: "u1", role: "user", parts: [{ type: "text", content: "hello" }] }];
 const calls = [];
 let landed = true;
