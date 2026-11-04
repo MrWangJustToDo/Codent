@@ -108,6 +108,6 @@ Rollback is per wave: each wave is an independent merge with its own validator; 
 ## Open Questions
 
 - Should the three axes be exposed in `AgentSessionSnapshot` in P4, or kept internal until the state machine has run for one release? (Spec allows additive; default: expose behind the existing optional-field convention once `T9` is green.)
-- Where does `SessionRuntime` live — `agent/session/` or `managers/`? Design preference: `agent/session/`, so the dependency arrow points from managers into the domain, matching the target module map.
+- Where does `SessionRuntime` live — `agent/session/` or `managers/`? **Resolved for now: `managers/session-runtime.ts`.** Its ports name manager-owned collaborators (`RunCoordinator`, `SessionPersistence`, `ModeCoordinator`, the controllers), and the layer table allows `managers → agent`, not the reverse. Moving it to `agent/session/` requires first extracting those collaborators into `runtime-types` ports (task 7.7); the target module map still expects that end state.
 - Exact wire name/shape of the approval `source` field (`source` vs `decidedBy`): decide in `A8`, keep it optional and additive.
 - Do we keep `AgentStatus` indefinitely as the wire projection, or mark it derived/deprecated for hosts? Default: keep it; no host migration is required.
