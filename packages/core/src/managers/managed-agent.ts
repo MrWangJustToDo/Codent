@@ -54,6 +54,7 @@ import {
 
 import { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
+import { CompactionController, type CompactionLease } from "../agent/compaction/compaction-controller.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
 import { getModelVisibleMessages } from "../agent/compaction/message-chain-projection.js";
 import { ToolCompactCache } from "../agent/compaction/tool-compact/tool-compact-cache.js";
@@ -97,6 +98,7 @@ import {
 import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js";
 import { SUBAGENT_EXCLUDED_TOOL_NAMES } from "../agent/subagent/subagent-tool-sets.js";
 import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
+import { TurnContextController } from "../agent/turn-context/turn-context-controller.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
@@ -119,8 +121,6 @@ import { copyModelMessages } from "../utils/model-messages.js";
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
-import { CompactionController, type CompactionLease } from "./controllers/compaction-controller.js";
-import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import { ExtensionFacet } from "./managed-agent-extensions.js";

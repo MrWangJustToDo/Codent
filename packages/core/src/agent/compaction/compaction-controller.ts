@@ -28,9 +28,9 @@
 
 import { isTerminalStatus } from "../../runtime-types/agent-status.js";
 
+import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
 import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
-import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 
 export type CompactionKind = "auto" | "manual" | "reactive";
 

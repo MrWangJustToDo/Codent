@@ -1,3 +1,7 @@
+import {
+  buildSystemPromptWithTurnContext,
+  buildProjectInstructionsSection,
+} from "../../agent/turn-context/prompt-builder.js";
 import { captureSessionStaleness } from "../../agent/turn-context/session-staleness.js";
 import {
   injectSyntheticMessages,
@@ -9,7 +13,6 @@ import {
   formatContextSectionUserContent,
   isContextUIMessage,
 } from "../../agent/turn-context/turn-context-message.js";
-import { buildSystemPromptWithTurnContext, buildProjectInstructionsSection } from "../managed-agent-prompt.js";
 
 import { defineMiddleware } from "./phase.js";
 

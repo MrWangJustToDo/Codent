@@ -57,7 +57,7 @@ export {
   recordExtensionResult,
 } from "../managers/agent-bootstrap.js";
 export { AutoModeController } from "../agent/approval/auto-mode-controller.js";
-export { TurnContextController } from "../managers/controllers/turn-context-controller.js";
+export { TurnContextController } from "../agent/turn-context/turn-context-controller.js";
 export { abortManagedAgentRun, finalizeManagedAgentRun } from "../managers/managed-agent-run-lifecycle.js";
 export { AgentManager } from "../managers/agent-manager.js";
 export { buildManagedAgent } from "../managers/agent-factory.js";
@@ -97,7 +97,7 @@ export {
   buildTurnContextSections,
   buildProjectInstructionsSection,
   buildFrozenSystemPrompt,
-} from "../managers/managed-agent-prompt.js";
+} from "../agent/turn-context/prompt-builder.js";
 export { createPromptCacheMiddleware } from "../managers/middleware/prompt-cache-middleware.js";
 // Exported for `validate:middleware-order`, which drives the real pipeline assembly
 // instead of duplicating the factory list (see that script's section 1).
@@ -147,7 +147,7 @@ export {
   readTruncationProgress,
 } from "../managers/stream-recovery/max-tokens-continue.js";
 export { createAgentStatusController, AgentStatusController } from "../agent/state/agent-status-controller.js";
-export { CompactionController } from "../managers/controllers/compaction-controller.js";
+export { CompactionController } from "../agent/compaction/compaction-controller.js";
 // The `ManagedAgent` end of the reactive path (gates, retry budget, event pair, status
 // unwind). `validate:reactive-compact` drives this against a fake host, because the
 // helper-only coverage it had before could not see a broken gate or a stuck status.

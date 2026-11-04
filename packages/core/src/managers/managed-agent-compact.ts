@@ -14,8 +14,8 @@ import { estimateTokens } from "../agent/compaction/token-estimator.js";
 import { toError } from "../utils/errors.js";
 
 import type { AgentManager } from "./agent-manager.js";
+import type { CompactionController, CompactionLease } from "../agent/compaction/compaction-controller.js";
 import type { ResolvedCoreEnv } from "../env";
-import type { CompactionController, CompactionLease } from "./controllers/compaction-controller.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";

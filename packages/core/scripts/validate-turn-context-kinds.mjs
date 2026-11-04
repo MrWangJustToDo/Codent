@@ -291,7 +291,7 @@ for (const name of ["turn-context", "todo-reminder", "repeat-reminder", "backgro
 // inside a longer sentence (``the `<session_id>` block``) are fine — only a whole-string tag
 // literal is a second renderer.
 const SECTION_BUILDERS = [
-  "managers/managed-agent-prompt.ts",
+  "agent/turn-context/prompt-builder.ts",
   "agent/turn-context/instruction-context.ts",
   "agent/turn-context/session-retrieval.ts",
   "agent/turn-context/background-jobs.ts",

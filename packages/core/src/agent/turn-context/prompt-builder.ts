@@ -1,14 +1,15 @@
-import { TURN_CONTEXT_KINDS, formatSectionTag } from "../agent/turn-context/turn-context-message.js";
-import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "../models/cache/prompt-cache.js";
+import { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "../../models/cache/prompt-cache.js";
 
-import type { AgentConfig } from "./agent-types.js";
-import type { ExtensionTurnContextSection } from "../agent/extension/types.js";
-import type { TurnContextSection } from "../agent/turn-context/turn-context-message.js";
+import { TURN_CONTEXT_KINDS, formatSectionTag } from "./turn-context-message.js";
 
-export { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "../models/cache/prompt-cache.js";
+import type { TurnContextSection } from "./turn-context-message.js";
+import type { ExtensionTurnContextSection } from "../extension/types.js";
+
+export { SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "../../models/cache/prompt-cache.js";
 
 export interface SystemPromptInput {
-  config: AgentConfig;
+  /** Only `systemPrompt` is read; callers may pass the full agent config structurally. */
+  config: { systemPrompt?: string };
   agentDocContent: string;
 }
 

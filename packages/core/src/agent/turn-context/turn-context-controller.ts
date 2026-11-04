@@ -12,30 +12,30 @@
  * runner's cache (which reads turn context through `AgentRunDeps`) never captures a stale value.
  */
 
-import { buildAutoModePrompt } from "../../agent/approval/auto-mode-prompt.js";
-import { buildModeInactivePrompt, buildPlanModePrompt } from "../../agent/plan/plan-prompts.js";
-import { getCurrentDate, getGitInfo } from "../../agent/turn-context/env-context.js";
+import { errorMessage } from "../../utils/errors.js";
+import { buildAutoModePrompt } from "../approval/auto-mode-prompt.js";
+import { buildModeInactivePrompt, buildPlanModePrompt } from "../plan/plan-prompts.js";
+
+import { getCurrentDate, getGitInfo } from "./env-context.js";
 import {
   formatInstructionContextSection,
   instructionStateChanged,
   loadLatestInstructionContent,
   readInstructionContextState,
   type InstructionContextState,
-} from "../../agent/turn-context/instruction-context.js";
-import { formatSessionRetrievalSection, hasSessionHistory } from "../../agent/turn-context/session-retrieval.js";
-import { errorMessage } from "../../utils/errors.js";
-import { buildFrozenSystemPrompt, buildTurnContextSections } from "../managed-agent-prompt.js";
+} from "./instruction-context.js";
+import { buildFrozenSystemPrompt, buildTurnContextSections } from "./prompt-builder.js";
+import { formatSessionRetrievalSection, hasSessionHistory } from "./session-retrieval.js";
 
-import type { ExtensionRunner, ExtensionTurnContextSection } from "../../agent/extension";
-import type { ModeState } from "../../agent/mode/mode-state.js";
-import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";
+import type { ExtensionRunner, ExtensionTurnContextSection } from "../extension";
+import type { TurnContextSection } from "./turn-context-message.js";
 import type { ResolvedCoreEnv } from "../../env";
-import type { AgentConfig } from "../agent-types.js";
+import type { ModeState } from "../mode/mode-state.js";
 
 export interface TurnContextControllerOptions {
   /** Agent id passed to extension `before_agent_start` hooks. */
   agentId: string;
-  getConfig: () => AgentConfig;
+  getConfig: () => { systemPrompt?: string };
   getCoreEnv: () => ResolvedCoreEnv;
   getSessionId: () => string | undefined;
   /** Single mode read surface; the plan artifact and auto flag both come from it. */

@@ -55,7 +55,7 @@ const PATTERNS = [
         "agent/state/agent-status-controller.ts",
         "the current status owner (transition() with a legacy setStatus fallback)",
       ],
-      ["managers/controllers/compaction-controller.ts", "compaction restores the status through the controller"],
+      ["agent/compaction/compaction-controller.ts", "compaction restores the status through the controller"],
       ["managers/managed-agent.ts", "ManagedAgent forwards to the controller / session reset"],
       ["managers/managed-agent-run-lifecycle.ts", "run finalization applies the terminal status"],
     ]),
