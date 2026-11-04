@@ -112,6 +112,7 @@ import { CompactionController, type CompactionLease } from "./controllers/compac
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
+import { ModeFacet } from "./managed-agent-mode.js";
 import { ModelFacet } from "./managed-agent-model.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
@@ -610,6 +611,8 @@ export class ManagedAgent {
   readonly sessionPersistence: SessionPersistence;
   /** Session identity + tracker facet (persistence, setSessionData, placeholders). */
   private readonly sessionFacet: SessionFacet;
+  /** Plan/auto/approval-policy facet (owns the coordinator-facing view). */
+  private readonly modeFacet: ModeFacet;
   /** Session switch/reset transaction owner (stop producers, clear transient state). */
   readonly sessionLifecycle: SessionLifecycleService;
 
@@ -816,6 +819,7 @@ export class ManagedAgent {
       this.emitStateChange();
       this.persistSession();
     });
+    this.modeFacet = new ModeFacet({ getMode: () => this.mode, getModeState: () => this.getModeState() });
     this.mode = new ModeCoordinator({
       planMode: this.planMode,
       autoMode: this.autoMode,
@@ -2564,11 +2568,11 @@ export class ManagedAgent {
   }
 
   isAutoModeEnabled(): boolean {
-    return this.getModeState().snapshot().auto;
+    return this.modeFacet.autoEnabled();
   }
 
   setAutoModeEnabled(enabled: boolean): void {
-    this.mode.setAuto(enabled);
+    this.modeFacet.setAuto(enabled);
   }
 
   /**
@@ -2576,7 +2580,7 @@ export class ManagedAgent {
    * True when auto mode is on, or plan mode is building a seeded plan.
    */
   shouldAutoApprovePendingTools(): boolean {
-    return this.mode.shouldAutoApprove();
+    return this.modeFacet.shouldAutoApprove();
   }
 
   /**
@@ -2584,7 +2588,7 @@ export class ManagedAgent {
    * Plan mode takes priority over auto mode; normal is the fallback.
    */
   getAgentMode(): AgentMode {
-    return this.mode.getMode();
+    return this.modeFacet.getMode();
   }
 
   /**
@@ -2593,12 +2597,12 @@ export class ManagedAgent {
    * @returns the resulting mode
    */
   setAgentMode(mode: AgentMode): AgentMode {
-    return this.mode.setMode(mode);
+    return this.modeFacet.setMode(mode);
   }
 
   /** Cycle normal → auto → plan → normal. @returns the resulting mode */
   cycleAgentMode(): AgentMode {
-    return this.mode.cycle();
+    return this.modeFacet.cycle();
   }
 
   // ============================================================================
