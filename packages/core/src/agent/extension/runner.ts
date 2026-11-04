@@ -202,6 +202,9 @@ export interface ExtensionRunnerOptions {
 }
 
 export class ExtensionRunner {
+  /** Per-callback bound; a validation script may lower it (production keeps the default). */
+  private readonly callbackTimeoutMs: number;
+
   private extensions: ExtensionInstance[] = [];
   /**
    * Monotonic load sequence, assigned at `loadExtension`. The tie-break within an equal
@@ -287,6 +290,7 @@ export class ExtensionRunner {
 
   constructor(options: ExtensionRunnerOptions) {
     this.options = options;
+    this.callbackTimeoutMs = options.callbackTimeoutMs ?? EXTENSION_CALLBACK_TIMEOUT_MS;
     const bus = options.eventBus ?? createAgentEventBus();
     this.rawBus = bus;
     this.eventBus = new BusExtensionEventBus(bus);
@@ -721,7 +725,8 @@ export class ExtensionRunner {
     try {
       await withCallbackTimeout(
         Promise.resolve(instance.api.activate(context)),
-        `extension "${instance.api.id}" activate`
+        `extension "${instance.api.id}" activate`,
+        this.callbackTimeoutMs
       );
       // A teardown during activation (disable / destroyAll) revokes the lease; the activation must
       // not resurrect the instance afterwards.
@@ -842,7 +847,8 @@ export class ExtensionRunner {
     try {
       await withCallbackTimeout(
         Promise.resolve(flush(this.contexts.get(instance.api.id))),
-        `extension "${instance.api.id}" flush`
+        `extension "${instance.api.id}" flush`,
+        this.callbackTimeoutMs
       );
     } catch (err) {
       const error = toError(err);
@@ -865,7 +871,8 @@ export class ExtensionRunner {
     try {
       await withCallbackTimeout(
         Promise.resolve(instance.api.deactivate()),
-        `extension "${instance.api.id}" deactivate`
+        `extension "${instance.api.id}" deactivate`,
+        this.callbackTimeoutMs
       );
     } catch (err) {
       // Do not swallow: surface deactivation failures for observability.
