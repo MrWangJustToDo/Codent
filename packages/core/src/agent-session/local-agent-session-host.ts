@@ -109,6 +109,18 @@ function toManagedConfig(options: AgentSessionCreateOptions): ManagedAgentConfig
  * Returns `undefined` when a fresh session should be created. Best-effort: a
  * degraded/missing CoreEnv fs falls back to a fresh session.
  */
+interface BootstrapSessionTarget {
+  id: string;
+  /**
+   * Whether THIS call wrote the empty-session reservation.
+   *
+   * Only that reservation may be released when the create fails: an explicit `--resume`/continue
+   * target is never reserved here, and an empty session reserved by ANOTHER process must not have
+   * its claim cleared by a create that never owned it.
+   */
+  reserved: boolean;
+}
+
 async function resolveBootstrapSessionId(
   options: AgentSessionCreateOptions,
   env: ResolvedCoreEnv,
@@ -121,8 +133,8 @@ async function resolveBootstrapSessionId(
    * starting the fresh session the caller asked for. The reuse is for a session NOBODY is running.
    */
   isTaken: (sessionId: string) => boolean = () => false
-): Promise<string | undefined> {
-  if (options.resumeSessionId) return options.resumeSessionId;
+): Promise<BootstrapSessionTarget | undefined> {
+  if (options.resumeSessionId) return { id: options.resumeSessionId, reserved: false };
   try {
     const store = new SessionStore(env);
     if (options.continueSession) {
@@ -131,12 +143,12 @@ async function resolveBootstrapSessionId(
       // a candidate, or `create` would fail with "already active in another live session" instead
       // of starting the fresh session the caller asked for.
       if (!latest || isTaken(latest.id)) return undefined;
-      return latest.id;
+      return { id: latest.id, reserved: false };
     }
     const empty = await store.getLatestEmpty();
     if (!empty || isTaken(empty.id)) return undefined;
     await store.reserveSession(empty.id);
-    return empty.id;
+    return { id: empty.id, reserved: true };
   } catch {
     return undefined;
   }
@@ -154,9 +166,10 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // Resolve the reuse/resume target up front and pass it through as
     // `initialSessionId`, so the managed agent's session id (and thus the
     // session-scoped log sink) is correct before any bootstrap log entry.
-    const targetSessionId = await resolveBootstrapSessionId(options, this.storeEnv, (sessionId) =>
+    const target = await resolveBootstrapSessionId(options, this.storeEnv, (sessionId) =>
       this.manager.getAgents().some((agent) => agent.getSessionData?.()?.id === sessionId)
     );
+    const targetSessionId = target?.id;
     let managed: ManagedAgent | undefined;
     try {
       managed = await this.manager.createManagedAgent(
@@ -205,6 +218,13 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
         } catch {
           // Preserve the original construction error; teardown is best-effort.
         }
+      } else if (target?.reserved) {
+        // `createManagedAgent` itself failed, so nothing owns the id THIS call reserved while
+        // resolving an empty session for reuse. Without this the reservation sits for its 5-minute
+        // expiry and the session is visible in `/resume` but refuses to be reused. Gated on
+        // `reserved` (not merely an id): an explicit resume/continue target was never reserved here,
+        // and releasing it could clear another process's claim on the same empty session.
+        await new SessionStore(this.storeEnv).releaseReservation(target.id).catch(() => undefined);
       }
       throw error;
     }

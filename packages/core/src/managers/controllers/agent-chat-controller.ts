@@ -267,8 +267,10 @@ export class AgentChatController {
     // pump's queue logic nor desynchronized by its unwinding decrement.
     this.managed.run.invalidateCurrentRun();
     this.pumpDepth = 0;
-    // Immediately clear loading tool rows; stream teardown may still finalize later.
-    this.applyCancelledIncompleteTools(true);
+    // Immediately clear loading tool rows; stream teardown may still finalize later. A pending
+    // `ask_user` is preserved: it is a question addressed to the user, not work this abort owns,
+    // and cancelling it here would make the park below a no-op (and discard the question).
+    this.applyCancelledIncompleteTools(true, { preservePendingAskUser: true });
     // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
     // kept the part in `interactions.approvals` while the run was over: the next input was
     // admitted against a status that said `aborted`, then parked on the old question forever.
@@ -281,6 +283,12 @@ export class AgentChatController {
     this.persistMessages("pump-complete");
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
     this.managed.finalizeRun("aborted");
+    // An `ask_user` is a question addressed to the USER: abandoning the run does not answer or
+    // withdraw it, and cancelling it would discard both the question and the input. The turn is
+    // over, but the agent is still parked on the user — name that, or `sendMessage` is admitted
+    // against `aborted` and the next pump breaks on the pending question without ever calling the
+    // model (the dead-looking session this rule exists to prevent).
+    this.managed.statusController.parkOnPendingQuestion(this.channel.getMessages());
   }
 
   /** How steering messages are drained at each drain point. */
@@ -808,8 +816,9 @@ export class AgentChatController {
           hasError = true;
         }
         if (!token.isCurrent) {
-          // Stream may have finalized truncated tool args after Esc — cancel again.
-          this.applyCancelledIncompleteTools(true);
+          // Stream may have finalized truncated tool args after Esc — cancel again, but keep a
+          // pending `ask_user` answerable (same rule as `interruptCurrentRun`).
+          this.applyCancelledIncompleteTools(true, { preservePendingAskUser: true });
           this.persistMessages("pump-complete");
           return;
         }
@@ -990,7 +999,18 @@ export class AgentChatController {
         this.managed.statusController.onRunError(message);
       },
       onError: (message) => {
-        if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "aborted") return;
+        // `error` is the middleware's own verdict: `status-middleware.onError` runs first inside the
+        // engine and already called `onRunError` (status + `agent:stream-error`). Without this guard
+        // the rethrow path emitted a second identical "Stream error" row for one failure — the same
+        // dedupe `onEmpty` and `applyRunOutcome` already do.
+        if (
+          isStaleSession() ||
+          !token.isCurrent ||
+          this.managed.getStatus() === "aborted" ||
+          this.managed.getStatus() === "error"
+        ) {
+          return;
+        }
         // Surface stream failures in status + `agent:stream-error` (not silent Completed). The event
         // is the single record: its log rule writes the error row, so logging here duplicated it.
         this.managed.statusController.onRunError(message);
@@ -1021,7 +1041,10 @@ export class AgentChatController {
    * framework fallback that lets extension/MCP tools benefit automatically even
    * if their execute never resolved before the run was torn down.
    */
-  private applyCancelledIncompleteTools(includeInFlight = false): void {
+  private applyCancelledIncompleteTools(
+    includeInFlight = false,
+    options: { preservePendingAskUser?: boolean } = {}
+  ): void {
     const current = this.channel.getMessages();
     const hasCancellable =
       hasCancellableIncompleteToolCalls(current) || (includeInFlight && hasInFlightToolCalls(current));
@@ -1029,6 +1052,7 @@ export class AgentChatController {
     const cancelled = settleToolCalls(current, {
       reason: TOOL_CANCELLED_MESSAGE,
       includeInFlight,
+      ...(options.preservePendingAskUser ? { preservePendingAskUser: true } : {}),
     });
     const cleaned = stripEmptyAssistantShells(cancelled);
     this.channel.setMessages(cleaned);

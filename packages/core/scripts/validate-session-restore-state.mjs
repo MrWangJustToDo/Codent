@@ -333,5 +333,60 @@ let sessionId;
   assert.equal(managed3.isAutoModeEnabled(), false, "resumed agent is not in auto mode (mutually exclusive)");
 }
 
+// ============================================================================
+// 4. Read-side repairs are WRITTEN back
+//
+// A session killed while a background job ran persists a `running` handle. Restore settles it in
+// memory, and `tracker.reset(repaired)` then treats that array as already persisted — so without a
+// second write the file keeps the handle, and `session_read` / another process reports a job that
+// cannot exist. The repaired transcript must reach disk even with no new message.
+// ============================================================================
+{
+  const manager = new AgentManager();
+  const host = createLocalAgentSessionHost({ manager });
+  const created = await host.create({ name: "repair-persist", model: "default-model", modelStyle: "openai" });
+  const managed = manager.getAgent(created.session.getSnapshot().agentId);
+  const id = managed.getSessionData().id;
+  const store = managed.getSessionStore();
+
+  const interruptedJobPart = {
+    type: "tool-call",
+    id: "call_bg",
+    name: "run_command",
+    arguments: '{"command":"sleep 100","run_in_background":true}',
+    state: "input-complete",
+    output: {
+      command: "sleep 100",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      durationMs: 0,
+      success: false,
+      status: "running",
+      runInBackground: true,
+      jobId: "job_interrupted",
+      cachedOutputPath: null,
+    },
+  };
+  const data = managed.getSessionData();
+  data.uiMessages = [
+    userMessage("bg-u1", "start it"),
+    { id: "bg-a1", role: "assistant", parts: [interruptedJobPart], createdAt: 2 },
+  ];
+  await store.save(data);
+  manager.releaseSessionOwnership(id, managed.id);
+
+  const manager2 = new AgentManager();
+  const host2 = createLocalAgentSessionHost({ manager: manager2 });
+  await host2.create({ name: "repair-resume", model: "default-model", modelStyle: "openai", resumeSessionId: id });
+
+  const persisted = await new SessionStore().load(id);
+  const persistedPart = persisted.uiMessages
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === "tool-call" && part.id === "call_bg");
+  assert.notEqual(persistedPart?.output?.status, "running", "the repaired background handle is on disk");
+  assert.equal(persistedPart?.output?.status, "killed", "…settled as killed, the same status the job record uses");
+}
+
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 console.log("session-restore-state validation passed");

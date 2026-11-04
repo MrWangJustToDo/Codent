@@ -174,6 +174,9 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
       // Read live, so a `/new` or `/resume` that lands while the query is in flight stops the
       // result from being booked to the session that did not spend it.
       getSessionId: () => host.getSessionData()?.id,
+      // The turn's persist already ran (above); extraction books its own spend afterwards, so the
+      // session needs one more state-only write once the queries settle.
+      persist: () => host.persistSession(),
       resolveTextAdapter: host.resolveTextAdapter,
       // Best-effort pass-through of the run's controller. Note the limit: this
       // runs from `finalize`, which only happens once the turn has settled (and

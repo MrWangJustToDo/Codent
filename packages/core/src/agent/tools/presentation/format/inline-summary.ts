@@ -59,9 +59,12 @@ export function getInlineSummary(part: ToolCallPart, toolName: string): string |
       return count !== undefined ? `${count} entries` : null;
     }
     case BUILTIN_TOOL_NAMES.grep: {
-      const matches = output.matches as unknown[] | undefined;
+      const matches = output.matches as Array<{ kind?: string }> | undefined;
       if (!matches) return null;
-      return matches.length === 0 ? "no matches" : `${matches.length} match${matches.length !== 1 ? "es" : ""}`;
+      // Context rows are display-only; counting them made a single hit with `context: 3` read as
+      // "7 matches" (and disagreed with the model-facing projection, which filters them).
+      const hits = matches.filter((match) => match.kind !== "context").length;
+      return hits === 0 ? "no matches" : `${hits} match${hits !== 1 ? "es" : ""}`;
     }
     case BUILTIN_TOOL_NAMES.glob: {
       const files = output.files as string[] | undefined;

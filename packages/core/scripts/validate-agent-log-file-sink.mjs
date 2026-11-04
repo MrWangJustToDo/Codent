@@ -471,4 +471,48 @@ await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
   console.log("AGENT_LOG_LEVEL filters the pending bootstrap buffer OK");
 }
 
+// ----------------------------------------------------------------------------
+// 5. `error.stack` is bounded at the same seam as the message
+//
+// V8 prefixes `stack` with `${name}: ${message}`, so an unbounded stack re-published a provider
+// body the message bound had just truncated — one MB-scale JSONL line after a 4xx.
+// ----------------------------------------------------------------------------
+{
+  // Own temp root: `rootPath` is removed by an earlier block, and the sink resolves its file
+  // through CoreEnv, which the previous block also cleared in its `finally`.
+  const stackRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "agent-log-stack-bound-"));
+  registerCoreEnv(createEnv(stackRoot, { withAppendFile: true }));
+  try {
+    const stackDir = path.join(stackRoot, ".agents/logs/ses_stack");
+    const stackLog = new AgentLog();
+    const detachStack = stackLog.attachFileSink({
+      dir: stackDir,
+      filename: "agent.log",
+      flushIntervalMs: 10,
+    });
+    const huge = new Error("x".repeat(8_000));
+    huge.stack = `${huge.name}: ${huge.message}\n${"    at frame\n".repeat(5_000)}`;
+    stackLog.error("agent", "huge-error", huge);
+
+    const file = path.join(stackDir, "agent.log");
+    const raw = await waitFor(
+      async () => {
+        try {
+          return (await fs.promises.readFile(file, "utf-8")).trim();
+        } catch {
+          return "";
+        }
+      },
+      (text) => text.includes("huge-error")
+    );
+    const entry = JSON.parse(raw.split("\n").filter(Boolean).at(-1));
+    assert.ok(entry.error.message.length <= 400, "error message bounded at the seam");
+    assert.ok(entry.error.stack.length <= 2_000, "error stack bounded at the seam");
+    detachStack();
+  } finally {
+    await fs.promises.rm(stackRoot, TEMP_RM_OPTIONS);
+    clearCoreEnv();
+  }
+}
+
 console.log("agent-log-file-sink validation passed");

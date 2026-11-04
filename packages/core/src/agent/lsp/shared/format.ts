@@ -28,17 +28,17 @@ function uriToPath(uri: string): string {
 /** Convert a file URI to a filesystem path (relative to rootDir when possible). */
 export function fileUriToPath(uri: string, rootDir: string): string {
   const abs = uriToPath(uri);
-  try {
-    // Compare on normalized separators and without a trailing separator, so a `C:\repo` root
-    // matches `C:/repo/f.ts` and `/repo/` matches `/repo/f.ts`.
-    const normalizedRoot = toPosixPathKey(rootDir);
-    const normalizedAbs = toPosixPath(abs);
-    if (normalizedAbs === normalizedRoot) return ".";
-    if (normalizedAbs.startsWith(`${normalizedRoot}/`)) {
-      return normalizedAbs.slice(normalizedRoot.length + 1);
-    }
-  } catch {
-    // fall through
+  // Compare on normalized separators and without a trailing separator, so a `C:\repo` root
+  // matches `C:/repo/f.ts` and `/repo/` matches `/repo/f.ts`.
+  //
+  // No guard: both helpers are pure `String.prototype.replace`/concatenation over strings this
+  // signature guarantees (`uriToPath` always returns a string), so there is no failure to fall
+  // through from — the old empty catch was unreachable.
+  const normalizedRoot = toPosixPathKey(rootDir);
+  const normalizedAbs = toPosixPath(abs);
+  if (normalizedAbs === normalizedRoot) return ".";
+  if (normalizedAbs.startsWith(`${normalizedRoot}/`)) {
+    return normalizedAbs.slice(normalizedRoot.length + 1);
   }
   return abs;
 }

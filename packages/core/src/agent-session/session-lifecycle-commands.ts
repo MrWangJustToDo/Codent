@@ -23,6 +23,9 @@ export async function generateAndApplySessionTitle(
   if (!session || !store) {
     return { ok: false, error: "No active session" };
   }
+  // The side query below is an await; a `/new` or `/resume` during it replaces the live session.
+  // The spend belongs to the session that asked (the same guard the display-name write uses).
+  const sessionIdAtStart = session.id;
 
   const textAdapter = await resolveTextAdapterForManaged(managed);
   if (!textAdapter) {
@@ -53,7 +56,9 @@ export async function generateAndApplySessionTitle(
         managed.emitEvent(type, payload);
       },
     });
-    if (usage) {
+    // Booked only while the asking session is still live: `managed.usage` is the tracker of
+    // whatever session is current, so an unguarded add charged this title to the next session.
+    if (usage && managed.getSessionData()?.id === sessionIdAtStart) {
       managed.usage.addTotal(usage);
     }
     const generated = text.trim().slice(0, 80);

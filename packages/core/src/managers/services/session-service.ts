@@ -218,7 +218,16 @@ export class SessionService {
 
   private async generateSessionTitle(
     userMessage: string,
-    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent">
+    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent"> & {
+      /**
+       * Whether the session that asked for the title is still the live one.
+       *
+       * The side query is an await: a `/new` or `/resume` during it replaces the tracker, and
+       * `usage.addTotal` (like the name write) must not land on the target. Checked here rather
+       * than only in the caller's `.then` because the usage is booked before the promise resolves.
+       */
+      stillOnSession?: () => boolean;
+    }
   ): Promise<string> {
     const { usage, resolveTextAdapter, emitSessionTitle, emitEvent } = input;
     // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
@@ -245,7 +254,10 @@ export class SessionService {
         },
       });
 
-      if (queryUsage) {
+      // Book the spend to the session that asked. The tracker on `input` belongs to whatever
+      // session is live NOW, so an unguarded add moved this conversation's title cost onto a
+      // session the user had just switched to (and left the source record short).
+      if (queryUsage && (input.stillOnSession?.() ?? true)) {
         usage.addTotal(queryUsage);
       }
 
@@ -518,6 +530,7 @@ export class SessionService {
         this.generateSessionTitle(firstUserText, {
           usage,
           resolveTextAdapter,
+          stillOnSession: () => this.data === target,
           ...(emitSessionTitle ? { emitSessionTitle } : {}),
           ...(emitEvent ? { emitEvent } : {}),
         }).then((title) => {
@@ -611,6 +624,31 @@ export class SessionService {
     await this.store.save(session);
 
     return { session, uiMessages: hydrated };
+  }
+
+  /**
+   * Persist a restored session again after read-side repairs.
+   *
+   * `readSessionForRestore` writes the canonical form before anyone adopts it, but the interrupted
+   * run handles (`task`, background `run_command`) and the half-open tool calls are repaired from
+   * the hydrated messages AFTER that write. Without this second write the repaired transcript only
+   * exists in memory: `tracker.reset(uiMessages)` is given the repaired array, so the sync tracker
+   * believes it is already on disk and every later `maybeSaveSessionUIMessages` is a no-op — the
+   * file keeps a `running` handle that `session_read` / another process / a downgraded reader still
+   * reports, while the UI (correctly) shows it settled.
+   *
+   * Only called when a repair actually changed the transcript (the repair helpers are copy-on-write).
+   */
+  async saveRestoredMessages(session: SessionData, uiMessages: UIMessage[]): Promise<void> {
+    if (!this.store) return;
+    try {
+      session.uiMessages = await dehydrateUIMessages(uiMessages, { env: this.store.getEnv() });
+    } catch {
+      // Canonicalize is best-effort here too: the repaired in-memory form is still what the agent
+      // adopts, and the next real save will canonicalize from the same arrays.
+      return;
+    }
+    await this.store.save(session);
   }
 
   /**

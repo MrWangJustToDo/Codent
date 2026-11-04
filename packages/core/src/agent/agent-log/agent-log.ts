@@ -1,7 +1,7 @@
 import { createSequentialIdGenerator } from "../../utils/generate-id.js";
 import { truncateText } from "../../utils/text-truncation.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
-import { MAX_LOG_MESSAGE_CHARS } from "../log/payload.js";
+import { MAX_LOG_MESSAGE_CHARS, MAX_LOG_STACK_CHARS } from "../log/payload.js";
 
 import { configuredLogLevel } from "./log-level-env.js";
 
@@ -179,7 +179,9 @@ export class AgentLog {
         // wrote the provider's raw body here unmodified, so one failed summary produced a
         // multi-megabyte JSONL line on those paths.
         message: truncateText(options.error.message, MAX_LOG_MESSAGE_CHARS),
-        stack: options.error.stack,
+        // Bounded too: the stack starts with `${name}: ${message}`, so leaving it raw undid the
+        // message bound (a provider body in the message became one MB-scale line again).
+        stack: options.error.stack === undefined ? undefined : truncateText(options.error.stack, MAX_LOG_STACK_CHARS),
       };
     }
 

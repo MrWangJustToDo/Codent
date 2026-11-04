@@ -57,6 +57,7 @@ export type AgentStatusTrigger =
   | "before-tool-call"
   | "client-tool-wait"
   | "client-tool-resume"
+  | "pending-question"
   | "reconcile"
   | "reconcile-after-run"
   | "apply-outcome"

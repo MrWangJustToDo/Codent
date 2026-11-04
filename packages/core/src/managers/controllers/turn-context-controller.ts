@@ -60,6 +60,27 @@ export class TurnContextController {
   private systemPromptFrozen = false;
   /** Pending per-extension turn-context sections collected in prepareForRun (before injection). */
   private pendingExtensionTurnContextSections: ExtensionTurnContextSection[] | undefined;
+  /**
+   * Extensions disabled WHILE {@link collectExtensionPromptHooks} is awaiting its interceptors.
+   *
+   * The collection is async (every `before_agent_start` handler is awaited) and it writes the
+   * snapshot in one assignment at the end. A disable that lands mid-flight called
+   * `clearExtensionSections` on an `undefined` snapshot and returned, so the assignment then
+   * re-admitted the just-disabled extension's section for the whole turn — the exact "section says
+   * the tool exists" bug the clear path exists to prevent, plus a lost disabled notice.
+   */
+  private collectingExtensionSections = false;
+  private disabledDuringCollection = new Map<string, string | undefined>();
+  /**
+   * Which collection owns the two fields above.
+   *
+   * A pump can be interrupted between "prepare started" and "hooks returned" (Esc resets
+   * `pumpDepth` immediately), so a second `prepareForRun` can start while the first is still
+   * awaiting its hooks. Without an owner, the first one's `finally` clears the second's flags and
+   * its late assignment overwrites the newer snapshot. Bumped by every collection and by
+   * `clearTurnContext`, so only the newest generation may write.
+   */
+  private collectionEpoch = 0;
   /** Last-seen instruction file digest snapshot (for instruction change detection). */
   private instructionContextState: InstructionContextState | undefined;
   /** Once an instruction change is detected, keep re-injecting (stable payload). */
@@ -123,13 +144,37 @@ export class TurnContextController {
     const runner = this.options.getExtensionRunner();
     if (!runner) return;
 
-    const collected = await runner.collectBeforeAgentStart(prompt, this.options.agentId);
-    this.pendingExtensionTurnContextSections = collected.turnContextSections;
+    const epoch = ++this.collectionEpoch;
+    this.collectingExtensionSections = true;
+    this.disabledDuringCollection.clear();
+    let sections: ExtensionTurnContextSection[] | undefined;
+    try {
+      const collected = await runner.collectBeforeAgentStart(prompt, this.options.agentId);
+      let next = collected.turnContextSections ?? [];
+      // Re-apply the disables that raced the await, in the same shape `clearExtensionSections`
+      // would have produced had the snapshot existed when they arrived.
+      for (const [extensionId, notice] of this.disabledDuringCollection) {
+        next = stripExtensionSections(next, extensionId, notice);
+      }
+      sections = next.length > 0 ? next : undefined;
+    } finally {
+      // A superseded collection owns neither the flags nor the snapshot: clearing them here would
+      // disarm the NEWER collection (see `collectionEpoch`).
+      if (epoch === this.collectionEpoch) {
+        this.collectingExtensionSections = false;
+        this.disabledDuringCollection.clear();
+        // Assigned even on a throw so a failed collection cannot leave the PREVIOUS turn's
+        // sections attached to this one.
+        this.pendingExtensionTurnContextSections = sections;
+      }
+    }
 
-    this.options.onPromptBefore({
-      prompt,
-      hasTurnContext: Boolean(collected.turnContextSections?.length),
-    });
+    if (epoch === this.collectionEpoch) {
+      this.options.onPromptBefore({
+        prompt,
+        hasTurnContext: Boolean(sections?.length),
+      });
+    }
   }
 
   /**
@@ -141,18 +186,23 @@ export class TurnContextController {
    * reaches the next call through the same snapshot.
    */
   clearExtensionSections(extensionId: string, notice?: string): void {
+    // A disable during the async collection has no snapshot to edit yet: remember it and let the
+    // collection apply it after the await (otherwise the assignment would re-admit the section).
+    if (this.collectingExtensionSections) {
+      this.disabledDuringCollection.set(extensionId, notice);
+      return;
+    }
     const sections = this.pendingExtensionTurnContextSections;
     if (!sections) return;
-    const prefix = `ext:${extensionId}`;
-    const remaining = sections.filter((section) => section.id !== prefix && !section.id.startsWith(`${prefix}:`));
-    const body = notice?.trim();
-    // The notice comes from the same disable that removed the section, so the SAME turn can tell
-    // the model why its tool just vanished. Waiting for the next user turn left it calling a tool
-    // that no longer exists.
-    this.pendingExtensionTurnContextSections = body ? [...remaining, { id: prefix, content: body }] : remaining;
+    this.pendingExtensionTurnContextSections = stripExtensionSections(sections, extensionId, notice);
   }
 
   clearTurnContext(): void {
+    // Invalidate an in-flight collection too: its result belongs to the turn that just ended, and
+    // assigning it afterwards would re-attach that turn's sections to the next one.
+    this.collectionEpoch += 1;
+    this.collectingExtensionSections = false;
+    this.disabledDuringCollection.clear();
     this.pendingExtensionTurnContextSections = undefined;
     // NOTE: instructionContextState / instructionContextActive intentionally NOT
     // reset here — they must survive across user turns (clearTurnContext runs at every
@@ -256,4 +306,21 @@ export class TurnContextController {
       return undefined;
     }
   }
+}
+
+/**
+ * Remove one extension's section(s) — the base `ext:<id>` and its named `ext:<id>:<name>`
+ * variants — from a collected snapshot, replacing them with the disabled notice when one was
+ * produced. Shared by the immediate clear and the during-collection path so both yield the same
+ * snapshot.
+ */
+function stripExtensionSections(
+  sections: ExtensionTurnContextSection[],
+  extensionId: string,
+  notice?: string
+): ExtensionTurnContextSection[] {
+  const prefix = `ext:${extensionId}`;
+  const remaining = sections.filter((section) => section.id !== prefix && !section.id.startsWith(`${prefix}:`));
+  const body = notice?.trim();
+  return body ? [...remaining, { id: prefix, content: body }] : remaining;
 }

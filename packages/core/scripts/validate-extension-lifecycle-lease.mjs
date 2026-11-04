@@ -117,6 +117,47 @@ const toolDef = (name) => ({
 }
 
 // ============================================================================
+// 1b. The lease is revoked BEFORE the (slow) deactivate runs
+//
+// `deactivate()` can await real work (the LSP extension shuts every server down). Removing tools
+// and interceptors only after it returned meant a disabled extension kept running tools and
+// rewriting the wire for the whole teardown; a message transformer has no per-call lease check of
+// its own, so this ordering is the only thing that stops it.
+// ============================================================================
+{
+  const { runner, tools } = makeRunner();
+  let captured;
+  let releaseDeactivate;
+  const deactivateGate = new Promise((resolve) => {
+    releaseDeactivate = resolve;
+  });
+  await runner.loadExtension({
+    id: "slow-off",
+    name: "slow-off",
+    activate(ctx) {
+      captured = ctx;
+      ctx.registerTool(toolDef("slow-off-tool"));
+    },
+    async deactivate() {
+      await deactivateGate;
+    },
+  });
+  assert.notEqual(runner.contextFor("slow-off"), undefined, "the active extension has a live lease");
+
+  const disabling = runner.setEnabled("slow-off", false);
+  await tick();
+  assert.equal(runner.contextFor("slow-off"), undefined, "the lease is gone while deactivate is still awaiting");
+
+  // A retained callback firing in that window must be refused, not land a tool on a disabled ext.
+  captured.registerTool(toolDef("slow-off-late"));
+  assert.equal(tools.has("slow-off-late"), false, "a release-time registration is refused");
+
+  releaseDeactivate();
+  assert.equal((await disabling).ok, true, "the disable completes");
+  assert.equal(runner.contextFor("slow-off"), undefined, "and the lease stays revoked");
+}
+
+// ============================================================================
 // 2. Disabling during activation revokes it, then the activation lands inactive
 // ============================================================================
 {

@@ -202,24 +202,27 @@ function formatGlobOutput(output: GlobOutput): string {
 }
 
 function formatGrepOutput(output: GrepOutput): string {
-  const { matches } = output;
+  // Context rows surround a hit; they are not hits. Counting them reported "7 matches" for one hit
+  // with `context: 3`, and the model-facing projection already filters `kind !== "context"`, so the
+  // two readers disagreed about the same result.
+  const hits = (output.matches ?? []).filter((match) => match.kind !== "context");
   // See {@link formatGlobOutput}: a cancelled search reports a cancel, and only when it has nothing
   // to show — a stopped `grep` certainly is not a `grep` that found nothing.
-  if (output.cancelled === true && (!matches || matches.length === 0)) return TOOL_CANCELLED_MESSAGE;
-  if (!matches || matches.length === 0) return "No matches found";
+  if (output.cancelled === true && hits.length === 0) return TOOL_CANCELLED_MESSAGE;
+  if (hits.length === 0) return "No matches found";
 
   const maxShow = 5;
-  const shown = matches.slice(0, maxShow);
+  const shown = hits.slice(0, maxShow);
   const lines = shown.map((match) => {
     const line = Number.isFinite(match.lineNumber) && match.lineNumber > 0 ? match.lineNumber : "?";
     return `  ${match.file}:${line}`;
   });
 
-  if (matches.length > maxShow) {
-    lines.push(`  ... and ${matches.length - maxShow} more matches`);
+  if (hits.length > maxShow) {
+    lines.push(`  ... and ${hits.length - maxShow} more matches`);
   }
 
-  return `${matches.length} matches:\n${lines.join("\n")}`;
+  return `${hits.length} matches:\n${lines.join("\n")}`;
 }
 
 function formatTodoOutput(output: TodoOutput): string {

@@ -227,8 +227,14 @@ export const createTreeTool = () => {
         // error outside POSIX shells (cmd.exe uses `2>nul`, PowerShell uses neither form).
         const treeArgs: string[] = [rootPath, "-L", String(depth)];
 
-        if (!showHidden) {
-          treeArgs.push("-I", ".*");
+        // ONE `-I`: it is a single-pattern option, so a second occurrence replaced the first — with
+        // a user `ignore` present, `showHidden: false` silently stopped filtering hidden files
+        // (while the JS fallback applied both, so the two engines disagreed).
+        const ignorePatterns: string[] = [];
+        if (!showHidden) ignorePatterns.push(".*");
+        if (ignore && ignore.length > 0) ignorePatterns.push(...ignore);
+        if (ignorePatterns.length > 0) {
+          treeArgs.push("-I", ignorePatterns.join("|"));
         }
 
         if (dirsOnly) {
@@ -237,10 +243,6 @@ export const createTreeTool = () => {
 
         if (pattern) {
           treeArgs.push("-P", pattern);
-        }
-
-        if (ignore && ignore.length > 0) {
-          treeArgs.push("-I", ignore.join("|"));
         }
 
         treeArgs.push("--noreport");

@@ -379,11 +379,11 @@ export async function autoCompact(
   // token-budget policy (always tokens — see keep-policy.ts).
   let contextWindow = options?.contextWindow;
   if (!contextWindow) {
-    try {
-      contextWindow = manager.getAgent(parentAgentId)?.getModelInfo()?.contextWindow ?? undefined;
-    } catch {
-      // Host without agent-registry access — fall back to the default-window derivation.
-    }
+    // `resolveCompactionAgent` is the ONE place that tolerates a manager whose `getAgent` throws
+    // (the no-op validation harness). An inline copy of that tolerance was a second definition of
+    // the same rule — and the real `AgentManager.getAgent` is a plain map read, so this path only
+    // exists for that port contract.
+    contextWindow = resolveCompactionAgent(manager, parentAgentId)?.getModelInfo()?.contextWindow;
   }
   const policy = resolveKeepPolicy(config, contextWindow);
   const cut = findCutPointByBudget(messages, policy.keepRecentTokens, hasPrevSummary ? 0 : -1);

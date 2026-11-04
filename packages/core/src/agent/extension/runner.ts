@@ -113,6 +113,15 @@ export interface ExtensionRunnerOptions {
    * extension's sections from the snapshot (not the whole snapshot: other extensions are live).
    */
   onExtensionDisabled?: (extensionId: string, notice: string) => void;
+  /**
+   * Called after a runtime enable succeeds.
+   *
+   * The mirror of {@link onExtensionDisabled}: a mid-turn disable put the disabled notice into the
+   * turn's collected snapshot, and re-enabling must take it back out — otherwise the rest of the
+   * turn keeps telling the model the extension is gone while its tools are live again. The
+   * extension's own section returns on the next prepared turn (it was dropped at disable).
+   */
+  onExtensionEnabled?: (extensionId: string) => void;
   cwd?: string;
   agentId?: string;
   /**
@@ -696,8 +705,19 @@ export class ExtensionRunner {
       const error = toError(err);
       if (instance.context === context) {
         // Release anything acquired before the throw (MCP clients, LSP servers) and roll back the
-        // artifacts, so a retry starts clean instead of stacking a second copy.
-        await this.teardownIncarnation(instance);
+        // artifacts, so a retry starts clean instead of stacking a second copy. Contained: a
+        // teardown failure (it reaches host callbacks and the extension's own `deactivate`) must
+        // not skip the state/error record below — that left the panel on "not enabled" with the
+        // real failure recorded nowhere, and the `finally` would still clear the activation marker.
+        try {
+          await this.teardownIncarnation(instance);
+        } catch (teardownError) {
+          this.emitExtensionEvent("agent:extension-error", {
+            extensionId: instance.api.id,
+            phase: "activate-teardown",
+            error: toError(teardownError).message,
+          });
+        }
         instance.state = "error";
         instance.error = error;
         // There is no section on a failed activation either, so without this the model sees the
@@ -733,16 +753,33 @@ export class ExtensionRunner {
    * Release one incarnation's resources and artifacts — the shared half of every teardown.
    *
    * Deliberately does NOT flush: `destroyExtension` (and the revoke branch, which flushes before it
-   * revokes the lease) owns that step, because flush must run while the context is still live. No
-   * `contexts.delete` here either: `unregisterInstanceArtifacts` deletes it identity-checked at the
-   * end, so a newer incarnation's lease is never removed by an older teardown.
+   * revokes the lease) owns that step, because flush must run while the context is still live.
+   *
+   * Ordering: revoke the lease → remove every dispatch surface → await `deactivate()`. All three
+   * steps have to happen before the await; the old order (deactivate first) left the extension
+   * fully callable for the duration of a slow shutdown (the LSP extension awaits `shutdownAll()`),
+   * and `wrapInterceptor` would have handed those still-registered handlers an `undefined` context
+   * once the lease was gone. `deactivate()` receives no context, and the arrays this step clears
+   * are the runner's bookkeeping, not the extension's — logging/coreEnv still work after a revoke.
    */
   private async teardownIncarnation(instance: ExtensionInstance): Promise<void> {
-    await this.deactivateExtension(instance);
-    this.unregisterInstanceArtifacts(instance);
-    // Clear any surface slots this extension rendered so they do not linger after the extension is
-    // disabled (e.g. a status line it published into the footer surface).
-    this.uiBridge.clearOwner(instance.api.id);
+    // Identity-checked so an older teardown cannot revoke a newer incarnation's lease.
+    if (this.contexts.get(instance.api.id) === instance.context) {
+      this.contexts.delete(instance.api.id);
+    }
+    try {
+      // Idempotent, identity-checked delete of the (already revoked) lease included.
+      this.unregisterInstanceArtifacts(instance);
+      // Clear any surface slots this extension rendered so they do not linger after the extension
+      // is disabled (e.g. a status line it published into the footer surface).
+      this.uiBridge.clearOwner(instance.api.id);
+    } finally {
+      // Slow resource release last; everything it could still observe as "registered" is already
+      // gone from the dispatch surfaces and the lease is revoked. `finally` because a throwing host
+      // callback during unregistration must not also skip the extension's own cleanup (LSP
+      // servers, timers) — the failure still propagates afterwards.
+      await this.deactivateExtension(instance);
+    }
     instance.state = "inactive";
   }
 
@@ -766,10 +803,10 @@ export class ExtensionRunner {
   }
 
   /**
-   * Release an extension's resources. Runs before artifact rollback/unregistration so a
-   * `deactivate()` can still use the registrations it owns, and is safe after a failed
-   * `activate()`. It may run twice for one incarnation (revoke during activation); the extension
-   * contract requires teardown to be idempotent.
+   * Release an extension's resources. Runs AFTER artifact unregistration and lease revocation (see
+   * `teardownIncarnation`), and is safe after a failed `activate()`. It may run twice for one
+   * incarnation (revoke during activation); the extension contract requires teardown to be
+   * idempotent. `deactivate()` receives no context, so it is not expected to register anything.
    */
   private async deactivateExtension(instance: ExtensionInstance): Promise<void> {
     if (!instance.api.deactivate) return;
@@ -787,15 +824,31 @@ export class ExtensionRunner {
   }
 
   async destroyAll(): Promise<void> {
+    // Per-instance isolation: `destroyExtension` catches its own phases, but unregistering the
+    // artifacts calls HOST callbacks (`onUnregisterTool` / `onUnregisterCommand` / UI bridge), and
+    // one throwing there used to abort the loop — leaving every later extension's LSP process,
+    // timer and listeners alive, and skipping the bookkeeping cleanup below.
     for (const instance of this.extensions) {
-      await this.destroyExtension(instance);
+      try {
+        await this.destroyExtension(instance);
+      } catch (err) {
+        const error = toError(err);
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: instance.api.id,
+          phase: "destroy",
+          error: error.message,
+        });
+      }
     }
-    this.extensions = [];
-    this.stacks.clear();
-    this.turnContextSections.clear();
-    this.messageTransformers.clearAll();
-    this.uiBridge.clearAll();
-    this.uiBridge.dispose();
+    try {
+      this.extensions = [];
+      this.stacks.clear();
+      this.turnContextSections.clear();
+      this.messageTransformers.clearAll();
+      this.uiBridge.clearAll();
+    } finally {
+      this.uiBridge.dispose();
+    }
   }
 
   /** Read-only snapshot of loaded extensions for management commands, in **dispatch order**. */
@@ -946,7 +999,12 @@ export class ExtensionRunner {
       // instance's bookkeeping, not the incarnation's.
       const context = this.createContext(instance.api, instance.config, instance.registrations);
       const outcome = await this.activateInstance(instance, context);
-      if (outcome.kind === "active") return { ok: true, message: `Extension "${id}" enabled` };
+      if (outcome.kind === "active") {
+        // Runtime enable only: the initial load has no prepared turn whose snapshot could hold a
+        // stale notice, so bootstrap does not need this call.
+        this.options.onExtensionEnabled?.(instance.api.id);
+        return { ok: true, message: `Extension "${id}" enabled` };
+      }
       if (outcome.kind === "revoked") {
         return { ok: false, message: `Extension "${id}" was disabled while activating` };
       }
@@ -979,7 +1037,22 @@ export class ExtensionRunner {
       if (body?.trim()) sectionNotices.push([section.name, body.trim()]);
     }
 
-    await this.destroyExtension(instance);
+    // Teardown revokes the lease before unregistering, so even a throwing host callback leaves the
+    // extension inert — but it used to skip the notice/notification entirely (and the state flip),
+    // leaving the panel and the model looking at a still-active extension. Record the transition
+    // either way and report the failure in the returned message.
+    let teardownError: unknown;
+    try {
+      await this.destroyExtension(instance);
+    } catch (error) {
+      teardownError = error;
+      instance.state = "inactive";
+      this.emitExtensionEvent("agent:extension-error", {
+        extensionId: instance.api.id,
+        phase: "teardown",
+        error: errorMessage(error),
+      });
+    }
     const notice =
       custom === undefined
         ? `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`
@@ -989,7 +1062,9 @@ export class ExtensionRunner {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
     this.options.onExtensionDisabled?.(instance.api.id, notice);
-    return { ok: true, message: `Extension "${id}" disabled` };
+    return teardownError === undefined
+      ? { ok: true, message: `Extension "${id}" disabled` }
+      : { ok: false, message: `Extension "${id}" disabled with errors: ${errorMessage(teardownError)}` };
   }
 
   /**

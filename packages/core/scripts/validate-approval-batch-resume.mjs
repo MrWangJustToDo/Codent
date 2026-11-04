@@ -297,6 +297,122 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
     /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true\)/,
     "the pump's catch path settles them too, but preserves a pending ask_user"
   );
+  // A preserved question must also be named in the status on the abort path (interruptCurrentRun
+  // finalizes directly and never reaches `applyRunOutcome`).
+  assert.match(
+    controllerSrc,
+    /this\.managed\.finalizeRun\("aborted"\);[\s\S]{0,900}parkOnPendingQuestion\(this\.channel\.getMessages\(\)\)/,
+    "the Esc path parks on a still-pending ask_user instead of reporting aborted"
+  );
+}
+
+// ============================================================================
+// 3c. A FAILED turn that still owes an `ask_user` is parked on the USER
+//
+// `ask_user` is a client tool: the server run cannot answer it, and the terminal paths deliberately
+// do not cancel it (that would lose the question and the input). The status therefore has to name
+// the wait. Left as `error`, the input queue admitted `sendMessage`, the next pump broke on the
+// pending interaction, and `deriveChatOutcome` re-derived `error` from the status it never left —
+// every later message was appended and never sent, with no visible change.
+// ============================================================================
+{
+  const askedManaged = await manager.createManagedAgent({ name: "error-awaiting-ask", model: "capturing-model" });
+  askedManaged.setTextAdapter({
+    adapter: {
+      kind: "text",
+      name: "erroring-ask",
+      model: "capturing-model",
+      "~types": {},
+      chatStream() {
+        return (async function* () {
+          yield { type: "RUN_ERROR", message: "boom while asking" };
+        })();
+      },
+      async structuredOutput() {
+        throw new Error("not implemented");
+      },
+    },
+    model: "capturing-model",
+    modelStyle: "openai",
+  });
+  const askedChat = askedManaged.initChat(manager);
+  askedChat.setMessages([
+    { id: "q-u1", role: "user", parts: [{ type: "text", content: "ask me first" }] },
+    {
+      id: "q-a1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-call",
+          id: "call_ask_error",
+          name: "ask_user",
+          state: "input-complete",
+          // A REAL part carries `arguments` as a JSON string; `input` alone reads as a truncated
+          // arg stream and gets cancelled as incomplete (which is what a broken stream must do).
+          arguments: JSON.stringify({ question: "which one?", options: [{ label: "a" }, { label: "b" }] }),
+        },
+      ],
+    },
+  ]);
+
+  await askedChat.sendMessage("go").catch(() => undefined);
+  await askedChat.runChain;
+
+  const askPart = askedChat
+    .getMessages()
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === "tool-call" && part.id === "call_ask_error");
+  assert.equal(askPart?.output, undefined, "the question is still answerable");
+  assert.equal(askedManaged.getStatus(), "awaiting_user", "a failed turn that owes an answer awaits the user");
+  assert.equal(
+    await askedChat.sendMessage("another message"),
+    "queued",
+    "input queues behind the question instead of opening a turn that breaks immediately"
+  );
+
+  // Esc on a parked question must not ANSWER it: the abort path has its own settle pass, and a
+  // plain `settleToolCalls(..., { includeInFlight: true })` would cancel the pending `ask_user`
+  // (it looks in-flight), making the park below a no-op and discarding the question.
+  askedChat.stop();
+  const afterStopPart = askedChat
+    .getMessages()
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === "tool-call" && part.id === "call_ask_error");
+  assert.equal(afterStopPart?.output, undefined, "Esc keeps the question answerable");
+  assert.equal(askedManaged.getStatus(), "awaiting_user", "…and the status still names the user wait");
+}
+
+// ============================================================================
+// 3d. A stale aborted controller does not turn a SETUP failure into a cancel
+//
+// `currentAbortController` survives a finished run (it is cleared on session reset, not at run
+// end), so after an Esc the previous controller is still current and aborted. The pump flips the
+// status to `running` before the stream, so if the adapter is built first and rejects (missing
+// style/key), `isAbortedNow()` saw the OLD signal: the turn finalized as `finished`, the error text
+// vanished and post-run memory extraction ran. `prepareForRun` (which mints THIS run's controller)
+// therefore runs before the adapter is built.
+// ============================================================================
+{
+  // A create with no modelStyle / adapter: resolving one rejects, which is the setup failure.
+  const staleManaged = await manager.createManagedAgent({ name: "stale-abort", model: "no-style-model" });
+  const staleChat = staleManaged.initChat(manager);
+
+  // What an Esc on a previous run leaves behind: a controller that is still current and aborted.
+  staleManaged.run.setupAbortController(undefined, { onAborted: () => undefined });
+  staleManaged.run.abort("user-cancelled");
+  assert.equal(staleManaged.run.currentAbortController?.signal.aborted, true, "the stale controller is aborted");
+
+  staleChat.setMessages([{ id: "s-u1", role: "user", parts: [{ type: "text", content: "hello" }] }]);
+  // The rejection surfaces from the run span, which the pump handles; it must not reject the call.
+  await staleChat.sendMessage("hello").catch(() => undefined);
+  await staleChat.runChain;
+
+  assert.equal(
+    staleManaged.getStatus(),
+    "error",
+    "the setup failure is a failed turn, not a cancel of the previous run"
+  );
+  assert.match(staleManaged.getError() ?? "", /modelStyle|adapter/i, "the failure reason is kept");
 }
 
 // ============================================================================

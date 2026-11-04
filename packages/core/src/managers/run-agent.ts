@@ -375,22 +375,31 @@ async function executeManagedAgentRun(
   const managed = manager.getAgent(agentId);
   if (!managed) throw new Error(`Agent not found: ${agentId}`);
 
-  const runner = await ensureAgentRunner(manager, managed);
-
   let messages = input.messages;
   if (input.prompt && !messages) {
     messages = [{ role: "user", content: input.prompt }];
   }
 
+  // A run with no channel can never stream: reject before preparation so it does not mint a runId,
+  // emit `prompt:submit`, or run the extension hooks for a turn that cannot start.
+  if (!managed.getUI()) {
+    throw new Error(`Agent "${agentId}" requires a UI channel before LLM runs`);
+  }
+
+  // Prepare BEFORE the adapter is built. `prepareForRun` is what mints this run's
+  // AbortController (`setupAbortController`), while `ensureAgentRunner` is the step that can
+  // reject on a configuration problem (missing key / unknown style). The old order left the
+  // PREVIOUS run's controller current while the pump had already flipped the status to
+  // `running`, so a stale `aborted` signal made `runManagedSpan` classify a setup failure as a
+  // user cancel: the error disappeared, the turn finalized as `finished`, and post-run memory
+  // extraction ran. Minting the controller first makes "was THIS run aborted?" answerable.
   await managed.prepareForRun({
     messages: messages as Parameters<typeof managed.prepareForRun>[0]["messages"],
     prompt: input.prompt,
     abortSignal: input.abortSignal,
   });
 
-  if (!managed.getUI()) {
-    throw new Error(`Agent "${agentId}" requires a UI channel before LLM runs`);
-  }
+  const runner = await ensureAgentRunner(manager, managed);
 
   // Use the RunCoordinator controller created in prepareForRun so ManagedAgent.abort()
   // cancels the same AbortController identity TanStack chat listens to.

@@ -29,6 +29,14 @@ const PREVIEW_MAX_CHARS = 200;
 const KEEP_STRING_MAX_CHARS = 120;
 /** Upper bound for an entry's human-readable message (the `data` previews are bounded separately). */
 export const MAX_LOG_MESSAGE_CHARS = 400;
+/**
+ * Upper bound for an `Error.stack`.
+ *
+ * Larger than the message because a stack is genuinely multi-line, but bounded all the same: V8
+ * prefixes the stack with `${name}: ${message}`, so an unbounded stack re-published a provider body
+ * the message had just been truncated to 400 chars — a single MB-scale JSONL line after a 4xx.
+ */
+export const MAX_LOG_STACK_CHARS = 2000;
 const KEEP_STRING_HARD_MAX_CHARS = 500;
 
 function asText(value: unknown): string {

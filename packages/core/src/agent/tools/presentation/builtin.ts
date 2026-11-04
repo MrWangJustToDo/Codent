@@ -32,9 +32,10 @@ export const BUILTIN_PRESENTATION: Record<string, BuiltinPresentationEntry> = {
   lsp_hover: { category: "reads" },
   lsp_symbols: { category: "reads" },
   code_overview: { category: "reads" },
-  // Memory / skill retrieval.
+  // Memory / skill / past-conversation retrieval.
   memory_read: { category: "reads" },
   load_skill: { category: "reads" },
+  session_read: { category: "reads" },
 
   // State / file mutation.
   edit_file: { category: "edits" },
@@ -53,6 +54,7 @@ export const BUILTIN_PRESENTATION: Record<string, BuiltinPresentationEntry> = {
   lsp_completions: { category: "searches" },
   lsp_code_actions: { category: "searches" },
   ast_search: { category: "searches" },
+  session_search: { category: "searches" },
   memory_list: { category: "searches" },
   list_skills: { category: "searches" },
   discover_tools: { category: "searches" },

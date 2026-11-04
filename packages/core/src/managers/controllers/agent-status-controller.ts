@@ -330,6 +330,24 @@ export class AgentStatusController {
   }
 
   /**
+   * A terminal run that still owns an unanswered `ask_user` is parked on the USER, not finished.
+   *
+   * `ask_user` is a client tool: the server run cannot answer it, and it is deliberately NOT
+   * cancelled on error/abort (cancelling it would make the question unanswerable and throw away the
+   * user's input). Leaving the status at `error` / `aborted` while that interaction is still pending
+   * is a contradiction the input queue reads literally: `sendMessage` is admitted instead of
+   * deferred, the next pump breaks immediately on the pending interaction, and `deriveChatOutcome`
+   * re-derives the old terminal status from the field it never left — so every later user message was
+   * appended to the transcript and never sent, with no visible change. Naming the wait keeps input
+   * queued (released when the question is answered) and matches the interaction snapshot.
+   */
+  parkOnPendingQuestion(messages: UIMessage[]): void {
+    if (firstPendingInteraction(messages)?.kind !== "clientTool") return;
+    if (this.deps.getStatus() === "awaiting_user") return;
+    this.deps.setStatus("awaiting_user", "pending-question");
+  }
+
+  /**
    * Single entry for end-of-run status finalization (chat pump and detached/subagent).
    *
    * Prefer this over calling {@link reconcileAfterRun} / legacy detached helpers directly.
@@ -343,6 +361,8 @@ export class AgentStatusController {
 
     if (kind === "aborted") {
       this.onRunAbort();
+      // Chat only: a detached worker must not stay in an active wait (see `parkOnPendingQuestion`).
+      if (path !== "detached") this.parkOnPendingQuestion(messages);
       return;
     }
 
@@ -357,6 +377,9 @@ export class AgentStatusController {
       } else if (outcome.errorMessage && !this.deps.getError()) {
         this.deps.setError(outcome.errorMessage);
       }
+      // Chat only: `finalizeDetached` right after this must end on a terminal status, and a
+      // detached worker has no UI that could answer a `clientTool` anyway.
+      if (path !== "detached") this.parkOnPendingQuestion(messages);
       return;
     }
 

@@ -116,6 +116,15 @@ export class AgentManager {
    * binds the log here first (see `buildManagedAgent`), and registration hands it to the registry.
    */
   private readonly constructionLogs = new Map<string, AgentLog>();
+  /**
+   * Envelope identity captured while a log is only retained (construction / teardown).
+   *
+   * `resolveMeta` cannot consult the registry then: construction runs before registration and
+   * teardown deletes the entry synchronously while its async chain still emits. The retained log
+   * still receives those rows, so leaving the envelope empty put rows in the right file with no
+   * `sessionId` / `runId` — the fields a remote or aggregated reader filters by.
+   */
+  private readonly retainedMeta = new Map<string, { runId?: string; sessionId?: string }>();
   /** Guards {@link dispose} against re-running and rejects construction after teardown. */
   private disposed = false;
 
@@ -136,7 +145,7 @@ export class AgentManager {
       },
       // Envelope identity is an agent property, not a call-site property: resolve it once for every
       // emitter on the scoped bus (the telemetry funnel, `plan`, `ui`, the extension runner).
-      resolveMeta: (agentId) => this.agents.get(agentId)?.getEventContext(),
+      resolveMeta: (agentId) => this.agents.get(agentId)?.getEventContext() ?? this.retainedMeta.get(agentId),
     });
     // The log extension consumes the bus (its policy half) and provides the file sink; agent
     // scopes up-flow to the root, so one subscription covers subagents too.
@@ -158,8 +167,14 @@ export class AgentManager {
       registry: this.agents,
       ownership: this.sessionOwnership,
       clearAgentScope: (id) => this.busScope.delete(id),
-      retainLog: (id, log) => this.teardownLogs.set(id, log),
-      releaseLog: (id) => this.teardownLogs.delete(id),
+      retainLog: (id, log, meta) => {
+        this.teardownLogs.set(id, log);
+        if (meta) this.retainedMeta.set(id, meta);
+      },
+      releaseLog: (id) => {
+        this.teardownLogs.delete(id);
+        this.retainedMeta.delete(id);
+      },
     });
   }
 
@@ -242,13 +257,15 @@ export class AgentManager {
    * then runs bootstrap (extensions, MCP, memory). Registration removes the binding.
    * @internal
    */
-  bindConstructionLog(agentId: string, log: AgentLog): void {
+  bindConstructionLog(agentId: string, log: AgentLog, meta?: { runId?: string; sessionId?: string }): void {
     this.constructionLogs.set(agentId, log);
+    if (meta) this.retainedMeta.set(agentId, meta);
   }
 
   /** Drop a construction-time log binding (registration or a failed build). @internal */
   releaseConstructionLog(agentId: string): void {
     this.constructionLogs.delete(agentId);
+    this.retainedMeta.delete(agentId);
   }
 
   // ============================================================================

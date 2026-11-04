@@ -178,6 +178,14 @@ export async function restoreManagedSession(
   const restoredMessages = cancelInterruptedBackgroundCommands(restored.uiMessages);
   const taskMessages = cancelInterruptedBackgroundTasks(restoredMessages);
   const uiMessages = settleInterruptedToolCalls(taskMessages);
+  // The repairs happen after `readSessionForRestore` wrote the canonical form, and `tracker.reset`
+  // below is given the REPAIRED array — so without this write the settled transcript would only
+  // ever exist in memory (the tracker would consider it persisted and every later save a no-op),
+  // while the file kept a `running` handle that `session_read` and other processes still report.
+  // The helpers are copy-on-write, so reference equality means "nothing to repair".
+  if (uiMessages !== restored.uiMessages) {
+    await host.session.saveRestoredMessages(session, uiMessages);
+  }
 
   const planSnapshot = session.planMode ? { ...session.planMode, steps: [...session.planMode.steps] } : null;
   if (planSnapshot && planSnapshot.phase !== "off" && !planSnapshot.planMarkdown?.trim() && planSnapshot.planFilePath) {
@@ -236,6 +244,11 @@ export async function restoreManagedSession(
   // A level written by a build that knew one more value must not abort the restore.
   if (session.reasoningEffort === undefined || isReasoningEffort(session.reasoningEffort)) {
     host.setReasoningEffort?.(session.reasoningEffort);
+  } else {
+    // A level this build does not know (written by another version) must not fall through to the
+    // LEAVING session's config: `getSessionPersistInput` always writes the live effort, so keeping
+    // it copies one session's depth into the target on the next save. Clear it explicitly.
+    host.setReasoningEffort?.(undefined);
   }
 
   // ---------------------------------------------------------------------------

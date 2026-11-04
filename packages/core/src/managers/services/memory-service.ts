@@ -54,6 +54,16 @@ export interface MemoryExtractionInput {
    * LLM spend lands in another session's lifetime totals and is persisted there.
    */
   getSessionId?: () => string | undefined;
+  /**
+   * Persist the session after the queries settle.
+   *
+   * The turn's own persist runs BEFORE extraction starts, and the side queries book their spend on
+   * the agent's tracker when they return — which is after that write. Without a second (state-only)
+   * persist the final turn's extraction/consolidation tokens and cost existed only in memory, so a
+   * session that ended right after a turn recorded none of it. Best-effort: `persistSession` is a
+   * no-op once the session is closed, so a teardown right after this cannot resurrect it.
+   */
+  persist?: () => void;
 }
 
 export class MemoryService implements MemorySelectionPort {
@@ -257,6 +267,13 @@ export class MemoryService implements MemorySelectionPort {
         if (pending) {
           this.runExtraction(pending);
         }
+        // The spend above was booked AFTER the turn's persist; make it durable — but only when the
+        // agent is still on the session that spent it, exactly like the booking. After a switch the
+        // write would target the new session for a query the old one paid for (and the old session's
+        // spend was not booked at all, so there is nothing to land). A queued extraction re-enters
+        // and persists its own spend. `persistState()` is fire-and-forget and reports its own
+        // failures, so the port is total.
+        if (stillOnStartSession()) input.persist?.();
       }
     })();
   }

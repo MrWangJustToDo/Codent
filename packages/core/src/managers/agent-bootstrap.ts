@@ -265,6 +265,10 @@ export class AgentBootstrap {
       // The turn's extension sections were snapshotted before the model call; a mid-turn disable
       // must remove that extension's section or the model keeps calling tools that just vanished.
       onExtensionDisabled: (extensionId, notice) => managed.clearExtensionTurnContext(extensionId, notice),
+      // …and a mid-turn re-enable must remove the disabled notice, or the rest of the turn keeps
+      // telling the model the extension is gone while its tools are live again. The content itself
+      // returns with the next prepared turn.
+      onExtensionEnabled: (extensionId) => managed.clearExtensionTurnContext(extensionId),
       cwd: rootPath,
       agentId: managed.id,
       getCoreEnv: () => env,

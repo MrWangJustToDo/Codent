@@ -5,7 +5,26 @@
 /** Process-local set of ids issued by {@link generateId} (collision avoidance). */
 const issuedIds = new Set<string>();
 
+/**
+ * Cap on remembered ids.
+ *
+ * The set exists to catch the theoretical same-millisecond collision, so it only needs the recent
+ * window — not every id a long-lived server ever minted (message, job, compact and run ids all pass
+ * through here). A Set preserves insertion order, so the oldest entries are evicted first.
+ */
+const MAX_ISSUED_IDS = 50_000;
+
 const MAX_GENERATE_ID_ATTEMPTS = 32;
+
+function rememberIssuedId(id: string): void {
+  issuedIds.add(id);
+  if (issuedIds.size <= MAX_ISSUED_IDS) return;
+  let overflow = issuedIds.size - MAX_ISSUED_IDS;
+  for (const oldest of issuedIds) {
+    if (overflow-- <= 0) break;
+    issuedIds.delete(oldest);
+  }
+}
 
 export type GenerateIdOptions = {
   /**
@@ -48,13 +67,13 @@ export const generateId = (prefix: string, options?: GenerateIdOptions): string 
   for (let attempt = 0; attempt < MAX_GENERATE_ID_ATTEMPTS; attempt++) {
     const id = buildId(prefix);
     if (isIdTaken(id, exists)) continue;
-    issuedIds.add(id);
+    rememberIssuedId(id);
     return id;
   }
 
   // Extremely unlikely: add extra entropy and accept.
   const fallback = `${buildId(prefix)}_${Math.random().toString(36).slice(2, 10)}`;
-  issuedIds.add(fallback);
+  rememberIssuedId(fallback);
   return fallback;
 };
 

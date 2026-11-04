@@ -964,10 +964,16 @@ export class ManagedAgent {
    * has to be driven from this side anyway.
    */
   logSubagentLifecycle(phase: SubagentLifecyclePhase, details: SubagentLogDetails): void {
-    // The index row belongs to the run that spawned the child. Spawn-time callers leave `details.run`
-    // unset (the current run is correct); settle-time callers pass the run captured at spawn,
-    // because a background task can settle on a later wake turn.
-    logSubagentLifecycle(this.log, phase, details, details.run ?? this.getCurrentRunId() ?? undefined);
+    // The index row belongs to the run that spawned the child, and ONLY that run. Every call site
+    // passes `readTaskRunSpawnId(...)`; falling back to `getCurrentRunId()` when the phase record is
+    // gone (a background task settling after a session switch cleared it) stamped the leaving
+    // session's settle row with the TARGET session's run — wrong attribution is worse than none.
+    //
+    // Internal workers are the exception: they serve no `task` call, so no phase record (and no
+    // spawn run) exists at all, and they are awaited inside the parent's run — the current run IS
+    // the run that spawned them. `parentTaskToolCallId` is what separates the two cases.
+    const run = details.run ?? (details.parentTaskToolCallId ? undefined : (this.getCurrentRunId() ?? undefined));
+    logSubagentLifecycle(this.log, phase, details, run, this.getEventSessionId());
   }
 
   setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
@@ -1250,7 +1256,11 @@ export class ManagedAgent {
    * that does not exist. `undefined` (bootstrap, before a session is minted) omits the field.
    */
   getEventSessionId(): string | undefined {
-    const own = this.getSessionData()?.id;
+    // `initialSessionId` is the on-disk target fixed before a session is adopted (resume/reuse).
+    // Bootstrap runs before the placeholder exists, so without this fallback every extension /
+    // MCP / memory row emitted during construction carried no session id even though the sink was
+    // already routed to that session's directory.
+    const own = this.getSessionData()?.id ?? this.config.initialSessionId;
     if (own) return own;
     const parent = this.parentId ? this.manager?.getAgent(this.parentId) : undefined;
     return parent?.getSessionData()?.id;

@@ -67,6 +67,7 @@ export class AgentEventBusScope {
     if (this.reportingHandlerError) return;
     const ownerId = this.deps.resolveLogOwner(info.scopeId);
     if (!ownerId) return;
+    const parentId = this.parents.get(info.scopeId);
     this.reportingHandlerError = true;
     try {
       this.root.emit(
@@ -77,7 +78,11 @@ export class AgentEventBusScope {
           kind: info.kind ?? "interceptor",
           error: errorMessage(info.error),
         },
-        { agentId: ownerId }
+        // Identity has two halves: `agentId` comes from the meta override and the PARENT from the
+        // scope tree. Emitting on the root node (this method's only seat) means `buildEventAt`
+        // cannot derive it, so a child's handler failure was the one event that named a parentless
+        // child — unlinkable to the task row and filtered out of the parent's projection.
+        { agentId: ownerId, ...(parentId !== undefined ? { parentId } : {}) }
       );
     } catch {
       // A failure while REPORTING a failure is contained: the bus already lost the frame, and the

@@ -343,8 +343,8 @@ Both reuse this same run skeleton. `AgentManager`'s ownership registry (`Map<ses
 
 ```
 run-agent.ts: executeManagedAgentRun
-  ensureAgentRunner(managed)          // build middleware + AgentRunner
-  managed.prepareForRun({ messages, abortSignal })
+  managed.prepareForRun({ messages, abortSignal })  // mint THIS run's AbortController first
+  ensureAgentRunner(managed)          // build middleware + AgentRunner (may reject on config)
   // Reuse RunCoordinator.currentAbortController as TanStack chat abortController
   // so ManagedAgent.abort() cancels the live stream (main agent + subagent/task).
   runStreamWithRecovery({ run: () => runner.run({ abortController }) })
@@ -478,6 +478,10 @@ Status logic is centralized in `AgentStatusController` (`managers/controllers/ag
 | User abort                  | `aborted`               | `onRunAbort` / `onUserCancel` / `RunCoordinator`             |
 | Error                       | `error`                 | `onRunError` / `onExternalError`                             |
 
+Exception: when the terminal (abort **or** error) still has an unanswered `ask_user` part, the
+status lands on `awaiting_user` instead — the question belongs to the user and is deliberately not
+cancelled, so input must queue behind it (`AgentStatusController.parkOnPendingQuestion`).
+
 ---
 
 ## 4. Tool approval flow
@@ -542,7 +546,7 @@ Default drain mode is `one-at-a-time`. `stop()` clears both queues; `clearTransc
 
 ### 4.4 Client tools (`ask_user`)
 
-Client tools pause the run until the host supplies output via `addToolResult`. Core does **not** infer UI status from message parts — the app sets it explicitly:
+Client tools pause the run until the host supplies output via `addToolResult`. During a run, the host sets the wait (`setClientToolWaiting`); at a terminal boundary core reconciles the status from the message parts, including the case where a failed/aborted turn still owns an unanswered `ask_user` (that ends as `awaiting_user`, not `error`/`aborted`, so input queues instead of being swallowed):
 
 | API                                        | When                                                     |
 | ------------------------------------------ | -------------------------------------------------------- |
@@ -1217,10 +1221,10 @@ agentManager.runAgentStream(agentId, { messages: UIMessage[], abortSignal })
   │
   ▼
 executeManagedAgentRun
-  ├─ ensureAgentRunner (lazy build AgentRunner + middleware)
-  ├─ prepareForRun
+  ├─ prepareForRun (mints this run's AbortController)
   │    ├─ (user-turn only) extension prompt hooks (memory selection)
   │    └─ (user-turn only) emit prompt:submit
+  ├─ ensureAgentRunner (lazy build AgentRunner + middleware; may reject on config)
   └─ runStreamWithReactiveCompactRetry
        └─ runner.run → TanStack chat()
             │

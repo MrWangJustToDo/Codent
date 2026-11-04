@@ -108,7 +108,9 @@ export function logSubagentLifecycle(
   phase: SubagentLifecyclePhase,
   details: SubagentLogDetails,
   /** The parent's run id: an index row belongs to the run that spawned the child. */
-  run?: string
+  run?: string,
+  /** The parent's disk session at write time (envelope identity, same as a bridged row). */
+  sessionId?: string
 ): void {
   if (!log) return;
   const { level, message } = subagentLifecycleLogLine(phase, details);
@@ -139,6 +141,7 @@ export function logSubagentLifecycle(
     message,
     data,
     details.error ? eventError(details.error) : undefined,
-    run
+    run,
+    sessionId
   );
 }

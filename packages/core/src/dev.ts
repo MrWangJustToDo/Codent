@@ -46,7 +46,8 @@ export { formatToolOutput } from "./agent/tools/presentation/format/output-forma
 export { classifyServerFailure } from "./agent/lsp/extension.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/builtin/shell/exec-args.js";
 export { fileUriToPath, formatLocation, formatLocationLink } from "./agent/lsp/shared/format.js";
-export { pathToFileUrl } from "./utils/file-url.js";
+// `pathToFileUrl` already reaches this barrel through `dev-agent.ts` (the extension barrel re-exports
+// it); a second explicit export made the barrel declare the same name twice, which fails `pnpm lint`.
 export {
   evaluateCommandApproval,
   SUBAGENT_DENY_MESSAGE,

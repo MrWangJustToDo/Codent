@@ -91,7 +91,17 @@ export async function buildManagedAgent({
     // resolved metadata is not reconstruction-able from `restConfig`, and a subagent
     // inherits its parent's stored config rather than re-resolving the model. Dropping
     // it left every subagent's usage tracker without pricing (`$0` at record time).
-    { ...restConfig, toolsetProfile, profileId, ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}), name },
+    {
+      ...restConfig,
+      toolsetProfile,
+      profileId,
+      // Put back what the destructure above removed: `ManagedAgent.getEventSessionId()` uses it as
+      // the pre-adoption identity (bootstrap runs before `setSessionDataPlaceholder`), and dropping
+      // it made that fallback permanently undefined.
+      ...(initialSessionId ? { initialSessionId } : {}),
+      ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}),
+      name,
+    },
     {
       id,
       log,
@@ -117,7 +127,7 @@ export async function buildManagedAgent({
     // registry yet, so a registry-only resolver dropped every row emitted before this call. The
     // seam's pending buffer was the old workaround; this makes the event path the real one, and it
     // has to precede the first producer, not merely bootstrap.
-    manager.bindConstructionLog(managed.id, log);
+    manager.bindConstructionLog(managed.id, log, managed.getEventContext());
 
     if (resolvedModelInfo) {
       managed.setModelInfo(resolvedModelInfo);

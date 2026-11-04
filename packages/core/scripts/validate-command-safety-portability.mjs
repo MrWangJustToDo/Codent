@@ -183,6 +183,48 @@ for (const [label, cmd, external] of [
   ["grep -e <pattern> <outside>", "grep -e TODO /etc/passwd", true],
   ["grep plain", "grep TODO src/index.ts", false],
   ["grep -rn inside", "grep -rn TODO src", false],
+
+  // Read-only commands that were never path-checked: their names pass the read-only table, but the
+  // operands are files, so the path axis has to run for them too.
+  ["base64 <outside>", "base64 /etc/shadow", true],
+  ["base64 inside", "base64 package.json", false],
+  ["tree <outside>", "tree /etc", true],
+  ["strings <outside>", "strings /etc/shadow", true],
+  ["xxd <outside>", "xxd /etc/passwd", true],
+  ["stat <outside>", "stat /etc/passwd", true],
+  ["md5sum <outside>", "md5sum /etc/passwd", true],
+  ["md5sum inside", "md5sum package.json", false],
+  ["diff <outside>", "diff package.json /etc/passwd", true],
+  ["jq <outside>", "jq . /etc/passwd", true],
+
+  // Search engines: read-only names whose positional operands are files.
+  ["rg <outside>", "rg TODO /etc/passwd", true],
+  ["rg inside", "rg TODO src/index.ts", false],
+  ["rg -g pattern inside", "rg -g '*.ts' TODO src", false],
+  ["ag <outside>", "ag TODO /etc/passwd", true],
+  ["ack inside", "ack TODO src", false],
+
+  // Value-taking flags are not operands (`tree -P '*.ts'` used to look like an external glob).
+  ["tree -P pattern", "tree -P '*.ts' .", false],
+  ["tree -I pattern", "tree -I '*.log' src", false],
+  ["diff -x pattern", "diff -x '*.o' a b", false],
+  ["awk program", "awk '{print $1}' package.json", false],
+  ["awk external operand", "awk '{print $1}' /etc/passwd", true],
+
+  // Input redirection names a file just like an operand (`<` is a read, not a write).
+  ["input redirect <outside>", "cat < /etc/passwd", true],
+  ["input redirect quoted", 'cat < "/etc/passwd"', true],
+  ["input redirect inside", "cat < package.json", false],
+  ["input redirect with fd", "cat 0< /etc/passwd", true],
+  ["input redirect no space", "cat</etc/passwd", true],
+  ["input redirect no space inside", "cat<package.json", false],
+  ["compound group redirect", "{ base64; } < /etc/shadow", true],
+  ["subshell redirect", "( base64 ) < /etc/shadow", true],
+  // …but a here-string / null device names nothing project-external, and a `<` inside a quoted
+  // argument is literal text.
+  ["here-string is not a file", 'cat <<< "hello"', false],
+  ["null device read", "cat < /dev/null", false],
+  ["quoted less-than is not a redirect", 'grep "a < /etc/x" package.json', false],
 ]) {
   const report = await posix(cmd);
   check(`posix: ${label} external`, report.anyExternalDir, external);

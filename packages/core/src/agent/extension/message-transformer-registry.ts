@@ -85,7 +85,10 @@ export class MessageTransformerRegistry {
    * array, because the contract is "at most one per extension"; the chaining order is the
    * declared dispatch order (rank), not insertion order.
    */
-  private transformers = new Map<string, { transformer: MessageTransformer; rank: DispatchRank }>();
+  private transformers = new Map<
+    string,
+    { transformer: MessageTransformer; rank: DispatchRank; context?: ExtensionContext }
+  >();
 
   constructor(private readonly host: MessageTransformerRegistryHost) {}
 
@@ -99,7 +102,13 @@ export class MessageTransformerRegistry {
 
   /** Register (or replace) the transformer owned by an extension, with its dispatch rank. */
   register(extensionId: string, transformer: MessageTransformer, rank: DispatchRank): void {
-    this.transformers.set(extensionId, { transformer, rank });
+    // Capture the incarnation that registered it. The registration surface is lease-checked at
+    // `register` time, but this registry is consumed by the wire seam on every model call and has no
+    // per-call lease check of its own — so a disable that is mid-`deactivate()` (the slow LSP path)
+    // would otherwise keep rewriting the wire until artifact teardown finished. Comparing the live
+    // context is the same identity rule as every other registration.
+    const context = this.host.getContext?.(extensionId);
+    this.transformers.set(extensionId, { transformer, rank, ...(context ? { context } : {}) });
   }
 
   /**
@@ -139,12 +148,14 @@ export class MessageTransformerRegistry {
       compareDispatchRank(a.rank, b.rank)
     );
 
-    for (const { extensionId, transformer } of ordered) {
+    for (const { extensionId, transformer, context } of ordered) {
       try {
-        const result = await transformer(
-          { ...ctx, extensionId, messages: current },
-          this.host.getContext?.(extensionId)
-        );
+        const liveContext = this.host.getContext?.(extensionId);
+        // A stale incarnation's transformer must not reach the wire. Only enforced when both sides
+        // are observable: a host without `getContext` keeps the old (permissive) behaviour, which
+        // is the validator/embedded harness shape.
+        if (context !== undefined && liveContext !== context) continue;
+        const result = await transformer({ ...ctx, extensionId, messages: current }, liveContext);
         if (result === undefined) continue;
         if (!isModelMessageArray(result)) {
           this.host.reportTransformerFailure(

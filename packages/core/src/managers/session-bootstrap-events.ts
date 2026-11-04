@@ -59,6 +59,9 @@ export async function emitSessionBootstrapEvents(
 
   const memoryManager = managed.memory.getManager();
   if (memoryManager) {
+    // `listMemories()` already contains its own failure handling (it returns `[]`) and
+    // `getIndexContent()` is a cached field read, so this block cannot make bootstrap fail — a
+    // guard here would be dead code.
     const memories = await memoryManager.listMemories();
     emitAgentTelemetry(managed, "session:memory", {
       memoryCount: memories.length,

@@ -18,7 +18,15 @@ import { toPosixPathKey } from "../../../../../utils/posix-path.js";
 import { canonicalizeCommandName, commandName, commandPrefix } from "./command-arity.js";
 import { extractCommands, parseCommandTree, resolveShellKind } from "./command-parser.js";
 import { hasCommandSubstitution, tokenizeCommandString } from "./command-tokenizer.js";
+import { PATH_INSPECTION_COMMANDS, PATH_OPERAND_COMMANDS, pathArgs } from "./path-args.js";
 import { isReadOnlyInvocation } from "./readonly-rules.js";
+import {
+  BENIGN_REDIRECTION,
+  hasWriteRedirection,
+  hasWriteRedirectionAcrossCommands,
+  readRedirectionTargets,
+  unquote,
+} from "./redirection.js";
 
 import type { ParsedCommand, ShellKind } from "./command-parser.js";
 import type { ResolvedCoreEnv, CoreEnvPath } from "../../../../../env";
@@ -136,27 +144,12 @@ const WRITE_OPS = new Set([
 /** All commands whose arguments are file paths (path-external analysis applies). */
 const FILE_COMMANDS = new Set([...CWD_COMMANDS, ...READ_FILE_COMMANDS, ...WRITE_OPS]);
 
-/**
- * Commands whose operands are paths but whose names are not "file commands".
- *
- * `git` is here because its *global options* take directories: `git -C /etc log` and
- * `git --git-dir=/etc/.git log` read outside the workspace while the command text looks read-only.
- * Without the name in this set, `pathArgs` never ran for git at all, so the analyzer returned an
- * auto-approved read. (The subcommand itself stays classified by the read-only table.)
- */
-const PATH_OPERAND_COMMANDS = new Set(["git"]);
+/** Every command for which the path axis runs — one set, so a new subset cannot be forgotten. */
+const PATH_BEARING_COMMANDS = new Set([...FILE_COMMANDS, ...PATH_OPERAND_COMMANDS, ...PATH_INSPECTION_COMMANDS]);
 
 // ============================================================================
 // Path argument expansion (opencode unquote/home/envValue/expand/prefix)
 // ============================================================================
-
-function unquote(text: string): string {
-  if (text.length < 2) return text;
-  const first = text[0];
-  const last = text[text.length - 1];
-  if ((first === '"' || first === "'") && first === last) return text.slice(1, -1);
-  return text;
-}
 
 function homeExpand(text: string, ctx: CommandAnalysisContext): string {
   if (!ctx.home) return text;
@@ -195,139 +188,6 @@ function globPrefix(text: string): string | undefined {
   return text.slice(0, match.index);
 }
 
-/** Commands whose first non-flag argument is a search pattern, not a path. */
-const PATTERN_FIRST_COMMANDS = new Set(["grep", "rg", "ag", "ack"]);
-
-/**
- * The STARTING POINTS of a `find` invocation — the only arguments that are filesystem operands.
- *
- * `find`'s grammar is `find [starting-point…] [expression]`: from the first token that begins with
- * `-` (or is a standalone `(`, `!`, `,`) everything is the expression, and its values are predicates
- * or patterns (`-name "*.d.mts"`, `-path ./x`, `-type f`), not paths. The generic path extractor
- * treated those values as operands: `-name "*.d.mts"` became a glob with no prefix to resolve, which
- * the analyzer reports as an unresolvable external path, so an ordinary read-only traversal demanded
- * approval. GNU's leading global options (`-L` / `-H` / `-P`, `-D debugopts`, `-O0..3`) are not
- * starting points either — skipping them keeps `find -L /etc` classified as external.
- */
-function findStartingPoints(tokens: string[]): string[] {
-  let i = 1;
-  while (i < tokens.length) {
-    const token = tokens[i]!;
-    if (token === "-L" || token === "-H" || token === "-P") {
-      i += 1;
-      continue;
-    }
-    if (token === "-D") {
-      i += 2;
-      continue;
-    }
-    if (/^-O[0-9]?$/.test(token)) {
-      i += 1;
-      continue;
-    }
-    break;
-  }
-
-  const paths: string[] = [];
-  for (; i < tokens.length; i += 1) {
-    const token = tokens[i]!;
-    if (token.startsWith("-") || token === "(" || token === "!" || token === ",") break;
-    paths.push(token);
-  }
-  return paths;
-}
-
-/**
- * Collect path arguments for a command, dropping flags (opencode `pathArgs`).
- *
- * `grep`-family commands are also skipped over their leading *pattern* argument, which is not a
- * path. Treating it as one produced a bogus external-dir verdict — and therefore an approval
- * prompt — for an ordinary read-only search: the pattern `\.todoManager\b` "resolved" to
- * `/.todoManager/b`, i.e. outside the root. The pattern carries no shell meaning that a path
- * check could act on, so dropping it is strictly more correct; the files it is searched for
- * are still checked normally.
- */
-function pathArgs(tokens: string[]): string[] {
-  const name = tokens[0]?.toLowerCase() ?? "";
-  // `find` is the one command whose remaining arguments are a small expression language: only the
-  // leading starting points are paths (see {@link findStartingPoints}).
-  if (name === "find") return findStartingPoints(tokens);
-
-  const args = tokens.slice(1).filter((item) => {
-    if (item.startsWith("-")) return false;
-    if (name === "chmod" && item.startsWith("+")) return false;
-    return true;
-  });
-
-  if (PATH_OPERAND_COMMANDS.has(name)) {
-    return Array.from(new Set([...args, ...gitDirectoryOperands(tokens)]));
-  }
-
-  if (PATTERN_FIRST_COMMANDS.has(name)) {
-    // The first positional is the PATTERN only when the pattern is not supplied by an option.
-    // `grep -f /etc/passwd src/index.ts` used to drop `/etc/passwd` as "the pattern" and approve the
-    // read; with `-e`/`-f` every positional is a file.
-    const positional = grepPatternFromOption(tokens) ? args : args.slice(1);
-    // Attached short/`--file=` values are inside a dash token, so the filter above dropped them.
-    return Array.from(new Set([...positional, ...grepAttachedFileValues(tokens)]));
-  }
-
-  return args;
-}
-
-/**
- * Directories carried by git's global options: `-C <dir>`, `--git-dir[=]<dir>`,
- * `--work-tree[=]<dir>`.
- *
- * `-C`'s value is also a plain positional (so it is already in `args`); the `=` forms and the
- * separate `--git-dir <dir>` value are not, because the dash filter drops the option token.
- */
-function gitDirectoryOperands(tokens: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 1; i < tokens.length; i++) {
-    const token = tokens[i]!;
-    if (token === "-C" || token === "--git-dir" || token === "--work-tree") {
-      const value = tokens[i + 1];
-      if (value !== undefined && !value.startsWith("-")) out.push(value);
-    } else if (token.startsWith("--git-dir=") || token.startsWith("--work-tree=")) {
-      out.push(token.slice(token.indexOf("=") + 1));
-    }
-  }
-  return out;
-}
-
-/**
- * Whether a `grep`-family invocation takes its pattern from an option (`-e` / `-f` and their long
- * forms, including attached values and short-flag clusters).
- */
-function grepPatternFromOption(tokens: string[]): boolean {
-  return tokens.some(
-    (token, index) =>
-      index > 0 &&
-      (token === "-e" ||
-        token === "--regexp" ||
-        token.startsWith("--regexp=") ||
-        token === "-f" ||
-        token === "--file" ||
-        token.startsWith("--file=") ||
-        /^-[A-Za-z]*[ef]/.test(token))
-  );
-}
-
-/** Paths carried INSIDE a `-f` cluster (`-fFILE`, `-rfFILE`) or `--file=FILE`. */
-function grepAttachedFileValues(tokens: string[]): string[] {
-  const out: string[] = [];
-  for (const token of tokens.slice(1)) {
-    if (token.startsWith("--file=")) {
-      out.push(token.slice("--file=".length));
-      continue;
-    }
-    const match = /^-[A-Za-z]*f(.+)$/.exec(token);
-    if (match) out.push(match[1]!);
-  }
-  return out;
-}
-
 /**
  * Whether `child` resolves inside `parent`.
  *
@@ -347,38 +207,6 @@ function containsPath(parent: string, child: string, path: CoreEnvPath): boolean
   const normalizedChild = canonical(child);
   if (normalizedChild === normalizedParent) return true;
   return normalizedChild.startsWith(`${normalizedParent}/`);
-}
-
-/**
- * Output redirections that cannot create, truncate, or modify a file — so they are not writes.
- *
- * - `2>&1` / `1>&2` / `>&2` — duplicate a descriptor onto another *descriptor*.
- * - `>/dev/null` / `2>/dev/null` — the null device discards the stream.
- *
- * Everything else containing `>` keeps the conservative write verdict. A `>` inside a quoted
- * argument (`grep ">" file`) is not shell syntax and is still counted as one; the whole-string
- * scan cannot tell, and the asymmetry is deliberate — a false positive costs one approval
- * prompt, while a false negative would auto-approve a real write.
- *
- * Only these two forms qualify: a redirection to a *named* target is exactly how a shell
- * creates or truncates a file, so it must keep asking. `2>&1` was the single most common cause
- * of spurious prompts in real plan/debug sessions (`cmd 2>&1 | tail`), i.e. shell noise that
- * every command carries and none of it writes.
- */
-const BENIGN_REDIRECTION = /(?:[12]?&>|[12]?>)\s*(&[12-]|\/dev\/null|[12][>&]?)/g;
-
-/**
- * Whether a command string redirects to a file (a write).
- *
- * `>>>` is not a redirection (it is not shell syntax); everything else containing `>` is
- * treated as one. Input redirection (`<`) is not a write. Known-benign output redirections
- * ({@link BENIGN_REDIRECTION}) are removed before the scan.
- *
- * Only consulted when the *per-command* source is unavailable — see
- * {@link hasWriteRedirectionAcrossCommands} for why a whole-string scan is wrong.
- */
-function hasWriteRedirection(source: string): boolean {
-  return />/.test(source.replace(BENIGN_REDIRECTION, " ").replace(/<<<?/g, ""));
 }
 
 /**
@@ -643,38 +471,6 @@ function classifyReadOnly(
 }
 
 /**
- * Whether any command inside a compound string writes via redirection.
- *
- * Split from {@link hasWriteRedirection} because the tokenizer strips a redirection's
- * *operator* before the analyzer sees a command: it deliberately drops `> out.txt` (the AST
- * path skips those nodes too), so `cmd.source` no longer contains the `>`.
- *
- * The fallback therefore has to look for redirection somewhere else, and an earlier version
- * looked at the whole original string — which is wrong whenever the shells being classified
- * assign a different meaning to `>`:
- *
- * - PowerShell comparison operators: `if ($a -gt $b)`, and `->` in an argument
- * - cmd.exe: `>` is the redirection, but the surrounding syntax differs enough that a global
- *   scan cannot attribute it to a command
- *
- * Attributing the redirection to the specific segment it appears in keeps the result tied to a
- * real shell operator. A segment whose redirection cannot be parsed this way still ends up
- * `not read-only`, so the conservative outcome is preserved.
- *
- * Only `>` counts. `|` is a separator (the tokenizer splits on it), and treating other
- * operators as writes would misclassify read-only commands on the shells this fallback exists
- * for.
- */
-function hasWriteRedirectionAcrossCommands(command: string): boolean {
-  // Strip benign redirections BEFORE splitting on `&` / `|`: the separators cut `2>&1` into
-  // `2>` and `1`, and the orphaned `>` then reads as a write in an otherwise read-only line.
-  return command
-    .replace(BENIGN_REDIRECTION, " ")
-    .split(/&&|\|\||[;|\n]|&/)
-    .some((segment) => hasWriteRedirection(segment));
-}
-
-/**
  * Background marker (` & ` / trailing `&`), excluding `&&`.
  *
  * A `&` that is part of a redirection is not a background marker: `2>&1` duplicated a
@@ -786,8 +582,13 @@ function analyzeParsedCommands(
     const isReadOnly = harmless && classifyReadOnly(name, prefix, normalized, cmd.tokens, ctx);
 
     const fileOps: FileOpAnalysis[] = [];
-    if (FILE_COMMANDS.has(name) || PATH_OPERAND_COMMANDS.has(name)) {
-      for (const rawArg of pathArgs(cmd.tokens)) {
+    if (PATH_BEARING_COMMANDS.has(name)) {
+      // Token operands plus every `<` object in the WHOLE command string. A redirection can attach
+      // to a compound/subshell (`{ cat; } < /etc/shadow`), where it belongs to no single command
+      // node, and the fallback tokenizer strips it from `cmd.source` as well. Charging a sibling
+      // command with it can only ask more often, never less.
+      const candidates = Array.from(new Set([...pathArgs(cmd.tokens), ...readRedirectionTargets(originalCommand)]));
+      for (const rawArg of candidates) {
         const expanded = expandArg(rawArg, ctx);
         const globbed = globPrefix(expanded);
         if (isDynamicArg(rawArg) || expanded.includes("$") || expanded === "" || globbed === undefined) {

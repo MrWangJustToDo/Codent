@@ -33,6 +33,13 @@ export class BusExtensionEventBus implements ExtensionEventBus {
 
   on<T extends InterceptableEvent>(type: string, handler: EventInterceptor<T>, rank?: DispatchRank): () => void {
     const key = handler as EventInterceptor<InterceptableEvent>;
+    // Idempotent per (type, handler). A second registration for the SAME function used to add a
+    // second interceptor to the bus while this map kept only the newest disposer, so `off()` (and
+    // a host's disable path) removed one copy and the other kept running every dispatch — "off
+    // succeeded but the handler still fires, twice". Re-registering is a no-op that hands back the
+    // live disposer.
+    const existing = this.disposers.get(type)?.get(key);
+    if (existing) return existing;
     const unsub = this.bus.onIntercept(type, handler, rank);
     const byHandler = this.disposers.get(type) ?? new Map();
     byHandler.set(key, unsub);

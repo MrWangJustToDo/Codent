@@ -26,7 +26,7 @@ export interface LifecycleCoordinatorDeps {
    * emits `agent:extension-error` / `session:save-error` producers that must still reach a sink —
    * otherwise the failures that explain a bad shutdown are the ones dropped.
    */
-  retainLog?: (id: string, log: AgentLog) => void;
+  retainLog?: (id: string, log: AgentLog, meta?: { runId?: string; sessionId?: string }) => void;
   /** Release a retained log once its teardown has flushed and settled. */
   releaseLog?: (id: string) => void;
 }
@@ -142,7 +142,11 @@ export class LifecycleCoordinator {
     })();
     this.trackTeardown(teardown);
 
-    this.deps.retainLog?.(id, managedAgent.log);
+    // Snapshot the envelope identity while the agent still knows it: the registry entry is about to
+    // be removed, and `resolveMeta` cannot answer for a retained log afterwards.
+    // Optional-call: structural hosts (validators, embedded harnesses) drive this coordinator with
+    // a fake that has no envelope accessor; attribution is an improvement, not a requirement.
+    this.deps.retainLog?.(id, managedAgent.log, managedAgent.getEventContext?.());
     this.deps.registry.delete(id);
   }
 
