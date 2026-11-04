@@ -424,9 +424,6 @@ export class ManagedAgent {
   private readonly modelFacet: ModelFacet;
   /** Explicit axes behind {@link currentStatus}; `transitionStatus` is the writer. */
   private agentState: AgentState = deriveAgentState("idle");
-  private error: string;
-  /** The last run's model finish reason, projected on the state channel. */
-  private lastFinishReason: string | null = null;
   /** Tools awaiting user approval in the current run (set by approval middleware). */
   private pendingApprovalCount: number;
   /** Nesting depth of a session restore (see `beginSessionRestore`). */
@@ -442,12 +439,6 @@ export class ManagedAgent {
   private interactionsRevision = -1;
   /** Set by {@link markDestroyed}: late async continuations must not start work on a dead runtime. */
   private destroyed = false;
-  /** Agent-loop progress for the current run; null until the first iteration. */
-  private iterationState: AgentIterationState | null = null;
-  /** The last finalized turn's reading, kept across the terminal reset (see `finalizeRun`). */
-  private lastIterationState: AgentIterationState | null = null;
-  /** Live LLM retry visibility (set by stream recovery; cleared when the stream recovers). */
-  private retryInfo: AgentRetryState | null = null;
   /** Session-transition state coalescing: publish one L1 frame after unload/load commits. */
   private stateBatchDepth = 0;
   private stateBatchPending = false;
@@ -761,14 +752,14 @@ export class ManagedAgent {
       getStatus: () => this.getStatus(),
       transition: (event) => this.transitionStatus(event),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
-      getError: () => this.error,
+      getError: () => this.getError(),
       setError: (error) => this.setError(error),
       setPendingApprovalCount: (count) => this.setPendingApprovalCount(count),
       // Same transcript the retained `interactions` projection reads, so the count and the list
       // can never describe two different states.
       getMessages: () => this.getUI()?.getMessages() ?? [],
       setFinishReason: (reason) => {
-        this.lastFinishReason = reason;
+        this.run.setLastFinishReason(reason);
       },
       // The controller is built before `this.mode`; the callback is read per call, at runtime.
       shouldAutoApprove: () => this.mode.shouldAutoApprove(),
@@ -842,7 +833,7 @@ export class ManagedAgent {
     // L1 state + local emitter (inline inits)
     // ============================================================================
     this.currentStatus = "idle";
-    this.error = "";
+    this.run.setError("");
     this.pendingApprovalCount = 0;
 
     // ====================================================================================
@@ -899,7 +890,7 @@ export class ManagedAgent {
         resetRunOutcome: () => this.resetRunOutcome(),
         clearErrorAndRetry: () => {
           this.setError("");
-          this.retryInfo = null;
+          this.run.setRetryState(null);
         },
         clearPendingApprovals: () => {
           this.pendingApprovalCount = 0;
@@ -1018,7 +1009,7 @@ export class ManagedAgent {
   }
 
   getError(): string {
-    return this.error;
+    return this.run.getError();
   }
 
   getPendingApprovalCount(): number {
@@ -1039,7 +1030,7 @@ export class ManagedAgent {
 
   /** Model finish reason of the last completed run, or null before one. */
   getLastFinishReason(): string | null {
-    return this.lastFinishReason;
+    return this.run.getLastFinishReason();
   }
 
   /**
@@ -1091,7 +1082,7 @@ export class ManagedAgent {
    * Re-derives the axes from the status; new writers use {@link transitionStatus}.
    */
   setStatus(status: AgentStatus, event?: AgentStateEventType): void {
-    this.agentState = deriveAgentState(status, this.error);
+    this.agentState = deriveAgentState(status, this.getError());
     this.applyStatus(status, event);
   }
 
@@ -1127,7 +1118,7 @@ export class ManagedAgent {
     if (status === "completed" || status === "aborted" || status === "error") {
       this.recordStreamDuration();
       // Terminal — any in-flight retry visibility is over.
-      this.retryInfo = null;
+      this.run.setRetryState(null);
     }
     this.currentStatus = status;
     // Timeline: an actual transition is a fact, so it is published as one (`agent:status`).
@@ -1161,7 +1152,7 @@ export class ManagedAgent {
   }
 
   setError(error: string): void {
-    this.error = error;
+    this.run.setError(error);
     this.emitStateChange();
   }
 
@@ -1178,12 +1169,12 @@ export class ManagedAgent {
   }
 
   getRetry(): AgentRetryState | null {
-    return this.retryInfo;
+    return this.run.getRetryState();
   }
 
   /** @internal Used by stream recovery to surface retry progress to hosts. */
   setRetry(retry: AgentRetryState | null): void {
-    this.retryInfo = retry;
+    this.run.setRetryState(retry);
     this.emitStateChange();
   }
 
@@ -1246,14 +1237,14 @@ export class ManagedAgent {
       state: this.agentState,
       name: this.name,
       sessionId: this.getSessionData()?.id ?? null,
-      error: this.error,
+      error: this.getError(),
       pendingApprovalCount: this.pendingApprovalCount,
-      ...(this.retryInfo ? { retry: this.retryInfo } : {}),
+      ...(this.run.getRetryState() ? { retry: this.run.getRetryState() } : {}),
       model: this.config.model,
       modelInfo: this.modelInfo,
       reasoningEffort: this.config.reasoningEffort ?? null,
-      lastFinishReason: this.lastFinishReason,
-      lastIteration: this.lastIterationState,
+      lastFinishReason: this.run.getLastFinishReason(),
+      lastIteration: this.run.getLastIterationState(),
       // Set at the end of a run, so it has to ride the state event that follows the status flip.
       lastStreamDurationMs: this.getLastStreamDurationMs(),
     };
@@ -1285,7 +1276,12 @@ export class ManagedAgent {
 
   /** Current agent-loop progress (1-based iteration vs budget); `{current:0}` when idle. */
   readIteration(): AgentIterationState {
-    return this.iterationState ?? { current: 0, max: this.config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS };
+    return (
+      this.run.getIterationState() ?? {
+        current: 0,
+        max: this.config.maxIterations ?? DEFAULT_AGENT_MAX_ITERATIONS,
+      }
+    );
   }
 
   /**
@@ -1318,7 +1314,7 @@ export class ManagedAgent {
    * @internal
    */
   setIterationProgress(state: AgentIterationState): void {
-    this.iterationState = state;
+    this.run.setIterationState(state);
     this.eventBus?.emit("agent:iteration", state);
   }
 
@@ -1326,8 +1322,8 @@ export class ManagedAgent {
   resetIterationProgress(): void {
     // finalizeRun and resetTransientState can both reach a terminal/reset path;
     // only publish when there is progress to clear.
-    if (this.iterationState === null) return;
-    this.iterationState = null;
+    if (this.run.getIterationState() === null) return;
+    this.run.setIterationState(null);
     this.eventBus?.emit("agent:iteration", this.readIteration());
   }
 
@@ -1339,8 +1335,8 @@ export class ManagedAgent {
    * by the next run's start/finish.
    */
   resetRunOutcome(): void {
-    this.lastFinishReason = null;
-    this.lastIterationState = null;
+    this.run.setLastFinishReason(null);
+    this.run.setLastIterationState(null);
     this.run.resetLastStreamDuration();
   }
 
@@ -1998,7 +1994,7 @@ export class ManagedAgent {
     // Keep the reading before the reset: the turn may have ended exactly at its budget, and the
     // stop reason is classified AFTER finalize (ACP). The status flip inside the finalize is what
     // publishes `lastIteration`, so both writes must land before it runs.
-    this.lastIterationState = this.iterationState;
+    this.run.setLastIterationState(this.run.getIterationState());
     // A terminal turn (or an abort) must not leave the retained `iteration` channel
     // reporting the last model turn of the run.
     this.resetIterationProgress();

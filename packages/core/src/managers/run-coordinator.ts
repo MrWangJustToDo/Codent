@@ -1,5 +1,7 @@
 import { isAbortError as matchesAbortError } from "../runtime-types/abort.js";
 
+import type { AgentRetryState } from "../runtime-types/agent-retry.js";
+import type { AgentIterationState } from "../runtime-types/session-payloads.js";
 import type { MultimodalPartType } from "../utils/multimodal-part-types.js";
 
 export interface AbortControllerSetup {
@@ -165,6 +167,56 @@ export class RunCoordinator {
   /** Whether the latest begun run is still current (no interrupt/supersede since). */
   isCurrentRunValid(): boolean {
     return this.currentRunToken?.valid ?? false;
+  }
+
+  // ==========================================================================
+  // Run outcome surface (status text, finish reason, iteration, retry)
+  // ==========================================================================
+
+  private errorMessage = "";
+  private lastFinishReason: string | null = null;
+  private iterationState: AgentIterationState | null = null;
+  private lastIterationState: AgentIterationState | null = null;
+  private retryInfo: AgentRetryState | null = null;
+
+  getError(): string {
+    return this.errorMessage;
+  }
+
+  setError(error: string): void {
+    this.errorMessage = error;
+  }
+
+  getLastFinishReason(): string | null {
+    return this.lastFinishReason;
+  }
+
+  setLastFinishReason(reason: string | null): void {
+    this.lastFinishReason = reason;
+  }
+
+  getIterationState(): AgentIterationState | null {
+    return this.iterationState;
+  }
+
+  setIterationState(state: AgentIterationState | null): void {
+    this.iterationState = state;
+  }
+
+  getLastIterationState(): AgentIterationState | null {
+    return this.lastIterationState;
+  }
+
+  setLastIterationState(state: AgentIterationState | null): void {
+    this.lastIterationState = state;
+  }
+
+  getRetryState(): AgentRetryState | null {
+    return this.retryInfo;
+  }
+
+  setRetryState(retry: AgentRetryState | null): void {
+    this.retryInfo = retry;
   }
 
   // ==========================================================================
