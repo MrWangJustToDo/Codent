@@ -25,6 +25,7 @@
 import { createCodeMode } from "@tanstack/ai-code-mode";
 
 import { errorMessage } from "../../utils/errors.js";
+import { resolveApprovalRequirement } from "../approval/approval-requirement.js";
 import { BUILTIN_EXTENSION_ORDER } from "../dispatch-order.js";
 
 import { normalizeBindingName, renameCodeModeTools } from "./binding-names.js";
@@ -180,10 +181,8 @@ export function createCodeModeExtension(options: CodeModeExtensionConfig = {}): 
       // sandbox `external_*` call runs a tool's raw `execute` and cannot raise the host approval
       // interrupt. The previous `allowApprovalTools` opt-in therefore has no reachable behaviour
       // and was removed rather than kept as a flag that only throws during activation.
-      const approvalGated = requestedTools.filter(
-        (tool) => (tool as { needsApproval?: boolean }).needsApproval === true
-      );
-      const tools = requestedTools.filter((tool) => (tool as { needsApproval?: boolean }).needsApproval !== true);
+      const approvalGated = requestedTools.filter((tool) => resolveApprovalRequirement(tool).requiresApproval);
+      const tools = requestedTools.filter((tool) => !resolveApprovalRequirement(tool).requiresApproval);
       if (approvalGated.length > 0) {
         ctx.logger.warn(
           `Code Mode: skipped approval-gated tool(s) because the sandbox bypasses the approval chain: ${approvalGated

@@ -52,6 +52,7 @@ import {
   type UIMessage as TanStackUIMessage,
 } from "@tanstack/ai";
 
+import { resolveApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import { AutoModeController } from "../agent/approval/auto-mode-controller.js";
 import { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
@@ -3018,7 +3019,7 @@ export class ManagedAgent {
     // narrow (no policy is decided from it — only the legacy accessor).
     const tools = this.extensions.getManagedToolsProvider()?.() ?? {};
     const tool = tools[toolName];
-    return tool != null && (tool as { needsApproval?: boolean }).needsApproval === true;
+    return tool != null && resolveApprovalRequirement(tool).requiresApproval;
   }
 
   /** Agent-local model-output shaping; the live tool entry wins. */

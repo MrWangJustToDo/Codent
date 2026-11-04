@@ -54,6 +54,8 @@ import {
 // Minimal CoreEnv: the real grammar path must run, or case 6 is a false green.
 // ----------------------------------------------------------------------------
 
+import { fakePolicyFacts } from "./helpers/mode-state.mjs";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const grammarDir = path.resolve(
   here,
@@ -266,7 +268,8 @@ function makeCoordinator(env) {
       return 1;
     },
     upsertApproval: (input) => approvals.push(input),
-    shouldAutoApprove: () => false,
+    getPolicyFacts: () => fakePolicyFacts(),
+    getApprovalRequirement: () => ({ requiresApproval: true, source: "declared" }),
     reconcile: () => {},
     persist: () => {},
     enqueueRun: async () => {},
@@ -278,7 +281,7 @@ function makeCoordinator(env) {
 
 {
   const { coordinator, responses } = makeCoordinator();
-  await coordinator.applyCommandSafetyPolicy();
+  await coordinator.authorizePendingApprovals();
   assert.equal(responses.length, 1, "without env, a read-only command is auto-approved");
   assert.equal(responses[0].approved, true, "and the answer is `approved`");
 }
@@ -286,7 +289,7 @@ function makeCoordinator(env) {
 {
   // `CI` is the important one: a text-only or deny-list verdict would auto-approve it here.
   const { coordinator, responses } = makeCoordinator({ CI: "1" });
-  await coordinator.applyCommandSafetyPolicy();
+  await coordinator.authorizePendingApprovals();
   assert.equal(
     responses.length,
     0,

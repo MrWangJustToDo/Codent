@@ -57,7 +57,7 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 - [x] 5.6 Move plan/subagent/code-mode availability into policy facts and make the offered tool list a projection of them (depends: 3.1, 5.1)
 - [x] 5.7 Move auto / plan-execution auto-approval into the pipeline; reduce `ApprovalDecisionCoordinator` to the answer writer (depends: 5.3, 3.2)
 - [x] 5.8 Make the approval table the single decision store; derive the tool part, resume map, JSONL row and event `source` from it (depends: 5.3)
-- [ ] 5.9 Delete duplicate gates and raw `needsApproval` policy reads (depends: 5.4–5.8)
+- [x] 5.9 Delete duplicate gates and raw `needsApproval` policy reads (depends: 5.4–5.8)
 - [ ] 5.10 Add `validate:authorize-matrix` (tool × mode × path × env × subagent × rules × annotations) (depends: 1.4, 5.1–5.9)
 
 ## 6. P4 — Three state axes and derived status

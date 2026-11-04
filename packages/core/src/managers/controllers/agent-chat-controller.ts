@@ -156,7 +156,6 @@ export class AgentChatController {
           input.decidedAt,
           input.overwrite ? { overwrite: input.overwrite } : undefined
         ),
-      shouldAutoApprove: () => this.managed.shouldAutoApprovePendingTools(),
       getPolicyFacts: () => this.managed.getPolicyFacts(),
       getApprovalRequirement: (toolName) => this.managed.getApprovalRequirement(toolName),
       reconcile: () => this.managed.statusController.reconcileWithPolicy(this.channel.getMessages(), "during-run"),

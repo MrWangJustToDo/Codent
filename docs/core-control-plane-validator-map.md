@@ -54,7 +54,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | Existing gate | Covers |
 |---|---|
 | `validate:approval-decisions`, `validate:tool-approval-resume` | decision table + resume map |
-| **New (A3/A10)** | `validate:authorize-pipeline` (created; stage order + deny precedence), `validate:authorize-matrix` (planned) |
+| **New (A3/A9/A10)** | `validate:authorize-pipeline` (stage order + deny precedence), `validate:authorize-matrix` (15 combination cases), `validate:approval-descriptor` (raw flag gate) |
 | `validate:approval-batch-resume` | held calls on terminal; pending `ask_user` |
 | `validate:auto-mode-approvals` | auto mode answers pending approvals |
 | `validate:command-safety-portability`, `validate:command-safety-readonly`, `validate:command-env-safety`, `validate:safe-command` | command analysis + env overrides |
@@ -114,7 +114,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | No gate on the number of writers for status/epoch/ownership | G1 | `validate:control-plane-writers` (created) |
 | No old/new equivalence harness | E10 / S10 / A10 / T9 | `helpers/equivalence.mjs` (created); epoch equivalence (created); session/authorize/state matrices (planned) |
 | No session-switch failure matrix (rollback per phase) | S10 | `validate:session-lease-matrix` (created) |
-| No single authorization decision matrix | A10 | planned |
+| No single authorization decision matrix | A10 | `validate:authorize-matrix` (created; env/rules pending) |
 | No state transition matrix / illegal-transition check | T9 | planned |
 | No epoch single-source guard | E10 | `validate:epoch-single-source` (created) |
 | No mode single-read guard | M5 | `validate:mode-single-read` (created) |

@@ -13,6 +13,8 @@ import assert from "node:assert/strict";
 
 import { ApprovalDecisionCoordinator, ToolApprovalTable } from "../dist/dev.mjs";
 
+import { fakePolicyFacts } from "./helpers/mode-state.mjs";
+
 function toolCall(id, name, command, approvalId, extra = {}) {
   return {
     type: "tool-call",
@@ -50,7 +52,8 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
       return at;
     },
     upsertApproval: (input) => upserts.push(input),
-    shouldAutoApprove: () => auto,
+    getPolicyFacts: () => fakePolicyFacts({ auto }),
+    getApprovalRequirement: () => ({ requiresApproval: true, source: "declared" }),
     reconcile: () => {
       reconciles += 1;
     },
@@ -119,14 +122,14 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 // ---------------------------------------------------------------------------
 {
   const ctrl = makeCoordinator({ auto: true });
-  ctrl.coordinator.autoApprovePending();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 2);
   assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 0 });
 }
 
 {
-  const ctrl = makeCoordinator({ auto: false });
-  ctrl.coordinator.autoApprovePending();
+  const ctrl = makeCoordinator({ auto: false, evaluate: async () => ({ action: "ask" }) });
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 0);
   assert.deepEqual(ctrl.stats(), { reconciles: 0, persists: 0, pumps: 0 });
 }
@@ -136,7 +139,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 // ---------------------------------------------------------------------------
 {
   const ctrl = makeCoordinator({ evaluate: async () => ({ action: "allow" }) });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 2, "both pending run_command calls are evaluated");
   assert.equal(ctrl.upserts[0].status, "approved");
   assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 0 });
@@ -147,7 +150,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
     messages: [{ id: "a", role: "assistant", parts: [toolCall("call", "run_command", "rm -rf x", "ap")] }],
     evaluate: async () => ({ action: "deny", reason: "blocked" }),
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.upserts[0].status, "denied");
   assert.equal(ctrl.upserts[0].reason, "blocked");
   assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 0 });
@@ -158,7 +161,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
     messages: [{ id: "a", role: "assistant", parts: [toolCall("call", "run_command", "rm -rf x", "ap")] }],
     evaluate: async () => ({ action: "ask" }),
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 0, "ask stays pending for the user");
   assert.deepEqual(ctrl.stats(), { reconciles: 0, persists: 0, pumps: 0 });
 }
@@ -183,7 +186,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
     evaluate: async () => ({ action: "deny", reason: "blocked by rules" }),
     diagnostic: (message, details) => diagnostics.push({ message, details }),
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 1, "the denial replaces the racing approval");
   assert.deepEqual(
     { approved: ctrl.decisions[0].approved, overwrite: ctrl.decisions[0].overwrite },
@@ -215,7 +218,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
       return { action: "allow" };
     },
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(evaluated, 1, "an approval is re-checked so a later denial can still land");
   assert.equal(ctrl.decisions.length, 0, "an allow never rewrites an answered call");
 }
@@ -244,7 +247,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
       return { action: "deny" };
     },
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
+  await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(evaluated, 0, "executed and denied calls are not re-evaluated");
   assert.equal(ctrl.decisions.length, 0);
 }
@@ -257,8 +260,9 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
       throw new Error("auto mode must not evaluate the policy");
     },
   });
-  await ctrl.coordinator.applyCommandSafetyPolicy();
-  assert.equal(ctrl.decisions.length, 0);
+  await ctrl.coordinator.authorizePendingApprovals();
+  assert.equal(ctrl.decisions.length, 1, "auto mode approves without running command analysis");
+  assert.equal(ctrl.upserts[0].status, "approved");
 }
 
 // ---------------------------------------------------------------------------

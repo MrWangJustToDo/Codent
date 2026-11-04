@@ -12,10 +12,10 @@ import { ToolAuthorizationService } from "../agent/approval/tool-authorization.j
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
 
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
-import type { ToolApprovalRecord } from "../agent/persistence/types.js";
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
 import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "../agent/approval/tool-authorization.js";
 import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
+import type { ToolApprovalRecord } from "../agent/persistence/types.js";
 import type { CommandApprovalDecision } from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { UIMessage } from "@tanstack/ai";
@@ -46,9 +46,8 @@ export interface ApprovalDecisionCoordinatorDeps {
     decidedAt: number;
     overwrite?: "deny";
   }) => void;
-  shouldAutoApprove: () => boolean;
   /** Policy snapshot for the one authorization pipeline (mode + profile + capabilities). */
-  getPolicyFacts?: () => AgentPolicyFacts;
+  getPolicyFacts: () => AgentPolicyFacts;
   /** The registered tool's declarative requirement (falls back to the raw flag for old hosts). */
   getApprovalRequirement?: (toolName: string) => ApprovalRequirement | undefined;
   /** Status reconcile + persistence after a batch of decisions. */
@@ -93,14 +92,13 @@ export class ApprovalDecisionCoordinator {
   constructor(private readonly deps: ApprovalDecisionCoordinatorDeps) {
     this.authorization = new ToolAuthorizationService({
       getMessages: deps.getMessages,
-      ...(deps.getPolicyFacts ? { getPolicyFacts: deps.getPolicyFacts } : {}),
+      getPolicyFacts: deps.getPolicyFacts,
       ...(deps.getApprovalRequirement ? { getApprovalRequirement: deps.getApprovalRequirement } : {}),
       ...(deps.isIncumbentTool ? { isIncumbentTool: deps.isIncumbentTool } : {}),
       isSessionSwitching: deps.isSessionSwitching,
       getCoreEnv: deps.getCoreEnv,
       ...(deps.evaluateCommandSafety ? { evaluateCommandSafety: deps.evaluateCommandSafety } : {}),
       ...(deps.reportDiagnostic ? { reportDiagnostic: deps.reportDiagnostic } : {}),
-      shouldAutoApprove: deps.shouldAutoApprove,
       recordDecision: (input) => this.recordDecision(input),
       settle: () => this.settle(),
     });
@@ -162,38 +160,9 @@ export class ApprovalDecisionCoordinator {
     }
   }
 
-  /**
-   * The pump's decision step, delegated to the authorization service.
-   *
-   * Legacy hosts without a policy snapshot keep the old two-step behavior; new hosts run one
-   * `authorizeToolCall` per pending call (auto/plan, declarative requirement, command analysis).
-   */
+  /** The pump's decision step: one `authorizeToolCall` per unresolved gated call. */
   async authorizePendingApprovals(): Promise<void> {
-    if (!this.deps.getPolicyFacts) {
-      this.autoApprovePending();
-      await this.applyCommandSafetyPolicy();
-      return;
-    }
     return this.authorization.authorizePendingApprovals();
-  }
-
-  /** Auto mode / plan execution: approve everything pending, without scheduling a pump. */
-  autoApprovePending(): void {
-    if (!this.deps.shouldAutoApprove()) return;
-
-    // Same set and same decision as `approvePendingApprovals`; only the pump differs. The old
-    // hand-rolled part scan repeated `isPendingToolApprovalPart` and could drift from the
-    // collection the retained interaction channel uses (it also visited non-assistant messages).
-    const pending = collectPendingApprovals(this.deps.getMessages());
-    if (pending.length === 0) return;
-
-    this.approveAll(pending);
-    this.settle();
-  }
-
-  /** Command-safety policy (delegated; kept for hosts/tests that call it directly). */
-  async applyCommandSafetyPolicy(): Promise<void> {
-    return this.authorization.applyCommandSafetyPolicy();
   }
 
   /** Record approval for every pending interaction, in the order the collector returned them. */
