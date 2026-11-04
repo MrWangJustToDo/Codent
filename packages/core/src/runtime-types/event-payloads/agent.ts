@@ -6,6 +6,7 @@
  */
 
 import type { AgentRetryStrategy } from "../agent-retry.js";
+import type { AgentStateEventType } from "../agent-state.js";
 import type { AgentStatusTrigger, RunFinalizeReason } from "../agent-status.js";
 import type { SessionJobSummary } from "../session-payloads.js";
 
@@ -101,6 +102,10 @@ export type AgentEventPayloads = {
     to: string;
     /** Why the status moved; the same closed union `setStatus` accepts. */
     trigger?: AgentStatusTrigger;
+    /** The transition event that produced it (the closed state-machine vocabulary). */
+    event?: AgentStateEventType;
+    /** The wait the transition established, when it is a pause. */
+    wait?: "approval" | "question";
   };
   "agent:extension-error": {
     extensionId?: string;

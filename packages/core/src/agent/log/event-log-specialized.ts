@@ -224,6 +224,18 @@ const MECHANICAL_STATUS_TRIGGERS: ReadonlySet<AgentStatusTrigger> = new Set([
   "before-tool-call",
 ]);
 
+/** Transition events whose meaning is already carried by a dedicated event. */
+const MECHANICAL_STATE_EVENTS: ReadonlySet<string> = new Set([
+  "prepare",
+  "stream-start",
+  "stream-chunk",
+  "settle",
+  "reset",
+  "compaction-start",
+  "compaction-end",
+  "teardown",
+]);
+
 /** Terminal outcomes a reader scans for, whatever moved the status there. */
 const NOTABLE_STATUSES: ReadonlySet<string> = new Set(["error", "aborted"]);
 
@@ -231,9 +243,16 @@ function logAgentStatus(log: AgentLog, event: AgentEvent): void {
   const d = p(event);
   const to = typeof d.to === "string" ? d.to : "unknown";
   const trigger = typeof d.trigger === "string" ? (d.trigger as AgentStatusTrigger) : undefined;
+  const stateEvent = typeof d.event === "string" ? d.event : undefined;
+  const wait = typeof d.wait === "string" ? d.wait : undefined;
   if (!NOTABLE_STATUSES.has(to)) {
     // A transition nobody explained is worth a row; the pump's bookkeeping is not.
-    if (trigger) {
+    if (stateEvent) {
+      if (MECHANICAL_STATE_EVENTS.has(stateEvent)) return;
+      // An approval pause is bracketed by the request/resolve rows; a client question is not
+      // (ask_user emits neither), so its pause/resume stays visible.
+      if ((stateEvent === "pause" || stateEvent === "resume") && wait !== "question") return;
+    } else if (trigger) {
       if (trigger.startsWith("compaction:")) return;
       if (MECHANICAL_STATUS_TRIGGERS.has(trigger)) return;
     }
@@ -242,6 +261,8 @@ function logAgentStatus(log: AgentLog, event: AgentEvent): void {
     from: d.from,
     to,
     ...(trigger ? { trigger } : {}),
+    ...(stateEvent ? { event: stateEvent } : {}),
+    ...(wait ? { wait } : {}),
   });
 }
 

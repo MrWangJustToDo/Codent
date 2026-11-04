@@ -47,6 +47,8 @@ export type AgentTransitionEvent =
   | { type: "reset" }
   | { type: "teardown" };
 
+export type AgentStateEventType = AgentTransitionEvent["type"];
+
 export const INITIAL_AGENT_STATE: AgentState = {
   lifecycle: "created",
   run: "idle",

@@ -97,6 +97,7 @@ import {
   projectAgentStatus,
   transition,
   type AgentState,
+  type AgentStateEventType,
   type AgentTransitionEvent,
 } from "../runtime-types/agent-state.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
@@ -1082,7 +1083,7 @@ export class ManagedAgent {
     });
     this.agentState = next;
     const status = projectAgentStatus(next);
-    this.applyStatus(status, trigger);
+    this.applyStatus(status, trigger, event.type, next.wait === "none" ? undefined : next.wait);
     return status;
   }
 
@@ -1091,7 +1092,12 @@ export class ManagedAgent {
     return this.agentState;
   }
 
-  private applyStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
+  private applyStatus(
+    status: AgentStatus,
+    trigger?: AgentStatusTrigger,
+    stateEvent?: AgentStateEventType,
+    wait?: "approval" | "question"
+  ): void {
     const prev = this.currentStatus;
     if (status === "completed" || status === "aborted" || status === "error") {
       this.recordStreamDuration();
@@ -1105,7 +1111,13 @@ export class ManagedAgent {
     // status, reconcile — are already described by the events that caused them, and suppressing
     // them here is what keeps the timeline from being 31% status lines.
     if (prev !== status) {
-      this.emitEvent("agent:status", { from: prev, to: status, ...(trigger ? { trigger } : {}) });
+      this.emitEvent("agent:status", {
+        from: prev,
+        to: status,
+        ...(trigger ? { trigger } : {}),
+        ...(stateEvent ? { event: stateEvent } : {}),
+        ...(wait ? { wait } : {}),
+      });
     }
     this.emitStateChange();
   }
