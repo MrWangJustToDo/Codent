@@ -23,6 +23,75 @@ function activeLease(id, onRelease = () => {}) {
   return lease;
 }
 
+/**
+ * Build the four session ports from a flat fake host.
+ *
+ * The service now takes `SessionRuntime`; the fakes below still describe the individual callbacks,
+ * and this adapter keeps those tests readable without re-declaring the whole port shape.
+ */
+function runtime(host) {
+  return {
+    lease:
+      host.lease ??
+      new SessionLease("agent", {
+        acquire: host.acquireSessionOwnership ?? (() => true),
+        release: host.releaseSessionOwnership ?? (() => {}),
+      }),
+    run: {
+      run: host.run ?? { resetRunState: () => {}, resetTurnLifecycle: () => {} },
+      statusController: host.statusController ?? { resetToIdle: () => {} },
+      stopActiveRun: host.stopActiveRun ?? (() => {}),
+      clearQueuedInput: host.clearQueuedInput ?? (() => {}),
+      abortManualCompaction: host.abortManualCompaction ?? (() => {}),
+      cascadeAbortToChildren: host.cascadeAbortToChildren ?? (() => {}),
+      discardPreforkRuns: host.discardPreforkRuns ?? (() => {}),
+      resetRunOutcome: host.resetRunOutcome,
+      clearErrorAndRetry: host.clearErrorAndRetry ?? (() => {}),
+      clearPendingApprovals: host.clearPendingApprovals ?? (() => {}),
+      syncInteractionStateFromUIMessages: host.syncInteractionStateFromUIMessages,
+    },
+    transcript: {
+      sessionPersistence: host.sessionPersistence,
+      getSessionData: host.getSessionData,
+      setSessionData: host.setSessionData ?? (() => {}),
+      getSessionStore: host.getSessionStore ?? (() => null),
+      awaitPersistIdle: host.awaitSessionPersistIdle ?? (async () => {}),
+      getChatController: host.getChatController ?? (() => undefined),
+      bindSessionLogSink: host.bindSessionLogSink ?? (() => {}),
+      emitSessionNew: host.emitSessionNew ?? (() => {}),
+      emitSessionSwitch: host.emitSessionSwitch ?? (() => {}),
+      refreshState: host.refreshState ?? (() => {}),
+      refreshSubagents: host.refreshSubagents,
+      beginStateBatch: host.beginStateBatch,
+      endStateBatch: host.endStateBatch,
+      beginSessionRestore: host.beginSessionRestore,
+      endSessionRestore: host.endSessionRestore,
+      resetSessionSyncTracker: host.resetSessionSyncTracker ?? (() => {}),
+      resetIterationProgress: host.resetIterationProgress ?? (() => {}),
+    },
+    mode: {
+      mode: host.mode ?? { reset: () => {} },
+      approvals: host.approvals ?? { clear: () => {} },
+      resetTurnContext: host.resetTurnContext ?? (() => {}),
+      resetMediaHydrationMisses: host.resetMediaHydrationMisses ?? (() => {}),
+    },
+    sidecars: {
+      getCompaction: host.getCompaction ?? (() => ({ resetReactiveCompactRetries: () => {} })),
+      memory: host.memory ?? { resetState: () => {} },
+      usage: host.usage ?? { reset: () => {} },
+      streamHub: host.streamHub ?? { endAllCommands: () => {}, clearAll: () => {} },
+      getTodoManager: host.getTodoManager ?? (() => ({ reset: () => {} })),
+      getToolCompactCache: host.getToolCompactCache,
+      clearExtensionUi: host.clearExtensionUi,
+      destroyChildAgents: host.destroyChildAgents ?? (() => {}),
+      clearTaskRuns: host.clearTaskRuns ?? (() => {}),
+      resetBackgroundWork: host.resetBackgroundWork ?? (() => {}),
+      resumeBackgroundWork: host.resumeBackgroundWork,
+      warn: host.warn,
+    },
+  };
+}
+
 const saves = [];
 const existing = new Set();
 let releaseMediaWrite;
@@ -210,7 +279,7 @@ assert.equal(
       clearRestorePlaceholder: () => {},
     },
   };
-  const lifecycle = new SessionLifecycleService(lifecycleHost);
+  const lifecycle = new SessionLifecycleService(runtime(lifecycleHost));
 
   const restored = await lifecycle.resume(target.id);
   assert.equal(restored.id, target.id);
@@ -261,63 +330,65 @@ assert.equal(
   let childAgentsDestroyed = false;
   let persistDrains = 0;
   const newTarget = { id: "ses_new", name: "New Session", uiMessages: [], model: "m", modelStyle: "openai" };
-  const newSessionLifecycle = new SessionLifecycleService({
-    getSessionStore: () => ({
-      create: () => newTarget,
-    }),
-    getSessionData: () => ({
-      id: "ses_old",
-      uiMessages: [{ id: "old", role: "user", parts: [] }],
-      model: "m",
-      modelStyle: "openai",
-    }),
-    lease: activeLease("ses_old", (id) => {
-      released = id;
-    }),
-    // No clearPersistedSession in this host: newSession must not look for one.
-    awaitSessionPersistIdle: async () => {
-      persistDrains += 1;
-    },
-    stopActiveRun: () => {},
-    abortManualCompaction: () => {},
-    clearQueuedInput: () => {},
-    cascadeAbortToChildren: () => {},
-    discardPreforkRuns: () => {},
-    streamHub: { endAllCommands: () => {}, clearAll: () => {} },
-    mode: { reset: () => {} },
-    approvals: { clear: () => {} },
-    run: { resetRunState: () => {}, resetTurnLifecycle: () => {} },
-    getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
-    statusController: { resetToIdle: () => {} },
-    clearErrorAndRetry: () => {},
-    clearPendingApprovals: () => {},
-    memory: { resetState: () => {} },
-    usage: { reset: () => {} },
-    resetMediaHydrationMisses: () => {},
-    getTodoManager: () => ({ reset: () => {} }),
-    resetTurnContext: () => {},
-    resetSessionSyncTracker: () => {},
-    resetIterationProgress: () => {},
-    destroyChildAgents: () => {
-      childAgentsDestroyed = true;
-    },
-    clearTaskRuns: () => {
-      taskRunsCleared = true;
-    },
-    resetBackgroundWork: () => {},
-    emitSessionNew: () => {},
-    refreshState: () => {},
-    refreshSubagents: () => {},
-    bindSessionLogSink: () => {},
-    getChatController: () => ({
-      clearTranscript: () => {
-        transcriptCleared = true;
+  const newSessionLifecycle = new SessionLifecycleService(
+    runtime({
+      getSessionStore: () => ({
+        create: () => newTarget,
+      }),
+      getSessionData: () => ({
+        id: "ses_old",
+        uiMessages: [{ id: "old", role: "user", parts: [] }],
+        model: "m",
+        modelStyle: "openai",
+      }),
+      lease: activeLease("ses_old", (id) => {
+        released = id;
+      }),
+      // No clearPersistedSession in this host: newSession must not look for one.
+      awaitSessionPersistIdle: async () => {
+        persistDrains += 1;
       },
-    }),
-    setSessionData: (data) => {
-      adopted = data;
-    },
-  });
+      stopActiveRun: () => {},
+      abortManualCompaction: () => {},
+      clearQueuedInput: () => {},
+      cascadeAbortToChildren: () => {},
+      discardPreforkRuns: () => {},
+      streamHub: { endAllCommands: () => {}, clearAll: () => {} },
+      mode: { reset: () => {} },
+      approvals: { clear: () => {} },
+      run: { resetRunState: () => {}, resetTurnLifecycle: () => {} },
+      getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
+      statusController: { resetToIdle: () => {} },
+      clearErrorAndRetry: () => {},
+      clearPendingApprovals: () => {},
+      memory: { resetState: () => {} },
+      usage: { reset: () => {} },
+      resetMediaHydrationMisses: () => {},
+      getTodoManager: () => ({ reset: () => {} }),
+      resetTurnContext: () => {},
+      resetSessionSyncTracker: () => {},
+      resetIterationProgress: () => {},
+      destroyChildAgents: () => {
+        childAgentsDestroyed = true;
+      },
+      clearTaskRuns: () => {
+        taskRunsCleared = true;
+      },
+      resetBackgroundWork: () => {},
+      emitSessionNew: () => {},
+      refreshState: () => {},
+      refreshSubagents: () => {},
+      bindSessionLogSink: () => {},
+      getChatController: () => ({
+        clearTranscript: () => {
+          transcriptCleared = true;
+        },
+      }),
+      setSessionData: (data) => {
+        adopted = data;
+      },
+    })
+  );
   const started = await newSessionLifecycle.newSession("session-new");
   assert.equal(started.id, "ses_new");
   assert.equal(adopted, newTarget, "the new session is adopted");
@@ -348,49 +419,51 @@ assert.equal(
   let drains = 0;
   let adopted = null;
   let transcriptCleared = false;
-  const lifecycle = new SessionLifecycleService({
-    getSessionData: () => ({ id: "ses_flag_old", uiMessages: [] }),
-    setSessionData: (data) => {
-      adopted = data;
-    },
-    getSessionStore: () => ({
-      create: () => ({ id: `ses_flag_new_${drains}`, uiMessages: [], model: "m", modelStyle: "openai" }),
-    }),
-    lease: activeLease("ses_flag_old"),
-    awaitSessionPersistIdle: () => drainGates[Math.min(drains++, drainGates.length - 1)],
-    stopActiveRun: () => {},
-    abortManualCompaction: () => {},
-    clearQueuedInput: () => {},
-    cascadeAbortToChildren: () => {},
-    discardPreforkRuns: () => {},
-    streamHub: { endAllCommands: () => {}, clearAll: () => {} },
-    mode: { reset: () => {} },
-    approvals: { clear: () => {} },
-    run: { resetRunState: () => {}, resetTurnLifecycle: () => {} },
-    getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
-    statusController: { resetToIdle: () => {} },
-    clearErrorAndRetry: () => {},
-    clearPendingApprovals: () => {},
-    memory: { resetState: () => {} },
-    usage: { reset: () => {} },
-    resetMediaHydrationMisses: () => {},
-    getTodoManager: () => ({ reset: () => {} }),
-    resetTurnContext: () => {},
-    resetSessionSyncTracker: () => {},
-    resetIterationProgress: () => {},
-    destroyChildAgents: () => {},
-    clearTaskRuns: () => {},
-    resetBackgroundWork: () => {},
-    emitSessionNew: () => {},
-    refreshState: () => {},
-    refreshSubagents: () => {},
-    bindSessionLogSink: () => {},
-    getChatController: () => ({
-      clearTranscript: () => {
-        transcriptCleared = true;
+  const lifecycle = new SessionLifecycleService(
+    runtime({
+      getSessionData: () => ({ id: "ses_flag_old", uiMessages: [] }),
+      setSessionData: (data) => {
+        adopted = data;
       },
-    }),
-  });
+      getSessionStore: () => ({
+        create: () => ({ id: `ses_flag_new_${drains}`, uiMessages: [], model: "m", modelStyle: "openai" }),
+      }),
+      lease: activeLease("ses_flag_old"),
+      awaitSessionPersistIdle: () => drainGates[Math.min(drains++, drainGates.length - 1)],
+      stopActiveRun: () => {},
+      abortManualCompaction: () => {},
+      clearQueuedInput: () => {},
+      cascadeAbortToChildren: () => {},
+      discardPreforkRuns: () => {},
+      streamHub: { endAllCommands: () => {}, clearAll: () => {} },
+      mode: { reset: () => {} },
+      approvals: { clear: () => {} },
+      run: { resetRunState: () => {}, resetTurnLifecycle: () => {} },
+      getCompaction: () => ({ resetReactiveCompactRetries: () => {} }),
+      statusController: { resetToIdle: () => {} },
+      clearErrorAndRetry: () => {},
+      clearPendingApprovals: () => {},
+      memory: { resetState: () => {} },
+      usage: { reset: () => {} },
+      resetMediaHydrationMisses: () => {},
+      getTodoManager: () => ({ reset: () => {} }),
+      resetTurnContext: () => {},
+      resetSessionSyncTracker: () => {},
+      resetIterationProgress: () => {},
+      destroyChildAgents: () => {},
+      clearTaskRuns: () => {},
+      resetBackgroundWork: () => {},
+      emitSessionNew: () => {},
+      refreshState: () => {},
+      refreshSubagents: () => {},
+      bindSessionLogSink: () => {},
+      getChatController: () => ({
+        clearTranscript: () => {
+          transcriptCleared = true;
+        },
+      }),
+    })
+  );
 
   const first = lifecycle.newSession("session-new");
   assert.equal(lifecycle.isTransitioning(), true, "a switch is visible synchronously, before its microtask runs");

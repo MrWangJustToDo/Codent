@@ -17,7 +17,7 @@
 | status 语义写入者 | 4 文件 / 35 调用点 | 1（`transition()`） | T1–T4 |
 | "当前性"机制 | 9 | 1（`Epoch`） | E1–E9 |
 | 权限判定入口 | 13 | 1 管线 / 7 阶段 | A1–A9 |
-| `SessionLifecycleHost` 成员 | 38 | ≤ 15（4 端口） | S6/S9 |
+| session 端口成员 | 36（4 端口，最大 16） | ≤ 15（单端口，可选） | S6/S9 |
 | `ManagedAgent` | 3091 行 / ~176 方法 | facade < 400 行 + 6 facets | F1–F5 |
 | status trigger | 21 | ~8 迁移事件 | T5 |
 | plan/auto 散读 | 47 / 6 处（代码读点） | 收敛到 `ModeState` | M1–M5 |
@@ -71,7 +71,7 @@
 | S6 | `SessionRuntime` 聚合 + 4 端口：`RunControl` / `TranscriptPort` / `ModePort` / `SidecarPort` | L | S1–S5 | 端口可独立 fake；host 侧不 import ManagedAgent |
 | S7 | `SessionLifecycleService` 的 unload/load/commit/rollback 改为 `lease.switchTo()` 阶段；保留 `serializeSwitch` 为 lease 内部锁 | L | S6 | `validate:session-switch-safety`、session-branching |
 | S8 | 背景工作 reset 变成 sidecar 端口并被切换事务 **await**（修 `void reset()`） | S | S6,S7 | 切换后立刻 re-resume 不丢/不删记录 |
-| S9 | `SessionLifecycleHost`（38）收敛到 ≤15；ManagedAgent 装配更新 | L | S6 | typecheck + switch/branching 套件 |
+| S9 | `SessionLifecycleHost`（38 成员）→ `SessionRuntime` 4 端口（36 成员，最大 16）；ManagedAgent 装配更新 | L | S6 | typecheck + switch/branching 套件 |
 | S10 | `validate:session-lease-matrix`：new/resume/同 id/异 id/各阶段失败/clone/fork × 副作用（ownership/sink/tracker/background/log 边界/事件） | L | G4,S1–S9 | 矩阵全绿；故障注入回滚成功 |
 | S11 | 删除重复 guard + `local-agent-session-host` 预留逻辑收敛到 lease | S | S9 | `validate:local-agent-session`、session-host |
 

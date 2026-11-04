@@ -51,6 +51,7 @@ export class LifecycleCoordinator {
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.
     managedAgent.markDestroyed();
+    managedAgent.sessionLease.beginDrain();
     managedAgent.abort(SUBAGENT_ABORT_REASONS.agentDestroyed);
 
     // Destroy all subagents first.
@@ -135,7 +136,13 @@ export class LifecycleCoordinator {
       } finally {
         // Release ownership only after producers stopped, writes drained, and the log
         // flushed. Releasing at the top let a new resume claim the id while this
-        // teardown was still writing to it.
+        // teardown was still writing to it. The lease is the owner (and releases the
+        // empty-session reservation it created); `releaseAllFor` stays as the stale-claim backstop.
+        try {
+          await managedAgent.releaseSessionLease();
+        } catch {
+          // Best-effort; the storage releases below still run.
+        }
         this.deps.ownership.releaseAllFor(id);
         this.deps.releaseLog?.(id);
       }

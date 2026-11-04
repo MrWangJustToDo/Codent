@@ -227,7 +227,8 @@ export class AgentUIChannel {
   }
 
   clearMessages(): void {
-    this.advanceSessionGeneration();
+    // The session generation advances at the lease commit, not here: the switch owns the boundary,
+    // and advancing in both places would make the generation skip a value.
     this.processor.clearMessages();
     this.historicalMessageIds = new Set();
   }

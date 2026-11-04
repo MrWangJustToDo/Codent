@@ -55,6 +55,7 @@ export async function buildManagedAgent({
     mcpServers,
     mcpElicit,
     initialSessionId,
+    initialSessionReserved,
     ...restConfig
   } = config;
 
@@ -99,6 +100,7 @@ export async function buildManagedAgent({
       // the pre-adoption identity (bootstrap runs before `setSessionDataPlaceholder`), and dropping
       // it made that fallback permanently undefined.
       ...(initialSessionId ? { initialSessionId } : {}),
+      ...(initialSessionReserved ? { initialSessionReserved: true } : {}),
       ...(explicitModelInfo ? { modelInfo: explicitModelInfo } : {}),
       name,
     },

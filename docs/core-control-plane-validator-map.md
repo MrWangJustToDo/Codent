@@ -47,7 +47,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | `validate:session-reuse-log`, `validate:session-message-log` | log sink / journal on reuse |
 | `validate:local-agent-session`, `validate:agent-session-host`, `validate:agent-session-types` | host surface |
 | `validate:restore-session-chat-state` | approved/denied/pending reconciliation |
-| **New (S10, in progress)** | `validate:session-lease-matrix` (lease transitions; switch side effects pending) |
+| **New (S10)** | `validate:session-lease-matrix` (lease transitions + adopt/reservation/sink phases; switch side effects exercised by `validate:session-switch-safety`) |
 
 ## P3 — Authorize (A1–A10)
 
@@ -112,7 +112,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 |---|---|---|
 | No gate on the number of writers for status/epoch/ownership | G1 | `validate:control-plane-writers` (created) |
 | No old/new equivalence harness | E10 / S10 / A10 / T9 | `helpers/equivalence.mjs` (created); epoch equivalence (created); session/authorize/state matrices (planned) |
-| No session-switch failure matrix (rollback per phase) | S10 | planned |
+| No session-switch failure matrix (rollback per phase) | S10 | `validate:session-lease-matrix` (created) |
 | No single authorization decision matrix | A10 | planned |
 | No state transition matrix / illegal-transition check | T9 | planned |
 | No epoch single-source guard | E10 | `validate:epoch-single-source` (created) |

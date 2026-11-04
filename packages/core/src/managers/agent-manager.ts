@@ -335,7 +335,12 @@ export class AgentManager {
         // resumable by another live agent once it hit disk). `restoreSession` re-acquires the same
         // id idempotently when bootstrap resumed one.
         const activeSessionId = managed.getSessionData()?.id;
-        if (activeSessionId && !managed.sessionLease.claim(activeSessionId)) {
+        if (
+          activeSessionId &&
+          !managed.sessionLease.claim(activeSessionId, {
+            reserved: managed.config.initialSessionReserved === true,
+          })
+        ) {
           // The target is already held by another live agent. The catch below tears down the
           // half-built agent so it cannot appear in the catalog or share the target's log sink.
           throw new Error(
@@ -343,7 +348,6 @@ export class AgentManager {
           );
         }
         if (activeSessionId) managed.sessionLease.commit();
-        managed.bindSessionLogSink();
       }
 
       if (bootstrap) {
@@ -361,6 +365,9 @@ export class AgentManager {
 
       return managed;
     } catch (error) {
+      // A lease claim may have been made above; release its ownership/reservation before the
+      // half-built agent is torn down (the teardown path only releases ownership).
+      managed?.sessionLease.release();
       if (managed) {
         if (registered) {
           this.lifecycle.destroy(managed.id);

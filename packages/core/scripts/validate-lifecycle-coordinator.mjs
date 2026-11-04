@@ -22,6 +22,8 @@ function fakeAgent(id, parentId) {
     updatedAt: 0,
     getMcpManager: () => ({ forceKill: () => events.push(`mcp:${id}`) }),
     markDestroyed: () => events.push(`destroyed:${id}`),
+    sessionLease: { beginDrain: () => events.push(`drain:${id}`) },
+    releaseSessionLease: async () => events.push(`lease-release:${id}`),
     abort: (reason) => events.push(`abort:${id}:${reason}`),
     getExtensionRunner: () => ({
       emitSessionShutdown: async (agentId) => events.push(`shutdown:${agentId}`),
@@ -92,10 +94,12 @@ for (const id of ["root", "child", "grandchild"]) {
   const close = events.indexOf(`close:${id}`);
   const persist = events.indexOf(`persist:${id}`);
   const flush = events.indexOf(`flush:${id}`);
+  const leaseRelease = events.indexOf(`lease-release:${id}`);
   assert.ok(
     shutdown >= 0 && destroyAll > shutdown && jobs > destroyAll && close > jobs && persist > close && flush > persist,
     `${id} teardown order`
   );
+  assert.ok(leaseRelease > flush, `${id} lease released after the log flush`);
 }
 
 for (const id of ["root", "child", "grandchild"]) {
@@ -118,6 +122,8 @@ await lifecycle.settleTeardowns();
     updatedAt: 0,
     getMcpManager: () => null,
     markDestroyed: () => {},
+    sessionLease: { beginDrain: () => {} },
+    releaseSessionLease: async () => {},
     abort: () => {},
     getExtensionRunner: () => null,
     destroyBackgroundWork: async () => {

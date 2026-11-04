@@ -29,7 +29,9 @@ export interface SessionLeasePorts {
    * Commit side effects: the persistence baseline for `uiMessages` and the session generation used
    * by `Epoch`. Called once per successful commit, after ownership has moved.
    */
-  onCommit?(sessionId: string, generation: number, uiMessages?: UIMessage[]): void;
+  onCommit?(sessionId: string, generation: number): void;
+  /** Persistence-baseline side effect for the transcript that was actually adopted. */
+  onAdopt?(sessionId: string, uiMessages?: UIMessage[]): void;
 }
 
 export interface SessionLeaseClaimOptions {
@@ -44,6 +46,8 @@ export class SessionLease {
   private leavingId: string | undefined;
   private generation = 0;
   private reserved = false;
+  /** The session id the log sink is currently bound to (set through `bindSink`). */
+  private boundSessionId: string | undefined;
 
   constructor(
     private readonly ownerId: string,
@@ -98,13 +102,16 @@ export class SessionLease {
   /** Enter the read/restore phase for the claimed target. */
   beginRestore(): void {
     if (this.state === "claimed") this.state = "restoring";
+    // Restore-time rows belong to the target, so the sink moves before the read (the departure
+    // gets it back on `abortClaim`).
+    if (this.sessionId !== undefined) this.bind(this.sessionId);
   }
 
   /**
    * Commit the claimed target: release the departure, make this the active session, advance the
    * generation, then run the commit side effects. Idempotent when already committed to this id.
    */
-  commit(options: { uiMessages?: UIMessage[] } = {}): void {
+  commit(): void {
     if (!this.sessionId) throw new Error("SessionLease.commit called without a claimed session");
     if (this.state === "active" && this.leavingId === undefined) {
       // A caller (e.g. restore) may commit the session that is already active — do not advance the
@@ -117,8 +124,18 @@ export class SessionLease {
     this.leavingId = undefined;
     this.state = "active";
     this.generation += 1;
-    this.ports.bindSink?.(this.sessionId);
-    this.ports.onCommit?.(this.sessionId, this.generation, options.uiMessages);
+    this.bind(this.sessionId);
+    this.ports.onCommit?.(this.sessionId, this.generation);
+  }
+
+  /**
+   * Record the transcript that was actually adopted (restore/bootstrap), independent of whether the
+   * ownership commit advanced the generation. The persistence baseline must be reset even when the
+   * restored session is already the active one.
+   */
+  adopt(options: { uiMessages?: UIMessage[] } = {}): void {
+    if (!this.sessionId) return;
+    this.ports.onAdopt?.(this.sessionId, options.uiMessages);
   }
 
   /**
@@ -137,7 +154,7 @@ export class SessionLease {
       this.leavingId = undefined;
       this.reserved = false;
       this.state = "active";
-      this.ports.bindSink?.(this.sessionId, { sessionBoundary: false });
+      this.bind(this.sessionId, { sessionBoundary: false });
       return;
     }
     this.ports.release(target, this.ownerId);
@@ -163,6 +180,13 @@ export class SessionLease {
     this.sessionId = undefined;
     this.leavingId = undefined;
     this.reserved = false;
+    this.boundSessionId = undefined;
     this.state = "released";
+  }
+
+  private bind(sessionId: string, options?: { sessionBoundary?: boolean }): void {
+    if (this.boundSessionId === sessionId) return;
+    this.ports.bindSink?.(sessionId, options);
+    this.boundSessionId = sessionId;
   }
 }

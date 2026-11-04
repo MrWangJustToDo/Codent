@@ -3,7 +3,6 @@
  */
 
 import { normalizeSessionApprovals } from "../agent/approval/tool-approval-table.js";
-import { createSessionSyncTracker, type SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import { readPlanFileAtRelativePath } from "../agent/plan/plan-store.js";
 import { settleInterruptedToolCalls } from "../agent/stream/incomplete-tool-calls.js";
 import { cancelInterruptedBackgroundTasks } from "../agent/subagent/task-background.js";
@@ -11,6 +10,7 @@ import { cancelInterruptedBackgroundCommands } from "../agent/tools/builtin/shel
 import { isReasoningEffort } from "../models/types.js";
 import { errorMessage } from "../utils/errors.js";
 
+import type { SessionSyncTracker } from "../agent/persistence/session-sync-tracker.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
 import type { Epoch } from "../runtime-types/epoch.js";
@@ -45,6 +45,8 @@ export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
   /** Capture the session/run generation before an async write (see `runtime-types/epoch.ts`). */
   captureEpoch?: () => Epoch;
+  /** The restored transcript was adopted: reset the persistence baseline against it. */
+  onSessionAdopted?: (uiMessages: TanStackUIMessage[]) => void;
   usage: UsageTracker;
   getTodoManager: () => TodoManager | null;
   /** Owning runtime's env, so plan files are read under the runtime root. */
@@ -150,11 +152,7 @@ export async function saveSessionUIMessages(
   if (persisted) tracker.markPersisted(uiMessages);
 }
 
-export async function restoreManagedSession(
-  host: SessionHost,
-  sessionId: string,
-  tracker: SessionSyncTracker = createSessionSyncTracker()
-): Promise<SessionData> {
+export async function restoreManagedSession(host: SessionHost, sessionId: string): Promise<SessionData> {
   // The caller's session lifecycle stops a live pump before this helper is entered; the
   // production switch owns that ordering in exactly one place.
   host.getToolCompactCache().clear();
@@ -283,11 +281,9 @@ export async function restoreManagedSession(
   // cannot append its late chunks to the restored transcript.
   if (host.getUI) {
     const ui = host.getUI();
-    ui?.advanceSessionGeneration();
     ui?.setMessages(uiMessages);
   }
   applyRestoredSessionChatState(host, uiMessages);
-  tracker.reset(uiMessages);
 
   // COMMIT — the one adoption. A throw here propagates untouched: unlike the block above there is
   // no coherent state to roll back to, and the caller reports the load as failed.
@@ -295,6 +291,9 @@ export async function restoreManagedSession(
     usage: host.usage,
     todoManager: host.getTodoManager(),
   });
+  // The baseline belongs to the transcript that was actually adopted; the lease owns that moment
+  // (bootstrap already committed the claim, so it must not depend on a second generation bump).
+  host.onSessionAdopted?.(uiMessages);
 
   // ---------------------------------------------------------------------------
   // POST-COMMIT — best effort. The switch has happened: a metadata refresh or a listener throwing

@@ -176,6 +176,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
         {
           ...toManagedConfig(options),
           ...(targetSessionId ? { initialSessionId: targetSessionId } : {}),
+          ...(target?.reserved ? { initialSessionReserved: true } : {}),
         },
         undefined,
         undefined,
@@ -218,13 +219,6 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
         } catch {
           // Preserve the original construction error; teardown is best-effort.
         }
-      } else if (target?.reserved) {
-        // `createManagedAgent` itself failed, so nothing owns the id THIS call reserved while
-        // resolving an empty session for reuse. Without this the reservation sits for its 5-minute
-        // expiry and the session is visible in `/resume` but refuses to be reused. Gated on
-        // `reserved` (not merely an id): an explicit resume/continue target was never reserved here,
-        // and releasing it could clear another process's claim on the same empty session.
-        await new SessionStore(this.storeEnv).releaseReservation(target.id).catch(() => undefined);
       }
       throw error;
     }
@@ -339,11 +333,6 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
   }
 
   async destroy(agentId: string): Promise<void> {
-    // Capture the root session's store/id before the manager drops the agent.
-    const managed = this.manager.getAgent(agentId);
-    const store = !managed?.parentId ? (managed?.getSessionStore?.() ?? null) : null;
-    const sessionId = store ? managed?.getSessionData()?.id : undefined;
-
     // Cascade: drop cached sessions for the agent and any children (the manager
     // already removes them from its registry). Child sessions expose their
     // parent via snapshot.parentId.
@@ -360,12 +349,8 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     // disk before this returns. Without it the flush races session teardown.
     await this.manager.settleTeardowns?.();
 
-    // Release the startup reservation for a still-empty root session so a later
-    // launch reuses it instead of piling up a fresh empty session. Best-effort:
-    // a crash keeps the reservation and it expires on its own.
-    if (store && sessionId) {
-      await store.releaseReservation(sessionId).catch(() => {});
-    }
+    // The session lease releases the startup reservation (it knows whether THIS agent made it);
+    // releasing it here again would also clear another process's claim on the same empty session.
   }
 }
 

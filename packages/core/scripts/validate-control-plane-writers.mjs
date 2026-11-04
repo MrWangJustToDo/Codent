@@ -86,8 +86,8 @@ const PATTERNS = [
     re: /\badvanceSessionGeneration\s*\(/,
     owner: "S1/S5 (SessionLease)",
     allowed: new Map([
-      ["agent/ui/ui-channel.ts", "definition — the UI channel owns the session generation"],
-      ["managers/managed-agent-session.ts", "restore bumps the generation — moves to lease.commit"],
+      ["agent/ui/ui-channel.ts", "definition — the UI channel stores the session generation"],
+      ["managers/managed-agent.ts", "lease commit port — the only production advance"],
     ]),
   },
   {

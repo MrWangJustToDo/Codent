@@ -8,112 +8,11 @@
 
 import { errorMessage } from "../../utils/errors.js";
 
-import type { CompactionService } from "./compaction-service.js";
-import type { MemoryService } from "./memory-service.js";
-import type { ToolApprovalTable } from "../../agent/approval/tool-approval-table.js";
-import type { SessionStore } from "../../agent/persistence/session-store.js";
+import type { SessionRuntime } from "./session-runtime.js";
 import type { SessionData } from "../../agent/persistence/types.js";
-import type { SessionLease } from "../../agent/session/session-lease.js";
-import type { AgentStreamHub } from "../../agent/stream-hub/agent-stream-hub.js";
-import type { TodoManager } from "../../agent/todo";
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
-import type { AgentChatController } from "../controllers/agent-chat-controller.js";
-import type { AgentStatusController } from "../controllers/agent-status-controller.js";
-import type { ModeCoordinator } from "../mode-coordinator.js";
-import type { RunCoordinator } from "../run-coordinator.js";
-import type { SessionPersistence } from "../session-persistence.js";
-import type { UsageTracker } from "../telemetry/usage-tracker.js";
-import type { UIMessage } from "@tanstack/ai";
 
 export type SessionLifecycleReason = "session-switch" | "session-new" | "session-resume" | "agent-destroy";
-
-/** Everything the lifecycle service needs from its owning agent. */
-export interface SessionLifecycleHost {
-  readonly sessionPersistence: SessionPersistence;
-  getSessionData(): SessionData | null;
-  setSessionData(data: SessionData): void;
-  getSessionStore(): SessionStore | null;
-  awaitSessionPersistIdle(): Promise<void>;
-  getChatController(): AgentChatController | undefined;
-  /** Session ownership/identity: the only place a claim is acquired, committed or released. */
-  readonly lease: SessionLease;
-  bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void;
-  emitSessionNew(sessionId: string, reason: "session-new"): void;
-  emitSessionSwitch(
-    fromSessionId: string,
-    toSessionId: string,
-    messageCount: number,
-    reason?: SessionSwitchReason
-  ): void;
-  refreshState(): void;
-  refreshSubagents(): void;
-  beginStateBatch?(): void;
-  endStateBatch?(): void;
-  syncInteractionStateFromUIMessages?(messages: UIMessage[]): void;
-  resetRunOutcome?(): void;
-  /** Projection cache keyed by toolCallId; entries are conversation-scoped. */
-  getToolCompactCache?(): { clear(): void };
-  readonly mode: ModeCoordinator;
-  readonly approvals: ToolApprovalTable;
-  readonly run: RunCoordinator;
-  getCompaction(): CompactionService;
-  readonly statusController: AgentStatusController;
-  readonly memory: MemoryService;
-  readonly usage: UsageTracker;
-  readonly streamHub: AgentStreamHub;
-  getTodoManager(): TodoManager | null;
-  stopActiveRun(reason: string): void;
-  /** Drop input queued while the agent was busy — a teardown has no turn to deliver it to. */
-  clearQueuedInput(): void;
-  abortManualCompaction(reason: string): void;
-  cascadeAbortToChildren(reason?: string): void;
-  discardPreforkRuns(): void;
-  clearErrorAndRetry(): void;
-  clearPendingApprovals(): void;
-  resetMediaHydrationMisses(): void;
-  resetTurnContext(): void;
-  /** Drop extension render slots: they describe the conversation being replaced. */
-  clearExtensionUi?(): void;
-  /**
-   * Bracket the restore's model/effort adoption.
-   *
-   * Those two writers emit `model:change` / `mode:change` synchronously, but at that point the log
-   * sink already points at the target while the envelope still names the departure — so the target
-   * got a row describing a change it never made (with the departure's auto flag). Suppress them;
-   * `session:restore` carries the final values.
-   */
-  beginSessionRestore?(): void;
-  endSessionRestore?(): void;
-  resetSessionSyncTracker(): void;
-  resetIterationProgress(): void;
-  /**
-   * Rebuild the background-work facade for the adopted session and wake it for any completion the
-   * previous process never delivered.
-   *
-   * Called AFTER the switch transaction: the reset drops the facade, and the wake path refuses
-   * while a switch is in flight. The facade's `pending()` then restores the on-disk records lazily.
-   */
-  resumeBackgroundWork?(): void;
-  /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
-  clearTaskRuns(): void;
-  /**
-   * Destroy the subagents that belonged to the conversation being replaced.
-   *
-   * A switch is not a stop: aborting them leaves every child registered (with its UI channel and
-   * full exploration transcript) until the ROOT agent is destroyed, so a long-lived host kept one
-   * copy per historical `task` — and the parent rebuilt its subagent list from all of them on every
-   * child status change. Tasks are deliberately `autoDestroy: false` (the preview outlives the
-   * run), which makes this the only place that can release them without losing the live preview.
-   */
-  destroyChildAgents(reason: string): void;
-  /**
-   * The session boundary for background work: drop the merged ledger (both kinds), end running seats,
-   * clear the pending queue, and clear the `jobs` channel without waking anyone.
-   */
-  resetBackgroundWork(reason: string): Promise<void> | void;
-  /** Non-fatal diagnostics (post-commit step failures that must not fail the switch). */
-  warn?(message: string, data?: Record<string, unknown>): void;
-}
 
 export class SessionLifecycleService {
   /** Serializes complete session transitions; each switch has multiple awaits and one owner. */
@@ -134,7 +33,7 @@ export class SessionLifecycleService {
    */
   private pendingSwitches = 0;
 
-  constructor(private readonly host: SessionLifecycleHost) {}
+  constructor(private readonly rt: SessionRuntime) {}
 
   private serializeSwitch<T>(operation: () => Promise<T>): Promise<T> {
     if (this.disposed) return Promise.reject(new Error("Agent is being destroyed; session switch refused."));
@@ -170,16 +69,16 @@ export class SessionLifecycleService {
    * buffers. A producer started after the buffer is cleared must be impossible.
    */
   stop(reason: SessionLifecycleReason = "session-switch"): void {
-    this.host.abortManualCompaction(reason);
-    this.host.stopActiveRun(reason);
+    this.rt.run.abortManualCompaction(reason);
+    this.rt.run.stopActiveRun(reason);
     // A manual compaction has no pump, so `stopActiveRun` does not clear its queue; and a
     // compaction aborted by this switch can settle AFTER the caller starts awaiting the restore,
     // where `resumeAfterCompaction()` would drain input into the session being replaced (or start
     // a turn on the new one). Drop it here, where every switch path passes.
-    this.host.clearQueuedInput();
-    this.host.cascadeAbortToChildren(reason);
-    this.host.discardPreforkRuns();
-    this.host.streamHub.endAllCommands();
+    this.rt.run.clearQueuedInput();
+    this.rt.run.cascadeAbortToChildren(reason);
+    this.rt.run.discardPreforkRuns();
+    this.rt.sidecars.streamHub.endAllCommands();
   }
 
   /**
@@ -189,12 +88,12 @@ export class SessionLifecycleService {
    * with transcript rotation / restore, ownership and log-sink rebinding.
    */
   reset(reason: SessionLifecycleReason = "session-switch"): void {
-    this.host.beginStateBatch?.();
+    this.rt.transcript.beginStateBatch?.();
     try {
       this.stop(reason);
       this.resetTransientState(reason, "full");
     } finally {
-      this.host.endStateBatch?.();
+      this.rt.transcript.endStateBatch?.();
     }
   }
 
@@ -213,42 +112,42 @@ export class SessionLifecycleService {
   private resetTransientState(reason: SessionLifecycleReason, scope: "full" | "resume"): void {
     const full = scope === "full";
     if (full) {
-      this.host.mode.reset();
-      this.host.approvals.clear();
+      this.rt.mode.mode.reset();
+      this.rt.mode.approvals.clear();
     }
     // Status FIRST: `resetRunState()` aborts the previous run, and its abort listener rewrites any
     // ACTIVE status to `aborted`. Aborting before the reset made every resume from an approval
     // pause (and every `/new` while parked) log a cancellation that never happened — the run was
     // merely being unloaded. With the status already `idle` the listener has nothing to change.
-    this.host.statusController.resetToIdle();
-    this.host.run.resetRunState();
-    this.host.run.resetTurnLifecycle();
-    this.host.getCompaction().resetReactiveCompactRetries();
-    this.host.clearErrorAndRetry();
-    if (full) this.host.clearPendingApprovals();
-    this.host.memory.resetState();
+    this.rt.run.statusController.resetToIdle();
+    this.rt.run.run.resetRunState();
+    this.rt.run.run.resetTurnLifecycle();
+    this.rt.sidecars.getCompaction().resetReactiveCompactRetries();
+    this.rt.run.clearErrorAndRetry();
+    if (full) this.rt.run.clearPendingApprovals();
+    this.rt.sidecars.memory.resetState();
     if (full) {
-      this.host.usage.reset();
-      this.host.resetMediaHydrationMisses();
-      this.host.getTodoManager()?.reset();
-      this.host.getToolCompactCache?.().clear();
+      this.rt.sidecars.usage.reset();
+      this.rt.mode.resetMediaHydrationMisses();
+      this.rt.sidecars.getTodoManager()?.reset();
+      this.rt.sidecars.getToolCompactCache?.().clear();
     }
-    this.host.streamHub.clearAll();
-    this.host.resetTurnContext();
+    this.rt.sidecars.streamHub.clearAll();
+    this.rt.mode.resetTurnContext();
     // Extension render slots describe the conversation, not the agent: a plan board or file tree
     // published for the old transcript must not survive into the new one (and must not be replayed
     // to a later subscriber as that session's initial state).
-    this.host.clearExtensionUi?.();
-    if (full) this.host.resetSessionSyncTracker();
-    this.host.resetIterationProgress();
+    this.rt.sidecars.clearExtensionUi?.();
+    if (full) this.rt.transcript.resetSessionSyncTracker();
+    this.rt.transcript.resetIterationProgress();
     // Session-scoped, like the iteration progress above: a completed task keeps its row for the
     // preview, but the conversation it belonged to is gone. Destroying them (not just aborting)
     // is what releases the child's UI channel, log sink and tool state; `clearTaskRuns` below then
     // drops the phase records/pre-fork seats that pointed at them.
-    this.host.destroyChildAgents(reason);
-    this.host.clearTaskRuns();
-    this.host.resetRunOutcome?.();
-    this.pendingBackgroundReset = Promise.resolve(this.host.resetBackgroundWork(reason));
+    this.rt.sidecars.destroyChildAgents(reason);
+    this.rt.sidecars.clearTaskRuns();
+    this.rt.run.resetRunOutcome?.();
+    this.pendingBackgroundReset = Promise.resolve(this.rt.sidecars.resetBackgroundWork(reason));
   }
 
   /** Await the background-work reset started by the last transient reset (switch transactions only). */
@@ -280,11 +179,11 @@ export class SessionLifecycleService {
 
   /** Publish one final L1 frame after a complete unload/load transaction. */
   private async runTransition<T>(operation: () => Promise<T>): Promise<T> {
-    this.host.beginStateBatch?.();
+    this.rt.transcript.beginStateBatch?.();
     try {
       return await operation();
     } finally {
-      this.host.endStateBatch?.();
+      this.rt.transcript.endStateBatch?.();
     }
   }
 
@@ -297,19 +196,19 @@ export class SessionLifecycleService {
    */
   private async unloadCurrent(reason: SessionLifecycleReason): Promise<void> {
     this.stop(reason);
-    await this.host.awaitSessionPersistIdle();
+    await this.rt.transcript.awaitPersistIdle();
   }
 
   private async newSessionInner(reason: "session-new"): Promise<SessionData> {
-    const store = this.host.getSessionStore();
+    const store = this.rt.transcript.getSessionStore();
     if (!store) throw new Error("Session store not available");
 
-    const current = this.host.getSessionData();
+    const current = this.rt.transcript.getSessionData();
     const next = store.create({
       modelStyle: current?.modelStyle ?? "openai",
       model: current?.model ?? "unknown",
     });
-    if (!this.host.lease.claim(next.id)) {
+    if (!this.rt.lease.claim(next.id)) {
       throw new Error(`Session "${next.id}" is already active in another live session and cannot be started here.`);
     }
 
@@ -322,27 +221,27 @@ export class SessionLifecycleService {
       // Adopt the new session before applying the reset. The reset then operates on the
       // target's empty state, and the state batch suppresses the intermediate frames that
       // used to carry the old session id.
-      this.host.setSessionData(next);
+      this.rt.transcript.setSessionData(next);
       adopted = true;
       // Commit the claim at the adoption point: the departure claim is released here, exactly once.
-      this.host.lease.commit();
-      this.host.getChatController()?.clearTranscript();
+      this.rt.lease.commit();
+      this.rt.transcript.getChatController()?.clearTranscript();
       this.resetTransientState(reason, "full");
       // The reset kills background jobs/tasks asynchronously; the switch is not complete until
       // they are gone (an immediate re-resume must not race a late record deletion).
       await this.settleTransientReset();
-      this.host.refreshSubagents?.();
-      this.host.emitSessionNew(next.id, reason);
-      this.host.refreshState();
+      this.rt.transcript.refreshSubagents?.();
+      this.rt.transcript.emitSessionNew(next.id, reason);
+      this.rt.transcript.refreshState();
       return next;
     } catch (error) {
       if (!adopted) {
-        this.host.lease.abortClaim();
+        this.rt.lease.abortClaim();
       } else {
         // The switch committed when `setSessionData(next)` ran (and the lease released the
         // departure). A later reset step failing does not un-switch it; just point writers at the
         // adopted id.
-        this.host.bindSessionLogSink(next.id);
+        this.rt.transcript.bindSessionLogSink(next.id);
       }
       throw error;
     }
@@ -369,7 +268,7 @@ export class SessionLifecycleService {
     // AFTER the transaction, for two reasons the in-transaction call could not satisfy: the reset
     // drops the facade, and `wakeForBackgroundCompletion` refuses while `isSessionSwitching()` is
     // true. Rebuilding it here is exactly the "next session builds a fresh one" lifecycle.
-    this.host.resumeBackgroundWork?.();
+    this.rt.sidecars.resumeBackgroundWork?.();
     return session;
   }
 
@@ -396,13 +295,13 @@ export class SessionLifecycleService {
   }
 
   private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {
-    if (!this.host.lease.claim(sessionId)) {
+    if (!this.rt.lease.claim(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);
     }
 
     // Snapshot the departure BEFORE the load: the count belongs to the session being left, and once
     // the load commits `getSessionData()` is the target.
-    const leaving = this.host.getSessionData();
+    const leaving = this.rt.transcript.getSessionData();
     const leavingId = leaving?.id;
     const leavingMessageCount = leaving?.uiMessages.length ?? 0;
 
@@ -410,24 +309,23 @@ export class SessionLifecycleService {
       // Drain what was already queued, then unload: `stop()` can synchronously queue a
       // `pump-complete` write through `interruptCurrentRun`, and both writes must settle before the
       // restore replaces the active session.
-      await this.host.awaitSessionPersistIdle();
+      await this.rt.transcript.awaitPersistIdle();
       await this.unloadCurrent("session-resume");
 
       // Restore-time logs belong to the target. A load that never commits re-points the sink at the
       // still-active leaving session in the catch below.
-      this.host.lease.beginRestore();
-      this.host.bindSessionLogSink(sessionId);
-      this.host.beginSessionRestore?.();
+      this.rt.lease.beginRestore();
+      this.rt.transcript.beginSessionRestore?.();
       let session: SessionData;
       try {
-        session = await this.host.sessionPersistence.restore(sessionId);
+        session = await this.rt.transcript.sessionPersistence.restore(sessionId);
       } finally {
-        this.host.endSessionRestore?.();
+        this.rt.transcript.endSessionRestore?.();
       }
 
       // COMMITTED: the restore adopted the target last. The lease releases the departure claim and
       // advances the generation here, exactly once.
-      this.host.lease.commit();
+      this.rt.lease.commit();
 
       try {
         // Clear the leaving run's volatile state. The `resume` scope keeps mode/approvals/usage/todos —
@@ -436,25 +334,25 @@ export class SessionLifecycleService {
         await this.settleTransientReset();
         // The reset makes the status idle; re-apply the restored interaction state so a session that
         // was waiting on approval/ask_user does not come back as idle.
-        this.host.syncInteractionStateFromUIMessages?.(session.uiMessages);
-        this.host.refreshSubagents?.();
+        this.rt.run.syncInteractionStateFromUIMessages?.(session.uiMessages);
+        this.rt.transcript.refreshSubagents?.();
 
         if (leavingId && leavingId !== sessionId) {
           // The departure entry belongs to the session being left, so point the sink back for this one
           // line, then re-attach the target WITHOUT a second boundary (the target's boundary was
           // written when its sink was bound above).
-          this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
+          this.rt.transcript.bindSessionLogSink(leavingId, { sessionBoundary: false });
           try {
-            this.host.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
+            this.rt.transcript.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
           } finally {
-            this.host.bindSessionLogSink(sessionId, { sessionBoundary: false });
+            this.rt.transcript.bindSessionLogSink(sessionId, { sessionBoundary: false });
           }
         }
-        this.host.refreshState();
+        this.rt.transcript.refreshState();
       } catch (error) {
         // Past the commit the switch HAS happened. Surfacing this as a failed resume made the host
         // report a failure for a state it is actually in; report and keep the switch instead.
-        this.host.warn?.("session resume post-commit step failed", {
+        this.rt.sidecars.warn?.("session resume post-commit step failed", {
           error: errorMessage(error),
         });
       }
@@ -468,10 +366,9 @@ export class SessionLifecycleService {
       //
       // A bootstrap stand-in must be dropped too: it refuses every write by design, so leaving it
       // behind after a failed load would turn one failed resume into a silently unsaved session.
-      this.host.sessionPersistence.clearRestorePlaceholder();
-      if (this.host.getSessionData()?.id !== sessionId) {
-        this.host.lease.abortClaim();
-        this.host.bindSessionLogSink(leavingId, { sessionBoundary: false });
+      this.rt.transcript.sessionPersistence.clearRestorePlaceholder();
+      if (this.rt.transcript.getSessionData()?.id !== sessionId) {
+        this.rt.lease.abortClaim();
         await this.recoverLeavingSession(leavingId);
       }
       throw error;
@@ -501,13 +398,13 @@ export class SessionLifecycleService {
   private async recoverLeavingSession(leavingId: string | undefined): Promise<void> {
     if (!leavingId) return;
     try {
-      await this.host.sessionPersistence.restore(leavingId);
+      await this.rt.transcript.sessionPersistence.restore(leavingId);
     } catch (error) {
       // Best-effort: the host still gets the original failure, and the in-memory state is already
       // the departure's (the target was never adopted). The report is itself contained so a broken
       // logger cannot replace the actionable error.
       try {
-        this.host.warn?.("failed to re-open the previous session after a failed resume", {
+        this.rt.sidecars.warn?.("failed to re-open the previous session after a failed resume", {
           error: errorMessage(error),
         });
       } catch {

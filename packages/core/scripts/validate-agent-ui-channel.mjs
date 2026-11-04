@@ -610,11 +610,14 @@ assert.match(failErrorMessages[1].parts[0].content, /boom/);
     })(),
   });
 
+  // Session generation is owned by the lease commit (SessionLease.onCommit calls this); a bare
+  // clear does not advance it, so the test advances explicitly to model the commit boundary.
+  generationChannel.advanceSessionGeneration();
   generationChannel.clearMessages();
   assert.equal(
     generationChannel.getSessionGeneration(),
     generationBefore + 1,
-    "clearMessages advances the UI session generation"
+    "the lease commit advances the UI session generation"
   );
   generationChannel.addUserMessage("new session question");
   releaseOldChunk();

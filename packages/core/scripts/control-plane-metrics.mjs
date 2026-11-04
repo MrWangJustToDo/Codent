@@ -57,12 +57,13 @@ const managedAgentMethods = managedAgent
   ? managedAgent.text.split("\n").filter((line) => /^ {2}(?:async )?[A-Za-z][A-Za-z0-9_]*[<(]/.test(line)).length
   : 0;
 
-const lifecycleHost = sources.find(({ rel }) => rel === "managers/services/session-lifecycle-service.ts");
-const lifecycleHostMembers = lifecycleHost
-  ? (lifecycleHost.text.match(/export interface SessionLifecycleHost\s*\{([\s\S]*?)\n\}/)?.[1] ?? "")
-      .split("\n")
-      .filter((line) => /^ {2}[A-Za-z][A-Za-z0-9_]*\??[:(]/.test(line)).length
-  : 0;
+const sessionRuntimeSource = sources.find(({ rel }) => rel === "managers/services/session-runtime.ts");
+const sessionPortBlocks = sessionRuntimeSource
+  ? [...sessionRuntimeSource.text.matchAll(/export interface (Session\w+Port)\s*\{([\s\S]*?)\n\}/g)]
+  : [];
+const sessionPortMembers = sessionPortBlocks.map(
+  (match) => match[2].split("\n").filter((line) => /^ {2}[A-Za-z][A-Za-z0-9_]*\??[:(]/.test(line)).length
+);
 
 const validators = walk(scriptsRoot, (name) => name.startsWith("validate-") && name.endsWith(".mjs"));
 const CONTROL_PLANE_RE =
@@ -91,7 +92,9 @@ const metrics = {
   },
   ownership: {
     writes: count(/\b(acquire|release)SessionOwnership\s*\(/g),
-    lifecycleHostMembers,
+    sessionPorts: sessionPortBlocks.length,
+    sessionPortMembers: sessionPortMembers.reduce((sum, n) => sum + n, 0),
+    largestSessionPort: sessionPortMembers.length > 0 ? Math.max(...sessionPortMembers) : 0,
   },
   permission: {
     needsApprovalReads: count(/\bneedsApproval\b/g),
@@ -124,7 +127,9 @@ if (process.argv.includes("--markdown")) {
     ["session-generation sites", metrics.currency.sessionGeneration],
     ["isSessionSwitching sites", metrics.currency.switchingChecks],
     ["ownership writes", metrics.ownership.writes],
-    ["SessionLifecycleHost members", metrics.ownership.lifecycleHostMembers],
+    ["session ports", metrics.ownership.sessionPorts],
+    ["session port members (total)", metrics.ownership.sessionPortMembers],
+    ["largest session port", metrics.ownership.largestSessionPort],
     ["needsApproval reads", metrics.permission.needsApprovalReads],
     ["auto-approval sites", metrics.permission.autoApprovalSites],
     ["planMode reads", metrics.modes.planReads],

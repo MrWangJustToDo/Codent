@@ -276,6 +276,13 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    * {@link ManagedAgent.restoreSession}. Root agents only.
    */
   initialSessionId?: string;
+  /**
+   * Whether {@link initialSessionId} came from an empty-session reservation this process wrote.
+   *
+   * The lease releases it on a failed claim/teardown; a resume target (never reserved here) is not
+   * touched.
+   */
+  initialSessionReserved?: boolean;
   agentDocFilenames?: string[];
   agentDocLoadOverride?: boolean;
   /**
@@ -435,6 +442,8 @@ export class ManagedAgent {
   readonly run: RunCoordinator;
   /** Session ownership/identity state machine (see `agent/session/session-lease.ts`). */
   readonly sessionLease: SessionLease;
+  /** The session id the log sink is currently bound to (mirrors `AgentLogBinding`). */
+  private boundSinkSessionId: string | undefined;
   /** Cached live accessors handed to extensions (`ctx.llm`, run/session facts). */
   private extensionRuntime: ExtensionRuntimeAccess | null = null;
   /**
@@ -678,6 +687,20 @@ export class ManagedAgent {
         const store = this.getSessionStore();
         if (store) void store.releaseReservation(sessionId).catch(() => undefined);
       },
+      onCommit: () => {
+        // The generation is the lease's boundary: a commit advances it exactly once, including the
+        // bootstrap claim and a new session. `clearMessages` deliberately does not.
+        this.getUI()?.advanceSessionGeneration();
+      },
+      onAdopt: (_sessionId, uiMessages) => {
+        if (uiMessages) this.sessionPersistence.resetTracker(uiMessages);
+      },
+      bindSink: (sessionId, options) => {
+        // `setSessionData` may already have bound the target (new session); the lease asks for the
+        // same id at commit. Re-binding would write a second session divider.
+        if (this.boundSinkSessionId === sessionId) return;
+        this.bindSessionLogSink(sessionId, options);
+      },
     });
     this.childIds = [];
     this.createdAt = Date.now();
@@ -805,109 +828,117 @@ export class ManagedAgent {
     });
 
     this.sessionLifecycle = new SessionLifecycleService({
-      sessionPersistence: this.sessionPersistence,
-      getSessionData: () => this.getSessionData(),
-      setSessionData: (data) => this.setSessionData(data),
-      getSessionStore: () => this.getSessionStore(),
-      awaitSessionPersistIdle: () => this.session.awaitPersistIdle(),
-      getChatController: () => this.getChatController(),
       lease: this.sessionLease,
-      bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
-      emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
-      emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
-        // The departure belongs to the session being left: the envelope must say so too, because
-        // the sink was pointed at it for this one row and the default would stamp the TARGET (the
-        // adoption already ran), making the line contradict its own payload.
-        this.emitEvent(
-          "session:switch",
-          { fromSessionId, toSessionId, messageCount, reason },
-          { sessionId: fromSessionId }
-        ),
-      refreshState: () => this.refreshState(),
-      refreshSubagents: () => this.refreshSubagents(),
-      beginStateBatch: () => this.beginStateBatch(),
-      endStateBatch: () => this.endStateBatch(),
-      syncInteractionStateFromUIMessages: (messages) => this.syncInteractionStateFromUIMessages(messages),
-      resetRunOutcome: () => this.resetRunOutcome(),
-      getToolCompactCache: () => this.getToolCompactCache(),
-      mode: this.mode,
-      approvals: this.approvals,
-      run: this.run,
-      getCompaction: () => this.compaction,
-      statusController: this.statusController,
-      memory: this.memory,
-      usage: this.usage,
-      streamHub: this.streamHub,
-      getTodoManager: () => this.getTodoManager(),
-      stopActiveRun: (reason) => this.stopActiveRun(reason),
-      clearQueuedInput: () => this.clearQueuedMessages(),
-      abortManualCompaction: (reason) => {
-        this.compactions.abortForTeardown(reason);
-        // The retry floor is a fact about the session being left (its fill, its summarizer
-        // failures); the target session starts with a clean slate.
-        this.compactions.clearAutoRetryFloor();
+      run: {
+        run: this.run,
+        statusController: this.statusController,
+        stopActiveRun: (reason) => this.stopActiveRun(reason),
+        clearQueuedInput: () => this.clearQueuedMessages(),
+        abortManualCompaction: (reason) => {
+          this.compactions.abortForTeardown(reason);
+          // The retry floor is a fact about the session being left (its fill, its summarizer
+          // failures); the target session starts with a clean slate.
+          this.compactions.clearAutoRetryFloor();
+        },
+        cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
+        discardPreforkRuns: () => this.discardPreforkRuns(),
+        resetRunOutcome: () => this.resetRunOutcome(),
+        clearErrorAndRetry: () => {
+          this.setError("");
+          this.retryInfo = null;
+        },
+        clearPendingApprovals: () => {
+          this.pendingApprovalCount = 0;
+        },
+        syncInteractionStateFromUIMessages: (messages) => this.syncInteractionStateFromUIMessages(messages),
       },
-      cascadeAbortToChildren: (reason) => this.cascadeAbortToChildren(reason),
-      discardPreforkRuns: () => this.discardPreforkRuns(),
-      clearErrorAndRetry: () => {
-        this.setError("");
-        this.retryInfo = null;
+      transcript: {
+        sessionPersistence: this.sessionPersistence,
+        getSessionData: () => this.getSessionData(),
+        setSessionData: (data) => this.setSessionData(data),
+        getSessionStore: () => this.getSessionStore(),
+        awaitPersistIdle: () => this.session.awaitPersistIdle(),
+        getChatController: () => this.getChatController(),
+        bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
+        emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
+        emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
+          // The departure belongs to the session being left: the envelope must say so too, because
+          // the sink was pointed at it for this one row and the default would stamp the TARGET (the
+          // adoption already ran), making the line contradict its own payload.
+          this.emitEvent(
+            "session:switch",
+            { fromSessionId, toSessionId, messageCount, reason },
+            { sessionId: fromSessionId }
+          ),
+        refreshState: () => this.refreshState(),
+        refreshSubagents: () => this.refreshSubagents(),
+        beginStateBatch: () => this.beginStateBatch(),
+        endStateBatch: () => this.endStateBatch(),
+        beginSessionRestore: () => this.beginSessionRestore(),
+        endSessionRestore: () => this.endSessionRestore(),
+        resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
+        resetIterationProgress: () => this.resetIterationProgress(),
       },
-      clearPendingApprovals: () => {
-        this.pendingApprovalCount = 0;
+      mode: {
+        mode: this.mode,
+        approvals: this.approvals,
+        resetTurnContext: () => this.turnContext.resetTurnState(),
+        resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       },
-      resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
-      resetTurnContext: () => this.turnContext.resetTurnState(),
-      clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
-      beginSessionRestore: () => this.beginSessionRestore(),
-      endSessionRestore: () => this.endSessionRestore(),
-      resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
-      resetIterationProgress: () => this.resetIterationProgress(),
-      // Runs AFTER the switch resolves (the facade is dropped by the reset, and a wake is refused
-      // mid-switch). It rebuilds the facade, restores un-notified records and starts the wake turn.
-      resumeBackgroundWork: () => this.resumeBackgroundWork(),
-      // Task phase records and pre-fork seats belong to the conversation being left.
-      clearTaskRuns: () => clearTaskRuns(this),
-      // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
-      // preview, so a switch is the only point that can release the child (UI channel, log sink,
-      // tool state) without destroying a preview the user is still looking at.
-      destroyChildAgents: (reason) => {
-        const manager = this.manager;
-        if (!manager || this.childIds.length === 0) return;
-        for (const childId of [...this.childIds]) {
-          try {
-            manager.destroyAgent(childId);
-          } catch (error) {
-            this.emitDiagnostic("session", "Failed to destroy a subagent during a session switch", {
+      sidecars: {
+        getCompaction: () => this.compaction,
+        memory: this.memory,
+        usage: this.usage,
+        streamHub: this.streamHub,
+        getTodoManager: () => this.getTodoManager(),
+        getToolCompactCache: () => this.getToolCompactCache(),
+        clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
+        // Task phase records and pre-fork seats belong to the conversation being left.
+        clearTaskRuns: () => clearTaskRuns(this),
+        // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
+        // preview, so a switch is the only point that can release the child (UI channel, log sink,
+        // tool state) without destroying a preview the user is still looking at.
+        destroyChildAgents: (reason) => {
+          const manager = this.manager;
+          if (!manager || this.childIds.length === 0) return;
+          for (const childId of [...this.childIds]) {
+            try {
+              manager.destroyAgent(childId);
+            } catch (error) {
+              this.emitDiagnostic("session", "Failed to destroy a subagent during a session switch", {
+                level: "warn",
+                data: { childId, reason },
+                error: String(error),
+              });
+            }
+          }
+        },
+        resetBackgroundWork: (reason) => {
+          // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the
+          // next session builds a fresh pair (same lifecycle the command registry always had).
+          // Return the promise: the switch transaction awaits it before completing (a re-resume
+          // must not race a late job-record deletion).
+          const work = this.backgroundWork;
+          this.backgroundWork = undefined;
+          this.commandService = undefined;
+          if (!work) return Promise.resolve();
+          return work.reset(reason).catch((error: unknown) => {
+            this.emitDiagnostic("jobs", "Failed to reset background work", {
               level: "warn",
-              data: { childId, reason },
+              data: { reason },
               error: String(error),
             });
-          }
-        }
-      },
-      resetBackgroundWork: (reason) => {
-        // Drop the facade whole: its sources are closed/generation-bumped by `reset()`, and the next
-        // session builds a fresh pair (same lifecycle the command registry always had). Return the
-        // promise: the switch transaction awaits it before completing (a re-resume must not race a
-        // late job-record deletion).
-        const work = this.backgroundWork;
-        this.backgroundWork = undefined;
-        this.commandService = undefined;
-        if (!work) return Promise.resolve();
-        return work.reset(reason).catch((error: unknown) => {
-          this.emitDiagnostic("jobs", "Failed to reset background work", {
-            level: "warn",
-            data: { reason },
-            error: String(error),
           });
-        });
+        },
+        // Runs AFTER the switch resolves (the facade is dropped by the reset, and a wake is refused
+        // mid-switch). It rebuilds the facade, restores un-notified records and starts the wake turn.
+        resumeBackgroundWork: () => this.resumeBackgroundWork(),
+        warn: (message, data) =>
+          this.emitDiagnostic("session", message, {
+            level: "warn",
+            ...(data ? { data: diagnosticDetails(data) } : {}),
+          }),
       },
-      warn: (message, data) =>
-        this.emitDiagnostic("session", message, {
-          level: "warn",
-          ...(data ? { data: diagnosticDetails(data) } : {}),
-        }),
     });
 
     if (config.setUp) {
@@ -1843,6 +1874,33 @@ export class ManagedAgent {
    */
   bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void {
     this.logBinding.bind(sessionId, options);
+    this.boundSinkSessionId = sessionId;
+  }
+
+  /**
+   * SessionHost adoption hook: the restored transcript is now the active one, so its persistence
+   * baseline is reset against the repaired messages. Separate from `lease.commit` because a
+   * bootstrap restore may adopt the session the manager already committed.
+   */
+  onSessionAdopted(uiMessages: TanStackUIMessage[]): void {
+    this.sessionLease.adopt({ uiMessages });
+  }
+
+  /**
+   * Teardown hook: release the session claim and, when this agent owned it, the empty-session
+   * reservation. Awaited by the lifecycle coordinator so the store write lands before exit.
+   */
+  async releaseSessionLease(): Promise<void> {
+    const sessionId = this.sessionLease.getSessionId();
+    const reserved = this.sessionLease.isReserved();
+    this.sessionLease.release();
+    if (reserved && sessionId) {
+      try {
+        await this.getSessionStore()?.releaseReservation(sessionId);
+      } catch {
+        // Best-effort: the reservation expires on its own.
+      }
+    }
   }
 
   /**

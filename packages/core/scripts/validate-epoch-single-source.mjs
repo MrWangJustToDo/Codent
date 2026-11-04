@@ -48,8 +48,8 @@ const PRODUCERS = [
     re: /\badvanceSessionGeneration\s*\(/,
     why: "the UI channel owns the transcript generation; only a restore may advance it",
     allowed: new Map([
-      ["agent/ui/ui-channel.ts", "owner + clearMessages call"],
-      ["managers/managed-agent-session.ts", "restore bumps the generation at adoption (moves to lease.commit)"],
+      ["agent/ui/ui-channel.ts", "owner (stores the counter)"],
+      ["managers/managed-agent.ts", "lease commit port (the only place that advances it)"],
     ]),
   },
   {
