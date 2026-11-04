@@ -91,6 +91,22 @@ jobs:
         # here: the suite includes it and reports it by name.
         run: pnpm run validate:all
 
+      - name: Control-plane metrics
+        # A trend is only useful if it is published: the writer gate above fails on new scatter,
+        # and this artifact records the counts (writers / guards / LOC / status triggers / ports)
+        # so a review can compare them with the previous run instead of guessing.
+        run: |
+          mkdir -p artifacts
+          node packages/core/scripts/control-plane-metrics.mjs --markdown > artifacts/control-plane-metrics.md
+          cat artifacts/control-plane-metrics.md
+
+      - name: Upload control-plane metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-metrics
+          path: artifacts/control-plane-metrics.md
+          if-no-files-found: error
+
       - name: Prove the websearch assertions fail on their defects
         # A green validator proves nothing on its own — it only proves the assertions run. The
         # negative-patch harness mutates one defect at a time (keyed selection, the MCP isError
