@@ -2,9 +2,9 @@
  * Full state-transition matrix: every wire status round-trips, every event has an allowed or
  * rejected transition, and the controller's sequences match the pure state machine.
  *
- * `validate-agent-state-axes` covers the model itself; this gate adds the old-status equivalence
- * and drives the real controller (not a status-string mock), so a writer that bypasses the axes
- * fails here.
+ * It covers the model (projection round-trip, transition table), the old-status equivalence, and
+ * drives the real controller (not a status-string mock), so a writer that bypasses the axes fails
+ * here.
  *
  * Run: pnpm --filter @codent/core run validate:state-transition-matrix
  */
@@ -15,6 +15,8 @@ import {
   createAgentStatusController,
   deriveAgentState,
   INITIAL_AGENT_STATE,
+  isActiveState,
+  isTerminalState,
   projectAgentStatus,
   resolveFinishStatus,
   transition,
@@ -111,6 +113,47 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   approval = transition(approval, { type: "pause", wait: "approval" });
   approval = transition(approval, { type: "interrupt" });
   assert.equal(projectAgentStatus(approval), "aborted", "an approval wait does not survive the turn ending");
+}
+
+// --- predicates are derived, not overlapping status sets --------------------
+{
+  const waiting = deriveAgentState("waiting");
+  assert.equal(isActiveState(waiting), true, "a paused run is active for cancellation");
+  assert.equal(isTerminalState(waiting), false, "a paused run is not terminal");
+  const question = deriveAgentState("awaiting_user");
+  assert.equal(isActiveState(question), true);
+  assert.equal(isTerminalState(question), false);
+  assert.equal(isTerminalState(deriveAgentState("error")), true);
+  assert.equal(isActiveState(deriveAgentState("completed")), false);
+}
+
+// --- pause/resume keeps the run phase --------------------------------------
+{
+  let state = transition(initState(), { type: "prepare" });
+  state = transition(state, { type: "stream-start" });
+  state = transition(state, { type: "stream-chunk", stream: "responding" });
+  state = transition(state, { type: "pause", wait: "approval" });
+  assert.equal(projectAgentStatus(state), "waiting");
+  state = transition(state, { type: "resume" });
+  assert.equal(projectAgentStatus(state), "responding");
+  assert.throws(() => transition(deriveAgentState("idle"), { type: "resume" }), /requires a pending wait/);
+}
+
+// --- illegal transitions: strict throws, non-strict records without corruption
+{
+  const destroyed = transition(initState(), { type: "teardown" });
+  assert.throws(() => transition(destroyed, { type: "prepare" }), /destroyed agent/);
+  const rejected = [];
+  const same = transition(
+    destroyed,
+    { type: "prepare" },
+    {
+      strict: false,
+      onReject: (reason, event) => rejected.push(`${event.type}: ${reason}`),
+    }
+  );
+  assert.equal(same, destroyed);
+  assert.equal(rejected.length, 1);
 }
 
 // --- controller sequences match the pure machine ----------------------------

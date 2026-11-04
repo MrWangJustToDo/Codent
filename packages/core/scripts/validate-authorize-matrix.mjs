@@ -1,9 +1,9 @@
 /**
  * Authorization matrix: tool class × mode × profile/path × annotations × persisted decision.
  *
- * The pipeline's stage order is asserted in `validate-authorize-pipeline.mjs`; this matrix drives
- * the same composer over the combinations a host can actually produce, so a new gate cannot be
- * added without a case here.
+ * This matrix drives the composer over the combinations a host can actually produce, including
+ * the precedence cases (a terminal deny before auto, an extension deny over an analysis allow),
+ * so a new gate cannot be added without a case here.
  *
  * Rules/env dimensions are not represented yet: the policy facts carry `env`, but no rule engine
  * evaluates it in core. When it lands, add the cases here rather than a second script.
@@ -162,6 +162,21 @@ const cases = [
       extensionHooks: async () => ({ action: "deny", source: "extension", reason: "blocked" }),
     },
     expect: { action: "deny", source: "extension" },
+  },
+  {
+    name: "run_command / analysis ask keeps the declarative ask",
+    input: {
+      toolName: "run_command",
+      facts: facts(),
+      approval: GATED,
+      analyzeCommand: async () => ({ action: "ask", source: "command-analysis" }),
+    },
+    expect: { action: "ask", source: "command-analysis" },
+  },
+  {
+    name: "root / free tool is allowed without a prompt",
+    input: { toolName: "read_file", facts: facts(), approval: FREE },
+    expect: { action: "allow", source: "declarative" },
   },
   {
     name: "extension skip / deny beats an analysis allow",

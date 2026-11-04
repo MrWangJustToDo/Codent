@@ -88,7 +88,7 @@ Global prerequisites: repo built (`pnpm build`), `pnpm typecheck` / `pnpm lint` 
 - [ ] 8.1 Replace "call order is the contract" comments with state-machine/port references; keep only cross-module invariants (continuous, per wave)
 - [ ] 8.2 Update `packages/core/ARCHITECTURE.md` (state table, session lifecycle, permission model, module map) (depends: 7.6)
 - [ ] 8.3 Update `AGENTS.md` (control-plane ownership, validator list, directory rules) (depends: 7.6)
-- [ ] 8.4 Merge or delete validators superseded by the new matrices (depends: 4.10, 5.10, 6.9)
+- [x] 8.4 Merge or delete validators superseded by the new matrices (depends: 4.10, 5.10, 6.9)
 - [x] 8.5 Add the control-plane writer gate and metrics report to CI (depends: 1.1, 1.3)
 
 ## 9. Rollout

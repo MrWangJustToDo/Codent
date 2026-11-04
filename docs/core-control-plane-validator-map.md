@@ -54,7 +54,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | Existing gate | Covers |
 |---|---|
 | `validate:approval-decisions`, `validate:tool-approval-resume` | decision table + resume map |
-| **New (A3/A9/A10)** | `validate:authorize-pipeline` (stage order), `validate:authorize-matrix` (18 cases incl. env/rules/extension), `validate:approval-descriptor` (raw flag gate), `validate:tool-before-hook` (once-per-call ledger) |
+| **New (A3/A9/A10)** | `validate:authorize-matrix` (20 cases: stage precedence + tool/mode/path/env/rules/annotations), `validate:approval-descriptor` (raw flag gate), `validate:tool-before-hook` (once-per-call ledger) |
 | `validate:approval-batch-resume` | held calls on terminal; pending `ask_user` |
 | `validate:auto-mode-approvals` | auto mode answers pending approvals |
 | `validate:command-safety-portability`, `validate:command-safety-readonly`, `validate:command-env-safety`, `validate:safe-command` | command analysis + env overrides |
@@ -75,7 +75,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | `validate:pump-continuation`, `validate:task-run-state`, `validate:task-prefork` | pump phases/continuations |
 | `validate:manual-compact-interlock`, `validate:reactive-compact`, `validate:auto-compact-noop` | compaction ownership/status restore |
 | `validate:middleware-order` | middleware adjacency |
-| **New (T1/T9)** | `validate:agent-state-axes` (projection round-trip + transition table) and `validate:state-transition-matrix` (controller sequences + old-status equivalence) |
+| **New (T1/T9)** | `validate:state-transition-matrix` (projection round-trip, transition table, controller sequences, old-status equivalence) |
 
 ## Mode facts (M1–M5)
 
@@ -115,7 +115,7 @@ Run all: `node scripts/run-all-validators.mjs --dir packages/core`
 | No old/new equivalence harness | E10 / S10 / A10 / T9 | `helpers/equivalence.mjs` (created); epoch equivalence (created); session/authorize/state matrices (planned) |
 | No session-switch failure matrix (rollback per phase) | S10 | `validate:session-lease-matrix` (created) |
 | No single authorization decision matrix | A10 | `validate:authorize-matrix` (created) |
-| No state transition matrix / illegal-transition check | T9 | `validate:agent-state-axes`, `validate:state-transition-matrix` (created) |
+| No state transition matrix / illegal-transition check | T9 | `validate:state-transition-matrix` (created) |
 | No epoch single-source guard | E10 | `validate:epoch-single-source` (created) |
 | No mode single-read guard | M5 | `validate:mode-single-read` (created) |
 
