@@ -178,11 +178,11 @@ const userRow = () => [{ id: "u1", role: "user", parts: [{ type: "text", content
   );
   assert.match(
     controller,
-    /const isStaleSession = captureSessionStaleness\(this\.channel\);/,
-    "the abort fallback captures the session generation before the stream starts"
+    /const epoch = this\.managed\.captureEpoch\(\);[\s\S]{0,160}const isStaleSession = \(\): boolean => !epoch\.isCurrent\(\);/,
+    "the abort fallback captures the session generation (via Epoch) before the stream starts"
   );
   assert.ok(
-    !/captureSessionStaleness\(\s*this\.channel,\s*\(\) => this\.managed\.isSessionSwitching\(\)/.test(controller),
+    !/isStable\(\)/.test(controller),
     "an admitted switch is not staleness: the run is still live while the switch drains persists"
   );
   assert.match(controller, /onAbort: applyAbortFallback/, "onAbort must go through the guarded fallback");

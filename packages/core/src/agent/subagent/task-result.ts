@@ -23,6 +23,7 @@ import {
 import type { SubagentStopReason } from "./subagent-stop-reason.js";
 import type { SubagentResult } from "./types.js";
 import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
+import type { Epoch } from "../../runtime-types/epoch.js";
 import type { AgentManager, ManagedAgent } from "../../runtime-types/hosts.js";
 import type { AgentUIChannel } from "../ui/ui-channel.js";
 import type { UIMessage } from "@tanstack/ai";
@@ -47,6 +48,8 @@ export interface FinalizeSubagentTaskInput {
   childLogPath?: string;
   subagentManaged: ManagedAgent;
   parentManaged: ManagedAgent;
+  /** Session/run identity captured when this child was spawned; stale results are not booked. */
+  parentEpoch: Epoch;
   manager: AgentManager;
   aggregateUsageToParent: boolean;
   customTools: boolean;
@@ -80,6 +83,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     childLogPath,
     subagentManaged,
     parentManaged,
+    parentEpoch,
     manager,
     aggregateUsageToParent,
     customTools,
@@ -199,7 +203,10 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
   const usage = subagentManaged.usage.getTotal();
   const billedInputTokens = subagentManaged.usage.getBilledInputTokens();
   const durationMs = Math.max(0, Date.now() - runStartedAt);
-  const usageCurrent = !taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration);
+  // Two different questions: the parent epoch answers "same session" (a background task may
+  // settle after a switch), the hub generation answers "same task stream" (a re-opened preview).
+  const usageCurrent =
+    parentEpoch.isCurrent() && (!taskStream || parentManaged.getStreamHub().isCurrentGeneration(summaryGeneration));
 
   if (aggregateUsageToParent && usageCurrent) {
     // The child's billed-prompt sum travels with its totals: the parent cannot recover it from the

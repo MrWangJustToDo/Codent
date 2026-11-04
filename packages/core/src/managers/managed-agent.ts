@@ -77,7 +77,6 @@ import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js"
 import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
-import { captureSessionStaleness } from "../agent/turn-context/session-staleness.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
@@ -86,6 +85,7 @@ import { selectModel } from "../models/config/model-selection.js";
 import { resolveModelInfoFromModelsDev, selectableModelIds } from "../models/config/models-config.js";
 import { offerableReasoningEfforts } from "../models/types.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
+import { createEpoch, type Epoch } from "../runtime-types/epoch.js";
 import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 import { copyModelMessages } from "../utils/model-messages.js";
@@ -2454,9 +2454,14 @@ export class ManagedAgent {
     // session's rows into the new (or leaving) one.
     const work = this.backgroundWork;
     if (!chat || !work) return;
+    // The peek is an await: a switch may commit while it runs. The facade identity catches the
+    // reset (a new session builds a new facade), and the epoch catches the window before that
+    // reset — without both, the target session could be woken for the leaving session's rows.
+    const epoch = this.captureEpoch();
     try {
       // Peek, do not mark: delivery (and the delivered flag) stays the middleware's.
       const pending = await work.pending();
+      if (this.backgroundWork !== work || !epoch.isCurrent()) return;
       if (pending.length === 0) return;
       chat.wakeForBackgroundCompletion(cause ?? (pending[0]?.kind === TASK_JOB_KIND ? "task" : "job"));
     } catch (error) {
@@ -2747,10 +2752,27 @@ export class ManagedAgent {
    * @internal Implemented for the plan host seam; not part of the host-facing API surface.
    */
   captureStaleness(): () => boolean {
-    // BOTH facts the helper defines: the generation covers "commit happened", `isSwitching` covers
-    // "unload/load admitted but not committed" — a disk read that resolves inside that window is
-    // stale too.
-    return captureSessionStaleness(this.chatController?.getUIChannel(), () => this.isSessionSwitching());
+    // The epoch carries BOTH facts the old helper encoded: the session/lifecycle generation covers
+    // "commit happened", and `isSessionSwitching` covers "unload/load admitted but not committed"
+    // — a disk read that resolves inside that window is stale too.
+    const epoch = this.captureEpoch();
+    return () => !epoch.isStable();
+  }
+
+  /**
+   * Capture the current session/lifecycle/run identity for an async continuation.
+   *
+   * The one entry point for "will this still belong to the same session when it resolves?" —
+   * persistence, side queries, background wake and subagent settlement all capture here instead
+   * of comparing session ids or calling `isSessionSwitching()` after an `await`.
+   */
+  captureEpoch(): Epoch {
+    return createEpoch({
+      getSessionGeneration: () => this.getUI()?.getSessionGeneration() ?? 0,
+      getLifecycleGeneration: () => this.getChatController()?.getLifecycleEpoch() ?? 0,
+      getRunToken: () => this.run.getRunToken(),
+      isSessionSwitching: () => this.isSessionSwitching(),
+    });
   }
 
   /**

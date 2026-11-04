@@ -18,6 +18,7 @@ import type { MemoryManager } from "../../agent/memory/memory-manager.js";
 import type { MemoryPrefetchInput, MemorySelectionPort, MemoryTelemetry } from "../../agent/memory/types.js";
 import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
 import type { SideQueryTelemetry } from "../../models/adapter/side-text-query.js";
+import type { Epoch } from "../../runtime-types/epoch.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
 import type { ModelMessage } from "@tanstack/ai";
 
@@ -46,14 +47,14 @@ export interface MemoryExtractionInput {
   /** Abort signal from the owning run — lets abort interrupt the queries. */
   abortSignal?: AbortSignal;
   /**
-   * The agent's active session id, read live.
+   * Identity captured when the extraction was requested.
    *
    * Extraction and consolidation finish AFTER the turn that started them, and the usage tracker is
    * reset/re-seeded when a `/new` or `/resume` adopts another session. The token count is therefore
    * recorded only while the agent is still on the session that spent it — otherwise one session's
    * LLM spend lands in another session's lifetime totals and is persisted there.
    */
-  getSessionId?: () => string | undefined;
+  epoch?: Epoch;
   /**
    * Persist the session after the queries settle.
    *
@@ -210,9 +211,8 @@ export class MemoryService implements MemorySelectionPort {
     const memoryManager = this.manager;
     const { onSideQuery, resolveTextAdapter, abortSignal, usage } = input;
     // The session that will be charged. A switch can complete before the query returns, and the
-    // tracker is re-seeded for the new session at adoption — see `MemoryExtractionInput.getSessionId`.
-    const sessionIdAtStart = input.getSessionId?.();
-    const stillOnStartSession = (): boolean => input.getSessionId?.() === sessionIdAtStart;
+    // tracker is re-seeded for the new session at adoption — see `MemoryExtractionInput.epoch`.
+    const sessionCurrent = (): boolean => input.epoch?.isCurrent() ?? true;
 
     this.extractionInProgress = true;
     this.emitEvent?.("memory:extract", { status: "start" });
@@ -233,7 +233,7 @@ export class MemoryService implements MemorySelectionPort {
           onSideQuery,
           abortSignal,
           usage,
-          stillOnStartSession
+          sessionCurrent
         );
         if (count > 0) {
           await memoryManager.flushIndex();
@@ -245,7 +245,7 @@ export class MemoryService implements MemorySelectionPort {
         const memoryCount = await memoryManager.getMemoryCount();
         if (memoryCount >= memoryManager.getConsolidateThreshold()) {
           this.emitEvent?.("memory:consolidate", { status: "start", count: memoryCount });
-          const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage, stillOnStartSession);
+          const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage, sessionCurrent);
           if (result.changed) {
             await memoryManager.flushIndex();
             this.emitEvent?.("memory:consolidate", {
@@ -273,7 +273,7 @@ export class MemoryService implements MemorySelectionPort {
         // spend was not booked at all, so there is nothing to land). A queued extraction re-enters
         // and persists its own spend. `persistState()` is fire-and-forget and reports its own
         // failures, so the port is total.
-        if (stillOnStartSession()) input.persist?.();
+        if (sessionCurrent()) input.persist?.();
       }
     })();
   }

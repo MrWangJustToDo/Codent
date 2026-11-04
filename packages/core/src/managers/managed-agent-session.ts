@@ -13,6 +13,7 @@ import { errorMessage } from "../utils/errors.js";
 
 import type { ResolvedCoreEnv } from "../env";
 import type { ModeCoordinator } from "./mode-coordinator.js";
+import type { Epoch } from "../runtime-types/epoch.js";
 import type { SessionPersistInput, SessionService } from "./services/session-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
@@ -42,6 +43,8 @@ export interface AppliedPersistedModel {
 
 export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
+  /** Capture the session/run generation before an async write (see `runtime-types/epoch.ts`). */
+  captureEpoch?: () => Epoch;
   usage: UsageTracker;
   getTodoManager: () => TodoManager | null;
   /** Owning runtime's env, so plan files are read under the runtime root. */
@@ -107,6 +110,7 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     // Mutual exclusivity: never persist auto while plan is active.
     autoMode: host.mode?.getPersistedAutoMode() ?? (planOn ? false : host.isAutoModeEnabled()),
     reasoningEffort: host.getReasoningEffort(),
+    epoch: host.captureEpoch?.(),
     resolveTextAdapter: host.resolveTextAdapter,
     emitEvent: (type, ...args) => host.emitEvent(type, ...args),
     emitSessionTitle: (payload, sessionId) =>

@@ -2,6 +2,8 @@ export type { TokenUsage } from "./token-usage.js";
 export { calculateCost, extractTanStackProvider, extractTanStackUsage } from "./token-usage.js";
 
 export type { AgentRunOutcomeKind, AgentStatus, RunFinalizeReason } from "./agent-status.js";
+export type { Epoch, EpochGenerations, EpochRunToken, EpochSource } from "./epoch.js";
+export { createEpoch } from "./epoch.js";
 export {
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,

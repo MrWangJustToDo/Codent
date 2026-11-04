@@ -28,7 +28,6 @@ import {
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
 import { reconcileSettledTaskParts } from "../../agent/subagent/task-background.js";
 import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
-import { captureSessionStaleness } from "../../agent/turn-context/session-staleness.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
@@ -237,6 +236,17 @@ export class AgentChatController {
     return (
       this.isPumpLive() || hasPendingInteraction(this.channel.getMessages()) || this.managed.compactions.isRunning()
     );
+  }
+
+  /**
+   * Current pump/session-switch generation.
+   *
+   * Exposed as an `Epoch` source (see `runtime-types/epoch.ts`): the controller owns this counter,
+   * and composing it with the session generation and run token is what makes one predicate replace
+   * the per-call-site staleness checks.
+   */
+  getLifecycleEpoch(): number {
+    return this.lifecycleEpoch;
   }
 
   /**
@@ -1043,7 +1053,8 @@ export class AgentChatController {
     // live one. Treating the admission as staleness swallowed a real stream error (no `error`
     // status, no `agent:stream-error`, turn persisted as `finished`). The generation moves at the
     // COMMIT, which is exactly when writing here would hit the target transcript.
-    const isStaleSession = captureSessionStaleness(this.channel);
+    const epoch = this.managed.captureEpoch();
+    const isStaleSession = (): boolean => !epoch.isCurrent();
     const applyAbortFallback = (): void => {
       if (isStaleSession()) return;
       // `applyCancelledIncompleteTools` preserves a pending `ask_user` by default — the single

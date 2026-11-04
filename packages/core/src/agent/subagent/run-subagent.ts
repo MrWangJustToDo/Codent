@@ -114,6 +114,9 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
   // Capture the hub generation before spawning: a session switch during spawn must make this
   // producer stale, not let it adopt the new session's generation.
   const summaryGeneration = parentManaged.getStreamHub().getGeneration();
+  // Same rule for the session identity: a background child can settle after the parent switched,
+  // and its usage must not be booked to (or its part written into) the target session.
+  const parentEpoch = parentManaged.captureEpoch();
   if (abortSignal?.aborted) {
     return abortedBeforeStartResult(subagentId, effectiveProfileId, maxIterations);
   }
@@ -335,6 +338,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       ...(childLogPath ? { childLogPath } : {}),
       subagentManaged,
       parentManaged,
+      parentEpoch,
       manager,
       aggregateUsageToParent,
       customTools: customTools !== undefined,

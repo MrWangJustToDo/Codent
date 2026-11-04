@@ -25,7 +25,7 @@ export async function generateAndApplySessionTitle(
   }
   // The side query below is an await; a `/new` or `/resume` during it replaces the live session.
   // The spend belongs to the session that asked (the same guard the display-name write uses).
-  const sessionIdAtStart = session.id;
+  const epoch = managed.captureEpoch();
 
   const textAdapter = await resolveTextAdapterForManaged(managed);
   if (!textAdapter) {
@@ -58,12 +58,12 @@ export async function generateAndApplySessionTitle(
     });
     // Booked only while the asking session is still live: `managed.usage` is the tracker of
     // whatever session is current, so an unguarded add charged this title to the next session.
-    if (usage && managed.getSessionData()?.id === sessionIdAtStart) {
+    if (usage && epoch.isCurrent()) {
       managed.usage.addTotal(usage);
     }
     const generated = text.trim().slice(0, 80);
     if (!generated) {
-      if (managed.getSessionData()?.id === session.id) {
+      if (epoch.isCurrent()) {
         managed.emitEvent("session:title", { ok: false, error: "model returned an empty title" });
       }
       return { ok: false, error: "Failed to generate title" };
@@ -73,7 +73,7 @@ export async function generateAndApplySessionTitle(
     // The disk write below still belongs to `session` (the one the title describes), but the live
     // display-name broadcast and the event would land on the TARGET session — the auto-title path
     // already guards this (`SessionService`), and the command path must agree.
-    if (managed.getSessionData()?.id === session.id) {
+    if (epoch.isCurrent()) {
       // Route through `setDisplayName` so the state channel broadcasts the new title (a raw
       // `managed.name = …` write never notified subscribers).
       managed.setDisplayName(generated);
@@ -83,7 +83,7 @@ export async function generateAndApplySessionTitle(
     return { ok: true, name: generated };
   } catch (error) {
     const err = toError(error);
-    if (managed.getSessionData()?.id === session.id) {
+    if (epoch.isCurrent()) {
       managed.emitEvent("session:title", { ok: false, error: err.message });
     }
     return { ok: false, error: `Title generation failed: ${err.message}` };

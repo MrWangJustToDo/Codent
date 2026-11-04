@@ -10,6 +10,7 @@ import { isActiveStatus } from "../runtime-types/agent-status.js";
 
 import type { RunCoordinator } from "./run-coordinator.js";
 import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
+import type { Epoch } from "../runtime-types/epoch.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
@@ -26,6 +27,8 @@ import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 export interface RunLifecycleHost {
   readonly id: string;
   parentId?: string;
+  /** Capture the session/run identity before an async continuation (see `runtime-types/epoch.ts`). */
+  captureEpoch?: () => Epoch;
   getStatus: () => AgentStatus;
   setStatus: (status: AgentStatus, trigger?: AgentStatusTrigger) => void;
   /** Track the active run id (log run-scoping); pass null to clear. */
@@ -175,9 +178,9 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
       // Extraction and consolidation are real LLM spend; the tracker is what makes it
       // show up in the session's lifetime totals.
       usage: host.usage,
-      // Read live, so a `/new` or `/resume` that lands while the query is in flight stops the
-      // result from being booked to the session that did not spend it.
-      getSessionId: () => host.getSessionData()?.id,
+      // Captured before the query; a `/new` or `/resume` that lands while it is in flight makes it
+      // stale, so the result is not booked to the session that did not spend it.
+      epoch: host.captureEpoch?.(),
       // The turn's persist already ran (above); extraction books its own spend afterwards, so the
       // session needs one more state-only write once the queries settle.
       persist: () => host.persistSession(),

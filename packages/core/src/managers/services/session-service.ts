@@ -16,6 +16,7 @@ import type { PlanModeState } from "../../agent/plan/plan-mode-controller.js";
 import type { TodoManager } from "../../agent/todo";
 import type { TextAdapterConfig } from "../../models/adapter/adapter-factory.js";
 import type { ModelStyle, ReasoningEffort } from "../../models/types.js";
+import type { Epoch } from "../../runtime-types/epoch.js";
 import type { EmitAgentTelemetryFn } from "../telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "../telemetry/usage-tracker.js";
 import type { UIMessage } from "@tanstack/ai";
@@ -29,6 +30,13 @@ export interface SessionPersistInput {
   autoMode?: boolean;
   /** Reasoning effort level to persist with this session. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Identity captured when the write was requested.
+   *
+   * Passed to the async auto-title so a `/new`/`/resume` during the side query can drop its usage
+   * and name write without comparing session ids (see `runtime-types/epoch.ts`).
+   */
+  epoch?: Epoch;
   resolveTextAdapter?: () => Promise<TextAdapterConfig | null>;
   emitEvent?: EmitAgentTelemetryFn;
   /**
@@ -218,20 +226,12 @@ export class SessionService {
 
   private async generateSessionTitle(
     userMessage: string,
-    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent"> & {
-      /**
-       * Whether the session that asked for the title is still the live one.
-       *
-       * The side query is an await: a `/new` or `/resume` during it replaces the tracker, and
-       * `usage.addTotal` (like the name write) must not land on the target. Checked here rather
-       * than only in the caller's `.then` because the usage is booked before the promise resolves.
-       */
-      stillOnSession?: () => boolean;
+    input: Pick<SessionPersistInput, "usage" | "resolveTextAdapter" | "emitSessionTitle" | "emitEvent" | "epoch"> & {
       /** The session this title belongs to; every event it emits names it explicitly. */
       sessionId?: string;
     }
   ): Promise<string> {
-    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent, sessionId } = input;
+    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent, sessionId, epoch } = input;
     // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
     // that does not exist yet; some providers answer with a plausible-looking name and some
     // reject the request outright (400 → the caller's fallback is also empty). The persist
@@ -261,7 +261,7 @@ export class SessionService {
       // Book the spend to the session that asked. The tracker on `input` belongs to whatever
       // session is live NOW, so an unguarded add moved this conversation's title cost onto a
       // session the user had just switched to (and left the source record short).
-      if (queryUsage && (input.stillOnSession?.() ?? true)) {
+      if (queryUsage && (epoch?.isCurrent() ?? true)) {
         usage.addTotal(queryUsage);
       }
 
@@ -544,12 +544,15 @@ export class SessionService {
         this.generateSessionTitle(firstUserText, {
           usage,
           resolveTextAdapter,
-          stillOnSession: () => this.data === target,
+          epoch: input.epoch,
           sessionId: target.id,
           ...(emitSessionTitle ? { emitSessionTitle } : {}),
           ...(emitEvent ? { emitEvent } : {}),
         }).then((title) => {
-          if (this.data !== target) return;
+          // The title belongs to the session that asked: a switch committed (or in flight) while
+          // the query ran means neither the name nor its broadcast may land on the target session.
+          // Hosts that do not capture an epoch keep the object-identity fallback.
+          if (input.epoch ? !input.epoch.isCurrent() : this.data !== target) return;
           const trimmed = title.trim();
           if (!trimmed) {
             // A whitespace-only provider reply. Keep "New Session" — and repair legacy
