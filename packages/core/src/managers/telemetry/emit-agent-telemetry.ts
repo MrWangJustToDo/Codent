@@ -1,11 +1,15 @@
 import type { AgentEvent } from "../../agent/agent-event-bus";
 import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
-import type { EmitAgentTelemetryFn, PayloadRequired } from "../../runtime-types/agent-events.js";
+import type {
+  EmitAgentTelemetryFn,
+  EmitAgentTelemetryOptions,
+  EmitPayloadArgs,
+} from "../../runtime-types/agent-events.js";
 
 /** Telemetry event names (payload-map keys); excludes session-projection events. */
 type TelemetryEventType = keyof AgentEventPayloadMap;
 
-export type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
+export type { EmitAgentTelemetryFn, EmitAgentTelemetryOptions } from "../../runtime-types/agent-events.js";
 
 /**
  * Args tuple for `emitAgentTelemetry`, with the payload requirement resolved from its type.
@@ -13,10 +17,9 @@ export type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
  * Declared here (not as `[...EmitPayloadArgs<T>, options?]`) because spreading a conditional tuple
  * and appending an optional element is not reliably reduced by the checker.
  */
-type TelemetryArgs<T> =
-  PayloadRequired<T> extends true
-    ? [payload: T, options?: EmitAgentTelemetryOptions]
-    : [payload?: T, options?: EmitAgentTelemetryOptions];
+// One shape in `runtime-types`; a local copy would be the first place a new envelope field does
+// not reach this entry point.
+type TelemetryArgs<T> = EmitPayloadArgs<T>;
 
 /**
  * Telemetry emitted before the agent had a bus to dispatch on.
@@ -58,23 +61,20 @@ export interface AgentTelemetryEmitter {
   getEventSessionId?(): string | undefined;
 }
 
-export interface EmitAgentTelemetryOptions {
-  /** Override agentId (default: emitter.id) */
-  agentId?: string;
-  parentId?: string;
-  /** Override sessionId (default: `getEventSessionId()` / `getSessionData()?.id`, omitted when unknown) */
-  sessionId?: string;
-  /** Override the run id (default: `getCurrentRunId()`, omitted outside a run) */
-  runId?: string;
-}
-
 /** Bind {@link emitAgentTelemetry} to a managed agent or other emitter. */
 export function createEmitTelemetryFn(emitter: AgentTelemetryEmitter): EmitAgentTelemetryFn {
   // The parent link travels with the emitter: middleware and domain objects receive this bound fn
   // (`deps.emitEvent`), and a child's compaction/tool events must carry the parent too.
   const parentId = emitter.parentId;
   return (type, ...args) =>
-    dispatchAgentTelemetry(emitter, type, args[0], parentId !== undefined ? { parentId } : undefined);
+    dispatchAgentTelemetry(
+      emitter,
+      type,
+      args[0],
+      // A caller's override WINS over the emitter's parent link: explicit beats derived, and the
+      // options element is the seam an asynchronous producer uses to name the session it belongs to.
+      parentId !== undefined ? { parentId, ...args[1] } : args[1]
+    );
 }
 
 /**

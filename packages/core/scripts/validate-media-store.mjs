@@ -226,6 +226,62 @@ async function testDehydrateHydrateRoundTrip() {
   console.log("  ✓ dehydrate/hydrate round-trip for url and data source types");
 }
 
+async function testToolCallOutputDehydrateHydrate() {
+  // `read_file` (image/PDF) and `webfetch` (image) keep their bytes on the tool-call's structured
+  // output, not on a `tool-result` part. That path used to be skipped, so every screenshot was
+  // persisted a second time as raw base64 (a 388 KB image in one real session).
+  const messages = [
+    makeMessage([
+      {
+        type: "tool-call",
+        id: "call-1",
+        name: "read_file",
+        arguments: "{}",
+        state: "complete",
+        output: { type: "image", path: "a.png", mimeType: "image/png", base64: TINY_PNG_BASE64, size: 68 },
+      },
+    ]),
+    makeMessage([
+      {
+        type: "tool-call",
+        id: "call-2",
+        name: "webfetch",
+        arguments: "{}",
+        state: "complete",
+        output: {
+          url: "https://x/y.png",
+          finalUrl: "https://x/y.png",
+          isImage: true,
+          // The real tool always reports the response header; the mime must round-trip exactly.
+          contentType: "image/png; charset=utf-8",
+          content: TINY_PNG_DATA_URL,
+        },
+      },
+    ]),
+  ];
+
+  const dehydrated = await dehydrateUIMessages(messages, { env: getEnv() });
+  assert.ok(dehydrated[0].parts[0].output.base64.startsWith("media://"), "read_file base64 should become a ref");
+  assert.ok(dehydrated[1].parts[0].output.content.startsWith("media://"), "webfetch data URL should become a ref");
+  assert.ok(dehydrated[0].parts[0].output.mediaRef, "the call output should carry mediaRef");
+  assert.equal(messages[0].parts[0].output.base64, TINY_PNG_BASE64, "the original message must not be mutated");
+  assert.ok(
+    !JSON.stringify(dehydrated).includes(TINY_PNG_BASE64),
+    "the persisted clone must not carry the raw base64 anywhere"
+  );
+
+  // Idempotent: a second dehydrate of an already-dehydrated message must not touch it.
+  const twice = await dehydrateUIMessages(dehydrated, { env: getEnv() });
+  assert.equal(twice[0].parts[0].output.base64, dehydrated[0].parts[0].output.base64, "second dehydrate is a no-op");
+
+  const hydrated = await hydrateUIMessages(dehydrated, { env: getEnv() });
+  assert.equal(hydrated[0].parts[0].output.base64, TINY_PNG_BASE64, "read_file base64 should be restored");
+  assert.equal(hydrated[1].parts[0].output.content, TINY_PNG_DATA_URL, "webfetch content should be restored");
+  assert.equal(hydrated[0].parts[0].output.mediaRef, undefined, "mediaRef is cleared after hydrate");
+
+  console.log("  ✓ tool-call output dehydrate/hydrate");
+}
+
 async function testInlineDataUrlWithoutMediaRef() {
   // Runtime / not-yet-dehydrated message — no mediaRef, value is a data URL
   const messages = [makeMessage([makeImagePart("url", TINY_PNG_DATA_URL)])];
@@ -350,6 +406,7 @@ async function main() {
   await testRoundTrip();
   await testExtractBase64();
   await testDehydrateHydrateRoundTrip();
+  await testToolCallOutputDehydrateHydrate();
   await testInlineDataUrlWithoutMediaRef();
   await testTypesUtils();
   await testInvalidHashRejected();

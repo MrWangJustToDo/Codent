@@ -14,6 +14,7 @@
 import { getEnv, type CoreEnv } from "../../../../../env";
 
 import { normalizeEditArguments } from "./arguments.js";
+import { assertEditableFileSize } from "./editable-size.js";
 import { applyEditsToText, type EditOperation } from "./find-edit-match.js";
 
 // ============================================================================
@@ -63,12 +64,15 @@ export async function previewEdit(input: PreviewEditInput, env?: CoreEnv): Promi
   // The tool accepts JSON-string / single-object / legacy shapes; the preview must see the same
   // edits the tool will run, or it previews a different change (or none) than the one written.
   const { path, edits } = normalizeEditArguments(input) as { path: string; edits?: unknown };
+  const targetEnv = env ?? getEnv();
+  // The preview reads the whole file too (approval path), so it shares the edit pipeline's gate.
+  await assertEditableFileSize(targetEnv, path);
   if (!Array.isArray(edits) || edits.length === 0) {
-    const oldFile = await (env ?? getEnv()).fs.readFile(path);
+    const oldFile = await targetEnv.fs.readFile(path);
     return { oldFile, newFile: oldFile, error: "edits: must contain at least 1 edit operation" };
   }
 
-  const oldFile = await (env ?? getEnv()).fs.readFile(path);
+  const oldFile = await targetEnv.fs.readFile(path);
   const applied = applyEditsToText(oldFile, edits as EditOperation[]);
   if (!applied.ok) {
     // The tool throws on the first unresolved edit and writes nothing at all, so the honest preview

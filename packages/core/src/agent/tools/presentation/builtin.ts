@@ -1,3 +1,5 @@
+import { isBuiltinToolName, type BuiltinToolName } from "../catalog/tool-names.js";
+
 import type { ToolActivityCategory, ToolPresentation } from "./types.js";
 
 /**
@@ -21,7 +23,9 @@ export interface BuiltinPresentationEntry {
   clientSide?: boolean;
 }
 
-export const BUILTIN_PRESENTATION: Record<string, BuiltinPresentationEntry> = {
+// Keyed by the built-in name union, not `string`: a rename in `BUILTIN_TOOL_NAMES` becomes a
+// compile error here instead of a silently missing fallback descriptor.
+export const BUILTIN_PRESENTATION: Partial<Record<BuiltinToolName, BuiltinPresentationEntry>> = {
   // File / resource inspection.
   read_file: { category: "reads" },
   list_file: { category: "reads" },
@@ -82,6 +86,7 @@ export function builtinPresentationNames(): string[] {
 
 /** Fallback descriptor for a built-in name (flags only; text/summary/input come from the ported formatters). */
 export function getBuiltinToolPresentation(name: string): ToolPresentation | undefined {
+  if (!isBuiltinToolName(name)) return undefined;
   const entry = BUILTIN_PRESENTATION[name];
   if (!entry) return undefined;
   return { ...entry };

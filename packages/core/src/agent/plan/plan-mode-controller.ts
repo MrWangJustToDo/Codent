@@ -49,6 +49,15 @@ export interface PlanModeControllerDeps {
    * that is the one event whose job is the snapshot.
    */
   emitEvent?: EmitAgentTelemetryFn;
+  /**
+   * Capture a staleness check for an artifact whose disk write may outlive its session.
+   *
+   * `applyPlanArtifact` is fire-and-forget from `onAssistantText`, and the only await is the plan
+   * file write (an HTTP round-trip on a remote env). A `/resume` or `/new` committed inside that
+   * await used to have the late write stamp the leaving session's plan (phase + markdown) into the
+   * target and persist it. Same guard as the title/memory writers.
+   */
+  captureStaleness?: () => () => boolean;
 }
 
 export interface BeginPlanExecutionResult {
@@ -390,13 +399,12 @@ export class PlanModeController {
       return { ok: false, error: `Cannot apply plan while phase is "${this.phase}"` };
     }
 
-    this.planMarkdown = planMarkdown;
-    this.steps = steps;
-    const { seeded, skippedDueToExisting } = this.seedTodosFromSteps({ force: false });
-    this.preservedExistingTodos = skippedDueToExisting;
-
+    // Captured BEFORE the write. Nothing is mutated until the write resolves, so a switch during
+    // the await leaves the target session untouched instead of inheriting this plan.
+    const isStale = this.deps.captureStaleness?.();
     const persistPath = options?.existingRelativePath ?? this.planFilePath ?? undefined;
     const nameHint = options?.nameHint ?? extractGoalFromPlanMarkdown(planMarkdown);
+    let savedPath: string | undefined;
     try {
       const { path } = await savePlanFile(
         planMarkdown,
@@ -404,10 +412,25 @@ export class PlanModeController {
         { existingRelativePath: persistPath },
         this.deps.getCoreEnv?.()
       );
-      this.planFilePath = path;
+      savedPath = path;
     } catch {
       // Non-fatal: keep in-memory plan even if disk write fails
     }
+
+    if (isStale?.() === true) {
+      return { ok: false, error: "Session changed before the plan artifact was applied" };
+    }
+    // The phase may also have moved during the write (a `/mode execute` while it was in flight);
+    // applying it now would flip a phase the user already left.
+    if (this.phase !== "planning" && this.phase !== "ready") {
+      return { ok: false, error: `Plan phase changed to "${this.phase}" while saving` };
+    }
+
+    this.planMarkdown = planMarkdown;
+    this.steps = steps;
+    const { seeded, skippedDueToExisting } = this.seedTodosFromSteps({ force: false });
+    this.preservedExistingTodos = skippedDueToExisting;
+    if (savedPath !== undefined) this.planFilePath = savedPath;
 
     if (this.phase === "planning") {
       this.phase = "ready";

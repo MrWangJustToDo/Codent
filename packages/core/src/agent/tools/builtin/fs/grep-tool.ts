@@ -7,7 +7,7 @@ import { OUTPUT_LIMITS } from "../../shared/output-limits.js";
 import { grepOutputSchema } from "../../shared/schemas.js";
 import { withDuration } from "../../shared/tool-result.js";
 
-import { expandBraceGlobs, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
+import { expandBraceGlobs, isWithinSearchPath, matchesGlobPath, normalizeSearchPath } from "./search/glob-pattern.js";
 import { parseCountLine, parseGrepLine, runGrepSearch } from "./search/grep-search.js";
 import { formatSearchModelOutput, resolveSearchPath } from "./search/search-command.js";
 import { activeExcludeDirs, defaultSearchPolicy, searchTargetBypassesIgnore } from "./search/search-policy.js";
@@ -269,12 +269,20 @@ export const createGrepTool = () => {
           }
         }
 
+        // `path` and `include` reach git as two pathspecs, and git takes them as a UNION — so an
+        // include glob exposed the rest of the repository. Keep only results inside the requested
+        // root (ripgrep's `--glob` + path pair is an intersection). A single-file search names its
+        // own file and is exempt.
+        const inScope = (file: string): boolean =>
+          searchPathIsFile || isWithinSearchPath(file, searchPath, coreEnv.rootPath);
+        const scopeMatches = allMatches.filter((match) => inScope(match.file));
+
         const filteredMatches =
           mode === "content"
-            ? allMatches
+            ? scopeMatches
             : includePatterns.length === 0
-              ? allMatches
-              : allMatches.filter((match) => includeMatch(match.file));
+              ? scopeMatches
+              : scopeMatches.filter((match) => includeMatch(match.file));
 
         const withoutZeroCounts =
           mode === "count" ? filteredMatches.filter((match) => match.content !== "Count: 0") : filteredMatches;

@@ -24,7 +24,7 @@ const MAX_LINES = 800;
 const ALLOWLIST = new Map([
   [
     "core/managers/managed-agent.ts",
-    "Composes the agent lifecycle, controllers and public facade; split is tracked separately.",
+    "Composition root: owns the object graph and its identity/lifecycle state. The file header names the remaining extraction seams (state publication, extension runtime access, background-work ownership) and why each is policy over the same graph rather than a field move.",
   ],
   [
     "core/agent/extension/runner.ts",

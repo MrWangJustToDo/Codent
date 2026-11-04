@@ -32,6 +32,10 @@ assert.equal(ACTIVE_STATUSES.has("compacting"), true);
 assert.equal(resolveFinishStatus("aborted", ""), "aborted");
 assert.equal(resolveFinishStatus("waiting", "oops"), "waiting");
 assert.equal(resolveFinishStatus("awaiting_user", ""), "awaiting_user");
+// `compacting` is owned by the CompactionController lease, not by the run. Overwriting it with
+// `completed` made the lease's restore a silent no-op and lost the turn's terminal status.
+assert.equal(resolveFinishStatus("compacting", ""), "compacting", "a finish must not overwrite the compaction lease");
+assert.equal(resolveFinishStatus("compacting", "boom"), "compacting", "…not even an error message may");
 assert.equal(resolveFinishStatus("running", "failed"), "error");
 assert.equal(resolveFinishStatus("responding", ""), "completed");
 

@@ -114,6 +114,7 @@ export class AgentUIChannel {
   /** Unified event bus for the owning agent (session `messages` projection). */
   private eventBus?: AgentEventBus;
   private toolPresentationResolver: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation;
+  private builtinToolResolver?: (name: string) => boolean;
 
   /** @internal Attach the agent's scoped unified event bus. */
   setEventBus(bus: AgentEventBus): void {
@@ -130,9 +131,19 @@ export class AgentUIChannel {
     this.toolPresentationResolver = resolver;
   }
 
+  /** @internal Whether the live tool under `name` is still the seeded built-in. */
+  setToolBuiltinResolver(resolver: (name: string) => boolean): void {
+    this.builtinToolResolver = resolver;
+  }
+
   /** Resolve a tool presentation through the owning agent, with the global registry as fallback. */
   resolveToolPresentation(name: string): ToolPresentation | undefined {
     return this.toolPresentationResolver(name);
+  }
+
+  /** Whether the built-in inline summary may describe this tool (not an extension shadow). */
+  isBuiltinTool(name: string): boolean {
+    return this.builtinToolResolver?.(name) ?? true;
   }
   private readonly approvalListeners = new Set<ApprovalListener>();
   private readonly customEventListeners = new Set<UICustomEventListener>();
@@ -440,7 +451,11 @@ export class AgentUIChannel {
     // The resolver already falls back to the built-in table for tools the agent was seeded with.
     // A second `?? getBuiltinToolPresentation(name)` here would hand that descriptor to a shadowing
     // extension tool that deliberately declared none — the very case the agent-side resolver stops.
-    const withDisplay = attachMissingToolDisplays(this.getMessages(), (name) => this.resolveToolPresentation(name));
+    const withDisplay = attachMissingToolDisplays(
+      this.getMessages(),
+      (name) => this.resolveToolPresentation(name),
+      (name) => this.isBuiltinTool(name)
+    );
     if (withDisplay) this.processor.setMessages(withDisplay);
     // End of run: everything now materialized becomes historical for the next
     // one (matters when the next stream is fed via processChunk directly).
@@ -597,7 +612,8 @@ export class AgentUIChannel {
  */
 function attachMissingToolDisplays(
   messages: TanStackUIMessage[],
-  resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation
+  resolveToolPresentation: (name: string) => ToolPresentation | undefined = getBuiltinToolPresentation,
+  isBuiltinTool: (name: string) => boolean = () => true
 ): TanStackUIMessage[] | null {
   const displayableStates = new Set(["complete", "output-available", "output-error"]);
 
@@ -614,7 +630,7 @@ function attachMissingToolDisplays(
       }
     }
 
-    const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation);
+    const display = computeToolDisplay(part.name, part.output, input, resolveToolPresentation, isBuiltinTool);
     return display ? { ...part, display } : undefined;
   });
 }

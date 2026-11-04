@@ -137,6 +137,36 @@ function relativeToSearchPath(file: string, searchPath: string, rootPath?: strin
 }
 
 /**
+ * Whether a command-result path actually lies under the search root.
+ *
+ * `git grep` (and `find`) take several pathspecs as a UNION, so an `include` glob passed beside
+ * the search path widens the result set to the whole repository: `git grep -- '*.ts' 'src'`
+ * returns `other/b.ts` too. The JS-side include filter only tests the basename, so it kept those
+ * rows. Callers apply this containment test before the glob filter so an explicit `path` still
+ * decides the scope, exactly like ripgrep's `--glob` + path pair.
+ */
+export function isWithinSearchPath(file: string, searchPath: string, rootPath?: string): boolean {
+  const withoutTrailing = (value: string): string => toPosixPath(value).replace(/\/+$/, "").replace(/^\.\//, "");
+  let normalized = withoutTrailing(file);
+  let root = withoutTrailing(searchPath);
+  if (rootPath) {
+    const workspaceRoot = withoutTrailing(rootPath);
+    if (normalized.startsWith(`${workspaceRoot}/`)) normalized = normalized.slice(workspaceRoot.length + 1);
+    else if (normalized === workspaceRoot) normalized = ".";
+    if (root.startsWith(`${workspaceRoot}/`)) root = root.slice(workspaceRoot.length + 1);
+    else if (root === workspaceRoot) root = ".";
+  }
+  if (!root || root === ".") return true;
+  // Windows compares paths case-insensitively. `resolveSearchPath` folds case for its traversal
+  // guard but returns the caller's spelling, so an absolute `path` whose drive/segment case differs
+  // from `rootPath` used to fail this prefix check and silently drop every result.
+  const fold = rootPath?.includes("\\") ? (value: string) => value.toLowerCase() : (value: string) => value;
+  const foldedRoot = fold(root);
+  const foldedFile = fold(normalized);
+  return foldedFile === foldedRoot || foldedFile.startsWith(`${foldedRoot}/`);
+}
+
+/**
  * Test one command-result path against a caller-defined glob.
  *
  * `rootPath` converts an absolute `searchPath` (and an absolute result) to workspace-relative

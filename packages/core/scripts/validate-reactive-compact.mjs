@@ -8,6 +8,8 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   CONTEXT_OVERFLOW_CODES,
@@ -23,6 +25,45 @@ import {
   UsageTracker,
   CompactionService,
 } from "../dist/dev.mjs";
+
+// ---------------------------------------------------------------------------
+// The reactive retry budget is RUN-scoped, not phase-scoped.
+//
+// `prepareManagedAgentForRun` runs once per tool phase. Resetting the counter there made
+// "max 1 retry per run" mean "max 1 per phase": a turn split by an approval could summarize (a
+// paid model call) once per segment. The reset belongs to the run boundary.
+// ---------------------------------------------------------------------------
+{
+  const lifecycleSrc = readFileSync(
+    fileURLToPath(new URL("../src/managers/managed-agent-run-lifecycle.ts", import.meta.url)),
+    "utf8"
+  );
+  const blockSource = (marker) => {
+    const start = lifecycleSrc.indexOf(marker);
+    assert.notEqual(start, -1, `missing marker: ${marker}`);
+    const open = lifecycleSrc.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < lifecycleSrc.length; i++) {
+      if (lifecycleSrc[i] === "{") depth += 1;
+      else if (lifecycleSrc[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return lifecycleSrc.slice(open + 1, i);
+      }
+    }
+    throw new Error(`unbalanced block after ${marker}`);
+  };
+  const runBlock = blockSource("if (!isToolContinuation) {");
+  assert.match(
+    runBlock,
+    /getCompaction\(\)\.resetReactiveCompactRetries\(\)/,
+    "the reset is INSIDE the run-start block (per-phase prep must not reset it)"
+  );
+  assert.equal(
+    lifecycleSrc.match(/getCompaction\(\)\.resetReactiveCompactRetries\(\)/g)?.length,
+    1,
+    "exactly one reset in the lifecycle — a second one restores the per-phase bug"
+  );
+}
 
 // ============================================================================
 // Overflow detection

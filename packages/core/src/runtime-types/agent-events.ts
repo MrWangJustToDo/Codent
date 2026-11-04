@@ -25,12 +25,36 @@ type RequiredPayloadKeys<T> = {
 export type PayloadRequired<T> = [RequiredPayloadKeys<T>] extends [never] ? false : true;
 
 /**
+ * Envelope overrides an asynchronous producer must be able to state.
+ *
+ * `sessionId` is the load-bearing one: a persist/title/side-query continuation resolves after the
+ * agent may have adopted another session, and the funnel's default ("the agent's CURRENT session")
+ * would file the row under the target's log.
+ */
+export interface EmitAgentTelemetryOptions {
+  /** Override agentId (default: emitter.id). */
+  agentId?: string;
+  parentId?: string;
+  /** Override sessionId (default: `getEventSessionId()` / `getSessionData()?.id`, omitted when unknown). */
+  sessionId?: string;
+  /** Override the run id (default: `getCurrentRunId()`, omitted outside a run). */
+  runId?: string;
+}
+
+/**
  * Args tuple for a telemetry event: the payload is mandatory when the payload type has a required
  * field. `payload?` used to accept the omission for EVERY event, so `emitEvent("job:changed")`
  * compiled and produced `payload: {}` — a frame whose consumers printed `Job ? started`. An
  * all-optional payload stays omittable.
+ *
+ * The options element is part of the shared contract so every host of this function (services,
+ * middleware, the session store) can state the envelope for work that outlived its session —
+ * previously only `ManagedAgent.emitEvent` could, and the narrower seam dropped the fact.
  */
-export type EmitPayloadArgs<T> = PayloadRequired<T> extends true ? [payload: T] : [payload?: T];
+export type EmitPayloadArgs<T> =
+  PayloadRequired<T> extends true
+    ? [payload: T, options?: EmitAgentTelemetryOptions]
+    : [payload?: T, options?: EmitAgentTelemetryOptions];
 
 /** Callback shape for services/middleware that emit lifecycle telemetry. */
 export type EmitAgentTelemetryFn = <T extends AgentEventType>(

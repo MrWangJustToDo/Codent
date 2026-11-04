@@ -38,7 +38,7 @@ export interface SessionPersistInput {
    * `side-query` warning, so "no title" and "the model call broke" were one row and neither said the
    * title was missing.
    */
-  emitSessionTitle?: (payload: { ok: boolean; name?: string; error?: string }) => void;
+  emitSessionTitle?: (payload: { ok: boolean; name?: string; error?: string }, sessionId?: string) => void;
   /**
    * Invoked when the async auto-title resolves, so the agent can broadcast the
    * new display name (the title lands on `SessionData.name` first).
@@ -227,9 +227,11 @@ export class SessionService {
        * than only in the caller's `.then` because the usage is booked before the promise resolves.
        */
       stillOnSession?: () => boolean;
+      /** The session this title belongs to; every event it emits names it explicitly. */
+      sessionId?: string;
     }
   ): Promise<string> {
-    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent } = input;
+    const { usage, resolveTextAdapter, emitSessionTitle, emitEvent, sessionId } = input;
     // Nothing to title. An empty prompt made the side LLM invent a title for a conversation
     // that does not exist yet; some providers answer with a plausible-looking name and some
     // reject the request outright (400 → the caller's fallback is also empty). The persist
@@ -250,7 +252,9 @@ export class SessionService {
         // (the structured-mode retry was invisible).
         onEvent: (event) => {
           const { type, ...payload } = event;
-          emitEvent?.(type, payload as never);
+          // The side query resolves after the session may have switched: name the session it was
+          // run FOR, or the default would file the row under the target.
+          emitEvent?.(type, payload as never, sessionId !== undefined ? { sessionId } : undefined);
         },
       });
 
@@ -267,7 +271,9 @@ export class SessionService {
       // covers adapter resolution and any non-LLM throw. A failed title is its own fact, not a
       // side-query failure — the two answer different questions ("no title" vs "the model call
       // broke"), and `session:title` is what a reader greps for.
-      emitSessionTitle?.({ ok: false, error: errorMessage(error) });
+      // The failure path has the same async identity problem the success path's `this.data !==
+      // target` guard solves: without the explicit id the row landed in the target's log.
+      emitSessionTitle?.({ ok: false, error: errorMessage(error) }, sessionId);
       return userMessage.slice(0, 50);
     }
   }
@@ -303,7 +309,10 @@ export class SessionService {
         return true;
       } catch (err) {
         const errorMsg = errorMessage(err);
-        emitEvent?.("session:save-error", { target, error: errorMsg });
+        // This is the direct (queue-bypassing) writer — the async title save — so `data` may be a
+        // session that was switched away from before the write failed. Name it explicitly; the
+        // envelope default ("the current session") would file the failure under the target.
+        emitEvent?.("session:save-error", { target, error: errorMsg }, { sessionId: data.id });
         return false;
       }
     })();
@@ -501,10 +510,15 @@ export class SessionService {
             data.uiMessages = dehydrated;
           } catch (err) {
             messagesPersisted = false;
-            emitEvent?.("session:save-error", {
-              target: "session+uiMessages",
-              error: errorMessage(err),
-            });
+            emitEvent?.(
+              "session:save-error",
+              {
+                target: "session+uiMessages",
+                error: errorMessage(err),
+              },
+              // The write belongs to `data`, which may no longer be the live session.
+              { sessionId: data.id }
+            );
           }
         }
       }
@@ -531,6 +545,7 @@ export class SessionService {
           usage,
           resolveTextAdapter,
           stillOnSession: () => this.data === target,
+          sessionId: target.id,
           ...(emitSessionTitle ? { emitSessionTitle } : {}),
           ...(emitEvent ? { emitEvent } : {}),
         }).then((title) => {
@@ -553,7 +568,7 @@ export class SessionService {
           // The generated name is the fact both readers look for. Only the FAILURE branch used to
           // emit, so the most common naming path (the first message) had no row while `/title` had
           // one — the same fact with two visibilities.
-          emitSessionTitle?.({ ok: true, name: trimmed });
+          emitSessionTitle?.({ ok: true, name: trimmed }, target.id);
           // Reuse the unified save path so a title-write failure also emits
           // `session:save-error` (target "session-title").
           void this.saveToStore(emitEvent, target, "session-title");

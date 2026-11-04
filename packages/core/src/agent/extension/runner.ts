@@ -762,25 +762,37 @@ export class ExtensionRunner {
    * once the lease was gone. `deactivate()` receives no context, and the arrays this step clears
    * are the runner's bookkeeping, not the extension's — logging/coreEnv still work after a revoke.
    */
-  private async teardownIncarnation(instance: ExtensionInstance): Promise<void> {
+  private async teardownIncarnation(instance: ExtensionInstance, incarnation = instance.context): Promise<void> {
     // Identity-checked so an older teardown cannot revoke a newer incarnation's lease.
-    if (this.contexts.get(instance.api.id) === instance.context) {
+    if (this.contexts.get(instance.api.id) === incarnation) {
       this.contexts.delete(instance.api.id);
     }
     try {
-      // Idempotent, identity-checked delete of the (already revoked) lease included.
-      this.unregisterInstanceArtifacts(instance);
-      // Clear any surface slots this extension rendered so they do not linger after the extension
-      // is disabled (e.g. a status line it published into the footer surface).
-      this.uiBridge.clearOwner(instance.api.id);
+      try {
+        // Idempotent, identity-checked delete of the (already revoked) lease included.
+        this.unregisterInstanceArtifacts(instance, incarnation);
+      } finally {
+        // Clear any surface slots this extension rendered so they do not linger after the extension
+        // is disabled (e.g. a status line it published into the footer surface). In a `finally` so
+        // a throwing host callback cannot leave the slot rendering for a disabled extension.
+        this.uiBridge.clearOwner(instance.api.id);
+      }
     } finally {
       // Slow resource release last; everything it could still observe as "registered" is already
       // gone from the dispatch surfaces and the lease is revoked. `finally` because a throwing host
       // callback during unregistration must not also skip the extension's own cleanup (LSP
       // servers, timers) — the failure still propagates afterwards.
-      await this.deactivateExtension(instance);
+      try {
+        await this.deactivateExtension(instance);
+      } finally {
+        // The write-back is AFTER an await, so it must be identity-checked too: a re-enable that
+        // completed while `deactivate()` was still running owns the instance now, and rolling it
+        // back to `inactive` left "lease live + tools registered + panel says disabled" (the next
+        // enable then stacked a third copy of every hook). Set it even when deactivate throws: the
+        // agent is released either way, and leaving `active` blocked the retry path.
+        if (instance.context === incarnation) instance.state = "inactive";
+      }
     }
-    instance.state = "inactive";
   }
 
   /**
@@ -933,7 +945,18 @@ export class ExtensionRunner {
             // instance active, and never call `deactivate()` (its resources then leak), while a
             // hung activation never resolves and leaves nobody to run the teardown at all.
             this.contexts.delete(id);
-            await this.teardownIncarnation(instance);
+            try {
+              await this.teardownIncarnation(instance);
+            } catch (error) {
+              // The lease is already revoked and the extension inert; a failing host callback must
+              // not strand the `activating` marker (which would make every later enable answer
+              // "still activating", the one path that can repair a hung activation).
+              this.emitExtensionEvent("agent:extension-error", {
+                extensionId: instance.api.id,
+                phase: "teardown",
+                error: errorMessage(error),
+              });
+            }
             // The marker is cleared too: it exists to stop a SECOND activation from registering a
             // duplicate, and the revoke above already refused this one's lease. Keeping it forever
             // (for an activation that may never settle) left the extension impossible to re-enable
@@ -992,6 +1015,23 @@ export class ExtensionRunner {
       return { ok: false, message: `Extension "${id}" has an invalid id and cannot be enabled` };
     }
 
+    // A failed/partial teardown can leave registrations behind while the state no longer says
+    // `active` (the disable fast path above already treats that as "not disabled"). Enabling on top
+    // of it stacked a second copy of every hook, so release what is left before creating the new
+    // incarnation. Contained: the extension may already be broken, and a cleanup failure must not
+    // make the remedy unreachable.
+    if (enabled && instance.state !== "active" && this.hasLiveArtifacts(instance)) {
+      try {
+        await this.teardownIncarnation(instance);
+      } catch (error) {
+        this.emitExtensionEvent("agent:extension-error", {
+          extensionId: id,
+          phase: "teardown",
+          error: errorMessage(error),
+        });
+      }
+    }
+
     if (enabled) {
       // A fresh context per activation: the context IS the registration lease (see
       // `isContextLive`), so a callback retained from the previous incarnation cannot land its
@@ -1025,9 +1065,19 @@ export class ExtensionRunner {
       provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined
     );
     const sectionNotices: Array<[string, string]> = [];
-    const disabledSections = provider
-      ? this.turnContextSections.normalizeSections(provider, instance.api.id)
-      : undefined;
+    // `sections` is runtime data from arbitrary JS. A malformed entry (or a throwing getter) used
+    // to reject `setEnabled` BEFORE teardown, leaving a broken extension active with no rollback —
+    // the remedy unreachable through the path that needs it. Same containment as `collect`.
+    let disabledSections: ReturnType<typeof this.turnContextSections.normalizeSections> | undefined;
+    try {
+      disabledSections = provider ? this.turnContextSections.normalizeSections(provider, instance.api.id) : undefined;
+    } catch (error) {
+      this.emitExtensionEvent("agent:extension-error", {
+        extensionId: instance.api.id,
+        phase: "turn-context",
+        error: `sections: ${errorMessage(error)}`,
+      });
+    }
     for (const section of disabledSections?.values() ?? []) {
       const body = await this.turnContextSections.captureDisabledNotice(
         instance.api.id,
@@ -1083,7 +1133,11 @@ export class ExtensionRunner {
       instance.registrations.unsubObservers.length > 0 ||
       instance.registrations.unsubTurnContext.length > 0 ||
       instance.registrations.messageTransformers.length > 0 ||
-      instance.registrations.toolOutputDecoratorDisposers.length > 0
+      instance.registrations.toolOutputDecoratorDisposers.length > 0 ||
+      // Process-level hooks count too: a failed release leaves them installed with no array entry,
+      // and without this the "already disabled" fast path would never retry the cleanup.
+      instance.registrations.flush !== null ||
+      instance.registrations.exitFlushRef !== null
     );
   }
 
@@ -1092,67 +1146,107 @@ export class ExtensionRunner {
    * Tools/commands are removed from the registry and the host; interceptors and
    * turn-context providers are unsubscribed.
    */
-  private unregisterInstanceArtifacts(instance: ExtensionInstance): void {
+  private unregisterInstanceArtifacts(instance: ExtensionInstance, incarnation = instance.context): void {
+    // Per-ITEM best-effort. The host callbacks (`onUnregisterTool` / `onUnregisterCommand`) are
+    // outside code, so one throw must not stop the remaining surfaces. An item that FAILED stays in
+    // its bookkeeping array: clearing it would leave the tool/hook live with no record of it, which
+    // made the "already disabled" fast path (and the leftover-artifact cleanup) refuse the only
+    // retry. The first failure is rethrown after every surface has been attempted.
+    let firstError: unknown;
+    const release = <T>(items: T[], fn: (item: T) => void): T[] => {
+      const remaining: T[] = [];
+      for (const item of items) {
+        try {
+          fn(item);
+        } catch (error) {
+          firstError ??= error;
+          remaining.push(item);
+        }
+      }
+      return remaining;
+    };
+    // Clear in place (`.length = 0` + push) rather than reassigning: the `createContext` closures
+    // reference `registrations` and may capture these arrays at call time.
+    const replace = <T>(target: T[], remaining: T[]): void => {
+      target.length = 0;
+      target.push(...remaining);
+    };
+
     // No ownership test: a per-runner map cannot tell whose tool was the one taken (two agents
     // loading the same extension share an id), and it does not need to — the host's per-name stack
     // answers "is this still mine?" itself, the same way whether this owner was on top or buried.
     // The mirror goes first because the callback may read `getTools()`.
-    for (const name of instance.registrations.tools) {
-      this.stacks.removeTool(name, instance.api.id);
-      this.options.onUnregisterTool?.(name, instance.api.id);
+    replace(
+      instance.registrations.tools,
+      release(instance.registrations.tools, (name) => {
+        this.stacks.removeTool(name, instance.api.id);
+        this.options.onUnregisterTool?.(name, instance.api.id);
+      })
+    );
+    try {
+      // One catalog publish for the whole removal batch: the per-name path is told not to publish,
+      // and disabling an extension with N tools used to re-serialize every descriptor N times.
+      if (instance.registrations.tools.length > 0) this.options.onToolRegistrationBatchComplete?.();
+    } catch (error) {
+      firstError ??= error;
     }
-    // One catalog publish for the whole removal batch: the per-name path is told not to publish,
-    // and disabling an extension with N tools used to re-serialize every descriptor N times.
-    if (instance.registrations.tools.length > 0) this.options.onToolRegistrationBatchComplete?.();
-    for (const name of instance.registrations.commands) {
-      const { existed, live } = this.stacks.removeCommand(name, instance.api.id);
-      if (!existed) continue;
-      if (live === undefined) {
-        this.options.onUnregisterCommand?.(name);
-      } else {
-        // A survivor becomes live: tell the observer the same way a fresh registration would, so
-        // "the command is now X" has one shape whether it came from load or from a disable.
-        this.options.onRegisterCommand?.(live);
-      }
-    }
-    for (const unsub of instance.registrations.unsubInterceptors) {
-      unsub();
-    }
-    for (const unsub of instance.registrations.unsubObservers) {
-      unsub();
-    }
-    for (const unsub of instance.registrations.unsubTurnContext) {
-      unsub();
-    }
+    replace(
+      instance.registrations.commands,
+      release(instance.registrations.commands, (name) => {
+        const { existed, live } = this.stacks.removeCommand(name, instance.api.id);
+        if (!existed) return;
+        if (live === undefined) {
+          this.options.onUnregisterCommand?.(name);
+        } else {
+          // A survivor becomes live: tell the observer the same way a fresh registration would, so
+          // "the command is now X" has one shape whether it came from load or from a disable.
+          this.options.onRegisterCommand?.(live);
+        }
+      })
+    );
+    replace(
+      instance.registrations.unsubInterceptors,
+      release(instance.registrations.unsubInterceptors, (unsub) => unsub())
+    );
+    replace(
+      instance.registrations.unsubObservers,
+      release(instance.registrations.unsubObservers, (unsub) => unsub())
+    );
+    replace(
+      instance.registrations.unsubTurnContext,
+      release(instance.registrations.unsubTurnContext, (unsub) => unsub())
+    );
     // The transformer slot is keyed by OWNER id with at most one entry per extension, so clearing
     // by id releases exactly this extension's slot (there is no per-incarnation identity to check,
     // and a re-registration under the same id is this extension's own newest claim).
-    for (const id of instance.registrations.messageTransformers) {
-      this.messageTransformers.clearExtension(id);
-    }
-    for (const dispose of [...instance.registrations.toolOutputDecoratorDisposers]) {
-      dispose();
-    }
-    // Clear in place (`.length = 0`) rather than reassigning: the `createContext`
-    // closures reference `registrations` and may read/capture these arrays at call
-    // time. Reassigning would silently desync re-enabled registrations from the
-    // instance, leaking them on a later disable.
-    instance.registrations.tools.length = 0;
-    instance.registrations.commands.length = 0;
-    instance.registrations.unsubInterceptors.length = 0;
-    instance.registrations.unsubObservers.length = 0;
-    instance.registrations.unsubTurnContext.length = 0;
-    instance.registrations.toolOutputDecoratorDisposers.length = 0;
-    instance.registrations.messageTransformers.length = 0;
+    replace(
+      instance.registrations.messageTransformers,
+      release(instance.registrations.messageTransformers, (id) => this.messageTransformers.clearExtension(id))
+    );
+    replace(
+      instance.registrations.toolOutputDecoratorDisposers,
+      release(instance.registrations.toolOutputDecoratorDisposers, (dispose) => dispose())
+    );
     // One flush per extension, and the sync one is registered process-wide too — so releasing it
-    // here is what stops a destroyed extension from running on `process.on("exit")`.
-    instance.registrations.flush = null;
-    instance.registrations.exitFlushRef?.();
-    instance.registrations.exitFlushRef = null;
-    // Identity-checked: a revoked instance must not delete a NEWER incarnation's lease for the
-    // same id (every other lease operation is identity-based too).
-    if (this.contexts.get(instance.api.id) === instance.context) this.contexts.delete(instance.api.id);
+    // here is what stops a destroyed extension from running on `process.on("exit")`. Kept as one
+    // unit: the hook and its ref are released together, and a throw leaves both for the retry.
+    try {
+      instance.registrations.flush = null;
+      instance.registrations.exitFlushRef?.();
+      instance.registrations.exitFlushRef = null;
+    } catch (error) {
+      firstError ??= error;
+    }
+    // Identity-checked against the INCARNATION being released, not `instance.context`: a re-enable
+    // may already have replaced the latter, and deleting by it would revoke the live lease.
+    try {
+      if (this.contexts.get(instance.api.id) === incarnation) this.contexts.delete(instance.api.id);
+    } catch (error) {
+      firstError ??= error;
+    }
     instance.registrations.exitFlush = null;
+
+    if (firstError !== undefined) throw toError(firstError);
   }
 
   /** The live context of an active extension, for dispatch sites outside the runner. */
@@ -1205,7 +1299,9 @@ export class ExtensionRunner {
   /** Report a throwing interceptor against the extension that registered it. */
   private reportInterceptorFailure(extensionId: string, pattern: string, eventType: string, err: unknown): void {
     const message = errorMessage(err);
-    this.writeExtensionLog("warn", extensionId, `interceptor for "${pattern}" failed on ${eventType}: ${message}`);
+    // Emitting is the record (the bridge writes one `agent:extension-error` row). The direct
+    // `writeExtensionLog` here made every failure two rows with the same text — the exact duplicate
+    // the observer and message-transform paths already removed.
     this.emitExtensionEvent("agent:extension-error", {
       extensionId,
       phase: "interceptor",

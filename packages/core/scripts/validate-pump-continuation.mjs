@@ -4,6 +4,8 @@
  * Run: pnpm --filter @codent/core run validate:pump-continuation
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { AgentLog, ManagedAgent, shouldDeferMidRunQueue } from "../dist/dev.mjs";
 
@@ -165,6 +167,51 @@ assert.equal(shouldDeferMidRunQueue({ pumpDepth: 0, status: "idle" }), false, "i
   channel.addUserMessage("again");
   await chat.pumpToolPhases?.();
   assert.equal(streams, 1, "the next turn still runs");
+}
+
+// ---------------------------------------------------------------------------
+// Wiring guards for the state-transition convergence points.
+//
+// These are source assertions on purpose: each one is an ORDER/ownership rule inside the pump
+// (private methods, no seam a unit test can drive), and the failure they prevent is silent.
+// ---------------------------------------------------------------------------
+{
+  const src = readFileSync(
+    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
+    "utf8"
+  );
+
+  // One preserve rule: the abort fallback and `interruptCurrentRun` used to disagree, and the
+  // fallback undid the park. Assert the default is FORWARDED to `settleToolCalls`, not merely that
+  // the string `?? true` exists.
+  assert.match(
+    src,
+    /\(options\.preservePendingAskUser \?\? true\) \? \{ preservePendingAskUser: true \}/,
+    "the default is forwarded to settleToolCalls"
+  );
+
+  // A chain pump admits on queued input; it must deliver that input BEFORE the first model call,
+  // and must not do it while tools still need to run (that would put user text before the result).
+  const phaseZero = src.slice(src.indexOf("} else if ("), src.indexOf("await this.executeStream"));
+  assert.match(phaseZero, /needsToolPhaseContinue\(currentMessages\)/, "a settled TOOL turn is not drained");
+  assert.match(phaseZero, /drainSteerIntoChannel\(\)/, "phase 0 drains steering");
+  assert.match(phaseZero, /if \(!steered\) this\.drainFollowUpIntoChannel\(\)/, "follow-up only when no steer");
+
+  // Esc is a turn outcome: it goes through the shared finalizer (status + finalizeRun + summary),
+  // not a hand-rolled sequence that skipped `turn:summary`.
+  const start = src.indexOf("private interruptCurrentRun");
+  const end = src.indexOf("setSteeringMode", start);
+  assert.ok(start !== -1 && end > start, "interruptCurrentRun is present");
+  const interrupt = src.slice(start, end);
+  assert.match(interrupt, /finalizeChat\(\{[\s\S]{0,600}?kind,/, "Esc finalizes through the shared finalizer");
+  assert.match(
+    interrupt,
+    /kind = this\.managed\.getStatus\(\) === "error" \? "error" : "aborted"/,
+    "a failed run keeps `error`"
+  );
+  assert.match(interrupt, /usageBefore: baselines\.usage/, "the summary uses the pump's usage baseline");
+  assert.match(interrupt, /costBefore: baselines\.cost/, "…cost baseline");
+  assert.match(interrupt, /toolCallsBefore: baselines\.toolCalls/, "…tool-call baseline");
 }
 
 console.log("validate:pump-continuation passed");

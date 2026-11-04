@@ -119,7 +119,12 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
       const d = p(event);
       const missing =
         typeof d.mediaMissing === "number" && d.mediaMissing > 0 ? `, ${d.mediaMissing} media missing` : "";
-      return `Session restored: ${d.messageCount ?? "?"} messages, ${d.tokenEstimate ?? "?"} tokens${missing}`;
+      // The restore suppresses `model:change` / `mode:change` (its envelope still names the
+      // departure while the sink already points at the target), so this row is the durable record
+      // of the adopted identity — including a fallback the catalog forced.
+      const model =
+        typeof d.model === "string" ? `, model ${d.model}${d.modelFallback === true ? " (fallback)" : ""}` : "";
+      return `Session restored: ${d.messageCount ?? "?"} messages, ${d.tokenEstimate ?? "?"} tokens${model}${missing}`;
     },
   },
   // The departure record, written to the session being left. Paired with `session:restore`, which

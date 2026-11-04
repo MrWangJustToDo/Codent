@@ -21,14 +21,18 @@ const fileMutationQueues = new Map<string, Promise<void>>();
 
 /**
  * Resolve a file path to a canonical queue key.
- * Uses `path.resolve` to normalize relative paths, symlinks, etc.
- * Falls back to the raw path if resolution fails.
+ *
+ * `resolve` is anchored to `env.rootPath`, never the process cwd: every fs operation resolves
+ * against the workspace root, so on a host whose cwd differs (`--remote-env`, server `ROOT_PATH`,
+ * `acp --cwd`) the same file reached as `src/a.ts` and `/srv/ws/src/a.ts` produced two keys and
+ * concurrent `write_file`/`delete_file` stopped being serialized. It does NOT resolve symlinks —
+ * the edit tool's re-read guard covers that.
  */
 function getQueueKey(env: ResolvedCoreEnv, filePath: string): string {
   try {
     // Key includes the workspace root so two runtimes with the same relative path do not
     // share (and serialize against each other's) mutation queue.
-    return `${env.rootPath}::${env.path.resolve(filePath)}`;
+    return `${env.rootPath}::${env.path.resolve(env.rootPath, filePath)}`;
   } catch {
     return `${env.rootPath}::${filePath}`;
   }

@@ -73,8 +73,26 @@ export interface SessionLifecycleHost {
   resetTurnContext(): void;
   /** Drop extension render slots: they describe the conversation being replaced. */
   clearExtensionUi?(): void;
+  /**
+   * Bracket the restore's model/effort adoption.
+   *
+   * Those two writers emit `model:change` / `mode:change` synchronously, but at that point the log
+   * sink already points at the target while the envelope still names the departure — so the target
+   * got a row describing a change it never made (with the departure's auto flag). Suppress them;
+   * `session:restore` carries the final values.
+   */
+  beginSessionRestore?(): void;
+  endSessionRestore?(): void;
   resetSessionSyncTracker(): void;
   resetIterationProgress(): void;
+  /**
+   * Rebuild the background-work facade for the adopted session and wake it for any completion the
+   * previous process never delivered.
+   *
+   * Called AFTER the switch transaction: the reset drops the facade, and the wake path refuses
+   * while a switch is in flight. The facade's `pending()` then restores the on-disk records lazily.
+   */
+  resumeBackgroundWork?(): void;
   /** Drop per-task phase records and any pre-fork seat registered for the left conversation. */
   clearTaskRuns(): void;
   /**
@@ -190,10 +208,14 @@ export class SessionLifecycleService {
       this.host.mode.reset();
       this.host.approvals.clear();
     }
+    // Status FIRST: `resetRunState()` aborts the previous run, and its abort listener rewrites any
+    // ACTIVE status to `aborted`. Aborting before the reset made every resume from an approval
+    // pause (and every `/new` while parked) log a cancellation that never happened — the run was
+    // merely being unloaded. With the status already `idle` the listener has nothing to change.
+    this.host.statusController.resetToIdle();
     this.host.run.resetRunState();
     this.host.run.resetTurnLifecycle();
     this.host.getCompaction().resetReactiveCompactRetries();
-    this.host.statusController.resetToIdle();
     this.host.clearErrorAndRetry();
     if (full) this.host.clearPendingApprovals();
     this.host.memory.resetState();
@@ -328,7 +350,12 @@ export class SessionLifecycleService {
    * at the same moment, so "active in another live session" always describes a real holder.
    */
   async resume(sessionId: string, reason: SessionSwitchReason = "resume"): Promise<SessionData> {
-    return this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
+    const session = await this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
+    // AFTER the transaction, for two reasons the in-transaction call could not satisfy: the reset
+    // drops the facade, and `wakeForBackgroundCompletion` refuses while `isSessionSwitching()` is
+    // true. Rebuilding it here is exactly the "next session builds a fresh one" lifecycle.
+    this.host.resumeBackgroundWork?.();
+    return session;
   }
 
   /**
@@ -374,7 +401,13 @@ export class SessionLifecycleService {
       // Restore-time logs belong to the target. A load that never commits re-points the sink at the
       // still-active leaving session in the catch below.
       this.host.bindSessionLogSink(sessionId);
-      const session = await this.host.sessionPersistence.restore(sessionId);
+      this.host.beginSessionRestore?.();
+      let session: SessionData;
+      try {
+        session = await this.host.sessionPersistence.restore(sessionId);
+      } finally {
+        this.host.endSessionRestore?.();
+      }
 
       // COMMITTED: the restore adopted the target last, so the old claim is free from here on.
       if (leavingId && leavingId !== sessionId) this.host.releaseSessionOwnership(leavingId);

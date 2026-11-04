@@ -40,7 +40,7 @@ export class SessionPersistence {
     if (!this.tracker.shouldPersist(uiMessages, { reason })) return;
     const sessionId = this.host.session.getSessionData()?.id;
     void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
-      this.reportBackgroundPersistError(err)
+      this.reportBackgroundPersistError(err, sessionId)
     );
   }
 
@@ -48,7 +48,7 @@ export class SessionPersistence {
   save(uiMessages: UIMessage[]): void {
     const sessionId = this.host.session.getSessionData()?.id;
     void saveSessionUIMessages(this.host, uiMessages, this.tracker, sessionId).catch((err) =>
-      this.reportBackgroundPersistError(err)
+      this.reportBackgroundPersistError(err, sessionId)
     );
   }
 
@@ -60,7 +60,7 @@ export class SessionPersistence {
         ...getSessionPersistInput(this.host),
         ...(sessionId ? { sessionId } : {}),
       }))
-      .catch((err) => this.reportBackgroundPersistError(err));
+      .catch((err) => this.reportBackgroundPersistError(err, sessionId));
   }
 
   /** Restore the store snapshot + agent state; called inside `ManagedAgent.restoreSession`. */
@@ -84,10 +84,19 @@ export class SessionPersistence {
    * rejection — and there is no global `unhandledRejection` handler, so the host
    * process would crash. Surface it as `session:save-error` instead.
    */
-  private reportBackgroundPersistError(error: unknown): void {
+  private reportBackgroundPersistError(error: unknown, sessionId?: string): void {
     const message = errorMessage(error);
     // One fact, one row: this used to write the seam directly AND emit the same failure, so a
     // background persist error appeared twice (and only one of the two carried `event`).
-    this.host.emitEvent("session:save-error", { target: "session+uiMessages", error: message });
+    //
+    // A failed write is asynchronous, so a `/resume` or `/new` can commit before it lands. Name the
+    // session the write belonged to explicitly — the envelope's default ("the agent's CURRENT
+    // session") would file the leaving session's failure under the target's log. This is the same
+    // override `session:switch` uses, now available on the shared `EmitAgentTelemetryFn` seam.
+    this.host.emitEvent(
+      "session:save-error",
+      { target: "session+uiMessages", error: message },
+      sessionId !== undefined ? { sessionId } : undefined
+    );
   }
 }

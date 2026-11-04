@@ -47,7 +47,16 @@ export function computeToolDisplay(
   name: string,
   output: unknown,
   input?: unknown,
-  resolvePresentation: (name: string) => ReturnType<typeof getBuiltinToolPresentation> = getBuiltinToolPresentation
+  resolvePresentation: (name: string) => ReturnType<typeof getBuiltinToolPresentation> = getBuiltinToolPresentation,
+  /**
+   * Whether the live tool under `name` is still the seeded built-in.
+   *
+   * The name-keyed inline summary reads a BUILT-IN output schema. An extension tool that shadows a
+   * built-in name and declares only `present: { category }` used to hit that fallback, so its own
+   * `{ matches: [...] }` was summarized as the built-in's "N matches" and persisted as such. Default
+   * `true` preserves the no-registry path, where the caller only has the static table.
+   */
+  isBuiltinTool: (name: string) => boolean = () => true
 ): ToolDisplayPayload | undefined {
   if (!name) return undefined;
 
@@ -73,7 +82,7 @@ export function computeToolDisplay(
     // descriptor at all (an undeclared extension tool, or one SHADOWING a built-in name) there is no
     // schema to read, and producing the built-in's text would be a confident guess about foreign
     // data — the same failure the presentation resolver was fixed to avoid.
-    (present ? safe(() => inlineSummaryForOutput(output, name)) : undefined) ??
+    (present && isBuiltinTool(name) ? safe(() => inlineSummaryForOutput(output, name)) : undefined) ??
     undefined;
   const label = safe(() => present?.label?.(input)) ?? undefined;
 

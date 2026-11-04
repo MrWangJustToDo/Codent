@@ -14,6 +14,7 @@
  */
 
 import assert from "node:assert/strict";
+import path from "node:path";
 
 import { createDeleteFileTool, fileMutationQueueSize, withFileMutationQueue } from "../dist/dev.mjs";
 
@@ -27,7 +28,10 @@ const makeHost = (rootPath = "/ws") => {
     ops,
     env: {
       rootPath,
-      path: { resolve: (p) => p },
+      // Multi-argument, like the real `CoreEnvPath`: the queue anchors relative paths to the
+      // workspace root (`resolve(rootPath, filePath)`), and a single-argument stand-in collapsed
+      // every file onto the root key.
+      path: { resolve: (...parts) => path.posix.resolve(...parts) },
       fs: {
         remove: async (p) => {
           ops.push(`remove:${p}`);
@@ -87,6 +91,35 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     order,
     ["a-start", "b-start", "b-end", "a-end"],
     `different files run concurrently (${order.join(",")})`
+  );
+}
+
+// ============================================================================
+// 2b. Relative and absolute spellings of the same file share ONE queue
+//
+// The key anchors `path.resolve` to `env.rootPath`; resolving against the process cwd produced two
+// keys on any host whose cwd differs from the workspace root, so two writes to one file ran
+// concurrently. With the old single-argument resolve this block interleaves and the size is 2.
+// ============================================================================
+{
+  const timeline = [];
+  const slow = withFileMutationQueue(env("/ws"), "src/a.ts", async () => {
+    timeline.push("rel-start");
+    await sleep(200);
+    timeline.push("rel-end");
+  });
+  await sleep(20);
+  const fast = withFileMutationQueue(env("/ws"), "/ws/src/a.ts", async () => {
+    timeline.push("abs-start");
+    await sleep(20);
+    timeline.push("abs-end");
+  });
+  assert.equal(fileMutationQueueSize(), 1, "one queue for two spellings of the same file");
+  await Promise.all([slow, fast]);
+  assert.deepEqual(
+    timeline,
+    ["rel-start", "rel-end", "abs-start", "abs-end"],
+    `relative and absolute paths must serialize (${timeline.join(",")})`
   );
 }
 

@@ -88,6 +88,7 @@ try {
     { id: "u2", role: "user", parts: [text("second prompt")] },
   ];
   source.todos = [{ id: "t1", content: "do x", status: "pending", priority: "high", createdAt: 1, updatedAt: 1 }];
+  source.contextTokens = 1234;
   await store.save(source);
 
   // --------------------------------------------------------------------------
@@ -103,7 +104,19 @@ try {
     assert.equal(clone.reasoningEffort, "medium", "reasoning effort copied");
     assert.deepEqual(clone.todos, [], "todos reset");
     assert.equal(clone.usage.totalTokens, 0, "window usage reset");
-    assert.equal(clone.name, source.name, "name derived from source when not given");
+    assert.equal(
+      clone.name,
+      `${source.name} (fork)`,
+      "a branch is named after its source but stays distinguishable, so `/resume <source name>` cannot open the copy"
+    );
+    assert.equal(
+      clone.contextTokens,
+      source.contextTokens,
+      "context fill follows the COPIED transcript, not the reset usage"
+    );
+    // …and it survives the production save/load path, not only the in-memory object.
+    await store.save(clone);
+    assert.equal((await store.load(clone.id)).contextTokens, 1234, "clone context fill persists");
   }
 
   // --------------------------------------------------------------------------
@@ -112,6 +125,7 @@ try {
   {
     const fork = store.branchFrom(source, { upToIndex: 2 });
     assert.equal(fork.uiMessages.length, 2, "fork keeps only messages before the index");
+    assert.equal(fork.contextTokens, undefined, "a truncated fork does not inherit the source's full context fill");
     assert.deepEqual(
       fork.uiMessages.map((m) => m.id),
       ["u1", "a1"]

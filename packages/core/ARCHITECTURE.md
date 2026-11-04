@@ -471,8 +471,8 @@ Status logic is centralized in `AgentStatusController` (`managers/controllers/ag
 | Tool call                   | `running`               | `TOOL_CALL_START`                                            |
 | Tool approval pending       | `waiting`               | `status.syncApprovals` on `onToolPhaseComplete`              |
 | Client tool (`ask_user`)    | `awaiting_user`         | App host calls `ManagedAgent.setClientToolWaiting(true)`     |
-| Auto-compact                | `compacting`            | `status.beginCompaction("auto")`                             |
-| Reactive compact            | `compacting`            | `status.beginCompaction("reactive")`                         |
+| Auto-compact                | `compacting`            | `CompactionController.begin("auto")` (lease)                 |
+| Reactive compact            | `compacting`            | `CompactionController.begin("reactive")` (lease)             |
 | Success                     | `completed`             | `onRunFinish` (preserves `waiting` / `awaiting_user` if set; `idle` only on a session reset) |
 | Stream ended, tools waiting | `waiting` / `awaiting_user` | `statusController.reconcileAfterRun` after `pumpToolPhases` |
 | User abort                  | `aborted`               | `onRunAbort` / `onUserCancel` / `RunCoordinator`             |
@@ -494,8 +494,8 @@ Core **declares** which tools need approval and **owns agent status** during the
 
 | Hook                  | Action                                                                                                                  |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `onToolPhaseComplete` | When `info.needsApproval.length > 0`: `waiting`, `setPendingApprovalCount`, emit `agent:tool-approval-request` per tool |
-| `onBeforeToolCall`    | When status is `waiting`: clear count, `running` (approved tool executing)                                              |
+| `onToolPhaseComplete` | `syncApprovals`: set the derived count; enter `waiting` only when the FIRST pending interaction is an approval (a question that came first keeps `awaiting_user`, which `setClientToolWaiting` owns); emit `agent:tool-approval-request` per tool |
+| `onBeforeToolCall`    | When status is `waiting`: RECOMPUTE the count from the transcript (a parallel batch can still hold an unanswered sibling), `running` only when it reaches zero |
 
 Tools with approval required (`defineServerTool` in `agent/tools/runtime/define-tool.ts`):
 
@@ -665,8 +665,7 @@ Only 15 of 7842 entries name `reasoning_details`; the 982 that name `reasoning_c
 **Trigger:** `shouldTriggerAutoCompact` when window input tokens ≥ `tokenThreshold × compactAtPercent / 100`. After a successful compact, `usage.resetWindow()` zeroes window tokens, so the next `onConfig` would otherwise fall through to `estimateTokens(projected wire)` and fire again immediately. Compaction middleware skips auto-compact when the latest durable channel message is already a SUMMARY (`isLatestDurableMessageCompactionSummary`, ignoring trailing `<ctx kind=...>`). `autoCompact` also no-ops when `toSummarize` is only previous SUMMARY / synthetic ctx messages.
 
 ```
-setStatus("compacting") via beginCompaction("auto")
-emit compaction:auto-start
+compactions.begin("auto") // claims the lease, sets `compacting`, emits compaction:auto-start
 autoCompact(messages, config, agentId, manager)
   → findCutPointByBudget (token-budget keep window)
   → summarizeConversation with <to_compress> + <still_in_context> (+ optional <previous-summary>)
@@ -675,8 +674,9 @@ applyCompactionResult(channel, usage, result)
   → return chronological post-append messages (for orphan tool-cache cleanup)
 compaction middleware (same onConfig):
   → convertMessages(channel) → getModelVisibleMessages → { messages: wire }
-emit compaction:auto-complete | compaction:auto-error
-setStatus("running") via endCompaction
+compactions.finish(lease, outcome) // emits compaction:auto-complete, restores the status the lease replaced
+  (compactions.release(lease) in the producer's `finally`; `compaction:auto-error` on failure)
+  // `begin` returns null only for a second concurrent manual compaction
 ```
 
 **Why re-project from the channel:** After append, TanStack `engineMessages` still match the **pre-compact** length. Returning those would drop the new SUMMARY for the immediate LLM call. Post-compact always rebuilds wire from the live channel. Engine `this.messages` is ephemeral and is never merged back.
@@ -711,10 +711,10 @@ runStreamWithRecovery catches RUN_ERROR / thrown error
   → before restart-style retry (not max-tokens continue): `resetRetryUiState()` on the channel —
     attempt-scoped only (summary banner + phase unlock), NEVER the message history, which is the
     wire this retry re-projects from — plus `statusController.onRecoveryRetry()` for both profiles
-  → beginCompaction("reactive")  // emits compaction:reactive-start only (not auto-start)
+  → compactions.begin("reactive")  // lease; emits compaction:reactive-start only (not auto-start)
   → reactiveCompact: summarize + keep tail messages
   → applyReactiveCompactionResult → append SUMMARY on channel
-  → endCompaction + emit compaction:reactive-complete | compaction:reactive-error
+  → compactions.finish(lease, outcome) | release(lease) → compaction:reactive-complete | compaction:reactive-error
   → retry runner.run; next onConfig projects from live channel (shared MAX_RECOVERY_ATTEMPTS ≈ 3)
 ```
 

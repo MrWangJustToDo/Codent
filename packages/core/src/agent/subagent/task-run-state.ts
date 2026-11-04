@@ -37,6 +37,14 @@ export class TaskRunState {
    * with a run that never spawned the child, so the parent index could not be sliced by run.
    */
   spawnRunId?: string;
+  /**
+   * Disk session the task was spawned in.
+   *
+   * The parent's log sink moves to the target on `/resume` / `/new` BEFORE the aborted child
+   * settles, so a settle-time index row written from the live session landed in the wrong file.
+   * Captured here so the writer can drop a row whose session is gone.
+   */
+  spawnSessionId?: string;
 
   constructor(readonly toolCallId: string) {}
 

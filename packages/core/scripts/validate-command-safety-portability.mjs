@@ -235,6 +235,33 @@ for (const [label, cmd, external] of [
   );
 }
 
+// --- OUTPUT REDIRECTION: ONLY THE BENIGN FORMS ARE EXEMPT ------------------
+// The exemption regex used to accept a bare `1`/`2` after `>`, so a target starting with a digit
+// (`> 2fa`, `2>1file`, `> 2024-...log`) was stripped and the command stayed "read-only" — a
+// fail-open that auto-approved a real write. `2>&1` / `>/dev/null` / `>&2` must still be exempt.
+for (const [label, cmd, isWrite] of [
+  ["write to digit-leading target", "echo hi > 2fa", true],
+  ["stderr to digit-leading target", "cat x 2>1file", true],
+  ["write to dated log", "ls > 2024-11-04.log", true],
+  ["write to plain target", "echo hi > out.txt", true],
+  ["descriptor duplication", "cmd 2>&1 | tail", false],
+  ["null device", "cmd >/dev/null", false],
+  ["stdout descriptor", "cmd 1>&2", false],
+  // `&>word` is stdout+stderr to a FILE (bash), not a descriptor copy. The old exemption treated
+  // `&>2` as benign, so `cmd &>2` (creates a file named "2") was auto-approved.
+  ["combined redirect to digit file", "cmd &>2", true],
+  ["combined redirect to named file", "cmd &>out.txt", true],
+  ["combined redirect to null", "cmd &>/dev/null", false],
+  // A null-device PREFIX is not the null device.
+  ["null-device name prefix", "echo x >/dev/null.txt", true],
+]) {
+  const report = await posix(cmd);
+  check(`posix: ${label} write verdict`, report.anyWriteOp, isWrite);
+  if (isWrite) {
+    check(`posix: ${label} subagent deny`, evaluateCommandApproval(report, { agentKind: "subagent" }).action, "deny");
+  }
+}
+
 // --- FALLBACK FAIL-SAFE INVARIANT (task 4.4) -------------------------------
 // Same checks under a shell with no grammar — the fallback path.
 const fallback = async (cmd) => analyzeCommand(cmd, { ...ctx, path: defaultPath, shellKind: "powershell" });

@@ -100,6 +100,6 @@ export type BuiltinToolName = (typeof BUILTIN_TOOL_NAMES)[keyof typeof BUILTIN_T
 const BUILTIN_TOOL_NAME_SET: ReadonlySet<string> = new Set(Object.values(BUILTIN_TOOL_NAMES));
 
 /** Whether `name` is one of core's built-in tool names. */
-export function isBuiltinToolName(name: string): boolean {
+export function isBuiltinToolName(name: string): name is BuiltinToolName {
   return BUILTIN_TOOL_NAME_SET.has(name);
 }

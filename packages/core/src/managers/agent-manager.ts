@@ -17,7 +17,13 @@ import type { SkillDirectory } from "../agent/skills/skill-registry.js";
 import type { AgentRuntime } from "../runtime/agent-runtime.js";
 import type { StreamChunk } from "@tanstack/ai";
 
-export type { AgentEvent, AgentEventListener, AgentEventBus, AgentEventType } from "../agent/agent-event-bus";
+export type {
+  AgentEvent,
+  AgentEventListener,
+  AgentEventBus,
+  AgentEventPayload,
+  AgentEventType,
+} from "../agent/agent-event-bus";
 export type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 export type { RunAgentStreamInput } from "./run-agent.js";
 

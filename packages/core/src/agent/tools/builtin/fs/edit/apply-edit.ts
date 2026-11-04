@@ -10,6 +10,7 @@ import { writeFileAtomic } from "../../../../../utils/atomic-write.js";
 import { truncateText } from "../../../../../utils/text-truncation.js";
 import { getFile } from "../../../shared/tool-result.js";
 
+import { assertEditableFileSize } from "./editable-size.js";
 import { applyEditsToText } from "./find-edit-match.js";
 import { withFileMutationQueue } from "./mutation-queue.js";
 
@@ -26,6 +27,9 @@ export async function applyEditToFile(
   edits: readonly EditOperation[]
 ): Promise<AppliedEditFile> {
   return withFileMutationQueue(env, path, async () => {
+    // Before either whole-file read (match + change guard): the same ceiling `read_file` applies to
+    // a file it would have to materialise.
+    await assertEditableFileSize(env, path);
     const originalContent = await getFile(env, path);
 
     const applied = applyEditsToText(originalContent, edits);

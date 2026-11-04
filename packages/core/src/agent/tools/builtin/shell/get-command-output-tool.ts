@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { defineServerTool, isProjectedModelContent } from "../../runtime/define-tool.js";
+import { OUTPUT_LIMITS, truncateString } from "../../shared/output-limits.js";
 import { getCommandOutputSchema } from "../../shared/schemas.js";
 
 import type { AgentToolContext } from "../../runtime/tool-context.js";
@@ -31,8 +32,16 @@ export const createGetCommandOutputTool = ({ context }: { context?: AgentToolCon
       const commands = context?.getCommandService();
       if (!commands) throw new Error("get_command_output requires an AgentToolContext");
       const result = await commands.poll(jobId);
+      // Background output is unbounded between polls (256K/stream while running), and this result
+      // rides the model wire on every poll. Foreground `run_command` already spills past the same
+      // budget; the job's durable log (`cachedOutputPath`) is where the rest is read from, so keep
+      // the TAIL of each stream here — the part a failure is reported at.
+      const stdout = truncateString(result.stdout, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
+      const stderr = truncateString(result.stderr, OUTPUT_LIMITS.MAX_CONTENT_CHARS, true);
       return {
         ...result,
+        stdout: stdout.text,
+        stderr: stderr.text,
         cachedOutputPath: result.logPath,
       };
     },

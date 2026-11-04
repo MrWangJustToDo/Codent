@@ -8,7 +8,6 @@ import { isActiveStatus } from "../runtime-types/agent-status.js";
 import { toError } from "../utils/errors.js";
 
 import type { ResolvedCoreEnv } from "../env";
-import type { AgentStatus } from "./agent-types.js";
 import type { AgentChatController } from "./controllers/agent-chat-controller.js";
 import type { ModeCoordinator } from "./mode-coordinator.js";
 import type {
@@ -16,6 +15,7 @@ import type {
   PlanModeController,
   PlanModeState,
 } from "../agent/plan/plan-mode-controller.js";
+import type { AgentStatus } from "../runtime-types/agent-status.js";
 
 export interface PlanApiHost {
   planMode: PlanModeController;
@@ -25,6 +25,8 @@ export interface PlanApiHost {
   getChatController: () => AgentChatController | undefined;
   /** Owning runtime's env, so plan files land under the runtime root. */
   getCoreEnv: () => ResolvedCoreEnv;
+  /** Capture a staleness guard before a disk read that may outlive its session. */
+  captureStaleness?: () => () => boolean;
 }
 
 export function getPlanModeState(host: PlanApiHost): PlanModeState {
@@ -81,7 +83,13 @@ export async function loadPlanFromWorkspace(
   name: string
 ): Promise<{ ok: boolean; path?: string; error?: string; stepCount?: number }> {
   try {
+    // The read is an await (an HTTP round-trip on a remote env); a switch inside it means the
+    // entry below belongs to a session the user already left.
+    const isStale = host.captureStaleness?.();
     const { path, markdown } = await loadPlanFile(name, host.getCoreEnv());
+    if (isStale?.() === true) {
+      return { ok: false, error: "Session changed before the plan was loaded" };
+    }
     // Validate BEFORE entering plan mode: a typo'd name or a file without a plan must leave the
     // session exactly as it was, not flip plan on and then back off (which would also drop auto).
     if (!extractPlan(markdown)) {

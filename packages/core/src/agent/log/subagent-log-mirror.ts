@@ -24,7 +24,10 @@
  * looks for, and whose reason is the whole point — is `info`.
  */
 
+import { truncateText } from "../../utils/text-truncation.js";
+
 import { eventError } from "./event-error.js";
+import { MAX_LOG_MESSAGE_CHARS } from "./payload.js";
 
 import type { AgentLog } from "../agent-log";
 import type { LogLevel } from "../agent-log/types.js";
@@ -47,6 +50,8 @@ export interface SubagentLogDetails {
   taskPhase?: "summary" | "limit";
   /** The parent run that spawned the child; settle-time rows outlive that run's pump. */
   run?: string;
+  /** Disk session the child was spawned in; a settle after a switch must not write into the target. */
+  sessionId?: string;
   /** Terminal fault, so a parent index can distinguish a failure from a cancel. */
   error?: string;
   /** Completion usage, so the parent index carries the same statistics the child result reports. */
@@ -121,14 +126,16 @@ export function logSubagentLifecycle(
     subagentId: details.subagentId,
     phase,
     ...(details.parentTaskToolCallId ? { parentTaskToolCallId: details.parentTaskToolCallId } : {}),
-    ...(details.description ? { description: details.description } : {}),
+    // `data` is written directly here (the bridge's `summarizePayload` is not on this path), so
+    // the provider body a failed child carries must be bounded at the writer.
+    ...(details.description ? { description: truncateText(details.description, MAX_LOG_MESSAGE_CHARS) } : {}),
     ...(details.iterations !== undefined ? { iterations: details.iterations } : {}),
     ...(details.maxIterations !== undefined ? { maxIterations: details.maxIterations } : {}),
     ...(details.durationMs !== undefined ? { durationMs: details.durationMs } : {}),
     ...(details.stopReason ? { stopReason: details.stopReason } : {}),
     ...(details.childLogPath ? { childLogPath: details.childLogPath } : {}),
     ...(details.taskPhase ? { taskPhase: details.taskPhase } : {}),
-    ...(details.error ? { error: details.error } : {}),
+    ...(details.error ? { error: truncateText(details.error, MAX_LOG_MESSAGE_CHARS) } : {}),
     ...(details.usage ? { usage: details.usage } : {}),
   };
   // `eventEntry`, not `info/warn/error`: those have no run parameter (the seam owns no run state),

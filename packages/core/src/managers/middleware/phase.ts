@@ -16,9 +16,6 @@ import { MIDDLEWARE_PHASE_RANK, type MiddlewarePhase } from "../../runtime-types
 export { MIDDLEWARE_PHASE_RANK, defineMiddleware } from "../../runtime-types/middleware-phase.js";
 export type { MiddlewarePhase, PhasedChatMiddleware } from "../../runtime-types/middleware-phase.js";
 
-/** Re-exported so existing importers keep working. */
-export type { ChatMiddleware } from "@tanstack/ai";
-
 /**
  * Canonical name sequence of the managed middleware pipeline. The phase sort
  * must resolve to exactly this order; `assertCanonicalMiddlewareOrder` warns

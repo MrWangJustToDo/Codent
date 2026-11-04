@@ -12,7 +12,7 @@
 import { isSettledToolCallPart, isToolCallPart } from "../agent/stream/message-parts.js";
 
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "./agent-run-outcome.js";
-import type { AgentStatus, RunFinalizeReason } from "./agent-types.js";
+import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type { AgentStatusController } from "./controllers/agent-status-controller.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";

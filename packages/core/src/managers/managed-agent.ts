@@ -29,8 +29,11 @@
  *    here for now. This is the honest limit of the split: the remaining status /
  *    session / resource regions are not field moves, they *are* the graph's
  *    mutation surface. Extracting one means moving policy and re-validating
- *    concurrency behaviour — see the archived debt tracker at
- *    `openspec/changes/archive/2026-10-10-core-structure-convergence/architecture-debt-tracker.md`.
+ *    concurrency behaviour. The 2026-10-10 tracker entry is an ARCHIVED snapshot
+ *    (~1756 lines and two named regions); the file is now ~3050 lines, so the
+ *    honest next units are the seams named above — state publication
+ *    (`status`/`state` batching), extension runtime access, and background-work
+ *    ownership — each extracted with its concurrency contract, not as a field move.
  *
  * The disable above is deliberately unexplained-by-default in the linter and
  * justified here instead, because the previous one carried no justification at all
@@ -74,6 +77,7 @@ import { buildSubagentSummaries } from "../agent/subagent/subagent-summaries.js"
 import { createTaskWorkSource } from "../agent/subagent/task-work-source.js";
 import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
+import { captureSessionStaleness } from "../agent/turn-context/session-staleness.js";
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
@@ -125,7 +129,7 @@ import { dispatchAgentTelemetry } from "./telemetry/emit-agent-telemetry.js";
 import { UsageTracker } from "./telemetry/usage-tracker.js";
 
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentConfig, AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "./agent-types.js";
+import type { AgentConfig } from "./agent-types.js";
 import type { AgentEvent, AgentEventBus } from "../agent/agent-event-bus";
 import type { AgentLog } from "../agent/agent-log";
 import type { CodeModeExtensionConfig } from "../agent/code-mode";
@@ -171,9 +175,10 @@ import type {
   SessionDiagnosticArea,
   SessionSwitchReason,
 } from "../runtime-types/agent-event-payloads.js";
-import type { AgentEventType, PayloadRequired } from "../runtime-types/agent-events.js";
+import type { AgentEventType, EmitAgentTelemetryOptions, EmitPayloadArgs } from "../runtime-types/agent-events.js";
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
+import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type {
   QueuedMessageContent,
   AgentIterationState,
@@ -198,30 +203,15 @@ import type {
  */
 const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", "subagent:prefork-discarded"]);
 
-/** Envelope overrides accepted by {@link ManagedAgent.emitEvent}. */
-interface EmitEventOptions {
-  parentId?: string;
-  agentId?: string;
-  /**
-   * Override the envelope's session id. The telemetry funnel defaults it to the agent's CURRENT
-   * session, which is wrong for a fact about the session being left — notably `session:switch`,
-   * whose row is written to the departing session's log while the adoption has already moved
-   * `getEventSessionId()` to the target.
-   */
-  sessionId?: string;
-}
-
 /**
  * Args tuple for {@link ManagedAgent.emitEvent}: the payload is mandatory when its type has a
  * required field, so `emitEvent("job:changed")` no longer compiles into a `{}` frame.
+ *
+ * The options element is the SHARED `EmitAgentTelemetryOptions`, not a local copy: an envelope
+ * override must mean the same thing whether a fact is emitted by the agent, a service or a
+ * middleware — that is what lets an async producer name the session it belongs to.
  */
-type EmitEventArgs<T extends AgentEventType> =
-  PayloadRequired<AgentEventPayloadMap[T]> extends true
-    ? [payload: AgentEventPayloadMap[T], options?: EmitEventOptions]
-    : [payload?: AgentEventPayloadMap[T], options?: EmitEventOptions];
-
-/** When the turn context payload hasn't changed, re-admit every N messages to keep context fresh. */
-export type { RunFinalizeReason } from "./agent-types.js";
+type EmitEventArgs<T extends AgentEventType> = EmitPayloadArgs<AgentEventPayloadMap[T]>;
 
 export type { AgentL1State, AgentMode } from "../runtime-types/session-payloads.js";
 
@@ -365,12 +355,6 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   toolConfig?: AgentToolConfig;
 };
 
-/** Subagent preview / non-useChat UI channel (TanStack StreamProcessor). */
-export type AgentUIChannelRef = Pick<
-  AgentUIChannel,
-  "getMessages" | "subscribeCustomEvents" | "subscribeApprovalRequests"
->;
-
 // ============================================================================
 // ManagedAgent — composition root
 // ============================================================================
@@ -414,6 +398,8 @@ export class ManagedAgent {
   private lastFinishReason: string | null = null;
   /** Tools awaiting user approval in the current run (set by approval middleware). */
   private pendingApprovalCount: number;
+  /** Nesting depth of a session restore (see `beginSessionRestore`). */
+  private sessionRestoreDepth = 0;
   /**
    * Channel revision the retained `interaction` snapshot was last derived from.
    *
@@ -722,6 +708,9 @@ export class ManagedAgent {
     this.planMode = new PlanModeController({
       getTodoManager: () => this.getTodoManager(),
       getCoreEnv: () => this.getCoreEnv(),
+      // A plan artifact is written from a fire-and-forget callback; the guard keeps a write that
+      // resolves after a session switch from landing in the target.
+      captureStaleness: () => this.captureStaleness(),
       emitEvent: (type, ...args) => this.emitEvent(type, ...args),
       onPhaseChange: () => {
         this.invalidateRunner();
@@ -860,8 +849,13 @@ export class ManagedAgent {
       resetMediaHydrationMisses: () => this.setMediaHydrationMisses(0),
       resetTurnContext: () => this.turnContext.resetTurnState(),
       clearExtensionUi: () => this.getExtensionRunner()?.clearUISlots(),
+      beginSessionRestore: () => this.beginSessionRestore(),
+      endSessionRestore: () => this.endSessionRestore(),
       resetSessionSyncTracker: () => this.resetSessionSyncTracker(),
       resetIterationProgress: () => this.resetIterationProgress(),
+      // Runs AFTER the switch resolves (the facade is dropped by the reset, and a wake is refused
+      // mid-switch). It rebuilds the facade, restores un-notified records and starts the wake turn.
+      resumeBackgroundWork: () => this.resumeBackgroundWork(),
       // Task phase records and pre-fork seats belong to the conversation being left.
       clearTaskRuns: () => clearTaskRuns(this),
       // The agents behind those tasks too: `autoDestroy: false` keeps a finished task for its
@@ -972,8 +966,24 @@ export class ManagedAgent {
     // Internal workers are the exception: they serve no `task` call, so no phase record (and no
     // spawn run) exists at all, and they are awaited inside the parent's run — the current run IS
     // the run that spawned them. `parentTaskToolCallId` is what separates the two cases.
+    const liveSessionId = this.getEventSessionId();
+    if (liveSessionId !== undefined) {
+      if (details.sessionId !== undefined) {
+        // A settle (or a later lifecycle row) can resolve after `/resume` / `/new` moved the log
+        // sink to the target. The spawn session travels with the task, so a mismatch means this row
+        // belongs to a file the sink no longer points at — the child's own log still has the
+        // timeline, and wrong attribution is worse than none.
+        if (details.sessionId !== liveSessionId) return;
+      } else if (details.parentTaskToolCallId !== undefined && (phase === "completed" || phase === "stopped")) {
+        // The spawn record was cleared by the switch (`clearTaskRuns`), so the snapshot above is
+        // unavailable. A REAL terminal settle always passes it (both call sites read it from the
+        // record), making "terminal task row with no session" the cleared-record case. Drop it
+        // rather than stamp it with the target session.
+        return;
+      }
+    }
     const run = details.run ?? (details.parentTaskToolCallId ? undefined : (this.getCurrentRunId() ?? undefined));
-    logSubagentLifecycle(this.log, phase, details, run, this.getEventSessionId());
+    logSubagentLifecycle(this.log, phase, details, run, details.sessionId ?? liveSessionId);
   }
 
   setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
@@ -1311,7 +1321,16 @@ export class ManagedAgent {
   }
 
   emitEvent<T extends AgentEventType>(type: T, ...args: EmitEventArgs<T>): void;
-  emitEvent(type: AgentEventType, payload?: AgentEventPayloadMap[AgentEventType], options?: EmitEventOptions): void {
+  emitEvent(
+    type: AgentEventType,
+    payload?: AgentEventPayloadMap[AgentEventType],
+    options?: EmitAgentTelemetryOptions
+  ): void {
+    // The restore adopts the persisted model/effort before the commit; both writers emit
+    // synchronously, with the sink already on the target but the envelope still on the departure.
+    // Those rows described a change the target never made — suppress them (the restore's own
+    // `session:restore` row carries the final model/effort).
+    if (this.sessionRestoreDepth > 0 && (type === "model:change" || type === "mode:change")) return;
     // Default the parent link to this agent's own parent: a child's events up-flow into the parent's
     // scope, and without this the envelope dropped `parentId` for everything except the explicit
     // `subagent:*` emits — so an extension could not tell a child's turn from its own by envelope alone.
@@ -2391,6 +2410,21 @@ export class ManagedAgent {
   }
 
   /**
+   * Rebuild the facade for the just-adopted session, then wake it for any undelivered completion.
+   *
+   * A session switch drops the facade (`resetBackgroundWork`), and `wakeForBackgroundWork` never
+   * mints one (it must not resurrect the leaving session's rows). Once the transaction has
+   * committed, building the facade is the normal "next session builds a fresh one" lifecycle, and
+   * `pending()` restores the target's on-disk records — including `notified: false` completions the
+   * previous process never delivered.
+   */
+  resumeBackgroundWork(): void {
+    if (this.parentId) return;
+    this.getBackgroundWork();
+    void this.wakeForBackgroundWork();
+  }
+
+  /**
    * Deliver finished background work to a session that is not running.
    *
    * The notification itself belongs to `background-middleware`, which injects it at the next model
@@ -2704,6 +2738,35 @@ export class ManagedAgent {
   }
 
   /**
+   * Capture a staleness check for work that resolves after its session may have been switched.
+   *
+   * Used by the plan API (`/mode load` awaits a disk read) and by {@link PlanModeController}'s
+   * fire-and-forget artifact write — the same two-fact guard the background/turn-context
+   * middlewares use.
+   *
+   * @internal Implemented for the plan host seam; not part of the host-facing API surface.
+   */
+  captureStaleness(): () => boolean {
+    // BOTH facts the helper defines: the generation covers "commit happened", `isSwitching` covers
+    // "unload/load admitted but not committed" — a disk read that resolves inside that window is
+    // stale too.
+    return captureSessionStaleness(this.chatController?.getUIChannel(), () => this.isSessionSwitching());
+  }
+
+  /**
+   * Bracket a restore so the model/effort adoption does not emit change rows into the target log.
+   * Internal to the session lifecycle; nesting-safe because a failed load re-opens the departure
+   * through the same restore path.
+   */
+  private beginSessionRestore(): void {
+    this.sessionRestoreDepth += 1;
+  }
+
+  private endSessionRestore(): void {
+    this.sessionRestoreDepth = Math.max(0, this.sessionRestoreDepth - 1);
+  }
+
+  /**
    * Kill this agent's background work and drop the facade (no-op if none was ever created).
    *
    * Called on destroy so a disposed runtime leaks neither child processes (command jobs) nor
@@ -3001,6 +3064,8 @@ export class ManagedAgent {
   /** @internal Wire chat / subagent UI channel (hosts read via {@link getUI}). */
   setUIChannel(ui: AgentUIChannel | undefined): void {
     ui?.setToolPresentationResolver((name) => this.getToolPresentation(name));
+    // The display fallback is keyed by name; only the seeded built-in's schema may drive it.
+    ui?.setToolBuiltinResolver((name) => this.toolService.isIncumbent(name));
     this.runnerWiring.setUIChannel(ui);
   }
 }

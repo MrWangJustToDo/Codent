@@ -18,6 +18,7 @@ import {
 } from "../../agent/stream/incomplete-tool-calls.js";
 import { findToolCallPart } from "../../agent/stream/suppress-replayed-tool-chunks.js";
 import {
+  countPendingToolApprovals,
   hasPendingAskUser,
   hasPendingInteraction,
   needsAgentResponseAfterTools,
@@ -87,6 +88,20 @@ export class AgentChatController {
   private currentToken: RunToken | null = null;
   /** Nested-safe depth; reset only by the single interrupt owner (see interruptCurrentRun). */
   private pumpDepth = 0;
+  /**
+   * Baselines for the live pump's `turn:summary`, retained outside `pumpToolPhases`.
+   *
+   * The Esc path finalizes in `interruptCurrentRun` (the pump's own outcome path is skipped once
+   * its token is invalidated), so without this the most common turn ending — a user abort — was
+   * the only one with no `turn:summary` at all. Null when no pump is live.
+   */
+  private pumpBaselines: {
+    startedAt: number;
+    usage: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+    cost: number;
+    toolCalls: number;
+    phases: number;
+  } | null = null;
   /**
    * Epoch of the single pump queued on {@link runChain} but not yet started. A stale
    * callback must not clear a newer epoch's slot; `null` means no current-epoch pump
@@ -270,7 +285,7 @@ export class AgentChatController {
     // Immediately clear loading tool rows; stream teardown may still finalize later. A pending
     // `ask_user` is preserved: it is a question addressed to the user, not work this abort owns,
     // and cancelling it here would make the park below a no-op (and discard the question).
-    this.applyCancelledIncompleteTools(true, { preservePendingAskUser: true });
+    this.applyCancelledIncompleteTools(true);
     // An approval prompt is a question the interrupted turn no longer has. Leaving it pending
     // kept the part in `interactions.approvals` while the run was over: the next input was
     // admitted against a status that said `aborted`, then parked on the old question forever.
@@ -278,11 +293,39 @@ export class AgentChatController {
     this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
     // The deny rewrote the channel AFTER the last status flip, so the retained count would
     // otherwise keep reporting the approvals that no longer exist (snapshot / ACP consumers).
-    this.managed.setPendingApprovalCount(0);
-    // App no longer checkpoints on status — persist cancelled tools on abort.
-    this.persistMessages("pump-complete");
+    // Derived from the transcript, like every other writer: this is a *recomputation*, not the
+    // lease-blind zeroing the setter's contract forbids.
+    this.managed.setPendingApprovalCount(countPendingToolApprovals(this.channel.getMessages()));
     // Turn finalize here: the invalidated token makes the in-flight pump skip its outcome path.
-    this.managed.finalizeRun("aborted");
+    // When this run actually had a pump, go through the SAME finalizer the pump uses — the abort
+    // is then a first-class turn outcome (status + `finalizeRun` + one `turn:summary`), not a
+    // separate hand-rolled sequence. A parked turn has no baselines (its pump ended as `waiting`),
+    // so it keeps the status-only finalize.
+    //
+    // A run that ALREADY failed (the pump is between phases, e.g. awaiting the command-safety
+    // check) keeps `error`: `onUserCancel` was a no-op there, and reporting `aborted` would hide
+    // the stream failure and contradict `agent:stream-error`.
+    const kind = this.managed.getStatus() === "error" ? "error" : "aborted";
+    const baselines = this.pumpBaselines;
+    if (baselines) {
+      this.pumpBaselines = null;
+      this.managed.runFinalizer.finalizeChat({
+        kind,
+        messages: this.channel.getMessages(),
+        waitingForUser: false,
+        phases: baselines.phases,
+        turnStartedAt: baselines.startedAt,
+        usageBefore: baselines.usage,
+        costBefore: baselines.cost,
+        toolCallsBefore: baselines.toolCalls,
+        // `finalizeChat` owns the persist (one snapshot, not two).
+        persist: () => this.persistMessages("pump-complete"),
+      });
+    } else {
+      // No pump: persist the cancelled tools before the status-only finalize.
+      this.persistMessages("pump-complete");
+      this.managed.finalizeRun(kind);
+    }
     // An `ask_user` is a question addressed to the USER: abandoning the run does not answer or
     // withdraw it, and cancelling it would discard both the question and the input. The turn is
     // over, but the agent is still parked on the user — name that, or `sendMessage` is admitted
@@ -777,6 +820,13 @@ export class AgentChatController {
       usageAtStart = this.managed.usage.snapshotTotal();
       costAtStart = this.managed.usage.getTotalCostUsd();
       toolCallsAtStart = countToolCalls(this.channel.getMessages());
+      this.pumpBaselines = {
+        startedAt: turnStart,
+        usage: usageAtStart,
+        cost: costAtStart,
+        toolCalls: toolCallsAtStart,
+        phases: 0,
+      };
 
       this.managed.resetTurnLifecycle();
       this.managed.clearPrepareAsContinuation();
@@ -803,6 +853,25 @@ export class AgentChatController {
           const prepared = this.prepareContinuationPhase(currentMessages);
           if (!prepared.continue) break;
           currentMessages = prepared.messages;
+        } else if (
+          this.hasQueuedMessages() &&
+          // Re-read, not the admission snapshot: the transcript may have settled differently while
+          // the pending interaction above was resolved.
+          currentMessages.at(-1)?.role === "assistant" &&
+          // A settled TOOL turn is not a stopping point: its tools still have to run, and injecting
+          // user text now would put it before the tool result. `prepareContinuationPhase` owns that
+          // ordering from phase 1 on.
+          !needsToolPhaseContinue(currentMessages)
+        ) {
+          // A chain pump admitted only because input was queued must deliver it BEFORE the first
+          // model call. Previously phase 0 re-sent the settled transcript, the model answered a
+          // question nobody asked, and only phase 1 drained the queue — one wasted call per chain.
+          // Mirror `prepareContinuationPhase`'s policy (steer wins; follow-up only when no steer)
+          // without marking a continuation: the turn now has a real prompt.
+          const steered = this.drainSteerIntoChannel();
+          if (!steered) this.drainFollowUpIntoChannel();
+          this.managed.clearPrepareAsNewTurn();
+          currentMessages = this.channel.getMessages();
         } else if (options.startsNewTurn) {
           // Set at the last moment: a pump that stops on a pending interaction never reaches its
           // first model call, and the mark must not leak into the resume pump.
@@ -811,6 +880,7 @@ export class AgentChatController {
 
         await this.executeStream(currentMessages, token);
         toolPhases = toolPhase + 1;
+        if (this.pumpBaselines) this.pumpBaselines.phases = toolPhases;
         if (epoch !== this.lifecycleEpoch) return;
         if (this.managed.getStatus() === "error") {
           hasError = true;
@@ -818,7 +888,7 @@ export class AgentChatController {
         if (!token.isCurrent) {
           // Stream may have finalized truncated tool args after Esc — cancel again, but keep a
           // pending `ask_user` answerable (same rule as `interruptCurrentRun`).
-          this.applyCancelledIncompleteTools(true, { preservePendingAskUser: true });
+          this.applyCancelledIncompleteTools(true);
           this.persistMessages("pump-complete");
           return;
         }
@@ -936,6 +1006,9 @@ export class AgentChatController {
       // interrupt owner already reset depth to 0, and the decrement would
       // otherwise steal depth from a newer pump. No Math.max guard needed.
       if (token.isCurrent) {
+        // Only the CURRENT pump may release the baselines: an interrupted pump already handed them
+        // to `finalizeChat` (or cleared them), and a superseded one must not clear a newer pump's.
+        this.pumpBaselines = null;
         this.pumpDepth -= 1;
         // The turn is over: no run is current any more. Without this the token stayed valid
         // after a normal completion, so `forceSubmit`'s `isCurrentRunValid()` fallback treated
@@ -973,6 +1046,10 @@ export class AgentChatController {
     const isStaleSession = captureSessionStaleness(this.channel);
     const applyAbortFallback = (): void => {
       if (isStaleSession()) return;
+      // `applyCancelledIncompleteTools` preserves a pending `ask_user` by default — the single
+      // rule. This fallback used to pass no option and consequently undid the park the Esc path had
+      // just established (status `awaiting_user` with no pending interaction, so every later
+      // message was deferred to a pump that never started and Esc became a no-op).
       this.applyCancelledIncompleteTools(true);
     };
     // AbortController is created inside prepareForRun (via runAgentStream) and wired
@@ -1043,6 +1120,10 @@ export class AgentChatController {
    */
   private applyCancelledIncompleteTools(
     includeInFlight = false,
+    // ONE rule, defaulting on: a pending `ask_user` is a question addressed to the user, not work
+    // this cleanup owns. The option existed because the abort fallback and `interruptCurrentRun`
+    // disagreed, and the fallback silently undid the park the Esc path had just established. A
+    // caller that genuinely wants to withdraw the question must say so explicitly.
     options: { preservePendingAskUser?: boolean } = {}
   ): void {
     const current = this.channel.getMessages();
@@ -1052,7 +1133,7 @@ export class AgentChatController {
     const cancelled = settleToolCalls(current, {
       reason: TOOL_CANCELLED_MESSAGE,
       includeInFlight,
-      ...(options.preservePendingAskUser ? { preservePendingAskUser: true } : {}),
+      ...((options.preservePendingAskUser ?? true) ? { preservePendingAskUser: true } : {}),
     });
     const cleaned = stripEmptyAssistantShells(cancelled);
     this.channel.setMessages(cleaned);

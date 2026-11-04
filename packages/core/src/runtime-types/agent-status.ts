@@ -97,6 +97,10 @@ export function isActiveStatus(status: AgentStatus): boolean {
 /** Resolve the status to apply when an agent run finishes. */
 export function resolveFinishStatus(current: AgentStatus, errorMessage: string): AgentStatus {
   if (isTerminalStatus(current)) return current;
+  // `compacting` is an owner-held state, not a run outcome. Writing `completed` over it made the
+  // compaction lease's `finish` a silent no-op (it only restores from `compacting`), so the turn's
+  // terminal value could be lost. The lease always restores in its producer's `finally`.
+  if (current === "compacting") return current;
   if (errorMessage) return "error";
   return "completed";
 }

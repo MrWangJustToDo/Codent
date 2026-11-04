@@ -105,6 +105,21 @@ const waitForState = async (id, check, label) => {
 };
 
 const userMessage = (id, text) => ({ id, role: "user", parts: [{ type: "text", content: text }], createdAt: 1 });
+const assistantAskUser = (id) => ({
+  id,
+  role: "assistant",
+  parts: [
+    { type: "text", content: "need input" },
+    {
+      type: "tool-call",
+      id: "call_ask",
+      name: "ask_user",
+      arguments: '{"question":"which?","options":["a","b"]}',
+      state: "input-complete",
+    },
+  ],
+  createdAt: 2,
+});
 const assistantWithApproval = (id) => ({
   id,
   role: "assistant",
@@ -331,6 +346,84 @@ let sessionId;
   const managed3 = manager3.getAgent(created3.session.getSnapshot().agentId);
   assert.notEqual(managed3.getPlanModeState().phase, "off", "resumed agent comes back in plan mode");
   assert.equal(managed3.isAutoModeEnabled(), false, "resumed agent is not in auto mode (mutually exclusive)");
+}
+
+// ============================================================================
+// 3.5 Unloading a PARKED session is not a cancellation, and restore adopts state silently
+//
+// The switch's `resetTransientState` aborts the previous run. With the status still
+// `awaiting_user`, that abort listener rewrote it to `aborted` — a cancellation the user never
+// performed, logged against the target. The model/effort adoption has the mirror problem: its
+// `model:change` / `mode:change` rows are emitted while the sink already points at the target but
+// the envelope still names the departure. `session:restore` is the record for both.
+// ============================================================================
+{
+  const manager = new AgentManager();
+  const host = createLocalAgentSessionHost({ manager });
+  const created = await host.create({ name: "parked-source", model: "default-model", modelStyle: "openai" });
+  const managed = manager.getAgent(created.session.getSnapshot().agentId);
+  const id = managed.getSessionData().id;
+  const store = managed.getSessionStore();
+
+  const data = managed.getSessionData();
+  data.uiMessages = [userMessage("p-u1", "go"), assistantAskUser("p-a1")];
+  data.reasoningEffort = "high";
+  // A model the catalog does not offer: `applyPersistedModel` falls back to the creation model and
+  // emits `model:change{fallback:true}`. With the same model as the runtime this branch never runs,
+  // so the "no model:change during restore" assertion used to be vacuously true.
+  data.model = "retired-model";
+  await store.save(data);
+  manager.releaseSessionOwnership(id, managed.id);
+
+  const manager2 = new AgentManager();
+  const seen = [];
+  manager2.on("agent:status", (event) => seen.push({ kind: "status", ...event.payload }));
+  manager2.on("mode:change", (event) => seen.push({ kind: "mode:change", ...event.payload }));
+  manager2.on("model:change", (event) => seen.push({ kind: "model:change", ...event.payload }));
+  manager2.on("session:restore", (event) => seen.push({ kind: "restore", ...event.payload }));
+
+  const host2 = createLocalAgentSessionHost({ manager: manager2 });
+  const created2 = await host2.create({
+    name: "parked-resume",
+    model: "default-model",
+    modelStyle: "openai",
+    resumeSessionId: id,
+  });
+  const managed2 = manager2.getAgent(created2.session.getSnapshot().agentId);
+
+  assert.equal(managed2.getStatus(), "awaiting_user", "a restored question keeps the session parked");
+  assert.ok(
+    !seen.some((event) => event.kind === "status" && event.to === "aborted"),
+    "unloading a parked session must not log a cancellation (status stayed awaiting_user)"
+  );
+  assert.ok(
+    !seen.some((event) => event.kind === "mode:change"),
+    "restore adopts effort silently; session:restore is the record"
+  );
+  assert.ok(
+    !seen.some((event) => event.kind === "model:change"),
+    "restore adopts the model silently (the target never made that change)"
+  );
+  // …but the adopted identity is not lost: it rides the restore record instead of a misattributed
+  // row. (This host carries no catalog, so `selectModel` trusts the persisted id and there is no
+  // fallback to report — the adoption change itself is what the suppression above hides.)
+  const restored = seen.find((event) => event.kind === "restore");
+  assert.equal(restored?.model, "retired-model", "session:restore carries the adopted model");
+  assert.equal(restored?.modelFallback, undefined, "no catalog ⇒ no forced fallback");
+
+  // The behavioural assertion above cannot construct a live run on a fresh manager (so the abort
+  // listener has nothing to write); lock the ordering that makes it true.
+  const lifecycleSrc = await fs.promises.readFile(
+    new URL("../src/managers/services/session-lifecycle-service.ts", import.meta.url),
+    "utf8"
+  );
+  const idleAt = lifecycleSrc.indexOf("statusController.resetToIdle()");
+  const runResetAt = lifecycleSrc.indexOf("run.resetRunState()");
+  assert.notEqual(idleAt, -1, "resetTransientState resets the status");
+  assert.ok(
+    idleAt < runResetAt,
+    "resetToIdle must run BEFORE resetRunState — the abort listener rewrites active statuses to aborted"
+  );
 }
 
 // ============================================================================

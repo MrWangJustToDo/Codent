@@ -54,7 +54,10 @@ const logCategories = [
  * entries the code now emits.
  */
 type AssertNever<T extends never> = T;
-export type LogCategoryCoverage = AssertNever<Exclude<LogCategory, (typeof logCategories)[number]>>;
+// Compile-time guard, deliberately not exported: it exists so adding a `LogCategory` without its
+// runtime array member fails to type-check. The alias has no consumer beyond the checker.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type LogCategoryCoverage = AssertNever<Exclude<LogCategory, (typeof logCategories)[number]>>;
 export const logCategorySchema = z.enum(logCategories);
 
 export const logEntrySchema = z.strictObject({

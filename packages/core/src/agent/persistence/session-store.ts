@@ -175,13 +175,27 @@ export class SessionStore {
     const messages = options.upToIndex === undefined ? all.slice() : all.slice(0, options.upToIndex);
     const now = Date.now();
     const name = options.name?.trim();
+    // A branch starts a new conversation, so it must not answer to the source's name: `/resume
+    // <name>` resolves the newest match, which is this branch, and would silently reopen the copy
+    // instead of the session the user named.
+    const branchName = name && name.length > 0 ? name : source.name ? `${source.name} (fork)` : source.name;
     return {
       id: generateId("ses"),
-      name: name && name.length > 0 ? name : source.name,
+      name: branchName,
       version: SESSION_VERSION,
       modelStyle: source.modelStyle,
       model: source.model,
       uiMessages: messages as SessionData["uiMessages"],
+      // Working state (usage/todos/plan/auto) is reset, but a CLONE copies the whole transcript —
+      // so its context fill is a property of that transcript, not of the work. Omitting it made the
+      // footer report 0% while the model was still receiving the whole history.
+      //
+      // A FORK (`upToIndex`) keeps only a prefix: carrying the source's full count would overstate
+      // the branch's fill and could trigger auto-compact on a small transcript. Leave it unset (the
+      // next response writes the real window) rather than copy or guess a proportional value.
+      ...(options.upToIndex === undefined && source.contextTokens !== undefined
+        ? { contextTokens: source.contextTokens }
+        : {}),
       usage: { ...EMPTY_USAGE },
       todos: [],
       forkedFrom: source.id,

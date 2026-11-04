@@ -23,7 +23,11 @@
  * of spurious prompts in real plan/debug sessions (`cmd 2>&1 | tail`), i.e. shell noise that
  * every command carries and none of it writes.
  */
-export const BENIGN_REDIRECTION = /(?:[12]?&>|[12]?>)\s*(&[12-]|\/dev\/null|[12][>&]?)/g;
+// `&>word` is `>word 2>&1` — a named file, NOT a descriptor duplication (`cmd &>2` creates a file
+// named "2"). Only a null-device target is benign there. The `/dev/null` branch is boundary-anchored
+// so `>/dev/null.txt` stays a write.
+export const BENIGN_REDIRECTION =
+  /(?:[12]?>&[12-]|[12]?>\s*\/dev\/null(?=$|[\s;&|)<>])|&>\s*\/dev\/null(?=$|[\s;&|)<>]))/g;
 
 /** Devices that discard a stream, so opening one is not reading project data. */
 const NULL_DEVICES = new Set(["/dev/null", "/dev/zero", "NUL", "nul"]);

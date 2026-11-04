@@ -237,15 +237,3 @@ export interface ModelInfo {
   /** Optional API base URL override (merged into connection resolution) */
   baseURL?: string;
 }
-
-/**
- * Lightweight model reference for UI display and selection.
- */
-export interface ModelOption {
-  id: ModelId;
-  name: string;
-  style: ModelStyle;
-  contextWindow?: number;
-  /** See {@link ModelInfo.capabilities} for the `undefined` (unknown) vs `[]` (declared none) split. */
-  capabilities?: ModelCapability[];
-}

@@ -1,9 +1,9 @@
+import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 import { pairToolResults } from "../tool-call-pairing.js";
 
 import {
   formatToolErrorForModel,
   isPendingToolExecutionResult,
-  isToolErrorResult,
   normalizeModelToolContent,
   parseToolMessageOutput,
 } from "./parse-tool-message.js";
@@ -110,7 +110,12 @@ export async function applyToolCompact(
 
     if (isDeniedToolResult(rawOutput)) continue;
 
-    if (isToolErrorResult(rawOutput)) {
+    // Only a BARE `{ error }` is the framework's failure shape. A structured tool result may carry
+    // a business `error` field beside real data (an MCP `structuredContent` of
+    // `{ error, items }`); the shape-only predicate used here replaced the whole payload with
+    // `Error: …` on the wire, while the UI path (which already uses `isBareToolErrorResult`) kept
+    // the data. Both readers must answer the same question the same way.
+    if (isBareToolErrorResult(rawOutput)) {
       const normalized = normalizeModelToolContent(formatToolErrorForModel(rawOutput));
       cache.set(cacheKey, { source: message.content, projected: normalized });
       setContent(target.messageIndex, normalized);

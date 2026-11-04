@@ -51,6 +51,17 @@ export type SessionEventPayloads = {
     autoMode?: boolean;
     /** Count of `media://` refs that could not be hydrated from disk on restore. */
     mediaMissing?: number;
+    /**
+     * The effective model after adoption. The restore path suppresses the usual
+     * `model:change` / `mode:change` rows (they would be emitted while the log sink already points
+     * at the target but the envelope still names the departure), so this record carries the
+     * resulting identity instead.
+     */
+    model?: string;
+    /** The persisted reasoning depth adopted by the restore. */
+    reasoningEffort?: string;
+    /** The persisted model id was not offered and the session's creation model was kept. */
+    modelFallback?: boolean;
   };
   /**
    * The active session id changes while the agent keeps running (a restore).

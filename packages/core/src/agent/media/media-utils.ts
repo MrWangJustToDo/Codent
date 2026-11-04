@@ -120,6 +120,124 @@ async function mapNestedMediaPart(
 }
 
 /**
+ * Binary media carried directly on a `tool-call.output`.
+ *
+ * Tools such as `read_file` (image / PDF) and `webfetch` (image) return the bytes in their
+ * structured output, and TanStack keeps that object on the `tool-call` part. `dehydrateUIMessages`
+ * used to walk only `tool-result.content`, so every screenshot was persisted a second time as raw
+ * base64 on the call — a 388 KB image in one real session — and the media store's retention never
+ * saw it. The wire still needs the bytes, so this stores them and leaves a reference that
+ * {@link hydrateToolCallOutput} restores on load.
+ */
+interface ToolCallOutputRecord {
+  type?: string;
+  base64?: string;
+  mimeType?: string;
+  contentType?: string;
+  content?: string;
+  isImage?: boolean;
+  mediaRef?: MediaRef;
+  [key: string]: unknown;
+}
+
+function isRecord(value: unknown): value is ToolCallOutputRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mimeForToolCallOutput(output: ToolCallOutputRecord): string {
+  if (typeof output.mimeType === "string" && output.mimeType.length > 0) return output.mimeType;
+  // `webfetch` reports the response header, not `mimeType` (`image/png; charset=…`).
+  if (typeof output.contentType === "string") {
+    const mime = output.contentType.split(";")[0]?.trim().toLowerCase();
+    if (mime) return mime;
+  }
+  if (output.type === "pdf") return "application/pdf";
+  if (output.type === "image") return "image/png";
+  return "application/octet-stream";
+}
+
+async function dehydrateToolCallOutput(output: unknown, store: MediaStore): Promise<unknown> {
+  if (!isRecord(output)) return output;
+
+  // `read_file` image / PDF: raw base64 in `base64`. Shape-check the media type too — a generic
+  // extension output may carry a field named `base64` (a signature or id) that only looks like
+  // base64, and moving it into the media store would rewrite its shape and normalize its bytes.
+  const base64Mime = mimeForToolCallOutput(output);
+  const mediaLike =
+    output.type === "image" ||
+    output.type === "pdf" ||
+    base64Mime.startsWith("image/") ||
+    base64Mime === "application/pdf";
+  if (mediaLike && typeof output.base64 === "string" && isBase64Source(output.base64)) {
+    const ref = await store.save(output.base64, base64Mime, undefined, "data");
+    output.base64 = buildMediaRefPath(ref);
+    output.mediaRef = {
+      hash: ref.hash,
+      mimeType: ref.mimeType,
+      filename: ref.filename,
+      size: ref.size,
+      sourceType: ref.sourceType,
+    };
+    return output;
+  }
+
+  // `webfetch` image: the bytes are a data URL in `content`.
+  if (output.isImage === true && typeof output.content === "string" && isBase64Source(output.content)) {
+    // The data URL's own media type is authoritative for the round-trip: hydration rebuilds
+    // `data:<mime>;base64,…` from the stored ref, so a mismatch would rewrite the header.
+    const mime = parseDataUrl(output.content)?.mimeType || mimeForToolCallOutput(output);
+    const ref = await store.save(output.content, mime, undefined, "url");
+    output.content = buildMediaRefPath(ref);
+    output.mediaRef = {
+      hash: ref.hash,
+      mimeType: ref.mimeType,
+      filename: ref.filename,
+      size: ref.size,
+      sourceType: ref.sourceType,
+    };
+  }
+  return output;
+}
+
+async function hydrateToolCallOutput(
+  output: unknown,
+  store: MediaStore,
+  onMissing?: (miss: MediaHydrationMiss) => void
+): Promise<unknown> {
+  if (!isRecord(output) || !output.mediaRef) return output;
+  if (!isMediaHash(output.mediaRef.hash)) {
+    // A malformed ref must be REPORTED, not silently left as `media://bad`: the miss counter drives
+    // the wire-recovery substitution, and without it the provider receives an unfetchable value on
+    // every request (the exact failure the substitution exists to prevent). Mirrors the binary-part
+    // path's `invalid-ref`.
+    onMissing?.({ ref: buildMediaRefPath(output.mediaRef), reason: "invalid-ref", path: "tool-call" });
+    return output;
+  }
+
+  // The owner is whoever still carries a `media://` value. A further hydrate on an already
+  // hydrated output (base64 back in place) is a no-op, not a miss.
+  const owner =
+    typeof output.base64 === "string" && isMediaRefValue(output.base64)
+      ? "base64"
+      : typeof output.content === "string" && isMediaRefValue(output.content)
+        ? "content"
+        : null;
+  if (!owner) return output;
+
+  const ref = output.mediaRef;
+  const loaded = await store.tryLoad(ref);
+  if (!loaded) {
+    onMissing?.({ ref: buildMediaRefPath(ref), reason: "not-found", path: "tool-call" });
+    return output;
+  }
+
+  if (owner === "base64") output.base64 = loaded;
+  else output.content = loaded;
+  delete output.mediaRef;
+  return output;
+}
+
+/**
  * Dehydrate binary parts nested in a stringified tool result. Leaves the field as
  * a string (the wire path revives it via `toModelOutput`), only shrinking the
  * embedded `source.value`s to `media://` references.
@@ -235,6 +353,12 @@ export async function dehydrateUIMessages(
         continue;
       }
 
+      // `read_file` / `webfetch` keep their bytes on the CALL's structured output.
+      if (part.type === "tool-call") {
+        part.output = await dehydrateToolCallOutput(part.output, store);
+        continue;
+      }
+
       if (!isBinaryMediaPart(part)) continue;
 
       const { source } = part;
@@ -270,7 +394,7 @@ export async function dehydrateUIMessages(
 // ============================================================================
 
 /** Which part of a UIMessage held a `media://` ref that failed to hydrate. */
-export type MediaMissPath = "content" | "tool-result";
+export type MediaMissPath = "content" | "tool-result" | "tool-call";
 
 /** A `media://` reference that could not be hydrated. */
 export interface MediaHydrationMiss {
@@ -322,6 +446,11 @@ export async function hydrateUIMessages(
     for (const part of message.parts) {
       if (part.type === "tool-result") {
         part.content = await hydrateToolResultContent(part.content, store, onMissing);
+        continue;
+      }
+
+      if (part.type === "tool-call") {
+        part.output = await hydrateToolCallOutput(part.output, store, onMissing);
         continue;
       }
 

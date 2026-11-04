@@ -3,8 +3,6 @@ import { z } from "zod";
 import { REASONING_EFFORT_VALUES } from "../models/types.js";
 import { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
 
-import type { ModelMessage } from "@tanstack/ai";
-
 // ============================================================================
 // Agent Config
 // ============================================================================
@@ -61,19 +59,3 @@ export const AgentConfigSchema = z.object({
 });
 
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
-
-// ============================================================================
-// Agent Status (compat re-exports)
-// ============================================================================
-
-export type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
-
-// ============================================================================
-// Run options
-// ============================================================================
-
-export interface AgentRunOptions {
-  prompt?: string;
-  messages?: ModelMessage[];
-  abortSignal?: AbortSignal;
-}

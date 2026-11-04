@@ -301,7 +301,7 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
   // finalizes directly and never reaches `applyRunOutcome`).
   assert.match(
     controllerSrc,
-    /this\.managed\.finalizeRun\("aborted"\);[\s\S]{0,900}parkOnPendingQuestion\(this\.channel\.getMessages\(\)\)/,
+    /finalizeChat\(\{[\s\S]{0,1400}?parkOnPendingQuestion\(this\.channel\.getMessages\(\)\)/,
     "the Esc path parks on a still-pending ask_user instead of reporting aborted"
   );
 }

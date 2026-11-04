@@ -13,14 +13,6 @@ import { isExtensionModuleFile, resolveExtensionDir } from "./paths.js";
 
 import type { ExtensionAPI, ExtensionFactory } from "./types.js";
 
-export interface ExtensionManifest {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  entry: string;
-}
-
 export interface ExtensionLoadResult {
   loaded: ExtensionAPI[];
   errors: Error[];

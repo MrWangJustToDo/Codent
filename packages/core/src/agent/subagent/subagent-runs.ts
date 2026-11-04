@@ -315,6 +315,7 @@ export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): T
   // Optional: validators and hosts may drive the registry with a structural fake that has no run
   // identity. The row is still useful without attribution; do not fail the call for it.
   state.spawnRunId ??= parentManaged.getCurrentRunId?.() ?? undefined;
+  state.spawnSessionId ??= parentManaged.getEventSessionId?.();
   return state;
 }
 
@@ -322,6 +323,15 @@ export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): T
 export function readTaskRunSpawnId(parentManaged: ManagedAgent, toolCallId: string | undefined): string | undefined {
   if (!toolCallId) return undefined;
   return subagentRuns(parentManaged).state(toolCallId)?.spawnRunId;
+}
+
+/** The disk session that spawned a task; settle-time rows compare against it. */
+export function readTaskRunSpawnSessionId(
+  parentManaged: ManagedAgent,
+  toolCallId: string | undefined
+): string | undefined {
+  if (!toolCallId) return undefined;
+  return subagentRuns(parentManaged).state(toolCallId)?.spawnSessionId;
 }
 
 export function enterTaskPhase(parentManaged: ManagedAgent, toolCallId: string, phase: TaskRunTerminalPhase): boolean {

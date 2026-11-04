@@ -108,8 +108,17 @@ export class ExtensionTurnContext {
       }
 
       // Named sections: each is its own `<ctx kind="<id>:<name>">` block, so a change in one never
-      // re-injects another.
-      for (const [name, section] of this.normalizeSections(provider, id)) {
+      // re-injects another. Normalization is inside the per-provider containment: `sections` is
+      // runtime data from arbitrary JS, and a malformed entry used to throw out of `collect()` and
+      // drop EVERY extension's sections for the turn (silently, with no `agent:extension-error`).
+      let named: Map<string, ExtensionContextSectionProvider>;
+      try {
+        named = this.normalizeSections(provider, id);
+      } catch (err) {
+        this.deps.reportFailure(id, "turn-context", `sections: ${errorMessage(err)}`);
+        continue;
+      }
+      for (const [name, section] of named) {
         try {
           const body = await section.content?.(ctx);
           if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
@@ -203,8 +212,14 @@ export class ExtensionTurnContext {
   ): Map<string, ExtensionContextSectionProvider> {
     const byName = new Map<string, ExtensionContextSectionProvider>();
     for (const section of provider.sections ?? []) {
-      if (!SECTION_NAME_RE.test(section.name)) {
-        this.warnOnce(provider, extensionId, `invalid context section name "${section.name}" — skipped`);
+      // Runtime shape validation: extensions are arbitrary JS, so a null/primitive entry or a
+      // non-string name must be skipped per entry rather than aborting the whole collection.
+      if (!section || typeof section.name !== "string" || !SECTION_NAME_RE.test(section.name)) {
+        this.warnOnce(
+          provider,
+          extensionId,
+          `invalid context section name "${String((section as { name?: unknown } | null)?.name)}" — skipped`
+        );
         continue;
       }
       if (byName.has(section.name)) {

@@ -8,8 +8,8 @@ import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
-import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "./agent-types.js";
 import type { RunCoordinator } from "./run-coordinator.js";
+import type { AgentStatus, AgentStatusTrigger, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type { CompactionService } from "./services/compaction-service.js";
 import type { MemoryService } from "./services/memory-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";
@@ -93,7 +93,6 @@ export async function prepareManagedAgentForRun(
       }
     },
   });
-  host.getCompaction().resetReactiveCompactRetries();
   // A previous phase's truncation escalation is not this phase's budget.
   host.run.resetMaxOutputTokensOverride();
 
@@ -116,6 +115,11 @@ export async function prepareManagedAgentForRun(
 
   // Run scope: one short id per user turn (tool continuations keep the same id).
   if (!isToolContinuation) {
+    // The reactive-compaction retry budget is RUN-scoped, not phase-scoped. Resetting it in the
+    // per-phase prep let a turn split by approvals/tools re-summarize once per phase; the counter's
+    // own contract ("max 1 per run") was therefore unenforceable. `resetTurnLifecycle` runs per
+    // pump, which is why this lives at the run boundary instead.
+    host.getCompaction().resetReactiveCompactRetries();
     const runId = Math.random().toString(36).slice(2, 10);
     host.setCurrentRunId(runId);
     // Emitted AFTER the id exists: a wake turn has no `prompt:submit`, so this row is the only

@@ -67,12 +67,18 @@ export type { ModelCatalogRead } from "./runtime/codent-agent.js";
 export type { CodentAgentOptions } from "./runtime/codent-agent.js";
 
 export { agentManager, AgentManager } from "./managers/agent-manager.js";
-export type { AgentEvent, AgentEventListener, AgentEventType, RunAgentStreamInput } from "./managers/agent-manager.js";
+// `AgentEventType` and `AgentEventPayload` come from the SAME table (the bus registry). The
+// telemetry payload map is narrower, so pairing its `AgentEventPayload` with the bus's wider
+// `AgentEventType` made `AgentEventPayload<AgentEventType>` fail its own constraint (and left
+// projection events without a public payload type).
 export type {
-  AgentEventPayloadMap,
+  AgentEvent,
+  AgentEventListener,
   AgentEventPayload,
-  EmptyAgentEventPayload,
-} from "./runtime-types/agent-event-payloads.js";
+  AgentEventType,
+  RunAgentStreamInput,
+} from "./managers/agent-manager.js";
+export type { AgentEventPayloadMap, EmptyAgentEventPayload } from "./runtime-types/agent-event-payloads.js";
 export { ManagedAgent, type ManagedAgentConfig, type AgentMode } from "./managers/managed-agent.js";
 export { isActiveStatus } from "./runtime-types/agent-status.js";
 export type { AgentStatus } from "./runtime-types/agent-status.js";

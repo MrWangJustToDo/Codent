@@ -70,7 +70,14 @@ export class AgentEventBusScope {
     const parentId = this.parents.get(info.scopeId);
     this.reportingHandlerError = true;
     try {
-      this.root.emit(
+      // Emit on the OWNING agent's bus, not the root. `emit` travels self → ancestors, so a root
+      // frame could never reach the agent's own scope: the event is declared `observable`, yet
+      // `ctx.events.observe("agent:event-handler-error")` (registered on the agent bus) never saw
+      // it. Emitting on the owner also up-flows to the root, so wildcard/global listeners keep the
+      // frame. A scope already dropped by teardown falls back to the root and still carries
+      // `agentId` for the log bridge. (There is no `channel` in the meta, so this does NOT publish
+      // on an `AgentSession` channel — the typed/extension observer surface is the gain.)
+      (this.scopes.get(ownerId) ?? this.root).emit(
         "agent:event-handler-error",
         {
           pattern: info.pattern,

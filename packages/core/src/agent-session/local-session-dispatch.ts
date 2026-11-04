@@ -29,6 +29,22 @@ export const SUBAGENT_ALLOWED_COMMANDS = new Set<AgentSessionCommand["type"]>([
   "addToolResult",
 ]);
 
+/**
+ * Plan commands that MUTATE session state and must not land while a switch is in flight.
+ *
+ * The dispatcher is the single entry point for TUI / ACP / remote sessions, and these cases both
+ * write the plan state and persist it — landing them on the transcript being replaced (or on a
+ * target the user has not seen) is the same class the chat paths already refuse. `/mode load` also
+ * awaits a disk read, which is exactly the window `/resume` needs.
+ */
+const PLAN_MUTATIONS = new Set<AgentSessionCommand["type"]>([
+  "plan.execute",
+  "plan.cancel",
+  "plan.save",
+  "plan.load",
+  "plan.complete",
+]);
+
 export async function dispatchLocalAgentSessionCommand(
   managed: ManagedAgent,
   _manager: unknown,
@@ -44,6 +60,10 @@ export async function dispatchLocalAgentSessionCommand(
   }
 
   const chat = managed.getChatController();
+
+  if (PLAN_MUTATIONS.has(command.type) && managed.isSessionSwitching?.() === true) {
+    return { ok: false, code: "failed", error: SESSION_SWITCHING_ERROR };
+  }
 
   try {
     switch (command.type) {
@@ -97,18 +117,10 @@ export async function dispatchLocalAgentSessionCommand(
         return { ok: true };
       }
       case "compact": {
-        // Manual compaction builds a summary checkpoint from the transcript and
-        // appends it to the channel. Mid-run that interleaves with the pump's own
-        // messages (the checkpoint lands inside a half-finished turn, and the
-        // pump's finally block restores `running` over `compacting`). Refuse while a
-        // run is live; auto-compaction already covers that case.
-        if (chat?.isRunActive?.()) {
-          return {
-            ok: false,
-            code: "failed",
-            error: "Cannot compact while the agent is running — stop it first (Esc).",
-          };
-        }
+        // `ManagedAgent.compact` owns the guard ORDER: switch in flight → compaction running →
+        // run active. Re-checking `isRunActive()` here (which itself includes a running
+        // compaction) reported a second `/compact` as "the agent is running — stop it first",
+        // telling the user to cancel a run that does not exist.
         const result = await managed.compact({ focus: command.focus });
         return result.ok ? { ok: true, data: result } : { ok: false, code: "failed", error: result.error };
       }

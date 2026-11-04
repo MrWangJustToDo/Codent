@@ -342,6 +342,9 @@ export const createTreeTool = () => {
           };
         }
 
+        // `tree` prints the root path as its first line (even with `--noreport`), so the line
+        // count is entries + 1. The built-in walk reports `paths.length`; subtracting the root line
+        // keeps both paths reporting "entries below the root" instead of differing by one.
         const lines = result.stdout.split("\n").filter((l) => l.trim());
 
         const cached = await maybeCacheOutput(coreEnv, result.stdout, `${toolCallId}-tree`);
@@ -358,7 +361,7 @@ export const createTreeTool = () => {
           path: rootPath,
           maxDepth: depth,
           tree: truncatedTree,
-          totalEntries: lines.length,
+          totalEntries: Math.max(0, lines.length - 1),
           truncated,
           cachedOutputPath: cached.cachedOutputPath,
         };

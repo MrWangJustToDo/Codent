@@ -109,7 +109,8 @@ export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackU
     reasoningEffort: host.getReasoningEffort(),
     resolveTextAdapter: host.resolveTextAdapter,
     emitEvent: (type, ...args) => host.emitEvent(type, ...args),
-    emitSessionTitle: (payload) => host.emitEvent("session:title", payload),
+    emitSessionTitle: (payload, sessionId) =>
+      host.emitEvent("session:title", payload, sessionId !== undefined ? { sessionId } : undefined),
     // The auto-title path writes `SessionData.name`; mirror it onto the agent so
     // live UI / snapshots pick it up (previously only manual rename broadcast).
     onTitleResolved: (name) => host.setDisplayName?.(name),
@@ -218,11 +219,16 @@ export async function restoreManagedSession(
   // record is authoritative because `unload` already stopped the run and drained every queued write.
   // A hand-maintained snapshot of model/effort/mode/approvals/transcript would be a second copy of
   // the same state, and the copy that can drift.
+  const requestedModel = session.model;
   const appliedModel = host.applyPersistedModel?.({
     model: session.model,
     ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
   });
   const modelChanged = appliedModel?.changed ?? false;
+  // The persisted id was not adopted (the catalog did not offer it). Recorded on `session:restore`
+  // because the restore suppresses `model:change` (emitting it here would write a target fact with
+  // a departure envelope) — without this the substitution had no durable record at all.
+  const modelFallback = appliedModel !== undefined && appliedModel.model !== requestedModel;
   // The effective model, not necessarily the requested one: an unavailable persisted id falls
   // back to the session's creation model. Adopting the raw record afterwards overwrote that
   // fallback, so the live state and the disk disagreed and every later resume repeated it.
@@ -314,6 +320,9 @@ export async function restoreManagedSession(
       tokenEstimate: session.contextTokens ?? host.usage.getContextFillTokens() ?? 0,
       planPhase: host.planMode.getPhase(),
       autoMode: host.isAutoModeEnabled(),
+      model: session.model,
+      ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
+      ...(modelFallback ? { modelFallback: true } : {}),
       ...(mediaMissing > 0 ? { mediaMissing } : {}),
     });
     // A miss is not only a diagnostic: the transcript still holds a `media://` ref no provider can
