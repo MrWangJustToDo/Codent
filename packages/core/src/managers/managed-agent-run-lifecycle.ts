@@ -2,8 +2,7 @@
  * Prepare / finalize / abort run lifecycle for {@link ManagedAgent}.
  */
 
-import type { UIMessage } from "@tanstack/ai";
-import { type UIMessage as TanStackUIMessage, type ModelMessage  } from "@tanstack/ai";
+import { type UIMessage as TanStackUIMessage, type ModelMessage } from "@tanstack/ai";
 
 import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
@@ -36,7 +35,7 @@ export interface RunLifecycleHost {
   /** The single state writer; when present, abort goes through the state machine. */
   transitionStatus?: (event: AgentTransitionEvent) => AgentStatus;
   /** Re-assert a pending `ask_user` as the wait after a run finalizes (see WaitKind). */
-  syncPendingWait?: (messages: UIMessage[]) => void;
+  syncPendingWait?: (messages: TanStackUIMessage[]) => void;
   /** Track the active run id (log run-scoping); pass null to clear. */
   setCurrentRunId: (runId: string | null) => void;
   recordStreamDuration: () => void;
