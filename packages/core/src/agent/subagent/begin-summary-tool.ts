@@ -4,10 +4,17 @@
 
 import { z } from "zod";
 
+import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { defineServerTool, isProjectedModelContent } from "../tools/runtime/define-tool.js";
 
-/** Tool name used to unlock task-tool summary streaming in the parent UI. */
-export const BEGIN_SUMMARY_TOOL_NAME = "begin_summary";
+/**
+ * Tool name used to unlock task-tool summary streaming in the parent UI.
+ *
+ * Derives from the built-in registry rather than spelling the string again: the catalog is the one
+ * place a built-in name is written, so a rename cannot leave this marker behind. Kept as an export
+ * because the public entry and the dev harness reach the name through it.
+ */
+export const BEGIN_SUMMARY_TOOL_NAME = BUILTIN_TOOL_NAMES.beginSummary;
 
 export const createBeginSummaryTool = () => {
   return defineServerTool({

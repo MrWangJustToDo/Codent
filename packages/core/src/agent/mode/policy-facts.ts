@@ -8,9 +8,16 @@
 
 import type { ModeState, ModeToolAvailability } from "./mode-state.js";
 import type { ModelCapability } from "../../models/types.js";
+import type { AgentProfileId } from "../../runtime-types/agent-profile.js";
 import type { PlanModePhase } from "../plan/plan-mode-controller.js";
 
-export type AgentProfile = "root" | "general" | "explore" | "internal";
+/**
+ * The profile this decision runs under.
+ *
+ * Deliberately the shared id union, not a second literal: this value feeds `authorizeToolCall`, so
+ * a profile added to the authoritative table must not leave the authorization layer on a stale set.
+ */
+export type AgentProfile = AgentProfileId;
 
 export interface AgentPolicyFactsInput {
   /** Toolset profile the agent runs under; `explore` is the read-only subagent profile. */

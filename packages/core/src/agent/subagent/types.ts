@@ -43,7 +43,13 @@ export interface SubagentRunDeps {
   manager: AgentManager;
 }
 
-export type SubagentProfile = "explore" | "internal" | "general";
+/**
+ * Subagent profiles — the shared id union minus `root`, which only the owning agent can be.
+ *
+ * Expressed as an exclusion rather than a second literal so adding a profile to
+ * `AGENT_PROFILE_IDS` cannot leave this list silently narrower.
+ */
+export type SubagentProfile = Exclude<AgentProfileId, "root">;
 
 export interface SubagentConfig {
   /** Optional custom ID for the subagent (auto-generated if not provided) */
