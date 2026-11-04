@@ -8,19 +8,19 @@
  * `ToolAuthorizationService` (the ordered pipeline), not this class.
  */
 
-import { ToolAuthorizationService } from "../agent/approval/tool-authorization.js";
-import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
+import { ToolAuthorizationService } from "./tool-authorization.js";
+import { collectPendingApprovals } from "../stream/tool-phase-utils.js";
 
-import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
-import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
-import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "../agent/approval/tool-authorization.js";
-import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
-import type { ToolApprovalRecord } from "../agent/persistence/types.js";
-import type { CommandApprovalDecision } from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
-import type { ResolvedCoreEnv } from "../env";
+import type { ApprovalRequirement } from "./approval-requirement.js";
+import type { UpsertToolApprovalInput } from "./tool-approval-table.js";
+import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "./tool-authorization.js";
+import type { AgentPolicyFacts } from "../mode/policy-facts.js";
+import type { ToolApprovalRecord } from "../persistence/types.js";
+import type { CommandApprovalDecision } from "../tools/builtin/shell/safety/command-approval-policy.js";
+import type { ResolvedCoreEnv } from "../../env";
 import type { UIMessage } from "@tanstack/ai";
 
-export type { RunCommandApprovalInput } from "../agent/approval/tool-authorization.js";
+export type { RunCommandApprovalInput } from "./tool-authorization.js";
 
 export interface ApprovalDecisionCoordinatorDeps {
   getMessages: () => UIMessage[];

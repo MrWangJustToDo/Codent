@@ -30,7 +30,7 @@ import { reconcileSettledTaskParts } from "../../agent/subagent/task-background.
 import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
-import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
+import { ApprovalDecisionCoordinator } from "../../agent/approval/approval-decision-coordinator.js";
 import { countToolCalls } from "../run-finalizer.js";
 
 import type { AgentEventBus } from "../../agent/agent-event-bus";
@@ -39,7 +39,7 @@ import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "../../runtime-types/session-payloads.js";
 import type { AgentManager } from "../agent-manager.js";
 import type { ManagedAgent } from "../managed-agent.js";
-import type { RunToken } from "../run-coordinator.js";
+import type { RunToken } from "../../agent/run/run-coordinator.js";
 import type { ContentPart, UIMessage } from "@tanstack/ai";
 
 const MAX_TOOL_PHASES = 40;

@@ -8,7 +8,7 @@ import { isToolContinuationPrepare } from "../agent/stream/tool-phase-utils.js";
 import { lastGenuineUserText } from "../agent/turn-context/turn-context-message.js";
 import { isActiveStatus } from "../runtime-types/agent-status.js";
 
-import type { RunCoordinator } from "./run-coordinator.js";
+import type { RunCoordinator } from "../agent/run/run-coordinator.js";
 import type { AgentStateEventType, AgentTransitionEvent } from "../runtime-types/agent-state.js";
 import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
 import type { Epoch } from "../runtime-types/epoch.js";

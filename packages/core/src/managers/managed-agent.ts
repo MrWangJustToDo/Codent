@@ -104,13 +104,13 @@ import { copyModelMessages } from "../utils/model-messages.js";
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import { AgentChatController } from "./controllers/agent-chat-controller.js";
-import { createAgentStatusController, type AgentStatusController } from "./controllers/agent-status-controller.js";
+import { createAgentStatusController, type AgentStatusController } from "../agent/state/agent-status-controller.js";
 import { CompactionController, type CompactionLease } from "./controllers/compaction-controller.js";
 import { TurnContextController } from "./controllers/turn-context-controller.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./managed-agent-compact.js";
 import { ExtensionFacet } from "./managed-agent-extensions.js";
-import { ModeFacet } from "./managed-agent-mode.js";
+import { ModeFacet } from "../agent/mode/managed-agent-mode.js";
 import { ModelFacet } from "./managed-agent-model.js";
 import {
   beginPlanExecution as beginPlanExecutionHelper,
@@ -129,8 +129,8 @@ import {
 import { RunnerWiring } from "./managed-agent-runner-wiring.js";
 import { SessionFacet } from "./managed-agent-session-state.js";
 import { ToolFacet } from "./managed-agent-tools.js";
-import { ModeCoordinator } from "./mode-coordinator.js";
-import { RunCoordinator } from "./run-coordinator.js";
+import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
+import { RunCoordinator } from "../agent/run/run-coordinator.js";
 import { RunFinalizer } from "./run-finalizer.js";
 import { AgentCommandService } from "./services/agent-command-service.js";
 import { AgentToolService } from "./services/agent-tool-service.js";

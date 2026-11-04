@@ -2,8 +2,8 @@
  * Typed end-of-run / mid-run status policies for {@link AgentStatusController}.
  */
 
-import type { AgentState } from "../runtime-types/agent-state.js";
-import type { AgentRunOutcomeKind } from "../runtime-types/agent-status.js";
+import type { AgentState } from "../../runtime-types/agent-state.js";
+import type { AgentRunOutcomeKind } from "../../runtime-types/agent-status.js";
 import type { UIMessage } from "@tanstack/ai";
 
 /**

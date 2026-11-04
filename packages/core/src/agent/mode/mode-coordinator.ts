@@ -8,16 +8,16 @@
  * AutoModeController change fire its persist, so the write cannot capture `plan on + auto on`.
  */
 
-import { createModeState, type ModeState } from "../agent/mode/mode-state.js";
+import { createModeState, type ModeState } from "./mode-state.js";
 import {
   resolveAgentPolicyFacts,
   type AgentPolicyFacts,
   type AgentPolicyFactsInput,
-} from "../agent/mode/policy-facts.js";
+} from "./policy-facts.js";
 
-import type { AutoModeController } from "../agent/approval/auto-mode-controller.js";
-import type { PlanModeController, PlanModeState } from "../agent/plan/plan-mode-controller.js";
-import type { AgentMode } from "../runtime-types/session-payloads.js";
+import type { AutoModeController } from "../approval/auto-mode-controller.js";
+import type { PlanModeController, PlanModeState } from "../plan/plan-mode-controller.js";
+import type { AgentMode } from "../../runtime-types/session-payloads.js";
 
 export interface ModeCoordinatorDeps {
   planMode: PlanModeController;

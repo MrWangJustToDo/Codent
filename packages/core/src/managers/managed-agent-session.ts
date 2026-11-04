@@ -12,7 +12,7 @@ import { errorMessage } from "../utils/errors.js";
 
 import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ResolvedCoreEnv } from "../env";
-import type { ModeCoordinator } from "./mode-coordinator.js";
+import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import type { Epoch } from "../runtime-types/epoch.js";
 import type { SessionPersistInput, SessionService } from "./services/session-service.js";
 import type { EmitAgentTelemetryFn } from "./telemetry/emit-agent-telemetry.js";

@@ -57,7 +57,7 @@ const PRODUCERS = [
     re: /\bbeginRun\s*\(/,
     why: "the run token is minted by the coordinator and by the chat pump that begins a run",
     allowed: new Map([
-      ["managers/run-coordinator.ts", "definition"],
+      ["agent/run/run-coordinator.ts", "definition"],
       ["managers/controllers/agent-chat-controller.ts", "the pump that begins the run"],
     ]),
   },

@@ -51,7 +51,10 @@ const PATTERNS = [
     re: /\bsetStatus\s*\(/,
     owner: "T3 (single transition writer)",
     allowed: new Map([
-      ["managers/controllers/agent-status-controller.ts", "the current status owner (becomes transition())"],
+      [
+        "agent/state/agent-status-controller.ts",
+        "the current status owner (transition() with a legacy setStatus fallback)",
+      ],
       ["managers/controllers/compaction-controller.ts", "compaction restores the status through the controller"],
       ["managers/managed-agent.ts", "ManagedAgent forwards to the controller / session reset"],
       ["managers/managed-agent-run-lifecycle.ts", "run finalization applies the terminal status"],

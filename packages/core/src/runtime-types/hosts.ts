@@ -28,6 +28,6 @@
 export type { ManagedAgent } from "../managers/managed-agent.js";
 export type { AgentManager } from "../managers/agent-manager.js";
 export type { UsageTracker } from "../managers/telemetry/usage-tracker.js";
-export type { AgentStatusController } from "../managers/controllers/agent-status-controller.js";
+export type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 // The agent-side counterpart: a real port (small interface, one implementation).
 export type { AgentUIChannel } from "../agent/ui/ui-channel.js";

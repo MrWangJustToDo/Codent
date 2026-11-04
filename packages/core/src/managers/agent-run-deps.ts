@@ -1,10 +1,10 @@
 import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
 
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentStatusController } from "./controllers/agent-status-controller.js";
+import type { AgentStatusController } from "../agent/state/agent-status-controller.js";
 import type { CompactionController } from "./controllers/compaction-controller.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
-import type { RunCoordinator } from "./run-coordinator.js";
+import type { RunCoordinator } from "../agent/run/run-coordinator.js";
 import type { SessionService } from "./services/session-service.js";
 import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { ToolApprovalTable } from "../agent/approval/tool-approval-table.js";

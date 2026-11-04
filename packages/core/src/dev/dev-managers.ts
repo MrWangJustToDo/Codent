@@ -42,8 +42,8 @@ export { UsageStore } from "../agent/usage/usage-store.js";
 export { promptTokensOf, totalTokensOf } from "../runtime-types/token-usage.js";
 export { AgentChatController } from "../managers/controllers/agent-chat-controller.js";
 export { RunFinalizer, countToolCalls } from "../managers/run-finalizer.js";
-export { ApprovalDecisionCoordinator } from "../managers/approval-decision-coordinator.js";
-export { ModeCoordinator } from "../managers/mode-coordinator.js";
+export { ApprovalDecisionCoordinator } from "../agent/approval/approval-decision-coordinator.js";
+export { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 export { SessionPersistence } from "../managers/session-persistence.js";
 export { SessionOwnership } from "../managers/session-ownership.js";
 export { AgentRegistry } from "../managers/agent-registry.js";
@@ -65,7 +65,7 @@ export { ManagedAgent } from "../managers/managed-agent.js";
 export { completePlan, loadPlanFromWorkspace } from "../managers/managed-agent-plan.js";
 export { createManualCompactHost } from "../managers/managed-agent.js";
 export { RunnerWiring } from "../managers/managed-agent-runner-wiring.js";
-export { RunCoordinator, type RunToken } from "../managers/run-coordinator.js";
+export { RunCoordinator, type RunToken } from "../agent/run/run-coordinator.js";
 export { CompactionService } from "../managers/services/compaction-service.js";
 export { SessionService } from "../managers/services/session-service.js";
 export { SessionLifecycleService } from "../managers/services/session-lifecycle-service.js";
@@ -146,7 +146,7 @@ export {
   handleMaxTokensTruncation,
   readTruncationProgress,
 } from "../managers/stream-recovery/max-tokens-continue.js";
-export { createAgentStatusController, AgentStatusController } from "../managers/controllers/agent-status-controller.js";
+export { createAgentStatusController, AgentStatusController } from "../agent/state/agent-status-controller.js";
 export { CompactionController } from "../managers/controllers/compaction-controller.js";
 // The `ManagedAgent` end of the reactive path (gates, retry budget, event pair, status
 // unwind). `validate:reactive-compact` drives this against a fake host, because the
@@ -169,8 +169,8 @@ export type {
   AgentRunOutcomeKind,
   AgentRunPath,
   StatusReconcilePolicy,
-} from "../managers/agent-run-outcome.js";
-export { whenClearForReconcilePolicy } from "../managers/agent-run-outcome.js";
+} from "../agent/state/agent-run-outcome.js";
+export { whenClearForReconcilePolicy } from "../agent/state/agent-run-outcome.js";
 export { applyRestoredSessionChatState, getSessionPersistInput, restoreManagedSession, saveSessionUIMessages } from "../managers/managed-agent-session.js";
 export { dispatchLocalAgentSessionCommand } from "../agent-session/local-session-dispatch.js";
 export { SKILL_DIRS_ENV_VAR, getDefaultSkillDirs } from "../managers/agent-manager.js";

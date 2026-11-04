@@ -7,8 +7,8 @@
  */
 
 import type { ModeCoordinator } from "./mode-coordinator.js";
-import type { ModeState } from "../agent/mode/mode-state.js";
-import type { AgentMode } from "../runtime-types/session-payloads.js";
+import type { ModeState } from "./mode-state.js";
+import type { AgentMode } from "../../runtime-types/session-payloads.js";
 
 export interface ModeFacetHost {
   getMode(): ModeCoordinator;

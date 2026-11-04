@@ -174,7 +174,7 @@ table. It enforces **three** properties:
 | `setStatus` / `setContext` / `setUIChannel` | Mutation entry points (`setUIChannel` package-internal)                            |
 | `statusController.applyRunOutcome(...)`     | Unified run finalization (chat + detached/subagent)                                |
 
-Plan/auto exclusion is owned by `ModeCoordinator` (`managers/mode-coordinator.ts`): it disables
+Plan/auto exclusion is owned by `ModeCoordinator` (`agent/mode/mode-coordinator.ts`): it disables
 plan **before** auto turns on (so the auto onChange persist cannot capture `plan on + auto on`),
 keeps the persisted auto flag false during any plan phase, and makes a restored plan win over a
 persisted auto flag.
@@ -459,7 +459,7 @@ Validate: `pnpm --filter @codent/core run validate:message-ops-purity`.
 TanStack runs tools sequentially but emits batched `TOOL_CALL_END` results only after the whole tool phase. `early-tool-result-ui` calls `AgentUIChannel.addToolResult` in `onAfterToolCall` so finished tools (e.g. the first of two `task` calls) show complete while later tools still run. The later stream chunks re-apply the same output idempotently.
 
 **Approval continuation:** After the user (or auto-approve) responds, a second `chat()` run executes pending tools and TanStack may re-emit `TOOL_CALL_START`/`ARGS` with an `argsMap`. `AgentUIChannel` drops those replays when the `toolCallId` already exists in UI messages so the call is not cloned onto a new assistant (approval metadata stays on the original part). `TOOL_CALL_END`/`RESULT` still flow to update that part.
-Status logic is centralized in `AgentStatusController` (`managers/controllers/agent-status-controller.ts`). `status-middleware` is the runtime hook for status; `lifecycle-middleware` owns usage and run finalization side-effects. Chat and detached runs converge on `statusController.applyRunOutcome(...)` (see `managers/agent-run-outcome.ts`).
+Status logic is centralized in `AgentStatusController` (`agent/state/agent-status-controller.ts`). `status-middleware` is the runtime hook for status; `lifecycle-middleware` owns usage and run finalization side-effects. Chat and detached runs converge on `statusController.applyRunOutcome(...)` (see `agent/state/agent-run-outcome.ts`).
 
 ### 3.5 Lifecycle status transitions
 
@@ -530,7 +530,7 @@ managed.isToolNeedsApproval(toolName); // managed-agent.ts
 **Mixed tool batches** (e.g. `tree` + `run_command`): TanStack defers non-approval tools while approvals are pending. Core `pumpToolPhases()` loops `runAgentStream()` until `shouldContinueAgentPump()` is false — no `ChatClient.shouldAutoSend()`.
 
 Approval decisions are written through `ApprovalDecisionCoordinator`
-(`managers/approval-decision-coordinator.ts`): the channel stamps `decidedAt`, the approval table
+(`agent/approval/approval-decision-coordinator.ts`): the channel stamps `decidedAt`, the approval table
 reuses it, then one reconcile/persist settles the batch. Explicit answers and approve-all join
 exactly ONE pump (`enqueueRunOnce`); auto/plan approvals and the command-safety policy never
 schedule a pump of their own.
@@ -1275,7 +1275,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Entry / connect     | `index.ts`, `agent-session/*`                                                                                                                |
 | Manager             | `managers/agent-manager.ts`, `managers/agent-factory.ts`                                                                                     |
-| Agent runtime       | `managers/managed-agent.ts`, `managers/run-agent.ts`, `managers/agent-run-outcome.ts`                                                        |
+| Agent runtime       | `managers/managed-agent.ts`, `managers/run-agent.ts`, `agent/state/agent-run-outcome.ts`                                                        |
 | Stream recovery     | `managers/run-stream-recovery.ts`, `managers/stream-recovery/*`                                                                              |
 | Runner              | `agent/runner/agent-runner.ts`                                                                                                               |
 | Middleware          | `managers/middleware/*.ts` (+ `agent/plan/plan-mode-middleware.ts`)                                                                          |
@@ -1284,7 +1284,7 @@ Domain-owned tools live next to their domain (same pattern as `subagent/begin-su
 | Shared types        | `runtime-types/*`                                                                                                                            |
 | Telemetry           | `agent/agent-event-bus/*` (the unified bus), `managers/telemetry/emit-agent-telemetry.ts`, `agent/log/*` (the log extension)                                        |
 | Persistence         | `managers/services/session-service.ts`, `agent/persistence/session-store.ts`                                                                          |
-| Services (extracted) | `managers/services/` — session / memory / compaction / extension-registry; `managers/run-coordinator.ts` (run lifecycle)               |
+| Services (extracted) | `managers/services/` — session / memory / compaction / extension-registry; `agent/run/run-coordinator.ts` (run lifecycle)               |
 | Usage               | `agent/usage/usage-store.ts` (pure IO), `agent/usage/usage-history-service.ts` (global history; managers import it directly)                                                   |
 | Cross-cutting utils | `utils/emitter.ts`, `utils/generate-id.ts`                                                                                                             |
 | Domain helpers      | `agent/stream/*` (empty-stream), `agent/run/*`, `agent/queue/*` (tool-phase / pending queue — stay with chat/run)                                                                   |

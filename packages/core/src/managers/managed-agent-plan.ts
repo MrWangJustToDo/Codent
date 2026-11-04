@@ -10,7 +10,7 @@ import { toError } from "../utils/errors.js";
 import type { ModeState } from "../agent/mode/mode-state.js";
 import type { ResolvedCoreEnv } from "../env";
 import type { AgentChatController } from "./controllers/agent-chat-controller.js";
-import type { ModeCoordinator } from "./mode-coordinator.js";
+import type { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import type {
   BeginPlanExecutionResult,
   PlanModeController,

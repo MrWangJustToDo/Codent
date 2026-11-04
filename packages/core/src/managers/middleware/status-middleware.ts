@@ -12,7 +12,7 @@ import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { AgentStatusController } from "../../runtime-types";
-import type { RunToken } from "../run-coordinator.js";
+import type { RunToken } from "../../agent/run/run-coordinator.js";
 import type { ChatMiddleware } from "@tanstack/ai";
 
 // ============================================================================
