@@ -95,7 +95,7 @@ const PATTERNS = [
     re: /\bisSessionSwitching\s*\(/,
     owner: "E9 (Epoch)",
     allowed: new Map([
-      ["managers/approval-decision-coordinator.ts", "synchronous admission — keeps the predicate"],
+      ["agent/approval/tool-authorization.ts", "synchronous admission — keeps the predicate"],
       ["managers/controllers/agent-chat-controller.ts", "pump admission — keeps the synchronous predicate"],
       ["managers/managed-agent.ts", "definition — the flag itself"],
       ["managers/run-agent.ts", "background-middleware delivery wiring (synchronous)"],

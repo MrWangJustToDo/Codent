@@ -1,29 +1,25 @@
 /**
- * Approval decisions: one write path for a user answer, an auto-mode approval, and the command
- * safety policy. The channel is the source of truth (it stamps the decision time), and the
- * in-memory approval table reuses that same timestamp so the persisted log and the live table
- * cannot diverge.
+ * Approval decisions: the answer writer.
  *
- * The coordinator deliberately owns no state. It exists so the four call sites that used to repeat
- * `addToolApprovalResponse → approvals.upsert → reconcile → persist` — and the two that must join
- * ONE pump instead of scheduling one per decision — cannot drift from that sequence.
+ * A user y/n, an auto-mode approval and a teardown denial all take the same path —
+ * `addToolApprovalResponse → approvals.upsert → reconcile → persist` — and the in-memory table
+ * reuses the channel's decision timestamp so the persisted log and the live table cannot diverge.
+ * The coordinator owns that sequence and the one-pump join. What a decision SHOULD be is
+ * `ToolAuthorizationService` (the ordered pipeline), not this class.
  */
 
-import { authorizeToolCall, type ToolAuthorizationDecision } from "../agent/approval/authorize-tool-call.js";
+import { ToolAuthorizationService } from "../agent/approval/tool-authorization.js";
 import { collectPendingApprovals } from "../agent/stream/tool-phase-utils.js";
-import { analyzeCommand, createAnalysisContext } from "../agent/tools/builtin/shell/safety/command-analyzer.js";
-import {
-  evaluateCommandApproval,
-  type CommandApprovalDecision,
-} from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
-import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 
 import type { ApprovalRequirement } from "../agent/approval/approval-requirement.js";
 import type { UpsertToolApprovalInput } from "../agent/approval/tool-approval-table.js";
+import type { RunCommandApprovalInput, ToolAuthorizationRecord } from "../agent/approval/tool-authorization.js";
 import type { AgentPolicyFacts } from "../agent/mode/policy-facts.js";
+import type { CommandApprovalDecision } from "../agent/tools/builtin/shell/safety/command-approval-policy.js";
 import type { ResolvedCoreEnv } from "../env";
-import type { ToolApprovalSource } from "../runtime-types/agent-event-payloads.js";
-import type { ToolCallPart, UIMessage } from "@tanstack/ai";
+import type { UIMessage } from "@tanstack/ai";
+
+export type { RunCommandApprovalInput } from "../agent/approval/tool-authorization.js";
 
 export interface ApprovalDecisionCoordinatorDeps {
   getMessages: () => UIMessage[];
@@ -76,17 +72,24 @@ export interface ApprovalDecisionCoordinatorDeps {
   reportDiagnostic?: (message: string, details?: Record<string, string>) => void;
 }
 
-/** The parts of a `run_command` call that decide its approval verdict. */
-export interface RunCommandApprovalInput {
-  command: string;
-  /** Workspace-relative working directory, as the tool will run it. */
-  cwd?: string;
-  /** Model-supplied environment overrides, as the host will merge them. */
-  env?: Record<string, string>;
-}
-
 export class ApprovalDecisionCoordinator {
-  constructor(private readonly deps: ApprovalDecisionCoordinatorDeps) {}
+  private readonly authorization: ToolAuthorizationService;
+
+  constructor(private readonly deps: ApprovalDecisionCoordinatorDeps) {
+    this.authorization = new ToolAuthorizationService({
+      getMessages: deps.getMessages,
+      ...(deps.getPolicyFacts ? { getPolicyFacts: deps.getPolicyFacts } : {}),
+      ...(deps.getApprovalRequirement ? { getApprovalRequirement: deps.getApprovalRequirement } : {}),
+      ...(deps.isIncumbentTool ? { isIncumbentTool: deps.isIncumbentTool } : {}),
+      isSessionSwitching: deps.isSessionSwitching,
+      getCoreEnv: deps.getCoreEnv,
+      ...(deps.evaluateCommandSafety ? { evaluateCommandSafety: deps.evaluateCommandSafety } : {}),
+      ...(deps.reportDiagnostic ? { reportDiagnostic: deps.reportDiagnostic } : {}),
+      shouldAutoApprove: deps.shouldAutoApprove,
+      recordDecision: (input) => this.recordDecision(input),
+      settle: () => this.settle(),
+    });
+  }
 
   /** One explicit y/n answer; settles once and joins the pump. */
   async respondToToolApproval(approvalId: string, approved: boolean, reason?: string): Promise<void> {
@@ -145,78 +148,18 @@ export class ApprovalDecisionCoordinator {
   }
 
   /**
-   * One pass over every pending approval through the authorization pipeline.
+   * The pump's decision step, delegated to the authorization service.
    *
-   * This is the pump's decision step: auto/plan auto-approval, declarative requirements and
-   * command-safety analysis are stages of ONE decision instead of three gates racing the same row.
-   * `ask` stays pending for the user; the caller does not enqueue a pump for it.
+   * Legacy hosts without a policy snapshot keep the old two-step behavior; new hosts run one
+   * `authorizeToolCall` per pending call (auto/plan, declarative requirement, command analysis).
    */
   async authorizePendingApprovals(): Promise<void> {
-    // Nothing read before the switch is safe to write after it.
-    if (this.deps.isSessionSwitching()) return;
-
-    const facts = this.deps.getPolicyFacts?.();
-    if (!facts) {
-      // Legacy hosts without a policy snapshot keep the two-step behaviour.
+    if (!this.deps.getPolicyFacts) {
       this.autoApprovePending();
       await this.applyCommandSafetyPolicy();
       return;
     }
-
-    let handled = false;
-    for (const approval of collectPendingApprovals(this.deps.getMessages())) {
-      const part = findApprovalPart(this.deps.getMessages(), approval.approvalId);
-      if (!part) continue;
-      // Already executed: the verdict can no longer protect anything.
-      if (part.state === "complete" || part.output !== undefined) continue;
-      const input = parseToolCallInput(part);
-      const isCommand = part.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(part.name) ?? true);
-      const decision = await authorizeToolCall({
-        toolName: part.name,
-        args: (input ?? {}) as Record<string, unknown>,
-        facts,
-        ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(part.name) } : {}),
-        // `collectPendingApprovals` only returns unanswered calls.
-        persisted: "pending",
-        ...(isCommand && input?.command
-          ? {
-              analyzeCommand: async () => {
-                const analyzed = await this.evaluateCommand({ ...input, command: input.command! });
-                return {
-                  action: analyzed.action,
-                  source: "command-analysis" as const,
-                  ...(analyzed.reason ? { reason: analyzed.reason } : {}),
-                };
-              },
-            }
-          : {}),
-      });
-      if (this.deps.isSessionSwitching()) return;
-
-      if (decision.action === "allow") {
-        this.recordDecision({
-          approvalId: approval.approvalId,
-          toolCallId: approval.toolCallId,
-          toolName: approval.toolName,
-          approved: true,
-          source: decision.source === "auto" ? "auto" : "policy",
-        });
-        handled = true;
-      } else if (decision.action === "deny") {
-        this.recordDecision({
-          approvalId: approval.approvalId,
-          toolCallId: approval.toolCallId,
-          toolName: approval.toolName,
-          approved: false,
-          reason: decision.reason ?? `Denied by ${decision.source}`,
-          source: "policy",
-        });
-        handled = true;
-      }
-      // ask → keep pending so the user can approve/deny (y/n).
-    }
-
-    if (handled) this.settle();
+    return this.authorization.authorizePendingApprovals();
   }
 
   /** Auto mode / plan execution: approve everything pending, without scheduling a pump. */
@@ -233,6 +176,11 @@ export class ApprovalDecisionCoordinator {
     this.settle();
   }
 
+  /** Command-safety policy (delegated; kept for hosts/tests that call it directly). */
+  async applyCommandSafetyPolicy(): Promise<void> {
+    return this.authorization.applyCommandSafetyPolicy();
+  }
+
   /** Record approval for every pending interaction, in the order the collector returned them. */
   private approveAll(pending: ReturnType<typeof collectPendingApprovals>): void {
     for (const approval of pending) {
@@ -246,135 +194,7 @@ export class ApprovalDecisionCoordinator {
     }
   }
 
-  /**
-   * Command-safety policy for `run_command` calls. Runs after {@link autoApprovePending};
-   * in auto mode / plan execution it is a no-op. `ask` stays pending for the user.
-   *
-   * A policy verdict can arrive AFTER the user answered, because the analyzer awaits CoreEnv while
-   * the request is already on screen. Execution cannot happen in that window (this runs inside the
-   * pump, before the next `chat()`), so a denial still protects the call: it replaces the approval
-   * (see `overwrite`) and is reported, instead of being dropped by first-decision-wins. A denial is
-   * the only verdict allowed to replace an answered call — an `allow` never overturns a user's no.
-   */
-  async applyCommandSafetyPolicy(): Promise<void> {
-    if (this.deps.shouldAutoApprove()) return;
-    // Nothing read before the switch is safe to write after it.
-    if (this.deps.isSessionSwitching()) return;
-
-    let handled = false;
-    for (const part of this.deps.getMessages().flatMap((message) => message.parts)) {
-      if (part.type !== "tool-call") continue;
-      const toolCall = part as ToolCallPart;
-      // Identity, not the name: an extension may register its own `run_command`, and analysing the
-      // shell text of a call that executes something else approves the wrong object.
-      if (toolCall.name !== BUILTIN_TOOL_NAMES.runCommand) continue;
-      if (!(this.deps.isIncumbentTool?.(toolCall.name) ?? true)) continue;
-      if (toolCall.approval?.needsApproval !== true) continue;
-      // A denial is terminal — the policy cannot loosen it, and there is nothing to decide.
-      if (toolCall.approval.approved === false) continue;
-      // Already executed: the verdict can no longer protect anything, and re-analysing it would
-      // spend a CoreEnv round-trip on every later phase of the same turn.
-      if (toolCall.state === "complete" || toolCall.output !== undefined) continue;
-      const approvalId = toolCall.approval.id;
-      const input = parseToolCallInput(toolCall);
-      const command = input?.command;
-      if (!approvalId || !command || !input) continue;
-
-      const liveBefore = findApprovalPart(this.deps.getMessages(), approvalId);
-      if (!liveBefore) continue;
-
-      const facts = this.deps.getPolicyFacts?.();
-      let decision: ToolAuthorizationDecision;
-      if (facts) {
-        decision = await authorizeToolCall({
-          toolName: liveBefore.name,
-          args: input as Record<string, unknown>,
-          facts,
-          ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(liveBefore.name) } : {}),
-          persisted:
-            liveBefore.approval?.approved === true
-              ? "approved"
-              : liveBefore.approval?.approved === false
-                ? "denied"
-                : "pending",
-          analyzeCommand: async () => {
-            const analyzed = await this.evaluateCommand({ ...input, command });
-            return {
-              action: analyzed.action,
-              source: "command-analysis",
-              ...(analyzed.reason ? { reason: analyzed.reason } : {}),
-            };
-          },
-        });
-      } else {
-        const analyzed = await this.evaluateCommand({ ...input, command });
-        decision = {
-          action: analyzed.action,
-          source: "command-analysis",
-          ...(analyzed.reason ? { reason: analyzed.reason } : {}),
-        };
-      }
-      // The analysis is an awaited CoreEnv call. A switch admitted while it ran replaces the
-      // channel and the approval table, so this decision no longer has a row to settle.
-      if (this.deps.isSessionSwitching()) return;
-
-      // Re-read after the await: the user may have answered while the analyzer was running.
-      const live = findApprovalPart(this.deps.getMessages(), approvalId);
-      if (!live) continue;
-
-      if (decision.action === "allow") {
-        // Never turn an answered call into an approval: that verdict belongs to the user (or auto
-        // mode), and re-asserting it here would also rewrite a denial.
-        if (live.approval?.approved !== undefined) continue;
-        this.recordDecision({
-          approvalId,
-          toolCallId: live.id,
-          toolName: live.name,
-          approved: true,
-          source: "policy",
-        });
-        handled = true;
-      } else if (decision.action === "deny") {
-        if (live.approval?.approved === false) continue;
-        const overridesUser = live.approval?.approved === true;
-        this.recordDecision({
-          approvalId,
-          toolCallId: live.id,
-          toolName: live.name,
-          approved: false,
-          reason: decision.reason,
-          source: "policy",
-          ...(overridesUser ? { overwrite: "deny" as const } : {}),
-        });
-        handled = true;
-        if (overridesUser) {
-          this.deps.reportDiagnostic?.(
-            `Command safety policy denied "${live.name}" after it was approved; the approval was overridden.`,
-            {
-              approvalId,
-              toolCallId: live.id,
-              ...(decision.reason ? { reason: decision.reason } : {}),
-            }
-          );
-        }
-      }
-      // ask → keep pending so the user can approve/deny (y/n).
-    }
-
-    if (handled) this.settle();
-  }
-
-  private recordDecision(input: {
-    approvalId: string;
-    toolCallId: string;
-    toolName?: string;
-    approved: boolean;
-    reason?: string;
-    /** Who decided — travels to the log row, never to the persisted record. */
-    source: ToolApprovalSource;
-    /** Approved → denied only; see {@link UpsertToolApprovalInput.overwrite}. */
-    overwrite?: "deny";
-  }): void {
+  private recordDecision(input: ToolAuthorizationRecord): void {
     // The channel resolves the time; the table reuses it (one time value for log + memory).
     const decidedAt = this.deps.addToolApprovalResponse(
       input.approvalId,
@@ -398,57 +218,4 @@ export class ApprovalDecisionCoordinator {
     this.deps.reconcile();
     this.deps.persist();
   }
-
-  private async evaluateCommand(input: RunCommandApprovalInput): Promise<CommandApprovalDecision> {
-    if (this.deps.evaluateCommandSafety) return this.deps.evaluateCommandSafety(input);
-    const env = this.deps.getCoreEnv();
-    // One basis for analysis and execution. `cwd` decides whether a relative path is inside the
-    // workspace, and the tool runs the command from it — analysing from `rootPath` instead made
-    // `run_command({ command: "cat ../README.md", cwd: "src" })` ask as an external read even
-    // though the same call was allowed on the subagent path (which already resolved it this way).
-    const cwd = input.cwd ? env.path.resolve(env.rootPath, input.cwd) : undefined;
-    const ctx = await createAnalysisContext(env, cwd ? { cwd } : undefined);
-    const report = await analyzeCommand(input.command, ctx);
-    return evaluateCommandApproval(report, { agentKind: "root", envOverrides: input.env });
-  }
-}
-
-/**
- * The live tool-call part carrying `approvalId`, re-read after an awaited analysis.
- *
- * The part object captured before the await can be stale (the user's answer rewrites it), so the
- * policy re-reads the current decision instead of acting on the snapshot it started from.
- */
-function findApprovalPart(messages: UIMessage[], approvalId: string): ToolCallPart | undefined {
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    for (const part of message.parts) {
-      if (part.type === "tool-call" && part.approval?.id === approvalId) return part as ToolCallPart;
-    }
-  }
-  return undefined;
-}
-
-/** Safely extract a tool-call's parsed input, falling back to the raw `arguments` JSON string. */
-function parseToolCallInput(
-  toolCall: ToolCallPart
-): { command?: string; cwd?: string; env?: Record<string, string> } | undefined {
-  let raw: unknown = toolCall.input;
-  if (!raw) {
-    try {
-      raw = JSON.parse(toolCall.arguments ?? "{}");
-    } catch {
-      return undefined;
-    }
-  }
-  if (!raw || typeof raw !== "object") return undefined;
-  const { command, cwd, env } = raw as { command?: unknown; cwd?: unknown; env?: unknown };
-  return {
-    ...(typeof command === "string" ? { command } : {}),
-    ...(typeof cwd === "string" && cwd ? { cwd } : {}),
-    // Only the KEY SET matters to the override rule, so a non-string value cannot hide a key.
-    // (A malformed `env` is already rejected by `inputSchema` before approval; this is the
-    // defensive read.)
-    ...(env && typeof env === "object" && !Array.isArray(env) ? { env: env as Record<string, string> } : {}),
-  };
 }
