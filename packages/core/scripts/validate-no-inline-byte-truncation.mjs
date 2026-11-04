@@ -8,11 +8,11 @@
  * had five homes.
  */
 
-import { runGuard } from "./helpers/source-guard.mjs";
+import { runPackageGuard } from "./helpers/source-guard.mjs";
 
-runGuard({
+runPackageGuard({
   name: "validate-no-inline-byte-truncation",
-  definitionFiles: ["utils/bytes.ts"],
+  definitionFiles: ["packages/core/src/utils/bytes.ts"],
   patterns: [
     { re: /new TextEncoder\(\)\.encode\([^)]*\)\.length/, reason: "inline UTF-8 byte count" },
     {

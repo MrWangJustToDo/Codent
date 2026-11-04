@@ -3,6 +3,7 @@ import { convertMessagesToModelMessages, type ChatMiddleware, type ModelMessage 
 import {
   applyCompactionResult,
   autoCompact,
+  collectIncompleteTodos,
   isCompactionCancel,
   isLatestDurableMessageCompactionSummary,
   keepPolicyProjectionOptions,
@@ -96,12 +97,7 @@ export function createCompactionMiddleware(deps: CompactionMiddlewareDeps): Chat
         const lease = deps.compactions.begin("auto", { tokensBefore: fillBefore });
         if (!lease) return { messages: llmMessages };
         try {
-          const incompleteTodos = deps.getTodoManager()?.getIncompleteTodos() ?? [];
-          const todos = incompleteTodos.map((t) => ({
-            content: t.content,
-            status: t.status as "pending" | "in_progress" | "completed",
-            priority: t.priority as "high" | "medium" | "low",
-          }));
+          const todos = collectIncompleteTodos(deps.getTodoManager());
 
           const usage = deps.getUsage();
           // The context fill, not the raw input field — see UsageTracker.getContextFillTokens().

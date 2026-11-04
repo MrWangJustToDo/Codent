@@ -4,7 +4,7 @@
 
 import { AUTO_DIAG_SERVER_WAIT_MS } from "../shared/timing.js";
 
-import { truncateHead } from "./tool-shared.js";
+import { normalizeLspPath, truncateHead } from "./tool-shared.js";
 
 import type { LspManager } from "../lsp-manager.js";
 import type { Diagnostic } from "vscode-languageserver-protocol";
@@ -69,7 +69,7 @@ export function createDiagnosticsTool(deps: DiagnosticsToolDeps) {
     },
     execute: async (input: unknown) => {
       const params = input as { path?: string };
-      const filePath = (params.path ?? "").replace(/^@/, "");
+      const filePath = normalizeLspPath(params.path) ?? "";
 
       // Workspace-wide mode
       if (filePath === "*" || filePath === "") {

@@ -111,6 +111,14 @@ export async function buildManagedAgent({
     // AND telemetry `dispatchEvent` (up-flows to the root observer / Event→Log bridge).
     managed.setEventBus(manager.of(managed.id, parentId));
 
+    managed.setLog(log);
+    // Bind the log to the bus scope BEFORE anything emits. `setModelInfo` publishes a `session:diagnostic`
+    // (debug) and bootstrap activates extensions / connects MCP/memory — but the agent is not in the
+    // registry yet, so a registry-only resolver dropped every row emitted before this call. The
+    // seam's pending buffer was the old workaround; this makes the event path the real one, and it
+    // has to precede the first producer, not merely bootstrap.
+    manager.bindConstructionLog(managed.id, log);
+
     if (resolvedModelInfo) {
       managed.setModelInfo(resolvedModelInfo);
       if (resolvedModelInfo.pricing) {
@@ -118,13 +126,6 @@ export async function buildManagedAgent({
       }
       managed.usage.setCapabilities(resolvedModelInfo.capabilities);
     }
-
-    managed.setLog(log);
-    // Bind the log to the bus scope BEFORE bootstrap runs. Bootstrap activates extensions and
-    // connects MCP/memory, and their failures are emitted as events — but the agent is not in the
-    // registry yet, so a registry-only resolver dropped every one of them. The seam's pending buffer
-    // was the old workaround; this makes the event path the real one.
-    manager.bindConstructionLog(managed.id, log);
 
     let bootstrapReport: BootstrapReport | undefined;
 

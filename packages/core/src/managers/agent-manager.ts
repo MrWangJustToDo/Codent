@@ -124,13 +124,15 @@ export class AgentManager {
     this.busScope = new AgentEventBusScope({
       // Attribute a contained observer/interceptor failure to the agent whose scope registered it.
       // Retained construction/teardown logs keep a scope resolvable before registration and after
-      // the registry entry is gone; a root-scoped hook falls back to any agent with a log (the same
-      // fallback the previous direct write used).
+      // the registry entry is gone. No fallback: the old `find(first agent with a log)` wrote a
+      // root-scoped hook failure into an arbitrary session's file, so in a multi-root host (server,
+      // ACP) one conversation's timeline carried an error from another. A scope with no owner is
+      // dropped — a missing diagnostic is better than a misattributed one.
       resolveLogOwner: (scopeId) => {
         if (this.agents.get(scopeId)?.log) return scopeId;
         if (this.constructionLogs.get(scopeId)) return scopeId;
         if (this.teardownLogs.get(scopeId)) return scopeId;
-        return [...this.agents.values()].find((agent) => agent.log)?.id;
+        return undefined;
       },
       // Envelope identity is an agent property, not a call-site property: resolve it once for every
       // emitter on the scoped bus (the telemetry funnel, `plan`, `ui`, the extension runner).
@@ -272,6 +274,10 @@ export class AgentManager {
       if (parent.parentId) throw new Error("Subagents cannot spawn subagents");
     }
     let managed: ManagedAgent | undefined;
+    // Whether THIS build reached the registry. `agents.has(managed.id)` cannot answer it: on a
+    // duplicate id it is true for the OLD agent, so the catch used to destroy a healthy agent and
+    // leak the half-built one (no dispose, no log/scope release).
+    let registered = false;
     try {
       const built = await buildManagedAgent({
         config,
@@ -290,6 +296,7 @@ export class AgentManager {
       if (this.disposed) throw new Error("AgentManager has been disposed");
 
       this.agents.register(managed);
+      registered = true;
       managed.manager = this;
       // The registry now resolves this agent, so the construction-time binding has done its job.
       // Dropping it here keeps one owner per log (registry → teardown), never two.
@@ -331,7 +338,7 @@ export class AgentManager {
       return managed;
     } catch (error) {
       if (managed) {
-        if (this.agents.has(managed.id)) {
+        if (registered) {
           this.lifecycle.destroy(managed.id);
           await this.lifecycle.settleTeardowns();
         } else {

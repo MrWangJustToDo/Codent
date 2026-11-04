@@ -27,6 +27,19 @@ import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { UIMessage as TanStackUIMessage } from "@tanstack/ai";
 
+/** The model actually in force after adopting (or rejecting) a persisted selection. */
+export interface AppliedPersistedModel {
+  /** Whether the effective model/style differs from the one the agent was created with. */
+  changed: boolean;
+  /**
+   * The model to record on the session. This is the persisted id when it is still offered, or the
+   * fallback (`config.model`) when the catalog no longer lists it — recording the requested id in
+   * that case is what made every later resume repeat the same fallback.
+   */
+  model: string;
+  modelStyle?: ModelStyle;
+}
+
 export interface SessionHost {
   getUI?: () => AgentUIChannel | undefined;
   usage: UsageTracker;
@@ -56,13 +69,15 @@ export interface SessionHost {
   setDisplayName?: (name: string) => void;
   /** Re-emit the L1 state snapshot (after swapping the on-disk session id). */
   refreshState?: () => void;
+  /** Persist current state only (no transcript) — used when a restore corrects the model. */
+  persistSession?: () => void;
   /**
    * Adopt the model a resumed session was saved with (no-op under remote-provider).
    * The persisted record is kept in sync by {@link SessionService.setModelConfig}.
    *
    * @returns whether the effective model changed (the caller then resolves its metadata).
    */
-  applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => boolean;
+  applyPersistedModel?: (next: { model: string; modelStyle?: ModelStyle }) => AppliedPersistedModel;
   /**
    * Re-resolve capabilities / context window / pricing for the configured model.
    * Optional so hosts that only restore sessions keep compiling.
@@ -195,11 +210,26 @@ export async function restoreManagedSession(
   // record is authoritative because `unload` already stopped the run and drained every queued write.
   // A hand-maintained snapshot of model/effort/mode/approvals/transcript would be a second copy of
   // the same state, and the copy that can drift.
-  const modelChanged =
-    host.applyPersistedModel?.({
-      model: session.model,
-      ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
-    }) ?? false;
+  const appliedModel = host.applyPersistedModel?.({
+    model: session.model,
+    ...(session.modelStyle ? { modelStyle: session.modelStyle } : {}),
+  });
+  const modelChanged = appliedModel?.changed ?? false;
+  // The effective model, not necessarily the requested one: an unavailable persisted id falls
+  // back to the session's creation model. Adopting the raw record afterwards overwrote that
+  // fallback, so the live state and the disk disagreed and every later resume repeated it.
+  //
+  // This is `record differs`, not `runtime changed`: when the fallback IS the model the runtime
+  // was created with, `setModel` is a no-op (`changed: false`) while the restored record still
+  // names the retired id.
+  const modelRecordCorrected =
+    appliedModel !== undefined &&
+    (session.model !== appliedModel.model ||
+      (appliedModel.modelStyle !== undefined && session.modelStyle !== appliedModel.modelStyle));
+  if (modelRecordCorrected && appliedModel) {
+    session.model = appliedModel.model;
+    if (appliedModel.modelStyle) session.modelStyle = appliedModel.modelStyle;
+  }
 
   // Restore the persisted reasoning-effort level so resumed sessions keep their
   // configured thinking depth. `setReasoningEffort` also invalidates the runner.
@@ -257,6 +287,9 @@ export async function restoreManagedSession(
     // would be "unknown" (permissive → media sent to a text-only endpoint) and the context window
     // unset (compaction trigger loses its clamp).
     if (modelChanged) await host.refreshModelMetadata?.();
+    // Make the fallback converge on disk once: the corrected `SessionData` was adopted above, but
+    // without a write the next resume reads the old id again.
+    if (modelChanged || modelRecordCorrected) host.persistSession?.();
     // Resumed sessions may carry a different display name than the previously viewed one — mirror it
     // (and broadcast) so the header/snapshot stay in sync.
     if (session.name) {

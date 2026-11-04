@@ -55,6 +55,7 @@ function makeRunner() {
       return null;
     },
   }));
+  const disabledCalls = [];
   const runner = new ExtensionRunner({
     eventBus: bus,
     onRegisterTool: (def, ownerId) => tools.set(def.name, { ownerId, def }),
@@ -63,8 +64,9 @@ function makeRunner() {
     },
     onRegisterCommand: (cmd) => commands.set(cmd.name, cmd),
     onUnregisterCommand: (name) => commands.delete(name),
+    onExtensionDisabled: (extensionId, notice) => disabledCalls.push({ extensionId, notice }),
   });
-  return { runner, tools, commands, logEntries };
+  return { runner, tools, commands, logEntries, bus, disabledCalls };
 }
 
 const toolDef = (name) => ({
@@ -78,7 +80,7 @@ const toolDef = (name) => ({
 // 1. A late registration after disable is refused (and logged once)
 // ============================================================================
 {
-  const { runner, tools, logEntries } = makeRunner();
+  const { runner, tools, logEntries, disabledCalls } = makeRunner();
   let captured;
   await runner.loadExtension({
     id: "late",
@@ -91,6 +93,8 @@ const toolDef = (name) => ({
 
   await runner.setEnabled("late", false);
   assert.equal(runner.getExtensionInfos()[0].state, "inactive");
+  assert.equal(disabledCalls.length, 1, "the host is told once about the disable");
+  assert.match(disabledCalls[0].notice, /disabled/, "…with the notice the turn snapshot should carry");
 
   // A retained callback fires after the disable — twice, to prove the warning is per revoke.
   captured.registerTool(toolDef("late-tool"));
@@ -139,6 +143,56 @@ const toolDef = (name) => ({
   await loading;
   assert.equal(runner.getExtensionInfos()[0].state, "inactive", "a revoked activation must not become active");
   assert.deepEqual(runner.getTools(), [], "and its registration is refused");
+}
+
+// ============================================================================
+// 2b. The same during a RUNTIME enable (the pending-toggle guard must not win)
+// ============================================================================
+//
+// A runtime enable holds BOTH `pendingToggles` (the non-reentrancy guard around `applyEnabled`) and
+// `activating` (set inside it). Checking the toggle guard first answered "already being toggled" and
+// made a hung `activate()` impossible to turn off — the one remedy the revoke branch exists for.
+{
+  const { runner, tools } = makeRunner();
+  let finishActivate;
+  let activations = 0;
+  const activationGate = new Promise((resolve) => {
+    finishActivate = resolve;
+  });
+  await runner.loadExtension({
+    id: "slow-enable",
+    name: "slow-enable",
+    async activate(ctx) {
+      activations += 1;
+      // The initial load and the post-revoke re-enable return immediately; only the second call
+      // (the runtime enable being revoked) hangs.
+      if (activations !== 2) return;
+      await activationGate;
+      ctx.registerTool(toolDef("slow-enable-tool"));
+    },
+  });
+  await runner.setEnabled("slow-enable", false);
+
+  const enabling = runner.setEnabled("slow-enable", true);
+  await tick();
+  const disabling = await runner.setEnabled("slow-enable", false);
+  assert.equal(disabling.ok, true, "a hung RUNTIME activation can still be disabled");
+  assert.match(disabling.message, /revoked/i, "and reports the activation as revoked");
+
+  // The revoke must release the toggle guard immediately: the hung enable's `finally` has not run
+  // yet, and waiting for an activation that may never settle made the extension unusable.
+  const reenabled = await runner.setEnabled("slow-enable", true);
+  assert.equal(reenabled.ok, true, "a revoked activation does not block an immediate re-enable");
+  assert.equal(runner.getExtensionInfos()[0].state, "active");
+
+  finishActivate();
+  await enabling;
+  assert.equal(
+    runner.getExtensionInfos()[0].state,
+    "active",
+    "the superseded activation stands down instead of disabling the new incarnation"
+  );
+  assert.equal(tools.has("slow-enable-tool"), false, "its late registration is refused");
 }
 
 // ============================================================================
@@ -278,6 +332,43 @@ const toolDef = (name) => ({
 }
 
 // ----------------------------------------------------------------------------
+// `observe` is restricted to the declared observable set at RUNTIME too
+//
+// The types say `ObservableExtensionEvent`, but an extension is plain JS at runtime:
+// `observe("*")` would become a second wildcard consumer (core's Event→Log bridge must stay the
+// only one), and an internal event name would deliver exactly what `observeAny` withholds.
+// ----------------------------------------------------------------------------
+{
+  const { runner, logEntries, bus } = makeRunner();
+  let observed = 0;
+  await runner.loadExtension({
+    id: "observe-scope",
+    name: "observe-scope",
+    activate(ctx) {
+      ctx.events.observe("*", () => {
+        observed += 1;
+      });
+      ctx.events.observe("tool:chunk", () => {
+        observed += 1;
+      });
+      ctx.events.observe("session:start", () => {
+        observed += 1;
+      });
+    },
+  });
+
+  await bus.emit("session:start", {}, { agentId: "observe-scope" });
+  await bus.emit("tool:chunk", {}, { agentId: "observe-scope" });
+  assert.equal(observed, 1, "only the valid observable subscription fires");
+  assert.equal(
+    logEntries.filter((entry) => /not an observable extension event/.test(entry.message)).length,
+    2,
+    "one warning per refused type"
+  );
+  await runner.destroyAll();
+}
+
+// ----------------------------------------------------------------------------
 // `ctx.logger` is an event, and an observer that logs must not recurse.
 //
 // `extension:log` is observable (it has to be: the wildcard log consumer is what records it), so an
@@ -291,7 +382,9 @@ const toolDef = (name) => ({
     id: "logger-loop",
     name: "logger-loop",
     async activate(ctx) {
-      ctx.events.observe("*", () => {
+      // `observeAny`, not `observe("*")`: the wildcard is refused at runtime now (the Event→Log
+      // bridge must stay core's only wildcard consumer). This test is about logger recursion.
+      ctx.events.observeAny(() => {
         observed += 1;
         ctx.logger.warn("nested from observer");
       });
@@ -350,6 +443,38 @@ const toolDef = (name) => ({
   assert.equal(enabled.ok, true, "the instance can be enabled later");
   assert.equal(activated, 1);
   assert.ok(tools.has("pre-disabled-tool"), "enabling activates it for real");
+  await runner.destroyAll();
+}
+
+// ----------------------------------------------------------------------------
+// A failed activation is one outcome regardless of the door
+//
+// `loadExtension` emitted `agent:extension-error` on a throw; a runtime re-enable did not (only
+// `deactivate`/`flush` failures emitted). The two activation paths now share one transaction, so a
+// failed retry is recorded like a failed initial load.
+// ----------------------------------------------------------------------------
+{
+  const { runner, logEntries } = makeRunner();
+  let attempts = 0;
+  const instance = await runner.loadExtension({
+    id: "fails-on-retry",
+    name: "fails-on-retry",
+    async activate() {
+      attempts += 1;
+      if (attempts > 1) throw new Error("retry exploded");
+    },
+  });
+  assert.equal(instance.state, "active", "the first activation succeeds");
+
+  await runner.setEnabled("fails-on-retry", false);
+  const retry = await runner.setEnabled("fails-on-retry", true);
+  assert.equal(retry.ok, false, "the failed re-enable reports failure");
+  assert.match(retry.message, /retry exploded/);
+  assert.equal(runner.getExtensionInfos()[0].state, "error", "and the instance is errored");
+  assert.ok(
+    logEntries.some((entry) => entry.level === "error" && /retry exploded/.test(entry.message)),
+    "a failed re-enable emits agent:extension-error, like an initial load failure"
+  );
   await runner.destroyAll();
 }
 

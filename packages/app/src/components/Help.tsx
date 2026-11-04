@@ -3,6 +3,7 @@ import {
   DEFAULT_BASE_URLS,
   DEFAULT_LOCAL_OPENAI_BASE_URL,
   MAX_AGENT_ITERATIONS,
+  truncateText,
 } from "@codent/core";
 import { Box, Text } from "ink";
 import { useEffect } from "react";
@@ -221,7 +222,7 @@ export const Help = () => {
                 <Box width={14}>
                   <Text color={COLORS.primary}>apiKey:</Text>
                 </Box>
-                <Text>{`${config.apiKey.slice(0, 12)}...`}</Text>
+                <Text>{truncateText(config.apiKey, 15)}</Text>
               </Box>
             )
           )}

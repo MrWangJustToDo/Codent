@@ -12,6 +12,7 @@
  */
 
 import { ExecutionError } from "../../../env/types";
+import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 export function createTimeoutAbort(options: { timeoutMs: number; signal?: AbortSignal }): {
   controller: AbortController;
@@ -74,9 +75,24 @@ export async function withTimeoutAbort<T>(
   const asError = (reason: unknown, fallback: string): Error =>
     reason instanceof Error ? reason : new Error(typeof reason === "string" && reason ? reason : fallback);
 
+  // A cancel must stay recognizable after it crosses the tool boundary. The reason string is
+  // `"user-cancelled"` (an internal token), and the resulting `{ error }` is later classified by
+  // `isAbortError`, which has only the message left — a plain `Error("user-cancelled")` reads as a
+  // failure (red row, `failed` in ACP, counted as an error in the activity summary). Keep the
+  // AbortError identity the rest of the stack agrees on.
+  const asAbortError = (): Error => {
+    // The shared message, not a copy: after TanStack wraps the throw as `{ error: message }`,
+    // message equality is the only signal left (name/code are lost), so the literal and
+    // `isCancelledToolCall` must not be able to drift.
+    const error = new Error(TOOL_CANCELLED_MESSAGE);
+    error.name = "AbortError";
+    (error as Error & { code?: string }).code = "aborted";
+    return error;
+  };
+
   const reasonFor = (): Error => {
     // A run abort (whichever fired first) is always a cancel — never the deadline error.
-    if (runSignal?.aborted) return asError(runSignal.reason, "aborted");
+    if (runSignal?.aborted) return asAbortError();
     const reason = controller.signal.reason;
     if (options.timeoutMessage && reason instanceof ExecutionError && reason.code === "timeout") {
       return new ExecutionError("timeout", options.timeoutMessage);

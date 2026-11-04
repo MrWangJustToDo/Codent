@@ -44,7 +44,7 @@ function entry(
   data?: Record<string, unknown>,
   error?: Error
 ): void {
-  log.eventEntry(level, category, event.type, message, data, error, event.runId);
+  log.eventEntry(level, category, event.type, message, data, error, event.runId, event.sessionId);
 }
 
 /** Runtime list of the log categories, for narrowing a payload value. */

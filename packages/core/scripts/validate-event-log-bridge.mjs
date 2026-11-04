@@ -680,4 +680,38 @@ console.log("approval request + resolution bridged: OK");
   console.log("specialized rows are length-bounded — ok");
 }
 
+// ---------------------------------------------------------------------------
+// The error body is bounded too, and the envelope session is recorded
+//
+// `entry.error.message` is not the seam's `message`: it came straight from the payload's `error`
+// (a provider body can be the whole response), so one failed request wrote a multi-megabyte line.
+// The same row also keeps the session it was emitted for — an async producer (title / memory /
+// side query) can resolve after a switch and land in the target file, where the sink path alone
+// cannot tell the reader which session the row describes.
+// ---------------------------------------------------------------------------
+{
+  const before = (await readEntries()).length;
+  bus.emit("agent:stream-error", { error: "E".repeat(20_000) }, { agentId: "agent-1", sessionId: "ses_late_row" });
+  const rows = await waitFor(readEntries, (snapshot) => snapshot.length > before);
+  const row = rows.find((entry) => entry.event === "agent:stream-error");
+  assert.ok(row, "the stream-error row is written");
+  assert.equal(row.sessionId, "ses_late_row", "the envelope session is recorded on the row");
+  assert.ok(
+    row.error?.message.length <= 400,
+    `entry.error.message is bounded like every other text field (got ${row.error?.message.length} chars)`
+  );
+  // A specialized handler (`compaction:auto-error`) does not pass through the generic `writeLog`
+  // path; the bound must live in the seam, not in one bridge branch.
+  const beforeCompact = (await readEntries()).length;
+  bus.emit("compaction:auto-error", { error: "C".repeat(20_000) }, { agentId: "agent-1" });
+  const compactRows = await waitFor(readEntries, (snapshot) => snapshot.length > beforeCompact);
+  const compactRow = compactRows.find((entry) => entry.event === "compaction:auto-error");
+  assert.ok(compactRow, "the compaction error row is written");
+  assert.ok(
+    compactRow.error?.message.length <= 400,
+    `a specialized error body is bounded at the seam (got ${compactRow.error?.message.length} chars)`
+  );
+  console.log("error bodies are bounded and rows carry their session — ok");
+}
+
 console.log("event-log-bridge validation passed");

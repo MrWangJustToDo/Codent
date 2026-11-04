@@ -76,6 +76,7 @@ const executing = {
   preservedExistingTodos: false,
   planFilePath: null,
 };
+const beforeRestore = persistCalls;
 mode.restore(executing, true);
 assert.equal(mode.getMode(), "plan");
 assert.equal(mode.isAutoEnabled(), false, "plan wins on restore");
@@ -85,6 +86,11 @@ assert.equal(mode.shouldAutoApprove(), true, "seeded executing plan auto-approve
 mode.restore(null, true);
 assert.equal(mode.getMode(), "auto");
 assert.equal(mode.isAutoEnabled(), true);
+assert.equal(
+  persistCalls,
+  beforeRestore,
+  "a restore adopts the persisted flag without firing the live mode-change persist"
+);
 
 // ---------------------------------------------------------------------------
 // 6. Cycle order

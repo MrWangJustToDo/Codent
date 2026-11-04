@@ -45,7 +45,8 @@ export { BUILTIN_PRESENTATION } from "./agent/tools/presentation/builtin.js";
 export { formatToolOutput } from "./agent/tools/presentation/format/output-format.js";
 export { classifyServerFailure } from "./agent/lsp/extension.js";
 export { execArgsCapture, canExecArgs } from "./agent/tools/builtin/shell/exec-args.js";
-export { fileUriToPath, formatLocation, formatLocationLink, pathToFileUri } from "./agent/lsp/shared/format.js";
+export { fileUriToPath, formatLocation, formatLocationLink } from "./agent/lsp/shared/format.js";
+export { pathToFileUrl } from "./utils/file-url.js";
 export {
   evaluateCommandApproval,
   SUBAGENT_DENY_MESSAGE,

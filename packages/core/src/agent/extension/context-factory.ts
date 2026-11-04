@@ -42,6 +42,9 @@ import type { CoreEnv } from "../../env";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { ToModelOutputDecorator } from "../tools/runtime/contract.js";
 
+/** Per-registration owner suffix; see the exit-flush registration below. */
+let exitFlushOwnerSeq = 0;
+
 /** Everything the context needs from the runner, as operations rather than a back-reference. */
 export interface ContextFactoryHost {
   /** Fixed for the runner's lifetime. */
@@ -256,7 +259,12 @@ export function createExtensionContext(
       registrations.exitFlushRef?.();
       // Also registered process-wide: an exit with a live session never runs agent teardown,
       // and that is exactly the case where the final batch matters most.
-      const ref = registerExtensionExitFlush(flush);
+      // Agent + extension id + registration sequence: two agents can load the same module-level
+      // `flush` function (a function-identity Set let one disable remove the other's), and two
+      // runners without an `agentId` (tests/tools) must not share one key either.
+      const ref = registerExtensionExitFlush(flush, {
+        ownerId: `${host.agentId}:${api.id}:${++exitFlushOwnerSeq}`,
+      });
       registrations.exitFlushRef = ref;
       return () => {
         if (registrations.exitFlush === flush) registrations.exitFlush = null;
@@ -313,7 +321,15 @@ export function createExtensionContext(
         registrations?.unsubInterceptors.push(unsub);
         return unsub;
       },
-      off: (type, handler) => host.offInterceptor(api.id, type, handler),
+      off: (type, handler) => {
+        // A retained `ctx` from a previous incarnation must not unregister the handler a NEW
+        // incarnation just registered (the wrapper memo is keyed by handler identity).
+        if (!host.isLive(context)) {
+          host.refuse(api.id, "events.off");
+          return;
+        }
+        host.offInterceptor(api.id, type, handler);
+      },
       ...host.observerSurface(api.id, registrations, () => context),
     },
     ui: host.ui(api.id, registrations, () => context),

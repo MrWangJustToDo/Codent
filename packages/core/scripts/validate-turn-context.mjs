@@ -464,7 +464,9 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
     async collectBeforeAgentStart(prompt, agentId) {
       this.lastPrompt = prompt;
       this.lastAgentId = agentId;
-      return { turnContextSections: [{ id: "ext", content: "<ext>context</ext>" }] };
+      // The real collector tags sections `ext:<extensionId>` (`EXTENSION_KIND_PREFIX`); the mock
+      // must use that shape or `clearExtensionSections` has nothing to match.
+      return { turnContextSections: [{ id: "ext:ext", content: "<ext>context</ext>" }] };
     },
   };
   const controller = new TurnContextController({
@@ -508,6 +510,34 @@ assert.equal(CONTEXT_OPEN_PREFIX, "<ctx kind=");
   assert.deepEqual(promptBefore, { prompt: "hello", hasTurnContext: true });
   assert.equal(runner.lastPrompt, "hello");
   assert.equal(runner.lastAgentId, "agent_turn_context");
+
+  // A mid-turn disable drops only that extension's snapshotted section. The turn's sections were
+  // collected once above and are reused by every model call; leaving them made the model call a
+  // tool that had just been unregistered.
+  const withExt = await controller.getDynamicTurnContextSections();
+  assert.ok(
+    withExt.some((section) => section.key === "ext:ext"),
+    "the collected extension section is present"
+  );
+  controller.clearExtensionSections("other");
+  assert.ok(
+    (await controller.getDynamicTurnContextSections()).some((section) => section.key === "ext:ext"),
+    "clearing another extension keeps this one"
+  );
+  // The same turn gets the disabled notice: removing the section without an explanation left the
+  // model calling a tool that had just vanished. A later clear (no notice) removes it entirely.
+  controller.clearExtensionSections("ext", "<disabled>gone</disabled>");
+  const withNotice = await controller.getDynamicTurnContextSections();
+  assert.ok(
+    withNotice.some((section) => section.key === "ext:ext" && section.content.includes("gone")),
+    "the disabled notice replaces the section in the current turn"
+  );
+  controller.clearExtensionSections("ext");
+  assert.equal(
+    (await controller.getDynamicTurnContextSections()).some((section) => section.key === "ext:ext"),
+    false,
+    "the disabled extension's section is gone from the current turn"
+  );
 
   controller.resetTurnState();
   assert.equal(invalidations, 2, "resetTurnState also unfreezes the prompt");

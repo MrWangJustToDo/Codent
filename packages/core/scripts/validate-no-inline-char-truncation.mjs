@@ -6,11 +6,11 @@
  * two callers asking for the same width disagreed by a marker's length.
  */
 
-import { runGuard } from "./helpers/source-guard.mjs";
+import { runPackageGuard } from "./helpers/source-guard.mjs";
 
-runGuard({
+runPackageGuard({
   name: "validate-no-inline-char-truncation",
-  definitionFiles: ["utils/text-truncation.ts"],
+  definitionFiles: ["packages/core/src/utils/text-truncation.ts"],
   patterns: [
     { re: /\.slice\(0,\s*[^)]*\)\s*\+\s*["'](?:\.\.\.|…)["']/, reason: "slice + omission marker" },
     { re: /\.slice\(0,\s*[^)]*\)\}?\s*(?:\.\.\.|…)[`"']/, reason: "template slice + omission marker" },

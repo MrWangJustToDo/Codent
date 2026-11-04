@@ -49,18 +49,22 @@ function writeLog(log: AgentLog, rule: EventLogRule, event: AgentEvent, message:
   // not a failure, and `AGENT_LOG_LEVEL=error` used to keep cancels while hiding tool cancels.
   if (rule.level === "error") {
     if (p(event).cancelled === true) {
-      log.eventEntry("warn", rule.category, event.type, message, data, undefined, run);
+      log.eventEntry("warn", rule.category, event.type, message, data, undefined, run, event.sessionId);
       return;
     }
+    // The payload's own `error` is raw provider text (often the whole 4xx/5xx body); it becomes
+    // `entry.error.message`. The seam (`AgentLog.log`) bounds every writer's error message, so this
+    // is deliberately not truncated here — a second, narrower bound would let the specialized
+    // handlers (which do not pass through this function) keep their own behaviour.
     const errorMessage = (p(event).error as string | undefined) ?? message;
     const error = eventError(errorMessage);
     // A producer that had an `Error` supplies its stack; `eventError` deliberately invents none.
     const stack = p(event).stack;
     if (typeof stack === "string") error.stack = stack;
-    log.eventEntry("error", rule.category, event.type, message, data, error, run);
+    log.eventEntry("error", rule.category, event.type, message, data, error, run, event.sessionId);
     return;
   }
-  log.eventEntry(rule.level, rule.category, event.type, message, data, undefined, run);
+  log.eventEntry(rule.level, rule.category, event.type, message, data, undefined, run, event.sessionId);
 }
 
 /**

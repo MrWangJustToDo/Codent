@@ -171,6 +171,7 @@ const retryEvents = [];
 function makeRunCoordinatorStub() {
   let drop = null;
   let continuation = false;
+  let everArmed = false;
   return {
     resetWireOverride() {
       drop = null;
@@ -185,7 +186,9 @@ function makeRunCoordinatorStub() {
     isWireContinuationArmed: () => continuation,
     setWireContinuationArmed: (next) => {
       continuation = next;
+      if (next) everArmed = true;
     },
+    wasEverArmed: () => everArmed,
   };
 }
 
@@ -533,9 +536,10 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
   const truncationRetries = [];
   let truncationAttempts = 0;
   const escalations = [];
+  const truncationRun = makeRunCoordinatorStub();
   const truncationManaged = {
     run: {
-      ...makeRunCoordinatorStub(),
+      ...truncationRun,
       setMaxOutputTokensOverride(max) {
         escalations.push(max);
       },
@@ -573,6 +577,16 @@ assert.ok(abortElapsed < 1000, `abort returns promptly, took ${abortElapsed}ms`)
   assert.equal(escalations.length, 1, "max_tokens is escalated exactly once");
   assert.equal(truncationAttempts, 5, "1 escalation + 3 continuations + 1 exhaust probe");
   assert.equal(truncationRetries.length, 4, "the escalation plus 3 continuations are reported");
+  assert.equal(
+    truncationRun.wasEverArmed(),
+    true,
+    "the continuation prompt was armed at least once (the assertion below is not vacuous)"
+  );
+  assert.equal(
+    truncationRun.isWireContinuationArmed(),
+    false,
+    "the continuation prompt is one-shot per attempt, not re-injected into later tool iterations"
+  );
   for (const state of truncationRetries) {
     assert.equal(
       state.attempt <= state.maxAttempts,

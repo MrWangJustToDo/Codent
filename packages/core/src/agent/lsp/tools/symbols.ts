@@ -5,7 +5,7 @@
 import { errorMessage } from "../../../utils/errors.js";
 import { fileUriToPath } from "../shared/format.js";
 
-import { truncateHead } from "./tool-shared.js";
+import { normalizeLspPath, truncateHead } from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { WorkspaceIndex } from "../../tree-sitter/workspace-index.js";
@@ -76,7 +76,7 @@ export function createSymbolsTool(deps: SymbolsToolDeps) {
     },
     execute: async (input: unknown, options: ToolExecutionOptions) => {
       const params = input as { path?: string; query?: string };
-      const filePath = params.path?.replace(/^@/, "");
+      const filePath = normalizeLspPath(params.path);
       const query = params.query;
 
       if (!filePath && query === undefined) {

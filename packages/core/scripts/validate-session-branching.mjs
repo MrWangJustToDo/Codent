@@ -123,13 +123,22 @@ try {
   // --------------------------------------------------------------------------
   // 3. branchSession: clone end-to-end (save + switch), source untouched
   // --------------------------------------------------------------------------
+  // `branchSession` now routes prepare + commit through `sessionLifecycle.branchTransaction`, so
+  // the fake must expose that seam (and must NOT expose `restoreSession`: calling it would queue a
+  // second switch behind the transaction in production).
   const fakeManaged = (session, { running = false } = {}) => ({
     session: { awaitPersistIdle: async () => {} },
     getSessionStore: () => store,
     getSessionData: () => session,
     getChatController: () => ({ isRunActive: () => running }),
     getUI: () => ({ getMessages: () => session.uiMessages }),
-    restoreSession: async (id) => await store.load(id),
+    sessionLifecycle: {
+      branchTransaction: async (_reason, prepare) => {
+        const prepared = await prepare();
+        if (!prepared.ok) return prepared;
+        return { ok: true, session: await store.load(prepared.sessionId) };
+      },
+    },
   });
 
   {

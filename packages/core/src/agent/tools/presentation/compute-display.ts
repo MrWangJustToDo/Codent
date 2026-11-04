@@ -1,4 +1,5 @@
 import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
+import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
@@ -89,13 +90,18 @@ export function computeToolDisplay(
 /**
  * Whether the stored output is a failure report (as opposed to a normal result).
  *
- * `ok: false` / `success: false` count as failure: every built-in uses those fields with
- * that meaning in its output schema. A tool that carries business data in them would lose its
- * summary — the durable fix for such a tool is to declare `isError` in its output schema
- * rather than to widen this check.
+ * `{ error }` alone is the framework's error shape and has nothing to render. An `error` field
+ * ALONGSIDE a payload is not: MCP/extension tools legitimately return `{ error, content }`, and
+ * blanking them here made the local body and the cross-process `part.display` disagree.
+ *
+ * `ok: false` / `success: false` still count: every built-in uses those flags to mean "the
+ * success-shaped renderers have nothing truthful to say" (a failed edit still carries `path`).
+ * A tool that carries business data in those fields should declare `isError` in its schema rather
+ * than widening this check.
  */
 function isErrorOutput(output: unknown): boolean {
+  if (isBareToolErrorResult(output)) return true;
   if (typeof output !== "object" || output === null) return false;
-  const record = output as { error?: unknown; isError?: unknown; ok?: unknown; success?: unknown };
-  return typeof record.error === "string" || record.isError === true || record.ok === false || record.success === false;
+  const record = output as { isError?: unknown; ok?: unknown; success?: unknown };
+  return record.isError === true || record.ok === false || record.success === false;
 }

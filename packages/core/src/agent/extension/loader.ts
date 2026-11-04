@@ -7,8 +7,9 @@
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { toError } from "../../utils/errors.js";
+import { pathToFileUrl } from "../../utils/file-url.js";
 
-import { isExtensionModuleFile, pathToFileUrl, resolveExtensionDir } from "./paths.js";
+import { isExtensionModuleFile, resolveExtensionDir } from "./paths.js";
 
 import type { ExtensionAPI, ExtensionFactory } from "./types.js";
 

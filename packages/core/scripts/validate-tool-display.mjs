@@ -333,6 +333,41 @@ for (const output of [{ error: "permission denied" }, { ok: false }, { success: 
 }
 assert.equal(core.computeToolDisplay("memory_write", { ok: false }), undefined, "memory_write failure");
 
+// A cancelled call is a neutral settle, not a failure state. Both marker shapes carry
+// `success: false`, and an abort-shaped error body carries no marker at all; the state reader must
+// apply the same verdict every host used to add by hand.
+for (const output of [
+  { success: false, cancelled: true, command: "sleep 99", exitCode: -1 },
+  { aborted: true },
+  { error: "Cancelled by user." },
+]) {
+  assert.equal(
+    core.getUiToolState({
+      type: "tool-call",
+      id: "call_cancelled",
+      name: "run_command",
+      state: "error",
+      output,
+    }),
+    "output-available",
+    `cancelled output ${JSON.stringify(output)} must not read as a tool failure`
+  );
+}
+
+// An `error` field ALONGSIDE a payload is a legitimate MCP/extension result, not the framework's
+// bare error shape. The local formatter already rendered it; blanking the cross-process
+// `part.display` made the same row show a body locally and nothing on a remote/ACP host.
+assert.deepEqual(
+  core.computeToolDisplay(
+    "ext_remote",
+    { error: "rate limited", content: [{ type: "text", text: "partial body" }] },
+    undefined,
+    () => ({ text: () => "rendered body" })
+  ),
+  { text: "rendered body" },
+  "an error field alongside real content must not hide the result"
+);
+
 console.log("validate-tool-display: lifecycle + failure shapes ok");
 
 // --- 11b. a cut-off task must not summarize as a clean finish -----------------

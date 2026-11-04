@@ -310,7 +310,18 @@ export function getTaskRunState(parentManaged: ManagedAgent, toolCallId: string)
 }
 
 export function beginTaskRun(parentManaged: ManagedAgent, toolCallId: string): TaskRunState {
-  return subagentRuns(parentManaged).begin(toolCallId);
+  const state = subagentRuns(parentManaged).begin(toolCallId);
+  // Assigned once: a re-entry (tool phase retry, background wake) must not move the attribution.
+  // Optional: validators and hosts may drive the registry with a structural fake that has no run
+  // identity. The row is still useful without attribution; do not fail the call for it.
+  state.spawnRunId ??= parentManaged.getCurrentRunId?.() ?? undefined;
+  return state;
+}
+
+/** The parent run that spawned a task, for settle-time rows (undefined for an unknown task). */
+export function readTaskRunSpawnId(parentManaged: ManagedAgent, toolCallId: string | undefined): string | undefined {
+  if (!toolCallId) return undefined;
+  return subagentRuns(parentManaged).state(toolCallId)?.spawnRunId;
 }
 
 export function enterTaskPhase(parentManaged: ManagedAgent, toolCallId: string, phase: TaskRunTerminalPhase): boolean {

@@ -321,6 +321,20 @@ export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent/types.js";
 export { resolveSummarizationBudget } from "./agent/compaction";
 
 // ============================================================================
+// Shared helpers
+//
+// Exported because the "one definition" guards scan EVERY package: a host cannot stop re-deriving
+// these if the definition is not reachable from `@codent/core`. Import them; do not copy them.
+// ============================================================================
+
+export { formatByteSize, type FormatByteSizeOptions } from "./utils/byte-size.js";
+export { truncateToUtf8Bytes, utf8ByteLength, type TruncateToUtf8BytesOptions } from "./utils/bytes.js";
+export { OMISSION_MARKER, truncateText, type TruncateTextOptions } from "./utils/text-truncation.js";
+export { isBase64Source, isDataUrl, parseDataUrl, stripDataUrlPrefix, type ParsedDataUrl } from "./utils/data-url.js";
+export { slugifyName, type SlugifyOptions } from "./utils/slug.js";
+export { headDisplayLines, splitDisplayLines, type SplitDisplayLinesOptions } from "./utils/display-lines.js";
+
+// ============================================================================
 // UI utilities
 // ============================================================================
 

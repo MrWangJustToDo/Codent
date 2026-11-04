@@ -5,11 +5,11 @@
  * `Math.round(size / 1024) + "KB"` and its megabytes variant were each rewritten per caller.
  */
 
-import { runGuard } from "./helpers/source-guard.mjs";
+import { runPackageGuard } from "./helpers/source-guard.mjs";
 
-runGuard({
+runPackageGuard({
   name: "validate-no-inline-byte-size",
-  definitionFiles: ["utils/byte-size.ts"],
+  definitionFiles: ["packages/core/src/utils/byte-size.ts"],
   patterns: [
     { re: /Math\.round\([^)]*\/\s*1024/, reason: "manual KB/MB conversion" },
     // `(bytes / 1024).toFixed(1)` and `` `${n} KB` `` are the same re-derivation in a different

@@ -1,3 +1,5 @@
+import { truncateText } from "@codent/core";
+
 import type { QueuedMessageContent, QueuedMessagesSnapshot } from "@codent/core";
 
 /**
@@ -53,5 +55,5 @@ export function nextQueuedPreview(queued: QueuedMessagesSnapshot | undefined, ma
 
   const line = textOf(next).replace(/\s+/g, " ").trim();
   if (!line) return null;
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return truncateText(line, max, { marker: "…" });
 }

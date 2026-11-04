@@ -38,6 +38,13 @@ export interface ToolExecutionOptions {
    */
   deadlineSignal?: AbortSignal;
   /**
+   * The deadline the tool declared (`timeoutMs`), when it has one.
+   *
+   * Present only on the execution context the framework builds; a tool that declared no deadline
+   * sees `undefined`. Useful for reporting the budget without re-reading its own definition.
+   */
+  timeoutMs?: number;
+  /**
    * Id of the agent running this tool call.
    *
    * Supplied by the run context (`ToolRunContext.agentId`) — the authoritative value, since

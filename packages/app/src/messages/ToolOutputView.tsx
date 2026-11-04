@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES, splitStreamingLines } from "@codent/core";
+import { BUILTIN_TOOL_NAMES, splitStreamingLines, truncateText } from "@codent/core";
 import { Box, Text } from "ink";
 
 import { HalfLinePaddedBox } from "../components/HalfLinePaddedBox.js";
@@ -21,7 +21,7 @@ const COMPACT_LINE_MAX = 200;
 
 /** Compact keeps one curated line (the `present.text` contract) instead of the full block. */
 function clampCompactLine(line: string): string {
-  return line.length > COMPACT_LINE_MAX ? `${line.slice(0, COMPACT_LINE_MAX - 1)}…` : line;
+  return truncateText(line, COMPACT_LINE_MAX, { marker: "…" });
 }
 
 export const ToolOutputView = ({ part, uiState }: { part: ToolCallPart; uiState: UiToolState }) => {

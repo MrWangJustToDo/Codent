@@ -11,7 +11,6 @@ import { getBuiltinToolPresentation } from "../../agent/tools/presentation/built
 import { describeToolPresentations } from "../../agent/tools/presentation/describe.js";
 import { defineServerTool } from "../../agent/tools/runtime/define-tool.js";
 import { AgentToolRegistry, type ResolvedAgentTool } from "../../agent/tools/runtime/tool-registry.js";
-import { withTimeoutAbort } from "../../agent/tools/shared/abort-timeout.js";
 
 import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type { ExtensionToolDefinition } from "../../agent/extension";
@@ -142,25 +141,23 @@ export class AgentToolService {
       outputSchema: def.outputSchema,
       lazy: def.lazy,
       needsApproval: def.needsApproval,
-      execute: async (args, toolCtx) => {
-        const run = (deadlineSignal: AbortSignal | undefined) =>
-          def.execute(
-            args,
-            {
-              toolCallId: toolCtx.toolCallId,
-              abortSignal: toolCtx.abortSignal,
-              deadlineSignal,
-              agentId: toolCtx.agentId ?? ctx.agentId,
-            },
-            ctx.getExtensionContext?.()
-          );
-        if (def.timeoutMs === undefined) return run(undefined);
-        return withTimeoutAbort((signal) => run(signal), {
-          timeoutMs: def.timeoutMs,
-          signal: toolCtx.abortSignal,
-          timeoutMessage: `Tool "${def.name}" timed out after ${def.timeoutMs}ms`,
-        });
-      },
+      // The definition owns the deadline wrapper (`withTimeoutAbort`) and sets `ctx.timeoutMs`.
+      // The service used to wrap this path itself and never pass the declaration down, so an
+      // extension tool's `ctx.timeoutMs` was unreachable; one wrapper now serves both registration
+      // paths (and reports the same timeout error).
+      timeoutMs: def.timeoutMs,
+      execute: async (args, toolCtx) =>
+        def.execute(
+          args,
+          {
+            toolCallId: toolCtx.toolCallId,
+            abortSignal: toolCtx.abortSignal,
+            deadlineSignal: toolCtx.deadlineSignal,
+            timeoutMs: toolCtx.timeoutMs,
+            agentId: toolCtx.agentId ?? ctx.agentId,
+          },
+          ctx.getExtensionContext?.()
+        ),
       present: def.present,
       toModelOutput: def.toModelOutput,
     });

@@ -10,9 +10,11 @@ export {
   EXTENSION_DIRS_ENV_VAR,
   getDefaultExtensionDirs,
   isExtensionModuleFile,
-  pathToFileUrl,
   resolveExtensionDir,
 } from "./paths.js";
+// The path → URL rule is shared with the LSP client; define it in `utils/`, re-export the name here
+// because the extension loader is its oldest consumer and the barrel is the extension surface.
+export { pathToFileUrl } from "../../utils/file-url.js";
 
 export type {
   ExtensionAPI,

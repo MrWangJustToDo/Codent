@@ -29,6 +29,14 @@ export type TaskRunTerminalPhase = Exclude<TaskRunPhase, "running">;
 export class TaskRunState {
   /** Current phase — one-way running → summary | limit. */
   phase: TaskRunPhase = "running";
+  /**
+   * The parent run that spawned this task.
+   *
+   * Settle-time rows are written after the spawning pump may have ended (a background task settles
+   * on a later wake turn). Reading the parent's current run at that moment stamped the completion
+   * with a run that never spawned the child, so the parent index could not be sliced by run.
+   */
+  spawnRunId?: string;
 
   constructor(readonly toolCallId: string) {}
 

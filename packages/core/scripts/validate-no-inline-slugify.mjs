@@ -6,11 +6,11 @@
  * and the length cap; a fix to one was forgotten in the other.
  */
 
-import { runGuard } from "./helpers/source-guard.mjs";
+import { runPackageGuard } from "./helpers/source-guard.mjs";
 
-runGuard({
+runPackageGuard({
   name: "validate-no-inline-slugify",
-  definitionFiles: ["utils/slug.ts"],
+  definitionFiles: ["packages/core/src/utils/slug.ts"],
   patterns: [
     { re: /replace\(\/-{2,}\/g/, reason: "slug hyphen collapsing" },
     { re: /replace\(\/\^-+\|-+\$\/g/, reason: "slug trimming" },

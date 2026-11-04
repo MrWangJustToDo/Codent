@@ -331,6 +331,28 @@ export class SessionLifecycleService {
     return this.serializeSwitch(() => this.runTransition(() => this.resumeInner(sessionId, reason)));
   }
 
+  /**
+   * Run a clone/fork as ONE switch transaction.
+   *
+   * Preparing a branch (drain the queued persist, snapshot the live channel, dehydrate media,
+   * write the new session) is several awaits. Doing that before calling `resume()` left it
+   * outside the lock: a `/resume` or `/new` admitted in that window could replace the source
+   * mid-read, and the branch then wrote the OLD metadata with the NEW messages. The commit half
+   * calls `resumeInner` directly — going through `resume()` here would queue behind this very
+   * transaction and deadlock.
+   */
+  async branchTransaction(
+    reason: SessionSwitchReason,
+    prepare: () => Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
+  ): Promise<{ ok: true; session: SessionData } | { ok: false; error: string }> {
+    return this.serializeSwitch(async () => {
+      const prepared = await prepare();
+      if (!prepared.ok) return prepared;
+      const session = await this.runTransition(() => this.resumeInner(prepared.sessionId, reason));
+      return { ok: true, session };
+    });
+  }
+
   private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {
     if (!this.host.acquireSessionOwnership(sessionId)) {
       throw new Error(`Session "${sessionId}" is already active in another live session and cannot be resumed here.`);

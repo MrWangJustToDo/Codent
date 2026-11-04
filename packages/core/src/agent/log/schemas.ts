@@ -77,5 +77,6 @@ export const logEntrySchema = z.strictObject({
     .optional(),
   tags: z.array(z.string()).optional(),
   run: z.string().optional(),
+  sessionId: z.string().optional(),
   event: z.string().optional(),
 });

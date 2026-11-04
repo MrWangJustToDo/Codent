@@ -132,6 +132,26 @@ export class TurnContextController {
     });
   }
 
+  /**
+   * Drop one extension's sections from the CURRENT turn's snapshot.
+   *
+   * Sections are collected once per user turn and reused by every model call in it. Disabling an
+   * extension mid-turn removed its tools immediately but left its section saying they exist, so
+   * the model called a tool that had just vanished. The disabled notice is written separately and
+   * reaches the next call through the same snapshot.
+   */
+  clearExtensionSections(extensionId: string, notice?: string): void {
+    const sections = this.pendingExtensionTurnContextSections;
+    if (!sections) return;
+    const prefix = `ext:${extensionId}`;
+    const remaining = sections.filter((section) => section.id !== prefix && !section.id.startsWith(`${prefix}:`));
+    const body = notice?.trim();
+    // The notice comes from the same disable that removed the section, so the SAME turn can tell
+    // the model why its tool just vanished. Waiting for the next user turn left it calling a tool
+    // that no longer exists.
+    this.pendingExtensionTurnContextSections = body ? [...remaining, { id: prefix, content: body }] : remaining;
+  }
+
   clearTurnContext(): void {
     this.pendingExtensionTurnContextSections = undefined;
     // NOTE: instructionContextState / instructionContextActive intentionally NOT

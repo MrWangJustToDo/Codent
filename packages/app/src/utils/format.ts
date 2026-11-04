@@ -1,3 +1,5 @@
+import { formatByteSize, parseDataUrl } from "@codent/core";
+
 export { formatDuration } from "@codent/core";
 
 /**
@@ -15,13 +17,13 @@ export function formatCost(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
+/** Size of a base64 data URL, in the display units the host uses everywhere. */
 export function formatFileSize(dataUrl: string): string {
-  const base64Match = dataUrl.match(/;base64,(.+)/);
-  if (!base64Match) return "";
-  const bytes = Math.ceil((base64Match[1]!.length * 3) / 4);
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  const parsed = parseDataUrl(dataUrl);
+  // An empty payload is not "0B": the old display omitted the size entirely.
+  if (!parsed?.base64) return "";
+  const bytes = Math.ceil((parsed.base64.length * 3) / 4);
+  return formatByteSize(bytes, { decimals: 1, showBytes: true });
 }
 
 export { formatToolInput } from "./tool-input-format.js";

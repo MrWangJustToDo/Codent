@@ -964,9 +964,10 @@ export class ManagedAgent {
    * has to be driven from this side anyway.
    */
   logSubagentLifecycle(phase: SubagentLifecyclePhase, details: SubagentLogDetails): void {
-    // The parent's current run: the index row belongs to the run that spawned the child, and the
-    // seam no longer remembers a run on its own.
-    logSubagentLifecycle(this.log, phase, details, this.getCurrentRunId() ?? undefined);
+    // The index row belongs to the run that spawned the child. Spawn-time callers leave `details.run`
+    // unset (the current run is correct); settle-time callers pass the run captured at spawn,
+    // because a background task can settle on a later wake turn.
+    logSubagentLifecycle(this.log, phase, details, details.run ?? this.getCurrentRunId() ?? undefined);
   }
 
   setStatus(status: AgentStatus, trigger?: AgentStatusTrigger): void {
@@ -1424,12 +1425,17 @@ export class ManagedAgent {
    *
    * A no-op when the effective model already matches the live config.
    *
-   * @returns whether the model actually changed. The caller uses it to decide whether the new
-   * model's metadata must be resolved (a resumed session's persisted model is not in the
-   * bootstrap `modelInfo`, so adopting it without re-resolving left capabilities "unknown" and
-   * the context window unset).
+   * @returns the effective selection: `changed` says whether the runtime actually moved (the caller
+   * then re-resolves metadata — a resumed session's persisted model is not in the bootstrap
+   * `modelInfo`, so adopting it without re-resolving left capabilities "unknown" and the context
+   * window unset); `model`/`modelStyle` are what should be recorded on the session, which is the
+   * fallback when the persisted id is no longer offered.
    */
-  applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): boolean {
+  applyPersistedModel(next: { model: string; modelStyle?: ModelStyle }): {
+    changed: boolean;
+    model: string;
+    modelStyle?: ModelStyle;
+  } {
     const remote = this.config.providerMode === "remote";
     // The catalog check is NOT remote-only: a direct runtime also carries the model list it was
     // built from (`CodentAgent({ models })`, wired by the CLI/ACP hosts), and a session can be
@@ -1466,7 +1472,7 @@ export class ManagedAgent {
     const style = remote || selection.fallback ? this.config.modelStyle : next.modelStyle;
     const sameModel = selection.model === this.config.model;
     const sameStyle = !style || style === this.config.modelStyle;
-    if (sameModel && sameStyle) return false;
+    if (sameModel && sameStyle) return this.effectivePersistedModel(false);
 
     // The adopted model is a change too (bootstrap ran on the default). Emitted here, not in
     // `setModel`, because `from` is the SESSION's requested id rather than whatever the runtime
@@ -1496,11 +1502,20 @@ export class ManagedAgent {
         error: errorMessage(error),
         data: { model: selection.model, ...(style ? { modelStyle: style } : {}) },
       });
-      return false;
+      return this.effectivePersistedModel(false);
     }
 
     this.setModel({ model: selection.model, ...(style ? { modelStyle: style } : {}) }, { emitChange: false });
-    return true;
+    return { changed: true, model: selection.model, ...(style ? { modelStyle: style } : {}) };
+  }
+
+  /** The model currently in force, for a restore that did not change anything. */
+  private effectivePersistedModel(changed: boolean): { changed: boolean; model: string; modelStyle?: ModelStyle } {
+    return {
+      changed,
+      model: this.config.model,
+      ...(this.config.modelStyle ? { modelStyle: this.config.modelStyle } : {}),
+    };
   }
 
   /**
@@ -2209,6 +2224,11 @@ export class ManagedAgent {
     this.turnContext.clearTurnContext();
   }
 
+  /** Drop a just-disabled extension's sections and append its notice to the current turn. */
+  clearExtensionTurnContext(extensionId: string, notice?: string): void {
+    this.turnContext.clearExtensionSections(extensionId, notice);
+  }
+
   resetSystemPrompt(): void {
     this.turnContext.resetSystemPrompt();
   }
@@ -2723,6 +2743,9 @@ export class ManagedAgent {
       }
     | { ok: false; error: string }
   > {
+    if (this.destroyed) {
+      return { ok: false, error: "Agent has been destroyed" };
+    }
     const manager = this.manager;
     if (!manager) {
       return { ok: false, error: "AgentManager required for compact" };

@@ -62,6 +62,15 @@ export interface LogEntry {
   /** Optional short run id — entries written during an agent run share one id. */
   run?: string;
   /**
+   * Session the entry belongs to, taken from the event envelope.
+   *
+   * The sink path answers "where did this land"; this answers "what was it about". They differ
+   * when an async producer (title generation, memory extraction, a side query) resolves after the
+   * live session switched and its row lands in the target's file — the field keeps the row
+   * attributable to the session it was computed for instead of silently claiming the target.
+   */
+  sessionId?: string;
+  /**
    * Originating bus event type (e.g. `llm:request`) when the entry was derived
    * from a typed telemetry event via the Event→Log bridge. Direct log calls
    * (bootstrap summaries, status transitions) leave this unset.

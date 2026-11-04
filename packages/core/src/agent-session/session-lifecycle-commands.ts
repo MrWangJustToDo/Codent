@@ -58,19 +58,29 @@ export async function generateAndApplySessionTitle(
     }
     const generated = text.trim().slice(0, 80);
     if (!generated) {
-      managed.emitEvent("session:title", { ok: false, error: "model returned an empty title" });
+      if (managed.getSessionData()?.id === session.id) {
+        managed.emitEvent("session:title", { ok: false, error: "model returned an empty title" });
+      }
       return { ok: false, error: "Failed to generate title" };
     }
     session.name = generated;
-    // Route through `setDisplayName` so the state channel broadcasts the new
-    // title (a raw `managed.name = …` write never notified subscribers).
-    managed.setDisplayName(generated);
+    // The summarizer call is an await: a `/resume` or `/new` during it replaces the live session.
+    // The disk write below still belongs to `session` (the one the title describes), but the live
+    // display-name broadcast and the event would land on the TARGET session — the auto-title path
+    // already guards this (`SessionService`), and the command path must agree.
+    if (managed.getSessionData()?.id === session.id) {
+      // Route through `setDisplayName` so the state channel broadcasts the new title (a raw
+      // `managed.name = …` write never notified subscribers).
+      managed.setDisplayName(generated);
+      managed.emitEvent("session:title", { ok: true, name: generated });
+    }
     await store.save(session);
-    managed.emitEvent("session:title", { ok: true, name: generated });
     return { ok: true, name: generated };
   } catch (error) {
     const err = toError(error);
-    managed.emitEvent("session:title", { ok: false, error: err.message });
+    if (managed.getSessionData()?.id === session.id) {
+      managed.emitEvent("session:title", { ok: false, error: err.message });
+    }
     return { ok: false, error: `Title generation failed: ${err.message}` };
   }
 }
@@ -147,9 +157,9 @@ function resolveForkIndex(messages: UIMessage[], raw: string | undefined): numbe
  * to put back in the editor. The fork point is selected by message id, or by a 1-based
  * index into the session's (genuine) user messages. The source session is left untouched.
  *
- * Refused while a run is active (the channel would be a half-finished turn). The new
- * session is written to disk and then adopted through {@link ManagedAgent.restoreSession},
- * the same switch path as `session.resume`.
+ * Refused while a run is active (the channel would be a half-finished turn). Preparation and
+ * commit run under `SessionLifecycleService.branchTransaction` — the same lock as a resume, so
+ * another switch cannot replace the source between the snapshot and the adoption.
  */
 export async function branchSession(
   managed: ManagedAgent,
@@ -159,11 +169,12 @@ export async function branchSession(
   | { ok: false; error: string }
 > {
   const store = managed.getSessionStore();
-  const current = managed.getSessionData();
-  if (!store || !current) {
+  if (!store || !managed.getSessionData()) {
     return { ok: false, error: "No active session" };
   }
 
+  // Fast refusal for a user command issued while a switch is already queued. The real
+  // serialization is `branchTransaction` below: this check alone was the reported race.
   if (managed.isSessionSwitching?.()) {
     return { ok: false, error: `Session is switching — try again when it finishes.` };
   }
@@ -172,51 +183,64 @@ export async function branchSession(
     return { ok: false, error: `Cannot ${options.mode} while the agent is running — stop it first (Esc).` };
   }
 
-  // A queued persist still targets the source session. Drain it before branching so the
-  // new session cannot observe or race a late source write.
-  await managed.session.awaitPersistIdle();
-
-  // Branch from the live channel so unsaved turns are included. Dehydrate first: the
-  // channel holds hydrated media (inline base64 / data URLs), but the session log
-  // stores `media://` refs — writing it raw would bake base64 into the append-only log
-  // and leave it there forever (later saves only append). The canonical persist path
-  // (`SessionService.persistSession`) dehydrates for exactly this reason.
-  const liveMessages = (managed.getUI()?.getMessages() ?? current.uiMessages) as UIMessage[];
-  const messages = (await dehydrateUIMessages(liveMessages, { env: store.getEnv() })) as UIMessage[];
-
-  let upToIndex: number | undefined;
   let forkText: string | undefined;
-  if (options.mode === "fork") {
-    const index = resolveForkIndex(messages, options.upToMessageId?.trim());
-    if (index <= 0) {
-      return { ok: false, error: "Fork point must be an earlier user message with messages before it" };
-    }
-    // The picker only offers user messages, but a hand-typed id (or an out-of-range
-    // index) could name an assistant/tool message — reject it rather than forking there.
-    if (messages[index]?.role !== "user" || isContextUIMessage(messages[index]!)) {
-      return { ok: false, error: "Fork point must be a user message" };
-    }
-    upToIndex = index;
-    forkText = uiMessageText(messages[index]!);
-  }
 
-  const newSession = store.branchFrom(current, {
-    ...(upToIndex !== undefined ? { upToIndex } : {}),
-    ...(options.name ? { name: options.name } : {}),
-    messages: messages as never,
+  // Preparation and commit are ONE transaction. Reading the source, dehydrating and writing the
+  // branch are several awaits; outside the lock another `/resume`/`/new` could replace the source
+  // between them, producing a branch whose metadata came from one session and whose messages came
+  // from another. `resumeInner` runs inside the same lock (calling `restoreSession` here would
+  // queue behind this transaction and deadlock).
+  const result = await managed.sessionLifecycle.branchTransaction(options.mode, async () => {
+    const source = managed.getSessionData();
+    if (!source) return { ok: false, error: "No active session" };
+
+    // A queued persist still targets the source session. Drain it before branching so the
+    // new session cannot observe or race a late source write.
+    await managed.session.awaitPersistIdle();
+
+    // Branch from the live channel so unsaved turns are included. Dehydrate first: the
+    // channel holds hydrated media (inline base64 / data URLs), but the session log
+    // stores `media://` refs — writing it raw would bake base64 into the append-only log
+    // and leave it there forever (later saves only append). The canonical persist path
+    // (`SessionService.persistSession`) dehydrates for exactly this reason.
+    const liveMessages = (managed.getUI()?.getMessages() ?? source.uiMessages) as UIMessage[];
+    const messages = (await dehydrateUIMessages(liveMessages, { env: store.getEnv() })) as UIMessage[];
+
+    let upToIndex: number | undefined;
+    if (options.mode === "fork") {
+      const index = resolveForkIndex(messages, options.upToMessageId?.trim());
+      if (index <= 0) {
+        return { ok: false, error: "Fork point must be an earlier user message with messages before it" };
+      }
+      // The picker only offers user messages, but a hand-typed id (or an out-of-range
+      // index) could name an assistant/tool message — reject it rather than forking there.
+      if (messages[index]?.role !== "user" || isContextUIMessage(messages[index]!)) {
+        return { ok: false, error: "Fork point must be a user message" };
+      }
+      upToIndex = index;
+      forkText = uiMessageText(messages[index]!);
+    }
+
+    const newSession = store.branchFrom(source, {
+      ...(upToIndex !== undefined ? { upToIndex } : {}),
+      ...(options.name ? { name: options.name } : {}),
+      messages: messages as never,
+    });
+
+    await store.save(newSession);
+    // `resumeInner` acquires the new id and releases the session being left only after a
+    // successful restore, so a branch needs no compensating release here.
+    return { ok: true as const, sessionId: newSession.id };
   });
 
-  await store.save(newSession);
-  // `restoreSession` acquires the new id and releases the session being left only after a
-  // successful restore, so a branch needs no compensating release here.
-  const restored = await managed.restoreSession(newSession.id, options.mode);
+  if (!result.ok) return result;
 
   return {
     ok: true,
-    sessionId: newSession.id,
-    name: restored.name,
-    model: restored.model,
-    uiMessages: restored.uiMessages,
+    sessionId: result.session.id,
+    name: result.session.name,
+    model: result.session.model,
+    uiMessages: result.session.uiMessages,
     ...(forkText ? { forkText } : {}),
   };
 }

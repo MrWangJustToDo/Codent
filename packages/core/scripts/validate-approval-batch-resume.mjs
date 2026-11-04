@@ -25,6 +25,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   approvalsToResumeMap,
@@ -217,6 +218,85 @@ assert.equal(managed.getStatus(), "completed", "the turn itself finished normall
     .find((part) => part.id === pendingId);
   assert.equal(pendingPart?.approval?.approved, undefined, "the question is kept for the user");
   assert.equal(pendingPart?.output, undefined, "and the settle pass leaves it alone");
+}
+
+// ============================================================================
+// 3a. An ERROR turn settles the same held call
+//
+// Reuses the real agent from section 3 with a stream that fails before producing a tool phase.
+// The request is one the engine parked beside the gated call and never ran; leaving it
+// `input-complete` meant the NEXT user turn executed the failed turn's arguments.
+// ============================================================================
+{
+  // A fresh agent: section 3 left the shared one parked on a pending approval, and a parked turn
+  // defers the next `sendMessage` instead of starting the failing stream this case needs.
+  const errorManaged = await manager.createManagedAgent({ name: "approval-error", model: "capturing-model" });
+  errorManaged.setTextAdapter({
+    adapter: {
+      kind: "text",
+      name: "erroring",
+      model: "capturing-model",
+      "~types": {},
+      chatStream() {
+        return (async function* () {
+          yield { type: "RUN_ERROR", message: "boom" };
+        })();
+      },
+      async structuredOutput() {
+        throw new Error("not implemented");
+      },
+    },
+    model: "capturing-model",
+    modelStyle: "openai",
+  });
+  const errorChat = errorManaged.initChat(manager);
+
+  const errorStuckId = "call_read_file_error";
+  errorChat.setMessages([
+    { id: "e-u1", role: "user", parts: [{ type: "text", content: "read it" }] },
+    {
+      id: "e-a1",
+      role: "assistant",
+      parts: [
+        { type: "tool-call", id: errorStuckId, name: "read_file", state: "input-complete", input: { path: "a.ts" } },
+      ],
+    },
+  ]);
+
+  await errorChat.sendMessage("continue").catch(() => undefined);
+  await errorChat.runChain;
+
+  const errorPart = errorChat
+    .getMessages()
+    .flatMap((message) => message.parts)
+    .find((part) => part.type === "tool-call" && part.id === errorStuckId);
+  assert.equal(errorPart?.state, "error", "the held call is settled on an error terminal too");
+  assert.equal(errorPart?.output?.cancelled, true, "…as a cancel, not a fabricated result");
+  assert.equal(errorManaged.getStatus(), "error", "the turn is still reported as failed");
+}
+
+// ============================================================================
+// 3b. The settle is a TERMINAL rule, not a `finished` rule
+//
+// An error/aborted turn has no later phase that could produce the held result either. Leaving it
+// `input-complete` meant the NEXT user turn continued that tool phase with the failed turn's
+// arguments — a write that nobody approved in this turn.
+// ============================================================================
+{
+  const controllerSrc = fs.readFileSync(
+    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
+    "utf8"
+  );
+  assert.match(
+    controllerSrc,
+    /if \(outcomeKind !== "waiting" && !waitingForUser\) \{\s*this\.applyCancelledIncompleteTools\(true\)/,
+    "every non-waiting terminal (error/aborted too) settles the calls the engine could not run"
+  );
+  assert.match(
+    controllerSrc,
+    /const stillWaiting = hasPendingInteraction\([\s\S]{0,120}if \(!stillWaiting\) this\.applyCancelledIncompleteTools\(true\)/,
+    "the pump's catch path settles them too, but preserves a pending ask_user"
+  );
 }
 
 // ============================================================================

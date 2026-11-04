@@ -59,7 +59,7 @@ export function packageSourceFiles(out = []) {
       if (entry.name === "workers" || entry.name === "vite-plugins" || SKIP_DIRS.has(entry.name)) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (/\.tsx?$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) out.push(full);
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
     }
   };
   for (const pkg of readdirSync(packagesRoot, { withFileTypes: true })) {
@@ -112,6 +112,30 @@ export function scanSource({ patterns, definitionFiles = [], scope }) {
     });
   }
   return offenders;
+}
+
+/**
+ * Run a guard across EVERY package, not just core.
+ *
+ * `definitionFiles` are repo-relative (`packages/core/src/utils/errors.ts`). The helper exists
+ * because a "one definition" rule is only enforceable on the consumer side if the definition is
+ * reachable from `@codent/core` — otherwise the host copy cannot comply and the guard only covers
+ * core while claiming otherwise.
+ */
+export function runPackageGuard({ name, patterns, definitionFiles = [], note }) {
+  const offenders = scanPackages({ patterns, definitionFiles });
+  if (offenders.length === 0) {
+    // Say what was actually scanned: `mcp-server` and the standalone worker trees are excluded
+    // deliberately (see `SKIP_PACKAGES`), so "across packages" would overstate coverage.
+    console.log(`${name}: ok (0 inline duplicates across scanned packages; mcp-server/workers excluded)`);
+    return;
+  }
+  process.stderr.write(`${name}: re-derived a shared rule instead of calling its @codent/core definition:\n`);
+  for (const offender of offenders) {
+    process.stderr.write(`  ${offender.rel}:${offender.line}  (${offender.reason})\n      ${offender.text}\n`);
+  }
+  if (note) process.stderr.write(`${note}\n`);
+  process.exit(1);
 }
 
 /** Run a guard: print each offender and exit non-zero when any exists. */

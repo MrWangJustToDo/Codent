@@ -9,6 +9,43 @@ import { resolveSymbolPosition, getSymbolNames } from "../shared/resolve-positio
 import type { LspRequestOptions } from "../../../env/lsp.js";
 import type { LspManager } from "../lsp-manager.js";
 
+/**
+ * The `{ path, line, character, query }` input contract shared by every position-based LSP tool.
+ *
+ * The four descriptions were copy-pasted into six tool files; a wording change (or a new field)
+ * had to be made six times, and one tool silently kept the old contract when it was not. `path` is
+ * the only required field — `line`/`character` may be replaced by `query`.
+ */
+export const POSITION_PROPERTIES = {
+  path: { type: "string", description: "File path" },
+  line: { type: "number", description: "Line number (1-indexed). Required unless query is provided." },
+  character: { type: "number", description: "Column number (1-indexed). Required unless query is provided." },
+  query: { type: "string", description: "Symbol name to find in the file (alternative to line/character)." },
+} as const;
+
+export interface PositionInput {
+  path?: string;
+  line?: number;
+  character?: number;
+  query?: string;
+}
+
+/** Read a position tool's input, with each tool's own extra fields inferred at the call site. */
+export function positionParams<T extends PositionInput = PositionInput>(input: unknown): T {
+  return (input ?? {}) as T;
+}
+
+/**
+ * Normalize the `@`-prefixed path form the model sometimes emits.
+ *
+ * Every LSP tool did `(params.path ?? "").replace(/^@/, "")` itself (eight copies, and `symbols`
+ * used optional chaining with different "missing path" semantics). Undefined stays `undefined`
+ * here so the caller can tell "no path" from an empty one.
+ */
+export function normalizeLspPath(path: string | undefined): string | undefined {
+  return path?.replace(/^@/, "");
+}
+
 export interface TruncatedLines {
   content: string;
   truncated: boolean;

@@ -441,7 +441,8 @@ Rules that keep `packages/core` internally consistent. Deviations need a reason 
   mandatory to say why not: the `/* eslint-disable max-lines */` at the top of such a file must
   be paired with a written justification naming what the file composes and which parts were
   extracted instead — the current members are `agent/extension/runner.ts`,
-  `managers/managed-agent.ts`, `packages/acp/src/agent.ts` and `packages/acp/src/projector.ts`, and
+  `managers/managed-agent.ts`, `managers/controllers/agent-chat-controller.ts`,
+  `packages/acp/src/agent.ts` and `packages/acp/src/projector.ts`, and
   their headers name what was split out — and `validate:file-size` fails an allowlisted file that
   drops back under the ceiling so the list cannot go stale. The guard scans **every** package's
   source with the same metric as ESLint (non-blank lines) — `src` when the package has one, the
@@ -934,7 +935,7 @@ packages/core/src/agent/
 │   ├── run-agent-skeleton.ts  # runAgentOnce / consumeAgentStream / ensureUIChannel
 │   └── managed-span.ts        # shared stream + abort/error/empty normalization
 ├── subagent/
-│   ├── run-subagent.ts        # Worker profile: runSubagent(), getSubagent(), destroySubagent()
+│   ├── run-subagent.ts        # Worker profile: runSubagent()
 │   ├── run-stats.ts           # Iteration/limit stats from UI messages + stream
 │   ├── subagent-tools.ts      # Read-only tool set for subagents
 │   ├── subagent-output.ts     # Cancel notice + summary truncation

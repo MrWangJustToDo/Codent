@@ -4,7 +4,7 @@
 
 import { convertMessagesToModelMessages } from "@tanstack/ai";
 
-import { isCompactionCancel } from "../agent/compaction";
+import { collectIncompleteTodos, isCompactionCancel } from "../agent/compaction";
 import { applyCompactionResult, applyReactiveCompactionResult } from "../agent/compaction/apply-compaction-result.js";
 import { autoCompact } from "../agent/compaction/auto-compact.js";
 import { keepPolicyProjectionOptions, resolveKeepPolicy } from "../agent/compaction/keep-policy.js";
@@ -202,13 +202,7 @@ export async function runManualCompact(
     return { ok: false, error: "No messages to compact" };
   }
 
-  const incompleteTodos: Array<{ content: string; status: string; priority: string }> =
-    host.getTodoManager()?.getIncompleteTodos() ?? [];
-  const todos = incompleteTodos.map((t) => ({
-    content: t.content,
-    status: t.status as "pending" | "in_progress" | "completed",
-    priority: t.priority as "high" | "medium" | "low",
-  }));
+  const todos = collectIncompleteTodos(host.getTodoManager());
 
   const tokensBeforeEstimate = estimateTokens(messages);
   const actualTokens = host.usage.getContextFillTokens();
@@ -280,7 +274,7 @@ export async function runManualCompact(
     const tokensBefore = result.tokensBefore ?? tokensBeforeEstimate;
     const tokensAfter = result.tokensAfter;
     const compressionRatio = tokensBefore > 0 ? Math.round((1 - tokensAfter / tokensBefore) * 100) : 0;
-    const todoNote = incompleteTodos.length > 0 ? ` (${incompleteTodos.length} todos preserved)` : "";
+    const todoNote = todos.length > 0 ? ` (${todos.length} todos preserved)` : "";
 
     host.compactions.finish(host.lease, { status: "completed", tokensBefore, tokensAfter });
     return {

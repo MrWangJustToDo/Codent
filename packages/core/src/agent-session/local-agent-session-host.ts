@@ -186,6 +186,8 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // session:start handlers inspect the live session, not the empty pre-restore shell.
       await managed.emitBootstrapEvents?.();
 
+      // A create is also a natural boundary: the previous conversation's children are gone.
+      this.pruneDanglingSessions();
       const session = createLocalAgentSession({
         managed,
         manager: this.manager,
@@ -208,7 +210,23 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
     }
   }
 
+  /**
+   * Drop cached sessions whose agent is no longer registered.
+   *
+   * A session switch destroys the previous conversation's subagents through
+   * `manager.destroyAgent` (`ManagedAgent.childIds`), which does not pass through this host — so
+   * only the entry requested by `connect()` used to be cleaned. A host that had opened child
+   * sessions (ACP does) kept every one of them, and with it the child's whole object graph
+   * (transcript, runner, tool registry, log sink) for the life of the process.
+   */
+  private pruneDanglingSessions(): void {
+    for (const id of [...this.sessions.keys()]) {
+      if (!this.manager.getAgent(id)) this.sessions.delete(id);
+    }
+  }
+
   connect(agentId: string): AgentSession | null {
+    this.pruneDanglingSessions();
     // Resolve the live agent FIRST: a session switch destroys the conversation's subagents
     // (`destroyChildAgents` → `manager.destroyAgent`), which happens outside this host. A cached
     // entry can therefore outlive the agent it wraps, and handing it back would give the caller a
@@ -230,6 +248,7 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
   }
 
   async list(): Promise<AgentSessionListEntry[]> {
+    this.pruneDanglingSessions();
     return this.manager.getAgents().map(toListEntry);
   }
 

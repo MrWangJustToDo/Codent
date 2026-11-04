@@ -1,5 +1,6 @@
 import { isAbortError, isCancelledOutputMarker } from "../../../runtime-types/abort.js";
 import { parseToolArguments } from "../../../utils/parse-tool-arguments.js";
+import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import type { ImagePart, ToolCallPart, ToolCallState } from "@tanstack/ai";
 
@@ -53,7 +54,10 @@ export function isImagePart(part: { type?: string } | null | undefined): part is
 export function isCancelledToolCall(part: ToolCallPart | { output?: unknown }): boolean {
   if (isCancelledOutputMarker(part?.output)) return true;
   const output = part?.output as { error?: unknown } | undefined;
-  return typeof output?.error === "string" && isAbortError(new Error(output.error));
+  if (typeof output?.error !== "string") return false;
+  // A tool that rethrows the shared cancel message has no marker and no abort-shaped name; the
+  // message itself is the only trace left after the framework wrapped it as `{ error }`.
+  return output.error === TOOL_CANCELLED_MESSAGE || isAbortError(new Error(output.error));
 }
 
 export function parseToolInput(part: { arguments?: string }): unknown {
@@ -70,6 +74,11 @@ export function getUiToolState(part: ToolCallPart): UiToolState {
 
   // Output means the tool finished — don't keep showing the executing spinner.
   if (part.output !== undefined) {
+    // A cancel is a neutral settle, not a failure: both the synthetic marker and a tool's own
+    // `cancelled: true` result carry `success: false`, and an abort-shaped error body has no
+    // marker at all. Hosts had to call `isCancelledToolCall` themselves after reading this state;
+    // a host that trusted the state alone painted the user's Esc as a red error.
+    if (isCancelledToolCall(part)) return "output-available";
     if (part.state === "error") return "output-error";
     const failed =
       typeof part.output === "object" &&

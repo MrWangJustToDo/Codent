@@ -48,6 +48,7 @@ export {
   buildCompactionPrompt,
   type CompactionTodoItem,
 } from "./compaction-prompt.js";
+export { collectIncompleteTodos } from "./compaction-todos.js";
 
 // Keep policy (token-budget vs legacy turn counting)
 export {

@@ -213,6 +213,51 @@ assert.deepEqual(resolveAutoCompactTrigger({ compactAtPercent: 80 }, 32_000), {
 }
 
 // ============================================================================
+// A summary must not consume the keep budget (second-compaction regression)
+// ============================================================================
+//
+// The channel is append-only, so a second compaction re-projects from
+// `[...history, S1, new, S2]`. If S1's tokens count toward the keep budget, the backward walk
+// reaches the budget AT S1, cuts on the first message after it, and drops the whole previously
+// kept window — which the new summary never covered. A summary is structural (always at the wire
+// head), so both walks must measure the same non-summary sequence.
+{
+  const uiText = (id, role, content) => ({ id, role, parts: [{ type: "text", content }] });
+  const uiHistory = [
+    uiText("p1", "user", `p1 ${"a".repeat(4_000)}`),
+    uiText("p2", "assistant", `p2 ${"b".repeat(4_000)}`),
+  ];
+  const uiAfter = [uiText("n1", "user", "n1"), uiText("n2", "assistant", "n2")];
+  const summaryUI = createCompactionSummaryUIMessage(`OLD SUMMARY ${"s".repeat(4_000)}`);
+  const chronologic = convertMessagesToModelMessages([...uiHistory, summaryUI, ...uiAfter]);
+  const summaryIndex = 2;
+  const budget = 500;
+
+  const cut = findCutPointByBudget(chronologic, budget);
+  assert.ok(
+    cut.cutIndex < summaryIndex,
+    `the cut must land in the pre-summary history, not on the first message after it (got ${cut.cutIndex})`
+  );
+  assert.ok(
+    chronologic.slice(cut.cutIndex).some((message) => JSON.stringify(message).includes("p2")),
+    "the kept window still contains pre-summary history"
+  );
+
+  const secondSummaryUI = createCompactionSummaryUIMessage("NEW SUMMARY");
+  const afterSecond = convertMessagesToModelMessages([...uiHistory, summaryUI, ...uiAfter, secondSummaryUI]);
+  const wire = getModelVisibleMessages(afterSecond, { keepRecentTokens: budget });
+  assert.ok(
+    JSON.stringify(wire).includes("p2"),
+    "a second compaction must not drop the previously kept window (the new summary never covered it)"
+  );
+  assert.equal(
+    wire.filter((message) => JSON.stringify(message).includes("SUMMARY")).length,
+    1,
+    "only the latest checkpoint is on the wire; older summaries are already folded into it"
+  );
+}
+
+// ============================================================================
 // Single default source: both createCompactionConfig paths resolve to 80%
 // ============================================================================
 assert.equal(createCompactionConfig({}).compactAtPercent, 80, "explicit-empty path → schema default 80");

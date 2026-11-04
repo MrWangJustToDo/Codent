@@ -65,6 +65,9 @@ import type { ModelMessage } from "@tanstack/ai";
  */
 const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 
+/** Result of one activation transaction — see {@link ExtensionRunner.activateInstance}. */
+type ActivationOutcome = { kind: "active" } | { kind: "revoked" } | { kind: "failed"; error: Error };
+
 /** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
 
 export interface ExtensionRunnerOptions {
@@ -102,6 +105,14 @@ export interface ExtensionRunnerOptions {
   onToolRegistrationBatchComplete?: () => void;
   /** Called after a tool registered outside activation (runtime registration). */
   onToolRegistrationComplete?: () => void;
+  /**
+   * Called after an extension is disabled.
+   *
+   * Its turn-context sections were collected once for the current user turn and would otherwise
+   * keep telling the model about tools that were just unregistered. The host drops that
+   * extension's sections from the snapshot (not the whole snapshot: other extensions are live).
+   */
+  onExtensionDisabled?: (extensionId: string, notice: string) => void;
   cwd?: string;
   agentId?: string;
   /**
@@ -158,8 +169,24 @@ export class ExtensionRunner {
   private loadSequence = 0;
   /** Resolved dispatch position per extension id (declared `order` + the load sequence). */
   private readonly ranks = new Map<string, DispatchRank>();
-  /** Extension ids with an in-flight `setEnabled` call (a toggle is not re-entrant). */
-  private readonly pendingToggles = new Set<string>();
+  /**
+   * Extension ids with an in-flight `setEnabled` call (a toggle is not re-entrant), keyed to the
+   * CALL rather than just the id.
+   *
+   * The token matters for the revoke path: a hung runtime enable holds this guard, and revoking it
+   * must let a re-enable proceed immediately. With a plain Set the old call's `finally` would delete
+   * whatever entry was there — including a newer call's — so the token keeps the release
+   * identity-checked (`get(id) === token`).
+   */
+  private readonly pendingToggles = new Map<string, symbol>();
+  /**
+   * Extension ids whose in-flight activation is being revoked.
+   *
+   * A revoke deliberately overrides the pending-toggle guard of the enable it is cancelling, so it
+   * needs its own non-reentrancy marker: without it a second disable arriving mid-teardown would
+   * flush/deactivate/unregister the same incarnation twice.
+   */
+  private readonly revoking = new Set<string>();
   /**
    * Per-name tool/command registrations, with owner and rank.
    *
@@ -178,6 +205,8 @@ export class ExtensionRunner {
    * with the same sentence. Cleared when the extension is activated again.
    */
   private readonly refusedRegistrations = new Set<string>();
+  /** One warning per (extension, event) for a subscription outside the observable set. */
+  private readonly warnedInvalidObservable = new Set<string>();
   /** Guards `writeExtensionLog` against a log consumer that itself logs. */
   private emittingExtensionLog = false;
   /** Live context per active extension — the object handed to every handler of that extension. */
@@ -430,6 +459,7 @@ export class ExtensionRunner {
       {
         bus: this.rawBus,
         reportFailure: (err, eventType) => this.reportObserverFailure(ownerId, err, eventType),
+        onInvalidType: (type) => this.refuseObservableType(ownerId, type),
         // Looked up per dispatch: the context is registered right after construction and reads live.
         getContext: () => this.contexts.get(ownerId),
         // Same lease as every other registration: a disabled extension's observer must not keep
@@ -442,6 +472,18 @@ export class ExtensionRunner {
           : {}),
       },
       registrations
+    );
+  }
+
+  /** Warn once per (extension, event) when `observe` names something outside the observable set. */
+  private refuseObservableType(ownerId: string, type: string): void {
+    const key = `${ownerId}\0${type}`;
+    if (this.warnedInvalidObservable.has(key)) return;
+    this.warnedInvalidObservable.add(key);
+    this.writeExtensionLog(
+      "warn",
+      ownerId,
+      `events.observe("${type}") is not an observable extension event; the subscription was ignored.`
     );
   }
 
@@ -581,7 +623,9 @@ export class ExtensionRunner {
       return invalid;
     }
 
-    this.contexts.set(api.id, ctx);
+    // The lease is published by `activateInstance`, together with `activating` — a context that is
+    // registered while the instance is not yet marked activating (or the reverse) is the window a
+    // concurrent toggle could see.
     const instance: ExtensionInstance = {
       api,
       context: ctx,
@@ -599,69 +643,81 @@ export class ExtensionRunner {
     // anyway. No live context either: the lease is what every registration is gated on, and a
     // disabled instance owns none until `applyEnabled` builds a fresh one.
     if (config?.enabled === false) {
-      this.contexts.delete(api.id);
       this.turnContextSections.setDisabledNotice(
         api.id,
         `Extension "${api.name ?? api.id}" is disabled — its tools and commands are unavailable.`
       );
       return instance;
     }
-    this.activating.add(api.id);
-    this.refusedRegistrations.delete(api.id);
+    await this.activateInstance(instance, ctx);
+    return instance;
+  }
+
+  /**
+   * One activation transaction: publish this incarnation's lease, run `activate`, and settle the
+   * instance to `active`, `inactive` (revoked mid-flight) or `error`.
+   *
+   * `loadExtension` and a runtime enable differ in what they do BEFORE (rank assignment, duplicate
+   * replacement) and AFTER (return shape), not in this part. The two copies had already drifted:
+   * a failed RE-enable emitted no `agent:extension-error` and a failed INITIAL load wrote no
+   * disabled notice, so the same activation failure looked different depending on which door it
+   * came through.
+   */
+  private async activateInstance(instance: ExtensionInstance, context: ExtensionContext): Promise<ActivationOutcome> {
+    // All synchronous up to the first await: publish the context and mark the activation together,
+    // so a toggle cannot observe "context exists, activating false" (or the reverse).
+    instance.context = context;
+    this.contexts.set(instance.api.id, context);
+    this.activating.add(instance.api.id);
+    this.refusedRegistrations.delete(instance.api.id);
+    // A notice describes the PREVIOUS incarnation. Clear it when activation STARTS: a turn
+    // collected while `activate` is still awaiting would otherwise carry the provider's section
+    // and the stale "disabled" notice under the same `<ctx kind="ext:<id>">`.
+    this.turnContextSections.clearNotices(instance.api.id);
 
     try {
-      await api.activate(ctx);
-      // A teardown during activation (destroyAll) revokes the context; the activation must not
-      // resurrect the instance afterwards.
-      if (!this.isContextLive(ctx)) {
-        // Only while this context still owns the instance: a disable-then-enable already created a
-        // NEW incarnation, and tearing it down here would release the new context's registrations
-        // and mark it inactive — an instance that reports `active` with no tools left.
-        if (instance.context === ctx) {
-          // `destroyExtension` ran `deactivate` BEFORE this promise resolved, so anything the rest of
-          // `activate` acquired after the revoke has no other owner: release it here (the documented
-          // teardown contract is idempotent, see `ExtensionAPI.deactivate`) and drop any artifact
-          // that still landed on a race.
-          await this.deactivateExtension(instance);
-          this.unregisterInstanceArtifacts(instance);
-          // Anything the tail of `activate` rendered after the teardown would otherwise be replayed
-          // to a later subscriber.
-          this.uiBridge.clearOwner(api.id);
-          instance.state = "inactive";
-        }
-        return instance;
+      await instance.api.activate(context);
+      // A teardown during activation (disable / destroyAll) revokes the lease; the activation must
+      // not resurrect the instance afterwards.
+      if (!this.isContextLive(context)) {
+        // Only while this context still owns the instance: a newer incarnation may already own it,
+        // and rolling that one back would leave an instance that reports `active` with no tools.
+        // `destroyExtension` / the revoke branch ran `deactivate` BEFORE this promise resolved, so
+        // anything the tail of `activate` acquired after the revoke has no other owner: release it
+        // here (teardown is idempotent by contract) and drop artifacts that landed on the race.
+        if (instance.context === context) await this.teardownIncarnation(instance);
+        return { kind: "revoked" };
       }
       instance.state = "active";
+      instance.error = undefined;
       this.options.onToolRegistrationBatchComplete?.();
+      return { kind: "active" };
     } catch (err) {
       const error = toError(err);
-      // Same ownership test as the revoke branch: a superseded activation must not roll back the
-      // incarnation that replaced it.
-      if (instance.context === ctx) {
-        // Release anything acquired before the throw (MCP clients, LSP servers). Artifact rollback
-        // alone leaves those live and a retry stacks a second copy on top of them.
-        await this.deactivateExtension(instance);
-        // Roll back any artifacts registered before the failure so a later re-enable
-        // starts clean (no duplicate registrations).
-        this.unregisterInstanceArtifacts(instance);
-        // A slot rendered before the throw must not survive the rollback (the queued UI flush
-        // would still publish it for an instance reported as `error`).
-        this.uiBridge.clearOwner(api.id);
+      if (instance.context === context) {
+        // Release anything acquired before the throw (MCP clients, LSP servers) and roll back the
+        // artifacts, so a retry starts clean instead of stacking a second copy.
+        await this.teardownIncarnation(instance);
         instance.state = "error";
         instance.error = error;
+        // There is no section on a failed activation either, so without this the model sees the
+        // tools simply vanish — the same reason the runtime-disable path writes one.
+        this.turnContextSections.setDisabledNotice(
+          instance.api.id,
+          `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
+        );
       }
-      // Emitting is the record (and the bootstrap reports it too); the direct logger row duplicated it.
+      // Emitting is the record (and bootstrap reports it too); the direct logger row duplicated it.
       this.emitExtensionEvent("agent:extension-error", {
-        extensionId: api.id,
+        extensionId: instance.api.id,
         phase: "activate",
         error: error.message,
       });
+      return { kind: "failed", error };
     } finally {
       // Identity-checked: a superseded activation must not clear the marker a newer one owns.
-      if (instance.context === ctx) this.activating.delete(api.id);
+      if (instance.context === context) this.activating.delete(instance.api.id);
     }
-
-    return instance;
   }
 
   async destroyExtension(instance: ExtensionInstance): Promise<void> {
@@ -670,11 +726,22 @@ export class ExtensionRunner {
     // *releases* the extension, and a fire-and-forget teardown would drop the last batch. A
     // failing flush is reported and the sequence continues (the extension still gets deactivated).
     await this.flushExtension(instance);
+    await this.teardownIncarnation(instance);
+  }
+
+  /**
+   * Release one incarnation's resources and artifacts — the shared half of every teardown.
+   *
+   * Deliberately does NOT flush: `destroyExtension` (and the revoke branch, which flushes before it
+   * revokes the lease) owns that step, because flush must run while the context is still live. No
+   * `contexts.delete` here either: `unregisterInstanceArtifacts` deletes it identity-checked at the
+   * end, so a newer incarnation's lease is never removed by an older teardown.
+   */
+  private async teardownIncarnation(instance: ExtensionInstance): Promise<void> {
     await this.deactivateExtension(instance);
     this.unregisterInstanceArtifacts(instance);
-    // Clear any surface slots this extension rendered so they do not linger
-    // after the extension is disabled (e.g. a status line it published into the
-    // footer surface).
+    // Clear any surface slots this extension rendered so they do not linger after the extension is
+    // disabled (e.g. a status line it published into the footer surface).
     this.uiBridge.clearOwner(instance.api.id);
     instance.state = "inactive";
   }
@@ -781,9 +848,8 @@ export class ExtensionRunner {
    * Returns a result describing what happened.
    */
   async setEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
-    // A toggle is not re-entrant. Two overlapping calls used to both observe the pre-toggle state
-    // and both run `activate()`, registering two copies of every tool, observer and interceptor.
-    if (this.pendingToggles.has(id)) {
+    // A revoke is a teardown of an in-flight activation; another toggle must not race it.
+    if (this.revoking.has(id)) {
       return { ok: false, message: `Extension "${id}" is already being toggled` };
     }
     // Refuse while an activation is in flight instead of answering from a state that is about to
@@ -794,40 +860,65 @@ export class ExtensionRunner {
     // off (the one remedy a broken extension needs). Revoke the lease first — everything the
     // activation tries from here on is refused — drop what it already registered, and let the
     // revoke branch release its resources if/when it resolves.
+    //
+    // This check comes BEFORE `pendingToggles`: a runtime enable holds BOTH sets (the toggle guard
+    // is added around `applyEnabled`, and `activating` is added inside it), so checking the toggle
+    // guard first answered "already being toggled" and left the hung activation unkillable — the
+    // exact case the revoke branch exists for.
     if (this.activating.has(id)) {
       if (!enabled) {
         const instance = this.extensions.find((e) => e.api.id === id);
         if (instance) {
-          // Flush while the context and its registration are still reachable: the activation may
-          // continue in the background, and `unregisterInstanceArtifacts` clears `flush` below.
-          // Best-effort — a hung activation may still be holding whatever it has not handed over.
-          await this.flushExtension(instance);
-          // Revoke the lease FIRST, then run teardown ourselves. Waiting for the in-flight
-          // `activate` to resolve is not enough: it can observe the still-live context, mark the
-          // instance active, and never call `deactivate()` (its resources then leak), while a
-          // hung activation never resolves and leaves nobody to run the teardown at all.
-          this.contexts.delete(id);
-          this.uiBridge.clearOwner(instance.api.id);
-          await this.deactivateExtension(instance);
-          this.unregisterInstanceArtifacts(instance);
-          instance.state = "inactive";
-          // The marker is cleared too: it exists to stop a SECOND activation from registering a
-          // duplicate, and the revoke above already refused this one's lease. Keeping it forever
-          // (for an activation that may never settle) left the extension impossible to re-enable
-          // for the life of the process. The activation that is still running is fenced instead:
-          // it checks `instance.context === context` before it touches any shared state, so if a
-          // new activation owns the instance by the time it resolves, it stands down.
-          this.activating.delete(instance.api.id);
-          return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
+          this.revoking.add(id);
+          try {
+            // Flush while the context and its registration are still reachable: the activation may
+            // continue in the background, and `unregisterInstanceArtifacts` clears `flush` below.
+            // Best-effort — a hung activation may still be holding whatever it has not handed over.
+            await this.flushExtension(instance);
+            // Revoke the lease FIRST, then run teardown ourselves. Waiting for the in-flight
+            // `activate` to resolve is not enough: it can observe the still-live context, mark the
+            // instance active, and never call `deactivate()` (its resources then leak), while a
+            // hung activation never resolves and leaves nobody to run the teardown at all.
+            this.contexts.delete(id);
+            await this.teardownIncarnation(instance);
+            // The marker is cleared too: it exists to stop a SECOND activation from registering a
+            // duplicate, and the revoke above already refused this one's lease. Keeping it forever
+            // (for an activation that may never settle) left the extension impossible to re-enable
+            // for the life of the process. The activation that is still running is fenced instead:
+            // it checks `instance.context === context` before it touches any shared state, so if a
+            // new activation owns the instance by the time it resolves, it stands down.
+            this.activating.delete(instance.api.id);
+            // The hung enable still holds the toggle guard in its `applyEnabled` frame; its
+            // `finally` is identity-checked, so dropping the entry here lets a re-enable start now
+            // without the old call later deleting the new call's token.
+            this.pendingToggles.delete(id);
+            // The normal disable path captures a custom `disabledContent` from the provider before
+            // destroying it. That would await the very extension being revoked (a hung activation
+            // can hold the provider), so this path uses the generic notice — but it must still tell
+            // the model why the tools vanished, like every other disable.
+            const revokedNotice = `Extension "${instance.api.name ?? id}" is disabled — its tools and commands are unavailable.`;
+            this.turnContextSections.setDisabledNotice(instance.api.id, revokedNotice);
+            this.options.onExtensionDisabled?.(instance.api.id, revokedNotice);
+            return { ok: true, message: `Extension "${id}" disabled; its activation was revoked` };
+          } finally {
+            this.revoking.delete(id);
+          }
         }
       }
       return { ok: false, message: `Extension "${id}" is still activating — try again when it finishes` };
     }
-    this.pendingToggles.add(id);
+    // A toggle is not re-entrant. Two overlapping calls used to both observe the pre-toggle state
+    // and both run `activate()`, registering two copies of every tool, observer and interceptor.
+    if (this.pendingToggles.has(id)) {
+      return { ok: false, message: `Extension "${id}" is already being toggled` };
+    }
+    const toggleToken = Symbol(id);
+    this.pendingToggles.set(id, toggleToken);
     try {
       return await this.applyEnabled(id, enabled);
     } finally {
-      this.pendingToggles.delete(id);
+      // Identity-checked: a revoke may have cleared this entry and a new toggle may own the id.
+      if (this.pendingToggles.get(id) === toggleToken) this.pendingToggles.delete(id);
     }
   }
 
@@ -849,66 +940,17 @@ export class ExtensionRunner {
     }
 
     if (enabled) {
-      this.activating.add(instance.api.id);
       // A fresh context per activation: the context IS the registration lease (see
       // `isContextLive`), so a callback retained from the previous incarnation cannot land its
       // tool/transformer in this one. The registrations object is shared on purpose — it is this
       // instance's bookkeeping, not the incarnation's.
       const context = this.createContext(instance.api, instance.config, instance.registrations);
-      instance.context = context;
-      this.contexts.set(instance.api.id, context);
-      this.refusedRegistrations.delete(instance.api.id);
-      // The disable notice describes the previous incarnation. Clear it when activation STARTS: a
-      // turn collected while `activate` is still awaiting would otherwise carry the provider's
-      // section and the stale "disabled" notice under the same `<ctx kind="ext:<id>">`.
-      this.turnContextSections.clearNotices(instance.api.id);
-      try {
-        await instance.api.activate(context);
-        if (!this.isContextLive(context)) {
-          // Revoked while activating (a disable, or `destroyAll`): stay inactive, register nothing
-          // further — and release whatever the rest of `activate` acquired after the revoke, which
-          // the teardown could not have seen (deactivate is idempotent by contract).
-          //
-          // Only while this context still owns the instance: if a re-enable already created a new
-          // one, the teardown below would release the NEW incarnation's registrations and mark it
-          // inactive. This activation is a dead incarnation; the revoke path has already cleaned
-          // what it had registered.
-          if (instance.context === context) {
-            await this.deactivateExtension(instance);
-            this.unregisterInstanceArtifacts(instance);
-            this.uiBridge.clearOwner(instance.api.id);
-            instance.state = "inactive";
-          }
-          return { ok: false, message: `Extension "${id}" was disabled while activating` };
-        }
-        instance.state = "active";
-        instance.error = undefined;
-        this.options.onToolRegistrationBatchComplete?.();
-        return { ok: true, message: `Extension "${id}" enabled` };
-      } catch (err) {
-        const error = toError(err);
-        if (instance.context === context) {
-          // A retry of an errored instance must release whatever the failed attempt acquired
-          // before rolling back its registrations; otherwise each retry stacks another copy.
-          await this.deactivateExtension(instance);
-          // Roll back any artifacts registered before the failure.
-          this.unregisterInstanceArtifacts(instance);
-          this.uiBridge.clearOwner(instance.api.id);
-          instance.state = "error";
-          instance.error = error;
-          // `clearNotices` ran at activation START (so a stale "disabled" notice could not sit
-          // beside a live section). On failure there is no section either, so without this the
-          // model sees the extension's tools simply vanish with no explanation.
-          this.turnContextSections.setDisabledNotice(
-            instance.api.id,
-            `Extension "${instance.api.id}" failed to activate (${error.message}); its tools and commands are unavailable.`
-          );
-        }
-        return { ok: false, message: `Failed to enable "${id}": ${error.message}` };
-      } finally {
-        // Identity-checked: a superseded activation must not clear the marker a newer one owns.
-        if (instance.context === context) this.activating.delete(instance.api.id);
+      const outcome = await this.activateInstance(instance, context);
+      if (outcome.kind === "active") return { ok: true, message: `Extension "${id}" enabled` };
+      if (outcome.kind === "revoked") {
+        return { ok: false, message: `Extension "${id}" was disabled while activating` };
       }
+      return { ok: false, message: `Failed to enable "${id}": ${outcome.error.message}` };
     }
 
     // Capture the provider's disabledContent BEFORE destroy (destroy unsubscribes
@@ -946,6 +988,7 @@ export class ExtensionRunner {
     for (const [name, body] of sectionNotices) {
       this.turnContextSections.setSectionNotice(instance.api.id, name, body);
     }
+    this.options.onExtensionDisabled?.(instance.api.id, notice);
     return { ok: true, message: `Extension "${id}" disabled` };
   }
 

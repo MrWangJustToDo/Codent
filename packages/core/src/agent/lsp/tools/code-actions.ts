@@ -6,7 +6,14 @@ import { errorMessage } from "../../../utils/errors.js";
 import { truncateText } from "../../../utils/text-truncation.js";
 import { fileUriToPath } from "../shared/format.js";
 
-import { resolvePosition, withResolved } from "./tool-shared.js";
+import {
+  POSITION_PROPERTIES,
+  normalizeLspPath,
+  positionParams,
+  resolvePosition,
+  withResolved,
+  type PositionInput,
+} from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { LspManager } from "../lsp-manager.js";
@@ -79,10 +86,7 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "File path" },
-        line: { type: "number", description: "Line number (1-indexed). Required unless query is provided." },
-        character: { type: "number", description: "Column number (1-indexed). Required unless query is provided." },
-        query: { type: "string", description: "Symbol name to find in the file (alternative to line/character)." },
+        ...POSITION_PROPERTIES,
         endLine: { type: "number", description: "End line for range selection (1-indexed). Defaults to line." },
         endCharacter: {
           type: "number",
@@ -94,16 +98,8 @@ export function createCodeActionsTool(deps: CodeActionsToolDeps) {
       additionalProperties: false,
     },
     execute: async (input: unknown, options: ToolExecutionOptions) => {
-      const params = input as {
-        path?: string;
-        line?: number;
-        character?: number;
-        query?: string;
-        endLine?: number;
-        endCharacter?: number;
-        kind?: string;
-      };
-      const filePath = (params.path ?? "").replace(/^@/, "");
+      const params = positionParams<PositionInput & { endLine?: number; endCharacter?: number; kind?: string }>(input);
+      const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, count: 0, preferredCount: 0 };

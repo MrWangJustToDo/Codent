@@ -25,9 +25,36 @@ export interface TruncateToUtf8BytesOptions {
   lineBoundary?: boolean;
 }
 
-/** UTF-8 byte length of a string. */
+/**
+ * UTF-8 byte length of a string.
+ *
+ * Counts by code unit instead of allocating `TextEncoder().encode(text)`: the log seam calls this
+ * for every tool input/output on the agent's own run path, where the encode produced a full copy
+ * of a value that was about to be reduced to a 200-char preview. Surrogate pairs count 4 bytes; a
+ * lone surrogate encodes as U+FFFD (3), which is what `TextEncoder` writes.
+ */
 export function utf8ByteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      // Includes lone low surrogates (0xdc00–0xdfff → U+FFFD, 3 bytes).
+      bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 /**

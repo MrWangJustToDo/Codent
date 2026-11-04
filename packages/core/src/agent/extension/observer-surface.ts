@@ -51,6 +51,15 @@ export interface ObserverSurfaceDeps {
   isLive?: () => boolean;
   /** Called once when a registration is refused (the runner logs a single warning per revoke). */
   onRefused?: () => void;
+  /**
+   * Called when a subscription names an event outside the declared observable set.
+   *
+   * The types already restrict this in TypeScript, but an extension is arbitrary JS at runtime:
+   * `observe("*")` would otherwise become a second wildcard consumer (the invariant is that the
+   * Event→Log bridge is core's only one), and an internal event name would leak the very events
+   * `observeAny` deliberately withholds.
+   */
+  onInvalidType?: (type: string) => void;
 }
 
 /**
@@ -75,6 +84,14 @@ export function createObserverSurface(
     return true;
   };
 
+  /** The declared observable set — the same one `observeAny` expands. */
+  const observable = new Set<string>(observableExtensionEvents());
+  const refusesType = (type: string): boolean => {
+    if (observable.has(type)) return false;
+    deps.onInvalidType?.(type);
+    return true;
+  };
+
   /** Keep the handler's return, but surface a rejection as a contained failure. */
   const contained =
     <T extends ObservableExtensionEvent>(handler: ExtensionEventObserver<T>) =>
@@ -95,7 +112,7 @@ export function createObserverSurface(
 
   return {
     observe: (type, handler, options) => {
-      if (refused()) return () => {};
+      if (refused() || refusesType(type)) return () => {};
       return track(
         deps.bus.on(type, contained(handler) as AgentEventListener<typeof type>, {
           replay: options?.replay ?? defaultReplay("observe", options),
@@ -116,7 +133,7 @@ export function createObserverSurface(
         for (const unsub of unsubs) unsub();
       });
     },
-    retained: (type) => (refused() ? undefined : deps.bus.retainedValue(type)),
+    retained: (type) => (refused() || refusesType(type) ? undefined : deps.bus.retainedValue(type)),
   };
 }
 

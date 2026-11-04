@@ -243,6 +243,18 @@ export async function* runStreamWithRecovery(options: RecoveryOptions): AsyncIte
 
     try {
       for await (const chunk of stream) {
+        // The continuation prompt belongs to the ATTEMPT that consumed it. Every model call rebuilds
+        // the wire from the channel, so leaving it armed re-injected "Output token limit hit…" on
+        // the next tool iteration of the same `chat()` — after the model had already resumed.
+        //
+        // Disarm on RUN_FINISHED, not on the first delta: a stream that dies mid-answer (a 5xx /
+        // socket reset after some text) is retried restart-style, and clearing at the first chunk
+        // dropped the instruction from that retry — the model got a truncated context and no
+        // "resume directly" directive. RUN_ERROR breaks before this loop yields it, so a failed
+        // attempt keeps the prompt armed for its retry.
+        if (chunk.type === "RUN_FINISHED" && options.managed.run.isWireContinuationArmed()) {
+          options.managed.run.setWireContinuationArmed(false);
+        }
         if (clearRetryOnNextChunk && chunk.type !== "RUN_ERROR") {
           // Stream recovered after a retry — hide retry visibility again.
           clearRetryOnNextChunk = false;

@@ -1,3 +1,4 @@
+import { truncateText } from "@codent/core";
 import { Box, Text } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import { toRaw } from "reactivity-store";
@@ -84,7 +85,7 @@ const ExtensionPanelList = ({
           <Box flexDirection="column" paddingLeft={3} marginBottom={1}>
             {info.description ? (
               <Text color={COLORS.muted} dimColor>
-                {info.description.length > 80 ? `${info.description.slice(0, 80)}…` : info.description}
+                {truncateText(info.description, 81, { marker: "…" })}
               </Text>
             ) : null}
             <Text color={COLORS.muted} dimColor>

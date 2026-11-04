@@ -17,6 +17,7 @@ const {
   getTaskRunState,
   peekTaskPreforkCoordinator,
   readTaskRunPhase,
+  readTaskRunSpawnId,
 } = await import("../dist/dev.mjs");
 
 // --- defaults ---
@@ -25,6 +26,21 @@ const parent = {};
 assert.equal(readTaskRunPhase(parent, "t1"), "running", "unknown tasks default to running");
 assert.equal(readTaskRunPhase(parent, undefined), "running");
 assert.equal(getTaskRunState(parent, "t1"), undefined);
+
+// --- spawn attribution is recorded once ---
+{
+  let currentRun = "run_spawn";
+  const withRun = { getCurrentRunId: () => currentRun };
+  beginTaskRun(withRun, "t-spawn");
+  assert.equal(readTaskRunSpawnId(withRun, "t-spawn"), "run_spawn", "the spawning run is recorded");
+  currentRun = "run_later";
+  beginTaskRun(withRun, "t-spawn");
+  assert.equal(
+    readTaskRunSpawnId(withRun, "t-spawn"),
+    "run_spawn",
+    "a re-entry (retry / wake) does not move the attribution to a later run"
+  );
+}
 
 // --- register + one-way transition ---
 

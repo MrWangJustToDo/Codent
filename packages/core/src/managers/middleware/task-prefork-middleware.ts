@@ -327,7 +327,7 @@ function trySpawn(
     // Fires when the queued run actually acquires a concurrency slot.
     () => {
       deps.emitEvent?.("agent:tool-start", {
-        tool_name: "task",
+        tool_name: BUILTIN_TOOL_NAMES.task,
         tool_call_id: toolCallId,
         tool_input: { prompt, description },
         // Tells the eager start apart from the tool-phase start of the same call id —

@@ -15,7 +15,7 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { captureStreamFinishReason } from "./run-stats.js";
 import { EMPTY_SUMMARY } from "./subagent-output.js";
-import { beginTaskRun, enterTaskPhase } from "./subagent-runs.js";
+import { beginTaskRun, enterTaskPhase, readTaskRunSpawnId } from "./subagent-runs.js";
 import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
 import { finalizeSubagentTask, subagentPreviewOutput } from "./task-result.js";
 import { SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
@@ -30,13 +30,6 @@ import type { ModelMessage, StreamChunk, UIMessage as TanStackUIMessage, UIMessa
  */
 export async function runSubagent(config: SubagentConfig, deps: SubagentRunDeps): Promise<SubagentResult> {
   return executeSubagentRun(config, deps.manager);
-}
-
-/**
- * Get a subagent instance by ID.
- */
-export function getSubagent(manager: AgentManager, subagentId: string) {
-  return manager.getAgent(subagentId);
 }
 
 /**
@@ -59,13 +52,6 @@ export function subagentResultToTaskOutput(result: SubagentResult) {
     ...(result.stopReason ? { stopReason: result.stopReason } : {}),
     success: !result.aborted && !result.incomplete,
   };
-}
-
-/**
- * Destroy a subagent by ID.
- */
-export function destroySubagent(manager: AgentManager, subagentId: string) {
-  manager.destroyAgent(subagentId);
 }
 
 /** Result for an abort that landed before the child could start (or just after spawn). */
@@ -226,6 +212,7 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
         parentManaged.logSubagentLifecycle("phase", {
           subagentId,
           parentTaskToolCallId: taskCallId,
+          run: readTaskRunSpawnId(parentManaged, taskCallId),
           taskPhase: phase,
           ...(childLogPath ? { childLogPath } : {}),
         });
@@ -249,11 +236,13 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     parentManaged.logSubagentLifecycle("created", {
       subagentId,
       parentTaskToolCallId: taskCallId,
+      run: readTaskRunSpawnId(parentManaged, taskCallId),
       ...(childLogPath ? { childLogPath } : {}),
     });
     parentManaged.logSubagentLifecycle("started", {
       subagentId,
       parentTaskToolCallId: taskCallId,
+      run: readTaskRunSpawnId(parentManaged, taskCallId),
       description,
       ...(childLogPath ? { childLogPath } : {}),
     });

@@ -57,7 +57,6 @@ const srcRoot = join(scriptDir, "../src");
  * directory does, and an import out of it is the same kind of inversion.
  *
  * Three root files are not layers in their own right:
- * - `env.ts` (the `env` layer's barrel; the layer itself now lives under `src/env/`);
  * - `dev.ts` — the dev-only barrel;
  * - `index.ts` — the public barrel.
  * `.d.ts` files are declarations, not modules with edges.
@@ -70,8 +69,6 @@ function stripModuleExtension(name) {
 }
 
 const ROOT_FILE_LAYERS = {
-  // `env` resolves from a bare directory import (`from "../env"` → `src/env`).
-  env: "env",
   dev: "dev",
   index: "index",
 };
@@ -222,7 +219,7 @@ const ALLOWED_EDGES = {
   "models → provider": {
     mode: "allow",
     reason: "an entry lists/registers its ModelProvider (provider construction + models.dev lookup)",
-    onlySources: ["config/models-config", "config/model-config", "index"],
+    onlySources: ["config/models-config", "config/model-config"],
   },
   "runtime → provider": { mode: "allow", reason: "runtime owns the ModelProvider" },
 };
@@ -364,6 +361,7 @@ const unlistedLayer = [];
 const unlistedEdge = [];
 const wrongMode = [];
 const deadEdges = [];
+const staleRestrictions = [];
 const valueCycles = [];
 const edges = new Map();
 const files = walkTsFiles(srcRoot);
@@ -385,6 +383,7 @@ for (const file of files) {
       file: relative(join(scriptDir, ".."), file),
       line: edge.line,
       specifier: edge.specifier,
+      sourceWithin: edge.source.within,
       within: edge.target.within,
     };
     (edge.typeOnly ? record.typeOnly : record.runtime).push(where);
@@ -437,6 +436,27 @@ for (const edgeKey of Object.keys(ALLOWED_EDGES)) {
   if (!edges.has(edgeKey)) deadEdges.push(edgeKey);
 }
 
+// No stale narrowing: every name in `onlySources` / `onlyTargets` must still be exercised by an
+// import that uses that edge. `models → provider` kept `index` after `models/index.ts` was deleted,
+// which silently authorized a file that no longer existed (and would have authorized a future one).
+for (const [edgeKey, allowed] of Object.entries(ALLOWED_EDGES)) {
+  const record = edges.get(edgeKey);
+  if (!record) continue; // reported as a dead edge above
+  const entries = [...record.runtime, ...record.typeOnly];
+  if (allowed.onlySources) {
+    const used = new Set(entries.map((entry) => entry.sourceWithin));
+    for (const name of allowed.onlySources) {
+      if (!used.has(name)) staleRestrictions.push(`${edgeKey} onlySources: ${name}`);
+    }
+  }
+  if (allowed.onlyTargets) {
+    const used = new Set(entries.map((entry) => entry.within));
+    for (const name of allowed.onlyTargets) {
+      if (!used.has(name)) staleRestrictions.push(`${edgeKey} onlyTargets: ${name}`);
+    }
+  }
+}
+
 // No runtime-value module cycles (type-only imports are erased and exempt).
 valueCycles.push(...findCycles(valueGraph));
 
@@ -487,7 +507,7 @@ function findCycles(graph) {
   return components;
 }
 
-const problems = [...unlistedLayer, ...unlistedEdge, ...wrongMode, ...deadEdges, ...valueCycles];
+const problems = [...unlistedLayer, ...unlistedEdge, ...wrongMode, ...deadEdges, ...staleRestrictions, ...valueCycles];
 
 if (problems.length > 0) {
   if (unlistedLayer.length > 0) {
@@ -522,6 +542,13 @@ if (problems.length > 0) {
       console.error(`  [dead-edge] ${edgeKey}  — ${ALLOWED_EDGES[edgeKey].reason}`);
     }
     console.error("  Delete the grant, or import through it. An edge nobody uses is not a boundary.");
+    console.error("");
+  }
+
+  if (staleRestrictions.length > 0) {
+    console.error("layer-boundary: stale narrowing(s) — a name the edge no longer uses:");
+    for (const entry of staleRestrictions) console.error(`  [stale-restriction] ${entry}`);
+    console.error("  Delete it: a stale allowlist entry authorizes a file that no longer exists.");
     console.error("");
   }
 

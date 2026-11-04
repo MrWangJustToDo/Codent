@@ -126,7 +126,17 @@ export function findCutPointByBudget(
 
   let accumulated = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
-    accumulated += estimateMessageTokens(messages[i]!);
+    const message = messages[i]!;
+    // A compaction summary is structural, not history to re-keep: the wire projection always
+    // puts the latest one at the head regardless of this budget. Counting its tokens made a
+    // SECOND compaction cut earlier in the chronological chain than the summarizer did on the
+    // summary-first wire (the summary sat where kept messages now sit), so the kept messages
+    // the summarizer deliberately left in context were dropped from the projection while the
+    // new summary never covered them. Skipping it here makes both walks measure the same
+    // message set — the sequence after the summary is identical in both orders.
+    if (!isCompactionSummaryModelMessage(message)) {
+      accumulated += estimateMessageTokens(message);
+    }
 
     if (accumulated < budgetTokens) continue;
 

@@ -58,17 +58,3 @@ export function formatLocationLink(link: LocationLink, rootDir: string): string 
   const col = link.targetRange.start.character + 1;
   return `${path}:${line}:${col}`;
 }
-
-/**
- * Convert a file path to a `file://` URI.
- *
- * Windows drive paths need three slashes (`file:///C:/dir/f.ts`): two would make `C:` parse as
- * the host. POSIX paths already start with `/`, so two slashes are correct for them.
- */
-export function pathToFileUri(absPath: string): string {
-  const normalized = toPosixPath(absPath);
-  if (normalized.startsWith("/")) {
-    return `file://${normalized}`;
-  }
-  return `file:///${normalized}`;
-}

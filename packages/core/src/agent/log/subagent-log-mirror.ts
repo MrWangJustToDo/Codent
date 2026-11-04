@@ -45,6 +45,8 @@ export interface SubagentLogDetails {
   childLogPath?: string;
   /** Set for the `phase` entry (summary / limit). */
   taskPhase?: "summary" | "limit";
+  /** The parent run that spawned the child; settle-time rows outlive that run's pump. */
+  run?: string;
   /** Terminal fault, so a parent index can distinguish a failure from a cancel. */
   error?: string;
   /** Completion usage, so the parent index carries the same statistics the child result reports. */

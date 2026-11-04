@@ -220,6 +220,43 @@ const ext = (id) => ({
 }
 
 // ============================================================================
+// 3b. A host tool filled into the record AFTER the extension claimed the name survives unload
+//
+// `agent-bootstrap` writes `tools.task` directly. `seed` used to return early whenever a stack
+// existed, so the `undefined` incumbent created by `register` was never filled: unloading the
+// extension deleted the name instead of restoring the host tool. The same early return must NOT
+// adopt the extension's own materialized tool as the incumbent (section 3).
+// ============================================================================
+
+{
+  const managed = makeAgent({});
+  managed.registerTool(
+    {
+      name: "late_host_tool",
+      description: "extension claim",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => ({}),
+    },
+    "ext_late_host"
+  );
+
+  const hostTool = {
+    name: "late_host_tool",
+    description: "host tool filled after the extension",
+    inputSchema: { type: "object", properties: {} },
+    execute: async () => ({}),
+  };
+  managed.tools.late_host_tool = hostTool;
+
+  managed.unregisterExtensionTool("late_host_tool", "ext_late_host");
+  assert.equal(
+    managed.tools.late_host_tool,
+    hostTool,
+    "the host tool seeded after the extension must be restored, not deleted"
+  );
+}
+
+// ============================================================================
 // 4. Two extensions on one name: the name is handed back in reverse order
 // ============================================================================
 

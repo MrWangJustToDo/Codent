@@ -12,11 +12,15 @@
  * How many containers below a MESSAGE are copied.
  *
  * Six, because the message level costs one: at five the per-part depth was one less than the
- * part-rooted clone, so `part.output[0].content` (and its elements) were shared with the UI channel
- * and a transformer pushing into them reached the persisted transcript. Six keeps the part depth
- * the durability invariant was written for while also covering the message's own fields
- * (`toolCalls`, `metadata`, `structuredOutput`). Payload strings stay shared: they are immutable
- * (and can be large).
+ * part-rooted clone, so `part.output[0].content` was shared with the UI channel and a transformer
+ * pushing into it reached the persisted transcript. Six keeps the part depth the durability
+ * invariant was written for while also covering the message's own fields (`toolCalls`, `metadata`,
+ * `structuredOutput`). Payload strings stay shared: they are immutable (and can be large).
+ *
+ * Boundary, stated exactly: the `content` ARRAY and the part objects in it are copied (six levels
+ * reach `part.output[i].content`); an object nested INSIDE a `content` element is one level deeper
+ * and stays shared. Replace that value instead of mutating it in place — the documented edits
+ * (`part.text`, `part.source.data`, pushing a part) are all within the copied depth.
  */
 export const MODEL_MESSAGE_OWNERSHIP_DEPTH = 6;
 

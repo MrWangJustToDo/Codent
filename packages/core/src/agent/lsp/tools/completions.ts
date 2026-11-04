@@ -8,6 +8,8 @@ import { resolveSymbolPosition } from "../shared/resolve-position.js";
 import { insertDot, shouldSyntheticTrigger, syntheticDotLocks } from "../shared/synthetic-dot.js";
 import { SYNTHETIC_DOT_SETTLE_DELAY_MS } from "../shared/timing.js";
 
+import { POSITION_PROPERTIES, normalizeLspPath, positionParams, type PositionInput } from "./tool-shared.js";
+
 import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { FileSync } from "../file-sync.js";
 import type { LspManager } from "../lsp-manager.js";
@@ -89,10 +91,7 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "File path" },
-        line: { type: "number", description: "Line number (1-indexed). Required unless query is provided." },
-        character: { type: "number", description: "Column number (1-indexed). Required unless query is provided." },
-        query: { type: "string", description: "Symbol name to find in the file (alternative to line/character)." },
+        ...POSITION_PROPERTIES,
         limit: { type: "number", description: "Max results to return (default: 20)." },
         trigger: {
           type: "string",
@@ -105,15 +104,8 @@ export function createCompletionsTool(deps: CompletionsToolDeps) {
       additionalProperties: false,
     },
     execute: async (input: unknown, options: ToolExecutionOptions) => {
-      const params = input as {
-        path?: string;
-        line?: number;
-        character?: number;
-        query?: string;
-        limit?: number;
-        trigger?: "auto" | "none";
-      };
-      const filePath = (params.path ?? "").replace(/^@/, "");
+      const params = positionParams<PositionInput & { limit?: number; trigger?: "auto" | "none" }>(input);
+      const filePath = normalizeLspPath(params.path) ?? "";
       const limit = params.limit ?? 20;
       const trigger = params.trigger ?? "auto";
       let line = params.line;

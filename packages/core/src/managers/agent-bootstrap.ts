@@ -20,6 +20,7 @@ import { BUILTIN_SKILLS } from "../agent/skills/builtin";
 import { createSkillsExtension } from "../agent/skills/extension.js";
 import { SkillRegistry, type SkillDirectory } from "../agent/skills/skill-registry.js";
 import { createTaskTool } from "../agent/subagent/task-tool.js";
+import { BUILTIN_TOOL_NAMES } from "../agent/tools/catalog/tool-names.js";
 import { errorMessage } from "../utils/errors.js";
 
 import type { ResolvedCoreEnv } from "../env";
@@ -211,7 +212,7 @@ export class AgentBootstrap {
       skillRegistry.registerAll(BUILTIN_SKILLS);
     }
 
-    managed.tools.task = createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager });
+    managed.tools[BUILTIN_TOOL_NAMES.task] = createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager });
     report.skills = { count: skillRegistry.size };
     return skillRegistry;
   }
@@ -261,6 +262,9 @@ export class AgentBootstrap {
       onRemoveToolOutputDecoratorOwner: (ownerId) => managed.removeToolOutputDecoratorOwner(ownerId),
       onToolRegistrationBatchComplete: publishTools,
       onToolRegistrationComplete: publishTools,
+      // The turn's extension sections were snapshotted before the model call; a mid-turn disable
+      // must remove that extension's section or the model keeps calling tools that just vanished.
+      onExtensionDisabled: (extensionId, notice) => managed.clearExtensionTurnContext(extensionId, notice),
       cwd: rootPath,
       agentId: managed.id,
       getCoreEnv: () => env,

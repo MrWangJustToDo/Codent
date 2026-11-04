@@ -6,7 +6,7 @@ import { errorMessage } from "../../../utils/errors.js";
 import { findDefinition, getNodeAtPosition } from "../../tree-sitter/symbol-extractor.js";
 import { formatLocation, formatLocationLink } from "../shared/format.js";
 
-import { resolvePosition, withResolved } from "./tool-shared.js";
+import { POSITION_PROPERTIES, normalizeLspPath, positionParams, resolvePosition, withResolved } from "./tool-shared.js";
 
 import type { ToolExecutionOptions } from "../../extension/types.js";
 import type { TreeSitterManager } from "../../tree-sitter/parser-manager.js";
@@ -92,18 +92,13 @@ export function createDefinitionTool(deps: DefinitionToolDeps) {
       "Go to the definition of a symbol at a position (1-indexed line/character, or a query symbol name). Returns the file path and location of the definition.",
     inputSchema: {
       type: "object",
-      properties: {
-        path: { type: "string", description: "File path" },
-        line: { type: "number", description: "Line number (1-indexed). Required unless query is provided." },
-        character: { type: "number", description: "Column number (1-indexed). Required unless query is provided." },
-        query: { type: "string", description: "Symbol name to find in the file (alternative to line/character)." },
-      },
+      properties: { ...POSITION_PROPERTIES },
       required: ["path"],
       additionalProperties: false,
     },
     execute: async (input: unknown, options: ToolExecutionOptions) => {
-      const params = input as { path?: string; line?: number; character?: number; query?: string };
-      const filePath = (params.path ?? "").replace(/^@/, "");
+      const params = positionParams(input);
+      const filePath = normalizeLspPath(params.path) ?? "";
 
       const pos = await resolvePosition(deps.manager, filePath, params, { signal: options?.abortSignal });
       if (pos.error) return { text: pos.error, count: 0 };

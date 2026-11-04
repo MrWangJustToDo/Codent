@@ -3,7 +3,6 @@
  */
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
-import { toPosixPath } from "../../utils/posix-path.js";
 import { AGENT_DATA_DIR } from "../../utils/workspace-paths.js";
 
 /** Project-local extension directory (relative to CoreEnv rootPath). */
@@ -74,13 +73,4 @@ export function isExtensionModuleFile(name: string): boolean {
   if (lower.endsWith(".d.ts")) return false;
   if (/\.(test|spec)\.(m?[jt]s)$/i.test(lower)) return false;
   return /\.(mjs|cjs|js|ts)$/i.test(lower);
-}
-
-/** Build a `file://` URL for dynamic import without depending on `node:url`. */
-export function pathToFileUrl(absPath: string): string {
-  const normalized = toPosixPath(absPath);
-  if (normalized.startsWith("/")) {
-    return `file://${normalized}`;
-  }
-  return `file:///${normalized}`;
 }

@@ -340,8 +340,10 @@ export function createCompactedMessages(summary: string): ModelMessage[] {
  *    prefix is summarized separately under `<turn_prefix>` and merged into the
  *    final SUMMARY.
  * 4. Optionally archive the compressed slice and append a pointer to the summary.
- * 5. Return `cutIndex` relative to the input `messages` array (including any
- *    summary-first offset). The caller maps that onto the chronological channel.
+ * 5. Return `cutIndex` relative to the input without its leading previous-summary
+ *    message. It is the decision-side record of the boundary: `applyCompactionResult`
+ *    appends the checkpoint and the stateless projection re-derives the same boundary
+ *    (both walks ignore summary tokens), so no `absoluteCut` mapping is needed.
  *
  * @param messages - Chronological or summary-first model-visible messages
  * @param config - Compaction configuration (keepRecentTokens budget; see keep-policy.ts)
@@ -416,9 +418,12 @@ export async function autoCompact(
     return { compacted: false, tokensBefore, tokensAfter: tokensBefore, type: "auto" };
   }
 
-  // Convert cutIndex from "relative to llmMessages" to "relative to raw
-  // context.messages" by subtracting the summary message offset. This makes
-  // applyCompactionResult's `absoluteCut = oldCompactIndex + cutIndex` correct.
+  // `cutIndex` is relative to the input WITHOUT its leading previous-summary message (the
+  // summary travels separately as `existingSummary`). It stays the decision-side record: the
+  // channel is append-only, so `applyCompactionResult` cannot slice by it — the stateless
+  // projection re-derives the boundary from the channel with the same budget. That works
+  // because `findCutPointByBudget` never counts a summary's tokens, so the summary-first wire
+  // and the chronological chain measure the same message sequence.
   const cutIndex = llmCutIndex - summaryOffset;
 
   // Decision-side observability: record the cut plan and the size of the slice

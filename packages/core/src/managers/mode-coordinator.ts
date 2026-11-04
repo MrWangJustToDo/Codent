@@ -109,6 +109,10 @@ export class ModeCoordinator {
   /** Restore both modes; a restored plan phase wins over the persisted auto flag. */
   restore(plan: PlanModeState | null | undefined, auto: boolean): void {
     this.deps.planMode.restoreState(plan);
-    this.deps.autoMode.setEnabled(this.deps.planMode.getPhase() === "off" && auto);
+    // `restore`, not `setEnabled`: the load is not a user mode switch. Firing the live callback
+    // here wrote `mode:change` into the TARGET's log while its envelope still named the departure
+    // (the sink is re-bound before the load, adoption happens after), and attempted a persist the
+    // service rejects — the target's own `session:restore` is the record.
+    this.deps.autoMode.restore(this.deps.planMode.getPhase() === "off" && auto);
   }
 }

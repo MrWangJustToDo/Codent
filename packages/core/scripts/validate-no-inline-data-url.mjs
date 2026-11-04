@@ -6,11 +6,11 @@
  * the payload was captured, and on whether a comma is allowed inside the media type.
  */
 
-import { runGuard } from "./helpers/source-guard.mjs";
+import { runPackageGuard } from "./helpers/source-guard.mjs";
 
-runGuard({
+runPackageGuard({
   name: "validate-no-inline-data-url",
-  definitionFiles: ["utils/data-url.ts"],
+  definitionFiles: ["packages/core/src/utils/data-url.ts"],
   patterns: [
     { re: /\/\^data:/, reason: "inline data-URL regex" },
     { re: /data:\[\^/, reason: "inline data-URL regex" },

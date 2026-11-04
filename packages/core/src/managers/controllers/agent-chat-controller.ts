@@ -27,6 +27,7 @@ import {
 import { peekTaskPreforkCoordinator } from "../../agent/subagent/subagent-runs.js";
 import { reconcileSettledTaskParts } from "../../agent/subagent/task-background.js";
 import { CLIENT_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
+import { captureSessionStaleness } from "../../agent/turn-context/session-staleness.js";
 import { AgentUIChannel } from "../../agent/ui/ui-channel.js";
 import { toError } from "../../utils/errors.js";
 import { ApprovalDecisionCoordinator } from "../approval-decision-coordinator.js";
@@ -856,12 +857,16 @@ export class AgentChatController {
 
         // A settled turn cannot still be waiting on a tool the engine never ran. TanStack parks a
         // whole batch on its approval-gated call and holds every plain call beside it; when the
-        // approval is answered in the same run, a held call can be left `input-complete` with no
-        // result — no error, no output, so its row spins forever and the wire carries an
+        // approval is answered (or the run ends before it) a held call can be left `input-complete`
+        // with no result — no error, no output, so its row spins forever and the wire carries an
         // unanswered call. `waitingForUser === false` proves no later phase can produce that
         // result, so settle it: the model sees a cancelled result and can retry, and the UI stops
         // loading. A parked turn keeps its calls (the resume still owes them).
-        if (outcomeKind === "finished" && !waitingForUser) {
+        //
+        // This is not only a `finished` rule: an `error`/`aborted` turn has no later phase either,
+        // and leaving a valid `input-complete` call behind meant the NEXT user turn continued that
+        // tool phase — executing the failed turn's arguments (possibly a write).
+        if (outcomeKind !== "waiting" && !waitingForUser) {
           this.applyCancelledIncompleteTools(true);
           messages = this.channel.getMessages();
         }
@@ -896,10 +901,16 @@ export class AgentChatController {
           this.managed.statusController.onRunError(message, normalized.stack);
           // Same terminal rule as the normal path: an error is not a wait.
           this.approvalDecisions.denyPendingApprovals(TOOL_CANCELLED_MESSAGE);
+          // …and it owes no tool result either. Without this the catch path finalized with a held
+          // `input-complete` call still on the wire, so the next turn executed it. A pending
+          // `ask_user` is the exception, exactly as on the normal path: the failure did not answer
+          // the user's question, and cancelling it would make the session unanswerable.
+          const stillWaiting = hasPendingInteraction(this.channel.getMessages());
+          if (!stillWaiting) this.applyCancelledIncompleteTools(true);
           this.managed.runFinalizer.finalizeChat({
             kind: "error",
             messages: this.channel.getMessages(),
-            waitingForUser: false,
+            waitingForUser: stillWaiting,
             phases: toolPhases,
             turnStartedAt: turnStart,
             usageBefore: usageAtStart,
@@ -939,6 +950,22 @@ export class AgentChatController {
   }
 
   private async executeStream(messages: UIMessage[], token: RunToken): Promise<void> {
+    // A run can outlive the session it belongs to: a session switch `stop()`s the pump, but a tool
+    // that ignores the abort signal (extension/MCP) resolves later, after the target transcript has
+    // been adopted into this same channel. `token.isCurrent` alone cannot cover that window — the
+    // abandoned stream's own `onAbort` fires before this method checks anything — so capture the
+    // generation BEFORE the span and re-check it on every terminal write.
+    //
+    // Generation only, deliberately NOT `isSessionSwitching`: a switch is "admitted" before it
+    // stops the run (`resumeInner` drains persists first), and in that window this run is still the
+    // live one. Treating the admission as staleness swallowed a real stream error (no `error`
+    // status, no `agent:stream-error`, turn persisted as `finished`). The generation moves at the
+    // COMMIT, which is exactly when writing here would hit the target transcript.
+    const isStaleSession = captureSessionStaleness(this.channel);
+    const applyAbortFallback = (): void => {
+      if (isStaleSession()) return;
+      this.applyCancelledIncompleteTools(true);
+    };
     // AbortController is created inside prepareForRun (via runAgentStream) and wired
     // directly into TanStack chat. Do not create a second controller here — that used
     // to leave ManagedAgent.abort() aborting a controller chat was not listening to.
@@ -950,28 +977,31 @@ export class AgentChatController {
       channel: this.channel,
       flagEmptyStream: true,
       abortErrorAsCancel: false,
-      onAbort: () => this.applyCancelledIncompleteTools(true),
+      onAbort: applyAbortFallback,
       onAbortError: (message) => {
-        if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
+        if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "aborted") return;
         // Abort-shaped does NOT mean the user aborted: `isAbortedNow` already ruled out our
         // signal/status, so this turn failed and must finalize as `error` (no memory extraction).
         this.managed.statusController.onExternalError(message);
-        this.applyCancelledIncompleteTools(true);
+        applyAbortFallback();
       },
       onEmpty: (message) => {
-        if (!token.isCurrent || this.managed.getStatus() === "error") return;
+        if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "error") return;
         this.managed.statusController.onRunError(message);
       },
       onError: (message) => {
-        if (!token.isCurrent || this.managed.getStatus() === "aborted") return;
+        if (isStaleSession() || !token.isCurrent || this.managed.getStatus() === "aborted") return;
         // Surface stream failures in status + `agent:stream-error` (not silent Completed). The event
         // is the single record: its log rule writes the error row, so logging here duplicated it.
         this.managed.statusController.onRunError(message);
       },
     });
 
+    // The switch committed while this stream was unwinding: the transcript on the channel now
+    // belongs to the target session, so neither the cancel marker nor status work here applies.
+    if (isStaleSession()) return;
     if (!token.isCurrent || this.managed.getStatus() === "aborted") {
-      this.applyCancelledIncompleteTools(true);
+      applyAbortFallback();
       return;
     }
     if (result.aborted) return; // onAbort already applied the framework fallback

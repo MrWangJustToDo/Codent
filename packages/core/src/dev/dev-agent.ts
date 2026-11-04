@@ -146,6 +146,7 @@ export {
   enterTaskSummaryPhase,
   getTaskRunState,
   readTaskRunPhase,
+  readTaskRunSpawnId,
 } from "../agent/subagent/subagent-runs.js";
 export { TaskRunState } from "../agent/subagent/task-run-state.js";
 export {

@@ -13,6 +13,7 @@ import { agentStreamKey } from "../stream-hub";
 import { isProgressSummaryEligible, summarizeProgress, type SummarizerSpawn } from "./progress-summary.js";
 import { deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";
 import { EMPTY_SUMMARY, truncateSummary } from "./subagent-output.js";
+import { readTaskRunSpawnId } from "./subagent-runs.js";
 import {
   applySubagentFailureNotice,
   applySubagentStopNotice,
@@ -253,6 +254,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     parentManaged.logSubagentLifecycle("stopped", {
       subagentId,
       parentTaskToolCallId,
+      run: readTaskRunSpawnId(parentManaged, parentTaskToolCallId),
       ...(aborted ? { stopReason } : {}),
       ...(failed && errorMessage ? { error: errorMessage } : {}),
       ...(childLogPath ? { childLogPath } : {}),
@@ -261,6 +263,7 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     parentManaged.logSubagentLifecycle("completed", {
       subagentId,
       parentTaskToolCallId,
+      run: readTaskRunSpawnId(parentManaged, parentTaskToolCallId),
       iterations: statusFlags.iterations,
       maxIterations: statusFlags.maxIterations,
       durationMs,

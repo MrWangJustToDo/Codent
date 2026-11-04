@@ -21,7 +21,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { ExtensionRegistryService, createTimeoutAbort, defineServerTool, withTimeoutAbort } from "../dist/dev.mjs";
+import {
+  ExtensionRegistryService,
+  TOOL_CANCELLED_MESSAGE,
+  createTimeoutAbort,
+  defineServerTool,
+  withTimeoutAbort,
+} from "../dist/dev.mjs";
 // The cancel verdict is a render-layer reader and lives on the public entry, not the internal
 // one — same split as validate-websearch-providers.mjs / validate-cancel-semantics.mjs.
 import { isAbortError } from "../dist/index.mjs";
@@ -140,7 +146,10 @@ function extContext() {
 
   const run = new AbortController();
   const pending = tool.execute({}, { toolCallId: "c1", abortSignal: run.signal, context: {} });
-  run.abort();
+  // The production reason is a bare string (`managed.abort("user-cancelled")`). Once the tool
+  // boundary turns it into `{ error: message }`, message-only readers (UI / ACP / activity summary)
+  // have nothing else to classify on, so the wrapper must keep the AbortError identity.
+  run.abort("user-cancelled");
 
   let error;
   try {
@@ -149,6 +158,10 @@ function extContext() {
   } catch (e) {
     error = e;
   }
+  assert.equal(error.name, "AbortError", "a cancel keeps its identity when the wrapper turns the reason into an Error");
+  assert.equal(error.code, "aborted", "…including the code the shared classifier accepts");
+  assert.equal(error.message, TOOL_CANCELLED_MESSAGE, "the cancel message is the shared constant, not a copy");
+  assert.doesNotMatch(error.message, /user-cancelled/, "the internal reason token must not leak to the UI or model");
   assert.equal(isAbortError(error, run.signal), true, "a run abort wins: the call settles as cancelled");
 }
 
@@ -209,6 +222,7 @@ function extContext() {
   const service = new ExtensionRegistryService();
   const ctx = extContext();
   let sawDeadlineSignal = false;
+  let sawTimeoutMs;
   let runAbortedAtDeadline = null;
   service.registerTool(
     {
@@ -219,6 +233,7 @@ function extContext() {
       execute: (_input, options) =>
         new Promise((_resolve, reject) => {
           sawDeadlineSignal = options.deadlineSignal instanceof AbortSignal;
+          sawTimeoutMs = options.timeoutMs;
           options.deadlineSignal.addEventListener(
             "abort",
             () => {
@@ -241,6 +256,7 @@ function extContext() {
     error = e;
   }
   assert.equal(sawDeadlineSignal, true, "an extension tool with timeoutMs receives a deadlineSignal");
+  assert.equal(sawTimeoutMs, 30, "the extension sees the budget it declared on its execution context");
   assert.equal(runAbortedAtDeadline, false, "its `abortSignal` stays live across the deadline");
   assert.equal(error.code, "timeout");
   assert.equal(isAbortError(error, run.signal), false, "…and the timeout is still not a cancel");

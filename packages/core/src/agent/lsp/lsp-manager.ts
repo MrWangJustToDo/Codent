@@ -8,10 +8,10 @@
  */
 
 import { errorMessage } from "../../utils/errors.js";
+import { pathToFileUrl } from "../../utils/file-url.js";
 
 import { getLanguageIdFromPath } from "./language-map.js";
 import { findLombokJar } from "./lombok.js";
-import { pathToFileUri } from "./shared/format.js";
 import { RESTART_INITIAL_BACKOFF_MS, RESTART_MAX_BACKOFF_MS, RESTART_MAX_ATTEMPTS } from "./shared/timing.js";
 
 import type { LspConnection, LspServerConfig } from "../../env/lsp";
@@ -276,7 +276,7 @@ export class LspManager {
 
   /** Get a file URI from a path. */
   getFileUri(filePath: string): string {
-    return pathToFileUri(this.resolvePath(filePath));
+    return pathToFileUrl(this.resolvePath(filePath));
   }
 
   /** Resolve an absolute path from potentially relative input. */

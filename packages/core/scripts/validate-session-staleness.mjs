@@ -15,6 +15,8 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   AgentUIChannel,
@@ -159,6 +161,41 @@ const userRow = () => [{ id: "u1", role: "user", parts: [{ type: "text", content
   assert.equal(persisted.length, 0);
   assert.equal(channel.getMessages().length, 1);
   console.log("✓ background drops a completion read across a session commit");
+}
+
+// ---------------------------------------------------------------------------
+// 6. The chat controller's abort fallback uses the same guard.
+// ---------------------------------------------------------------------------
+//
+// The abort path is the one terminal write that runs from INSIDE the abandoned stream (`onAbort`),
+// before the controller can consult `token.isCurrent`. Without the guard, a tool that ignores the
+// signal let an old run patch the transcript the target session had already adopted — cancelling a
+// restored `ask_user` and leaving the session parked on a question nothing could answer.
+{
+  const controller = readFileSync(
+    fileURLToPath(new URL("../src/managers/controllers/agent-chat-controller.ts", import.meta.url)),
+    "utf8"
+  );
+  assert.match(
+    controller,
+    /const isStaleSession = captureSessionStaleness\(this\.channel\);/,
+    "the abort fallback captures the session generation before the stream starts"
+  );
+  assert.ok(
+    !/captureSessionStaleness\(\s*this\.channel,\s*\(\) => this\.managed\.isSessionSwitching\(\)/.test(controller),
+    "an admitted switch is not staleness: the run is still live while the switch drains persists"
+  );
+  assert.match(controller, /onAbort: applyAbortFallback/, "onAbort must go through the guarded fallback");
+  assert.ok(
+    !/onAbort: \(\) => this\.applyCancelledIncompleteTools\(true\)/.test(controller),
+    "the unguarded abort write is the regression this pins"
+  );
+  assert.match(
+    controller,
+    /if \(isStaleSession\(\)\) return;[\s\S]{0,120}if \(!token\.isCurrent/,
+    "the post-span terminal branch must drop a stale session before touching its transcript"
+  );
+  console.log("✓ the chat controller's abort fallback is session-generation guarded");
 }
 
 console.log("session-staleness validation passed");

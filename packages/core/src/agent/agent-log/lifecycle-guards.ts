@@ -56,25 +56,34 @@ export function flushActiveAgentLogsSync(): void {
  * Process-wide rather than per-agent because the path that needs them most — a hard exit with a
  * live session — never runs agent teardown, so there is no per-agent registry to consult.
  *
- * Two sets because order is the contract: a user flush commonly writes through `ctx.logger`, whose
+ * Two maps because order is the contract: a user flush commonly writes through `ctx.logger`, whose
  * entries only reach the file when the log sink is flushed. The sink's own flush is registered by
  * the built-in log extension at agent construction (i.e. FIRST), so a single insertion-ordered set
  * ran it before every user flush and silently dropped what they wrote. Finalizers always run last.
  */
-const extensionExitFlushes = new Set<() => void>();
-const extensionExitFinalizers = new Set<() => void>();
+const extensionExitFlushes = new Map<string, () => void>();
+const extensionExitFinalizers = new Map<string, () => void>();
+let anonymousExitFlushSeq = 0;
 
 /**
  * Register an extension's synchronous exit flush. Returns the disposer (idempotent).
  *
  * `last: true` marks a finalizer (the log sink's own flush) that every ordinary flush must run
- * before.
+ * before. `ownerId` names the registration (agent + extension id): without it the registry was a
+ * `Set` keyed by function identity, so two agents loading the same module-level function shared
+ * one entry — disabling the extension on agent A removed the entry agent B still needed.
  */
-export function registerExtensionExitFlush(flush: () => void, options?: { last?: boolean }): () => void {
+export function registerExtensionExitFlush(
+  flush: () => void,
+  options?: { last?: boolean; ownerId?: string }
+): () => void {
   const target = options?.last ? extensionExitFinalizers : extensionExitFlushes;
-  target.add(flush);
+  const key = options?.ownerId ?? `anonymous-${++anonymousExitFlushSeq}`;
+  target.set(key, flush);
+  const registered = target.get(key);
   return () => {
-    target.delete(flush);
+    // Identity-checked: a disposer retained across a re-register must not remove the newer flush.
+    if (target.get(key) === registered) target.delete(key);
   };
 }
 
@@ -86,14 +95,14 @@ export function registerExtensionExitFlush(flush: () => void, options?: { last?:
  * so the state those flushes just wrote is what lands on disk.
  */
 export function flushExtensionExitFlushesSync(): void {
-  for (const flush of [...extensionExitFlushes]) {
+  for (const flush of [...extensionExitFlushes.values()]) {
     try {
       flush();
     } catch {
       // Non-fatal: a failing extension flush must not block the exit path.
     }
   }
-  for (const flush of [...extensionExitFinalizers]) {
+  for (const flush of [...extensionExitFinalizers.values()]) {
     try {
       flush();
     } catch {

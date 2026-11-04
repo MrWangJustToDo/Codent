@@ -30,7 +30,7 @@ import {
   walkTree,
   fileUriToPath,
   formatLocation,
-  pathToFileUri,
+  pathToFileUrl,
 } from "../dist/dev.mjs";
 
 let failures = 0;
@@ -86,8 +86,15 @@ check("file URI: traversal outside the root stays relative-first", () => {
 
 check("file URI: round-trips a Windows drive path", () => {
   const uri = "file:///C:/dir/file.ts";
-  const back = pathToFileUri(fileUriToPath(uri, "C:\\repo"));
+  const back = pathToFileUrl(fileUriToPath(uri, "C:\\repo"));
   assert.equal(back, uri);
+});
+
+check("file URI: characters that would change the URL are encoded", () => {
+  // The extension loader and the LSP client shared the unencoded spelling: `#` became a fragment
+  // and `?` a query, so the loader reported a file that exists as unloadable.
+  assert.equal(pathToFileUrl("/tmp/a#b/c?.ts"), "file:///tmp/a%23b/c%3F.ts");
+  assert.equal(pathToFileUrl("/tmp/with space.ts"), "file:///tmp/with%20space.ts");
 });
 
 check("file URI: round-trips a POSIX path", () => {
@@ -95,7 +102,7 @@ check("file URI: round-trips a POSIX path", () => {
   // intentionally relativized (`/repo/src/a.ts` -> `src/a.ts`), and a relative path cannot
   // reproduce the original absolute URI — that is inherent to the conversion, not a defect.
   const uri = "file:///elsewhere/a.ts";
-  const back = pathToFileUri(fileUriToPath(uri, "/repo"));
+  const back = pathToFileUrl(fileUriToPath(uri, "/repo"));
   assert.equal(back, uri);
 });
 

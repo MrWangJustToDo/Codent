@@ -146,6 +146,8 @@ export class AgentLog {
        * belongs to (absent outside a run).
        */
       run?: string | null;
+      /** Session the event was emitted for, from the same envelope (absent when unknown). */
+      sessionId?: string | null;
     }
   ): LogEntry | null {
     if (!this.shouldLog(level)) return null;
@@ -168,10 +170,15 @@ export class AgentLog {
     if (options?.tags) entry.tags = options.tags;
     if (options?.event) entry.event = options.event;
     if (options?.run) entry.run = options.run;
+    if (options?.sessionId) entry.sessionId = options.sessionId;
     if (options?.error) {
       entry.error = {
         name: options.error.name,
-        message: options.error.message,
+        // Bound at the ONE builder every writer passes through. The bridge had this, but the
+        // specialized handlers (`compaction:*-error`, `session:diagnostic`, the subagent mirror)
+        // wrote the provider's raw body here unmodified, so one failed summary produced a
+        // multi-megabyte JSONL line on those paths.
+        message: truncateText(options.error.message, MAX_LOG_MESSAGE_CHARS),
         stack: options.error.stack,
       };
     }
@@ -230,9 +237,16 @@ export class AgentLog {
     message: string,
     data?: Record<string, unknown>,
     error?: Error,
-    run?: string | null
+    run?: string | null,
+    sessionId?: string | null
   ): LogEntry | null {
-    return this.log(level, category, message, { data, error, event: eventType, ...(run !== undefined ? { run } : {}) });
+    return this.log(level, category, message, {
+      data,
+      error,
+      event: eventType,
+      ...(run !== undefined ? { run } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    });
   }
 
   // ============================================================================

@@ -65,7 +65,33 @@ export class AgentToolRegistry {
 
   /** Seed a built-in/existing tool without claiming extension ownership. */
   seed(name: string, tool: unknown): void {
-    if (this.stacks.has(name)) return;
+    const stack = this.stacks.get(name);
+    if (stack) {
+      // A stack can already exist whose incumbent has no tool: `register` creates one from the
+      // live record, and the record may not carry the name yet (the host fills it later). Returning
+      // early left that `undefined` incumbent in place, so unregistering the extension found
+      // "remaining = [incumbent]" and materialized/deleted the name — silently losing the tool the
+      // host then seeded.
+      //
+      // Only a value that is NOT the stack's live tool is a host seed. `useTools` re-seeds the
+      // live record on every register/unregister, and after an extension registers, that record
+      // holds the extension's own materialized tool; adopting it as the incumbent would make the
+      // extension impossible to unload (the test that pins this is section 3 of
+      // `validate-extension-tool-restore`).
+      const incumbent = stack.find((entry) => entry.ownerId === INCUMBENT_TOOL_OWNER);
+      if (incumbent) {
+        if (incumbent.tool === undefined && this.resolve(name)?.tool !== tool) {
+          incumbent.tool = tool;
+          this.materialize(name);
+        }
+        return;
+      }
+      const top = pickTopByRank(stack);
+      if (top.tool === tool) return;
+      stack.push({ name, tool, ownerId: INCUMBENT_TOOL_OWNER, rank: INCUMBENT_RANK });
+      this.materialize(name);
+      return;
+    }
     this.stacks.set(name, [{ name, tool, ownerId: INCUMBENT_TOOL_OWNER, rank: INCUMBENT_RANK }]);
     this.materialize(name);
   }

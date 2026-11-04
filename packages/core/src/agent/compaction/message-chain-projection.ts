@@ -67,6 +67,11 @@ export function getModelVisibleMessages(
   // Deterministic over the frozen pre-summary slice: same content + policy
   // always yields the same kept window (see design notes in keep-policy.ts).
   const keptStart = findCutPointByBudget(before, keepRecentTokens ?? 0).cutIndex;
-  const kept = before.slice(keptStart);
+  // The latest summary is an incremental update of every older one, and older summaries are
+  // structural (they do not consume the keep budget — see `findCutPointByBudget`). Keeping them in
+  // the kept slice therefore accumulated one stale checkpoint per compaction: a long session's
+  // wire carried 3+ "CONVERSATION SUMMARY" blocks, only the last of which was current. Filter them
+  // out of the chronological window; the single head checkpoint is the only one the model sees.
+  const kept = before.slice(keptStart).filter((message) => !isCompactionSummaryModelMessage(message));
   return [summary, ...kept, ...after];
 }

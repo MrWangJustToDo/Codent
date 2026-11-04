@@ -76,7 +76,7 @@ const mockEnv = {
 registerCoreEnv(mockEnv);
 
 const waitFor = async (check, label) => {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 100; i++) {
     if (await check()) return;
     await sleep(20);
   }
@@ -217,6 +217,13 @@ assert.equal(
   retiredAgent?.getSnapshot().model,
   "provider-model",
   "a persisted model the catalog dropped must not be revived"
+);
+// …and the FALLBACK converges on disk. Adopting the restored record after the fallback put the
+// retired id back into `SessionData.model`, so every later resume repeated the same fallback and
+// the session list kept naming a model the catalog no longer offers.
+await waitFor(
+  async () => (await store.load(sessionId)).model === "provider-model",
+  "the fallback model persisted to the session record"
 );
 await retired.dispose();
 
