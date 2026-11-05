@@ -79,7 +79,8 @@ export type {
   RunAgentStreamInput,
 } from "./managers/agent-manager.js";
 export type { AgentEventPayloadMap, EmptyAgentEventPayload } from "./runtime-types/agent-event-payloads.js";
-export { ManagedAgent, type ManagedAgentConfig, type AgentMode } from "./managers/managed-agent.js";
+export { ManagedAgent, type ManagedAgentConfig } from "./managers/managed-agent.js";
+export type { AgentMode } from "./runtime-types/session-payloads.js";
 export { isActiveStatus } from "./runtime-types/agent-status.js";
 export type { AgentStatus } from "./runtime-types/agent-status.js";
 export type { QueuedMessageContent, QueuedMessagesSnapshot } from "./agent/run/chat-controller.js";
@@ -200,7 +201,7 @@ export {
 export { isUserVisibleTaskRow, type SubagentRowLike } from "./agent-session/subagent-row.js";
 export { resolvePendingInteractions } from "./agent/stream/tool-phase-utils.js";
 export { isBuiltinToolName } from "./agent/tools/catalog/tool-names.js";
-export type { AgentL1State } from "./managers/managed-agent.js";
+export type { AgentL1State } from "./runtime-types/session-payloads.js";
 export type { AgentRetryState, AgentRetryStrategy } from "./runtime-types/agent-retry.js";
 export type {
   AgentIterationState,

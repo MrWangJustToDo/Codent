@@ -124,6 +124,17 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
    * signal a host can observe — so the sink also reports through the injected callback, which the
    * log extension turns into a `session:diagnostic`.
    */
+  let lastEntryErrorAt = 0;
+  /** Throttle per-entry schema/serialize reports (write-path has its own interval). */
+  const reportEntryError = (message: string, info: Omit<LogPersistErrorInfo, "consecutiveFailures">): void => {
+    const now = Date.now();
+    if (now - lastEntryErrorAt >= PERSIST_ERROR_REPORT_INTERVAL_MS) {
+      lastEntryErrorAt = now;
+      console.error(message);
+    }
+    reportPersistError(info);
+  };
+
   const reportPersistError = (info: Omit<LogPersistErrorInfo, "consecutiveFailures">): void => {
     const now = Date.now();
     if (now - lastPersistErrorAt < PERSIST_ERROR_REPORT_INTERVAL_MS) return;
@@ -289,8 +300,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     const parsed = logEntrySchema.safeParse(entry);
     if (!parsed.success) {
       const reason = parsed.error.issues[0]?.message ?? "invalid entry";
-      console.error(`[agent] log entry rejected by the persisted schema (${entry.level}/${entry.category}):`, reason);
-      reportPersistError({ stage: "schema", error: reason, dropped: 0 });
+      reportEntryError(
+        `[agent] log entry rejected by the persisted schema (${entry.level}/${entry.category}): ${reason}`,
+        { stage: "schema", error: reason, dropped: 0 }
+      );
       return;
     }
     // Serialize inside the guard, not after it: `JSON.stringify` throws on a `BigInt`, a circular
@@ -302,8 +315,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       // whole entry (safeParse above), so `parsed.data` is never a silently-stripped copy.
       buffer.push(JSON.stringify(parsed.data));
     } catch (error) {
-      console.error(`[agent] log entry is not serializable (${entry.level}/${entry.category}):`, errorMessage(error));
-      reportPersistError({ stage: "serialize", error: errorMessage(error), dropped: 0 });
+      reportEntryError(
+        `[agent] log entry is not serializable (${entry.level}/${entry.category}): ${errorMessage(error)}`,
+        { stage: "serialize", error: errorMessage(error), dropped: 0 }
+      );
       return;
     }
     schedule();

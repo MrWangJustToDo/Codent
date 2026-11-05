@@ -30,6 +30,7 @@
  */
 
 import { isBase64Source, parseDataUrl } from "../../utils/data-url.js";
+import { isRecord as isPlainRecord } from "../../utils/is-record.js";
 
 import { MediaStore } from "./media-store.js";
 import {
@@ -141,7 +142,8 @@ interface ToolCallOutputRecord {
 }
 
 function isRecord(value: unknown): value is ToolCallOutputRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  // One clause order, one definition (`utils/is-record.ts`); this wrapper only narrows the type.
+  return isPlainRecord(value);
 }
 
 function mimeForToolCallOutput(output: ToolCallOutputRecord): string {

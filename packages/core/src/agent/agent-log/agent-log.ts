@@ -269,6 +269,13 @@ export class AgentLog {
    * seam's flush paths. Replaces any previous sink.
    */
   attachSink(sink: LogSink): void {
+    // Bind FIRST: a drain can synchronously trigger a writer (persist-error -> diagnostic ->
+    // bridge -> log). With the sink assigned only at the end, such an entry landed in the just-
+    // cleared buffer and was never drained by a second attach.
+    this.sinkEntry = sink.handleEntry;
+    this.sinkFlush = sink.flush ?? null;
+    this.sinkFlushSync = sink.flushSync ?? null;
+    this.fileSinkDir = sink.dir ?? null;
     // Drain entries emitted before this sink existed (bootstrap), before anything emitted from
     // here on — so binding a sink never loses the diagnostics that explain how the bind
     // happened. Cleared on drain: a later re-attach must not replay them.
@@ -311,10 +318,6 @@ export class AgentLog {
         if (this.shouldLog(entry.level)) sink.handleEntry(entry);
       }
     }
-    this.sinkEntry = sink.handleEntry;
-    this.sinkFlush = sink.flush ?? null;
-    this.sinkFlushSync = sink.flushSync ?? null;
-    this.fileSinkDir = sink.dir ?? null;
   }
 
   /**

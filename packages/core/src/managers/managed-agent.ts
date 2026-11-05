@@ -15,11 +15,11 @@
  *
  * 1. **Is it a field cluster with one invariant?** Then it belongs in its own
  *    module behind a host interface, and this file only delegates.
- *    `run-coordinator.ts` (run id / abort / timing), `managed-agent-runner-wiring.ts`
- *    (runner cache + adapter + UI channel, where "change the tools without dropping
- *    the cached runner" must be unexpressible), `managed-agent-compact.ts`,
- *    `managed-agent-session.ts`, `managed-agent-plan.ts` and
- *    `managed-agent-run-lifecycle.ts` all exist for this reason.
+ *    `agent/run/run-coordinator.ts` (run id / abort / timing),
+ *    `agent/run/runner-wiring.ts` (runner cache + adapter + UI channel, where "change the
+ *    tools without dropping the cached runner" must be unexpressible),
+ *    `managers/compact-facet.ts`, `agent/session/session-restore.ts`,
+ *    `agent/plan/plan-facet.ts` and `agent/run/run-lifecycle.ts` all exist for this reason.
  * 2. **Is it pure computation over inputs?** Then it belongs in `agent/**` (e.g.
  *    `agent/turn-context/*`, `agent/compaction/*`) — this file should call it, not
  *    contain it.
@@ -30,7 +30,7 @@
  *    session / resource regions are not field moves, they *are* the graph's
  *    mutation surface. Extracting one means moving policy and re-validating
  *    concurrency behaviour. The 2026-10-10 tracker entry is an ARCHIVED snapshot
- *    (~1756 lines and two named regions); the file is now ~3050 lines, so the
+ *    (~1756 lines and two named regions); the file is now ~2980 non-blank lines, so the
  *    honest next units are the seams named above — state publication
  *    (`status`/`state` batching), extension runtime access, and background-work
  *    ownership — each extracted with its concurrency contract, not as a field move.
@@ -232,8 +232,6 @@ const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", 
  * middleware — that is what lets an async producer name the session it belongs to.
  */
 type EmitEventArgs<T extends AgentEventType> = EmitPayloadArgs<AgentEventPayloadMap[T]>;
-
-export type { AgentL1State, AgentMode } from "../runtime-types/session-payloads.js";
 
 export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   name: string;

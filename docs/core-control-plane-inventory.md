@@ -17,7 +17,7 @@ are listed at the end as migration context.
 
 | file | sites |
 |---|---:|
-| `managers/controllers/agent-status-controller.ts` | 26 |
+| `agent/state/agent-status-controller.ts` | 26 |
 | `managers/controllers/compaction-controller.ts` | 4 |
 | `managers/managed-agent.ts` | 3 |
 | `agent/run/run-lifecycle.ts` | 2 |
@@ -49,13 +49,13 @@ old helper until they receive the epoch through their deps.
 | file | sites |
 |---|---:|
 | `agent/ui/ui-channel.ts` | 2 |
-| `managers/managed-agent-session.ts` | 1 |
+| `agent/session/session-restore.ts` | 1 |
 
 ### `session-switching` → owner E9 (Epoch) — 10 sites
 
 | file | sites |
 |---|---:|
-| `managers/approval-decision-coordinator.ts` | 2 |
+| `agent/approval/approval-decision-coordinator.ts` | 2 |
 | `agent/run/chat-controller.ts` | 3 |
 | `managers/managed-agent.ts` | 4 |
 | `managers/run-agent.ts` | 1 |
@@ -78,7 +78,7 @@ manager/agent facade definitions that the lease's ports call.
 | `TERMINAL_STATUSES` / `ACTIVE_STATUSES` overlap on `waiting` / `awaiting_user` | `runtime-types/agent-status.ts` | T4 |
 | `compacting` as a status value | `agents-status-controller`, `compaction-controller` | T6 |
 | Raw `needsApproval` reads | the registered descriptor (`ApprovalRequirement`) is the policy read; remaining raw reads are transcript/status projections (A9) | A2 done / A9 |
-| Former 38-member host is now `SessionRuntime` (4 ports, 36 members, largest 16) | `managers/services/session-runtime.ts` | S9 (done) |
+| Former 38-member host is now `SessionRuntime` (4 ports, 37 members, largest 16) | `runtime-types/session-runtime.ts` | S9 (done) |
 | `ManagedAgent` public methods (~176) | `managers/managed-agent.ts` | F1–F5 |
 | Direct `planMode` / `isAutoModeEnabled` reads | now zero outside `agent/mode/` (gate: `validate:mode-single-read`) | M4 (done) |
 | `getStatus()` readers (15 files) | across `agent/` and `managers/` | T3 |

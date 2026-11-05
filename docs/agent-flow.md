@@ -709,9 +709,9 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | 文件 | 负责 |
 |---|---|
 | `packages/core/src/runtime-types/agent-status.ts` | `AgentStatus`、`RunFinalizeReason`/`AgentRunOutcomeKind`（后者 = 前者 + `"waiting"`）、`TERMINAL_STATUSES`/`ACTIVE_STATUSES`、`resolveFinishStatus` |
-| `packages/core/src/managers/controllers/agent-status-controller.ts` | 所有状态跳转的唯一实现、审批/交互状态同步、`applyRunOutcome` |
+| `packages/core/src/agent/state/agent-status-controller.ts` | 所有状态跳转的唯一实现、审批/交互状态同步、`applyRunOutcome` |
 | `packages/core/src/agent/run/chat-controller.ts` | pump 循环、run chain/epoch/token、steer/follow-up、打断、tool-phase 续跑 |
-| `packages/core/src/managers/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |
+| `packages/core/src/agent/run/run-coordinator.ts` | abort controllers、run token、continuation 标记、turn finalize 守卫、wire-only 覆盖、截断上限 |
 | `packages/core/src/managers/run-finalizer.ts` | `deriveChatOutcome`、`finalizeChat`、`finalizeDetached` 的顺序契约 |
 | `packages/core/src/agent/run/run-lifecycle.ts` | `prepareManagedAgentForRun` / `finalizeManagedAgentRun` / `abortManagedAgentRun` |
 | `packages/core/src/managers/managed-agent.ts` | 组合根、`setStatus` + `agent:state` 发布、`abort`、`finalizeRun` |
@@ -721,10 +721,10 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 | `packages/core/src/managers/middleware/status-middleware.ts` | TanStack hook → `AgentStatusController` |
 | `packages/core/src/managers/middleware/lifecycle-middleware.ts` | usage、`turn:*`/`message:*`、`llm:*`、iteration 进度 |
 | `packages/core/src/managers/middleware/compaction-middleware.ts` | 自动压缩触发、channel 锚定 wire 投影、失败记忆 |
-| `packages/core/src/managers/approval-decision-coordinator.ts` | 审批写入路径（用户/自动/命令安全）、一次 pump 合并 |
-| `packages/core/src/managers/services/session-lifecycle-service.ts` | 会话切换/新建/恢复的有序事务 |
-| `packages/core/src/managers/session-persistence.ts` | 指纹式持久化与 `session:save-error` |
-| `packages/core/src/managers/managed-agent-session.ts` | 持久化输入、恢复事务、`session:restore` |
+| `packages/core/src/agent/approval/approval-decision-coordinator.ts` | 审批写入路径（用户/自动/命令安全）、一次 pump 合并 |
+| `packages/core/src/agent/session/session-lifecycle-service.ts` | 会话切换/新建/恢复的有序事务 |
+| `packages/core/src/agent/session/session-persistence.ts` | 指纹式持久化与 `session:save-error` |
+| `packages/core/src/agent/session/session-restore.ts` | 持久化输入、恢复事务、`session:restore` |
 | `packages/core/src/agent/runner/agent-runner.ts` | `chat()` 包装、abort controller 解析 |
 | `packages/core/src/agent/run/run-agent-skeleton.ts` | `runAgentOnce` / `consumeAgentStream` / `ensureUIChannel` |
 | `packages/core/src/agent/run/run-span.ts` | 共享 span：abort/error/empty 归一化 |

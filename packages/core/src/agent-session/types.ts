@@ -24,13 +24,14 @@ import type { AgentStreamEvent, AgentStreamSnapshot, StreamingChunk } from "../a
 import type { TodoItem } from "../agent/todo/types.js";
 import type { ToolPresentation, ToolPresentationInfo } from "../agent/tools/presentation/types.js";
 import type { UsageHistoryResult } from "../agent/usage/usage-store.js";
-import type { AgentL1State, AgentMode } from "../managers/managed-agent.js";
 import type { UsageChangeSnapshot } from "../managers/telemetry/usage-tracker.js";
 import type { ModelInfo, ModelStyle, ReasoningEffort } from "../models/types.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type { AgentState } from "../runtime-types/agent-state.js";
 import type { AgentStatus } from "../runtime-types/agent-status.js";
 import type {
+  AgentL1State,
+  AgentMode,
   AgentSessionSubagentSummary,
   AgentIterationState,
   SessionInteractionsSnapshot,
