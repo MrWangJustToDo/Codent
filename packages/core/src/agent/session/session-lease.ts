@@ -184,6 +184,11 @@ export class SessionLease {
     this.state = "released";
   }
 
+  /** A host detached the sink: forget the binding so the next commit rebinds the same id. */
+  clearBoundSink(): void {
+    this.boundSessionId = undefined;
+  }
+
   private bind(sessionId: string, options?: { sessionBoundary?: boolean }): void {
     if (this.boundSessionId === sessionId) return;
     this.ports.bindSink?.(sessionId, options);

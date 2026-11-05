@@ -1905,6 +1905,10 @@ export class ManagedAgent {
 
   /** Release the active log sink binding. Idempotent. */
   detachLogSink(): void {
+    // Both trackers must forget the id: an early return in the lease's `bind` (same id) would
+    // otherwise leave the sink detached forever after a later commit.
+    this.sessionLease.clearBoundSink();
+    this.boundSinkSessionId = undefined;
     this.logBinding.detach();
   }
 
