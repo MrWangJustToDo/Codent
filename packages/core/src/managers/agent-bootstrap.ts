@@ -340,7 +340,15 @@ export class AgentBootstrap {
       for (const factory of config.extensions) {
         try {
           const api = await factory.create();
-          recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api));
+          const extensionConfig =
+            factory.enabled === false || factory.env
+              ? {
+                  id: api.id,
+                  ...(factory.enabled === false ? { enabled: false } : {}),
+                  ...(factory.env ? { env: { ...factory.env } } : {}),
+                }
+              : undefined;
+          recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api, extensionConfig));
         } catch (err) {
           recordExtensionError(report, "config", err);
           this.extensionError("config", errorMessage(err));

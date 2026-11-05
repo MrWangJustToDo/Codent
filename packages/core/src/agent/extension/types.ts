@@ -718,6 +718,10 @@ export interface ExtensionAPI {
 
 export interface ExtensionFactory {
   create(): Promise<ExtensionAPI> | ExtensionAPI;
+  /** Load disabled (the instance exists in the panel but registers nothing). */
+  enabled?: boolean;
+  /** Values exposed to the extension as `ctx.env`. */
+  env?: Record<string, string>;
 }
 
 // ============================================================================

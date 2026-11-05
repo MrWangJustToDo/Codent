@@ -204,6 +204,8 @@ export interface ExtensionRunnerOptions {
 export class ExtensionRunner {
   /** Per-callback bound; a validation script may lower it (production keeps the default). */
   private readonly callbackTimeoutMs: number;
+  /** Final teardown: no load/toggle may revive the registry afterwards. */
+  private destroyed = false;
 
   private extensions: ExtensionInstance[] = [];
   /**
@@ -617,6 +619,7 @@ export class ExtensionRunner {
   }
 
   async loadExtension(api: ExtensionAPI, config?: ExtensionConfig): Promise<ExtensionInstance> {
+    if (this.destroyed) throw new Error("ExtensionRunner has been destroyed");
     // The loader dedupes discovered FILES by basename, but a module declares the id. Two files
     // can therefore yield the same id; without this replacement the second instance is active but
     // `setEnabled(id, false)` always targets the first one, leaving a permanently "on" copy.
@@ -893,6 +896,8 @@ export class ExtensionRunner {
   }
 
   async destroyAll(): Promise<void> {
+    if (this.destroyed) return;
+    this.destroyed = true;
     // Per-instance isolation: `destroyExtension` catches its own phases, but unregistering the
     // artifacts calls HOST callbacks (`onUnregisterTool` / `onUnregisterCommand` / UI bridge), and
     // one throwing there used to abort the loop — leaving every later extension's LSP process,
@@ -970,6 +975,7 @@ export class ExtensionRunner {
    * Returns a result describing what happened.
    */
   async setEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; message: string }> {
+    if (this.destroyed) return { ok: false, message: "ExtensionRunner has been destroyed" };
     // A revoke is a teardown of an in-flight activation; another toggle must not race it.
     if (this.revoking.has(id)) {
       return { ok: false, message: `Extension "${id}" is already being toggled` };
