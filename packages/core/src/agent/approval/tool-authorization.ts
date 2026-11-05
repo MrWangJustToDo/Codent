@@ -107,6 +107,26 @@ export class ToolAuthorizationService {
       // missing requirement now (extension disabled, tool swapped) must still ask, not become
       // free. Name alone is not an identity — the approval was granted for the old tool.
       const requirement = this.deps.getApprovalRequirement?.(toolCall.name);
+      // The analyzer runs ONCE, before auto: a destructive verdict is a hard policy, so auto mode
+      // cannot skip it. (The old order skipped analysis entirely in auto.) Results are reused by
+      // the later analysis stage.
+      const analyzed =
+        isCommand && input?.command ? await this.evaluateCommand({ ...input, command: input.command }) : undefined;
+      if (this.deps.isSessionSwitching()) return;
+      const hardPolicy =
+        analyzed?.action === "deny"
+          ? {
+              action: "deny" as const,
+              source: "policy" as const,
+              ...(analyzed.reason ? { reason: analyzed.reason } : {}),
+            }
+          : input?.env && Object.keys(input.env).length > 0
+            ? {
+                action: "ask" as const,
+                source: "policy" as const,
+                reason: "a command env override requires confirmation",
+              }
+            : undefined;
       const decision = await authorizeToolCall({
         toolName: toolCall.name,
         args: (input ?? {}) as Record<string, unknown>,
@@ -116,6 +136,7 @@ export class ToolAuthorizationService {
           source: "declared",
           reason: "approval was requested and the tool's requirement is no longer resolvable",
         },
+        ...(hardPolicy ? { hardPolicy } : {}),
         persisted,
         ...(this.deps.runToolBeforeHook
           ? {
@@ -131,16 +152,13 @@ export class ToolAuthorizationService {
               },
             }
           : {}),
-        ...(isCommand && input?.command
+        ...(analyzed
           ? {
-              analyzeCommand: async () => {
-                const analyzed = await this.evaluateCommand({ ...input, command: input.command! });
-                return {
-                  action: analyzed.action,
-                  source: "command-analysis" as const,
-                  ...(analyzed.reason ? { reason: analyzed.reason } : {}),
-                };
-              },
+              analyzeCommand: async () => ({
+                action: analyzed.action,
+                source: "command-analysis" as const,
+                ...(analyzed.reason ? { reason: analyzed.reason } : {}),
+              }),
             }
           : {}),
       });

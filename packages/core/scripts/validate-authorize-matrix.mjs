@@ -179,6 +179,16 @@ const cases = [
     expect: { action: "allow", source: "declarative" },
   },
   {
+    name: "auto / hard policy ask is not bypassed",
+    input: {
+      toolName: "run_command",
+      facts: facts({ auto: true }),
+      approval: GATED,
+      hardPolicy: { action: "ask", source: "policy", reason: "env override" },
+    },
+    expect: { action: "ask", source: "policy" },
+  },
+  {
     name: "extension skip / deny beats an analysis allow",
     input: {
       toolName: "run_command",

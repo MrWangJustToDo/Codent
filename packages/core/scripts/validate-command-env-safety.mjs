@@ -247,7 +247,7 @@ assert.equal(
 // 5. End to end: the coordinator threads the call's `env` into the verdict
 // ----------------------------------------------------------------------------
 
-function makeCoordinator(env) {
+function makeCoordinator(env, { auto = false } = {}) {
   const responses = [];
   const approvals = [];
   const parts = [
@@ -268,7 +268,7 @@ function makeCoordinator(env) {
       return 1;
     },
     upsertApproval: (input) => approvals.push(input),
-    getPolicyFacts: () => fakePolicyFacts(),
+    getPolicyFacts: () => fakePolicyFacts({ auto }),
     getApprovalRequirement: () => ({ requiresApproval: true, source: "declared" }),
     isIncumbentTool: () => true,
     reconcile: () => {},
@@ -289,7 +289,7 @@ function makeCoordinator(env) {
 
 {
   // `CI` is the important one: a text-only or deny-list verdict would auto-approve it here.
-  const { coordinator, responses } = makeCoordinator({ CI: "1" });
+  const { coordinator, responses } = makeCoordinator({ CI: "1" }, { auto: true });
   await coordinator.authorizePendingApprovals();
   assert.equal(
     responses.length,

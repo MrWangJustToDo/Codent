@@ -122,7 +122,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
 // 3. Auto-mode approval: settle once, never schedule a pump
 // ---------------------------------------------------------------------------
 {
-  const ctrl = makeCoordinator({ auto: true });
+  const ctrl = makeCoordinator({ auto: true, evaluate: async () => ({ action: "allow" }) });
   await ctrl.coordinator.authorizePendingApprovals();
   assert.equal(ctrl.decisions.length, 2);
   assert.deepEqual(ctrl.stats(), { reconciles: 1, persists: 1, pumps: 0 });
@@ -257,12 +257,10 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
   const ctrl = makeCoordinator({
     messages: [{ id: "a", role: "assistant", parts: [toolCall("call", "run_command", "git status", "ap")] }],
     auto: true,
-    evaluate: async () => {
-      throw new Error("auto mode must not evaluate the policy");
-    },
+    evaluate: async () => ({ action: "allow" }),
   });
   await ctrl.coordinator.authorizePendingApprovals();
-  assert.equal(ctrl.decisions.length, 1, "auto mode approves without running command analysis");
+  assert.equal(ctrl.decisions.length, 1, "auto mode still runs the hard-policy analysis, then approves");
   assert.equal(ctrl.upserts[0].status, "approved");
 }
 

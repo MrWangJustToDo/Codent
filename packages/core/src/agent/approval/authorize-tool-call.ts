@@ -67,8 +67,8 @@ export async function authorizeToolCall(input: AuthorizeToolCallInput): Promise<
     return { action: "deny", source: "availability", reason: `"${toolName}" is not available in this mode or profile` };
   }
 
-  // 2. Hard policy: auto mode never bypasses it.
-  if (input.hardPolicy?.action === "deny") return input.hardPolicy;
+  // 2. Hard policy: auto mode never bypasses a deny OR an ask (an env override, for example).
+  if (input.hardPolicy && input.hardPolicy.action !== "allow") return input.hardPolicy;
 
   // 3. A recorded denial is terminal: no later stage may loosen it.
   if (input.persisted === "denied") {
