@@ -24,7 +24,7 @@ import {
 } from "./agent-run-outcome.js";
 
 import type { EmitAgentTelemetryFn } from "../../runtime-types/agent-events.js";
-import type { AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
+import type { AgentState, AgentStateEventType, AgentTransitionEvent } from "../../runtime-types/agent-state.js";
 import type { AgentStatus } from "../../runtime-types/agent-status.js";
 import type { StreamChunk, ToolPhaseCompleteInfo, UIMessage } from "@tanstack/ai";
 
@@ -36,6 +36,8 @@ export type { AgentRunOutcome, AgentRunOutcomeKind, AgentRunPath, StatusReconcil
 
 export interface AgentStatusControllerDeps {
   getStatus: () => AgentStatus;
+  /** Axes behind `getStatus`; lets a wait transition preserve a failed/aborted outcome. */
+  getAgentState?: () => AgentState;
   /** The one writer. Present in production; legacy fixtures may provide only `setStatus`. */
   transition?: (event: AgentTransitionEvent) => AgentStatus;
   setStatus?: (status: AgentStatus, event?: AgentStateEventType) => void;
@@ -74,6 +76,7 @@ export interface ReconcileFromUIMessagesOptions {
 
 function applyChunkStatus(
   getStatus: () => AgentStatus,
+  getState: (() => AgentState) | undefined,
   dispatch: (event: AgentTransitionEvent) => AgentStatus,
   chunk: StreamChunk
 ): void {
@@ -95,7 +98,13 @@ function applyChunkStatus(
   // projections on every call, and recomputes the interaction snapshot (two full
   // passes over the message list) with them.
   if (type === "TOOL_CALL_START") {
-    if (current !== "running") dispatch({ type: "stream-chunk", stream: "tooling" });
+    // Enter the tooling phase even when the projection already reads `running` (prepare does):
+    // otherwise the axes stay at `preparing` for a turn that starts with a tool call. Guard on
+    // the axes, not the projection, so repeated tool chunks do not re-emit state.
+    const axes = getState?.();
+    if (axes ? axes.run !== "tooling" : current !== "running") {
+      dispatch({ type: "stream-chunk", stream: "tooling" });
+    }
     return;
   }
 
@@ -160,7 +169,7 @@ export class AgentStatusController {
   onRunStart(): void {
     this.deps.setFinishReason?.(null);
     const status = this.deps.getStatus();
-    if (status === "aborted") return;
+    if (status === "aborted" || status === "compacting") return;
     if (status !== "waiting" && status !== "awaiting_user") {
       this.dispatch({ type: "prepare" });
     }
@@ -168,7 +177,7 @@ export class AgentStatusController {
   }
 
   onStreamChunk(chunk: StreamChunk): StreamChunk {
-    applyChunkStatus(this.deps.getStatus, (event) => this.dispatch(event), chunk);
+    applyChunkStatus(this.deps.getStatus, this.deps.getAgentState, (event) => this.dispatch(event), chunk);
     return chunk;
   }
 
@@ -181,6 +190,9 @@ export class AgentStatusController {
     if (isTerminalStatus(current) || current === "waiting" || current === "awaiting_user" || current === "compacting") {
       return;
     }
+    // A tool_calls finish is a tool phase, not the turn: the pump continues. Settling here made
+    // every phase publish `completed` and reset the stream duration between phases.
+    if (finishReason === "tool_calls") return;
     this.dispatch({ type: "settle", result: this.deps.getError() ? "error" : "completed" });
   }
 
@@ -300,7 +312,13 @@ export class AgentStatusController {
       return;
     }
     if (this.deps.getStatus() === "awaiting_user") {
-      this.dispatch({ type: "settle", result: "completed", clearWait: true });
+      const axes = this.deps.getAgentState?.();
+      if (axes && (axes.outcome === "error" || axes.outcome === "aborted")) {
+        // Answering a question after the turn failed/aborted clears the wait, not the outcome.
+        this.dispatch({ type: "resume" });
+      } else {
+        this.dispatch({ type: "settle", result: "completed", clearWait: true });
+      }
     }
   }
 

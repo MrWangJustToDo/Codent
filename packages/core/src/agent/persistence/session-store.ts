@@ -418,7 +418,7 @@ export class SessionStore {
     // Mark before waiting: a save queued after this point must not restart the session. An
     // in-flight save holds the shared lock; wait for it before removing the file it may be
     // appending to.
-    deletedSessionPaths.add(key);
+    this.markDeleting(id);
     const pending = sessionSaveLocks.get(key);
     if (pending) await pending;
     sessionSaveLocks.delete(key);
@@ -458,6 +458,18 @@ export class SessionStore {
   clearCache(id: string): void {
     this.lastSaved.delete(id);
     this.statusStamps.delete(id);
+  }
+
+  /**
+   * Mark a session as deleting without waiting or removing files.
+   *
+   * A live delete must close the claim window BEFORE teardown releases ownership: another agent
+   * could otherwise adopt the id between release and `delete()` and then have every save refused
+   * by the tombstone. `delete()` calls this too.
+   */
+  markDeleting(id: string): void {
+    if (!isSafeSessionId(id)) return;
+    deletedSessionPaths.add(this.getLogKey(id));
   }
 
   // ==========================================================================

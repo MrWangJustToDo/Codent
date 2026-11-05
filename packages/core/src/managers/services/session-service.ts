@@ -154,8 +154,15 @@ export class SessionService {
     this.restorePlaceholder = data;
   }
 
-  /** Give up the stand-in without adopting anything (a failed restore). */
+  /**
+   * Give up the stand-in without adopting anything (a failed restore).
+   *
+   * Clearing the guard alone was not enough: the placeholder stays `data`, so a later state-only
+   * persist (teardown/shutdown hooks) rewrote the target log with an empty transcript. Drop the
+   * reference too, so "no session" is the honest state until a real one is adopted.
+   */
   clearRestorePlaceholder(): void {
+    if (this.data === this.restorePlaceholder) this.data = null;
     this.restorePlaceholder = null;
   }
 

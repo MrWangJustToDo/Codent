@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 
-import { SessionPersistence } from "../dist/dev.mjs";
+import { SessionPersistence, SessionService } from "../dist/dev.mjs";
 
 import { fakeModeState } from "./helpers/mode-state.mjs";
 
@@ -79,3 +79,14 @@ assert.equal(persistence.clear, undefined, "SessionPersistence.clear must not ex
 assert.equal(persistence.clearNow, undefined, "SessionPersistence.clearNow must not exist");
 
 console.log("session-persistence validation passed");
+
+// A failed restore must drop the stand-in, not leave an empty-data save target.
+{
+  const service = new SessionService();
+  service.setSessionDataPlaceholder({ id: "ses_placeholder" });
+  assert.equal(service.getSessionData()?.id, "ses_placeholder");
+  service.clearRestorePlaceholder();
+  assert.equal(service.getSessionData(), null, "clearing the placeholder drops the stand-in data");
+}
+
+console.log("session placeholder drop: OK");

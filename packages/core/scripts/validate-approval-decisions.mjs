@@ -54,6 +54,7 @@ function makeCoordinator({ messages: initial = messages, auto = false, evaluate,
     upsertApproval: (input) => upserts.push(input),
     getPolicyFacts: () => fakePolicyFacts({ auto }),
     getApprovalRequirement: () => ({ requiresApproval: true, source: "declared" }),
+    isIncumbentTool: () => true,
     reconcile: () => {
       reconciles += 1;
     },

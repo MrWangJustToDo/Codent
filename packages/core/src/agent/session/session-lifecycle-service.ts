@@ -213,7 +213,6 @@ export class SessionLifecycleService {
       throw new Error(`Session "${next.id}" is already active in another live session and cannot be started here.`);
     }
 
-    let adopted = false;
     try {
       // Unload the current conversation. The previous session stays on disk untouched:
       // starting a new conversation is not a clear.
@@ -223,8 +222,9 @@ export class SessionLifecycleService {
       // target's empty state, and the state batch suppresses the intermediate frames that
       // used to carry the old session id.
       this.rt.transcript.setSessionData(next);
-      adopted = true;
       // Commit the claim at the adoption point: the departure claim is released here, exactly once.
+      // `setSessionData` can throw AFTER swapping the data (the log-sink bind), so the catch below
+      // asks the data for the truth instead of relying on a boolean written after the call.
       this.rt.lease.commit();
       this.rt.transcript.getChatController()?.clearTranscript();
       this.resetTransientState(reason, "full");
@@ -236,13 +236,13 @@ export class SessionLifecycleService {
       this.rt.transcript.refreshState();
       return next;
     } catch (error) {
-      if (!adopted) {
-        this.rt.lease.abortClaim();
-      } else {
-        // The switch committed when `setSessionData(next)` ran (and the lease released the
-        // departure). A later reset step failing does not un-switch it; just point writers at the
-        // adopted id.
+      if (this.rt.transcript.getSessionData()?.id === next.id) {
+        // The data was adopted (possibly just before a sink bind threw): keep the switch, make the
+        // lease agree, and re-point writers at the id they now represent.
+        this.rt.lease.commit();
         this.rt.transcript.bindSessionLogSink(next.id);
+      } else {
+        this.rt.lease.abortClaim();
       }
       throw error;
     }

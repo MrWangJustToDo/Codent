@@ -270,6 +270,7 @@ function makeCoordinator(env) {
     upsertApproval: (input) => approvals.push(input),
     getPolicyFacts: () => fakePolicyFacts(),
     getApprovalRequirement: () => ({ requiresApproval: true, source: "declared" }),
+    isIncumbentTool: () => true,
     reconcile: () => {},
     persist: () => {},
     enqueueRun: async () => {},

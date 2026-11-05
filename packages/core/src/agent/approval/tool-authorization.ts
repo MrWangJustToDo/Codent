@@ -98,16 +98,24 @@ export class ToolAuthorizationService {
       // the real arguments.
       const hookArgs = parseToolInput(toolCall);
       const isCommand =
-        toolCall.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(toolCall.name) ?? true);
+        toolCall.name === BUILTIN_TOOL_NAMES.runCommand && (this.deps.isIncumbentTool?.(toolCall.name) ?? false);
       // An answered call is not re-decided, but a DENY may still replace it: the analyzer can
       // resolve after the user answered (it awaits CoreEnv while the request is on screen), and
       // execution cannot happen in that window.
       const persisted = approval.approved === true ? "approved" : "pending";
+      // Fail closed: the call was gated when it was requested (`approval.needsApproval`), so a
+      // missing requirement now (extension disabled, tool swapped) must still ask, not become
+      // free. Name alone is not an identity — the approval was granted for the old tool.
+      const requirement = this.deps.getApprovalRequirement?.(toolCall.name);
       const decision = await authorizeToolCall({
         toolName: toolCall.name,
         args: (input ?? {}) as Record<string, unknown>,
         facts,
-        ...(this.deps.getApprovalRequirement ? { approval: this.deps.getApprovalRequirement(toolCall.name) } : {}),
+        approval: requirement ?? {
+          requiresApproval: true,
+          source: "declared",
+          reason: "approval was requested and the tool's requirement is no longer resolvable",
+        },
         persisted,
         ...(this.deps.runToolBeforeHook
           ? {

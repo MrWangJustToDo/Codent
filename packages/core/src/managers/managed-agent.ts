@@ -83,6 +83,7 @@ import {
   savePlanToWorkspace as savePlanToWorkspaceHelper,
 } from "../agent/plan/plan-facet.js";
 import { PlanModeController } from "../agent/plan/plan-mode-controller.js";
+import { isPlanModeForbiddenTool } from "../agent/plan/plan-tools.js";
 import { AgentChatController } from "../agent/run/chat-controller.js";
 import { RunCoordinator } from "../agent/run/run-coordinator.js";
 import {
@@ -760,6 +761,7 @@ export class ManagedAgent {
     this.extensions.setManagedToolsProvider(() => this.tools);
     this.statusController = createAgentStatusController({
       getStatus: () => this.getStatus(),
+      getAgentState: () => this.agentState,
       transition: (event) => this.transitionStatus(event),
       setStatus: (status, trigger) => this.setStatus(status, trigger),
       getError: () => this.getError(),
@@ -2571,6 +2573,14 @@ export class ManagedAgent {
     const profile = this.config.toolsetProfile ?? (this.parentId ? "explore" : "root");
     const unavailable = new Set<string>();
     if (profile === "explore") for (const name of SUBAGENT_EXCLUDED_TOOL_NAMES) unavailable.add(name);
+    // The authorization gate must see the same plan-mode boundary as the offered list: an editing
+    // tool hidden from the model is denied if it is called anyway, not asked and then blocked by
+    // the plan middleware.
+    if (this.getModeState().toolAvailability().restrictsMutations) {
+      for (const name of Object.keys(this.tools)) {
+        if (isPlanModeForbiddenTool(name, (tool) => this.getToolPresentation(tool))) unavailable.add(name);
+      }
+    }
     return this.mode.getPolicyFacts({
       profile,
       isSubagent: Boolean(this.parentId),
@@ -2917,6 +2927,9 @@ export class ManagedAgent {
    */
   markDestroyed(): void {
     this.destroyed = true;
+    // Make the axes agree with the flag: late transitions then hit the destroyed guard instead of
+    // being accepted by a state machine that still believes the agent is alive.
+    this.agentState = { ...this.agentState, lifecycle: "destroyed", run: "idle", wait: "none", stream: "none" };
   }
 
   /** Whether {@link markDestroyed} ran. */

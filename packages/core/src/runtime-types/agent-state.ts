@@ -153,6 +153,9 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
 
   switch (event.type) {
     case "prepare":
+      // A compaction owns the run phase; starting a chat/pump beside it would silently discard
+      // the lease's resume phase.
+      if (state.run === "compacting") reject("prepare requires no active compaction", event, options);
       return {
         lifecycle: "busy",
         run: "preparing",
@@ -198,6 +201,17 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       };
 
     case "settle":
+      // A settle during compaction records the result without stealing the phase (the lease
+      // applies it on `compaction-end`).
+      if (state.run === "compacting") {
+        return {
+          ...state,
+          outcome: event.result,
+          stream: "none",
+          ...(event.clearWait ? { wait: "none" } : {}),
+          ...(event.error !== undefined ? { errorMessage: event.error } : {}),
+        };
+      }
       return {
         ...state,
         run: "finalizing",
@@ -223,6 +237,9 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       };
 
     case "pause":
+      // A wait cannot be established while compaction owns the run: the restore guard is the
+      // compaction lease, and a wait would change the projection out from under it.
+      if (state.run === "compacting") reject("pause requires no active compaction", event, options);
       if (state.lifecycle !== "busy" && state.lifecycle !== "ready") {
         reject(`pause requires a live agent, got ${state.lifecycle}`, event, options);
       }
@@ -248,6 +265,7 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
 
     case "compaction-start":
       if (state.run === "compacting") reject("compaction already owns the run", event, options);
+      if (state.wait !== "none") reject("compaction requires no pending wait", event, options);
       return {
         ...state,
         lifecycle: "busy",

@@ -203,15 +203,16 @@ export async function restoreManagedSession(host: SessionHost, sessionId: string
     usage: host.usage,
     todoManager: host.getTodoManager(),
   });
-  // The baseline belongs to the transcript that was actually adopted; the lease owns that moment
-  // (bootstrap already committed the claim, so it must not depend on a second generation bump).
-  host.onSessionAdopted?.(uiMessages);
-
   // ---------------------------------------------------------------------------
   // POST-COMMIT — best effort. The switch has happened: a metadata refresh or a listener throwing
   // must not report the load as failed (the caller's rollback would release a session it is using).
   // ---------------------------------------------------------------------------
   try {
+    // The baseline belongs to the transcript that was actually adopted; the lease owns that moment
+    // (bootstrap already committed the claim, so it must not depend on a second generation bump).
+    // Inside the post-commit block: a throwing sink/baseline must not prevent `lease.commit()` in
+    // the caller after the data was already swapped.
+    host.onSessionAdopted?.(uiMessages);
     // `mode.restore` ran before the adoption (the commit must be last), so `restoreTodos` overwrote
     // the plan-bound repair with the persisted value. Re-assert it now that the target's list is in
     // place; otherwise an `executing` session with `todoPlanBound: false` can never reach `retro`

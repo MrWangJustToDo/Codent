@@ -156,6 +156,17 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   assert.equal(rejected.length, 1);
 }
 
+// --- answering a question after a failed turn keeps the failure ------------
+{
+  let state = transition(initState(), { type: "prepare" });
+  state = transition(state, { type: "pause", wait: "question" });
+  state = transition(state, { type: "stream-end", result: "error", error: "down" });
+  assert.equal(projectAgentStatus(state), "awaiting_user");
+  state = transition(state, { type: "resume" });
+  assert.equal(projectAgentStatus(state), "error");
+  assert.equal(state.errorMessage, "down", "the failure survives the answered question");
+}
+
 // --- controller sequences match the pure machine ----------------------------
 {
   let state = deriveAgentState("idle");

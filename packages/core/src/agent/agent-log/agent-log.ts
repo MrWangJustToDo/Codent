@@ -2,6 +2,7 @@ import { createSequentialIdGenerator } from "../../utils/generate-id.js";
 import { truncateText } from "../../utils/text-truncation.js";
 import { createJsonlFileSink } from "../log/jsonl-file-sink.js";
 import { MAX_LOG_MESSAGE_CHARS, MAX_LOG_STACK_CHARS } from "../log/payload.js";
+import { redactLogValue, redactSecrets } from "../log/redaction.js";
 
 import { configuredLogLevel } from "./log-level-env.js";
 
@@ -163,10 +164,11 @@ export class AgentLog {
       // arbitrary string), `session:diagnostic`, memory — could write a single JSONL line of any
       // size, and a provider body returned by an extension turned the timeline into an unreadable
       // blob. `data` values are bounded separately by `summarizePayload`.
-      message: truncateText(message, MAX_LOG_MESSAGE_CHARS),
+      message: truncateText(redactSecrets(message), MAX_LOG_MESSAGE_CHARS),
     };
 
-    if (options?.data) entry.data = options.data;
+    // The one builder every writer passes through: redact direct writers too, not just the bridge.
+    if (options?.data) entry.data = redactLogValue(options.data) as Record<string, unknown>;
     if (options?.tags) entry.tags = options.tags;
     if (options?.event) entry.event = options.event;
     if (options?.run) entry.run = options.run;
@@ -178,10 +180,13 @@ export class AgentLog {
         // specialized handlers (`compaction:*-error`, `session:diagnostic`, the subagent mirror)
         // wrote the provider's raw body here unmodified, so one failed summary produced a
         // multi-megabyte JSONL line on those paths.
-        message: truncateText(options.error.message, MAX_LOG_MESSAGE_CHARS),
+        message: truncateText(redactSecrets(options.error.message), MAX_LOG_MESSAGE_CHARS),
         // Bounded too: the stack starts with `${name}: ${message}`, so leaving it raw undid the
         // message bound (a provider body in the message became one MB-scale line again).
-        stack: options.error.stack === undefined ? undefined : truncateText(options.error.stack, MAX_LOG_STACK_CHARS),
+        stack:
+          options.error.stack === undefined
+            ? undefined
+            : truncateText(redactSecrets(options.error.stack), MAX_LOG_STACK_CHARS),
       };
     }
 

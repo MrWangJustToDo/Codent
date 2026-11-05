@@ -298,13 +298,17 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // that teardown returns, so the ordering this barrier was protecting still holds.
       // Record the deletion in the session's own log before teardown flushes it; a session with no
       // live agent has no sink to write to (and no log that would outlive the delete).
+      const store = new SessionStore(this.storeEnv);
+      // Tombstone BEFORE destroy releases ownership: the window between release and file removal
+      // otherwise let another live agent adopt an id whose every later save is refused.
+      store.markDeleting(sessionId);
       live.emitEvent?.("session:deleted", { sessionId });
       await this.destroy(live.id);
       // `destroy` is NOT enough on its own: it releases a still-empty session's startup
       // reservation but leaves the log file in place, so without this delete a live session that
       // had already been persisted would survive `deleteSession` and keep appearing in
       // `listPersistedSessions`.
-      await new SessionStore(this.storeEnv).delete(sessionId).catch(() => undefined);
+      await store.delete(sessionId).catch(() => undefined);
       // The session was live, so the caller's delete succeeded whether or not it had a file yet.
       return true;
     }
