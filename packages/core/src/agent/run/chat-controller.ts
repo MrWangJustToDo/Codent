@@ -32,7 +32,7 @@ import { CLIENT_TOOL_NAMES } from "../tools/catalog/tool-names.js";
 import { AgentUIChannel } from "../ui/ui-channel.js";
 
 import { runManagedSpan } from "./run-span.js";
-import { countToolCalls } from "./run-stats.js";
+import { countToolCalls } from "./tool-call-count.js";
 
 import type { AgentEventBus } from "../agent-event-bus";
 import type { RunToken } from "./run-coordinator.js";

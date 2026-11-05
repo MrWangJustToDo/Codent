@@ -49,6 +49,8 @@ export async function emitToolBeforeHook(
 export class ToolBeforeHookLedger {
   private readonly outcomes = new Map<string, ToolBeforeHookOutcome>();
   private readonly inFlight = new Map<string, Promise<ToolBeforeHookOutcome>>();
+  /** Bumped by `clear`; a producer that settles after a turn boundary must not repopulate. */
+  private epoch = 0;
 
   /**
    * Run the producer once per toolCallId; concurrent callers join the same promise.
@@ -62,9 +64,10 @@ export class ToolBeforeHookLedger {
     const running = this.inFlight.get(toolCallId);
     if (running) return running;
 
+    const epoch = this.epoch;
     const promise = producer()
       .then((outcome) => {
-        this.outcomes.set(toolCallId, outcome);
+        if (this.epoch === epoch) this.outcomes.set(toolCallId, outcome);
         return outcome;
       })
       .finally(() => this.inFlight.delete(toolCallId));
@@ -78,6 +81,7 @@ export class ToolBeforeHookLedger {
   }
 
   clear(): void {
+    this.epoch += 1;
     this.outcomes.clear();
     this.inFlight.clear();
   }

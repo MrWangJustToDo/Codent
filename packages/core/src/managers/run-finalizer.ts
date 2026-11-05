@@ -9,7 +9,7 @@
  * to a microtask). This class owns it so a new caller cannot reorder it by accident.
  */
 
-import { countToolCalls } from "../agent/run/run-stats.js";
+import { countToolCalls } from "../agent/run/tool-call-count.js";
 import { deriveRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
 
 import type { AgentRunOutcome, AgentRunOutcomeKind } from "../agent/state/agent-run-outcome.js";
@@ -21,7 +21,7 @@ import type { UsageTracker } from "./telemetry/usage-tracker.js";
 import type { PreforkDiscardCause } from "../agent/subagent/task-prefork.js";
 import type { UIMessage } from "@tanstack/ai";
 
-export { countToolCalls } from "../agent/run/run-stats.js";
+export { countToolCalls } from "../agent/run/tool-call-count.js";
 
 export interface RunFinalizerDeps {
   status: AgentStatusController;
