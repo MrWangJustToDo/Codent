@@ -109,11 +109,5 @@ assert.match(
 assert.ok(!/\bthrow err\b/.test(resultSrc), "the task result must not rethrow");
 assert.match(resultSrc, /channel\.failRun\(errorMessage\)/, "panel cleanup is applied after precedence");
 assert.match(resultSrc, /aborted \|\| failed \? "subagent:error" : "subagent:completed"/);
-assert.match(
-  resultSrc,
-  /if \(aborted \|\| failed\) \{/,
-  "the parent-log mirror does not record a failed run as completed"
-);
-assert.match(resultSrc, /aborted \? \{ stopReason \} : \{\}/, "the mirror names an abort reason only for an abort");
 
 console.log("subagent-failure-outcome validation passed");

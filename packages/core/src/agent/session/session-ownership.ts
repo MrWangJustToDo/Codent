@@ -34,12 +34,12 @@ export function sessionOwnershipScope(env: Pick<ResolvedCoreEnv, "rootPath" | "r
 }
 
 /** The shared ownership table for one workspace. */
-export function sharedSessionOwnership(env: ResolvedCoreEnv): SessionOwnership {
+export function sharedSessionOwnership(env: ResolvedCoreEnv, identity: object = env): SessionOwnership {
   if (env.remote === true) {
-    let ownership = sharedRemoteByEnv.get(env);
+    let ownership = sharedRemoteByEnv.get(identity);
     if (!ownership) {
       ownership = new SessionOwnership();
-      sharedRemoteByEnv.set(env, ownership);
+      sharedRemoteByEnv.set(identity, ownership);
     }
     return ownership;
   }

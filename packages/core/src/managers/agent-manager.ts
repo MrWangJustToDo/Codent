@@ -145,15 +145,21 @@ export class AgentManager {
    * manager reports the bound one. `bindRuntime` refuses while this is non-zero.
    */
   private buildsInFlight = 0;
+  /** Resolvers waiting for the last in-flight build to settle (see `disposeInner`). */
+  private buildWaiters: Array<() => void> = [];
   /** Guards {@link dispose} against re-running and rejects construction after teardown. */
   private disposed = false;
+  /** True only after a teardown COMPLETED; a failed attempt may retry. */
+  private tornDown = false;
+  /** In-flight teardown shared by concurrent `dispose()` callers. */
+  private disposePromise?: Promise<void>;
 
   constructor(runtime?: AgentRuntime) {
     this.boundRuntime = runtime;
     // A runtime names a workspace, so two managers over the same workspace share one claim table:
     // otherwise both can hold the same session id and interleave their transcript writes. No runtime
     // (legacy ambient manager) keeps a private table — there is no workspace to scope it to.
-    this.sessionOwnership = runtime ? sharedSessionOwnership(runtime.env) : new SessionOwnership();
+    this.sessionOwnership = runtime ? sharedSessionOwnership(runtime.env, runtime.sourceEnv) : new SessionOwnership();
     this.busScope = new AgentEventBusScope({
       // Attribute a contained observer/interceptor failure to the agent whose scope registered it.
       // Retained construction/teardown logs keep a scope resolvable before registration and after
@@ -176,10 +182,9 @@ export class AgentManager {
     this.logExtension = createLogExtension({
       bus: this.busScope.root,
       // Every event is attributed to its owning agent. A child that has already left the registry
-      // must NOT fall back to the parent sink: late child events would then look like parent
-      // content and violate the index-only contract. The parent index is written explicitly by
-      // `logSubagentLifecycle`. A construction or retained teardown log keeps the agent's own
-      // events attributable while its async work runs (they are dropped once it settles).
+      // must NOT fall back to the parent log: late child events would then look like parent
+      // content. A construction or retained teardown log keeps the agent's own events attributable
+      // while its async work runs (they are dropped once it settles).
       resolveLog: (event) =>
         this.agents.get(event.agentId)?.log ??
         this.constructionLogs.get(event.agentId) ??
@@ -248,7 +253,7 @@ export class AgentManager {
       throw new Error("Cannot bind a runtime while an agent build is in flight; retry after it settles.");
     }
     this.boundRuntime = runtime;
-    this.sessionOwnership = sharedSessionOwnership(runtime.env);
+    this.sessionOwnership = sharedSessionOwnership(runtime.env, runtime.sourceEnv);
   }
 
   /** The root log extension (sink provider + event→entry consumer). */
@@ -274,11 +279,32 @@ export class AgentManager {
    * Idempotent; a disposed manager cannot create new agents.
    */
   async dispose(): Promise<void> {
-    if (this.disposed) return;
+    // Cache the in-flight teardown: a second caller must await the same completion, not observe a
+    // half-finished shutdown because `disposed` was set before the first await. A FAILED teardown
+    // drops the cache so a retry can finish whatever is still owned.
+    if (!this.disposePromise) {
+      const attempt = this.disposeInner();
+      this.disposePromise = attempt;
+      void attempt.catch(() => {
+        if (this.disposePromise === attempt) this.disposePromise = undefined;
+      });
+    }
+    return this.disposePromise;
+  }
+
+  private async disposeInner(): Promise<void> {
+    if (this.tornDown) return;
     this.disposed = true;
+    // A build in flight (extension activation, MCP connect) may still hold child processes and
+    // isolate handles. Waiting for it means `dispose()` resolving really means "nothing is left",
+    // instead of leaving cleanup to a microtask the host may never reach before process.exit.
+    if (this.buildsInFlight > 0) {
+      await new Promise<void>((resolve) => this.buildWaiters.push(resolve));
+    }
     this.lifecycle.reset();
     await this.lifecycle.settleTeardowns();
     this.logExtension.dispose();
+    this.tornDown = true;
   }
 
   // ============================================================================
@@ -381,6 +407,14 @@ export class AgentManager {
       managed = built.managed;
       const { bootstrap } = built;
 
+      // A build can await extension activation and MCP connects; the parent may be torn down in
+      // that window (session switch / Esc cascade). `linkChild` silently ignores a missing parent,
+      // which left the child registered with a dead `parentId`: neither a root (`roots()` filters
+      // it out) nor reachable through `parent.childIds`, so nothing would ever destroy it.
+      if (parentId && !this.agents.get(parentId)) {
+        throw new Error(`Parent agent "${parentId}" was destroyed while building this agent`);
+      }
+
       // A build can await extension activation and MCP connects; a concurrent `dispose()` may have
       // run in that window. Registering now would leave a live agent (and its child processes) in
       // a registry nothing will ever tear down. The catch below disposes it.
@@ -449,6 +483,11 @@ export class AgentManager {
       throw error;
     } finally {
       this.buildsInFlight -= 1;
+      if (this.buildsInFlight === 0 && this.buildWaiters.length > 0) {
+        const waiters = this.buildWaiters;
+        this.buildWaiters = [];
+        for (const resolve of waiters) resolve();
+      }
     }
   }
 
@@ -509,21 +548,8 @@ export class AgentManager {
       subagent.invalidateRunner();
     }
 
-    // Subagents share the parent's session log directory but write an
-    // independent file ({subagentId}.log) so per-agent entries stay attributable.
-    // Bound through the log extension (not `log.attachFileSink`) so the sink is registered for
-    // teardown: a subagent has no extension runner, so nothing else would release it.
-    const parentLogDir = parent.getLog()?.getFileSinkDir?.();
-    const subagentLog = subagent.getLog();
-    if (parentLogDir && subagentLog) {
-      subagent.setLogSinkDetach(
-        this.logExtension.attachSink(subagentLog, {
-          dir: parentLogDir,
-          filename: `${subagent.id}.log`,
-          env: this.runtime?.env,
-        })
-      );
-    }
+    // Subagents share the root's workspace timeline; `buildManagedAgent` binds the same shared
+    // sink, so every entry (root or child) lands in `.agents/logs/agent.log` with its own scope.
 
     return subagent;
   }

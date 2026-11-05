@@ -166,7 +166,7 @@ The current session is excluded unless you pass its \`sessionId\` explicitly. Fo
       if (isProjectedModelContent(output)) return output;
       if (output.matches.length === 0) {
         const note = output.truncated ? " (results may be incomplete: match/content bound reached)" : "";
-        const currentId = output.excludedSessionId ?? context?.getSessionId();
+        const currentId = output.excludedSessionId;
         const asked = (input as { sessionId?: unknown } | undefined)?.sessionId;
         // The default excludes the live session. Say so with the id, or a model that searched for
         // something it just discussed reads "no matches" as "this tool is broken".

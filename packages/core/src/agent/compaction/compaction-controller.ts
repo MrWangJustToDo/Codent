@@ -125,6 +125,14 @@ export class CompactionController {
 
     if (this.deps.transition) this.deps.transition({ type: "compaction-start" });
     else this.deps.setStatus("compacting", "compaction-start");
+    // The transition can be refused by the state machine (a run phase that cannot be preempted,
+    // a pending wait, a destroyed agent). Return no lease then: producers already treat null as
+    // "could not start", while a lease against a status that never became `compacting` would let a
+    // summary apply and emit start/complete lines for a phase that does not exist.
+    if (this.deps.getStatus() !== "compacting") {
+      this.active = null;
+      return null;
+    }
     if (kind === "auto") {
       this.deps.emitEvent(
         "compaction:auto-start",

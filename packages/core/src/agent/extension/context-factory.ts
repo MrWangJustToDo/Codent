@@ -88,7 +88,7 @@ export interface ContextFactoryHost {
   disposeMessageTransformer: (extensionId: string, transformer: MessageTransformer) => boolean;
 
   /** The bus surface an extension may emit on / query. */
-  eventBus: Pick<ExtensionEventBus, "emit" | "hasInterceptors">;
+  eventBus: Pick<ExtensionEventBus, "intercept" | "hasInterceptors">;
   observerSurface: (
     extensionId: string,
     registrations: ExtensionRegistrations | undefined,
@@ -327,7 +327,7 @@ export function createExtensionContext(
       // from here (the facade only calls `intercept`), but a retained callback could still make
       // someone else's `tool:before:*` / `before_agent_start` handler run — and `hasInterceptors` is
       // a fast-path guard whose whole contract is "will anything receive this".
-      emit: (event) => (host.isLive(context) ? host.eventBus.emit(event) : Promise.resolve(undefined)),
+      intercept: (event) => (host.isLive(context) ? host.eventBus.intercept(event) : Promise.resolve(undefined)),
       hasInterceptors: (type) => host.isLive(context) && host.eventBus.hasInterceptors(type),
       // The `ctx.events.on` accessor is an interceptor registration equivalent to
       // `ctx.registerInterceptor`, so it must carry the same rank — otherwise an extension

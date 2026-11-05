@@ -68,7 +68,6 @@ import {
   type ToolBeforeHookOutcome,
 } from "../agent/extension/tool-before-hook.js";
 import { backgroundWakeCause, TASK_JOB_KIND, type BackgroundWakeCause } from "../agent/jobs/background-work.js";
-import { logSubagentLifecycle } from "../agent/log/subagent-log-mirror.js";
 import { ModeCoordinator } from "../agent/mode/mode-coordinator.js";
 import { ModeFacet } from "../agent/mode/mode-facet.js";
 import { type SessionSaveReason } from "../agent/persistence/session-sync-tracker.js";
@@ -167,7 +166,6 @@ import type {
   ExtensionLlmResult,
   ExtensionRuntimeAccess,
 } from "../agent/extension/types.js";
-import type { SubagentLifecyclePhase, SubagentLogDetails } from "../agent/log/subagent-log-mirror.js";
 import type { LspExtensionConfig } from "../agent/lsp";
 import type { McpElicitHook, McpExtensionConfig, McpServerConfig } from "../agent/mcp";
 import type { McpManager } from "../agent/mcp/manager.js";
@@ -289,10 +287,9 @@ export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
    */
   mcpServers?: Record<string, McpServerConfig>;
   /**
-   * Pre-resolved on-disk session id to adopt at bootstrap (before the session
-   * log sink attaches), so a reused/resumed session's id is fixed from the
-   * start. The full restore is still performed by the caller via
-   * {@link ManagedAgent.restoreSession}. Root agents only.
+   * Pre-resolved on-disk session id to adopt at bootstrap (before the restore), so a
+   * reused/resumed session's id is fixed from the start. The full restore is still performed by
+   * the caller via {@link ManagedAgent.restoreSession}. Root agents only.
    */
   initialSessionId?: string;
   /**
@@ -459,8 +456,6 @@ export class ManagedAgent {
 
   /** Session ownership/identity state machine (see `agent/session/session-lease.ts`). */
   readonly sessionLease: SessionLease;
-  /** The session id the log sink is currently bound to (mirrors `AgentLogBinding`). */
-  private boundSinkSessionId: string | undefined;
   /** Cached live accessors handed to extensions (`ctx.llm`, run/session facts). */
   private extensionRuntime: ExtensionRuntimeAccess | null = null;
   /**
@@ -495,7 +490,7 @@ export class ManagedAgent {
   private mcpManager: McpManager | null = null;
   private skillRegistry: SkillRegistry | null = null;
   log: AgentLog;
-  /** Session log sink lifetime (bind / re-point / flush-on-destroy). */
+  /** Workspace log sink lifetime (bind once / flush-on-destroy). */
   private readonly logBinding: AgentLogBinding;
   /** Extension / tool / integration registration domain (todo, MCP, skills, extensions). */
   readonly extensions: ExtensionRegistryService;
@@ -539,6 +534,15 @@ export class ManagedAgent {
   readonly compactions: CompactionController;
   /** Per-agent background work ownership: one facade, two sources (commands + tasks). */
   private backgroundWork?: BackgroundWorkService;
+  /**
+   * Signature of the pending set that already produced a wake turn.
+   *
+   * The pump's `finally` re-checks after every turn. If delivery cannot be recorded (a read-only
+   * workspace makes `markDelivered` fail), the same completion stays pending forever and each turn
+   * woke another paid turn with byte-identical content. A wake is only scheduled when the set
+   * changes; a refused wake (parked/planning) does not record the signature, so it can retry later.
+   */
+  private backgroundWakeSignature: string | null = null;
   /** The command source handle (tools' `AgentCommandPort`, registry, `<background_jobs>` pointer). */
   private commandService?: AgentCommandService;
   /**
@@ -664,9 +668,6 @@ export class ManagedAgent {
     this.log = init.log;
     this.logBinding = new AgentLogBinding({
       getLog: () => this.log,
-      getParentId: () => this.parentId,
-      getSessionId: () => this.getSessionData()?.id,
-      getAgentId: () => this.id,
       getCoreEnv: () => this.getCoreEnv(),
       attachViaManager: (log, options) => this.manager?.getLogExtension()?.attachSink(log, options),
     });
@@ -702,10 +703,7 @@ export class ManagedAgent {
         this.emitEvent(type, data);
       });
     this.session = init.session ?? new SessionService();
-    this.sessionFacet = new SessionFacet(this, {
-      hasManager: () => Boolean(this.manager),
-      bindSessionLogSink: (sessionId) => this.bindSessionLogSink(sessionId),
-    });
+    this.sessionFacet = new SessionFacet(this);
     this.sessionPersistence = this.sessionFacet.persistence;
     // The store resolves the runtime env when bound, else ambient lazily at first write.
     this.usageHistory = init.usageHistory ?? new UsageHistoryService(new UsageStore(this.runtime?.env));
@@ -730,12 +728,6 @@ export class ManagedAgent {
         // the generation stayed put and late tool chunks from the aborted run could append to the
         // transcript that had just been restored — and be persisted with it.
         this.getUI()?.advanceSessionGeneration();
-      },
-      bindSink: (sessionId, options) => {
-        // `setSessionData` may already have bound the target (new session); the lease asks for the
-        // same id at commit. Re-binding would write a second session divider.
-        if (this.boundSinkSessionId === sessionId) return;
-        this.bindSessionLogSink(sessionId, options);
       },
     });
     this.modelFacet = new ModelFacet({
@@ -911,7 +903,9 @@ export class ManagedAgent {
           this.run.setRetryState(null);
         },
         clearPendingApprovals: () => {
-          this.pendingApprovalCount = 0;
+          // Route through the one setter so the state frame is emitted; a bare field write left
+          // the snapshot/ACP badge on the old count whenever this ran outside a state batch.
+          this.setPendingApprovalCount(0);
         },
         syncInteractionStateFromUIMessages: (messages) => this.syncInteractionStateFromUIMessages(messages),
       },
@@ -922,7 +916,6 @@ export class ManagedAgent {
         getSessionStore: () => this.getSessionStore(),
         awaitPersistIdle: () => this.session.awaitPersistIdle(),
         getChatController: () => this.getChatController(),
-        bindSessionLogSink: (sessionId, options) => this.bindSessionLogSink(sessionId, options),
         emitSessionNew: (sessionId, reason) => this.emitEvent("session:new", { sessionId, reason }),
         emitSessionSwitch: (fromSessionId, toSessionId, messageCount, reason) =>
           // The departure belongs to the session being left: the envelope must say so too, because
@@ -985,6 +978,7 @@ export class ManagedAgent {
           const work = this.backgroundWork;
           this.backgroundWork = undefined;
           this.commandService = undefined;
+          this.backgroundWakeSignature = null;
           if (!work) return Promise.resolve();
           return work.reset(reason).catch((error: unknown) => {
             this.emitDiagnostic("jobs", "Failed to reset background work", {
@@ -1049,49 +1043,6 @@ export class ManagedAgent {
   /** Model finish reason of the last completed run, or null before one. */
   getLastFinishReason(): string | null {
     return this.run.getLastFinishReason();
-  }
-
-  /**
-   * Record a subagent lifecycle line in the PARENT agent's own log.
-   *
-   * Every subagent event is delivered to the subagent's own file (the log bridge scopes
-   * by `event.agentId`), so a `task` call's children are invisible in the parent log —
-   * reconstructing which subagent belongs to which call needed cross-file timestamp
-   * matching. The parent log is where a reader looks for the session's story, so the
-   * child's lifecycle is mirrored here, attributed by call id and subagent id.
-   *
-   * Deliberately a direct write rather than a second bus event: the bus event already
-   * exists and already has one destination, and "log this in my file" is not a fact
-   * other consumers should react to. Subagents have no extension runner, so the mirror
-   * has to be driven from this side anyway.
-   */
-  logSubagentLifecycle(phase: SubagentLifecyclePhase, details: SubagentLogDetails): void {
-    // The index row belongs to the run that spawned the child, and ONLY that run. Every call site
-    // passes `readTaskRunSpawnId(...)`; falling back to `getCurrentRunId()` when the phase record is
-    // gone (a background task settling after a session switch cleared it) stamped the leaving
-    // session's settle row with the TARGET session's run — wrong attribution is worse than none.
-    //
-    // Internal workers are the exception: they serve no `task` call, so no phase record (and no
-    // spawn run) exists at all, and they are awaited inside the parent's run — the current run IS
-    // the run that spawned them. `parentTaskToolCallId` is what separates the two cases.
-    const liveSessionId = this.getEventSessionId();
-    if (liveSessionId !== undefined) {
-      if (details.sessionId !== undefined) {
-        // A settle (or a later lifecycle row) can resolve after `/resume` / `/new` moved the log
-        // sink to the target. The spawn session travels with the task, so a mismatch means this row
-        // belongs to a file the sink no longer points at — the child's own log still has the
-        // timeline, and wrong attribution is worse than none.
-        if (details.sessionId !== liveSessionId) return;
-      } else if (details.parentTaskToolCallId !== undefined && (phase === "completed" || phase === "stopped")) {
-        // The spawn record was cleared by the switch (`clearTaskRuns`), so the snapshot above is
-        // unavailable. A REAL terminal settle always passes it (both call sites read it from the
-        // record), making "terminal task row with no session" the cleared-record case. Drop it
-        // rather than stamp it with the target session.
-        return;
-      }
-    }
-    const run = details.run ?? (details.parentTaskToolCallId ? undefined : (this.getCurrentRunId() ?? undefined));
-    logSubagentLifecycle(this.log, phase, details, run, details.sessionId ?? liveSessionId);
   }
 
   /**
@@ -1421,20 +1372,25 @@ export class ManagedAgent {
   /**
    * Session id an event from this agent should carry.
    *
-   * A subagent has no session data of its own — it runs inside the parent's session and log dir —
+   * A subagent has no session data of its own — it runs inside the parent's session (the timeline is workspace-wide) —
    * so the parent's id is the truthful answer. The old fallback stamped the CHILD'S AGENT ID into
    * `sessionId` (two different identifier spaces), which made a subagent's events claim a session
    * that does not exist. `undefined` (bootstrap, before a session is minted) omits the field.
    */
   getEventSessionId(): string | undefined {
+    // A child runs inside the parent's session, but "the parent's live session" changes on a
+    // switch while the child's settle rows belong to the session it was spawned in. `sessionScopeId`
+    // is captured at spawn, so it is the truthful attribution for the child's whole lifetime
+    // (equal to the parent's live id unless a switch happened).
+    if (this.parentId) {
+      const scope = this.getSessionScopeId();
+      if (scope) return scope;
+      return this.manager?.getAgent(this.parentId)?.getSessionData()?.id;
+    }
     // `initialSessionId` is the on-disk target fixed before a session is adopted (resume/reuse).
     // Bootstrap runs before the placeholder exists, so without this fallback every extension /
-    // MCP / memory row emitted during construction carried no session id even though the sink was
-    // already routed to that session's directory.
-    const own = this.getSessionData()?.id ?? this.config.initialSessionId;
-    if (own) return own;
-    const parent = this.parentId ? this.manager?.getAgent(this.parentId) : undefined;
-    return parent?.getSessionData()?.id;
+    // MCP / memory row emitted during construction carried no session id.
+    return this.getSessionData()?.id ?? this.config.initialSessionId;
   }
 
   /**
@@ -1859,21 +1815,11 @@ export class ManagedAgent {
   }
 
   /**
-   * Attach (or re-point) the session JSONL log sink to the current session id's
-   * directory. Called once the session id is fixed at bootstrap, again after a
-   * restore, and whenever the active session id changes — so logs follow the
-   * reused/resumed session rather than the transient id allocated before restore.
-   * No-op for subagents (they write an independent file into the parent's dir via
-   * `spawnSubagent`).
-   *
-   * `sessionId` overrides the id taken from the session data, for the one caller that
-   * knows the target before the restore has run: `restoreSession` binds ahead of
-   * `restoreManagedSession`, so the restore's own `session:restore` entry lands in the
-   * session being restored instead of the transient bootstrap dir.
+   * Bind the workspace log sink. Called once by the factory; later session changes do not re-point
+   * the file (entries carry `sessionId`/`run` themselves).
    */
-  bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void {
-    this.logBinding.bind(sessionId, options);
-    this.boundSinkSessionId = sessionId;
+  bindLogSink(): void {
+    this.logBinding.bind();
   }
 
   /**
@@ -1902,24 +1848,7 @@ export class ManagedAgent {
     }
   }
 
-  /**
-   * Record the release handle for a sink bound outside {@link bindSessionLogSink} — the subagent
-   * path, where `spawnSubagent` owns the options and core defers release until destroy.
-   */
-  setLogSinkDetach(detach: () => void): void {
-    this.logBinding.setExternalDetach(detach);
-  }
-
-  /** Release the active log sink binding. Idempotent. */
-  detachLogSink(): void {
-    // Both trackers must forget the id: an early return in the lease's `bind` (same id) would
-    // otherwise leave the sink detached forever after a later commit.
-    this.sessionLease.clearBoundSink();
-    this.boundSinkSessionId = undefined;
-    this.logBinding.detach();
-  }
-
-  /** Land buffered entries, release the sink, then unregister the process guard. */
+  /** Land buffered entries, release this agent's sink reference, then unregister the guard. */
   async flushLogOnDestroy(): Promise<void> {
     await this.logBinding.flushOnDestroy();
   }
@@ -1955,15 +1884,8 @@ export class ManagedAgent {
   /**
    * Adopt session data for the *active* on-disk session.
    *
-   * This is the single write point for "which session is active", so the log sink is
-   * re-pointed here rather than at each caller: a resume and `/new` both change the id
-   * mid-process, and binding at the one place that records the change is what keeps the two
-   * from drifting. Idempotent — same id rebinds to the same dir and returns.
-   *
-   * Skipped while `manager` is unset (factory construction): there the sink is bound by
-   * `AgentManager.add`, which runs after the manager is attached so the binding is registered
-   * with the log extension for teardown. Binding earlier would take the seam's fallback path and
-   * leave a sink the extension does not know about.
+   * This is the single write point for "which session is active". The workspace timeline does not
+   * move with it (entries carry `sessionId`), so no log binding happens here.
    */
   setSessionData(data: SessionData): void {
     this.sessionFacet.setSessionData(data);
@@ -2107,6 +2029,7 @@ export class ManagedAgent {
         }),
       emitSideQuery: (type: "side-query:mode" | "side-query:error", payload: Record<string, unknown>) =>
         this.emitEvent(type, payload as never),
+      captureEpoch: () => this.captureEpoch(),
       resolveTextAdapter: async () => (await this.resolveTextAdapter?.()) ?? null,
       getExtensionConnection: () => ({
         ...(this.config.modelStyle ? { style: this.config.modelStyle } : {}),
@@ -2496,6 +2419,9 @@ export class ManagedAgent {
   resumeBackgroundWork(): void {
     if (this.parentId) return;
     this.getBackgroundWork();
+    // A fresh session (or a resumed one) must be allowed to wake for its own pending set even if
+    // that set's ids happen to match the previous wake's signature.
+    this.backgroundWakeSignature = null;
     void this.wakeForBackgroundWork();
   }
 
@@ -2537,8 +2463,18 @@ export class ManagedAgent {
       // Peek, do not mark: delivery (and the delivered flag) stays the middleware's.
       const pending = await work.pending();
       if (this.backgroundWork !== work || !epoch.isCurrent()) return;
-      if (pending.length === 0) return;
-      chat.wakeForBackgroundCompletion(cause ?? (pending[0]?.kind === TASK_JOB_KIND ? "task" : "job"));
+      if (pending.length === 0) {
+        this.backgroundWakeSignature = null;
+        return;
+      }
+      const signature = pending
+        .map((completion) => `${completion.kind}:${completion.id}`)
+        .sort()
+        .join("|");
+      // Delivery failures leave the same set pending; do not wake again for it.
+      if (signature === this.backgroundWakeSignature) return;
+      const woke = chat.wakeForBackgroundCompletion(cause ?? (pending[0]?.kind === TASK_JOB_KIND ? "task" : "job"));
+      if (woke) this.backgroundWakeSignature = signature;
     } catch (error) {
       this.emitDiagnostic("jobs", "Background completion wake skipped", { level: "warn", error: errorMessage(error) });
     }
@@ -2936,6 +2872,7 @@ export class ManagedAgent {
     const work = this.backgroundWork;
     this.backgroundWork = undefined;
     this.commandService = undefined;
+    this.backgroundWakeSignature = null;
     // No command-source fallback: the source is only ever built through the facade
     // (`getCommandService()` ensures it first), and the two fields are dropped together, so
     // "a source without a facade" does not exist.

@@ -436,4 +436,35 @@ assert.doesNotMatch(errorText, /Overwrote file: undefined/);
   );
 }
 
+// ---------------------------------------------------------------------------
+// A framework synthetic cancel must never reach the tool's own formatter.
+// ---------------------------------------------------------------------------
+{
+  const reason = "Session restored after an interrupted run.";
+  const wire = [
+    {
+      role: "assistant",
+      content: null,
+      toolCalls: [{ id: "call-cancel", type: "function", function: { name: "explode", arguments: "{}" } }],
+    },
+    {
+      role: "tool",
+      toolCallId: "call-cancel",
+      content: JSON.stringify({ success: false, error: reason, cancelled: true, reason }),
+    },
+  ];
+  const throwingRegistry = {
+    get: () => () => {
+      throw new Error("the tool formatter must not run for a synthetic cancel");
+    },
+  };
+  const out = await applyToolCompact(wire, {
+    config: {},
+    registry: throwingRegistry,
+    cache: new ToolCompactCache(),
+  });
+  const projected = out.find((m) => m.role === "tool" && m.toolCallId === "call-cancel");
+  assert.ok(JSON.stringify(projected?.content).includes(reason), "the model sees the recorded cancel reason");
+}
+
 console.log("tool-compact validation passed");

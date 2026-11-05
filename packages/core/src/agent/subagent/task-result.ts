@@ -13,7 +13,6 @@ import { agentStreamKey } from "../stream-hub";
 import { isProgressSummaryEligible, summarizeProgress, type SummarizerSpawn } from "./progress-summary.js";
 import { deriveSubagentRunStats, hasBeginSummaryCall } from "./run-stats.js";
 import { EMPTY_SUMMARY, truncateSummary } from "./subagent-output.js";
-import { readTaskRunSpawnId, readTaskRunSpawnSessionId } from "./subagent-runs.js";
 import {
   applySubagentFailureNotice,
   applySubagentStopNotice,
@@ -45,7 +44,6 @@ export interface FinalizeSubagentTaskInput {
   runStartedAt: number;
   /** Caller abort reason (pre-fork parent run); the child's own reason is read as a fallback. */
   abortReason?: unknown;
-  childLogPath?: string;
   subagentManaged: ManagedAgent;
   parentManaged: ManagedAgent;
   /** Session/run identity captured when this child was spawned; stale results are not booked. */
@@ -80,7 +78,6 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
     maxOutputLength,
     runStartedAt,
     abortReason,
-    childLogPath,
     subagentManaged,
     parentManaged,
     parentEpoch,
@@ -256,37 +253,6 @@ export async function finalizeSubagentTask(input: FinalizeSubagentTaskInput): Pr
           },
     { parentId: parentAgentId }
   );
-
-  if (aborted || failed) {
-    parentManaged.logSubagentLifecycle("stopped", {
-      subagentId,
-      parentTaskToolCallId,
-      run: readTaskRunSpawnId(parentManaged, parentTaskToolCallId),
-      sessionId: readTaskRunSpawnSessionId(parentManaged, parentTaskToolCallId),
-      ...(aborted ? { stopReason } : {}),
-      ...(failed && errorMessage ? { error: errorMessage } : {}),
-      ...(childLogPath ? { childLogPath } : {}),
-    });
-  } else {
-    parentManaged.logSubagentLifecycle("completed", {
-      subagentId,
-      parentTaskToolCallId,
-      run: readTaskRunSpawnId(parentManaged, parentTaskToolCallId),
-      sessionId: readTaskRunSpawnSessionId(parentManaged, parentTaskToolCallId),
-      iterations: statusFlags.iterations,
-      maxIterations: statusFlags.maxIterations,
-      durationMs,
-      usage: {
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-        totalTokens: billedInputTokens + (usage.outputTokens ?? 0),
-        billedInputTokens,
-        cacheReadTokens: usage.cacheReadTokens ?? 0,
-        cacheWriteTokens: usage.cacheWriteTokens ?? 0,
-      },
-      ...(childLogPath ? { childLogPath } : {}),
-    });
-  }
 
   return {
     subagentId,

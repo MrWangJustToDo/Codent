@@ -1,3 +1,4 @@
+import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
 import { pairToolResults } from "../tool-call-pairing.js";
 
@@ -117,6 +118,19 @@ export async function applyToolCompact(
     // the data. Both readers must answer the same question the same way.
     if (isBareToolErrorResult(rawOutput)) {
       const normalized = normalizeModelToolContent(formatToolErrorForModel(rawOutput));
+      cache.set(cacheKey, { source: message.content, projected: normalized });
+      setContent(target.messageIndex, normalized);
+      continue;
+    }
+
+    // The framework's synthetic cancel marker is not any tool's schema. Passing it to the tool's
+    // own `toModelOutput` made every formatter read absent fields (`write_file` told the model
+    // "Overwrote file: undefined"), and `session_search` threw. The UI has always short-circuited
+    // this shape; the model path must answer the same question the same way.
+    if (isSyntheticCancelOutput(rawOutput)) {
+      const normalized = normalizeModelToolContent([
+        { type: "text" as const, content: syntheticCancelMessage(rawOutput) },
+      ]);
       cache.set(cacheKey, { source: message.content, projected: normalized });
       setContent(target.messageIndex, normalized);
       continue;

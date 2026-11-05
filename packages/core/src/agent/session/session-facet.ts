@@ -13,19 +13,10 @@ import type { SessionSaveReason } from "../persistence/session-sync-tracker.js";
 import type { SessionData } from "../persistence/types.js";
 import type { UIMessage } from "@tanstack/ai";
 
-export interface SessionFacetOptions {
-  /** True after the factory attached a manager; before that the log sink is bound by `add`. */
-  hasManager: () => boolean;
-  bindSessionLogSink: (sessionId: string) => void;
-}
-
 export class SessionFacet {
   readonly persistence: SessionPersistence;
 
-  constructor(
-    private readonly host: SessionHost,
-    private readonly options: SessionFacetOptions
-  ) {
+  constructor(private readonly host: SessionHost) {
     this.persistence = new SessionPersistence(host);
   }
 
@@ -33,18 +24,14 @@ export class SessionFacet {
     return this.host.session.getSessionData();
   }
 
-  /** Adopt a session id; the log sink follows the identity when a manager is attached. */
+  /** Adopt a session id; the workspace log file is independent of session identity. */
   setSessionData(data: SessionData): void {
-    const previousId = this.getSessionData()?.id;
     this.host.session.setSessionData(data);
-    if (this.options.hasManager() && data.id && data.id !== previousId) this.options.bindSessionLogSink(data.id);
   }
 
   /** Adopt the restore stand-in; every persist dispatched while it is active is refused. */
   setSessionDataPlaceholder(data: SessionData): void {
-    const previousId = this.getSessionData()?.id;
     this.host.session.setSessionDataPlaceholder(data);
-    if (this.options.hasManager() && data.id && data.id !== previousId) this.options.bindSessionLogSink(data.id);
   }
 
   maybeSaveSessionUIMessages(uiMessages: UIMessage[], reason: SessionSaveReason): void {

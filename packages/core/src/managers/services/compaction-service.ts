@@ -56,6 +56,17 @@ export class CompactionService {
     return this.reactiveCompactRetries;
   }
 
+  /**
+   * Give a retry slot back when no compaction was attempted.
+   *
+   * `begin()` can refuse (a pending wait, a manual compaction, a destroyed agent). Without the
+   * refund the budget was consumed by a claim that never ran, and the next real overflow saw
+   * `max-retries` with zero attempts made.
+   */
+  refundReactiveCompactRetry(): void {
+    if (this.reactiveCompactRetries > 0) this.reactiveCompactRetries -= 1;
+  }
+
   getMaxReactiveCompactRetries(): number {
     return MAX_REACTIVE_RETRIES;
   }

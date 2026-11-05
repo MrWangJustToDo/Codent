@@ -1,6 +1,5 @@
-import { isSyntheticCancelOutput } from "../../../runtime-types/abort.js";
+import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../runtime-types/abort.js";
 import { isBareToolErrorResult } from "../../../runtime-types/tool-error.js";
-import { TOOL_CANCELLED_MESSAGE } from "../../stream/incomplete-tool-calls.js";
 
 import { getBuiltinToolPresentation } from "./builtin.js";
 import { inlineSummaryForOutput } from "./format/inline-summary.js";
@@ -64,14 +63,14 @@ export function computeToolDisplay(
   // with the same marker, so the row must say "cancelled" for EVERY tool. Handled before the error
   // short-circuit (the marker carries `success: false`) and before the name-keyed formatter, which
   // is the only other place that knew how to render it.
-  if (isSyntheticCancelOutput(output)) return { text: TOOL_CANCELLED_MESSAGE };
+  if (isSyntheticCancelOutput(output)) return { text: syntheticCancelMessage(output) };
 
   // A failed call is rendered by the error path (the part's `errorText`), never by the
   // tool's success-shaped renderers: `{ error: "denied by user" }` used to summarize as
   // "updated" / "applied" / "saved", and that wrong text is persisted with the session.
   if (isErrorOutput(output)) return undefined;
 
-  const present = resolvePresentation(name);
+  const present = safe(() => resolvePresentation(name));
   // Only the SYNTHETIC framework payload is replaced wholesale: it carries no output at all (the
   // tool never returned). A tool that caught its own abort DOES have output, and its own `text`
   // renderer is what renders it — see {@link isSyntheticCancelOutput}.

@@ -16,22 +16,31 @@ import type { LogLevel } from "./types.js";
 
 const LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
 
+let cachedRaw: string | undefined;
 let cachedLevel: LogLevel | undefined;
 /** Last invalid raw value already warned about, so a typo does not warn per sink. */
 let warnedInvalid: string | null = null;
 
 /** Parse `AGENT_LOG_LEVEL`; `undefined` when unset or invalid (the seam default then applies). */
 export function configuredLogLevel(): LogLevel | undefined {
-  if (cachedLevel) return cachedLevel;
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
   const raw = proc?.env?.AGENT_LOG_LEVEL?.trim().toLowerCase();
   // Unset is not cached: a library host may load `.env` after the runtime was built, and the first
   // subagent's `attachSink` happens before that. Re-reading `process.env` per sink is cheap.
-  if (!raw) return undefined;
+  if (!raw) {
+    cachedRaw = undefined;
+    cachedLevel = undefined;
+    return undefined;
+  }
+  // Cache on the RAW value, so changing the variable takes effect for later sinks. Caching only a
+  // valid parsed level made the knob immutable for the rest of the process after the first read.
+  if (raw === cachedRaw) return cachedLevel;
+  cachedRaw = raw;
   if (LEVELS.has(raw)) {
     cachedLevel = raw as LogLevel;
     return cachedLevel;
   }
+  cachedLevel = undefined;
   // A typo used to fall through to the seam default (the noisiest level) with no signal at all,
   // so a user trying to quieten a workspace got the opposite. Say it once per bad value.
   if (warnedInvalid !== raw) {

@@ -102,7 +102,7 @@ function interceptorExt(id, order, seen, opts = {}) {
 
 async function fireProbe(runner) {
   const bus = runner.getEventBus();
-  await bus.emit({
+  await bus.intercept({
     type: "tool:before:probe",
     payload: { toolName: "probe", args: {}, sessionId: "s" },
     defaultReturn: undefined,

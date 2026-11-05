@@ -71,7 +71,12 @@ export async function handleManagedReactiveCompact(
     retry,
     maxRetries: host.getCompaction().getMaxReactiveCompactRetries(),
   });
-  if (!lease) return false;
+  if (!lease) {
+    // The claim was refused (a wait / manual compaction / destroyed agent), so no attempt exists.
+    // Keep the retry budget for the next real overflow.
+    host.getCompaction().refundReactiveCompactRetry();
+    return false;
+  }
   const current = () => host.compactions.isCurrent(lease);
   // Hoisted so the catch can classify the throw against the same signal.
   const abortSignal = host.getAbortSignal?.();

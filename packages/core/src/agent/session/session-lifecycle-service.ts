@@ -233,16 +233,29 @@ export class SessionLifecycleService {
       // The reset kills background jobs/tasks asynchronously; the switch is not complete until
       // they are gone (an immediate re-resume must not race a late record deletion).
       await this.settleTransientReset();
+      // A long-lived process `/resume`s through many sessions; the store's per-id fingerprints
+      // (a second copy of the transcript) for the departure would otherwise live until exit.
+      if (current?.id && current.id !== next.id) {
+        // The lifecycle's store port is narrower than `SessionStore` (fake stores in tests do not
+        // implement the cache); the method is optional so the switch never fails over it.
+        (store as typeof store & { clearCache?: (id: string) => void }).clearCache?.(current.id);
+      }
       this.rt.transcript.refreshSubagents?.();
       this.rt.transcript.emitSessionNew(next.id, reason);
       this.rt.transcript.refreshState();
       return next;
     } catch (error) {
       if (this.rt.transcript.getSessionData()?.id === next.id) {
-        // The data was adopted (possibly just before a sink bind threw): keep the switch, make the
-        // lease agree, and re-point writers at the id they now represent.
+        // The data was adopted (possibly just before a later step threw): keep the switch and make
+        // the lease agree.
         this.rt.lease.commit();
-        this.rt.transcript.bindSessionLogSink(next.id);
+        // Adoption committed but the reset did not run: without it usage/todos/approvals/mode and
+        // the stream hub still describe the LEFT session and would be persisted into this one.
+        try {
+          this.resetTransientState(reason, "full");
+        } catch {
+          // Best-effort; the switch itself is already committed.
+        }
       } else {
         this.rt.lease.abortClaim();
       }
@@ -347,15 +360,13 @@ export class SessionLifecycleService {
         this.rt.transcript.refreshSubagents?.();
 
         if (leavingId && leavingId !== sessionId) {
-          // The departure entry belongs to the session being left, so point the sink back for this one
-          // line, then re-attach the target WITHOUT a second boundary (the target's boundary was
-          // written when its sink was bound above).
-          this.rt.transcript.bindSessionLogSink(leavingId, { sessionBoundary: false });
-          try {
-            this.rt.transcript.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
-          } finally {
-            this.rt.transcript.bindSessionLogSink(sessionId, { sessionBoundary: false });
-          }
+          // One recorded row carries both ids; the file itself never moves on a switch.
+          this.rt.transcript.emitSessionSwitch(leavingId, sessionId, leavingMessageCount, reason);
+          // The departure is no longer active; drop its transcript fingerprints (the next
+          // `/resume` reloads and re-primes them).
+          (this.rt.transcript.getSessionStore() as { clearCache?: (id: string) => void } | undefined)?.clearCache?.(
+            leavingId
+          );
         }
         this.rt.transcript.refreshState();
       } catch (error) {

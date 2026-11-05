@@ -14,7 +14,7 @@ Sample modules for manual testing. **Not** loaded by default — core only scans
 | `demo-guard.mjs` | `tool:before:run_command` deny | Ask agent to run `rm -rf /` |
 | `demo-status.mjs` | Footer render surface (raw text + layout tree) + notification | `/ext-badge on`, `/ext-tree`, `/ext-notify` |
 | `demo-turn-context.mjs` | Per-turn context via `registerContextProvider` + `before_agent_start` observer | `/ext-turn on`, then chat; `/ext-turn tab example.com` |
-| `demo-pi-like.mjs` | pi-like capabilities: `session:start`/`session:shutdown`, render surface, plain JSON Schema tool, `modifiedResult`, CoreEnv access | Ask the agent to use `ext_json_echo` or `ext_echo`; `/ext-root` |
+| `demo-pi-like.mjs` | pi-like capabilities: `session:bootstrap`/`session:shutdown`, render surface, plain JSON Schema tool, `modifiedResult`, CoreEnv access | Ask the agent to use `ext_json_echo` or `ext_echo`; `/ext-root` |
 
 Load demos explicitly:
 
@@ -48,7 +48,7 @@ A registered tool declares how it is displayed through a **single `present` fiel
 Every `present` function must be a **pure function** of the stored result (or the parsed input): the rendered value is persisted with the session and replayed on restore.
 
 Extensions can now also:
-- Observe the agent session lifecycle via `session:start` / `session:shutdown` interceptors.
+- Observe the agent session lifecycle via `session:bootstrap` / `session:shutdown` interceptors.
 - Draw into the host UI via the single generic surface: `ctx.ui.render(surface, key, payload)` with `payload` = raw text (ANSI + newlines preserved) or a `text` / `row` / `column` / `box` layout tree. `null` removes the slot; slots are per-extension and cleared when it is disabled. `surface` is currently `"footer"` — the only surface the hosts implement — and `key` scopes the slot within it (`packages/app/src/layout/FooterExtensionSurface.tsx`).
 - Push a **transient** notification with `ctx.ui.notify(message, level)` — use it for one-off events, and a render slot for anything that should persist.
 - Rewrite a tool result by setting `event.payload.modifiedResult` in a `tool:after:<name>` interceptor (the middleware returns the modified result to the model).

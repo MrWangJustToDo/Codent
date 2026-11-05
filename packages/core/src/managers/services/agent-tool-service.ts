@@ -157,7 +157,11 @@ export class AgentToolService {
   /** Create and register an extension tool under its owner. */
   register(def: ExtensionToolDefinition, ctx: AgentToolRegistrationContext): void {
     const existing = (this.getToolsRecord() as Record<string, unknown>)[def.name];
-    if (existing) ctx.warn?.(`Tool "${def.name}" already registered, overwriting`);
+    // Covering a BUILT-IN is a supported, expected capability; only a same-name claim that is not
+    // the incumbent is worth warning about (an extension fighting another extension).
+    if (existing && !this.registry.isIncumbent(def.name)) {
+      ctx.warn?.(`Tool "${def.name}" already registered, overwriting`);
+    }
 
     const serverTool = defineServerTool({
       name: def.name,

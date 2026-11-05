@@ -2,7 +2,7 @@
  * Demo: pi-like extension capabilities.
  *
  * Exercises the extension-system enhancements:
- *   - `session:start` / `session:shutdown` lifecycle events (per-agent ExtensionEventBus)
+ *   - `session:bootstrap` / `session:shutdown` lifecycle events (per-agent ExtensionEventBus)
  *   - `ctx.ui.render(surface, key, payload)` surface slots + `ctx.ui.notify(message, level)`
  *   - Plain JSON Schema tool (non-Zod) via the widened `inputSchema` type
  *   - `modifiedResult` to rewrite a tool result (here: append a marker to `ext_echo`)
@@ -18,8 +18,8 @@ export default {
   description: "Exercises lifecycle events, render surface, JSON Schema tool, modifiedResult",
   activate(ctx) {
     // --- Lifecycle events ---------------------------------------------------
-    ctx.registerInterceptor("session:start", (event) => {
-      ctx.logger.info(`[demo-pi-like] session:start cwd=${event.payload.cwd}`);
+    ctx.registerInterceptor("session:bootstrap", (event) => {
+      ctx.logger.info(`[demo-pi-like] session:bootstrap cwd=${event.payload.cwd}`);
       ctx.ui.render("footer", "demo", "LSP-like: idle");
     });
 

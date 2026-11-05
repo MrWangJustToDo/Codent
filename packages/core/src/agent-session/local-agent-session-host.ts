@@ -200,6 +200,12 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // session:start handlers inspect the live session, not the empty pre-restore shell.
       await managed.emitBootstrapEvents?.();
 
+      // `restoreSession` runs BEFORE `initChat`, so its `resumeBackgroundWork()` could not wake
+      // (the chat controller did not exist yet) and the pending completion was left waiting for
+      // the user's next message. Re-run it now that the controller exists — only for a restored
+      // session; a fresh create has no records and should not build the background facade.
+      if (restored) await managed.resumeBackgroundWork?.();
+
       // A create is also a natural boundary: the previous conversation's children are gone.
       this.pruneDanglingSessions();
       const session = createLocalAgentSession({
@@ -218,6 +224,15 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
           await this.destroy(managed.id);
         } catch {
           // Preserve the original construction error; teardown is best-effort.
+        }
+      } else if (target?.reserved) {
+        // The empty-session reservation was written before `createManagedAgent`; a create that
+        // failed before it claimed the id would leave this file reserved (and skipped by the next
+        // `getLatestEmpty()`) until its TTL expires.
+        try {
+          await new SessionStore(this.storeEnv).releaseReservation(target.id);
+        } catch {
+          // Best-effort, same as the reservation itself.
         }
       }
       throw error;

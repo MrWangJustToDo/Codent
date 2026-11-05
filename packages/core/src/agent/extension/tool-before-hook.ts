@@ -38,7 +38,7 @@ export async function emitToolBeforeHook(
     },
     defaultReturn: undefined,
   };
-  await runner.getEventBus().emit(event);
+  await runner.getEventBus().intercept(event);
   return {
     skip: event.skip === true,
     ...(event.reason !== undefined ? { reason: event.reason } : {}),

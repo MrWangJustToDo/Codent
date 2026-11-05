@@ -173,24 +173,22 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
 }
 
 // ---------------------------------------------------------------------------
-// 5. Session timelines have a retention rule too, and the ACTIVE one is never reaped
+// 5. The workspace timeline has a retention rule too
 //
-// `.agents/logs/<sessionId>/agent.log*` is the only agent artifact that used to grow without a
-// bound (rotation caps one file, not the directory; every subagent gets its own file). The unit is
-// the session directory, so the sweep has to descend one level and reap an emptied directory.
+// `.agents/logs/agent.log*` is the only agent artifact that used to grow without a bound (rotation
+// caps one file's size, not the directory). The timeline is flat now: the active file is kept by
+// mtime, not by a session directory.
 // ---------------------------------------------------------------------------
 {
   resetAgentLogSweep();
-  const staleLog = await writeAged(`${AGENT_LOG_DIR}/ses_stale/agent.log`, staleAge(LOG_MAX_AGE_MS));
-  const freshLog = await writeAged(`${AGENT_LOG_DIR}/ses_fresh/agent.log`, 0);
-  // Old enough to be collected, but this session is being appended to right now.
-  const keptLog = await writeAged(`${AGENT_LOG_DIR}/ses_kept/agent.log`, staleAge(LOG_MAX_AGE_MS));
+  const staleLog = await writeAged(`${AGENT_LOG_DIR}/agent.log`, staleAge(LOG_MAX_AGE_MS));
+  const freshLog = await writeAged(`${AGENT_LOG_DIR}/agent.live.log`, 0);
   // Rotation shards. `agent.log.1` does NOT end with `.log`, so the sweeper's default suffix test
-  // left every segment behind: the active file was reaped and the session kept ~4 × 5 MiB forever.
-  // Both spellings are covered here — the root timeline and a subagent's independent file.
-  const staleShard = await writeAged(`${AGENT_LOG_DIR}/ses_stale/agent.log.1`, staleAge(LOG_MAX_AGE_MS));
-  const staleSubagentShard = await writeAged(`${AGENT_LOG_DIR}/ses_shard/subagent_abc.log.2`, staleAge(LOG_MAX_AGE_MS));
-  const keptShard = await writeAged(`${AGENT_LOG_DIR}/ses_kept/agent.log.1`, staleAge(LOG_MAX_AGE_MS));
+  // would leave every segment behind.
+  const staleShard = await writeAged(`${AGENT_LOG_DIR}/agent.log.1`, staleAge(LOG_MAX_AGE_MS));
+  const staleSecondShard = await writeAged(`${AGENT_LOG_DIR}/agent.old.log.2`, staleAge(LOG_MAX_AGE_MS));
+  // Legacy layout from before the single-file timeline: still swept (nested pass), permanently.
+  const legacyLog = await writeAged(`${AGENT_LOG_DIR}/ses_legacy/agent.log`, staleAge(LOG_MAX_AGE_MS));
 
   const present = async (rel) =>
     fs.promises
@@ -198,33 +196,17 @@ const staleAge = (maxAgeMs) => maxAgeMs + 60_000;
       .then(() => true)
       .catch(() => false);
 
-  const removed = await sweepAgentLogs(env, { force: true, keepDir: `${AGENT_LOG_DIR}/ses_kept` });
-  assert.equal(removed, 3, "the idle sessions' timelines and their rotation shards are collected");
+  const removed = await sweepAgentLogs(env, { force: true });
+  assert.equal(removed, 4, "stale timeline files, shards and legacy session logs are collected");
   assert.equal(await present(staleLog), false, "a stale timeline is removed");
-  assert.equal(await present(staleShard), false, "a rotated segment of a stale timeline is removed");
-  assert.equal(
-    await present(staleSubagentShard),
-    false,
-    "a subagent's rotated segment (its own file, same directory) is removed"
-  );
-  assert.equal(await present(freshLog), true, "a live timeline is kept");
-  assert.equal(await present(keptLog), true, "the session being appended to is never reaped");
-  assert.equal(await present(keptShard), true, "and neither are its rotated segments");
-  // The directory is deliberately kept: `remove` is recursive, so deleting a directory that gained a
-  // file between the emptiness check and the delete would lose it. An empty session dir is inert.
-  assert.equal(
-    await fs.promises
-      .access(abs(`${AGENT_LOG_DIR}/ses_stale`))
-      .then(() => true)
-      .catch(() => false),
-    true,
-    "an emptied session directory is left in place (never rm -rf'd from a check-then-act)"
-  );
+  assert.equal(await present(staleShard), false, "a rotated segment is removed");
+  assert.equal(await present(staleSecondShard), false, "a second rotated segment is removed");
+  assert.equal(await present(legacyLog), false, "a legacy per-session timeline directory is swept");
+  assert.equal(await present(freshLog), true, "an actively-written timeline is kept");
 
-  // Without `keepDir`, the same age rule applies to every session (a resumed one re-opens its file).
   await sweepAgentLogs(env, { force: true, now: Date.now() + staleAge(LOG_MAX_AGE_MS) });
   assert.equal(await present(freshLog), false, "a later pass collects it once the age applies");
-  console.log("session timelines expire by directory, active one excluded — ok");
+  console.log("workspace timeline expires by age, active file excluded by mtime — ok");
 }
 
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);

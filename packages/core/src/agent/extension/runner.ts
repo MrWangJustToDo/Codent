@@ -284,7 +284,7 @@ export class ExtensionRunner {
       emitBeforeAgentStart: async (event) => {
         // Awaited, not fired-and-forgotten: a handler that warms an index or reads the transcript
         // must finish before the first model call. Rejections are contained by the bus.
-        await this.eventBus.emit(event);
+        await this.eventBus.intercept(event);
       },
       reportFailure: (extensionId, phase, error) =>
         this.emitExtensionEvent("agent:extension-error", { extensionId, phase, error }),
@@ -354,7 +354,7 @@ export class ExtensionRunner {
       disposeMessageTransformer: (extensionId, transformer) =>
         this.messageTransformers.dispose(extensionId, transformer),
       eventBus: {
-        emit: (event) => this.eventBus.emit(event),
+        intercept: (event) => this.eventBus.intercept(event),
         hasInterceptors: (type) => this.eventBus.hasInterceptors(type),
       },
       observerSurface: (extensionId, registrations, getContext) =>
@@ -535,27 +535,35 @@ export class ExtensionRunner {
   }
 
   /**
-   * Emit `session:start` to registered interceptors (per-agent ExtensionEventBus).
+   * Emit `session:bootstrap` to registered interceptors (per-agent ExtensionEventBus).
    * Distinct from the telemetry `session:start` emitted via the unified bus —
    * this one is interceptable by extensions.
    */
-  async emitSessionStart(cwd: string, agentId: string): Promise<void> {
+  async emitSessionBootstrap(cwd: string, agentId: string): Promise<void> {
     // Awaited, like `session:shutdown`: an async handler that warms an index or reads the transcript
     // was still in flight when the first model call started. Errors stay contained (bootstrap must
     // not fail because a hook threw) but the handler itself is awaited — bounded, so a handler that
     // never settles cannot hang agent creation.
     const sessionId = this.options.getRuntime?.()?.sessionId() ?? null;
+    // Named `session:bootstrap`, not `session:start`: the observable telemetry event of that name
+    // is a different fact (fire-and-forget, `{ cwd }`), and one name cannot be two events with two
+    // dispatch modes. This is the awaited, interceptable initialization hook.
     await withCallbackTimeout(
       this.eventBus
-        .emit({
-          type: "session:start",
+        .intercept({
+          type: "session:bootstrap",
           payload: { cwd, agentId, ...(sessionId ? { sessionId } : {}) },
           defaultReturn: undefined,
         })
         .catch(() => {}),
-      "session:start",
+      "session:bootstrap",
       this.callbackTimeoutMs
-    ).catch(() => {});
+    ).catch((error) => {
+      // A handler that throws is reported by the bus; one that never settles only produces this
+      // timeout rejection. Swallowing it made a hung initialization hook look like "startup was
+      // slow" with nothing in the timeline.
+      this.writeExtensionLog("warn", "session:bootstrap", errorMessage(error));
+    });
   }
 
   /**
@@ -574,7 +582,7 @@ export class ExtensionRunner {
     // awaits that), turning "quit the app" into a hang with no timeout anywhere in the chain.
     await withCallbackTimeout(
       this.eventBus
-        .emit({
+        .intercept({
           type: "session:shutdown",
           payload: { agentId, ...(sessionId ? { sessionId } : {}) },
           defaultReturn: undefined,
@@ -582,7 +590,9 @@ export class ExtensionRunner {
         .catch(() => {}),
       "session:shutdown",
       this.callbackTimeoutMs
-    ).catch(() => {});
+    ).catch((error) => {
+      this.writeExtensionLog("warn", "session:shutdown", errorMessage(error));
+    });
   }
 
   /** The extension tools this runner still holds, one per name — a mirror of what the host holds,
@@ -625,6 +635,11 @@ export class ExtensionRunner {
       this.ranks.delete(api.id);
       this.turnContextSections.clearNotices(api.id);
     }
+
+    // `destroyExtension` is the one suspension point in this method; a `destroyAll()` that ran
+    // while we awaited it must not be followed by pushing a fresh instance into a dead runner
+    // (nothing would ever tear it down again).
+    if (this.destroyed) throw new Error("ExtensionRunner has been destroyed");
 
     const registrations: ExtensionRegistrations = {
       tools: [],
@@ -1215,7 +1230,10 @@ export class ExtensionRunner {
     let firstError: unknown;
     const release = <T>(items: T[], fn: (item: T) => void): T[] => {
       const remaining: T[] = [];
-      for (const item of items) {
+      // Snapshot: a disposer may remove itself from `items` (the tool-output decorator handle
+      // splices its own ledger entry), and iterating the live array then skips the next item —
+      // the last decorator was never disposed and the ledger was cleared anyway.
+      for (const item of [...items]) {
         try {
           fn(item);
         } catch (error) {

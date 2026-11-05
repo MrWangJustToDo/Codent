@@ -5,7 +5,7 @@
  * - one managed-span call site (root + child share it);
  * - profiles are configuration, not extra lifecycles;
  * - task stays explore-only with UI-only profile metadata;
- * - logs carry scope, and parent child-lifecycle records are index-only;
+ * - logs carry scope (one workspace timeline, no per-agent file);
  * - child profiles do not acquire session persistence.
  *
  * Run: pnpm --filter @codent/core run validate:unified-agent-execution
@@ -20,7 +20,6 @@ import {
   AGENT_PROFILE_IDS,
   AgentLog,
   logEntrySchema,
-  logSubagentLifecycle,
   subagentResultToTaskOutput,
   taskOutputSchema,
 } from "../dist/dev.mjs";
@@ -178,20 +177,14 @@ assert.equal(
   "the persisted schema rejects unknown scope fields"
 );
 
-const parentEntries = [];
-const parentLog = new AgentLog({ scope: { profile: "root" } });
-parentLog.attachSink({ handleEntry: (entry) => parentEntries.push(entry) });
-logSubagentLifecycle(parentLog, "completed", {
-  subagentId: "s1",
-  parentTaskToolCallId: "tc1",
-  iterations: 2,
-  maxIterations: 50,
-  durationMs: 10,
-  usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
-});
-assert.equal(parentEntries.length, 1);
-assert.equal(parentEntries[0].data?.indexOnly, true);
-assert.equal(parentEntries[0].scope.profile, "root");
-assert.deepEqual(parentEntries[0].data?.usage, { inputTokens: 4, outputTokens: 2, totalTokens: 6 });
+// The parent-log mirror is gone: root and child `AgentLog`s share the workspace timeline, so a
+// child row is attributable by its own `scope`/`sessionId` and must not be duplicated into a
+// parent "index" row. Guard against the mirror creeping back in.
+const taskResult = read("agent/subagent/task-result.ts");
+assert.ok(
+  !/logSubagentLifecycle|subagent-log-mirror|subagentLifecycleLogLine/.test(runSubagent + taskResult),
+  "no parent-log mirror remains (one workspace timeline, child rows carry their own scope)"
+);
+assert.ok(!/data\?\.indexOnly|indexOnly: true/.test(taskResult), "no index-only parent rows");
 
 console.log("unified-agent-execution validation passed");

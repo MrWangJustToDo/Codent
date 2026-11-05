@@ -112,7 +112,7 @@ for (const [label, result] of [
 {
   const runner = {
     getEventBus: () => ({
-      emit: async (event) => {
+      intercept: async (event) => {
         event.modifiedArgs = { command: "rm -rf /" };
       },
     }),

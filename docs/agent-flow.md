@@ -495,7 +495,7 @@ managed 路径不传 owner controller 会直接抛错，只有 `detached: true` 
 4. ownership 在提交点交接：`acquire(target)` 先、提交后 `release(leaving)`；load 未提交则
    `release(target)` 并把日志 sink 指回仍活跃的会话。
    `session:switch` 的 `messageCount` 是**被离开**会话的条数（unload 前快照），写回离开会话的
-   sink 时带 `{ sessionBoundary: false }`，避免同一文件出现第二条分隔线。
+   session 切换只记录事件，不再重绑定 sink，也不写分隔线。
 5. `newSessionInner`：create + `acquire` → unload → `setSessionData(next)`（提交点）→
    `clearTranscript()` + `resetTransientState(full)`；提交后失败只修占用与 sink，不回滚新会话。
 6. `resetTransientState` 一份有序清单，`full` / `resume` 两个作用域：`run.resetRunState()`

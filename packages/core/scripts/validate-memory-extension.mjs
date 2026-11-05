@@ -271,12 +271,20 @@ observers.get("message:start")({
   agentId: "agent-1",
   payload: { role: "assistant", firstOutput: true },
 });
-assert.equal(await selectionSection.content(), undefined, "a committed memory is not selected again");
+assert.equal(
+  await selectionSection.content(),
+  "<memory_selection>No memories are relevant to this turn.</memory_selection>",
+  "a committed memory is not selected again (the section emits the tombstone that supersedes the old one)"
+);
 assert.equal(llmCalls.length, 5, "the committed set suppresses the next completion");
 
 // An already-aborted run issues no completion at all.
 mockCtx.signal = { aborted: true };
-assert.equal(await selectionSection.content(), undefined, "an aborted run injects no selection");
+assert.equal(
+  await selectionSection.content(),
+  "<memory_selection>No memories are relevant to this turn.</memory_selection>",
+  "an aborted run injects the tombstone, not a stale selection"
+);
 assert.equal(llmCalls.length, 5, "an aborted run issues no completion");
 mockCtx.signal = undefined;
 

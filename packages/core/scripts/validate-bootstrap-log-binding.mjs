@@ -63,8 +63,8 @@ registerCoreEnv({
   fetch: async () => new Response(),
 });
 
-const readEntries = async (sessionId) => {
-  const file = path.join(rootPath, ".agents/logs", sessionId, "agent.log");
+const readEntries = async () => {
+  const file = path.join(rootPath, ".agents/logs", "agent.log");
   const exists = await fs.promises.access(file).then(
     () => true,
     () => false
@@ -115,7 +115,7 @@ assert.ok(sessionId?.startsWith("ses_"), `session id, got ${sessionId}`);
 // The sink flushes on an interval, so poll instead of sleeping a fixed time.
 let entries = [];
 for (let attempt = 0; attempt < 100; attempt++) {
-  entries = await readEntries(sessionId);
+  entries = await readEntries();
   if (entries.some((entry) => entry.event === "agent:extension-error")) break;
   await sleep(25);
 }
@@ -150,11 +150,11 @@ assert.equal(docRows.length, 1, `one documentation row (the load itself), got ${
 // The window closes: after registration the same agent still records, and a
 // second failure does not double-write (bind moved from constructionLogs → agents).
 // ----------------------------------------------------------------------------
-const before = (await readEntries(sessionId)).length;
+const before = (await readEntries()).length;
 managed.emitEvent("agent:extension-error", { extensionId: "post-registration", phase: "config", error: "x" });
 let afterEntries = [];
 for (let attempt = 0; attempt < 100; attempt++) {
-  afterEntries = await readEntries(sessionId);
+  afterEntries = await readEntries();
   if (afterEntries.length > before) break;
   await sleep(25);
 }

@@ -15,7 +15,7 @@ import { BEGIN_SUMMARY_TOOL_NAME } from "./begin-summary-tool.js";
 import { buildExploreSystemPrompt } from "./explore-prompt.js";
 import { captureStreamFinishReason } from "./run-stats.js";
 import { EMPTY_SUMMARY } from "./subagent-output.js";
-import { beginTaskRun, enterTaskPhase, readTaskRunSpawnId } from "./subagent-runs.js";
+import { beginTaskRun, enterTaskPhase } from "./subagent-runs.js";
 import { SUBAGENT_PARENT_RUN_NOTICE } from "./subagent-stop-reason.js";
 import { finalizeSubagentTask, subagentPreviewOutput } from "./task-result.js";
 import { SUBAGENT_DEFAULT_MAX_ITERATIONS } from "./types.js";
@@ -153,8 +153,6 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
     profile: effectiveProfileId,
     ...(taskCallId ? { taskCallId } : {}),
   });
-  const childLogDir = subagent.log.getFileSinkDir?.();
-  const childLogPath = childLogDir ? `${childLogDir}/${subagentId}.log` : undefined;
 
   // Task-level phase machine: authoritative running → summary transitions.
   if (taskCallId) {
@@ -212,13 +210,6 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
           { subagentId, phase, parentTaskToolCallId: taskCallId },
           { parentId: parentAgentId }
         );
-        parentManaged.logSubagentLifecycle("phase", {
-          subagentId,
-          parentTaskToolCallId: taskCallId,
-          run: readTaskRunSpawnId(parentManaged, taskCallId),
-          taskPhase: phase,
-          ...(childLogPath ? { childLogPath } : {}),
-        });
       }
     };
     /** `begin_summary` call site — the subagent is writing its own report. */
@@ -234,21 +225,6 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       { subagentId, description, parentTaskToolCallId: taskCallId },
       { parentId: parentAgentId }
     );
-    // Mirror into the parent's file so a `task` call's children are readable without opening
-    // each subagent log (the bus event above only ever lands in the child's own file).
-    parentManaged.logSubagentLifecycle("created", {
-      subagentId,
-      parentTaskToolCallId: taskCallId,
-      run: readTaskRunSpawnId(parentManaged, taskCallId),
-      ...(childLogPath ? { childLogPath } : {}),
-    });
-    parentManaged.logSubagentLifecycle("started", {
-      subagentId,
-      parentTaskToolCallId: taskCallId,
-      run: readTaskRunSpawnId(parentManaged, taskCallId),
-      description,
-      ...(childLogPath ? { childLogPath } : {}),
-    });
 
     subagentManaged.resetTurnLifecycle();
 
@@ -335,7 +311,6 @@ async function executeSubagentRun(config: SubagentConfig, manager: AgentManager)
       ...(maxOutputLength !== undefined ? { maxOutputLength } : {}),
       runStartedAt,
       ...(abortSignal?.reason !== undefined ? { abortReason: abortSignal.reason } : {}),
-      ...(childLogPath ? { childLogPath } : {}),
       subagentManaged,
       parentManaged,
       parentEpoch,

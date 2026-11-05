@@ -100,8 +100,8 @@ if (canCount) {
 await new Promise((r) => setTimeout(r, 1200));
 
 // ---- 2. session:start with a NEW cwd (project B) → old server torn down ----
-await runner.emitSessionStart(projectB, "sess-1");
-// emitSessionStart is fire-and-forget (void emit); wait for shutdown to complete.
+await runner.emitSessionBootstrap(projectB, "sess-1");
+// emitSessionBootstrap is fire-and-forget (void emit); wait for shutdown to complete.
 const afterStartB = await waitForCount(baseline, 30, 200);
 if (canCount) {
   record(

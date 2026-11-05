@@ -47,10 +47,6 @@ const ALLOWLIST = new Map([
     "packages/core/src/agent/log/event-log-specialized.ts",
     "Dedicated handlers for the events whose row shape is not one formatter (multi-row, per-server).",
   ],
-  [
-    "packages/core/src/agent/log/subagent-log-mirror.ts",
-    "Mirrors a child's lifecycle into the PARENT file (indexOnly contract) — the bus event already has a destination (the child's log), so publishing a second event would record the same fact twice.",
-  ],
 ]);
 
 const PATTERNS = [

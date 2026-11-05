@@ -291,7 +291,12 @@ creating a duplicate (check memory_list first).`,
 
   const indexContent = (): string | undefined => {
     const index = memoryManager.getIndexContent();
-    if (!index.trim()) return undefined;
+    if (!index.trim()) {
+      // A stable sentinel, not `undefined`: section admission is hash-based and has no retraction,
+      // so an empty turn left the PREVIOUS index block in the wire forever. The sentinel supersedes
+      // it once and is then stable (not re-injected).
+      return "<memory_index>No memories are available yet.</memory_index>";
+    }
     return [
       "<memory_index>",
       "These are memories from previous sessions. Respect user preferences from memory.",
@@ -317,7 +322,9 @@ creating a duplicate (check memory_list first).`,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     const content = selection.getRelevantContent();
-    return content.trim() ? content : undefined;
+    // Same reason as the index: an absent selection would leave the previous turn's matches in the
+    // wire, where the model reads them as current.
+    return content.trim() ? content : "<memory_selection>No memories are relevant to this turn.</memory_selection>";
   };
 
   // One commit per turn: the first assistant message proves the turn is actually running. A turn

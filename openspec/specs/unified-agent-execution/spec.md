@@ -168,7 +168,7 @@ All profiles SHALL write the same `LogEntry` schema through `AgentLog` and the l
 #### Scenario: Parent log is an index
 
 - **WHEN** a child is created, starts, changes task phase, completes, or stops
-- **THEN** the parent log receives an index-only lifecycle/link entry with the child id and log path, marked `data.indexOnly: true`, including the existing `subagent:completed` statistics (`iterations`, `durationMs`, `usage`), but not a duplicate of the child's LLM/tool entries
+- **THEN** the child lifecycle row carries the subagent id, `parentTaskToolCallId` and the spawn `sessionId` in the shared workspace timeline (no separate child file or index marker).
 
 #### Scenario: Same schema for all profiles
 

@@ -91,8 +91,8 @@ async function writeExtension(rootPath, filename, lines) {
   await fs.promises.writeFile(path.join(dir, filename), [...lines, ""].join("\n"), "utf8");
 }
 
-/** The agent.log path for a session under `rootPath`. */
-const logFileFor = (rootPath, sessionId) => path.join(rootPath, ".agents/logs", sessionId, "agent.log");
+/** The workspace timeline file under `rootPath`. */
+const logFileFor = (rootPath) => path.join(rootPath, ".agents/logs", "agent.log");
 
 const exists = (p) =>
   fs.promises.access(p).then(
@@ -117,26 +117,35 @@ assert.ok(sessionId?.startsWith("ses_"), `stable ses_ id, got ${sessionId}`);
 managed.getLog()?.info("system", "host-level-entry");
 await sleep(450); // default flush interval is 250ms
 
-const logDir = path.join(rootPath, ".agents/logs", sessionId);
+const logDir = path.join(rootPath, ".agents/logs");
 const logFile = path.join(logDir, "agent.log");
 assert.ok(await exists(logFile), "agent.log exists");
 const content = await fs.promises.readFile(logFile, "utf-8");
 assert.ok(content.includes("host-level-entry"), "runtime entry landed on disk");
 assert.ok(content.includes("Session started"), "bootstrap entry persisted (sink attached before bootstrap events)");
-console.log("main agent OK:", path.relative(rootPath, logDir));
+console.log("main agent OK:", path.relative(rootPath, logFile));
 
 // ----------------------------------------------------------------------------
-// 2. Subagent: inherits parent session dir, independent {subagentId}.log.
+// 2. Subagent: same workspace timeline, distinguished by scope/session fields.
 // ----------------------------------------------------------------------------
 const subagent = await manager.spawnSubagent(managed.id, { name: "sub" });
 subagent.getLog()?.info("system", "subagent-entry");
 await sleep(450);
 
-const subFile = path.join(logDir, `${subagent.id}.log`);
-assert.ok(await exists(subFile), "subagent file exists");
-const subContent = await fs.promises.readFile(subFile, "utf-8");
-assert.ok(subContent.includes("subagent-entry"), "subagent entry landed in parent session dir");
-console.log("subagent OK:", path.relative(rootPath, subFile));
+const subContent = await fs.promises.readFile(logFile, "utf-8");
+assert.ok(subContent.includes("subagent-entry"), "subagent entry landed in the workspace timeline");
+const subEntry = subContent
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => JSON.parse(line))
+  .find((entry) => entry.message?.includes("subagent-entry"));
+assert.ok(subEntry, "the subagent row is parseable");
+assert.notEqual(subEntry.scope?.profile, "root", "the row is attributable to the child profile");
+const strayChildFiles = (await fs.promises.readdir(logDir)).filter(
+  (name) => name.endsWith(".log") && name !== "agent.log"
+);
+assert.deepEqual(strayChildFiles, [], "no per-subagent log files");
+console.log("subagent OK:", path.relative(rootPath, logFile));
 
 // ----------------------------------------------------------------------------
 // 3. Extension activation failure emitted during bootstrap (before the session sink

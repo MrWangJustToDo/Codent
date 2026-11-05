@@ -144,7 +144,7 @@ try {
       },
     }),
   };
-  managed.bindSessionLogSink("ses_cleanup");
+  managed.bindLogSink();
 
   await managed.disposeBuiltResources();
   assert.equal(child.killed, true, "cleanup force-kills the real MCP transport child");
@@ -157,7 +157,7 @@ try {
 {
   const manager = new AgentManager();
   const log = new AgentLog();
-  manager.getLogExtension().attachSink(log, { dir: ".agents/logs/ses_cleanup", env });
+  manager.getLogExtension().attachSink(log, { dir: ".agents/logs", env });
   assert.equal(manager.getLogExtension().getAttachedSinkCount(), 1);
   await manager.dispose();
   assert.equal(manager.getLogExtension().getAttachedSinkCount(), 0, "manager dispose releases every log sink");

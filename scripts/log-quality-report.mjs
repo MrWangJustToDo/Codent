@@ -56,28 +56,20 @@ const sessionArg = args.find((arg) => !arg.startsWith("--"));
 // ============================================================================
 
 function newestSessionWithLog() {
-  if (!fs.existsSync(LOGS_DIR)) return null;
-  const dirs = fs
-    .readdirSync(LOGS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith("ses_"))
-    .map((entry) => {
-      const logPath = path.join(LOGS_DIR, entry.name, "agent.log");
-      if (!fs.existsSync(logPath)) return null;
-      return { id: entry.name, mtime: fs.statSync(logPath).mtimeMs };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.mtime - a.mtime);
-  return dirs[0]?.id ?? null;
+  const file = path.join(LOGS_DIR, "agent.log");
+  if (!fs.existsSync(file)) return null;
+  // The timeline is workspace-wide; the session a report defaults to is the newest row's owner.
+  const entries = readLog(file).entries;
+  return entries.filter((entry) => entry.sessionId).at(-1)?.sessionId ?? null;
 }
 
 const sessionId = sessionArg ?? newestSessionWithLog();
 if (!sessionId) {
-  console.error("no session log found under .agents/logs — run a session first");
+  console.error("no session rows found in .agents/logs/agent.log — run a session first");
   process.exit(2);
 }
 
-const logDir = path.join(LOGS_DIR, sessionId);
-const rootLog = path.join(logDir, "agent.log");
+const rootLog = path.join(LOGS_DIR, "agent.log");
 if (!fs.existsSync(rootLog)) {
   console.error(`no agent.log for session ${sessionId}`);
   process.exit(2);
@@ -103,11 +95,26 @@ function readLog(file) {
   return { entries, bytes: Buffer.byteLength(text), badLines };
 }
 
-const root = readLog(rootLog);
-const childLogs = fs
-  .readdirSync(logDir)
-  .filter((name) => name.startsWith("subagent_") && name.endsWith(".log"))
-  .map((name) => ({ name, ...readLog(path.join(logDir, name)) }));
+const allEntries = readLog(rootLog);
+const sessionEntries = allEntries.entries.filter((entry) => entry.sessionId === sessionId);
+const root = {
+  ...allEntries,
+  entries: sessionEntries.filter((entry) => !entry.scope || entry.scope.profile === "root"),
+  // Byte size must describe the SAME rows as the row count (the file also holds other sessions
+  // and unattributed bootstrap rows).
+  bytes: sessionEntries.reduce((sum, entry) => sum + Buffer.byteLength(JSON.stringify(entry)), 0),
+};
+const unattributedRows = allEntries.entries.filter((entry) => !entry.sessionId).length;
+
+// Child rows share the workspace file; a child is identified by scope (profile + task call).
+const childGroups = new Map();
+for (const entry of sessionEntries) {
+  if (!entry.scope || entry.scope.profile === "root") continue;
+  const key = `${entry.scope.profile}:${entry.scope.taskCallId ?? "internal"}`;
+  if (!childGroups.has(key)) childGroups.set(key, []);
+  childGroups.get(key).push(entry);
+}
+const childLogs = [...childGroups].map(([name, entries]) => ({ name, entries, bytes: 0, badLines: 0 }));
 
 const fmtInt = (n) => n.toLocaleString("en-US");
 const pct = (part, whole) => (whole === 0 ? "0.0%" : `${((part / whole) * 100).toFixed(1)}%`);
@@ -287,6 +294,9 @@ console.log(
   `volume   ${fmtInt(total)} rows, ${(root.bytes / 1e6).toFixed(2)} MB` +
     (root.badLines ? `  ⚠ ${root.badLines} unparsable line(s)` : "")
 );
+if (unattributedRows > 0) {
+  console.log(`         ${fmtInt(unattributedRows)} row(s) without a sessionId (bootstrap/construction)`);
+}
 
 console.log("\n-- levels ------------------------------------------------");
 for (const [level, n] of top(byLevel, 5))

@@ -30,7 +30,6 @@ import {
 } from "./session-journal.js";
 import { fingerprintUIMessage } from "./session-sync-tracker.js";
 import {
-  AGENT_LOG_DIR,
   SESSION_DIR,
   SESSION_LOG_MESSAGE,
   SESSION_LOG_SUFFIX,
@@ -222,13 +221,16 @@ export class SessionStore {
     // so failures surface (session:save-error). Keep the stored lock chain
     // non-rejecting so one failure does not permanently stall later saves.
     const run = prev.then(() => this.doSave(session));
-    sessionSaveLocks.set(
-      key,
-      run.then(
-        () => undefined,
-        () => undefined
-      )
+    const chain = run.then(
+      () => undefined,
+      () => undefined
     );
+    sessionSaveLocks.set(key, chain);
+    // Release the entry once it settles, but only if it is still the tail: an unbounded map kept a
+    // closure per session for the life of the process (only `delete()` ever removed one).
+    void chain.finally(() => {
+      if (sessionSaveLocks.get(key) === chain) sessionSaveLocks.delete(key);
+    });
     return run;
   }
 
@@ -408,8 +410,9 @@ export class SessionStore {
   /**
    * Delete a session by ID (its log; there is no separate snapshot file).
    *
-   * Also removes `.agents/logs/<id>/`: that timeline carries the user's prompts, tool arguments and
-   * tool output, so leaving it behind made "delete this conversation" keep the conversation.
+   * The agent timeline is NOT deleted: it is one workspace-wide file (`.agents/logs/agent.log`)
+   * shared by every session and subagent, and entries are selected by their `sessionId` field.
+   * Deleting it here would erase every other conversation's timeline too.
    */
   async delete(id: string): Promise<boolean> {
     if (!isSafeSessionId(id)) return false;
@@ -428,16 +431,6 @@ export class SessionStore {
     if (await this.fs.exists(logPath)) {
       await this.fs.remove(logPath);
       removed = true;
-    }
-    // Same containment rule as the log path: never build a directory from an id that could leave
-    // the logs root. Best-effort — a failed log cleanup must not fail the deletion itself.
-    if (isSafeSessionId(id) && !id.startsWith(".")) {
-      const logDir = `${AGENT_LOG_DIR}/${id}`;
-      try {
-        if (await this.fs.exists(logDir)) await this.fs.remove(logDir);
-      } catch {
-        // Non-fatal.
-      }
     }
     return removed;
   }

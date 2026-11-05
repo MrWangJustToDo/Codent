@@ -185,11 +185,11 @@ export class CommandJobRegistry {
 
   /** Whether a `clearCoreEnv(rootPath)` for `rootPath` owns this registry's jobs. */
   belongsTo(rootPath?: string): boolean {
-    // No env = no attributable owner. Returning true here made a defensive/second `clearCoreEnv()`
-    // (or a host that never registered an ambient env and only builds a `CodentAgent`) reap every
-    // runtime's running background commands in the process.
+    // No env = no attributable owner: a defensive/second `clearCoreEnv()` (or a host that never
+    // registered an ambient env and only builds a `CodentAgent`) must NOT reap every runtime's
+    // running background commands in the process.
     if (!rootPath) return false;
-    return this.env === undefined || this.env.rootPath === rootPath;
+    return this.env !== undefined && this.env.rootPath === rootPath;
   }
 
   private readonly jobs = new Map<string, CommandJobRecord>();

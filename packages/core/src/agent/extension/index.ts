@@ -45,7 +45,7 @@ export type {
   ToolLifecycleEvent,
   BeforeAgentStartEvent,
   BeforeAgentStartPayload,
-  SessionStartEvent,
+  SessionBootstrapEvent,
   SessionStartPayload,
   SessionShutdownEvent,
   SessionShutdownPayload,

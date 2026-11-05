@@ -53,6 +53,8 @@ export interface AgentChatHost {
   setClientToolWaiting(active: boolean): void;
   setPendingWakeCause(cause: BackgroundWakeCause): void;
   isSessionSwitching(): boolean;
+  /** Set by `ManagedAgent.markDestroyed`; late async continuations must not start work. */
+  isDestroyed(): boolean;
   abort(reason?: string): void;
   emitEvent: EmitAgentTelemetryFn;
   emitDiagnostic(

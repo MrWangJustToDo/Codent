@@ -191,7 +191,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           },
           defaultReturn: undefined,
         };
-        await eventBus.emit(event);
+        await eventBus.intercept(event);
 
         // If an interceptor set modifiedResult, stash it for onToolPhaseComplete (we cannot
         // return it from onAfterToolCall — that hook returns void in TanStack 0.43.1).
@@ -199,7 +199,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
           modifiedResults.set(info.toolCallId, event.payload.modifiedResult);
         }
       } else {
-        await eventBus.emit({
+        await eventBus.intercept({
           type: `tool:error:${info.toolName}`,
           payload: {
             toolName: info.toolName,

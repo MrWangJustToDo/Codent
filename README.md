@@ -41,7 +41,7 @@ A **runtime-agnostic** AI coding agent — same core logic, runs in terminal, Ch
 | **Modes** | `Shift+Tab` cycles Normal → Auto (skip approvals) → Plan; `/mode` for explicit control (`plan` / `auto` / `off`) |
 | **Plan Mode** | Explore → review → Build → forced retro (`/mode plan`, persisted under `.agents/plans/`) |
 | **Background commands** | `run_command(run_in_background)` plus `get_command_output` / `kill_command` |
-| **Telemetry** | Lifecycle telemetry bus bridged to a persisted agent log — a run-scoped event timeline (JSONL under `.agents/logs/<sessionId>/`, size-rotated); hosts subscribe via AgentSession `lifecycle` |
+| **Telemetry** | Lifecycle telemetry bus bridged to a persisted agent log — a run-scoped event timeline (JSONL under `.agents/logs/agent.log`, size-rotated); hosts subscribe via AgentSession `lifecycle` |
 | **Extensions** | Capability model like [Pi](https://pi.dev) — declarative extension modules (tools / commands / hooks); built-ins (LSP, Memory, Skills, MCP) + third-party modules under `.agents/extension` (`Ctrl+Y` panel). See [Extensions](#extensions) |
 | **Sandbox** | Isolated command execution with OS-level sandboxing (`@anthropic-ai/sandbox-runtime`) |
 | **Code Mode** | Sandboxed TypeScript execution via TanStack `ai-code-mode` — the model can write and run TS in an isolated V8 context with a curated subset of agent tools exposed as `external_*` functions (read-only fs eager, shell/websearch lazy) |

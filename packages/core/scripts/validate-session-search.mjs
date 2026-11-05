@@ -352,6 +352,9 @@ try {
       withheld: 0,
       truncated: false,
       durationMs: 1,
+      // The executor always records this for the implicit "search everything" case; the projection
+      // reads the stored value instead of the live session id (prefix stability across /resume).
+      excludedSessionId: "ses_current",
     };
     const renderNoMatch = getToolMetadata(searchTool)?.toModelOutput;
     const rendered = await renderNoMatch({ toolCallId: "s0", input: { query: "no-such-token" }, output: noMatch });

@@ -15,6 +15,7 @@ import { backgroundWorkKind, backgroundWorkNoun } from "../jobs/background-work.
 import { eventError } from "./event-error.js";
 import { hookEchoesEnabled } from "./hooks-echo.js";
 import { readEventPayload as p, summarizePayload } from "./payload.js";
+import { logCategorySchema } from "./schemas.js";
 
 import type { SessionDiagnosticArea } from "../../runtime-types/agent-event-payloads.js";
 import type { McpConfigSourceKind } from "../../runtime-types/mcp-status.js";
@@ -46,20 +47,9 @@ function entry(
   log.eventEntry(level, category, event.type, message, data, error, event.runId, event.sessionId);
 }
 
-/** Runtime list of the log categories, for narrowing a payload value. */
-const LOG_CATEGORIES = [
-  "agent",
-  "chat",
-  "llm",
-  "tool",
-  "approval",
-  "compaction",
-  "skill",
-  "memory",
-  "hooks",
-  "system",
-  "side-query",
-] as const satisfies readonly LogCategory[];
+/** Runtime list of the log categories, for narrowing a payload value. Derived from the schema so a
+ * new category cannot be accepted by the sink but silently downgraded to `hooks` here. */
+const LOG_CATEGORIES: readonly LogCategory[] = logCategorySchema.options as readonly LogCategory[];
 
 function logSessionMcp(log: AgentLog, event: AgentEvent): void {
   const configSourceKind = p(event).configSourceKind as McpConfigSourceKind | undefined;
@@ -137,7 +127,10 @@ function logJobChanged(log: AgentLog, event: AgentEvent): void {
   const from = previous && previous !== status ? ` (from ${previous})` : "";
   // A start is a debug fact (the `run_command` / `task` row already shows it); a terminal transition
   // is the row the timeline needs, and a restored job's first observation is not a transition at all.
-  entry(log, event, terminal ? "info" : "debug", "tool", `${what}${exit}${from}${label}`, {
+  // A FAILED terminal state is the one worth `warn`: at the default `info` threshold a background
+  // command that exited non-zero had no row at all once the level was raised to quieten the log.
+  const level = status === "failed" ? "warn" : terminal ? "info" : "debug";
+  entry(log, event, level, "tool", `${what}${exit}${from}${label}`, {
     jobId: d.jobId,
     status,
     kind,

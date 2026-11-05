@@ -404,4 +404,39 @@ registerCoreEnv(createFsEnv(rootPath));
   console.log("10. installAgentLogProcessGuards wires the extension flush on real exit: ok");
 }
 
+// ----------------------------------------------------------------------------
+// 11. Shared workspace sink: two logs, one file, ref-counted close.
+// ----------------------------------------------------------------------------
+{
+  const dir = path.join(rootPath, ".agents/logs/shared");
+  const file = path.join(dir, "agent.log");
+  const ext = createLogExtension({ bus: createAgentEventBus("root"), resolveLog: () => null });
+  const a = new AgentLog();
+  const b = new AgentLog();
+  const detachA = ext.attachSink(a, { dir, filename: "agent.log", flushIntervalMs: 10 });
+  const detachB = ext.attachSink(b, { dir, filename: "agent.log", flushIntervalMs: 10 });
+  assert.equal(ext.getAttachedSinkCount(), 2, "both logs are attached");
+
+  a.info("system", "from-a");
+  b.info("system", "from-b");
+  await a.flush();
+  let content = fs.readFileSync(file, "utf-8");
+  assert.ok(content.includes("from-a") && content.includes("from-b"), "both logs write through one sink");
+
+  detachA();
+  assert.equal(ext.getAttachedSinkCount(), 1, "detaching one log keeps the other");
+  b.info("system", "after-a-detach");
+  await b.flush();
+  content = fs.readFileSync(file, "utf-8");
+  assert.ok(content.includes("after-a-detach"), "the surviving log still writes after one detach");
+
+  detachB();
+  assert.equal(ext.getAttachedSinkCount(), 0, "the last detach releases the sink");
+  b.info("system", "after-all-detach");
+  await b.flush();
+  content = fs.readFileSync(file, "utf-8");
+  assert.ok(!content.includes("after-all-detach"), "a detached seam no longer writes");
+  console.log("11. shared workspace sink is ref-counted: ok");
+}
+
 console.log("\nextension-flush validation passed");

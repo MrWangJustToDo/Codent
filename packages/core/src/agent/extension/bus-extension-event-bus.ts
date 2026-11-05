@@ -23,7 +23,7 @@ export class BusExtensionEventBus implements ExtensionEventBus {
 
   constructor(private readonly bus: AgentEventBus) {}
 
-  async emit<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined> {
+  async intercept<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined> {
     return this.bus.intercept(event);
   }
 

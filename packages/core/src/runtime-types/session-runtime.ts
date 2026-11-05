@@ -48,7 +48,6 @@ export interface SessionTranscriptPort {
   getSessionStore(): SessionStore | null;
   awaitPersistIdle(): Promise<void>;
   getChatController(): AgentChatController | undefined;
-  bindSessionLogSink(sessionId?: string, options?: { sessionBoundary?: boolean }): void;
   emitSessionNew(sessionId: string, reason: "session-new"): void;
   emitSessionSwitch(
     fromSessionId: string,

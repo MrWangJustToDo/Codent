@@ -22,7 +22,7 @@ import type { AgentLog } from "./agent-log.js";
 
 /**
  * Agent logs with an attached file sink. Managed by the agent lifecycle
- * (`bindSessionLogSink` registers, destroy unregisters), not by callers.
+ * (`bindLogSink` registers, destroy unregisters), not by callers.
  */
 const activeLogs = new Set<AgentLog>();
 

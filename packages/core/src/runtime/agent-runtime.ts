@@ -46,6 +46,12 @@ export interface AgentRuntimeOptions {
 
 export class AgentRuntime {
   readonly env: ResolvedCoreEnv;
+  /**
+   * The env as the host supplied it (before `resolveCoreEnv` copied it). Identity that must be
+   * stable across runtimes — the remote session-ownership table — keys on this, not on `env`,
+   * which is a fresh object per runtime.
+   */
+  readonly sourceEnv: CoreEnv;
   readonly modelProvider?: ModelProvider;
   readonly name: string;
   readonly rootPath: string;
@@ -57,6 +63,7 @@ export class AgentRuntime {
   constructor(options: AgentRuntimeOptions) {
     // Resolve defaults once so tools read a fully-formed env off the runtime.
     this.env = resolveCoreEnv(options.env);
+    this.sourceEnv = options.env;
     this.modelProvider = options.modelProvider;
     // The workspace root is the env's: an option here could only rename a display value while the
     // tools kept using `env.rootPath`, which is a trap rather than a feature.

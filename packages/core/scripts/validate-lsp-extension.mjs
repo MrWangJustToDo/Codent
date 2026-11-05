@@ -167,7 +167,7 @@ record("/lsp status runs (servers configured)", /typescript/.test(lspStatus), ls
 // ---- helper: emit a tool:after:read_file event to trigger file-sync (didOpen) ----
 const eventBus = runner.getEventBus();
 async function syncRead(filePath) {
-  await eventBus.emit({
+  await eventBus.intercept({
     type: "tool:after:read_file",
     payload: { toolName: "read_file", args: { path: filePath }, result: {}, durationMs: 1 },
     defaultReturn: undefined,
@@ -175,7 +175,7 @@ async function syncRead(filePath) {
 }
 // helper: emit a tool:after:write_file event to trigger file-sync (didOpen/didChange) + auto-diag
 async function syncWrite(filePath) {
-  await eventBus.emit({
+  await eventBus.intercept({
     type: "tool:after:write_file",
     payload: { toolName: "write_file", args: { path: filePath }, result: {}, durationMs: 1 },
     defaultReturn: undefined,
@@ -274,7 +274,7 @@ const event = {
   },
   defaultReturn: undefined,
 };
-await eventBus.emit(event);
+await eventBus.intercept(event);
 // Diagnostics land in `modifiedResult` (the model-facing result); the original
 // tool result must stay untouched.
 const injected = event.payload.modifiedResult?._lspDiagnostics;
@@ -304,7 +304,7 @@ const cleanEvent = {
   },
   defaultReturn: undefined,
 };
-await eventBus.emit(cleanEvent);
+await eventBus.intercept(cleanEvent);
 const cleanElapsed = Date.now() - cleanStart;
 record(
   "clean write returns without waiting the settle timeout",
@@ -322,7 +322,7 @@ record(
 // shut down and eagerly start every server a second time. The active manager (and its running
 // mock server) must survive that event; a later disable/shutdown still reaps it.
 const beforeStart = countMockServers();
-await runner.emitSessionStart(projectDir, "sess-1");
+await runner.emitSessionBootstrap(projectDir, "sess-1");
 await new Promise((r) => setTimeout(r, 100));
 const afterStart = countMockServers();
 record("session:start handler runs without throwing", true);

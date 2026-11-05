@@ -27,7 +27,6 @@ export interface AgentRunOutcome {
   kind: AgentRunOutcomeKind;
   messages: UIMessage[];
   path?: AgentRunPath;
-  finishReason?: string | null;
   errorMessage?: string;
 }
 

@@ -19,9 +19,9 @@
  *    (`event-log-rules.ts`). This is the ONE recording path: a call site decides *what happened* by
  *    emitting an event, and the table decides whether, at what level, and in which category it
  *    reaches the file. `validate:no-direct-agent-log` keeps it that way.
- * 2. **The seam** — `AgentLog.debug/info/warn/error/eventEntry`, reached by the bridge itself, by the
- *    subagent parent-log mirror, and by the pre-registration window (bootstrap facts resolve a log
- *    through the manager before the agent is registered). It exists so a fact can be recorded when
+ * 2. **The seam** — `AgentLog.debug/info/warn/error/eventEntry`, reached by the bridge itself and by
+ *    the pre-registration window (bootstrap facts resolve a log through the manager before the
+ *    agent is registered). It exists so a fact can be recorded when
  *    no bus consumer can see it yet — not as a general write path.
  *
  * The seam is a **privileged dependency injection**, not a bus event: a log-entry event would have
@@ -31,9 +31,9 @@
  * construction — the sink never emits.
  *
  * Subagents matter for the shape of this module: they have no extension runner (only roots get one,
- * `agent-factory.ts`), yet they write logs to their own file. So the extension exposes a **sink
- * factory** that core binds per `AgentLog` — root and subagent alike — rather than a per-agent
- * extension instance.
+ * `agent-factory.ts`), yet they must log. Root and child `AgentLog`s therefore attach to the SAME
+ * workspace file, with `scope`/`sessionId` keeping the rows attributable; the extension ref-counts
+ * the per-file sink and reuses it across every agent.
  */
 
 import { createAgentEventBus } from "../agent-event-bus";
@@ -41,7 +41,7 @@ import { registerExtensionExitFlush } from "../agent-log/lifecycle-guards.js";
 import { configuredLogLevel } from "../agent-log/log-level-env.js";
 
 import { bridgeTelemetryToAgentLog } from "./event-log-bridge.js";
-import { createJsonlFileSink } from "./jsonl-file-sink.js";
+import { createJsonlFileSink, DEFAULT_LOG_FILENAME, type LogFileSink } from "./jsonl-file-sink.js";
 
 // Registered with the process-exit guards so a hard exit lands pending batches; see the module note.
 
@@ -51,6 +51,41 @@ import type { AgentLog } from "../agent-log/agent-log.js";
 import type { AgentLogFileSinkOptions, LogPersistErrorInfo } from "../agent-log/types.js";
 
 export type { EventLogPolicy, EventLogResolver, EventLogRule } from "./event-log-bridge.js";
+
+interface SharedSinkEntry {
+  sink: LogFileSink;
+  refs: number;
+  /** Every log currently writing through this sink (used to attribute persist failures). */
+  owners: Set<AgentLog>;
+}
+
+/**
+ * Process-wide sink registry: one physical sink per workspace FILE, not per manager.
+ *
+ * Two runtimes over the same workspace are supported (`sharedSessionOwnership`), and both write
+ * `.agents/logs/agent.log`. Per-manager maps would give each its own buffer/timer/rotation over one
+ * file; the registry keys the sink by workspace identity so rotation has a single writer.
+ */
+const workspaceSinks = new Map<string, SharedSinkEntry>();
+const envSinkIds = new WeakMap<object, number>();
+let nextEnvSinkId = 0;
+
+function sinkKey(options: AgentLogFileSinkOptions): string {
+  const file = `${options.dir}\0${options.filename ?? DEFAULT_LOG_FILENAME}`;
+  const env = options.env;
+  if (!env) return `ambient:${file}`;
+  if (env.remote === true) {
+    // A remote env is one connection: two servers may report the same `rootPath` while being
+    // different filesystems, so identity is the only safe discriminator.
+    let id = envSinkIds.get(env);
+    if (id === undefined) {
+      id = ++nextEnvSinkId;
+      envSinkIds.set(env, id);
+    }
+    return `remote:${id}:${file}`;
+  }
+  return `local:${env.rootPath}:${file}`;
+}
 
 export interface LogExtensionOptions {
   /** Bus whose events become entries. Defaults to a fresh root bus (standalone use). */
@@ -118,6 +153,14 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
   // handle here is what would let the two diverge — `dispose()` detached the sink and forgot the
   // seam, and the log then wrote into a dead buffer while its entries were retained by nobody.
   const sinks = new Map<AgentLog, () => void>();
+  /**
+   * One physical sink per log file.
+   *
+   * The timeline is workspace-scoped now, so root and subagent logs, and every session the agent
+   * switches through, all append to the same file. Creating a sink per `AgentLog` would give each
+   * its own buffer/timer and interleave batches; the registry keeps one buffer and ref-counts the
+   * bindings so the file closes only after the last agent log detaches.
+   */
   let unsubscribe: (() => void) | null = null;
   // Process-exit path: the sink owns a flush timer, so a hard exit must land the pending batch
   // itself. Registered on the same guards that flush the active logs, and released with the
@@ -137,28 +180,52 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       // persisted output, and the seam is shared by every agent in the process.
       const level = configuredLogLevel();
       if (level) log.setMinLevel(level);
-      // Re-pointing an already-attached log must release the previous binding first (its batch is
-      // landed by `detach()`), including the seam side — otherwise the seam keeps feeding a sink
-      // that is no longer in this registry.
+      // Re-pointing an already-attached log must release the previous binding first.
       sinks.get(log)?.();
-      const sink = createJsonlFileSink({
-        ...sinkOptions,
-        ...(options.onPersistError
-          ? { onPersistError: (info: LogPersistErrorInfo) => options.onPersistError?.(log, info) }
-          : {}),
-      });
+
+      const key = sinkKey(sinkOptions);
+      let entry = workspaceSinks.get(key);
+      if (!entry) {
+        // The owner set is filled below; the callback resolves it lazily so a failure is reported
+        // through a LIVE log rather than whichever log happened to create the sink.
+        const candidate: SharedSinkEntry = {
+          sink: undefined as unknown as LogFileSink,
+          refs: 0,
+          owners: new Set(),
+        };
+        candidate.sink = createJsonlFileSink({
+          ...sinkOptions,
+          ...(options.onPersistError
+            ? {
+                onPersistError: (info: LogPersistErrorInfo) => {
+                  const owner = candidate.owners.values().next().value;
+                  if (owner) options.onPersistError?.(owner, info);
+                },
+              }
+            : {}),
+        });
+        entry = candidate;
+        workspaceSinks.set(key, entry);
+      }
+      entry.refs += 1;
+      entry.owners.add(log);
+      const shared = entry;
+
       const detach = (): void => {
         if (sinks.get(log) !== detach) return; // superseded — nothing of ours to release
         sinks.delete(log);
-        // `detach` is async on purpose (a remote CoreEnv can only write asynchronously); the
-        // caller of this handle is synchronous, so at least never leave the rejection unhandled.
-        void sink.detach().catch(() => undefined);
-        // Conditional: a superseded handle must not unbind the live binding (the `sinks.get` check
-        // above covers this registry, the seam guard covers the seam itself).
-        log.detachSink(sink.handleEntry);
+        shared.owners.delete(log);
+        log.detachSink(shared.sink.handleEntry);
+        shared.refs -= 1;
+        if (shared.refs <= 0) {
+          workspaceSinks.delete(key);
+          // `detach` is async on purpose (a remote CoreEnv can only write asynchronously); the
+          // caller of this handle is synchronous, so at least never leave the rejection unhandled.
+          void shared.sink.detach().catch(() => undefined);
+        }
       };
       sinks.set(log, detach);
-      log.attachSink(sink);
+      log.attachSink(shared.sink);
       return detach;
     },
 

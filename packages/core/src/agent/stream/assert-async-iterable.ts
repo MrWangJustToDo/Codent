@@ -1,3 +1,5 @@
+import { toError } from "../../utils/errors.js";
+
 /**
  * Ensure a value is async-iterable before `for await` / `yield*`.
  * Prevents the cryptic `Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')`.
@@ -17,13 +19,7 @@ export function assertAsyncIterable<T>(value: unknown, context: string): asserts
 
 /** Coerce any thrown value to an Error, preferring a real message over `String(value)`. */
 function toStreamError(error: unknown, fallback: string): Error {
-  if (error instanceof Error) return error;
-  if (typeof error === "string" && error) return new Error(error);
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message) return new Error(message);
-  }
-  return new Error(fallback);
+  return toError(error, fallback);
 }
 
 /**

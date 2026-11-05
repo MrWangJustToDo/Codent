@@ -46,12 +46,13 @@ export interface StaleFileSweepSpec {
   /** Entries whose mtime is older than this are removed. */
   maxAgeMs: number;
   /**
-   * Scan one level of subdirectories as well (one directory per session). Session logs live in
-   * `.agents/logs/<sessionId>/`, so a flat scan never reaches them.
+   * Scan one level of subdirectories as well. The current timeline is flat (`.agents/logs/agent.log`),
+   * but upgrades may still contain the legacy per-session layout (`<sessionId>/agent.log*`), so the
+   * log sweeper enables this to collect those directories too.
    *
    * Directories are deliberately NOT removed when they empty out: `remove` is recursive, so a
    * directory that gained a file between the emptiness check and the delete would lose it. An
-   * empty session directory costs one inode and is otherwise inert.
+   * empty legacy directory costs one inode and is otherwise inert.
    */
   nested?: boolean;
 }

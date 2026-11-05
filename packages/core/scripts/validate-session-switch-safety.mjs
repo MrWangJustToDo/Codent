@@ -59,7 +59,6 @@ function runtime(host) {
       getSessionStore: host.getSessionStore ?? (() => null),
       awaitPersistIdle: host.awaitSessionPersistIdle ?? (async () => {}),
       getChatController: host.getChatController ?? (() => undefined),
-      bindSessionLogSink: host.bindSessionLogSink ?? (() => {}),
       emitSessionNew: host.emitSessionNew ?? (() => {}),
       emitSessionSwitch: host.emitSessionSwitch ?? (() => {}),
       refreshState: host.refreshState ?? (() => {}),
@@ -223,7 +222,7 @@ assert.equal(
   let restoreEntered = false;
   let persistDrainCalls = 0;
   const resetCalls = [];
-  const sinkBinds = [];
+  const sessionSwitches = [];
   const markReset = (name) => () => resetCalls.push(name);
 
   const lifecycleHost = {
@@ -268,9 +267,8 @@ assert.equal(
     destroyChildAgents: markReset("childAgents"),
     clearTaskRuns: markReset("taskRuns"),
     resetBackgroundWork: markReset("backgroundWork"),
-    emitSessionSwitch: () => {},
+    emitSessionSwitch: (from, to, messageCount, reason) => sessionSwitches.push({ from, to, messageCount, reason }),
     refreshState: () => {},
-    bindSessionLogSink: (sessionId, options) => sinkBinds.push({ sessionId, options }),
     sessionPersistence: {
       restore: async (sessionId) => {
         restoreEntered = true;
@@ -287,15 +285,11 @@ assert.equal(
   const restored = await lifecycle.resume(target.id);
   assert.equal(restored.id, target.id);
   assert.equal(restoreEntered, true);
-  // The departure entry is written into the session being LEFT. That sink must not stamp the
-  // ending file with a "new session" divider (it did, immediately before "Session switched…").
-  const departure = sinkBinds.find((bind) => bind.sessionId === leaving.id);
-  assert.deepEqual(
-    departure?.options,
-    { sessionBoundary: false },
-    "re-pointing at the leaving session is a continuation, not a new session"
-  );
   assert.equal(persistDrainCalls, 2, "resume drains before and after stop()");
+  assert.ok(
+    sessionSwitches.some((entry) => entry.from === leaving.id && entry.to === target.id),
+    "the switch is recorded as one event between the two session ids"
+  );
   // Restore owns mode/approvals/usage/todos/media misses/tracker; resume only
   // clears the volatile state that the on-disk session cannot rehydrate.
   for (const name of [
@@ -381,7 +375,6 @@ assert.equal(
       emitSessionNew: () => {},
       refreshState: () => {},
       refreshSubagents: () => {},
-      bindSessionLogSink: () => {},
       getChatController: () => ({
         clearTranscript: () => {
           transcriptCleared = true;
@@ -459,7 +452,6 @@ assert.equal(
       emitSessionNew: () => {},
       refreshState: () => {},
       refreshSubagents: () => {},
-      bindSessionLogSink: () => {},
       getChatController: () => ({
         clearTranscript: () => {
           transcriptCleared = true;

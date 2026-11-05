@@ -374,7 +374,7 @@ async function activateLsp(
   });
 
   // ---- Session lifecycle ----
-  ctx.registerInterceptor("session:start", async (event) => {
+  ctx.registerInterceptor("session:bootstrap", async (event) => {
     const payload = (event as { payload?: { cwd?: string } }).payload;
     if (!payload?.cwd) return;
     const newRoot = corePath.resolve(payload.cwd);

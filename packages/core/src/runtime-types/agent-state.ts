@@ -37,6 +37,8 @@ export interface AgentState {
    * (`getStatus() === "compacting"`) unreachable.
    */
   resumeOutcome?: RunOutcome;
+  /** Streaming phase to restore when a compaction lease ends (thinking/responding/none). */
+  resumeStream?: StreamPhase;
 }
 
 export type AgentTransitionEvent =
@@ -273,6 +275,10 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         lifecycle: "busy",
         resumeRun: state.run === "idle" ? undefined : state.run,
         resumeOutcome: state.outcome,
+        // The phase is not only `run`: a compaction started mid-stream used to come back as
+        // plain `running`, losing "thinking"/"responding" until the next chunk (and forever if the
+        // model finished right after the summary).
+        resumeStream: state.run === "streaming" ? state.stream : undefined,
         run: "compacting",
         // The lease owns the run, so it also owns the outcome: a compaction started from `error` /
         // `aborted` must project `compacting` (the interlock and the lease's restore guard both read
@@ -286,7 +292,14 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       // A finish that landed while the compaction owned the phase is applied now; otherwise the
       // phase and outcome the compaction interrupted resume.
       if (state.outcome !== "none") {
-        return { ...state, run: "finalizing", resumeRun: undefined, resumeOutcome: undefined };
+        return {
+          ...state,
+          run: "finalizing",
+          stream: "none",
+          resumeRun: undefined,
+          resumeOutcome: undefined,
+          resumeStream: undefined,
+        };
       }
       const run = state.resumeRun ?? "idle";
       return {
@@ -296,8 +309,10 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         lifecycle: run === "idle" ? "ready" : "busy",
         run,
         outcome: state.resumeOutcome ?? "none",
+        stream: run === "streaming" ? (state.resumeStream ?? "none") : "none",
         resumeRun: undefined,
         resumeOutcome: undefined,
+        resumeStream: undefined,
       };
     }
 

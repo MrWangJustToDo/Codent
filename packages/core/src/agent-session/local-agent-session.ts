@@ -148,6 +148,8 @@ class LocalAgentSessionImpl implements AgentSession {
   /** Ref count for the single underlying bus subscription. */
   private sourceRefCount = 0;
   private sourceTeardown: (() => void) | null = null;
+  /** True only when the bus was present at wiring time; a bus-less wiring is retried on subscribe. */
+  private sourceWired = false;
 
   constructor(options: CreateLocalAgentSessionOptions) {
     this.managed = options.managed;
@@ -250,7 +252,16 @@ class LocalAgentSessionImpl implements AgentSession {
     // above, and a per-subscribe wiring would duplicate every event per
     // subscriber (N subscribers → N copies).
     this.sourceRefCount += 1;
-    if (!this.sourceTeardown) this.sourceTeardown = this.wireSource();
+    // Wire only once, and only when the bus exists. `wireSource` returns a no-op teardown when the
+    // bus is absent; storing that as the "wired" handle made a session created before `setEventBus`
+    // permanently silent (every channel, including retained replay).
+    if (!this.sourceWired) {
+      const teardown = this.wireSource();
+      if (this.managed.getEventBus()) {
+        this.sourceWired = true;
+        this.sourceTeardown = teardown;
+      }
+    }
     unsubs.push(() => this.releaseSource());
 
     let active = true;
@@ -289,6 +300,7 @@ class LocalAgentSessionImpl implements AgentSession {
     this.sourceRefCount = 0;
     const teardown = this.sourceTeardown;
     this.sourceTeardown = null;
+    this.sourceWired = false;
     try {
       teardown?.();
     } catch {

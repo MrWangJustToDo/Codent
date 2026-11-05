@@ -105,13 +105,23 @@ session.subscribe(
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Session-scoped log routing. The sink is bound per session id, and both a resume and `/new`
-// change that id mid-process — so these helpers are how the validator holds the binding to the
-// session it claims to be logging.
+// Workspace timeline routing. The file is shared; a session's rows are selected by the
+// `sessionId` field they already carry.
 const logsRoot = path.join(rootPath, ".agents/logs");
 const readLog = async (id) => {
   try {
-    return await fs.promises.readFile(path.join(logsRoot, id, "agent.log"), "utf-8");
+    const content = await fs.promises.readFile(path.join(logsRoot, "agent.log"), "utf-8");
+    return content
+      .split("\n")
+      .filter((line) => {
+        if (!line.trim()) return false;
+        try {
+          return JSON.parse(line).sessionId === id;
+        } catch {
+          return false;
+        }
+      })
+      .join("\n");
   } catch {
     return "";
   }
@@ -388,7 +398,7 @@ assert.ok(!(await readLog(target.id)).includes("Session started (new)"), "…and
       version: "1.0.0",
       description: "records restore/start ordering",
       activate(ctx) {
-        ctx.registerInterceptor("session:start", () => {
+        ctx.registerInterceptor("session:bootstrap", () => {
           order.push("start");
         });
         ctx.events.observe("session:restore", () => {

@@ -463,8 +463,8 @@ export interface SessionStartPayload {
   sessionId?: string;
 }
 
-export interface SessionStartEvent extends InterceptableEvent<SessionStartPayload> {
-  type: "session:start";
+export interface SessionBootstrapEvent extends InterceptableEvent<SessionStartPayload> {
+  type: "session:bootstrap";
   payload: SessionStartPayload;
 }
 
@@ -483,7 +483,7 @@ export interface SessionShutdownEvent extends InterceptableEvent<SessionShutdown
 export type ToolLifecycleEvent = ToolBeforeEvent | ToolAfterEvent | ToolErrorEvent;
 
 export interface ExtensionEventBus {
-  emit<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined>;
+  intercept<T extends InterceptableEvent>(event: T): Promise<T["defaultReturn"] | undefined>;
   /**
    * Whether any interceptor (exact or wildcard pattern) would receive `type`.
    *

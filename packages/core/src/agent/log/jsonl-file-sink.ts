@@ -43,6 +43,13 @@ export const DEFAULT_LOG_FLUSH_INTERVAL_MS = 250;
  * and the run died from logging. Oldest lines are dropped first and the loss is reported.
  */
 const MAX_RETRY_BUFFER_LINES = 2_000;
+/**
+ * Cap on the LIVE buffer, including a write that is slow rather than failing.
+ *
+ * The failure path had a bound; a slow `appendFile` (one HTTP request on a remote CoreEnv) did not.
+ * A debug-level firehose could grow the buffer for the whole duration of that write.
+ */
+const MAX_LIVE_BUFFER_LINES = 5_000;
 /** Consecutive automatic retries after a failed write before waiting for the next entry. */
 const MAX_WRITE_RETRIES = 5;
 /**
@@ -92,10 +99,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   if (!appendFile) return inertSink(); // no append support
 
   const dir = options.dir;
-  // Age-based retention for the whole log root (once per process per workspace). The directory this
-  // sink appends to is excluded: a resumed session's older file must not be reaped immediately
-  // before the divider check reads whether it already has content.
-  void sweepAgentLogs(env, { keepDir: dir });
+  // Age-based retention for the whole log root (once per process per workspace). The active file is
+  // kept by mtime, not by a directory exemption, so no `keepDir` is needed now that the timeline is
+  // flat (legacy session subdirectories are still swept).
+  void sweepAgentLogs(env);
   const filename = options.filename ?? DEFAULT_LOG_FILENAME;
   const maxBytes = options.maxBytes ?? DEFAULT_LOG_MAX_BYTES;
   const maxFiles = options.maxFiles ?? DEFAULT_LOG_MAX_FILES;
@@ -111,9 +118,6 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
   let flushInFlight = false;
   /** Consecutive failed writes; the retry timer is re-armed only up to a small cap. */
   let consecutiveFailures = 0;
-  /** Whether the session-boundary divider has been decided for this sink. `false` means the
-   * caller asked for a continuation (a temporary re-point), so no divider is ever written. */
-  let boundaryWritten = options.sessionBoundary === false;
   /** Last time a persistence failure was reported to the session (see the throttle constant). */
   let lastPersistErrorAt = 0;
 
@@ -213,22 +217,10 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     flushInFlight = true;
     const lines = buffer;
     buffer = [];
-    /** Whether this batch prepended the session divider (so a failed write can put it back). */
-    let dividerAdded = false;
     try {
       await envFs.mkdir(dir);
-      const existed = await envFs.exists(filePath);
-      if (!existed) {
+      if (!(await envFs.exists(filePath))) {
         await envFs.writeFile(filePath, "");
-      }
-      // Reused log file (session resumed/continued): mark the new launch with a clearly
-      // visible divider before the first batch of this session.
-      if (!boundaryWritten) {
-        boundaryWritten = true;
-        if (existed) {
-          lines.unshift(`---------- ${new Date().toISOString()} new session ----------`);
-          dividerAdded = true;
-        }
       }
       const content = lines.join("\n") + "\n";
       const contentBytes = utf8ByteLength(content);
@@ -249,15 +241,6 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     } catch (error) {
       // Non-fatal, but not silent: put the batch back at the HEAD so the next flush retries in
       // order, and say why. A failed append used to vanish with no trace at all.
-      //
-      // If this batch carried the divider, take it back out and clear the flag: the retry must be
-      // able to prepend it again. Otherwise the >MAX_RETRY_BUFFER_LINES cap below — which drops
-      // from the HEAD — could discard the divider while `boundaryWritten` already said "written",
-      // and a resumed file would silently lose its launch marker.
-      if (dividerAdded) {
-        lines.shift();
-        boundaryWritten = false;
-      }
       // A failed append may have written a prefix of the batch (ENOSPC/EIO mid-write), and the
       // whole batch is retried, so that prefix can appear twice. Knowing exactly how much landed
       // needs the pre-write file size (a stat on every flush); for a diagnostic log, a duplicated
@@ -332,6 +315,11 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       // Write the validated object. The schema is strict: an unknown top-level field rejects the
       // whole entry (safeParse above), so `parsed.data` is never a silently-stripped copy.
       buffer.push(JSON.stringify(parsed.data));
+      if (buffer.length > MAX_LIVE_BUFFER_LINES) {
+        const dropped = buffer.length - MAX_LIVE_BUFFER_LINES;
+        buffer = buffer.slice(dropped);
+        reportPersistError({ stage: "write", error: "live buffer cap reached", dropped });
+      }
     } catch (error) {
       reportEntryError(
         `[agent] log entry is not serializable (${entry.level}/${entry.category}): ${errorMessage(error)}`,
@@ -366,14 +354,6 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       void flush();
       return;
     }
-    // The session divider is only decidable with `existsSync`. Without it, defer to the async path
-    // (which has `exists`) instead of writing this batch now: marking the divider "written" would
-    // drop it entirely, while leaving it pending would prepend a "new session" marker in the
-    // middle of this session's next async batch.
-    if (!boundaryWritten && typeof envFs.existsSync !== "function") {
-      void flush();
-      return;
-    }
     const lines = buffer;
     buffer = [];
     if (timer) {
@@ -382,13 +362,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
     }
     try {
       envFs.mkdirSync?.(dir);
-      const pending = [...lines];
-      if (!boundaryWritten && envFs.existsSync?.(filePath)) {
-        pending.unshift(`---------- ${new Date().toISOString()} new session ----------`);
-      }
-      appendFileSync(filePath, pending.join("\n") + "\n");
-      // Only mark the divider once the write landed, so a retry still writes it.
-      boundaryWritten = true;
+      appendFileSync(filePath, lines.join("\n") + "\n");
       consecutiveFailures = 0;
     } catch (error) {
       // Put the batch back so `detach()`'s follow-up async flush can land it while the process is

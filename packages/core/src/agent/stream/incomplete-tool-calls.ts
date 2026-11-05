@@ -106,7 +106,9 @@ function applyToolCallCancellation(
       partsChanged = true;
       const synthetic = options.outputFor
         ? options.outputFor(part, message)
-        : { success: false, error: message, cancelled: options.cancelled === true };
+        : // `reason` preserves the attribution (user cancel vs crash recovery) for BOTH the UI and
+          // the model wire: `error` is shared shape and the formatters deliberately do not read it.
+          { success: false, error: message, cancelled: options.cancelled === true, reason: message };
       // Carry the `cancelled` marker on the PART's output too, not only on the appended
       // `tool-result`: the part output is what the UI renders (and what a host reads),
       // while the tool-result content is consumed by the model wire. Without it here, a

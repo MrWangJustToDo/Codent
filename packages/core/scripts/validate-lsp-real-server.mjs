@@ -76,7 +76,7 @@ if (instance.state !== "active") process.exit(1);
 
 const eventBus = runner.getEventBus();
 async function syncWrite(filePath, resultText = "ok") {
-  await eventBus.emit({
+  await eventBus.intercept({
     type: "tool:after:write_file",
     payload: { toolName: "write_file", args: { path: filePath }, result: { text: resultText }, durationMs: 5 },
     defaultReturn: undefined,
@@ -128,7 +128,7 @@ const injEvent = {
   payload: { toolName: "write_file", args: { path: badFile }, result: injectedResult, durationMs: 5 },
   defaultReturn: undefined,
 };
-await eventBus.emit(injEvent);
+await eventBus.intercept(injEvent);
 // The interceptor waits for the publish that follows the write; give it a bit more
 // for a warm server to finish analyzing.
 await new Promise((r) => setTimeout(r, 4000));

@@ -108,6 +108,24 @@ const gitWorkTreeCache = new Map<
 >();
 
 /**
+ * Per-env suffix for the probe memo.
+ *
+ * `rootPath` alone is not unique across runtimes: a remote env and a local env can both answer
+ * `/workspace`, and their `execArgs` capability differs. Keying the 30s memo by string alone let
+ * one runtime's answer decide the other's ignore policy.
+ */
+const envIdentities = new WeakMap<object, number>();
+let nextEnvIdentity = 0;
+function envCacheKey(env: CoreEnv): string {
+  let id = envIdentities.get(env);
+  if (id === undefined) {
+    id = ++nextEnvIdentity;
+    envIdentities.set(env, id);
+  }
+  return `${env.rootPath}\0${id}`;
+}
+
+/**
  * Whether the workspace is inside a git work tree — the gate for every VCS-aware rung.
  *
  * Asks git for a *string* (`true` / `false`), not an exit status: a probe whose answer is "silent
@@ -118,7 +136,7 @@ const gitWorkTreeCache = new Map<
  * nothing, and caching that would report "no repo" for the rest of the session.
  */
 export function isGitWorkTree(env: CoreEnv, signal?: AbortSignal): Promise<boolean> {
-  const key = env.rootPath;
+  const key = envCacheKey(env);
   const now = Date.now();
   const cached = gitWorkTreeCache.get(key);
   if (cached && cached.expiresAt > now) {

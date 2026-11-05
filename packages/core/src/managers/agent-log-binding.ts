@@ -1,14 +1,17 @@
 /**
- * Session-scoped log sink lifetime: bind, re-point, release and the destroy-time flush.
+ * Workspace log sink lifetime for one agent.
  *
- * The ordering is the contract: a destroy must land the buffered batch first, then release the
- * sink (which also clears its periodic timer), then unregister the process-level guard. Releasing
- * earlier sends final extension work into a buffer nothing drains; never releasing leaves a timer
- * writing into a directory that teardown is trying to remove.
+ * The timeline is **one file per workspace** (`.agents/logs/agent.log`), size-rotated. It is bound
+ * once when the agent is built and never re-pointed: a session switch, a resume or a `/new` is just
+ * another recorded entry — the entry already carries `sessionId`, `run` and the agent scope, so the
+ * file does not need to move.
+ *
+ * The close order is still the contract: land the buffered batch, release this agent's reference to
+ * the shared sink, then unregister the process-level guard.
  */
 
 import { registerActiveAgentLog, unregisterActiveAgentLog } from "../agent/agent-log";
-import { AGENT_LOG_DIR, isSafeSessionId } from "../agent/persistence/types.js";
+import { AGENT_LOG_DIR } from "../agent/persistence/types.js";
 
 import type { AgentLog } from "../agent/agent-log";
 import type { AgentLogFileSinkOptions } from "../agent/agent-log/types.js";
@@ -16,61 +19,32 @@ import type { ResolvedCoreEnv } from "../env";
 
 export interface AgentLogBindingDeps {
   getLog: () => AgentLog;
-  getParentId: () => string | undefined;
-  getSessionId: () => string | undefined;
-  getAgentId: () => string;
   getCoreEnv: () => ResolvedCoreEnv;
-  /** Bind through the built-in log extension (which tracks the sink for teardown). */
+  /** Bind through the built-in log extension (which shares one sink per workspace). */
   attachViaManager?: (log: AgentLog, options: AgentLogFileSinkOptions) => (() => void) | null | undefined;
 }
 
 export class AgentLogBinding {
   private detachHandle: (() => void) | null = null;
-  /** Whether any sink was ever attached. Distinguishes "never bound" from "bound, then detached". */
+  /** Whether a sink was ever attached (distinguishes "never bound" from "bound, then detached"). */
   private everBound = false;
 
   constructor(private readonly deps: AgentLogBindingDeps) {}
 
   /**
-   * Attach (or re-point) the session JSONL sink. No-op for subagents: they write an independent
-   * file into the parent's directory, bound by `AgentManager.spawnSubagent`.
+   * Bind the workspace sink. Idempotent: the first bind wins, and later session changes do not
+   * detach/re-point it.
    */
-  bind(sessionId?: string, options?: { sessionBoundary?: boolean }): void {
-    if (this.deps.getParentId()) return;
-
-    const resolved = sessionId ?? this.deps.getSessionId() ?? this.deps.getAgentId();
-    // The log directory is `AGENT_LOG_DIR/<id>`, so the id is a path segment. `SessionStore` refuses
-    // an unsafe id, but `bind` runs BEFORE the store's restore validates it (resume binds the sink,
-    // then loads), so an id from an external entry point (`session/load`, HTTP resume) would have
-    // created the directory first. Fall back to the agent id, which this process minted.
-    const safe = isSafeSessionId(resolved) ? resolved : this.deps.getAgentId();
-    const dir = `${AGENT_LOG_DIR}/${safe}`;
+  bind(): void {
+    if (this.detachHandle) return;
     const log = this.deps.getLog();
-    if (log.getFileSinkDir() === dir) return;
-
-    this.detachHandle?.();
-    const sinkOptions = {
-      dir,
-      env: this.deps.getCoreEnv(),
-      ...(options?.sessionBoundary === false ? { sessionBoundary: false } : {}),
-    };
+    const sinkOptions = { dir: AGENT_LOG_DIR, env: this.deps.getCoreEnv() };
     this.detachHandle = this.deps.attachViaManager?.(log, sinkOptions) ?? log.attachFileSink(sinkOptions);
     this.everBound = true;
-    // Track for the process-level crash/exit guards.
     registerActiveAgentLog(log);
   }
 
-  /**
-   * Record a release handle for a sink bound outside {@link bind} — the subagent path owns the
-   * options (parent dir + `{subagentId}.log`) and defers release until that agent is destroyed.
-   */
-  setExternalDetach(detach: () => void): void {
-    this.detachHandle?.();
-    this.detachHandle = detach;
-    this.everBound = true;
-  }
-
-  /** Release the active sink binding. Idempotent; the handle is cleared first. */
+  /** Release this agent's reference. Idempotent. */
   detach(): void {
     const detach = this.detachHandle;
     this.detachHandle = null;
@@ -78,27 +52,19 @@ export class AgentLogBinding {
   }
 
   /**
-   * Destroy-time: land buffered entries, release the sink, then unregister the guard.
+   * Destroy-time: land buffered entries, release the reference, then unregister the guard.
    *
    * Awaitable: a runtime without sync fs (remote CoreEnv) can only write its final batch
-   * asynchronously, so the caller must await this before the process exits. `AgentLog.flush()`
-   * is a no-op when no sink is attached.
+   * asynchronously, so the caller must await this before the process exits.
    */
   async flushOnDestroy(): Promise<void> {
     const log = this.deps.getLog();
-    // A build that failed BEFORE any sink was ever bound (memory init, an ownership conflict, a
-    // dispose race) drops the pending buffer with the object: `flushSync` is a no-op without a
-    // sink. That buffer is exactly the bootstrap diagnostics the buffer exists for, so the loss
-    // must at least be visible — the overflow path already writes a warn for the same reason.
-    //
-    // Guarded on `everBound` rather than `hasSink()` alone: a second, idempotent destroy AFTER
-    // `detach()` would otherwise report every entry logged in between as "dropped".
+    // A build that failed before the factory bound the sink drops its pending buffer with the
+    // object. That buffer is exactly the bootstrap diagnostics the buffer exists for, so the loss
+    // must at least be visible.
     if (!this.everBound && !log.hasSink() && (log.getPendingEntryCount() > 0 || log.getPendingDroppedCount() > 0)) {
       const count = log.getPendingEntryCount();
       const dropped = log.getPendingDroppedCount();
-      // Name both losses: entries still buffered and entries the bounded buffer already had to
-      // discard. Only the first number was reported, so a bootstrap that overflowed looked like a
-      // quiet one that merely had "nothing to say".
       console.warn(
         `[agent] dropping ${count} buffered log entr${count === 1 ? "y" : "ies"}` +
           `${dropped > 0 ? ` and ${dropped} already-overflowed entr${dropped === 1 ? "y" : "ies"}` : ""}` +

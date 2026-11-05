@@ -138,10 +138,10 @@ export class SessionService {
   /**
    * Adopt a stand-in for a session that is about to be restored.
    *
-   * Bootstrap needs the id before the transcript is loaded: the log sink binds to
-   * `.agents/logs/<id>/` while extensions are still being activated, and the session is read once the
-   * runtime exists. The stand-in carries only the id and the creation-time model — it is NOT a
-   * persistable target, and every write dispatched while it is active is refused.
+   * Bootstrap needs the id before the transcript is loaded: the workspace timeline binds at agent
+   * construction (independent of the session id), and the session is read once the runtime exists.
+   * The stand-in carries only the id and the creation-time model — it is NOT a persistable target,
+   * and every write dispatched while it is active is refused.
    *
    * That refusal is the structural guarantee behind the restore ordering: the state carried over
    * before adoption (`/models`-style model, reasoning effort, plan phase, approvals) must reach the

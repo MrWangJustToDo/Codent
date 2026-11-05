@@ -341,8 +341,8 @@ assert.equal(await fs.promises.readFile(filePath, "utf-8"), afterDetach, "no wri
 console.log("detach OK");
 
 // ----------------------------------------------------------------------------
-// 5. Reused log file: re-attaching to an existing file writes a session
-//    divider so a new launch does not blend into the previous one.
+// 5. Reused log file: a later attachment appends to the same timeline, with no
+//    session divider (the file is workspace-scoped; sessions are entry fields).
 // ----------------------------------------------------------------------------
 const log2 = new AgentLog();
 const detach2 = log2.attachFileSink({
@@ -354,14 +354,11 @@ log2.info("system", "launch-2");
 await log2.flush();
 
 const content2 = await fs.promises.readFile(filePath, "utf-8");
-const markerMatch = content2.match(/---------- [^\n]+ new session ----------/);
-assert.ok(markerMatch, `reused file must contain a session divider, got:\n${content2.slice(0, 300)}`);
-const beforeMarker = content2.slice(0, markerMatch.index).trim();
-assert.ok(beforeMarker.length > 0, "previous launch entries precede the divider");
-const afterMarker = content2.slice(markerMatch.index + markerMatch[0].length);
-assert.ok(afterMarker.includes("launch-2"), "new launch entries follow the divider");
+assert.ok(content2.includes("hello-1"), "previous entries are still there");
+assert.ok(content2.includes("launch-2"), "a later attachment appends to the same timeline");
+assert.ok(!content2.includes("new session ---"), "no launch/session divider is written");
 detach2();
-console.log("reused-file divider OK");
+console.log("reused-file append OK");
 
 await fs.promises.rm(rootPath, TEMP_RM_OPTIONS);
 // ----------------------------------------------------------------------------

@@ -64,15 +64,14 @@ export function createEmitTelemetryFn(emitter: AgentTelemetryEmitter): EmitAgent
   // The parent link travels with the emitter: middleware and domain objects receive this bound fn
   // (`deps.emitEvent`), and a child's compaction/tool events must carry the parent too.
   const parentId = emitter.parentId;
-  return (type, ...args) =>
-    dispatchAgentTelemetry(
-      emitter,
-      type,
-      args[0],
-      // A caller's override WINS over the emitter's parent link: explicit beats derived, and the
-      // options element is the seam an asynchronous producer uses to name the session it belongs to.
-      parentId !== undefined ? { parentId, ...args[1] } : args[1]
-    );
+  return (type, ...args) => {
+    const supplied = args[1];
+    // Explicit beats derived, but an explicit `parentId: undefined` key must not ERASE the derived
+    // link: `{ parentId, ...supplied }` let a conditionally-built options object do exactly that,
+    // and a child event without `parentId` is dropped by the parent session's `acceptEvent`.
+    const options = parentId === undefined || supplied?.parentId !== undefined ? supplied : { ...supplied, parentId };
+    return dispatchAgentTelemetry(emitter, type, args[0], options);
+  };
 }
 
 /**

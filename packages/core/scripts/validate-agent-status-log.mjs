@@ -22,7 +22,7 @@
 
 import assert from "node:assert/strict";
 
-import { ManagedAgent, SPECIALIZED_EVENT_LOG_HANDLERS, logSubagentLifecycle } from "../dist/dev.mjs";
+import { ManagedAgent, SPECIALIZED_EVENT_LOG_HANDLERS } from "../dist/dev.mjs";
 
 // Capture sink. Status rows go through `eventEntry` (the event bridge's write path), the subagent
 // mirror through the plain level methods; keeping both lets one harness assert both policies.
@@ -165,81 +165,6 @@ for (const [from, to, event] of [
   managed.setStatus("aborted", "user-cancel");
   assert.equal(events.at(-1).payload.to, "aborted");
   assert.equal(managed.getStatus(), "aborted");
-}
-
-// --- the parent-log mirror: a subagent's lifecycle is recorded in the PARENT's file ---
-//
-// Bus events reach only the subagent's own log (the bridge scopes by `event.agentId`), so a
-// child used to be invisible in the parent log and had to be correlated across files by
-// timestamp. This one stays a direct write on purpose — see the allowlist reason in
-// `validate-no-direct-agent-log.mjs`.
-//
-// These go through `ManagedAgent.logSubagentLifecycle` — the method `run-subagent` actually
-// calls — and not through the helper it delegates to. That distinction is the whole point:
-// a first version of this file asserted the free function while the method still carried an
-// inlined COPY of the wording, so the test was green against code nothing ran, and the two
-// had already drifted ("Subagent created" vs "Subagent spawn"). Asserting the method makes
-// the delegation itself the thing under test.
-{
-  const { written, log } = createCapture();
-  const managed = createManaged(log);
-
-  managed.logSubagentLifecycle("created", { subagentId: "sub-1", parentTaskToolCallId: "call-01" });
-  const made = written.at(-1);
-  assert.equal(made?.level, "debug", "a spawn is bookkeeping — the child's own file has the detail");
-  assert.equal(made?.category, "system");
-  assert.ok(made.message.includes("sub-1") && made.message.includes("[task call-01]"), "id + call id");
-
-  managed.logSubagentLifecycle("started", {
-    subagentId: "sub-1",
-    parentTaskToolCallId: "call-01",
-    description: "audit the manager",
-  });
-  assert.ok(written.at(-1).message.includes("audit the manager"), "the description is carried");
-
-  managed.logSubagentLifecycle("completed", {
-    subagentId: "sub-1",
-    parentTaskToolCallId: "call-01",
-    iterations: 15,
-    maxIterations: 50,
-    durationMs: 85600,
-  });
-  const completed = written.at(-1);
-  assert.equal(completed.level, "info", "the outcome stays visible");
-  assert.ok(completed.message.includes("15/50 iterations"), "with the run stats");
-  assert.ok(completed.message.includes("85600ms"));
-
-  // A stopped child is the line a reader scans for, so its reason is the message.
-  managed.logSubagentLifecycle("stopped", {
-    subagentId: "sub-2",
-    parentTaskToolCallId: "call-01",
-    stopReason: "parent-run",
-  });
-  const stopped = written.at(-1);
-  assert.equal(stopped.level, "info");
-  assert.match(stopped.message, /^Subagent parent-run:/, "the stop reason is named, not guessed as a cancel");
-
-  // An internal worker has no task call — the mirror records it without a fabricated binding.
-  managed.logSubagentLifecycle("created", { subagentId: "worker-1" });
-  assert.equal(written.at(-1).message, "Subagent created: subagent worker-1");
-  assert.ok(!written.at(-1).message.includes("[task"), "no fabricated call binding");
-}
-
-// --- no sink, no crash: the mirror is a no-op without a parent log ---
-{
-  const written = [];
-  const sink = {
-    eventEntry: (level, _category, eventType) => written.push({ level, eventType }),
-  };
-  logSubagentLifecycle(sink, "created", { subagentId: "sub-3" });
-  assert.deepEqual(
-    written,
-    [{ level: "debug", eventType: "subagent:created" }],
-    "an index row names the subagent event it mirrors"
-  );
-  logSubagentLifecycle(null, "created", { subagentId: "sub-3" });
-  logSubagentLifecycle(undefined, "stopped", { subagentId: "sub-3", stopReason: "user" });
-  assert.equal(written.length, 1, "a missing log writes nothing and does not throw");
 }
 
 console.log("agent-status-log validation passed");

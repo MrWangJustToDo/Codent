@@ -68,14 +68,17 @@ registerCoreEnv({
   fetch: async () => new Response(),
 });
 
-const listLogDirs = async () => {
-  const dir = path.join(rootPath, ".agents/logs");
-  const exists = await fs.promises.access(dir).then(
+const logsRoot = path.join(rootPath, ".agents/logs");
+const logFile = path.join(logsRoot, "agent.log");
+
+/** Any session-shaped subdirectories under the log root (there should be none). */
+const listSessionDirs = async () => {
+  const exists = await fs.promises.access(logsRoot).then(
     () => true,
     () => false
   );
   if (!exists) return [];
-  return (await fs.promises.readdir(dir)).filter((n) => n.startsWith("ses_")).sort();
+  return (await fs.promises.readdir(logsRoot)).filter((n) => n.startsWith("ses_")).sort();
 };
 
 // ----------------------------------------------------------------------------
@@ -101,8 +104,7 @@ const emptySession = managed1.getSessionData();
 await managed1.getSessionStore().save(emptySession);
 await sleep(50);
 
-const logDirE = path.join(rootPath, ".agents/logs", sessionE);
-const logFileE = path.join(logDirE, "agent.log");
+const logFileE = logFile;
 assert.ok(
   await fs.promises.access(logFileE).then(
     () => true,
@@ -113,8 +115,8 @@ assert.ok(
 assert.ok((await fs.promises.readFile(logFileE, "utf-8")).includes("launch-1-marker"), "launch 1 entry on disk");
 
 await host1.destroy(created1.session.id);
-const dirsAfterLaunch1 = await listLogDirs();
-assert.deepEqual(dirsAfterLaunch1, [sessionE], `exactly one log dir after launch 1, got ${dirsAfterLaunch1.join(",")}`);
+const dirsAfterLaunch1 = await listSessionDirs();
+assert.deepEqual(dirsAfterLaunch1, [], `no per-session log dirs after launch 1, got ${dirsAfterLaunch1.join(",")}`);
 
 // ----------------------------------------------------------------------------
 // Launch 2: default startup must reuse E (same id) and keep logging to E's dir.
@@ -131,16 +133,12 @@ assert.equal(session2, sessionE, "launch 2 reuses the latest empty session id");
 managed2.getLog().info("system", "launch-2-marker");
 await sleep(450);
 
-const dirsAfterLaunch2 = await listLogDirs();
-assert.deepEqual(
-  dirsAfterLaunch2,
-  [sessionE],
-  `no stray log dir after reused launch, got ${dirsAfterLaunch2.join(",")}`
-);
+const dirsAfterLaunch2 = await listSessionDirs();
+assert.deepEqual(dirsAfterLaunch2, [], `no per-session log dir after reused launch, got ${dirsAfterLaunch2.join(",")}`);
 
 const content2 = await fs.promises.readFile(logFileE, "utf-8");
-assert.ok(content2.includes("launch-2-marker"), "launch 2 entry landed in the reused session log dir");
-assert.ok(content2.includes("new session ---"), "launch divider written for the reused log file");
+assert.ok(content2.includes("launch-2-marker"), "launch 2 entry landed in the workspace timeline");
+assert.ok(!content2.includes("new session ---"), "no launch divider: the timeline is continuous");
 
 // ----------------------------------------------------------------------------
 // Launch 3: graceful teardown releases the reservation so E is reused again

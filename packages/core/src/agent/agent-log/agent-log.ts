@@ -89,6 +89,8 @@ export class AgentLog {
   private pendingEntries: LogEntry[] = [];
   /** Entries dropped by the pending cap. Reported once when the buffer is drained. */
   private pendingDropped = 0;
+  /** One line for the first entry whose construction threw (a broken `data` getter, etc.). */
+  private entryBuildFailureReported = false;
 
   private static readonly levelPriority: Record<LogLevel, number> = {
     debug: 0,
@@ -153,61 +155,76 @@ export class AgentLog {
   ): LogEntry | null {
     if (!this.shouldLog(level)) return null;
 
-    const entry: LogEntry = {
-      scope: { ...this.scope },
-      id: generateLogId(),
-      timestamp: Date.now(),
-      level,
-      category,
-      // Bounded HERE because this is the one builder every writer passes through. The Event→Log
-      // bridge was the only guard, so the specialized handlers — `extension:log` (an extension's
-      // arbitrary string), `session:diagnostic`, memory — could write a single JSONL line of any
-      // size, and a provider body returned by an extension turned the timeline into an unreadable
-      // blob. `data` values are bounded separately by `summarizePayload`.
-      message: truncateText(redactSecrets(message), MAX_LOG_MESSAGE_CHARS),
-    };
-
-    // The one builder every writer passes through: redact direct writers too, not just the bridge.
-    if (options?.data) entry.data = redactLogValue(options.data) as Record<string, unknown>;
-    if (options?.tags) entry.tags = options.tags;
-    if (options?.event) entry.event = options.event;
-    if (options?.run) entry.run = options.run;
-    if (options?.sessionId) entry.sessionId = options.sessionId;
-    if (options?.error) {
-      entry.error = {
-        name: options.error.name,
-        // Bound at the ONE builder every writer passes through. The bridge had this, but the
-        // specialized handlers (`compaction:*-error`, `session:diagnostic`, the subagent mirror)
-        // wrote the provider's raw body here unmodified, so one failed summary produced a
-        // multi-megabyte JSONL line on those paths.
-        message: truncateText(redactSecrets(options.error.message), MAX_LOG_MESSAGE_CHARS),
-        // Bounded too: the stack starts with `${name}: ${message}`, so leaving it raw undid the
-        // message bound (a provider body in the message became one MB-scale line again).
-        stack:
-          options.error.stack === undefined
-            ? undefined
-            : truncateText(redactSecrets(options.error.stack), MAX_LOG_STACK_CHARS),
+    // Entry construction (redaction, truncation, a getter on `data`) runs on the agent's own path.
+    // `sink.handleEntry` is guarded, but a direct writer (the subagent mirror, the extension
+    // fallback) has no bus wildcard above it — one throwing getter must not turn a diagnostic into
+    // a run failure.
+    try {
+      const entry: LogEntry = {
+        scope: { ...this.scope },
+        id: generateLogId(),
+        timestamp: Date.now(),
+        level,
+        category,
+        // Bounded HERE because this is the one builder every writer passes through. The Event→Log
+        // bridge was the only guard, so the specialized handlers — `extension:log` (an extension's
+        // arbitrary string), `session:diagnostic`, memory — could write a single JSONL line of any
+        // size, and a provider body returned by an extension turned the timeline into an unreadable
+        // blob. `data` is bounded by `redactLogValue`'s own cap (it is not routed through the
+        // bridge's `summarizePayload`).
+        message: truncateText(redactSecrets(message), MAX_LOG_MESSAGE_CHARS),
       };
-    }
 
-    // Persistence-only: hand the entry to the attached sink, or retain it (bounded)
-    // until one attaches. Bootstrap emits before the session sink exists, and those
-    // entries are the ones that explain how bootstrap went.
-    if (this.sinkEntry) {
-      this.sinkEntry(entry);
-    } else {
-      this.pendingEntries.push(entry);
-      if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) {
-        // The cap drops the OLDEST entries — which at bootstrap are the earliest extension/MCP
-        // failures, the ones a reader most needs. The loss itself is now recorded (see
-        // `attachSink`), so "the log starts mid-bootstrap" is distinguishable from "nothing went
-        // wrong".
-        this.pendingEntries.shift();
-        this.pendingDropped += 1;
+      // The one builder every writer passes through: redact direct writers too, not just the bridge.
+      if (options?.data) entry.data = redactLogValue(options.data) as Record<string, unknown>;
+      if (options?.tags) entry.tags = options.tags;
+      if (options?.event) entry.event = options.event;
+      if (options?.run) entry.run = options.run;
+      if (options?.sessionId) entry.sessionId = options.sessionId;
+      if (options?.error) {
+        entry.error = {
+          name: options.error.name,
+          // Bound at the ONE builder every writer passes through. The bridge had this, but the
+          // specialized handlers (`compaction:*-error`, `session:diagnostic`, the subagent mirror)
+          // wrote the provider's raw body here unmodified, so one failed summary produced a
+          // multi-megabyte JSONL line on those paths.
+          message: truncateText(redactSecrets(options.error.message), MAX_LOG_MESSAGE_CHARS),
+          // Bounded too: the stack starts with `${name}: ${message}`, so leaving it raw undid the
+          // message bound (a provider body in the message became one MB-scale line again).
+          stack:
+            options.error.stack === undefined
+              ? undefined
+              : truncateText(redactSecrets(options.error.stack), MAX_LOG_STACK_CHARS),
+        };
       }
-    }
 
-    return entry;
+      // Persistence-only: hand the entry to the attached sink, or retain it (bounded)
+      // until one attaches. Bootstrap emits before the session sink exists, and those
+      // entries are the ones that explain how bootstrap went.
+      if (this.sinkEntry) {
+        this.sinkEntry(entry);
+      } else {
+        this.pendingEntries.push(entry);
+        if (this.pendingEntries.length > MAX_PENDING_LOG_ENTRIES) {
+          // The cap drops the OLDEST entries — which at bootstrap are the earliest extension/MCP
+          // failures, the ones a reader most needs. The loss itself is now recorded (see
+          // `attachSink`), so "the log starts mid-bootstrap" is distinguishable from "nothing went
+          // wrong".
+          this.pendingEntries.shift();
+          this.pendingDropped += 1;
+        }
+      }
+
+      return entry;
+    } catch (error) {
+      // One diagnostic must not become the run failure. Report the first construction failure once
+      // per process; a broken `data` getter would otherwise fail on every entry silently.
+      if (!this.entryBuildFailureReported) {
+        this.entryBuildFailureReported = true;
+        console.warn(`[agent] could not build log entry (${level}/${category}):`, error);
+      }
+      return null;
+    }
   }
 
   debug(category: LogCategory, message: string, data?: Record<string, unknown>, tags?: string[]): LogEntry | null {

@@ -351,7 +351,11 @@ const winEnv = (records) => ({
   await run(createGlobTool(), { pattern: "**/*.ts", path: "C:\\repo\\src" }, winEnv(absolute));
   check(
     "win32: an absolute in-root drive path is accepted",
-    absolute.length > 0 && absolute.every((r) => r.cwd === "C:\\repo") && absolute[0]?.args?.includes("C:\\repo\\src"),
+    // The probe enums also appear in `records` (git/fd); find the glob invocation rather than
+    // assuming it is the first spawn — the work-tree probe is cached per env instance.
+    absolute.length > 0 &&
+      absolute.every((r) => r.cwd === "C:\\repo") &&
+      absolute.some((r) => r.args?.includes("C:\\repo\\src")),
     `records=${json(absolute)}`
   );
 

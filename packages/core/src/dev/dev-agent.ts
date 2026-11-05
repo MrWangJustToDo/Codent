@@ -109,14 +109,6 @@ export {
   SUBAGENT_STOP_REASONS,
 } from "../agent/subagent/subagent-stop-reason.js";
 export {
-  logSubagentLifecycle,
-  subagentLifecycleLogLine,
-} from "../agent/log/subagent-log-mirror.js";
-export type {
-  SubagentLifecyclePhase,
-  SubagentLogDetails,
-} from "../agent/log/subagent-log-mirror.js";
-export {
   buildProgressSummaryPrompt,
   isProgressSummaryEligible,
   PROGRESS_SUMMARY_MARKER,

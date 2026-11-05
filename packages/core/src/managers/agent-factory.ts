@@ -128,12 +128,18 @@ export async function buildManagedAgent({
     managed.setEventBus(manager.of(managed.id, parentId));
 
     managed.setLog(log);
+    // The manager is needed before the construction-log snapshot (the child's event context
+    // resolves its session through the parent) and before the sink bind; the registry link is
+    // still assigned by `createManagedAgent` after the agent is fully built.
+    managed.manager = manager;
     // Bind the log to the bus scope BEFORE anything emits. `setModelInfo` publishes a `session:diagnostic`
     // (debug) and bootstrap activates extensions / connects MCP/memory — but the agent is not in the
     // registry yet, so a registry-only resolver dropped every row emitted before this call. The
     // seam's pending buffer was the old workaround; this makes the event path the real one, and it
     // has to precede the first producer, not merely bootstrap.
     manager.bindConstructionLog(managed.id, log, managed.getEventContext());
+    // Bind the workspace timeline before the first producer (bootstrap extensions / MCP / memory).
+    managed.bindLogSink();
 
     if (resolvedModelInfo) {
       managed.setModelInfo(resolvedModelInfo);
@@ -181,7 +187,7 @@ export async function buildManagedAgent({
       });
       // Adopt a pre-resolved restore target's id BEFORE the log sink attaches
       // (`createManagedAgent`), so bootstrap entries land in the reused session's
-      // log dir instead of a transient id. Only the id is needed here: the local host
+      // session timeline instead of a transient id. Only the id is needed here: the local host
       // loads the transcript once in `restoreSession`; loading it here too made every
       // large resume read the log twice.
       if (initialSessionId) {

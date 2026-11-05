@@ -401,7 +401,7 @@ const UI_MEMBERS = ["notify", "subscribe", "render", "getContext"];
 
 // Hook names actually dispatched by core. Renaming one must fail here.
 const HOOK_NAMES = [
-  "session:start",
+  "session:bootstrap",
   "session:shutdown",
   "before_agent_start",
   "tool:before:",

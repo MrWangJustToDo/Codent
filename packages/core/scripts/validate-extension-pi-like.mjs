@@ -56,7 +56,7 @@ registerCoreEnv({
     activate(ctx) {
       // CoreEnv is injected into the context.
       assert.equal(ctx.coreEnv.rootPath, "/workspace", "ctx.coreEnv injected");
-      ctx.registerInterceptor("session:start", (event) => {
+      ctx.registerInterceptor("session:bootstrap", (event) => {
         sawStart = true;
         assert.equal(event.payload.cwd, "/workspace");
         assert.equal(event.payload.agentId, "sess-1");
@@ -75,7 +75,7 @@ registerCoreEnv({
     },
   });
 
-  runner.emitSessionStart("/workspace", "sess-1");
+  runner.emitSessionBootstrap("/workspace", "sess-1");
   await new Promise((r) => setTimeout(r, 5));
 
   assert.equal(sawStart, true, "session:start fired");

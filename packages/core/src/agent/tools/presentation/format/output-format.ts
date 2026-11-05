@@ -1,4 +1,4 @@
-import { isSyntheticCancelOutput } from "../../../../runtime-types/abort.js";
+import { isSyntheticCancelOutput, syntheticCancelMessage } from "../../../../runtime-types/abort.js";
 import { promptTokensOf } from "../../../../runtime-types/token-usage.js";
 import { formatExtensionDeniedOutput, isExtensionDeniedOutput } from "../../../../runtime-types/tool-denial.js";
 import { isBareToolErrorResult } from "../../../../runtime-types/tool-error.js";
@@ -36,6 +36,8 @@ const CACHE_DIR_PATTERN = AGENT_CACHE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 const CACHE_HINT_PATTERNS = [
   new RegExp(`^Full output saved to:\\s*${CACHE_DIR_PATTERN}/`),
+  new RegExp(`^Output saved to:\\s*${CACHE_DIR_PATTERN}/`),
+  new RegExp(`^Output for this page saved to:\\s*${CACHE_DIR_PATTERN}/`),
   new RegExp(`^Use read_file with path="${CACHE_DIR_PATTERN}/`),
   /^\.\.\.\s*\(\d+\s+lines?\s+omitted\)\s*\.\.\.$/,
   /^\.\.\.\s*\(\d+\s+chars?\s+omitted\)\s*\.\.\.$/,
@@ -331,7 +333,7 @@ export function formatToolOutput(
   // Only the SYNTHETIC one is short-circuited. A tool that caught its own abort returns a full
   // output with `cancelled: true` and whatever it had produced — that is a real result, and its
   // formatter renders it (minus the exit code the tool synthesizes).
-  if (isSyntheticCancelOutput(output)) return TOOL_CANCELLED_MESSAGE;
+  if (isSyntheticCancelOutput(output)) return syntheticCancelMessage(output);
 
   // An extension's refusal (`tool:before:*` → `event.skip`) is the same class of shape: a shared
   // marker that is no tool's schema. Without this short-circuit every formatter read fields that

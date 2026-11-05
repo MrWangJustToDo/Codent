@@ -182,10 +182,10 @@ export class CodentAgent {
     // A manager we built is ours to tear down; an injected one belongs to the injector, and
     // disposing it here would destroy every root agent another runtime is using.
     const ownsManager = options.ownsManager ?? options.manager === undefined;
-    // Unchanged default for an injected manager: its plane belongs to the injector (a shared
-    // provider must not be destroyed by one handle). Pass `ownsRuntime: true` explicitly when this
-    // handle should release it.
-    const ownsRuntime = options.ownsRuntime ?? options.manager === undefined;
+    // The RUNTIME is a different question: an injected `new AgentManager()` has no runtime, so this
+    // call built one and owns its provider/env; only an injected runtime (and its plane) is borrowed.
+    // Pass `ownsRuntime: false` explicitly to keep a caller-owned provider alive.
+    const ownsRuntime = options.ownsRuntime ?? (options.manager === undefined || injectedRuntime === undefined);
     return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
   }
 

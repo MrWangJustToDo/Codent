@@ -233,7 +233,7 @@ Match is on the literal prefix, so \`tool:before:run_*\` works too.
 
 | Hook | Payload / control |
 |---|---|
-| \`session:start\` | \`{ cwd, sessionId }\` — fires once after bootstrap. |
+| \`session:bootstrap\` | \`{ cwd, sessionId }\` — awaited initialization hook, after bootstrap. |
 | \`session:shutdown\` | \`{ sessionId }\` — fires on teardown. |
 | \`before_agent_start\` | \`{ prompt, sessionId }\` — once per user turn, before turn context is collected. **Observe-only**: there is no field to append prompt or context here; use \`registerContextProvider\` for model-visible text. |
 | \`tool:before:<name>\` | \`{ toolName, args, sessionId }\`. Set \`event.skip = true\` to cancel (add \`event.reason\` to explain), or \`event.modifiedArgs = …\` to rewrite the arguments. The rewrite is **refused** for approval-gated tools and for \`task\`: their approval/safety decision (or the pre-forked child) was already made from the original arguments, so the call runs unchanged and the refusal is logged. |
@@ -383,7 +383,7 @@ ctx.z                      // the host's zod — always use this, never \`import
 ctx.logger.info("…")       // / .warn / .error → the agent log
 ctx.registerFlush(async () => { await saveState(); })  // awaited before teardown releases resources
 ctx.registerExitFlush(() => saveStateSync())           // sync, for process exit / crash
-ctx.events.on("session:start", handler)            // intercept (the six hook names)
+ctx.events.on("session:bootstrap", handler)            // intercept (the six hook names)
 ctx.events.observe("llm:response", handler)        // observe (observer events)
 ctx.events.retained("session:usage")               // current retained value
 \`\`\`
@@ -409,7 +409,7 @@ Then, in the session:
    (\`active\` / \`error\`), tool count, and command count. Toggle one to enable/disable it;
    a load error is shown here.
 2. Run your slash command, or ask the agent to call your tool.
-3. Read \`${AGENT_DATA_DIR}/logs/<sessionId>/agent.log\` for \`ctx.logger\` output and load failures.
+3. Read \`${AGENT_DATA_DIR}/logs/agent.log\` for \`ctx.logger\` output and load failures.
 
 A failing extension never kills the session — it is reported and skipped. That also means
 a typo can look like "nothing happened", so check the panel and the log first.

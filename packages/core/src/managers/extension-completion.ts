@@ -19,6 +19,7 @@ import type { ExtensionLlmRequest, ExtensionLlmResult } from "../agent/extension
 import type { TextAdapterConfig } from "../models/adapter/adapter-factory.js";
 import type { LoadedModelEntry } from "../models/config/models-config.js";
 import type { ModelInfo, ModelStyle } from "../models/types.js";
+import type { Epoch } from "../runtime-types/epoch.js";
 
 export { ExtensionLlmError, type ExtensionLlmErrorCode } from "../agent/extension/extension-llm-error.js";
 
@@ -45,6 +46,11 @@ export interface ExtensionCompletionHost {
   getExtensionCatalog(): readonly LoadedModelEntry[] | undefined;
   /** The active run's signal (undefined when idle). */
   getExtensionSignal(): AbortSignal | undefined;
+  /**
+   * Capture the session/run epoch for a call that will outlive the turn that started it. Usage and
+   * diagnostics must not land in the session a `/new` or `/resume` switched to mid-completion.
+   */
+  captureEpoch?(): Epoch;
   /** Count one call against the current run's budget; throws {@link ExtensionLlmError} when spent. */
   consumeExtensionBudget(extensionId: string): void;
   /**
@@ -222,6 +228,10 @@ export async function completeExtensionQuery(
   request: ExtensionLlmRequest
 ): Promise<ExtensionLlmResult> {
   const messages = normalizeMessages(request);
+  // Capture BEFORE the first await: a completion can outlive its turn (and its session), and a
+  // `/new` or `/resume` that lands during adapter resolution must not receive its usage.
+  const epoch = host.captureEpoch?.();
+  const stillCurrent = (): boolean => !epoch || epoch.isCurrent();
   const adapter = await resolveAdapter(host, request.model?.trim() || undefined);
 
   // A ceiling, not a default: a caller may ask for less, never for more than the host allows.
@@ -249,6 +259,7 @@ export async function completeExtensionQuery(
       ...(signal ? { abortSignal: signal } : {}),
       purpose: `extension:${extensionId}`,
       onEvent: (event) => {
+        if (!stillCurrent()) return;
         const { type, ...payload } = event;
         host.emitSideQuery?.(type, payload);
       },
@@ -256,15 +267,19 @@ export async function completeExtensionQuery(
 
     // Price the model that ran, not the session's: a named catalog model can differ in rate, and the
     // usage-history row already uses this adapter's pricing — one call must not have two costs.
-    if ("usage" in result && result.usage) host.usage.addTotal(result.usage, adapter.pricing ?? undefined);
-    host.emitDiagnostic?.("extension", `LLM completion (${extensionId})`, {
-      level: "debug",
-      data: {
-        model: request.model?.trim() || host.getExtensionModel(),
-        maxOutputTokens,
-        ...("usage" in result && result.usage ? { usage: result.usage } : {}),
-      },
-    });
+    if ("usage" in result && result.usage && stillCurrent()) {
+      host.usage.addTotal(result.usage, adapter.pricing ?? undefined);
+    }
+    if (stillCurrent()) {
+      host.emitDiagnostic?.("extension", `LLM completion (${extensionId})`, {
+        level: "debug",
+        data: {
+          model: request.model?.trim() || host.getExtensionModel(),
+          maxOutputTokens,
+          ...("usage" in result && result.usage ? { usage: result.usage } : {}),
+        },
+      });
+    }
 
     return "data" in result ? { data: result.data } : { text: result.text };
   } catch (error) {
@@ -272,15 +287,15 @@ export async function completeExtensionQuery(
     // The port attaches that usage to the thrown error so it can still be attributed; without this, a
     // failing extension call would be the one LLM call a session never pays for.
     const billed = (error as { usage?: Parameters<UsageTracker["addTotal"]>[0] }).usage;
-    if (billed) {
+    if (billed && stillCurrent()) {
       host.usage.addTotal(billed, adapter.pricing ?? undefined);
       host.emitDiagnostic?.("extension", `LLM completion failed after billing (${extensionId})`, {
         level: "warn",
         data: { model: request.model?.trim() || host.getExtensionModel(), usage: billed },
       });
-    } else {
+    } else if (!billed && stillCurrent()) {
       // Nothing was billed, so the slot goes back: a burst of transient failures must not spend the
-      // run's allowance.
+      // run's allowance. A stale completion must not refund the NEW run's budget either.
       host.refundExtensionBudget?.();
     }
     throw error;

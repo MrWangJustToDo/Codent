@@ -227,7 +227,22 @@ export class AgentChatController {
     // Foreground only: a background task must survive Esc, so its detached seat is not a reason to
     // interrupt anything.
     const registeredPrefork = peekTaskPreforkCoordinator(this.managed)?.foregroundSize ?? 0;
-    if (!this.isPumpLive() && registeredPrefork === 0 && !hasPendingInteraction(this.channel.getMessages())) return;
+    // A wait whose interaction is gone is not a run to interrupt and not a reason to ignore Esc.
+    // `setClientToolWaiting(true)` can outlive the part it asserted (stale host UI, a switch that
+    // dropped the question); clearing it here is the only recovery short of `/new`. Only when no
+    // pump/pre-fork is live: with a live run the stale wait is a symptom, and Esc must still abort.
+    const messages = this.channel.getMessages();
+    const pending = hasPendingInteraction(messages);
+    if (!pending && !this.isPumpLive() && registeredPrefork === 0) {
+      const status = this.managed.getStatus();
+      if (status === "waiting" || status === "awaiting_user") {
+        // Esc also drops queued input, matching the normal abort path.
+        this.clearQueuedMessages();
+        this.managed.statusController.clearUnbackedWait();
+        return;
+      }
+    }
+    if (!this.isPumpLive() && registeredPrefork === 0 && !pending) return;
     this.interruptCurrentRun("user-cancelled");
   }
 
@@ -536,6 +551,11 @@ export class AgentChatController {
     // User-authored text must not forge compaction checkpoint markers (see
     // assertNotCompactionSummaryInput in agent/compaction).
     assertNotCompactionSummaryInput(content);
+    if (this.managed.isDestroyed()) return "dropped";
+    // A stale QUESTION with no transcript backing must not swallow the input into a queue nothing
+    // will drain. Scoped to `question`: an approval wait is set from the engine batch and the part
+    // may not be in the transcript yet, so clearing that here would race the approval request.
+    this.managed.statusController.clearUnbackedWait("question");
     // A resume/new is unload → load. Input offered inside that window belongs to neither session:
     // writing it would target the one being left, and replaying it into the target would attach a
     // message to a transcript the user has not seen yet. Report the refusal — a host that only
@@ -571,6 +591,10 @@ export class AgentChatController {
    * @returns whether a pump was enqueued.
    */
   wakeForBackgroundCompletion(cause: BackgroundWakeCause = "job"): boolean {
+    // A destroyed agent has no session to wake: `destroyAgent` marks it before the (slow)
+    // extension teardown, and a background unit finishing inside that window used to start a real
+    // paid turn on a dead transcript.
+    if (this.managed.isDestroyed()) return false;
     // A switch is replacing the transcript; the completion is delivered on the next turn.
     if (this.managed.isSessionSwitching()) return false;
     // A live pump delivers the notification at its next model call (the old behavior), and a
@@ -646,6 +670,10 @@ export class AgentChatController {
     // rather than in each host is what lets the resumed pump leave `awaiting_user`; see
     // `prepareRunPhase`.
     if (!hasPendingAskUser(this.channel.getMessages())) this.managed.setClientToolWaiting(false);
+    // The answer is durable state, not just a channel write: without this the process could die
+    // between the answer and the resumed pump's persist, leaving an unanswered `ask_user` on disk
+    // while the host already reported the answer sent.
+    this.persistMessages("user-message");
     await this.enqueueRunOnce();
     return true;
   }
@@ -712,6 +740,7 @@ export class AgentChatController {
    * result) is handled by that run rather than needing a second one.
    */
   private enqueueRunOnce(options: { startsNewTurn?: boolean } = {}): Promise<void> {
+    if (this.managed.isDestroyed()) return Promise.resolve();
     if (this.runPending()) return this.runChain;
     const epoch = this.lifecycleEpoch;
     const startsNewTurn = options.startsNewTurn === true;

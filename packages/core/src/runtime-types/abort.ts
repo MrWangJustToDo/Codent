@@ -55,7 +55,7 @@ export function isCancelledOutputMarker(output: unknown): boolean {
 }
 
 /** The fields the framework's synthetic cancel payload carries — and nothing else. */
-const SYNTHETIC_CANCEL_KEYS = new Set(["success", "error", "cancelled", "aborted"]);
+const SYNTHETIC_CANCEL_KEYS = new Set(["success", "error", "cancelled", "aborted", "reason"]);
 
 /**
  * The framework's synthetic cancel payload specifically, as opposed to any output that carries a
@@ -78,4 +78,17 @@ const SYNTHETIC_CANCEL_KEYS = new Set(["success", "error", "cancelled", "aborted
 export function isSyntheticCancelOutput(output: unknown): boolean {
   if (!isCancelledOutputMarker(output)) return false;
   return Object.keys(output as object).every((key) => SYNTHETIC_CANCEL_KEYS.has(key));
+}
+
+/**
+ * The text a synthetic cancel should show the UI **and** the model.
+ *
+ * The marker is shared by two writers with different reasons: a user abort writes
+ * "Cancelled by user.", while crash recovery writes "Session restored after an interrupted run.".
+ * Rendering one constant for both attributes a crash to the user (and it was the only reason ever
+ * shown, because the formatters short-circuited before reading `error`).
+ */
+export function syntheticCancelMessage(output: unknown): string {
+  const reason = (output as { reason?: unknown } | null | undefined)?.reason;
+  return typeof reason === "string" && reason.trim() ? reason : "Cancelled by user.";
 }

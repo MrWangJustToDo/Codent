@@ -74,24 +74,31 @@ function interceptorMatches(pattern: string, name: string): boolean {
  * - interceptor `intercept` / `onIntercept` (async, ordered, shared mutable
  *   event, cancel short-circuit).
  */
+export interface HandlerFailureInfo {
+  pattern: string;
+  event: string;
+  /** Scope the interceptor was registered on (an agent id for scoped buses). */
+  scopeId: string;
+  error: unknown;
+  /** Which dispatch mode failed. Absent means interceptor (the original caller shape). */
+  kind?: "interceptor" | "observer";
+}
+
 export class DefaultAgentEventBus implements AgentEventBus {
+  /** First failure per (scope, event, pattern); a broken handler would otherwise flood stderr. */
+  private readonly reportedFailures = new Set<string>();
+  private readonly reporter: (info: HandlerFailureInfo) => void;
+
   constructor(
     private readonly node: EventBusScopeNode,
     /**
-     * Reports an interceptor that threw. Interceptors are the channel third-party
-     * extensions write most, so an exception there must not fail the tool call or
-     * turn it wraps — but silently swallowing it hides a broken extension. The
-     * host wires this to its log; without it the failure is only counted.
+     * Reports an interceptor/observer that threw. Interceptors are the channel third-party
+     * extensions write most, so an exception there must not fail the tool call or turn it wraps —
+     * but silently swallowing it hides a broken extension. The host wires this to its log; without
+     * it the failure is reported to stderr (once per scope/event/pattern) instead of vanishing:
+     * a root-scoped host listener has no agent log to fall back to.
      */
-    private readonly onInterceptorError?: (info: {
-      pattern: string;
-      event: string;
-      /** Scope the interceptor was registered on (an agent id for scoped buses). */
-      scopeId: string;
-      error: unknown;
-      /** Which dispatch mode failed. Absent means interceptor (the original caller shape). */
-      kind?: "interceptor" | "observer";
-    }) => void,
+    private readonly onInterceptorError?: (info: HandlerFailureInfo) => void,
     /**
      * Envelope fields resolved from the owning agent when the caller supplied none.
      *
@@ -100,7 +107,20 @@ export class DefaultAgentEventBus implements AgentEventBus {
      * the telemetry funnel (`plan`, `ui`, `stream-hub`, the extension runner).
      */
     private readonly resolveMeta?: (agentId: string) => { runId?: string; sessionId?: string } | undefined
-  ) {}
+  ) {
+    this.reporter =
+      onInterceptorError ??
+      ((info) => {
+        const key = `${info.scopeId}\0${info.event}\0${info.pattern}`;
+        if (this.reportedFailures.has(key)) return;
+        if (this.reportedFailures.size >= 100) this.reportedFailures.clear();
+        this.reportedFailures.add(key);
+        console.error(
+          `[agent:event] ${info.kind ?? "interceptor"} handler failed for "${info.event}" (scope ${info.scopeId}):`,
+          info.error
+        );
+      });
+  }
 
   get scopeId(): string {
     return this.node.id;
@@ -143,7 +163,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           payload = retained.provider();
         } catch (error) {
           reportContained(() =>
-            this.onInterceptorError?.({
+            this.reporter({
               pattern: type,
               event: type,
               scopeId: retained.node.id,
@@ -159,7 +179,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           if (result && typeof (result as PromiseLike<unknown>).then === "function") {
             void Promise.resolve(result).catch((error) =>
               reportContained(() =>
-                this.onInterceptorError?.({
+                this.reporter({
                   pattern: type,
                   event: type,
                   scopeId: this.node.id,
@@ -174,7 +194,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           // handler escaped `on()` AFTER the subscription was registered, so the caller never
           // received a disposer and leaked the listener.
           reportContained(() =>
-            this.onInterceptorError?.({
+            this.reporter({
               pattern: type,
               event: type,
               scopeId: this.node.id,
@@ -201,7 +221,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
       // Same containment as the `on()` replay: this is a user-facing read, and one faulty provider
       // must not turn `subscribe()` (which reconciles retained values) into a failed subscription.
       reportContained(() =>
-        this.onInterceptorError?.({ pattern: type, event: type, scopeId: retained.node.id, error, kind: "observer" })
+        this.reporter({ pattern: type, event: type, scopeId: retained.node.id, error, kind: "observer" })
       );
       return undefined;
     }
@@ -222,9 +242,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
       // vanishing in `Emitter`'s catch. Silence here was the worst case to debug — a projector or
       // log sink failing on every live frame with no diagnostic at all.
       node.observers.emit(type, event, (error) =>
-        reportContained(() =>
-          this.onInterceptorError?.({ pattern: type, event: type, scopeId: node.id, error, kind: "observer" })
-        )
+        reportContained(() => this.reporter({ pattern: type, event: type, scopeId: node.id, error, kind: "observer" }))
       );
       if (!deliverToWildcards) continue;
       for (const { listener } of [...node.wildcards]) {
@@ -235,13 +253,13 @@ export class DefaultAgentEventBus implements AgentEventBus {
           if (result && typeof (result as PromiseLike<unknown>).then === "function") {
             void Promise.resolve(result).catch((error) =>
               reportContained(() =>
-                this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
+                this.reporter({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
               )
             );
           }
         } catch (error) {
           reportContained(() =>
-            this.onInterceptorError?.({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
+            this.reporter({ pattern: "*", event: type, scopeId: node.id, error, kind: "observer" })
           );
         }
       }
@@ -288,7 +306,7 @@ export class DefaultAgentEventBus implements AgentEventBus {
           result = await registration.handler(event as InterceptableEvent);
         } catch (error) {
           reportContained(() =>
-            this.onInterceptorError?.({ pattern: registration.pattern, event: event.type, scopeId: node.id, error })
+            this.reporter({ pattern: registration.pattern, event: event.type, scopeId: node.id, error })
           );
           continue;
         }
@@ -371,7 +389,14 @@ export class DefaultAgentEventBus implements AgentEventBus {
         ? this.resolveMeta?.(agentId)
         : undefined;
     const sessionId = meta?.sessionId ?? resolved?.sessionId;
-    const runId = meta?.runId ?? resolved?.runId;
+    // `sessionId` and `runId` are one identity: an explicit session that is not the resolved one
+    // (a late save for the session a `/resume` just left) must not inherit the CURRENT run. The
+    // telemetry funnel already suppresses it; resolving it again here put it back.
+    const runId =
+      meta?.runId ??
+      (meta?.sessionId !== undefined && resolved?.sessionId !== undefined && meta.sessionId !== resolved.sessionId
+        ? undefined
+        : resolved?.runId);
     return {
       type,
       ts: meta?.ts ?? Date.now(),

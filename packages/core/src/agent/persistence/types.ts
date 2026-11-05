@@ -35,7 +35,7 @@ export const SESSION_LOG_SUFFIX = ".session.jsonl";
 /** Log line kind: one message + the full non-message state snapshot at that point. */
 export const SESSION_LOG_MESSAGE = "message";
 
-/** Directory for per-session AgentLog JSONL files: `.agents/logs/{sessionId}/`. */
+/** Workspace timeline root: `.agents/logs/` (one `agent.log`, size-rotated). */
 export const AGENT_LOG_DIR = `${AGENT_DATA_DIR}/logs`;
 
 /**

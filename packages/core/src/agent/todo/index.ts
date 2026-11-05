@@ -9,8 +9,7 @@
  *
  * @example
  * ```typescript
- * import { TodoManager } from '@codent/core';
- *
+ * // Internal module: the agent owns one TodoManager; it is not exported from the public entry.
  * const todoManager = new TodoManager();
  *
  * // Update from tool call

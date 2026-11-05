@@ -350,7 +350,7 @@ const toolDef = (name) => ({
   });
 
   assert.deepEqual(await revoked.llm.complete({ prompt: "hi" }), { text: "ok" }, "a live extension may call the model");
-  await revoked.events.emit({ type: "test:lease-probe", payload: {} });
+  await revoked.events.intercept({ type: "test:lease-probe", payload: {} });
   assert.equal(fired, 1, "a live extension's emit reaches another extension's interceptor");
   assert.equal(revoked.events.hasInterceptors("test:lease-probe"), true);
 
@@ -361,13 +361,13 @@ const toolDef = (name) => ({
     (error) => error?.code === "revoked",
     "a revoked extension's completion is refused (it must not spend tokens)"
   );
-  await revoked.events.emit({ type: "test:lease-probe", payload: {} });
+  await revoked.events.intercept({ type: "test:lease-probe", payload: {} });
   assert.equal(fired, 1, "and its emit no longer reaches anyone");
   assert.equal(revoked.events.hasInterceptors("test:lease-probe"), false, "nor does it advertise interceptors");
 
   // The live extension is unaffected — this is a lease, not a global switch.
   assert.equal(live.events.hasInterceptors("test:lease-probe"), true);
-  await live.events.emit({ type: "test:lease-probe", payload: {} });
+  await live.events.intercept({ type: "test:lease-probe", payload: {} });
   assert.equal(fired, 2);
 
   await runner.destroyAll();

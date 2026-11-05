@@ -84,10 +84,19 @@ function applyChunkStatus(
   const current = getStatus();
 
   // Keep interactive pauses and user cancel sticky — leftover chunks must not resurrect "running".
+  // `completed` too: the projection checks `run: "streaming"` BEFORE `outcome: "completed"`, so one
+  // trailing chunk after `settle` flipped a finished turn back to thinking/running with no pump
+  // left to settle it (Esc then did nothing). Error/aborted are protected by projection order.
   // A compaction lease owns the run phase: a late chunk must not promote `run` to streaming/tooling,
   // or the lease's restore guard (`status === "compacting"`) stops matching and the phase is
   // abandoned by `finish()` without ever being restored.
-  if (current === "waiting" || current === "awaiting_user" || current === "aborted" || current === "compacting") {
+  if (
+    current === "waiting" ||
+    current === "awaiting_user" ||
+    current === "aborted" ||
+    current === "completed" ||
+    current === "compacting"
+  ) {
     return;
   }
 
@@ -327,6 +336,29 @@ export class AgentStatusController {
     this.dispatch({ type: "reset" });
   }
 
+  /**
+   * Clear a `waiting` / `awaiting_user` that no transcript interaction backs.
+   *
+   * `setClientToolWaiting(true)` may assert a question before its part is visible (and a host can
+   * assert one that never arrives, e.g. a stale UI after a session switch). Nothing else clears
+   * that wait: input queues forever, `stop()` finds no pending interaction, and `interrupt` keeps a
+   * question by design. Resolving it on the next input / Esc is the escape hatch.
+   */
+  clearUnbackedWait(kind: "question" | "any" = "any"): void {
+    const status = this.deps.getStatus();
+    const matches =
+      kind === "question" ? status === "awaiting_user" : status === "waiting" || status === "awaiting_user";
+    if (!matches) return;
+    const messages = this.deps.getMessages?.() ?? [];
+    if (firstPendingInteraction(messages)) return;
+    const outcome = this.deps.getAgentState?.()?.outcome;
+    this.dispatch({
+      type: "settle",
+      result: outcome === "error" ? "error" : outcome === "aborted" ? "aborted" : "completed",
+      clearWait: true,
+    });
+  }
+
   reconcileFromUIMessages(messages: UIMessage[], options?: ReconcileFromUIMessagesOptions): void {
     const whenClear = options?.whenClear ?? "idle";
     // The badge counts every pending approval, independent of which wait the status names.
@@ -414,8 +446,12 @@ export class AgentStatusController {
     }
 
     if (kind === "error") {
-      // executeStream may already have called onRunError — do not re-emit agent:stream-error.
-      if (this.deps.getStatus() !== "error") {
+      // Dedupe on the AXES, not the projected status: a pending `ask_user` keeps projecting
+      // `awaiting_user` while `outcome` is already `error`, so the old test re-emitted the same
+      // failure (once from the stream hook, once from the pump finalizer).
+      const axes = this.deps.getAgentState?.();
+      const alreadyError = axes ? axes.outcome === "error" : this.deps.getStatus() === "error";
+      if (!alreadyError) {
         if (outcome.errorMessage) {
           this.onRunError(outcome.errorMessage);
         } else {

@@ -132,7 +132,10 @@ export class ApprovalDecisionCoordinator {
       source: "user",
     });
     this.settle();
-    return this.deps.enqueueRun();
+    // The decision is durable here (channel + table). Do NOT await the pump: the command plane is
+    // remote-facing, and a pump runs for the whole remaining turn — blocking the response on it
+    // made a slow turn look like a failed approval, and a client retry re-answered a decided call.
+    void this.deps.enqueueRun().catch(() => undefined);
   }
 
   /** Answer every pending approval, then resume the pump exactly once. */
@@ -142,7 +145,9 @@ export class ApprovalDecisionCoordinator {
 
     this.approveAll(pending);
     this.settle();
-    return this.deps.enqueueRun();
+    // Same rule as a single answer: the decisions are durable now, and the caller (auto-mode,
+    // plan execution, a remote command) must not block for the rest of the pump.
+    void this.deps.enqueueRun().catch(() => undefined);
   }
 
   /**

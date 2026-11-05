@@ -8,8 +8,15 @@
  */
 
 /** Normalize an unknown thrown value to an `Error`. */
-export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+export function toError(error: unknown, fallback?: string): Error {
+  if (error instanceof Error) return error;
+  if (typeof error === "string" && error) return new Error(error);
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message) return new Error(message);
+  }
+  if (fallback !== undefined) return new Error(fallback);
+  return new Error(String(error));
 }
 
 /** Extract a message from an unknown thrown value. */

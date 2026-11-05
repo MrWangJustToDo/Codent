@@ -23,8 +23,6 @@ export interface SessionLeasePorts {
   release(sessionId: string, ownerId: string): void;
   /** Release a reservation this lease created (best-effort; the store owns the flag). */
   releaseReservation?(sessionId: string): void;
-  /** Point the persisted log sink at the committed session (the target boundary). */
-  bindSink?(sessionId: string, options?: { sessionBoundary?: boolean }): void;
   /**
    * Commit side effects: the persistence baseline for `uiMessages` and the session generation used
    * by `Epoch`. Called once per successful commit, after ownership has moved.
@@ -46,8 +44,6 @@ export class SessionLease {
   private leavingId: string | undefined;
   private generation = 0;
   private reserved = false;
-  /** The session id the log sink is currently bound to (set through `bindSink`). */
-  private boundSessionId: string | undefined;
 
   constructor(
     private readonly ownerId: string,
@@ -102,9 +98,6 @@ export class SessionLease {
   /** Enter the read/restore phase for the claimed target. */
   beginRestore(): void {
     if (this.state === "claimed") this.state = "restoring";
-    // Restore-time rows belong to the target, so the sink moves before the read (the departure
-    // gets it back on `abortClaim`).
-    if (this.sessionId !== undefined) this.bind(this.sessionId);
   }
 
   /**
@@ -124,7 +117,6 @@ export class SessionLease {
     this.leavingId = undefined;
     this.state = "active";
     this.generation += 1;
-    this.bind(this.sessionId);
     this.ports.onCommit?.(this.sessionId, this.generation);
   }
 
@@ -154,7 +146,6 @@ export class SessionLease {
       this.leavingId = undefined;
       this.reserved = false;
       this.state = "active";
-      this.bind(this.sessionId, { sessionBoundary: false });
       return;
     }
     this.ports.release(target, this.ownerId);
@@ -180,18 +171,6 @@ export class SessionLease {
     this.sessionId = undefined;
     this.leavingId = undefined;
     this.reserved = false;
-    this.boundSessionId = undefined;
     this.state = "released";
-  }
-
-  /** A host detached the sink: forget the binding so the next commit rebinds the same id. */
-  clearBoundSink(): void {
-    this.boundSessionId = undefined;
-  }
-
-  private bind(sessionId: string, options?: { sessionBoundary?: boolean }): void {
-    if (this.boundSessionId === sessionId) return;
-    this.ports.bindSink?.(sessionId, options);
-    this.boundSessionId = sessionId;
   }
 }
