@@ -7,7 +7,6 @@
  */
 
 import { resolveApprovalRequirement } from "../agent/approval/approval-requirement.js";
-import { getBuiltinToolPresentation } from "../agent/tools/presentation/builtin.js";
 import { getToolMetadata } from "../agent/tools/runtime/define-tool.js";
 
 import type { AgentToolService } from "./services/agent-tool-service.js";
@@ -56,9 +55,9 @@ export class ToolFacet {
     const service = this.host.getToolService();
     const tools = this.host.getTools();
     service.useTools(tools);
-    const declared = service.resolve(toolName)?.present ?? getToolMetadata(tools[toolName])?.present;
-    if (declared) return declared;
-    return service.isIncumbent(toolName) ? getBuiltinToolPresentation(toolName) : undefined;
+    // One rule lives in the service; the metadata fallback covers a host record the registry has
+    // not seeded yet.
+    return service.resolvePresentation(toolName) ?? getToolMetadata(tools[toolName])?.present;
   }
 
   registerToolOutputDecorator(

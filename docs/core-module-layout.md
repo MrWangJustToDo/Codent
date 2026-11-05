@@ -29,5 +29,6 @@ then one commit.
 
 ## Not moved (deliberate)
 - `managers/services/*` — the target map keeps the service layer in managers.
+- `managers/stream-recovery/*` — run-recovery policy over `ManagedAgent`/`AgentManager`; it needs the same port extraction before moving.
 - `managers/run-finalizer.ts` — listed under `managers/` in the target map.
 - `managers/middleware/*`, `managers/telemetry/*`, `managers/stream-recovery/*`.

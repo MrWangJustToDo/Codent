@@ -17,7 +17,7 @@ import type { DispatchRank } from "../../agent/dispatch-order.js";
 import type { ExtensionToolDefinition } from "../../agent/extension";
 import type { ExtensionContext } from "../../agent/extension/types.js";
 import type { ToolsRecord } from "../../agent/tools/catalog/tool-set.js";
-import type { ToolPresentationInfo } from "../../agent/tools/presentation/types.js";
+import type { ToolPresentation, ToolPresentationInfo } from "../../agent/tools/presentation/types.js";
 import type { ToModelOutputDecorator, ToModelOutputFn } from "../../agent/tools/runtime/contract.js";
 
 export interface AgentToolRegistrationContext {
@@ -120,14 +120,21 @@ export class AgentToolService {
     return this.registry.isIncumbent(name);
   }
 
+  /**
+   * The one presentation resolution rule: the live entry's descriptor, else the built-in table only
+   * for the implementation this agent was seeded with. A shadowing extension tool without its own
+   * `present` is undeclared rather than borrowing a descriptor for a different output shape.
+   */
+  resolvePresentation(name: string): ToolPresentation | undefined {
+    const declared = this.resolve(name)?.present;
+    if (declared) return declared;
+    return this.registry.isIncumbent(name) ? getBuiltinToolPresentation(name) : undefined;
+  }
+
   catalog(): ToolPresentationInfo[] {
     return describeToolPresentations(
       this.registry.list().map((entry) => entry.name),
-      // Same rule as `ManagedAgent.getToolPresentation`: the built-in table describes the tool the
-      // agent was SEEDED with. A shadowing extension tool without its own `present` is described as
-      // undeclared instead of inheriting a descriptor written for a different output shape.
-      (name) =>
-        this.resolve(name)?.present ?? (this.registry.isIncumbent(name) ? getBuiltinToolPresentation(name) : undefined)
+      (name) => this.resolvePresentation(name)
     ).map((info) => ({
       ...info,
       // The one field a host cannot derive from the name: which implementation is live.

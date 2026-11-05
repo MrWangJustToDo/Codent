@@ -148,7 +148,7 @@ table. It enforces **three** properties:
 
 - `agent/**` MUST NOT import `managers/**` (the manager-side ports it needs are declared in `runtime-types/hosts.ts`)
 - `models/**` MUST NOT import `managers/**`
-- `runtime-types/**` may only reach upward from `hosts.ts` (the port file), type-only
+- `runtime-types/**` may only reach upward from the five named port files (`hosts.ts`, `session-host.ts`, `session-runtime.ts`, `chat-host.ts`, `run-host.ts`), type-only, and the layer gate pins both their sources and targets
 - `env/index.ts` is the bottom of the stack and must not import upward — process-scoped teardown is registered via `env/teardown.ts` hooks instead
 - Edges that must stay type-only: `agent → agent-session`, `runtime-types → {managers, agent, models}`. `models → agent` is `allow` but narrowed to two leaf modules (`stream/stream-errors`, `usage/usage-history-service`); a third target is a table change.
 - Package-wide stream helpers live in `agent/stream/` (not under `subagent/`)

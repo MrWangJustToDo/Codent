@@ -6,12 +6,15 @@
  * `needsApproval` flag, because that is how two gates end up disagreeing about the same call.
  */
 
-export type ApprovalRequirementSource = "declared" | "mcp-annotations" | "default";
+export type ApprovalRequirementSource = "declared" | "default";
 
 export interface ApprovalRequirement {
   /** True when the call must be answered before it can execute. */
   readonly requiresApproval: boolean;
-  /** Where the requirement came from (diagnostics + the stage's decision source). */
+  /**
+   * Where the requirement came from. MCP annotations are folded into the registered boolean before
+   * this descriptor is built, so there is no separate source value to mislabel.
+   */
   readonly source: ApprovalRequirementSource;
   /** Set when the tool exists but the requirement had to be assumed (fail closed). */
   readonly reason?: string;
