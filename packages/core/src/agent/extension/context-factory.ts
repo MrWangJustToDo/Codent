@@ -205,8 +205,12 @@ export function createExtensionContext(
         host.refuse(api.id, "registerCommand");
         return;
       }
-      host.registerCommand(api.id, cmd, host.rankOf(api.id));
+      // Same rule as `registerTool`: record the claim BEFORE the host call. The host's observer
+      // (`onRegisterCommand`) can throw, and with the push after it the activation rollback would
+      // iterate an empty ledger while the command stayed in the stacks — a "ghost" command that is
+      // still broadcast after the extension is disabled and that nothing can unregister.
       registrations?.commands.push(cmd.name);
+      host.registerCommand(api.id, cmd, host.rankOf(api.id));
     },
 
     registerInterceptor: <T extends InterceptableEvent>(

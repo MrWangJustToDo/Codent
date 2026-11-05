@@ -110,8 +110,9 @@ import { TurnContextController } from "../agent/turn-context/turn-context-contro
 import { type TurnContextSection } from "../agent/turn-context/turn-context-message.js";
 import { UsageHistoryService } from "../agent/usage/usage-history-service.js";
 import { UsageStore } from "../agent/usage/usage-store.js";
-import { getEnv, resolveCoreEnv } from "../env";
+import { getEnv } from "../env";
 import { offerableReasoningEfforts } from "../models/types.js";
+import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 import {
   deriveAgentState,
   projectAgentStatus,
@@ -128,7 +129,7 @@ import { copyModelMessages } from "../utils/model-messages.js";
 import { truncateText } from "../utils/text-truncation.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
-import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
+import { AgentConfigSchema } from "./agent-types.js";
 import { handleManagedReactiveCompact, runManualCompact, type ManualCompactHost } from "./compact-facet.js";
 import { completeExtensionQuery, DEFAULT_EXTENSION_CALLS_PER_RUN, ExtensionLlmError } from "./extension-completion.js";
 import { ExtensionFacet } from "./extension-facet.js";
@@ -1554,9 +1555,14 @@ export class ManagedAgent {
     // Route telemetry through this agent's scoped bus (up-flows to the root
     // observer / Event→Log bridge) instead of the process-wide root bus.
     // A new bus has no subscribers that saw the old frames; do not suppress its first snapshot.
+    // Every retained projection has a dedupe signature now, so reset the whole set — missing one
+    // left its first frame on the new bus suppressed until the row happened to change.
     this.lastStateSignature = null;
     this.lastModeSignature = null;
     this.lastToolPresentationSignature = null;
+    this.lastSubagentsSignature = null;
+    this.lastJobStatuses.clear();
+    this.interactionsRevision = -1;
     this.dispatchEvent = (event) => {
       bus.emit(event.type as never, event.payload as never, {
         ts: event.ts,
@@ -2861,9 +2867,17 @@ export class ManagedAgent {
     return this.modelInfo?.contextWindow ?? undefined;
   }
 
-  /** Resolved workspace env for this agent: its runtime's env, or the ambient env. */
+  /**
+   * Resolved workspace env for this agent: its runtime's env, or the ambient env.
+   *
+   * Returns the already-resolved object instead of re-resolving it on every read: the assembly is
+   * done once (`registerCoreEnv` / `AgentRuntime`), and rebuilding it here gave every tool and
+   * middleware a fresh object — so identity-keyed caches either missed forever or had to fall back
+   * to a weaker key (the tree-sitter parser cache could only key by root path, which two runtimes
+   * over the same workspace share).
+   */
   getCoreEnv(): ResolvedCoreEnv {
-    return resolveCoreEnv(this.runtime?.env ?? getEnv());
+    return this.runtime?.env ?? getEnv();
   }
 
   /**
@@ -3227,13 +3241,6 @@ export class ManagedAgent {
   };
 }
 
-/**
- * Keep diagnostic `details` shallow and JSON-safe.
- *
- * The event payload forbids `Record<string, unknown>` (it is written to the entry verbatim, so a
- * nested value bypassed the size cap). Two adapters still receive an open record from a host port;
- * this is where that ends — scalars pass, numeric arrays pass, anything else becomes its text.
- */
 /** JSON form of a nested diagnostic value, bounded and never throwing. */
 function jsonDiagnosticValue(value: unknown): string {
   try {
@@ -3245,6 +3252,13 @@ function jsonDiagnosticValue(value: unknown): string {
   return truncateText(String(value), 2000);
 }
 
+/**
+ * Keep diagnostic `details` shallow and JSON-safe.
+ *
+ * The event payload forbids `Record<string, unknown>` (it is written to the entry verbatim, so a
+ * nested value bypassed the size cap). Two adapters still receive an open record from a host port;
+ * this is where that ends — scalars pass, numeric arrays pass, anything else becomes its text.
+ */
 function diagnosticDetails(
   data: Record<string, unknown>
 ): Record<string, string | number | boolean | null | readonly number[]> {

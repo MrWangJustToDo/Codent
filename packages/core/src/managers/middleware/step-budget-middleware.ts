@@ -29,8 +29,7 @@ import {
   formatSectionTag,
   syntheticKindFromId,
 } from "../../agent/turn-context/turn-context-message.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { AgentUIChannel } from "../../runtime-types";

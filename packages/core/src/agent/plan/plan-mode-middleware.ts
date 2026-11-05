@@ -10,6 +10,8 @@ import type { ChatMiddleware } from "@tanstack/ai";
 export interface PlanModeMiddlewareDeps {
   getModeState: () => ModeState | null;
   resolveToolPresentation?: (name: string) => ToolPresentation | undefined;
+  /** Whether the live tool is the built-in (see `ExtensionsMiddlewareDeps.isBuiltinTool`). */
+  isBuiltinTool?: (name: string) => boolean;
 }
 
 /** Skip forbidden / unsafe tools while plan mode restricts tooling. */
@@ -22,7 +24,8 @@ export function createPlanModeMiddleware(deps: PlanModeMiddlewareDeps): ChatMidd
         modeState,
         hookCtx.toolName,
         hookCtx.args,
-        deps.resolveToolPresentation
+        deps.resolveToolPresentation,
+        deps.isBuiltinTool
       );
       if (!reason) return;
       return {

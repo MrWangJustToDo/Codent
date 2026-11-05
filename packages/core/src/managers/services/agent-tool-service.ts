@@ -180,6 +180,10 @@ export class AgentToolService {
             deadlineSignal: toolCtx.deadlineSignal,
             timeoutMs: toolCtx.timeoutMs,
             agentId: toolCtx.agentId ?? ctx.agentId,
+            // Forward the owning runtime's env. An extension tool that executes another tool
+            // (code-mode's `external_*` bindings) must hand this down, or the nested call falls
+            // back to the process-ambient workspace.
+            coreEnv: toolCtx.coreEnv,
           },
           ctx.getExtensionContext?.()
         ),

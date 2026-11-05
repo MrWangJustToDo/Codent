@@ -5,9 +5,9 @@ import { resolveToolsRecord } from "../agent/tools/catalog/tool-set.js";
 import { createTextAdapter } from "../models/adapter/adapter-factory.js";
 import { resolvePromptCacheKey } from "../models/cache/prompt-cache.js";
 import { DEFAULT_BASE_URLS } from "../models/config/model-config.js";
+import { DEFAULT_AGENT_MAX_ITERATIONS } from "../runtime-types/agent-limits.js";
 
 import { buildManagedAgentDeps } from "./agent-run-deps.js";
-import { DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
 import {
   createApprovalResumeMiddleware,
   createBackgroundMiddleware,
@@ -237,6 +237,9 @@ export function buildAgentRunner(
       // ORIGINAL input before this hook, and an eagerly started `task` subagent already began on
       // it. Neither can honour a rewritten argument list after the fact.
       isApprovalGated: (toolName) => deps.isToolNeedsApproval(toolName),
+      // Name equality is not identity: an extension may shadow `task`, and the deferred-start /
+      // argument-rewrite rules describe the built-in implementation on the original input.
+      isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
       onArgRewriteRefused: (toolName) => {
         emitEvent("session:diagnostic", {
           area: "extension",
@@ -261,6 +264,7 @@ export function buildAgentRunner(
     createPlanModeMiddleware({
       getModeState: () => deps.getModeState(),
       resolveToolPresentation: deps.resolveToolPresentation,
+      isBuiltinTool: (toolName) => deps.isBuiltinTool(toolName),
     }),
     // Condition + counter reminder: the todo list has gone stale for too many rounds. Reads
     // its round/episode state back from the window (no in-memory schedule).

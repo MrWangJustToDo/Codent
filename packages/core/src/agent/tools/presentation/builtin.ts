@@ -78,6 +78,8 @@ export const BUILTIN_PRESENTATION: Partial<Record<BuiltinToolName, BuiltinPresen
   complete_plan: { category: "other", keepRow: true, detailed: true },
   create_plan: { category: "other" },
   update_plan: { category: "other" },
+  // Subagent marker: structured ("summary phase unlocked"), so it owns its row.
+  begin_summary: { category: "other" },
 };
 
 export function builtinPresentationNames(): string[] {

@@ -357,6 +357,17 @@ export class TodoManager {
     this.clear();
   }
 
+  /**
+   * Teardown: drop the pending auto-clear timer without publishing.
+   *
+   * The timer is a 3s deferred `clear()`, and `clear()` notifies listeners — after destroy that
+   * would emit `session:todos` from an agent that no longer exists. Distinct from {@link clear} on
+   * purpose: teardown must not touch state or fire events.
+   */
+  dispose(): void {
+    this.clearAutoClearTimer();
+  }
+
   // ============================================================================
   // Private
   // ============================================================================

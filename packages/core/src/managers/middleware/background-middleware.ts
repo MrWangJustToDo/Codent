@@ -35,9 +35,8 @@ import {
   nextSyntheticNonce,
   selectChangedSections,
 } from "../../agent/turn-context/synthetic-injection.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { errorMessage } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { BackgroundWorkCompletion } from "../../agent/jobs/background-work.js";
 import type { TurnContextSection } from "../../agent/turn-context";

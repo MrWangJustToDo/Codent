@@ -6,15 +6,9 @@
  * `agent/plan/plan-mode-middleware.ts`) can declare their phase without
  * importing `managers/**`. What remains here is the manager-side concern: how
  * the assembled pipeline is ordered and guarded.
- *
- * The phase primitives are re-exported so existing manager-side importers keep
- * working through this module.
  */
 
 import { MIDDLEWARE_PHASE_RANK, type MiddlewarePhase } from "../../runtime-types/middleware-phase.js";
-
-export { MIDDLEWARE_PHASE_RANK, defineMiddleware } from "../../runtime-types/middleware-phase.js";
-export type { MiddlewarePhase, PhasedChatMiddleware } from "../../runtime-types/middleware-phase.js";
 
 /**
  * Canonical name sequence of the managed middleware pipeline. The phase sort

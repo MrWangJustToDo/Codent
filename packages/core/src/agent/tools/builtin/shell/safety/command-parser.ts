@@ -88,9 +88,12 @@ export interface ParsedCommand {
 // Tree-sitter manager singleton
 // ============================================================================
 
-// Grammar loading is workspace-scoped, not agent-scoped. `resolveCoreEnv()` returns a fresh
-// wrapper on each read, so the key is the stable root path rather than object identity.
-const managerPromises = new Map<string, Promise<TreeSitterManager | null>>();
+// Grammar loading is workspace-scoped, not agent-scoped. The cache is keyed by the env's `fs`
+// object rather than `rootPath`: two runtimes can point at the same root through different
+// transports (local vs remote, or two independent backends), and sharing the first one's
+// `locateTreeSitterGrammar` made the second permanently fail to parse. The fs object is stable for
+// the lifetime of one env and collected with it.
+const managerPromises = new WeakMap<object, Promise<TreeSitterManager | null>>();
 
 function createTreeSitterEnv(env: ResolvedCoreEnv): TreeSitterEnv {
   const path = env.path;
@@ -116,7 +119,7 @@ function createTreeSitterEnv(env: ResolvedCoreEnv): TreeSitterEnv {
  * language, so the file-path → language resolver is a no-op.
  */
 async function getCommandTreeSitterManager(env: ResolvedCoreEnv): Promise<TreeSitterManager | null> {
-  const key = env.rootPath;
+  const key = env.fs as unknown as object;
   let managerPromise = managerPromises.get(key);
   if (!managerPromise) {
     managerPromise = (async () => {

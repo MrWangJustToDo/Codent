@@ -115,11 +115,17 @@ function toExtensionTool(tool: AnyServerTool): ExtensionToolDefinition {
     execute: async (input, options) => {
       const signal = options.abortSignal;
       signal?.throwIfAborted();
+      // Forward the run's context so the nested tool executes against the SAME runtime env it was
+      // registered for. Dropping it made `defineServerTool` fall back to the process-ambient env —
+      // the wrong workspace when two runtimes share a process, and a hard error when the host only
+      // builds a `CodentAgent` and never registers an ambient env.
+      const runContext = options.coreEnv ? { agentId: options.agentId, coreEnv: options.coreEnv } : undefined;
       // `execute_typescript` runs a sandbox, so there is no global console interception here:
       // upstream receives the extension logger through its `debug` option instead.
       const run = tool.execute?.(input, {
         toolCallId: options.toolCallId,
         abortSignal: signal,
+        ...(runContext ? { context: runContext } : {}),
       });
       if (!run) return {} as ToolCallResult;
       if (!signal) return ((await run) ?? {}) as ToolCallResult;

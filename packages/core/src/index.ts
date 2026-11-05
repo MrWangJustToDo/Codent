@@ -323,7 +323,7 @@ export { resolveSessionRef, type SessionRefCandidate } from "./agent-session/ses
 export { askUserOutputSchema } from "./agent/tools/builtin/interaction/ask-user-tool.js";
 export { buildAskUserOutput, type AskUserAnswerInput } from "./agent/tools/builtin/interaction/ask-user-output.js";
 export { buildDefaultSystemPrompt } from "./agent/prompt/default-prompt.js";
-export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "./managers/agent-types.js";
+export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "./runtime-types/agent-limits.js";
 export { SUBAGENT_NO_TRUNCATE } from "./agent/subagent/types.js";
 export { resolveSummarizationBudget } from "./agent/compaction";
 

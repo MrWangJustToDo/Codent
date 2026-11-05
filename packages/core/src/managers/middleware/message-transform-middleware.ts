@@ -25,8 +25,7 @@
 
 import { buildModelCapabilityFlags } from "../../agent/extension/types.js";
 import { unsupportedMultimodalPartTypes } from "../../models/adapter/capability-message-utils.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
 import type { MessageTransformPhase, ModelCapabilityFlags, MultimodalPartType } from "../../agent/extension/types.js";

@@ -6,9 +6,8 @@
  * directly via {@link createCompactionMiddleware}.
  */
 
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { errorMessage } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { RunToken } from "../../agent/run/run-coordinator.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";

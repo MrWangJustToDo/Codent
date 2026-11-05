@@ -346,7 +346,11 @@ creating a duplicate (check memory_list first).`,
     sections.push({ name: "index", content: indexContent });
   }
   if (config?.selectionDisabled !== true) {
-    sections.push({ name: "selection", content: produceSelection });
+    // Selection runs a side-query completion (`ctx.llm.complete`) over the turn's window, so it is
+    // NOT bounded by the runner's 60s callback clock: a slow-but-healthy model call would be cut
+    // and reported as an extension failure on every turn. It is still cancellable — the completion
+    // receives `ctx.signal`, so Esc aborts it with the run.
+    sections.push({ name: "selection", content: produceSelection, timeoutMs: 0 });
   }
   ctx.registerContextProvider({
     ...(sections.length > 0 ? { sections } : {}),

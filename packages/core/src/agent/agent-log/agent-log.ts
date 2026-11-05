@@ -269,6 +269,10 @@ export class AgentLog {
    * seam's flush paths. Replaces any previous sink.
    */
   attachSink(sink: LogSink): void {
+    // A replacement must land the previous sink's pending batch first: the seam re-points, it
+    // cannot release the old sink, and a host that used `attachFileSink` (the embedded fallback)
+    // before the manager bound its own would otherwise lose every line written in between.
+    if (this.sinkEntry) this.sinkFlushSync?.();
     // Bind FIRST: a drain can synchronously trigger a writer (persist-error -> diagnostic ->
     // bridge -> log). With the sink assigned only at the end, such an entry landed in the just-
     // cleared buffer and was never drained by a second attach.
@@ -363,10 +367,8 @@ export class AgentLog {
   attachFileSink(options: AgentLogFileSinkOptions): () => void {
     const level = configuredLogLevel();
     if (level) this.setMinLevel(level);
-    // `attachSink` only re-points the seam; it cannot release the previous sink. This is the
-    // fallback path (embedded hosts call it directly), so land that sink's pending batch first —
-    // otherwise a second call dropped the lines written since the last flush.
-    this.sinkFlushSync?.();
+    // `attachSink` flushes the previous sink before re-pointing the seam (see its note): this is
+    // the fallback path (embedded hosts call it directly), so the pending batch is landed there.
     const sink = createJsonlFileSink(options);
     this.attachSink(sink);
     return () => {
@@ -401,5 +403,15 @@ export class AgentLog {
   /** Entries still retained because no sink has been attached (bootstrap diagnostics). */
   getPendingEntryCount(): number {
     return this.pendingEntries.length;
+  }
+
+  /**
+   * Entries dropped because the pending buffer overflowed before any sink was bound.
+   *
+   * Reported at teardown when the log never got a sink at all: the overflow marker is written by
+   * `attachSink`, so a log that never binds one would otherwise lose the count with the object.
+   */
+  getPendingDroppedCount(): number {
+    return this.pendingDropped;
   }
 }

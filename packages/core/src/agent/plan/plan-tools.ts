@@ -1,4 +1,4 @@
-import { BUILTIN_TOOL_NAMES } from "../tools/catalog/tool-names.js";
+import { BUILTIN_TOOL_NAMES, isBuiltinToolName } from "../tools/catalog/tool-names.js";
 import { getBuiltinToolPresentation } from "../tools/presentation/builtin.js";
 
 import type { ModeState } from "../mode/mode-state.js";
@@ -81,7 +81,8 @@ export function getPlanModeToolBlockReason(
   modeState: ModeState | null | undefined,
   toolName: string,
   args: unknown,
-  resolve = getBuiltinToolPresentation
+  resolve = getBuiltinToolPresentation,
+  isBuiltinTool: (name: string) => boolean = isBuiltinToolName
 ): string | null {
   const availability = modeState?.toolAvailability();
   if (!availability) return null;
@@ -98,7 +99,7 @@ export function getPlanModeToolBlockReason(
     return `Plan mode: "${toolName}" is blocked while planning. Use /mode execute after the plan is ready.`;
   }
 
-  if (toolName === BUILTIN_TOOL_NAMES.runCommand) {
+  if (isBuiltinTool(toolName) && toolName === BUILTIN_TOOL_NAMES.runCommand) {
     // run_command itself is NOT blocked here — it goes through the unified
     // needsApproval + command-safety approval rules (read-only auto-approve,
     // write/external paths ask the user y/n). Only background jobs are still

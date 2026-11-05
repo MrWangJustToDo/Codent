@@ -13,8 +13,7 @@ import {
   formatContextSectionUserContent,
   isContextUIMessage,
 } from "../../agent/turn-context/turn-context-message.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { TurnContextSection } from "../../agent/turn-context/turn-context-message.js";

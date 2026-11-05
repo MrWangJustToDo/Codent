@@ -7,9 +7,6 @@ import { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-t
 // Agent Config
 // ============================================================================
 
-/** Agent-loop iteration limits (defined in runtime-types, re-exported for manager-side consumers). */
-export { DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_ITERATIONS } from "../runtime-types/agent-limits.js";
-
 export const AgentConfigSchema = z.object({
   // The schema is where a config key becomes REAL: `ManagedAgent` re-parses every config through
   // it, and a Zod object strips keys it does not declare. `ManagedAgentConfig`'s extras survive

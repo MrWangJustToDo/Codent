@@ -6,8 +6,7 @@ import {
   shouldApplyOpenAIPromptCacheKey,
   sortToolsByName,
 } from "../../models/cache/prompt-cache.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { ModelStyle } from "../../models/types.js";

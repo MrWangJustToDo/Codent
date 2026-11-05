@@ -7,6 +7,7 @@ import { createAgentEventBus } from "../agent-event-bus";
 import { compareDispatchRank, resolveExtensionOrder } from "../dispatch-order.js";
 
 import { BusExtensionEventBus } from "./bus-extension-event-bus.js";
+import { EXTENSION_CALLBACK_TIMEOUT_MS, withCallbackTimeout } from "./callback-timeout.js";
 import { createExtensionContext, type ContextFactoryHost } from "./context-factory.js";
 import { ExtensionLlmError } from "./extension-llm-error.js";
 import { createExtensionUiBridge } from "./extension-ui-bridge.js";
@@ -67,33 +68,6 @@ const EXTENSION_ID_RE = /^[A-Za-z][A-Za-z0-9._/-]*$/;
 
 /** Result of one activation transaction — see {@link ExtensionRunner.activateInstance}. */
 type ActivationOutcome = { kind: "active" } | { kind: "revoked" } | { kind: "failed"; error: Error };
-
-/**
- * Upper bound on one extension lifecycle callback (`activate` / `deactivate` / flush).
- *
- * Extensions are third-party code and the contract bounds none of these, while the runner awaits
- * them on the session's critical path: bootstrap activates serially, so one `activate` that never
- * settles kept the agent (and every later extension) from ever existing, and a hung `deactivate`
- * left `pendingToggles` locked so the extension could never be disabled again. Timeout is not
- * cancellation — there is no signal in the contract — it only stops the runner from waiting
- * forever; the failure is reported like any other callback error.
- */
-const EXTENSION_CALLBACK_TIMEOUT_MS = 60_000;
-
-/** Settle `promise`, or reject with a labelled timeout. A late rejection is consumed by the race. */
-function withCallbackTimeout<T>(
-  promise: Promise<T>,
-  label: string,
-  timeoutMs: number = EXTENSION_CALLBACK_TIMEOUT_MS
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} did not settle within ${timeoutMs}ms`)), timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-  });
-}
 
 /** Reserved namespace for extension-authored turn-context kinds (see {@link ExtensionRunner.sectionKind}). */
 
@@ -315,6 +289,7 @@ export class ExtensionRunner {
       reportFailure: (extensionId, phase, error) =>
         this.emitExtensionEvent("agent:extension-error", { extensionId, phase, error }),
       log: (level, extensionId, message) => this.writeExtensionLog(level, extensionId, message),
+      callbackTimeoutMs: this.callbackTimeoutMs,
     });
 
     this.contextHost = {
@@ -567,15 +542,20 @@ export class ExtensionRunner {
   async emitSessionStart(cwd: string, agentId: string): Promise<void> {
     // Awaited, like `session:shutdown`: an async handler that warms an index or reads the transcript
     // was still in flight when the first model call started. Errors stay contained (bootstrap must
-    // not fail because a hook threw) but the handler itself is awaited.
+    // not fail because a hook threw) but the handler itself is awaited — bounded, so a handler that
+    // never settles cannot hang agent creation.
     const sessionId = this.options.getRuntime?.()?.sessionId() ?? null;
-    await this.eventBus
-      .emit({
-        type: "session:start",
-        payload: { cwd, agentId, ...(sessionId ? { sessionId } : {}) },
-        defaultReturn: undefined,
-      })
-      .catch(() => {});
+    await withCallbackTimeout(
+      this.eventBus
+        .emit({
+          type: "session:start",
+          payload: { cwd, agentId, ...(sessionId ? { sessionId } : {}) },
+          defaultReturn: undefined,
+        })
+        .catch(() => {}),
+      "session:start",
+      this.callbackTimeoutMs
+    ).catch(() => {});
   }
 
   /**
@@ -699,10 +679,9 @@ export class ExtensionRunner {
     // anyway. No live context either: the lease is what every registration is gated on, and a
     // disabled instance owns none until `applyEnabled` builds a fresh one.
     if (config?.enabled === false) {
-      this.turnContextSections.setDisabledNotice(
-        api.id,
-        `Extension "${api.name ?? api.id}" is disabled — its tools and commands are unavailable.`
-      );
+      // No disabled notice: the notice exists so the model learns its tools VANISHED mid-session
+      // (a runtime disable), and one injected at load time describes an extension this session
+      // never had — it is pure per-turn prompt cost. A later enable writes the section normally.
       return instance;
     }
     await this.activateInstance(instance, ctx);
@@ -754,7 +733,11 @@ export class ExtensionRunner {
       return { kind: "active" };
     } catch (err) {
       const error = toError(err);
-      if (instance.context === context) {
+      // `isContextLive` too: a disable / destroyAll during `activate` revokes the lease and has
+      // already torn this incarnation down. Writing `state: "error"` afterwards contradicted the
+      // user's explicit disable (the panel said "error" with the activation exception) and ran the
+      // teardown a second time. The failure is still reported by the event below.
+      if (instance.context === context && this.isContextLive(context)) {
         // Release anything acquired before the throw (MCP clients, LSP servers) and roll back the
         // artifacts, so a retry starts clean instead of stacking a second copy. Contained: a
         // teardown failure (it reaches host callbacks and the extension's own `deactivate`) must
@@ -1137,7 +1120,8 @@ export class ExtensionRunner {
     const custom = await this.turnContextSections.captureDisabledNotice(
       instance.api.id,
       "context provider",
-      provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined
+      provider?.disabledContent ? () => provider.disabledContent!(ctxForDisable) : undefined,
+      provider?.timeoutMs
     );
     const sectionNotices: Array<[string, string]> = [];
     // `sections` is runtime data from arbitrary JS. A malformed entry (or a throwing getter) used
@@ -1157,7 +1141,8 @@ export class ExtensionRunner {
       const body = await this.turnContextSections.captureDisabledNotice(
         instance.api.id,
         `section "${section.name}"`,
-        section.disabledContent ? () => section.disabledContent!(ctxForDisable) : undefined
+        section.disabledContent ? () => section.disabledContent!(ctxForDisable) : undefined,
+        section.timeoutMs ?? provider?.timeoutMs
       );
       if (body?.trim()) sectionNotices.push([section.name, body.trim()]);
     }

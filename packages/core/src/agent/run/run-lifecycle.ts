@@ -130,12 +130,18 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   if (reason === "finished" && !promptless) {
     const sideEpoch = host.captureEpoch?.();
     const sideSessionId = host.getSessionData?.()?.id;
+    // Pin the producing run: extraction settles after the turn, so the live-run fallback would
+    // book its spend to a turn that started meanwhile.
+    const sideRunId = host.run.getCurrentRunId?.() ?? undefined;
     host.memory.runExtraction({
       getMessagesForLLM: () => host.getMessagesForLLM(),
       onSideQuery: (event) => {
         if (sideEpoch && !sideEpoch.isCurrent()) return;
         const { type, ...payload } = event;
-        host.emitEvent(type, payload as never, sideSessionId ? { sessionId: sideSessionId } : undefined);
+        host.emitEvent(type, payload as never, {
+          ...(sideSessionId ? { sessionId: sideSessionId } : {}),
+          ...(sideRunId ? { runId: sideRunId } : {}),
+        });
       },
       // Extraction and consolidation are real LLM spend; the tracker is what makes it
       // show up in the session's lifetime totals.

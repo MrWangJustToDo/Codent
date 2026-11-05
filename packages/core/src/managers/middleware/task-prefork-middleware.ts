@@ -41,9 +41,8 @@ import {
 } from "../../agent/subagent/subagent-runs.js";
 import { SUBAGENT_NO_TRUNCATE } from "../../agent/subagent/types.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { generateId } from "../../utils/generate-id.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { PreforkDiscard, PreforkDiscardCause, TaskPreforkCoordinator } from "../../agent/subagent/task-prefork.js";
@@ -132,6 +131,15 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
     discardRegisteredPrefork(managed, cause, reportDiscard);
   };
 
+  /**
+   * Whether the live `task` implementation is the built-in one.
+   *
+   * Unknown (no managed agent, e.g. a validator harness) degrades to `false`: not pre-forking is
+   * always safe (the tool phase still runs `execute`), while pre-forking the wrong implementation
+   * is not.
+   */
+  const isLiveBuiltinTask = (): boolean => deps.getManagedAgent()?.isBuiltinTool(BUILTIN_TOOL_NAMES.task) === true;
+
   return defineMiddleware("tools", {
     name: "task-prefork",
     onChunk: (_ctx, chunk) => {
@@ -158,7 +166,12 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
       }
 
       if (chunk.type === "TOOL_CALL_START") {
-        if (chunk.toolCallName === BUILTIN_TOOL_NAMES.task) {
+        // A shadowing extension may legally take the `task` name (the registry only warns). Only
+        // the LIVE incumbent should start a subagent: spawning one for the replacement burns a
+        // provider stream, emits subagent events, and writes its summary onto a row that never
+        // asked for it. `isBuiltinTool` answers "is the incumbent built-in", which is the only
+        // identity that survives a shadow.
+        if (chunk.toolCallName === BUILTIN_TOOL_NAMES.task && isLiveBuiltinTask()) {
           pendingCalls.set(chunk.toolCallId, { argsText: "" });
         }
         return chunk;
@@ -223,6 +236,10 @@ export function createTaskPreforkMiddleware(deps: TaskPreforkMiddlewareDeps): Ch
       if (info.toolName !== BUILTIN_TOOL_NAMES.task) return;
       const managed = deps.getManagedAgent();
       if (!managed) return;
+      // No identity gate here: this is the cleanup for a pre-fork that was ALREADY registered.
+      // The entry gate (`TOOL_CALL_START`) decides whether to start one; if the built-in was
+      // shadowed mid-run after that, an entry still registered here is the orphan this pass exists
+      // to collect. Re-checking identity would skip it and leave the subagent holding a slot.
       const discard = peekTaskPreforkCoordinator(managed)?.discard(info.toolCallId, "tool-rejected");
       if (discard) reportDiscard(discard);
     },

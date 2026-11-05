@@ -33,6 +33,11 @@ After calling begin_summary, write your complete answer as plain text in the sam
 
     execute: async () => ({ ready: true as const }),
 
+    // Declared at the definition site (the fallback table mirrors it): an undeclared tool is
+    // treated as workspace-editing and withheld from plan-restricted phases, which would hide
+    // the protocol marker rather than a capability.
+    present: { category: "other" },
+
     toModelOutput: ({ output }) =>
       isProjectedModelContent(output)
         ? output

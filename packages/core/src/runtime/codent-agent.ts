@@ -119,9 +119,11 @@ export class CodentAgent {
   /**
    * The runtime's session host.
    *
-   * Direct `host.create()` calls are owned by the caller: `dispose()` only destroys
-   * ids created through {@link createSession}. Use `createSession()` when this runtime
-   * should manage the session lifecycle.
+   * Sessions created through {@link createSession} are recorded as owned and destroyed by
+   * {@link dispose}. A direct `host.create()` bypasses that record: on a runtime that built its own
+   * manager, `dispose()` also disposes the manager (and therefore every root agent on it), while a
+   * remote-session host has no local manager to tear down. Use `createSession()` unless you own the
+   * manager yourself.
    */
   readonly host: AgentSessionHost;
 
@@ -163,17 +165,26 @@ export class CodentAgent {
     // An injected manager already carries the runtime its agents actually use. Reusing it is the
     // only way `getEnv()` / the provider / the model catalog describe the same workspace as the
     // manager; constructing a second runtime here silently split those two planes.
-    if (options.manager?.runtime && options.manager.runtime.env.rootPath !== options.env.rootPath) {
+    const injectedRuntime = options.manager?.runtime;
+    if (injectedRuntime && injectedRuntime.env.rootPath !== options.env.rootPath) {
       throw new Error(
-        `Injected AgentManager is bound to ${options.manager.runtime.env.rootPath}, not ${options.env.rootPath}.`
+        `Injected AgentManager is bound to ${injectedRuntime.env.rootPath}, not ${options.env.rootPath}.`
       );
     }
-    const runtime = options.manager?.runtime ?? new AgentRuntime(runtimeOptions);
+    const runtime = injectedRuntime ?? new AgentRuntime(runtimeOptions);
+    // An injected manager built with `new AgentManager()` has no runtime and would keep using the
+    // ambient env for every agent it creates. Bind it to the runtime this handle is built on, so
+    // there is one workspace plane. No-op when it was already bound to this runtime; refuses a
+    // second (different) binding and a manager that already created agents.
+    options.manager?.bindRuntime(runtime);
     const manager = options.manager ?? (options.host ? undefined : new AgentManager(runtime));
     const host = options.host ?? createLocalAgentSessionHost({ manager: manager! });
     // A manager we built is ours to tear down; an injected one belongs to the injector, and
     // disposing it here would destroy every root agent another runtime is using.
     const ownsManager = options.ownsManager ?? options.manager === undefined;
+    // Unchanged default for an injected manager: its plane belongs to the injector (a shared
+    // provider must not be destroyed by one handle). Pass `ownsRuntime: true` explicitly when this
+    // handle should release it.
     const ownsRuntime = options.ownsRuntime ?? options.manager === undefined;
     return new CodentAgent(runtime, host, manager, options.models, ownsManager, ownsRuntime);
   }
@@ -246,6 +257,10 @@ export class CodentAgent {
    * {@link CodentAgentOptions.ownsRuntime}, which defaults to "no manager was injected" — an
    * injected runtime belongs to its injector; `ownsEnv` further gates the env). Pass
    * `ownsRuntime: true` when you inject a manager but still want the provider released. Idempotent.
+   *
+   * When this runtime built the manager, disposing it also tears down any session that was created
+   * by calling `host.create()` directly — that host is the runtime's own, and its log sink / extension
+   * runner cannot outlive it. Use an injected manager when the host owns those sessions.
    *
    * Deliberately never calls `host.list()`: a remote host's catalog is the SERVER's live agents,
    * not this client's ownership. Enumerating and destroying it would delete other clients'

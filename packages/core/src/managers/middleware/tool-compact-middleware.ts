@@ -1,7 +1,6 @@
 import { applyToolCompact } from "../../agent/compaction/tool-compact/apply-tool-compact.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { errorMessage } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { ToolCompactCache } from "../../agent/compaction/tool-compact/tool-compact-cache.js";
 import type { ToModelOutputRegistry } from "../../agent/compaction/tool-compact/types.js";

@@ -17,7 +17,15 @@ import type { SessionOwnership } from "../agent/session/session-ownership.js";
 
 export interface LifecycleCoordinatorDeps {
   registry: AgentRegistry;
-  ownership: SessionOwnership;
+  /**
+   * Drop every claim held by an agent (the teardown backstop for a claim a failed release left
+   * behind).
+   *
+   * A live delegating object, not the table itself: the owner may replace its table (a manager
+   * bound to a runtime after construction), and a captured reference would release into the old
+   * one — leaving a claim in the table the agents actually use.
+   */
+  ownership: Pick<SessionOwnership, "releaseAllFor">;
   /** Drop the per-agent event-bus scope. */
   clearAgentScope: (id: string) => void;
   /**
@@ -47,6 +55,9 @@ export class LifecycleCoordinator {
     managedAgent.getMcpManager()?.forceKill();
     // A debounced memory-index refresh can outlive the agent and write after teardown.
     managedAgent.getMemoryManager?.()?.dispose();
+    // A completed list schedules a 3s auto-clear that notifies listeners; after destroy that
+    // would publish `session:todos` from a removed agent.
+    managedAgent.getTodoManager?.()?.dispose();
 
     // Before the abort: the compaction `finally` and any queued pump unwind asynchronously and must
     // see "destroyed", not "stopped", or they resume a run on an agent that is being removed.

@@ -10,8 +10,7 @@
  */
 
 import { approvalsToResumeMap } from "../../agent/approval/tool-approval-table.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { ToolApprovalRecord } from "../../agent/persistence/types.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";

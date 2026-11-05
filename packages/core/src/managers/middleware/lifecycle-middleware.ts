@@ -6,9 +6,8 @@
  * is owned by {@link AgentChatController.pumpToolPhases} / detached runners — not per-`chat()` finish.
  */
 
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { extractTanStackProvider, extractTanStackUsage } from "../../runtime-types/token-usage.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { ModelPricing } from "../../models/types.js";

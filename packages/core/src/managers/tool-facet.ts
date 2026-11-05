@@ -48,6 +48,15 @@ export class ToolFacet {
   isBuiltinTool(toolName: string): boolean {
     const service = this.host.getToolService();
     service.useTools(this.host.getTools());
+    // Two questions, and this one is the RENDERING contract: "may a built-in-only renderer handle
+    // this row?". A name nothing is registered under must answer `true` — the app's
+    // `isBuiltinTool` documents "true when we cannot tell", and the remote publisher's
+    // `origin !== "extension"` says the same. Answering `false` for a historical row whose tool was
+    // unregistered (an extension disabled, a code-mode tool on a restored session) made the local
+    // and remote renderings disagree.
+    //
+    // Identity checks that must be exact (task pre-fork, plan-mode `run_command`) deliberately do
+    // NOT use this predicate; they ask the registry's `isIncumbent` through the run deps.
     return service.isIncumbent(toolName) || !service.resolve(toolName);
   }
 

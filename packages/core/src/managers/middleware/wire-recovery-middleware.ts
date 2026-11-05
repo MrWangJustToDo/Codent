@@ -56,9 +56,8 @@ import {
   stripMultimodalContentParts,
   stripMultimodalFromChatMessages,
 } from "../../models/adapter/capability-message-utils.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { CONTINUATION_PROMPT } from "../stream-recovery/max-tokens-continue.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { RunCoordinator } from "../../agent/run/run-coordinator.js";
 import type { ToolRunContext } from "../../agent/runner/run-context.js";

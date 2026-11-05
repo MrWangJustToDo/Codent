@@ -12,8 +12,7 @@
 import { resolveTodoReminder } from "../../agent/turn-context/reminder";
 import { injectSyntheticMessages, nextSyntheticNonce } from "../../agent/turn-context/synthetic-injection.js";
 import { TURN_CONTEXT_KINDS, formatContextSectionUserContent } from "../../agent/turn-context/turn-context-message.js";
-
-import { defineMiddleware } from "./phase.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 
 import type { TodoManager } from "../../agent/todo";
 import type { AgentUIChannel } from "../../agent/ui/ui-channel.js";

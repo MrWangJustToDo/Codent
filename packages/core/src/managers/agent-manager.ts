@@ -1,5 +1,5 @@
 import { createLogExtension, type LogExtension } from "../agent/log/extension.js";
-import { SessionOwnership } from "../agent/session/session-ownership.js";
+import { SessionOwnership, sharedSessionOwnership } from "../agent/session/session-ownership.js";
 import { getEnv, type ResolvedCoreEnv } from "../env";
 import { AGENT_DATA_DIR } from "../utils/workspace-paths.js";
 
@@ -85,13 +85,19 @@ export class AgentManager {
   private readonly agents = new AgentRegistry();
 
   /**
-   * Runtime this manager belongs to (env + model provider). `undefined` = the ambient
-   * runtime (legacy single-instance hosts); agents created here inherit it.
+   * Runtime this manager belongs to (env + model provider). `undefined` = the ambient runtime
+   * (legacy single-instance hosts) until {@link bindRuntime} is called; agents created here inherit
+   * it.
    */
-  readonly runtime?: AgentRuntime;
+  private boundRuntime?: AgentRuntime;
 
-  /** Process-local disk-session claims (one live root agent per persisted id). */
-  private readonly sessionOwnership = new SessionOwnership();
+  /** Read-only view of the bound runtime (see {@link bindRuntime}). */
+  get runtime(): AgentRuntime | undefined {
+    return this.boundRuntime;
+  }
+
+  /** Process-local disk-session claims (one live root agent per persisted id, per workspace). */
+  private sessionOwnership: SessionOwnership;
 
   /** Unified root bus + cached per-agent scopes (interceptor error isolation included). */
   private readonly busScope: AgentEventBusScope;
@@ -131,11 +137,23 @@ export class AgentManager {
    * `sessionId` / `runId` — the fields a remote or aggregated reader filters by.
    */
   private readonly retainedMeta = new Map<string, { runId?: string; sessionId?: string }>();
+  /**
+   * Builds that have started but not returned.
+   *
+   * `createManagedAgent` reads `this.runtime` when it starts and registers only after an await, so
+   * binding a runtime in that window would leave the in-flight agent on the ambient env while the
+   * manager reports the bound one. `bindRuntime` refuses while this is non-zero.
+   */
+  private buildsInFlight = 0;
   /** Guards {@link dispose} against re-running and rejects construction after teardown. */
   private disposed = false;
 
   constructor(runtime?: AgentRuntime) {
-    this.runtime = runtime;
+    this.boundRuntime = runtime;
+    // A runtime names a workspace, so two managers over the same workspace share one claim table:
+    // otherwise both can hold the same session id and interleave their transcript writes. No runtime
+    // (legacy ambient manager) keeps a private table — there is no workspace to scope it to.
+    this.sessionOwnership = runtime ? sharedSessionOwnership(runtime.env) : new SessionOwnership();
     this.busScope = new AgentEventBusScope({
       // Attribute a contained observer/interceptor failure to the agent whose scope registered it.
       // Retained construction/teardown logs keep a scope resolvable before registration and after
@@ -187,7 +205,9 @@ export class AgentManager {
     this.logExtension.start();
     this.lifecycle = new LifecycleCoordinator({
       registry: this.agents,
-      ownership: this.sessionOwnership,
+      // Delegating, not a captured table: `bindRuntime` can replace `sessionOwnership`, and the
+      // teardown backstop must release into the table agents are currently claiming from.
+      ownership: { releaseAllFor: (id) => this.sessionOwnership.releaseAllFor(id) },
       clearAgentScope: (id) => this.busScope.delete(id),
       retainLog: (id, log, meta) => {
         this.teardownLogs.set(id, log);
@@ -198,6 +218,37 @@ export class AgentManager {
         this.retainedMeta.delete(id);
       },
     });
+  }
+
+  /**
+   * Bind a runtime to a manager that was constructed without one.
+   *
+   * A host may inject `new AgentManager()` into `CodentAgent.create({ manager, env, provider })`.
+   * Without this binding the manager keeps using the ambient env for every agent it creates while
+   * the handle reports its own env/provider/catalog — two planes for one runtime (and in a
+   * multi-runtime process, the wrong workspace). `CodentAgent.create` calls this with the runtime it
+   * just built, so the manager and the handle describe the same workspace.
+   *
+   * Refuses to rebind, to run after agents exist, or while an agent build is in flight — each would
+   * move live agents between runtime planes mid-flight.
+   * @internal
+   */
+  bindRuntime(runtime: AgentRuntime): void {
+    if (this.boundRuntime === runtime) return;
+    if (this.disposed) throw new Error("Cannot bind a runtime to a disposed AgentManager.");
+    if (this.boundRuntime) {
+      throw new Error(
+        `AgentManager is already bound to ${this.boundRuntime.env.rootPath}, not ${runtime.env.rootPath}.`
+      );
+    }
+    if (this.agents.all().length > 0) {
+      throw new Error("Cannot bind a runtime to an AgentManager that already created agents.");
+    }
+    if (this.buildsInFlight > 0) {
+      throw new Error("Cannot bind a runtime while an agent build is in flight; retry after it settles.");
+    }
+    this.boundRuntime = runtime;
+    this.sessionOwnership = sharedSessionOwnership(runtime.env);
   }
 
   /** The root log extension (sink provider + event→entry consumer). */
@@ -317,6 +368,7 @@ export class AgentManager {
     // duplicate id it is true for the OLD agent, so the catch used to destroy a healthy agent and
     // leak the half-built one (no dispose, no log/scope release).
     let registered = false;
+    this.buildsInFlight += 1;
     try {
       const built = await buildManagedAgent({
         config,
@@ -395,6 +447,8 @@ export class AgentManager {
         }
       }
       throw error;
+    } finally {
+      this.buildsInFlight -= 1;
     }
   }
 
@@ -561,9 +615,11 @@ export class AgentManager {
    * therefore a change to *that* release, plus moving the conversation state off the agent
    * (`uiChannel` / `sessionData` / todos / plan / approvals / queues) — not a change to this table.
    *
-   * Scope: this is per-`AgentManager`, so it guards one process. Two runtimes over the same
-   * workspace do not see each other's claims (the store's `reservedAt` only covers reusing an empty
-   * session).
+   * Scope: a manager bound to a runtime shares the table with every other manager over the same
+   * workspace (a local env by root path, a remote env per client connection — see
+   * `sharedSessionOwnership`). Two runtimes over the same workspace must not both write one
+   * session's transcript, so they see each other's claims. Only a legacy manager constructed
+   * without a runtime keeps a private table.
    */
   acquireSessionOwnership(sessionId: string, agentId: string): boolean {
     return this.sessionOwnership.acquire(sessionId, agentId);

@@ -1,9 +1,8 @@
 import { emitToolBeforeHook, ToolBeforeHookLedger } from "../../agent/extension/tool-before-hook.js";
 import { BUILTIN_TOOL_NAMES } from "../../agent/tools/catalog/tool-names.js";
 import { isAbortError, isCancelledOutputMarker } from "../../runtime-types/abort.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { errorMessage } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { ExtensionRunner } from "../../agent/extension/runner.js";
 import type { ToolAfterEvent } from "../../agent/extension/types.js";
@@ -40,6 +39,14 @@ export interface ExtensionsMiddlewareDeps {
   isApprovalGated?: (toolName: string) => boolean;
   /** Report a refused rewrite, so a policy rejection is not silent. */
   onArgRewriteRefused?: (toolName: string) => void;
+  /**
+   * Whether the LIVE tool under this name is the seeded built-in.
+   *
+   * Name equality is not identity: an extension may shadow `task`/`run_command`, and the rules
+   * below (deferred start, argument-rewrite refusal) belong to the built-in implementation only.
+   * Absent in standalone harnesses; those fall back to the static name check.
+   */
+  isBuiltinTool?: (toolName: string) => boolean;
 }
 
 /**
@@ -51,8 +58,14 @@ export interface ExtensionsMiddlewareDeps {
  * rewrite would be silently ignored by the run while the model believes it took effect.
  */
 function canRewriteArgs(deps: ExtensionsMiddlewareDeps, toolName: string): boolean {
-  if (toolName === BUILTIN_TOOL_NAMES.task) return false;
+  if (isBuiltinTask(deps, toolName)) return false;
   return deps.isApprovalGated?.(toolName) !== true;
+}
+
+/** The built-in `task` — not an extension tool that happens to carry the same name. */
+function isBuiltinTask(deps: ExtensionsMiddlewareDeps, toolName: string): boolean {
+  if (toolName !== BUILTIN_TOOL_NAMES.task) return false;
+  return deps.isBuiltinTool?.(toolName) ?? true;
 }
 
 export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): ChatMiddleware<ToolRunContext> {
@@ -71,7 +84,7 @@ export function createExtensionsMiddleware(deps: ExtensionsMiddlewareDeps): Chat
       // A pre-forked `task` emits its own start when it is admitted (see task-prefork);
       // emitting here too would start the row's clock while a queued run still waits.
       const deferStart =
-        hookCtx.toolName === BUILTIN_TOOL_NAMES.task && deps.isTaskToolStartDeferred?.(hookCtx.toolCallId) === true;
+        isBuiltinTask(deps, hookCtx.toolName) && deps.isTaskToolStartDeferred?.(hookCtx.toolCallId) === true;
       if (!deferStart) {
         deps.emitEvent?.("agent:tool-start", {
           tool_name: hookCtx.toolName,

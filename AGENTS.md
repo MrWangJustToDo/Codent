@@ -1362,7 +1362,7 @@ packages/
 │   │   ├── commands/                  # Core-side builtin command catalog (`BUILTIN_COMMAND_CATALOG`)
 │   │   ├── compaction/                # Append SUMMARY + summary-first wire projection
 │   │   ├── extension/                 # Extension API (loader, runner, EventBus interception, dispatch order)
-│   │   ├── jobs/                      # Background command jobs extension (durable per-job logs)
+│   │   ├── jobs/                      # Cross-kind background work: the `BackgroundWorkSource` contract + the footer extension (command registry/durable logs live in `tools/builtin/shell/jobs/`)
 │   │   ├── lsp/                       # Built-in LSP extension, tools, commands and file-sync
 │   │   ├── tree-sitter/               # Runtime-agnostic tree-sitter parsers, search/index/rewrite engines
 │   │   ├── mcp/                       # MCP integration

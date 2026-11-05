@@ -9,9 +9,8 @@
 
 import { getBuiltinToolPresentation } from "../../agent/tools/presentation/builtin.js";
 import { computeToolDisplay } from "../../agent/tools/presentation/compute-display.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { errorMessage } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { ToolRunContext } from "../../agent/runner/run-context.js";
 import type { AgentUIChannel } from "../../runtime-types";

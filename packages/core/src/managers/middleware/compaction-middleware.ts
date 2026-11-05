@@ -10,9 +10,8 @@ import {
   resolveKeepPolicy,
 } from "../../agent/compaction";
 import { projectWireFromChannel } from "../../agent/compaction/wire-projection.js";
+import { defineMiddleware } from "../../runtime-types/middleware-phase.js";
 import { toError } from "../../utils/errors.js";
-
-import { defineMiddleware } from "./phase.js";
 
 import type { WireProjectionCache } from "../../agent/compaction";
 import type { CompactionController } from "../../agent/compaction/compaction-controller.js";

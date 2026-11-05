@@ -3,7 +3,7 @@ import type { DispatchRank } from "../dispatch-order.js";
 import type { ExtensionObserverSurface } from "./event-visibility.js";
 import type { ExtensionZod } from "./extension-zod.js";
 import type { ExtensionUI } from "./ui-types.js";
-import type { CoreEnv } from "../../env";
+import type { CoreEnv, ResolvedCoreEnv } from "../../env";
 import type { ModelCapability } from "../../models/types.js";
 import type { MultimodalPartType } from "../../utils/multimodal-part-types.js";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
@@ -53,6 +53,16 @@ export interface ToolExecutionOptions {
    * that register tools without a run context fall back to the registering agent's id.
    */
   agentId?: string;
+  /**
+   * The owning runtime's workspace env (with defaults resolved).
+   *
+   * Present whenever the call came from a run (`defineServerTool` resolves it from the
+   * `ToolRunContext`). A tool that executes ANOTHER tool — code-mode's `external_*` bindings are
+   * the shipped case — must forward this to that call. Without it the nested tool falls back to
+   * the process-ambient env, which is the wrong workspace in a multi-runtime process and throws
+   * outright when no ambient env is registered.
+   */
+  coreEnv?: ResolvedCoreEnv;
 }
 
 export type ToolCallResult = Record<string, unknown>;
@@ -378,18 +388,28 @@ export type TurnContextProvider = (ctx?: ExtensionContext) => string | undefined
  * Per-extension context injection (the single unified injection API).
  *
  * Register once via {@link ExtensionContext.registerContextProvider}; the runner
- * emits this extension as its own `<ctx kind=<extension id>>` section each user
- * turn. `content` is injected while enabled; `disabledContent` replaces it when
- * the extension is disabled at runtime — both share the same tag, so the model
- * sees enable/disable symmetrically.
+ * emits this extension as its own `<ctx kind="ext:<extension id>">` section each
+ * user turn (a named section adds `:<name>`). `content` is injected while enabled;
+ * `disabledContent` replaces it when the extension is disabled at runtime — both
+ * share the same tag, so the model sees enable/disable symmetrically.
  */
 export interface ExtensionContextProvider {
   /** Injected each user turn while the extension is enabled. */
   content?: TurnContextProvider;
-  /** Injected (under the same `<ctx kind=<id>>` tag) when the extension is disabled. */
+  /** Injected (under the same `<ctx kind="ext:<id>">` tag) when the extension is disabled. */
   disabledContent?: TurnContextProvider;
   /**
-   * Additional named sections, each rendered under its own `<ctx kind="<extensionId>:<name>">` tag
+   * Upper bound for this provider's callbacks, in milliseconds.
+   *
+   * Defaults to the runner's extension-callback bound (60s). `0` removes the wall-clock bound for
+   * this provider — use it only for a producer that is bounded by its own work (a model completion
+   * honours the run signal, so Esc still cancels it). Without this, a legitimate slow section
+   * (memory selection runs a side-query completion) would be cut and reported as an extension
+   * failure on every turn.
+   */
+  timeoutMs?: number;
+  /**
+   * Additional named sections, each rendered under its own `<ctx kind="ext:<extensionId>:<name>">` tag
    * and admitted by its own content hash. A change in one section never re-injects another.
    */
   sections?: readonly ExtensionContextSectionProvider[];
@@ -403,16 +423,18 @@ export interface ExtensionContextSectionProvider {
   content?: TurnContextProvider;
   /** Injected under the same kind when the extension is disabled. */
   disabledContent?: TurnContextProvider;
+  /** Per-section override of {@link ExtensionContextProvider.timeoutMs} (`0` = no bound). */
+  timeoutMs?: number;
 }
 
 /**
  * One extension's contribution to per-turn context. Each enabled extension is
- * emitted as its own `<ctx kind=<extension id>>` section so enable/disable is
+ * emitted as its own `<ctx kind="ext:<extension id>">` section so enable/disable is
  * expressed symmetrically under the same tag (and only that section re-injects
  * when its content changes — prompt-cache friendly).
  */
 export interface ExtensionTurnContextSection {
-  /** Extension id — used directly as the `<ctx kind=...>` tag. */
+  /** Extension id — used as the `<ctx kind="ext:<id>">` tag's id part. */
   id: string;
   /** Rendered content. For an enabled extension this is its injected content
    *  (e.g. `<memory_index>`); for a disabled extension it is the disabled notice. */
@@ -610,7 +632,7 @@ export interface ExtensionContext {
   /**
    * Register this extension's per-turn context injection (enabled content + disabled
    * notice) in one call. Each user turn the runner emits this extension as its own
-   * `<ctx kind=<extension id>>` section. Returns an unsubscribe function.
+   * `<ctx kind="ext:<extension id>">` section. Returns an unsubscribe function.
    */
   registerContextProvider(provider: ExtensionContextProvider): () => void;
   /**

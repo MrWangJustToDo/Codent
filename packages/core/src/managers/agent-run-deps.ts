@@ -1,4 +1,4 @@
-import { getEnv, resolveCoreEnv, type ResolvedCoreEnv } from "../env";
+import { getEnv, type ResolvedCoreEnv } from "../env";
 
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
@@ -77,6 +77,13 @@ export interface AgentRunDeps {
    * rewrite after the approval was decided on the original input.
    */
   isToolNeedsApproval: (toolName: string) => boolean;
+  /**
+   * Whether the LIVE implementation under this name is the seeded built-in (read live, same reason:
+   * an extension may shadow a built-in while the cached runner stays alive). Read by the task
+   * prefork, extension and plan-mode middlewares — name equality alone would treat a shadowing
+   * extension tool as the built-in.
+   */
+  isBuiltinTool: (toolName: string) => boolean;
   getTodoManager: () => TodoManager | null;
   getExtensionRunner: () => ExtensionRunner | null;
   /** The agent's background-job registry (drained by the notification middleware). */
@@ -159,6 +166,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     getPolicyFacts: () => managed.getPolicyFacts(),
     resolveToolPresentation: (name) => managed.getToolPresentation(name),
     isToolNeedsApproval: (toolName) => managed.isToolNeedsApproval(toolName),
+    isBuiltinTool: (toolName) => managed.isBuiltinTool(toolName),
     getTodoManager: () => managed.getTodoManager(),
     getExtensionRunner: () => managed.getExtensionRunner(),
     getCommandService: () => managed.getCommandService(),
@@ -174,7 +182,7 @@ export function buildManagedAgentDeps(managed: ManagedAgent, manager: AgentManag
     streamHub: managed.getStreamHub(),
     config: managed.config,
     parentId: managed.parentId,
-    coreEnv: resolveCoreEnv(managed.runtime?.env ?? getEnv()),
+    coreEnv: managed.runtime?.env ?? getEnv(),
     shouldTriggerAutoCompact: (messages) => managed.shouldTriggerAutoCompact(messages),
     shouldPersistUIMessage: (messages, reason) => managed.maybeSaveSessionUIMessages(messages, reason),
     setIterationProgress: (state) => managed.setIterationProgress(state),

@@ -93,10 +93,16 @@ export class AgentLogBinding {
     //
     // Guarded on `everBound` rather than `hasSink()` alone: a second, idempotent destroy AFTER
     // `detach()` would otherwise report every entry logged in between as "dropped".
-    if (!this.everBound && !log.hasSink() && log.getPendingEntryCount() > 0) {
+    if (!this.everBound && !log.hasSink() && (log.getPendingEntryCount() > 0 || log.getPendingDroppedCount() > 0)) {
       const count = log.getPendingEntryCount();
+      const dropped = log.getPendingDroppedCount();
+      // Name both losses: entries still buffered and entries the bounded buffer already had to
+      // discard. Only the first number was reported, so a bootstrap that overflowed looked like a
+      // quiet one that merely had "nothing to say".
       console.warn(
-        `[agent] dropping ${count} buffered log entr${count === 1 ? "y" : "ies"}: no sink was bound before teardown`
+        `[agent] dropping ${count} buffered log entr${count === 1 ? "y" : "ies"}` +
+          `${dropped > 0 ? ` and ${dropped} already-overflowed entr${dropped === 1 ? "y" : "ies"}` : ""}` +
+          ": no sink was bound before teardown"
       );
     }
     log.flushSync();

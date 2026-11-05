@@ -353,6 +353,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const fakeParent = (messages, { noChannel = false } = {}) => ({
     id: "parent-1",
     config: {},
+    // The middleware asks the LIVE implementation's identity before pre-forking a `task`.
+    isBuiltinTool: () => true,
     getChatController: noChannel ? () => undefined : () => ({ getMessages: () => messages }),
     getUI: noChannel ? () => undefined : () => ({ getMessages: () => messages }),
     addPendingAbortController: () => {},
@@ -828,6 +830,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   const managed = {
     id: "parent-dup",
+    isBuiltinTool: () => true,
     addPendingAbortController: () => {},
     removePendingAbortController: () => {},
   };

@@ -291,14 +291,9 @@ export class AcpProjector {
     if (opts.primeOnly) this.primeFrom(this.session.getSnapshot(), false);
     const channels: AgentSessionChannel[] = opts.channels ?? [
       ...DEFAULT_AGENT_SESSION_CHANNELS,
-      // The default set deliberately omits these three: a host that does not project extensions
-      // should not pay for them. This host does (commands + notices), so it opts in explicitly.
-      //
-      // `mode` is the same kind of opt-in, and its absence here made the `case "mode"` branch below
-      // unreachable: `session:mode` is emitted on its own channel (not on `state`), so a plan ending
-      // via `complete_plan` never re-advertised the `category: "mode"` config option.
-      "mode",
-      "extensions",
+      // `mode` and `extensions` are in the default set now (a default subscriber must see the mode
+      // label and the extension list). This host additionally projects `extension-ui`, which is the
+      // one channel genuinely opt-in: a host without an extension UI surface should not pay for it.
       "extension-ui",
     ];
     this.unsubscribe = this.session.subscribe((event) => this.onEvent(event), { channels });

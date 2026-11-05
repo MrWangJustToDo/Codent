@@ -112,8 +112,21 @@ export function dispatchAgentTelemetry<T extends TelemetryEventType>(
   // Never fall back to the agent id: `sessionId` and `agentId` are different identifier spaces, and
   // stamping the agent id made a subagent's events claim a session that does not exist. Unknown is
   // reported as absent.
-  const sessionId = options?.sessionId ?? emitter.getEventSessionId?.() ?? emitter.getSessionData?.()?.id;
-  const runId = options?.runId ?? emitter.getCurrentRunId?.() ?? undefined;
+  //
+  // `sessionId` and `runId` are ONE identity. An asynchronous producer pins the session it belongs
+  // to; the run that happens to be live when the frame is finally dispatched may belong to a
+  // DIFFERENT session (a `/resume` committed in between), and stamping it made a departure's
+  // failure line land under the target's run. So an explicit session id that is not the emitter's
+  // current one suppresses the live-run fallback; when it matches (the common in-session save
+  // error), the current run is still the right attribution. A caller that knows the run passes both.
+  const explicitSessionId = options?.sessionId;
+  const currentSessionId = emitter.getEventSessionId?.() ?? emitter.getSessionData?.()?.id;
+  const sessionId = explicitSessionId ?? currentSessionId;
+  const runId =
+    options?.runId ??
+    (explicitSessionId !== undefined && explicitSessionId !== currentSessionId
+      ? undefined
+      : (emitter.getCurrentRunId?.() ?? undefined));
   const body = (payload ?? {}) as AgentEventPayloadMap[T];
 
   emitter.dispatchEvent({

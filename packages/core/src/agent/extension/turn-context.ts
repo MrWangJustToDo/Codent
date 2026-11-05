@@ -19,6 +19,8 @@
 import { errorMessage } from "../../utils/errors.js";
 import { sortByDispatchRank } from "../dispatch-order.js";
 
+import { EXTENSION_CALLBACK_TIMEOUT_MS, withCallbackTimeout } from "./callback-timeout.js";
+
 import type { DispatchRank } from "../dispatch-order.js";
 import type {
   BeforeAgentStartEvent,
@@ -43,6 +45,8 @@ export interface ExtensionTurnContextDeps {
   /** Producer failures converge on `agent:extension-error` (never a bare console write). */
   reportFailure: (extensionId: string, phase: "turn-context" | "disable-notice", error: string) => void;
   log: (level: "warn", extensionId: string, message: string) => void;
+  /** Bound for one callback; defaults to {@link EXTENSION_CALLBACK_TIMEOUT_MS}. */
+  callbackTimeoutMs?: number;
 }
 
 export class ExtensionTurnContext {
@@ -82,7 +86,8 @@ export class ExtensionTurnContext {
   // ==========================================================================
 
   /**
-   * Emit `before_agent_start` (interceptors may append context), then run the registered providers.
+   * Emit `before_agent_start` (interceptors observe the prompt; they cannot append context), then run
+   * the registered providers.
    *
    * Each enabled extension with content becomes its own section (kind = id), ordered by declared
    * dispatch order so the sequence is declarable rather than load-determined. A throwing producer is
@@ -90,11 +95,22 @@ export class ExtensionTurnContext {
    */
   async collect(prompt: string, agentId: string): Promise<ExtensionPromptAppends> {
     const sessionId = this.deps.getSessionId();
-    await this.deps.emitBeforeAgentStart({
-      type: "before_agent_start",
-      payload: { prompt, agentId, ...(sessionId ? { sessionId } : {}) },
-      defaultReturn: undefined,
-    });
+    // A hung interceptor must not hang the turn: the emission is awaited (a handler that warms an
+    // index has to finish before the first model call), so it needs the same bound every other
+    // extension callback has. The failure is logged, not attributed to one extension — the timeout
+    // cannot say which handler never settled.
+    try {
+      await this.bound(
+        this.deps.emitBeforeAgentStart({
+          type: "before_agent_start",
+          payload: { prompt, agentId, ...(sessionId ? { sessionId } : {}) },
+          defaultReturn: undefined,
+        }),
+        "before_agent_start"
+      );
+    } catch (err) {
+      this.deps.log("warn", "before_agent_start", errorMessage(err));
+    }
 
     const turnContextSections: ExtensionTurnContextSection[] = [];
     const ordered = sortByDispatchRank(Array.from(this.providers, ([id, entry]) => ({ id, ...entry })));
@@ -105,7 +121,11 @@ export class ExtensionTurnContext {
       const ctx = this.deps.getContext(id);
       if (!ctx) continue;
       try {
-        const value = await provider.content?.(ctx);
+        const value = await this.bound(
+          Promise.resolve(provider.content?.(ctx)),
+          `extension "${id}" context`,
+          provider.timeoutMs
+        );
         if (value?.trim()) turnContextSections.push({ id: this.sectionKind(id), content: value.trim() });
       } catch (err) {
         this.deps.reportFailure(id, "turn-context", errorMessage(err));
@@ -124,7 +144,11 @@ export class ExtensionTurnContext {
       }
       for (const [name, section] of named) {
         try {
-          const body = await section.content?.(ctx);
+          const body = await this.bound(
+            Promise.resolve(section.content?.(ctx)),
+            `extension "${id}" section "${name}"`,
+            section.timeoutMs ?? provider.timeoutMs
+          );
           if (body?.trim()) turnContextSections.push({ id: this.sectionKind(id, name), content: body.trim() });
         } catch (err) {
           this.deps.reportFailure(id, "turn-context", `section "${name}": ${errorMessage(err)}`);
@@ -159,11 +183,18 @@ export class ExtensionTurnContext {
   async captureDisabledNotice(
     extensionId: string,
     source: string,
-    produce: (() => Promise<string | undefined> | string | undefined) | undefined
+    produce: (() => Promise<string | undefined> | string | undefined) | undefined,
+    timeoutMs?: number
   ): Promise<string | undefined> {
     if (!produce) return undefined;
     try {
-      return (await produce()) ?? undefined;
+      // The disable path awaits this before unregistering, so a producer that never settles would
+      // leave `pendingToggles` locked and the extension impossible to disable — the one state a
+      // broken extension must never be able to create.
+      return (
+        (await this.bound(Promise.resolve(produce()), `extension "${extensionId}" disabled notice`, timeoutMs)) ??
+        undefined
+      );
     } catch (err) {
       // One report, not two: `reportFailure` already emits `agent:extension-error`, which the log
       // bridge writes as a row. Logging here as well produced a duplicate line for one failure.
@@ -243,5 +274,21 @@ export class ExtensionTurnContext {
 
   private sectionKind(extensionId: string, name?: string): string {
     return name ? `${EXTENSION_KIND_PREFIX}${extensionId}:${name}` : `${EXTENSION_KIND_PREFIX}${extensionId}`;
+  }
+
+  private callbackTimeoutMs(): number {
+    return this.deps.callbackTimeoutMs ?? EXTENSION_CALLBACK_TIMEOUT_MS;
+  }
+
+  /**
+   * Apply a provider's declared bound, or the runner default.
+   *
+   * `0` means "no wall-clock bound" and is deliberately explicit: a producer that runs a model
+   * completion is already bounded by the run signal (`ctx.signal`), and a fixed wall clock turned a
+   * legitimately slow completion into a per-turn `agent:extension-error`.
+   */
+  private bound<T>(promise: Promise<T>, label: string, timeoutMs?: number): Promise<T> {
+    if (timeoutMs === 0) return promise;
+    return withCallbackTimeout(promise, label, timeoutMs ?? this.callbackTimeoutMs());
   }
 }

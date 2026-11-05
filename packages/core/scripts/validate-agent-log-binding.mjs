@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 
 import { AgentLogBinding } from "../dist/dev.mjs";
 
-function makeLog({ hasSink = true, pending = 0 } = {}) {
+function makeLog({ hasSink = true, pending = 0, pendingDropped = 0 } = {}) {
   const calls = [];
   let dir = "";
   return {
@@ -30,6 +30,7 @@ function makeLog({ hasSink = true, pending = 0 } = {}) {
     // The destroy path reads these to report a bootstrap that never bound a sink.
     hasSink: () => hasSink,
     getPendingEntryCount: () => pending,
+    getPendingDroppedCount: () => pendingDropped,
   };
 }
 
@@ -179,6 +180,28 @@ function makeBinding({ log, parentId, sessionId, attachViaManager }) {
   }
   assert.equal(warnings.length, 1, "the loss is reported once, not silently dropped");
   assert.match(warnings[0], /2 buffered log entries/, "…with the count that was lost");
+}
+
+// …and an overflowed buffer is reported too: a log that never binds a sink has no `attachSink`
+// drain to write the overflow marker, so the destroy warning is its only channel.
+{
+  const log = makeLog({ hasSink: false, pending: 2, pendingDropped: 5 });
+  const binding = makeBinding({
+    log,
+    parentId: () => undefined,
+    sessionId: () => "ses_boot_overflow",
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    await binding.flushOnDestroy();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1, "the loss is reported once");
+  assert.match(warnings[0], /2 buffered log entries/, "…buffered count");
+  assert.match(warnings[0], /5 already-overflowed entries/, "…and the entries the cap already dropped");
 }
 
 // A bound-then-detached binding must not report entries logged in between as dropped.

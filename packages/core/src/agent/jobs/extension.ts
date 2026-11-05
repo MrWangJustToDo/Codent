@@ -214,6 +214,10 @@ export function createJobsExtension(): ExtensionAPI {
       // Retained, so a session that already has running jobs paints on the first frame instead
       // of waiting for the next transition.
       ctx.events.observe("session:jobs", (event) => {
+        // Child agents emit their own `session:jobs` (a subagent can run background work), and
+        // events up-flow to the parent scope — without this filter the root footer renders a
+        // child's command/task rows. Same rule the memory extension applies to `message:start`.
+        if (event.agentId !== ctx.agentId) return;
         jobs = event.payload.jobs;
         syncTick();
         paint();

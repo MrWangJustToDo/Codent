@@ -99,9 +99,10 @@ export class SessionPersistence {
     // background persist error appeared twice (and only one of the two carried `event`).
     //
     // A failed write is asynchronous, so a `/resume` or `/new` can commit before it lands. Name the
-    // session the write belonged to explicitly — the envelope's default ("the agent's CURRENT
-    // session") would file the leaving session's failure under the target's log. This is the same
-    // override `session:switch` uses, now available on the shared `EmitAgentTelemetryFn` seam.
+    // session the write belonged to explicitly so the ROW says which conversation lost the write;
+    // the envelope's default would name the target. The row still lands in the sink currently
+    // bound (the target's file) — bindings follow the live session, and re-pointing the sink from a
+    // background save would race the switch. The explicit id is what makes the row attributable.
     this.host.emitEvent(
       "session:save-error",
       { target: "session+uiMessages", error: message },

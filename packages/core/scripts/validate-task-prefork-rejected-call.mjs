@@ -78,7 +78,13 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         if (type === "subagent:prefork-discarded") reported.push(payload);
       },
     });
-  const fakeParent = () => ({ id: "parent-refused", config: {}, addPendingAbortController: () => {} });
+  const fakeParent = () => ({
+    id: "parent-refused",
+    config: {},
+    // The middleware asks the LIVE implementation's identity before discarding a pre-fork.
+    isBuiltinTool: () => true,
+    addPendingAbortController: () => {},
+  });
   const settle = (middleware, toolName, toolCallId) =>
     middleware.onAfterToolCall({}, { toolName, toolCallId, ok: true, duration: 0, result: {} });
 

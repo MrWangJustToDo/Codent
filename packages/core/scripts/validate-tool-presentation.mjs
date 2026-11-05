@@ -27,11 +27,11 @@ const TABLE_FILE = join(SRC, "agent/tools/presentation/builtin.ts");
 
 /**
  * Names assembled at runtime rather than written as a `name:` literal (the lazy-tool
- * discovery surface and the code-mode entry point), so the fallback table **is** their
- * declaration. If one of them ever gets a literal definition site it must be removed
- * from this set — the check below enforces that.
+ * discovery surface, the code-mode entry point, and the subagent's registry-derived marker), so
+ * the fallback table **is** their declaration for this parser. If one of them ever gets a literal
+ * `name:` definition site it must be removed from this set — the check below enforces that.
  */
-const DYNAMIC_TABLE_ONLY = new Set(["discover_tools", "execute_typescript"]);
+const DYNAMIC_TABLE_ONLY = new Set(["discover_tools", "execute_typescript", "begin_summary"]);
 
 /** The plan authoring factory takes its name as a parameter, so both names share one declaration. */
 const FACTORY_NAMES = ["create_plan", "update_plan"];

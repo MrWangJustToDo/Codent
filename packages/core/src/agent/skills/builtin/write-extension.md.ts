@@ -278,7 +278,7 @@ const usage = ctx.events.retained("session:usage");               // on-demand r
 ctx.registerContextProvider({
   content: () => "…injected while enabled…",         // string | undefined
   disabledContent: () => "…notice while disabled…",
-  // Optional named sections: each gets its own <ctx kind="<id>:<name>"> and its own
+  // Optional named sections: each gets its own <ctx kind="ext:<id>:<name>"> and its own
   // content hash, so a changing selection never re-injects a stable index.
   sections: [
     { name: "index", content: () => renderIndex() },
@@ -292,7 +292,7 @@ Section names must be slugs (\`[A-Za-z][A-Za-z0-9._-]*\`) — the name becomes p
 extension is disabled; a throwing producer is skipped and reported without affecting the
 other sections.
 
-The base section is emitted each user turn as \`<ctx kind=<extension id>>\`, so it is
+The base section is emitted each user turn as \`<ctx kind="ext:<extension id>">\`, so it is
 prompt-cache friendly (\`undefined\` or an empty string injects nothing, and a section only
 re-injects when its content changes). All callbacks are re-evaluated every turn — read live
 state in them instead of caching a string at activation.

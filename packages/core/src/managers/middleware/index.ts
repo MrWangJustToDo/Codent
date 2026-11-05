@@ -33,12 +33,6 @@ export {
 export { createPromptCacheMiddleware, type PromptCacheMiddlewareDeps } from "./prompt-cache-middleware.js";
 export { instrumentMiddlewareLog } from "./instrument-middleware-log.js";
 export { createPlanModeMiddleware, type PlanModeMiddlewareDeps } from "../../agent/plan/plan-mode-middleware.js";
-export {
-  assertCanonicalMiddlewareOrder,
-  CANONICAL_MIDDLEWARE_ORDER,
-  defineMiddleware,
-  sortMiddlewaresByPhase,
-  MIDDLEWARE_PHASE_RANK,
-  type MiddlewarePhase,
-  type PhasedChatMiddleware,
-} from "./phase.js";
+export { MIDDLEWARE_PHASE_RANK, defineMiddleware } from "../../runtime-types/middleware-phase.js";
+export type { MiddlewarePhase, PhasedChatMiddleware } from "../../runtime-types/middleware-phase.js";
+export { assertCanonicalMiddlewareOrder, CANONICAL_MIDDLEWARE_ORDER, sortMiddlewaresByPhase } from "./phase.js";
