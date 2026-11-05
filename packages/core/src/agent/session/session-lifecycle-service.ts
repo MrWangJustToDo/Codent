@@ -287,12 +287,18 @@ export class SessionLifecycleService {
     reason: SessionSwitchReason,
     prepare: () => Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
   ): Promise<{ ok: true; session: SessionData } | { ok: false; error: string }> {
-    return this.serializeSwitch(async () => {
-      const prepared = await prepare();
-      if (!prepared.ok) return prepared;
-      const session = await this.runTransition(() => this.resumeInner(prepared.sessionId, reason));
-      return { ok: true, session };
-    });
+    const result = await this.serializeSwitch(() =>
+      this.runTransition(async () => {
+        const prepared = await prepare();
+        if (!prepared.ok) return prepared;
+        const session = await this.resumeInner(prepared.sessionId, reason);
+        return { ok: true as const, session };
+      })
+    );
+    // Same post-transaction lifecycle as `resume()`: the reset dropped the facade, and a wake is
+    // refused mid-switch, so clone/fork must rebuild it too.
+    if (result.ok) this.rt.sidecars.resumeBackgroundWork?.();
+    return result;
   }
 
   private async resumeInner(sessionId: string, reason: SessionSwitchReason): Promise<SessionData> {

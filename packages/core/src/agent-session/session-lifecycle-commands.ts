@@ -52,8 +52,11 @@ export async function generateAndApplySessionTitle(
       maxOutputTokens: 60,
       purpose: "title",
       onEvent: (event) => {
+        // A side query outlives a switch: its completion row belongs to the session that asked,
+        // and a stale one must not be filed under the target (or spend its usage there).
+        if (!epoch.isCurrent()) return;
         const { type, ...payload } = event;
-        managed.emitEvent(type, payload);
+        managed.emitEvent(type, payload, { sessionId: session.id });
       },
     });
     // Booked only while the asking session is still live: `managed.usage` is the tracker of

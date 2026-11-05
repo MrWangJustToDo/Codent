@@ -97,6 +97,7 @@ export function applyEvent(
       return {
         ...snapshot,
         status: event.payload.status,
+        state: event.payload.state,
         ...(event.payload.name !== undefined ? { name: event.payload.name } : {}),
         error: event.payload.error,
         pendingApprovalCount: event.payload.pendingApprovalCount,

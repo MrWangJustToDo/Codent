@@ -48,19 +48,35 @@ function unionMembers(name) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
 }
 
+/** Distinct `{ type: "..." }` discriminants in the state event union. */
+function transitionEventCount() {
+  const entry = sources.find(({ rel }) => rel === "runtime-types/agent-state.ts");
+  if (!entry) return 0;
+  return new Set([...entry.text.matchAll(/type:\s*"([^"]+)"/g)].map((m) => m[1])).size;
+}
+
 function nonBlankLines(text) {
   return text.split("\n").filter((line) => line.trim().length > 0).length;
 }
 
 const managedAgent = sources.find(({ rel }) => rel === "managers/managed-agent.ts");
-const managedAgentMethods = managedAgent
-  ? managedAgent.text.split("\n").filter((line) => /^ {2}(?:async )?[A-Za-z][A-Za-z0-9_]*[<(]/.test(line)).length
-  : 0;
+const sessionRuntimeSource = sources.find(({ rel }) => rel === "runtime-types/session-runtime.ts");
+if (!managedAgent || !sessionRuntimeSource) {
+  console.error(
+    `control-plane-metrics: missing ${!managedAgent ? "managers/managed-agent.ts" : "runtime-types/session-runtime.ts"}; ` +
+      "update the path rather than reporting a silent 0."
+  );
+  process.exit(1);
+}
+const managedAgentMethods = managedAgent.text
+  .split("\n")
+  .filter(
+    (line) => /^ {2}(?:async )?[A-Za-z][A-Za-z0-9_]*[<(]/.test(line) && !/^ {2}(?:private|protected)\b/.test(line)
+  ).length;
 
-const sessionRuntimeSource = sources.find(({ rel }) => rel === "managers/services/session-runtime.ts");
-const sessionPortBlocks = sessionRuntimeSource
-  ? [...sessionRuntimeSource.text.matchAll(/export interface (Session\w+Port)\s*\{([\s\S]*?)\n\}/g)]
-  : [];
+const sessionPortBlocks = [
+  ...sessionRuntimeSource.text.matchAll(/export interface (Session\w+Port)\s*\{([\s\S]*?)\n\}/g),
+];
 const sessionPortMembers = sessionPortBlocks.map(
   (match) => match[2].split("\n").filter((line) => /^ {2}[A-Za-z][A-Za-z0-9_]*\??[:(]/.test(line)).length
 );
@@ -80,6 +96,7 @@ const metrics = {
   status: {
     values: unionMembers("AgentStatus").length,
     triggers: unionMembers("AgentStatusTrigger").length,
+    transitionEvents: transitionEventCount(),
     writers: count(/\bsetStatus\s*\(/g),
     readerFiles: sources.filter(({ text }) => /\bgetStatus\s*\(\)/.test(text)).length,
   },
@@ -98,7 +115,7 @@ const metrics = {
   },
   permission: {
     needsApprovalReads: count(/\bneedsApproval\b/g),
-    autoApprovalSites: count(/\bautoApprove\w*\b/g),
+    autoApprovalSites: count(/\b(?:autoMode|shouldAutoApprove)\w*\b/g),
   },
   modes: {
     planReads: count(/\bplanMode\./g),
@@ -119,6 +136,7 @@ if (process.argv.includes("--markdown")) {
     ["ManagedAgent public methods", metrics.managedAgent.publicMethods],
     ["AgentStatus values", metrics.status.values],
     ["AgentStatus triggers", metrics.status.triggers],
+    ["transition events", metrics.status.transitionEvents],
     ["setStatus sites", metrics.status.writers],
     ["files reading getStatus()", metrics.status.readerFiles],
     ["session-id guard sites", metrics.currency.sessionIdGuards],

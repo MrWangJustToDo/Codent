@@ -213,6 +213,11 @@ export class MemoryService implements MemorySelectionPort {
     // The session that will be charged. A switch can complete before the query returns, and the
     // tracker is re-seeded for the new session at adoption — see `MemoryExtractionInput.epoch`.
     const sessionCurrent = (): boolean => input.epoch?.isCurrent() ?? true;
+    // Post-await events belong to the asking session; a switch makes them stale (the queued
+    // extraction for the NEW session re-emits its own start/complete rows).
+    const emit = (type: "memory:extract" | "memory:consolidate", payload: Record<string, unknown>): void => {
+      if (sessionCurrent()) this.emitEvent?.(type, payload as never);
+    };
 
     this.extractionInProgress = true;
     this.emitEvent?.("memory:extract", { status: "start" });
@@ -222,7 +227,7 @@ export class MemoryService implements MemorySelectionPort {
         const textAdapter = (await resolveTextAdapter?.()) ?? null;
         if (!textAdapter) {
           // No provider configured — skip rather than report a memory error.
-          this.emitEvent?.("memory:extract", { status: "skip-no-adapter" });
+          emit("memory:extract", { status: "skip-no-adapter" });
           return;
         }
 
@@ -237,29 +242,29 @@ export class MemoryService implements MemorySelectionPort {
         );
         if (count > 0) {
           await memoryManager.flushIndex();
-          this.emitEvent?.("memory:extract", { status: "complete", count });
+          emit("memory:extract", { status: "complete", count });
         } else {
-          this.emitEvent?.("memory:extract", { status: "empty" });
+          emit("memory:extract", { status: "empty" });
         }
 
         const memoryCount = await memoryManager.getMemoryCount();
         if (memoryCount >= memoryManager.getConsolidateThreshold()) {
-          this.emitEvent?.("memory:consolidate", { status: "start", count: memoryCount });
+          emit("memory:consolidate", { status: "start", count: memoryCount });
           const result = await consolidateMemories(memoryManager, textAdapter, onSideQuery, usage, sessionCurrent);
           if (result.changed) {
             await memoryManager.flushIndex();
-            this.emitEvent?.("memory:consolidate", {
+            emit("memory:consolidate", {
               status: "complete",
               before: memoryCount,
               after: result.count,
             });
           } else {
-            this.emitEvent?.("memory:consolidate", { status: "skip", count: memoryCount });
+            emit("memory:consolidate", { status: "skip", count: memoryCount });
           }
         }
       } catch (err) {
         const errorMsg = errorMessage(err);
-        this.emitEvent?.("memory:extract", { status: "error", error: errorMsg });
+        emit("memory:extract", { status: "error", error: errorMsg });
       } finally {
         this.extractionInProgress = false;
         const pending = this.pendingExtraction;

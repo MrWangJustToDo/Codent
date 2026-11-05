@@ -50,6 +50,7 @@ function emptySnapshot(agentId: string): AgentSessionSnapshot {
     agentId,
     name: "",
     status: "idle",
+    state: { lifecycle: "ready", run: "idle", wait: "none", outcome: "none", stream: "none" },
     error: "",
     pendingApprovalCount: 0,
     mode: "normal",

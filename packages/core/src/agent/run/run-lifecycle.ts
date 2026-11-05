@@ -128,11 +128,14 @@ export function finalizeManagedAgentRun(host: RunLifecycleHost, reason: RunFinal
   // Always consume: a wake turn that was aborted must not leave the mark for the NEXT turn.
   const promptless = host.run.consumePromptlessTurn();
   if (reason === "finished" && !promptless) {
+    const sideEpoch = host.captureEpoch?.();
+    const sideSessionId = host.getSessionData?.()?.id;
     host.memory.runExtraction({
       getMessagesForLLM: () => host.getMessagesForLLM(),
       onSideQuery: (event) => {
+        if (sideEpoch && !sideEpoch.isCurrent()) return;
         const { type, ...payload } = event;
-        host.emitEvent(type, payload as never);
+        host.emitEvent(type, payload as never, sideSessionId ? { sessionId: sideSessionId } : undefined);
       },
       // Extraction and consolidation are real LLM spend; the tracker is what makes it
       // show up in the session's lifetime totals.
