@@ -62,4 +62,8 @@ export class SessionFacet {
   persistSession(): void {
     this.persistence.persistState();
   }
+
+  persistSessionNow(): Promise<boolean> {
+    return this.persistence.persistStateNow();
+  }
 }

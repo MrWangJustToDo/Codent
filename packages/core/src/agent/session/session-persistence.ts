@@ -52,6 +52,15 @@ export class SessionPersistence {
     );
   }
 
+  /** Awaitable state-only persist (rename/title need the write to land before returning). */
+  async persistStateNow(): Promise<boolean> {
+    const sessionId = this.host.session.getSessionData()?.id;
+    return this.host.session.persistSession(() => ({
+      ...getSessionPersistInput(this.host),
+      ...(sessionId ? { sessionId } : {}),
+    }));
+  }
+
   /** Persist model/state only (usage, todos, mode); does not write `uiMessages`. */
   persistState(): void {
     const sessionId = this.host.session.getSessionData()?.id;

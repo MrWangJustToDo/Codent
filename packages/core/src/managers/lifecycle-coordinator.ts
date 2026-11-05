@@ -104,6 +104,14 @@ export class LifecycleCoordinator {
       }
 
       try {
+        // Let the pump write its final tool results/usage before persistence closes. The abort
+        // above should end it; a parked approval has no live pump and resolves immediately.
+        await managedAgent.getChatController?.()?.settleRun?.();
+      } catch {
+        // Best effort; close() still drains what was admitted.
+      }
+
+      try {
         // Kill this agent's background work so a disposed runtime does not leak child processes.
         await managedAgent.destroyBackgroundWork();
       } catch {

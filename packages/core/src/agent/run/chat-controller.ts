@@ -251,6 +251,20 @@ export class AgentChatController {
   }
 
   /**
+   * Resolve once the queued pump chain has finished.
+   *
+   * Teardown must not close persistence while a pump is still writing its final tool state; the
+   * chain already serializes every pump, so awaiting it is the barrier (a parked approval has no
+   * live pump and resolves).
+   */
+  settleRun(): Promise<void> {
+    return this.runChain.then(
+      () => undefined,
+      () => undefined
+    );
+  }
+
+  /**
    * Current pump/session-switch generation.
    *
    * Exposed as an `Epoch` source (see `runtime-types/epoch.ts`): the controller owns this counter,

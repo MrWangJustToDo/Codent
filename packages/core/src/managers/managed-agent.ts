@@ -2000,6 +2000,11 @@ export class ManagedAgent {
     this.sessionFacet.persistSession();
   }
 
+  /** Awaitable state persist; used by rename/title where the caller reports success after disk. */
+  persistSessionNow(): Promise<boolean> {
+    return this.sessionFacet.persistSessionNow();
+  }
+
   /**
    * Finalize a user turn / detached run — persist session, clear turn memory, optionally extract memories, emit `agent:stop`.
    * Owned by {@link AgentChatController} / subagent runners (not per-`chat()` middleware).

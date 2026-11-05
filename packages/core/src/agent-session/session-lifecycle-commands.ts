@@ -82,7 +82,7 @@ export async function generateAndApplySessionTitle(
       managed.setDisplayName(generated);
       managed.emitEvent("session:title", { ok: true, name: generated });
     }
-    await store.save(session);
+    await managed.persistSessionNow();
     return { ok: true, name: generated };
   } catch (error) {
     const err = toError(error);
@@ -102,11 +102,10 @@ export async function applySessionRename(
     return { ok: false, error: "Name is required" };
   }
   const session = managed.getSessionData();
-  const store = managed.getSessionStore();
   managed.setDisplayName(trimmed);
-  if (session && store) {
+  if (session) {
     session.name = trimmed;
-    await store.save(session);
+    await managed.persistSessionNow();
   }
   // Same event as the auto-title path: both change the user-visible name, and a reader greps one
   // fact. (`setDisplayName` only re-emits `agent:state`.)
