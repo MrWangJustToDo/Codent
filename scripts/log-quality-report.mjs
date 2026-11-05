@@ -14,10 +14,14 @@
  *   2. coverage    — the events that must exist in any run (startup, prompt, llm, tool, turn)
  *   3. promise     — the facts that used to be missing: prompt text, approval source, mode
  *                    switch, delegation cost, per-child run scope
- *   4. reconcile   — logged cost vs the session's persisted `cost` (children included)
+ *   4. reconcile   — pump cost (`turn:summary`) vs the session's persisted `cost`. A pump summary
+ *                    already includes its root calls, the delegated run's total and in-pump side
+ *                    queries; the residual is post-run side-query spend, which the log does not
+ *                    carry on purpose (`memory:*` start/complete rows are silent). The usage store
+ *                    is read only as an upper bound that can explain that residual.
  *   5. check mode  — `--check` exits non-zero on a regression (mechanical status rows, a
  *                    `(structured)` prompt, missing bootstrap summary, unscoped child rows,
- *                    cost gap > 10%)
+ *                    an UNEXPLAINED cost gap > 10%)
  *
  * Usage:
  *   node scripts/log-quality-report.mjs                 # newest session with a log
@@ -33,6 +37,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const LOGS_DIR = path.join(repoRoot, ".agents", "logs");
 const SESSIONS_DIR = path.join(repoRoot, ".agents", "sessions");
+const USAGE_DIR = path.join(repoRoot, ".agents", "usage");
 
 const args = process.argv.slice(2);
 const check = args.includes("--check");
@@ -152,39 +157,59 @@ function noiseRows() {
  * Child rows that cannot be sliced by run (the reason `run` moved onto the envelope).
  *
  * `subagent:created` / `subagent:started` are emitted before the child's run exists, so they are
- * legitimately unscoped. Everything else in a child log belongs to that run.
+ * legitimately unscoped — and so is the construction preface before the child's FIRST run: the
+ * `[model] Setting model info` diagnostic happens before there is a run to name. A row emitted
+ * AFTER that first run must carry one; that is the property this check protects.
  */
 const CHILD_PRE_RUN_EVENTS = new Set(["subagent:created", "subagent:started"]);
 function unscopedChildRows() {
   let rows = 0;
   for (const child of childLogs) {
-    for (const entry of child.entries) {
-      if (!entry.event || CHILD_PRE_RUN_EVENTS.has(entry.event)) continue;
-      if (!entry.run) rows += 1;
+    const firstRunAt = child.entries.findIndex((entry) => entry.run);
+    let lastRunAt = -1;
+    for (let i = child.entries.length - 1; i >= 0; i -= 1) {
+      if (child.entries[i].run) {
+        lastRunAt = i;
+        break;
+      }
     }
+    child.entries.forEach((entry, index) => {
+      if (!entry.event || CHILD_PRE_RUN_EVENTS.has(entry.event)) return;
+      if (entry.run) return;
+      if (firstRunAt === -1) {
+        rows += 1;
+        return;
+      }
+      // Outside the run window there is nothing to scope to: the construction preface (model info)
+      // and the teardown epilogue (`subagent:destroyed`) have no run. A gap INSIDE the window is the
+      // defect this check is for.
+      if (index > firstRunAt && index < lastRunAt) rows += 1;
+    });
   }
   return rows;
 }
 
 /**
- * What the log says was spent: every root model call, plus each delegated run's own total.
+ * What the log can attribute: one `turn:summary` per pump.
  *
- * A worker runs its whole loop in one `chat()`, so its `llm:response` row reports the LAST
- * iteration's cost only — summing those would undercount. `subagent:completed.costUsd` is the
- * run's total (and is what makes this number comparable to the session's billed cost).
+ * `llm:response` cannot be used — it reports the LAST iteration of a multi-iteration `chat()`, so a
+ * root turn that ran two iterations looked far cheaper than it was. A pump summary already
+ * aggregates everything the session tracker accrued during it: the root calls, a delegated run's
+ * total, and in-pump side queries. The remaining spend is post-run side queries (memory
+ * extraction/consolidation), whose start/complete rows are silent by policy; that is the residual
+ * the report explains separately rather than a missing row.
  */
 function loggedCost() {
   let cost = 0;
+  let pumps = 0;
   for (const entry of root.entries) {
-    if (entry.event === "llm:response") cost += entry.data?.costUsd ?? 0;
-    if (entry.event === "subagent:completed") cost += entry.data?.costUsd ?? 0;
+    if (entry.event !== "turn:summary") continue;
+    const value = entry.data?.costUsd;
+    if (typeof value !== "number") continue;
+    cost += value;
+    pumps += 1;
   }
-  for (const child of childLogs) {
-    for (const entry of child.entries) {
-      if (entry.event === "subagent:completed") cost += entry.data?.costUsd ?? 0;
-    }
-  }
-  return cost;
+  return { value: cost, pumps };
 }
 
 /** The persisted billed cost. State is attached to message lines, not a `t: "state"` record. */
@@ -195,18 +220,61 @@ function sessionCost() {
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     try {
       const record = JSON.parse(lines[i]);
-      if (typeof record.state?.cost === "number") return { value: record.state.cost, reason: null };
+      if (typeof record.state?.cost === "number") {
+        return { value: record.state.cost, reason: null, state: record.state };
+      }
     } catch {
       // keep scanning: a truncated tail should not hide the previous state line
     }
   }
-  return { value: null, reason: "session has no state.cost" };
+  return { value: null, reason: "session has no state.cost", state: null };
+}
+
+/**
+ * Side-query spend inside the session's time window, as an UPPER BOUND.
+ *
+ * The usage store records side queries under the shared `agentId: "side-query"`, so rows from a
+ * concurrent session can fall in the same window. This number is therefore only used to decide
+ * whether the post-pump residual is *explainable*, never as the exact cost of this session.
+ */
+function sideQueryCostInWindow(state) {
+  if (!state || typeof state.createdAt !== "number") return { value: 0, rows: 0 };
+  const from = state.createdAt;
+  const to = typeof state.updatedAt === "number" ? state.updatedAt : Date.now();
+  const file = path.join(USAGE_DIR, `usage-${new Date(from).getFullYear()}.jsonl`);
+  if (!fs.existsSync(file)) return { value: 0, rows: 0 };
+  let value = 0;
+  let rows = 0;
+  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+    if (!line) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (record.agentId !== "side-query") continue;
+    if (typeof record.ts !== "number" || record.ts < from || record.ts > to) continue;
+    value += typeof record.costUsd === "number" ? record.costUsd : 0;
+    rows += 1;
+  }
+  return { value, rows };
 }
 
 const noise = noiseRows();
-const cost = loggedCost();
+const pump = loggedCost();
+const cost = pump.value;
 const billedState = sessionCost();
 const billed = billedState.value;
+const sideQueries = sideQueryCostInWindow(billedState.state);
+// Positive = the log accounts for less than was billed. Negative means the log over-counted.
+// A log that already violates the timeline contract (direct-seamer status rows, or the mechanical
+// pump transitions the current policy suppresses) cannot be priced against today's semantics: its
+// `turn:summary` deltas were produced by a different finalizer. Report the contract failure and
+// skip cost instead of printing a misleading "unexplained gap" on top of it.
+const preChangeBuild = noise.legacyStatus.length > 0 || noise.status.length > 0;
+const residual = billed != null && billed > 0 ? billed - cost : null;
+const unexplained = residual != null && residual > 0 ? Math.max(0, residual - Math.max(0, sideQueries.value)) : 0;
 const costGap = billed && billed > 0 ? Math.abs(billed - cost) / billed : null;
 
 // ============================================================================
@@ -318,11 +386,25 @@ if (childLogs.length === 0) {
 }
 
 console.log("\n-- cost reconciliation -----------------------------------");
-console.log(`  logged (root llm + child costUsd)  $${cost.toFixed(4)}`);
-console.log(
-  `  session state cost                 ${billed == null ? `? (${billedState.reason})` : `$${billed.toFixed(4)}`}`
-);
-console.log(`  gap                                ${costGap == null ? "?" : `${(costGap * 100).toFixed(1)}%`}`);
+if (preChangeBuild) {
+  console.log("  skipped — this log predates the current timeline contract (mechanical status rows)");
+  console.log("            cost is not comparable; restart the app and record a session with this build");
+} else {
+  console.log(`  pumps (turn:summary)               $${cost.toFixed(4)}${pump.pumps ? `  (${pump.pumps})` : ""}`);
+  console.log(
+    `  session state cost                 ${billed == null ? `? (${billedState.reason})` : `$${billed.toFixed(4)}`}`
+  );
+  console.log(
+    `  residual (outside pumps)            ${
+      residual == null ? "?" : `${((residual / billed) * 100).toFixed(1)}% ($${residual.toFixed(4)})`
+    }`
+  );
+  console.log(
+    `  side-query spend in window          $${sideQueries.value.toFixed(4)}` +
+      (sideQueries.rows ? `  (${sideQueries.rows} call(s); upper bound)` : "")
+  );
+  console.log(`  unexplained                         $${unexplained.toFixed(4)}`);
+}
 
 // ============================================================================
 // Check mode
@@ -341,12 +423,24 @@ if (check) {
   if (countEvent("session:start") === 0) failures.push("no session:start row");
   if (countEvent("prompt:submit") === 0) failures.push("no prompt:submit row");
   if (unscopedChildRows() > 0) failures.push(`${unscopedChildRows()} unscoped child row(s)`);
-  if (costGap != null && costGap > 0.1) failures.push(`cost gap ${(costGap * 100).toFixed(1)}% > 10%`);
+  if (!preChangeBuild && billed != null && billed > 0) {
+    if (pump.pumps === 0) {
+      failures.push("no turn:summary cost row — no pump can be priced");
+    } else if (cost > billed * 1.02) {
+      failures.push(`pump cost $${cost.toFixed(4)} exceeds billed $${billed.toFixed(4)} — double counting`);
+    } else if (unexplained / billed > 0.1) {
+      failures.push(
+        `unexplained cost gap $${unexplained.toFixed(4)} (${((unexplained / billed) * 100).toFixed(1)}%) > 10%`
+      );
+    }
+  }
 
   // "Could not check" is not "checked and fine". Reported explicitly, and promotable to a failure
   // for the acceptance run (`--require-cost`).
-  const costSkipped = costGap == null;
-  const costSkipReason = billedState.reason ?? "session cost is zero";
+  const costSkipped = costGap == null || preChangeBuild;
+  const costSkipReason = preChangeBuild
+    ? "pre-change build: turn:summary rows are not comparable"
+    : (billedState.reason ?? "session cost is zero");
   if (costSkipped && requireCost) {
     failures.push(`cost cannot be reconciled (${costSkipReason}) — required by --require-cost`);
   }
