@@ -219,7 +219,10 @@ export function createExtensionContext(
       }
       const unsub = host.registerInterceptor(api.id, eventType, handler, host.rankOf(api.id));
       registrations?.unsubInterceptors.push(unsub);
-      return unsub;
+      return () => {
+        if (!host.isLive(context)) return;
+        unsub();
+      };
     },
 
     registerContextProvider: (provider: ExtensionContextProvider): (() => void) => {
@@ -229,7 +232,10 @@ export function createExtensionContext(
       }
       const unsub = host.registerContextProvider(api.id, provider, host.rankOf(api.id));
       registrations?.unsubTurnContext.push(unsub);
-      return unsub;
+      return () => {
+        if (!host.isLive(context)) return;
+        unsub();
+      };
     },
 
     registerFlush: (flush: (ctx?: ExtensionContext) => Promise<void> | void): (() => void) => {
@@ -242,6 +248,7 @@ export function createExtensionContext(
       // Identity-checked: a stale disposer from a replaced flush must not clear
       // the newer registration (mirrors `registerContextProvider` above).
       return () => {
+        if (!host.isLive(context)) return;
         if (registrations.flush === flush) registrations.flush = null;
       };
     },
@@ -290,7 +297,12 @@ export function createExtensionContext(
       // Identity-checked: a stale disposer from a replaced transformer must not
       // clear the newer registration (mirrors `registerContextProvider` above).
       return () => {
+        if (!host.isLive(context)) return;
         host.disposeMessageTransformer(api.id, transformer);
+        // A disposed transformer must also leave the registration ledger, or `hasLiveArtifacts`
+        // still reports the incarnation as active after its only transformer was removed.
+        const index = registrations?.messageTransformers.indexOf(api.id) ?? -1;
+        if (registrations && index >= 0) registrations.messageTransformers.splice(index, 1);
       };
     },
 

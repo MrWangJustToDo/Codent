@@ -141,10 +141,12 @@ export function logSubagentLifecycle(
   // `eventEntry`, not `info/warn/error`: those have no run parameter (the seam owns no run state),
   // and an index row is exactly the case that needs the explicit one. `eventError` keeps the
   // fault text without inventing a stack that points at this module.
+  const eventType =
+    phase === "completed" ? "subagent:completed" : phase === "stopped" ? "subagent:error" : `subagent:${phase}`;
   log.eventEntry(
     level,
     "system",
-    `subagent:${phase}`,
+    eventType,
     message,
     data,
     details.error ? eventError(details.error) : undefined,

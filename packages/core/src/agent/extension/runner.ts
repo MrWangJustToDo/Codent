@@ -752,6 +752,9 @@ export class ExtensionRunner {
         // not skip the state/error record below — that left the panel on "not enabled" with the
         // real failure recorded nowhere, and the `finally` would still clear the activation marker.
         try {
+          // Flush before teardown, like every other exit path: an extension that registered a
+          // flush and then threw during activate otherwise loses its buffered data forever.
+          await this.flushExtension(instance);
           await this.teardownIncarnation(instance);
         } catch (teardownError) {
           this.emitExtensionEvent("agent:extension-error", {
@@ -777,8 +780,12 @@ export class ExtensionRunner {
       });
       return { kind: "failed", error };
     } finally {
-      // Identity-checked: a superseded activation must not clear the marker a newer one owns.
-      if (instance.context === context) this.activating.delete(instance.api.id);
+      // Ownership is the CONTEXT registered for this id, not this instance object: a duplicate
+      // load replaces the instance while the old activation is in flight, and `instance.context`
+      // alone let the old one clear the marker the new incarnation owns.
+      if (this.contexts.get(instance.api.id) === context || !this.contexts.has(instance.api.id)) {
+        this.activating.delete(instance.api.id);
+      }
     }
   }
 
@@ -1225,7 +1232,10 @@ export class ExtensionRunner {
     // No ownership test: a per-runner map cannot tell whose tool was the one taken (two agents
     // loading the same extension share an id), and it does not need to — the host's per-name stack
     // answers "is this still mine?" itself, the same way whether this owner was on top or buried.
-    // The mirror goes first because the callback may read `getTools()`.
+    // The mirror goes first because the callback may read `getTools()`. Capture the count BEFORE
+    // `replace`: after it the array holds only the failed removals, so checking it published the
+    // catalog only when an unregister FAILED (normal disable never refreshed subscribers).
+    const hadTools = instance.registrations.tools.length > 0;
     replace(
       instance.registrations.tools,
       release(instance.registrations.tools, (name) => {
@@ -1236,7 +1246,7 @@ export class ExtensionRunner {
     try {
       // One catalog publish for the whole removal batch: the per-name path is told not to publish,
       // and disabling an extension with N tools used to re-serialize every descriptor N times.
-      if (instance.registrations.tools.length > 0) this.options.onToolRegistrationBatchComplete?.();
+      if (hadTools) this.options.onToolRegistrationBatchComplete?.();
     } catch (error) {
       firstError ??= error;
     }

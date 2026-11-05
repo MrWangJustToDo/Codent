@@ -55,11 +55,12 @@ function newestSessionWithLog() {
   const dirs = fs
     .readdirSync(LOGS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("ses_"))
-    .map((entry) => ({
-      id: entry.name,
-      mtime: fs.statSync(path.join(LOGS_DIR, entry.name, "agent.log")).mtimeMs,
-    }))
-    .filter((entry) => fs.existsSync(path.join(LOGS_DIR, entry.id, "agent.log")))
+    .map((entry) => {
+      const logPath = path.join(LOGS_DIR, entry.name, "agent.log");
+      if (!fs.existsSync(logPath)) return null;
+      return { id: entry.name, mtime: fs.statSync(logPath).mtimeMs };
+    })
+    .filter(Boolean)
     .sort((a, b) => b.mtime - a.mtime);
   return dirs[0]?.id ?? null;
 }
