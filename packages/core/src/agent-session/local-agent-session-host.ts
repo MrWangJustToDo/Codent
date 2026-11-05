@@ -308,7 +308,15 @@ class LocalAgentSessionHostImpl implements AgentSessionHost {
       // reservation but leaves the log file in place, so without this delete a live session that
       // had already been persisted would survive `deleteSession` and keep appearing in
       // `listPersistedSessions`.
-      await store.delete(sessionId).catch(() => undefined);
+      try {
+        await store.delete(sessionId);
+      } catch (error) {
+        // The teardown ran, but the file is still there. Report the failure and lift the tombstone:
+        // keeping it made the surviving session permanently unreadable in this process (and it
+        // reappeared on restart), which is a worse state than an honest error.
+        store.unmarkDeleting(sessionId);
+        throw error;
+      }
       // The session was live, so the caller's delete succeeded whether or not it had a file yet.
       return true;
     }

@@ -150,7 +150,9 @@ export function createLogExtension(options: LogExtensionOptions): LogExtension {
       const detach = (): void => {
         if (sinks.get(log) !== detach) return; // superseded — nothing of ours to release
         sinks.delete(log);
-        void sink.detach();
+        // `detach` is async on purpose (a remote CoreEnv can only write asynchronously); the
+        // caller of this handle is synchronous, so at least never leave the rejection unhandled.
+        void sink.detach().catch(() => undefined);
         // Conditional: a superseded handle must not unbind the live binding (the `sinks.get` check
         // above covers this registry, the seam guard covers the seam itself).
         log.detachSink(sink.handleEntry);

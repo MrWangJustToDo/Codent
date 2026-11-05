@@ -125,6 +125,7 @@ import { createEpoch, type Epoch } from "../runtime-types/epoch.js";
 import { errorMessage } from "../utils/errors.js";
 import { generateId } from "../utils/generate-id.js";
 import { copyModelMessages } from "../utils/model-messages.js";
+import { truncateText } from "../utils/text-truncation.js";
 
 import { AgentLogBinding } from "./agent-log-binding.js";
 import { AgentConfigSchema, DEFAULT_AGENT_MAX_ITERATIONS } from "./agent-types.js";
@@ -195,7 +196,7 @@ import type {
   SessionDiagnosticArea,
   SessionSwitchReason,
 } from "../runtime-types/agent-event-payloads.js";
-import type { AgentEventType, EmitAgentTelemetryOptions, EmitPayloadArgs } from "../runtime-types/agent-events.js";
+import type { TelemetryEventType, EmitAgentTelemetryOptions, EmitPayloadArgs } from "../runtime-types/agent-events.js";
 import type { AgentProfileId, AgentToolsetProfile } from "../runtime-types/agent-profile.js";
 import type { AgentRetryState } from "../runtime-types/agent-retry.js";
 import type { AgentStatus, RunFinalizeReason } from "../runtime-types/agent-status.js";
@@ -231,7 +232,7 @@ const NON_ROW_SUBAGENT_EVENTS: ReadonlySet<string> = new Set(["subagent:queue", 
  * override must mean the same thing whether a fact is emitted by the agent, a service or a
  * middleware — that is what lets an async producer name the session it belongs to.
  */
-type EmitEventArgs<T extends AgentEventType> = EmitPayloadArgs<AgentEventPayloadMap[T]>;
+type EmitEventArgs<T extends TelemetryEventType> = EmitPayloadArgs<AgentEventPayloadMap[T]>;
 
 export type ManagedAgentConfig<T = ManagedAgent> = AgentConfig & {
   name: string;
@@ -1479,10 +1480,10 @@ export class ManagedAgent {
     });
   }
 
-  emitEvent<T extends AgentEventType>(type: T, ...args: EmitEventArgs<T>): void;
+  emitEvent<T extends TelemetryEventType>(type: T, ...args: EmitEventArgs<T>): void;
   emitEvent(
-    type: AgentEventType,
-    payload?: AgentEventPayloadMap[AgentEventType],
+    type: TelemetryEventType,
+    payload?: AgentEventPayloadMap[TelemetryEventType],
     options?: EmitAgentTelemetryOptions
   ): void {
     // The restore adopts the persisted model/effort before the commit; both writers emit
@@ -2937,6 +2938,11 @@ export class ManagedAgent {
     // Make the axes agree with the flag: late transitions then hit the destroyed guard instead of
     // being accepted by a state machine that still believes the agent is alive.
     this.agentState = { ...this.agentState, lifecycle: "destroyed", run: "idle", wait: "none", stream: "none" };
+    // ...and the status must agree with the axes. `getL1State()` pairs the two, so leaving
+    // `currentStatus` at "running" exposed a `status: "running"` + `lifecycle: "destroyed"` snapshot
+    // and made the abort that follows (`run-lifecycle`) treat the agent as live, writing a
+    // "Rejected state transition" diagnostic on every teardown of a running agent.
+    this.currentStatus = projectAgentStatus(this.agentState);
   }
 
   /** Whether {@link markDestroyed} ran. */
@@ -3228,6 +3234,17 @@ export class ManagedAgent {
  * nested value bypassed the size cap). Two adapters still receive an open record from a host port;
  * this is where that ends — scalars pass, numeric arrays pass, anything else becomes its text.
  */
+/** JSON form of a nested diagnostic value, bounded and never throwing. */
+function jsonDiagnosticValue(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json === "string") return truncateText(json, 2000);
+  } catch {
+    // A cyclic / throwing `toJSON` value falls back to the old behaviour rather than failing a log.
+  }
+  return truncateText(String(value), 2000);
+}
+
 function diagnosticDetails(
   data: Record<string, unknown>
 ): Record<string, string | number | boolean | null | readonly number[]> {
@@ -3238,7 +3255,10 @@ function diagnosticDetails(
     } else if (Array.isArray(value) && value.every((entry) => typeof entry === "number")) {
       out[key] = value as number[];
     } else {
-      out[key] = String(value);
+      // A nested object is DATA, not a label: `String(value)` printed `[object Object]`, so the
+      // extension-completion diagnostic lost every field of its `usage` (tokens/cost). Serialize
+      // it instead, bounded — `session:diagnostic` details are summarized again downstream.
+      out[key] = jsonDiagnosticValue(value);
     }
   }
   return out;

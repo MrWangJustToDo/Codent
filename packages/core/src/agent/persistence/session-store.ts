@@ -472,6 +472,18 @@ export class SessionStore {
     deletedSessionPaths.add(this.getLogKey(id));
   }
 
+  /**
+   * Undo {@link markDeleting} when the removal itself failed.
+   *
+   * The tombstone is process-permanent, so leaving it behind after a failed `remove` made a session
+   * that still exists on disk unreadable and unwritable for the rest of the process (and it came
+   * back on the next start, looking like a delete that silently reverted).
+   */
+  unmarkDeleting(id: string): void {
+    if (!isSafeSessionId(id)) return;
+    deletedSessionPaths.delete(this.getLogKey(id));
+  }
+
   // ==========================================================================
   // Private
   // ==========================================================================

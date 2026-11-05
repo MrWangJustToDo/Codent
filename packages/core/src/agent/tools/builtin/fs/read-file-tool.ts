@@ -3,6 +3,7 @@ import { z } from "zod";
 import { estimateImageInputTokens, tryReadImageDimensions } from "../../../../models/estimate-image-tokens.js";
 import { formatByteSize } from "../../../../utils/byte-size.js";
 import { utf8ByteLength } from "../../../../utils/bytes.js";
+import { compareCodeUnits } from "../../../../utils/code-unit-order.js";
 import { readTextPieces } from "../../../../utils/read-text-pieces.js";
 import { defaultMimeForPartType } from "../../../media/types.js";
 import { defineServerTool } from "../../runtime/define-tool.js";
@@ -217,7 +218,7 @@ IMPORTANT: Reading images adds significant data to context. Avoid reading more t
           const entries = await fsys.readdir(filePath);
           const sortedEntries = entries
             .map((e) => (e.type === "directory" ? `${e.name}/` : e.name))
-            .sort((a, b) => a.localeCompare(b));
+            .sort(compareCodeUnits);
 
           const startIdx = (offset ?? 1) - 1;
           const effectiveLimit = limit ?? DEFAULT_LINE_LIMIT;

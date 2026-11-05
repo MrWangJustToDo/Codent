@@ -153,14 +153,32 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
    * be appending to. The copy path (read → write → remove) is the fallback for hosts whose CoreEnv
    * has no `rename`; it is equivalent for the shifted segments, which nothing else writes.
    */
-  const moveSegment = async (from: string, to: string): Promise<void> => {
+  const moveSegment = async (from: string, to: string, options: { active?: boolean } = {}): Promise<void> => {
     if (envFs.rename) {
       await envFs.rename(from, to);
       return;
     }
     const content = await envFs.readFile(from);
     await envFs.writeFile(to, content);
-    await envFs.remove(from);
+    if (!options.active) {
+      await envFs.remove(from);
+      return;
+    }
+    // The ACTIVE file may be appended to concurrently (`flushSync` on the exit path writes while
+    // an async batch owns the rotation). Removing it after the copy would delete those bytes, so
+    // re-read and leave only what arrived after the copied prefix in the active file. A genuine
+    // atomic move is impossible without `rename`; this narrows the loss window from the whole copy
+    // to the gap between the second read and the write, and never deletes unrecognized content.
+    const current = await envFs.readFile(from);
+    if (current === content) {
+      await envFs.remove(from);
+      return;
+    }
+    if (current.startsWith(content)) {
+      await envFs.writeFile(from, current.slice(content.length));
+      return;
+    }
+    // Replaced by something we did not read (or a concurrent truncation): leave it alone.
   };
   /**
    * Shift segments `{file}.{maxFiles-1}` → drop, ..., `{file}` → `{file}.1`.
@@ -187,7 +205,7 @@ export function createJsonlFileSink(options: AgentLogFileSinkOptions): LogFileSi
       const from = `${filePath}.${i}`;
       if (await envFs.exists(from)) await moveSegment(from, `${filePath}.${i + 1}`);
     }
-    if (await envFs.exists(filePath)) await moveSegment(filePath, `${filePath}.1`);
+    if (await envFs.exists(filePath)) await moveSegment(filePath, `${filePath}.1`, { active: true });
   };
 
   const flushBatch = async (): Promise<void> => {

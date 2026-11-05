@@ -73,7 +73,6 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
   const destroyed = transition(initState(), { type: "teardown" });
   for (const event of [
     { type: "prepare" },
-    { type: "stream-start" },
     { type: "stream-chunk", stream: "responding" },
     { type: "pause", wait: "question" },
     { type: "settle", result: "completed" },
@@ -90,7 +89,6 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 // A compaction keeps the phase through a stream finish and restores it afterwards.
 {
   let state = transition(initState(), { type: "prepare" });
-  state = transition(state, { type: "stream-start" });
   state = transition(state, { type: "compaction-start" });
   state = transition(state, { type: "stream-end", result: "completed" });
   assert.equal(projectAgentStatus(state), "compacting");
@@ -130,7 +128,6 @@ assert.equal(projectAgentStatus(transition(idle, { type: "reset" })), "idle");
 // --- pause/resume keeps the run phase --------------------------------------
 {
   let state = transition(initState(), { type: "prepare" });
-  state = transition(state, { type: "stream-start" });
   state = transition(state, { type: "stream-chunk", stream: "responding" });
   state = transition(state, { type: "pause", wait: "approval" });
   assert.equal(projectAgentStatus(state), "waiting");

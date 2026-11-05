@@ -65,6 +65,18 @@ export class AgentToolService {
     return this.registry.getToolsRecord();
   }
 
+  /**
+   * Seed one host-built built-in into the live record and registry.
+   *
+   * Bootstrap used to write `managed.tools[name] = …` directly, which left the registry unaware
+   * until some later `useTools()` re-seeded it: `getApprovalRequirement()`, `resolvePresentation()`
+   * and the presentation catalog all omitted the tool in the meantime (the `task` tool was the
+   * case). Seeding keeps the record and the dispatch stack in lockstep from the same write.
+   */
+  seedTool(name: string, tool: ToolsRecord[string]): void {
+    this.registry.seed(name, tool);
+  }
+
   resolve(name: string): ResolvedAgentTool | undefined {
     const entry = this.registry.resolve(name);
     if (!entry) return undefined;

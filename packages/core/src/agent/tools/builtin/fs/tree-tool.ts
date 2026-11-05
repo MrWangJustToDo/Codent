@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getEnv, type CoreEnvFs } from "../../../../env";
 import { ExecutionError } from "../../../../env/types";
 import { isAbortError } from "../../../../runtime-types/abort.js";
+import { compareCodeUnits } from "../../../../utils/code-unit-order.js";
 import { headDisplayLines } from "../../../../utils/display-lines.js";
 import { toPosixPath, toPosixPathKey } from "../../../../utils/posix-path.js";
 import { TOOL_CANCELLED_MESSAGE } from "../../../stream/incomplete-tool-calls.js";
@@ -81,7 +82,7 @@ export async function walkTree(rootPath: string, options: WalkTreeOptions): Prom
       return;
     }
 
-    for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of [...entries].sort((a, b) => compareCodeUnits(a.name, b.name))) {
       if (results.length >= MAX_TREE_ENTRIES) return;
       // Checked per entry, not per directory: a directory can hold thousands, and each one costs a
       // stat below.

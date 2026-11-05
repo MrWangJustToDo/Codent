@@ -6,7 +6,7 @@ import { truncateText } from "../../utils/text-truncation.js";
 
 import { readEventPayload as p } from "./payload.js";
 
-import type { AgentEventPayloadMap } from "../../runtime-types/agent-event-payloads.js";
+import type { TelemetryEventType } from "../../runtime-types/agent-events.js";
 import type { AgentEvent, AgentEventType } from "../agent-event-bus";
 import type { LogCategory, LogLevel } from "../agent-log/types.js";
 import type { SubagentStopReason } from "../subagent/subagent-stop-reason.js";
@@ -74,7 +74,7 @@ const SUBAGENT_STOP_WORDING: Record<SubagentStopReason, string> = {
  * event still requires an entry (compile-checked) while session-projection
  * events (e.g. `agent:state`) stay out of the log stream.
  */
-const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRuleEntry> = {
+const TELEMETRY_EVENT_LOG_RULES: Record<TelemetryEventType, EventLogRuleEntry> = {
   // ============================================================================
   // Session lifecycle
   // ============================================================================
@@ -627,7 +627,7 @@ const TELEMETRY_EVENT_LOG_RULES: Record<keyof AgentEventPayloadMap, EventLogRule
  * fastest way to make the timeline unreadable. Typed as an exhaustive `false` map so a new projection
  * event cannot land without the author stating it.
  */
-export const PROJECTION_EVENT_LOG_RULES: Record<Exclude<AgentEventType, keyof AgentEventPayloadMap>, false> = {
+export const PROJECTION_EVENT_LOG_RULES: Record<Exclude<AgentEventType, TelemetryEventType>, false> = {
   "agent:state": false,
   "session:messages": false,
   "session:queues": false,

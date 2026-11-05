@@ -75,10 +75,13 @@ export function getUiToolState(part: ToolCallPart): UiToolState {
     // a host that trusted the state alone painted the user's Esc as a red error.
     if (isCancelledToolCall(part)) return "output-available";
     if (part.state === "error") return "output-error";
+    // `ok: false` is the other success flag built-ins use (`create_plan` / `update_plan` report a
+    // rejected plan that way instead of throwing, and a shadowed extension tool may use either).
+    // Reading only `success` painted a failed plan with a green check.
     const failed =
       typeof part.output === "object" &&
       part.output !== null &&
-      (part.output as { success?: boolean }).success === false;
+      ((part.output as { success?: boolean }).success === false || (part.output as { ok?: boolean }).ok === false);
     return failed ? "output-error" : "output-available";
   }
 

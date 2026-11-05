@@ -7,6 +7,7 @@
 
 import { getFirstUserInput } from "../../agent/compaction/message-utils.js";
 import { dehydrateUIMessages, hydrateUIMessages, type MediaHydrationMiss } from "../../agent/media/media-utils.js";
+import { markRestoreReadFailure } from "../../agent/session/session-restore.js";
 import { runSideTextQuery } from "../../models/adapter/side-text-query.js";
 import { errorMessage } from "../../utils/errors.js";
 
@@ -573,8 +574,18 @@ export class SessionService {
   async readSessionForRestore(sessionId: string, input: SessionRestoreInput = {}): Promise<RestoredSessionRead> {
     if (!this.store) throw new Error("Session store not available");
 
-    const session = await this.store.load(sessionId);
-    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    // Mark a missing/corrupt target. This is the `/resume <bad id>` case: nothing of the target was
+    // read, so the recovery must not re-load the departure from disk (that would roll back an
+    // in-memory message whose earlier persist failed). A later failure — including the canonical
+    // rewrite below — is NOT marked, because the target was readable and the switch's recovery path
+    // still owns the cleanup.
+    let session: SessionData | null;
+    try {
+      session = await this.store.load(sessionId);
+    } catch (error) {
+      throw markRestoreReadFailure(error);
+    }
+    if (!session) throw markRestoreReadFailure(new Error(`Session not found: ${sessionId}`));
 
     // Hydrate reads media files; canonicalize re-extracts media:// refs (writes).
     // Neither must abort a resume on media IO failure, so degrade to the stored

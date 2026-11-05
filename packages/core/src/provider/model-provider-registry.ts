@@ -19,7 +19,11 @@ export function registerModelProvider(provider: ModelProvider): void {
 export function clearModelProvider(): void {
   const prev = ambientProvider;
   ambientProvider = null;
-  void prev?.destroy?.();
+  // Best-effort, but not an unhandled rejection: an async `destroy` that fails used to escape as
+  // `unhandledRejection` from a synchronous clear path.
+  void Promise.resolve()
+    .then(() => prev?.destroy?.())
+    .catch(() => undefined);
 }
 
 /** Whether an ambient model provider is registered. */

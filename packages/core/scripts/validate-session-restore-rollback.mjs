@@ -172,5 +172,58 @@ assert.deepEqual(released, ["ses_B"]);
   assert.equal(claims.get("ses_A"), m.id, "the departure claim was never handed over");
 }
 
+// A `/resume <missing id>` fails at the READ. Nothing of the target was applied, so the departure
+// must NOT be re-loaded from disk: that would replace the live transcript with whatever last landed
+// and silently drop an in-memory message whose persist had failed.
+{
+  const loads = [];
+  const leavingA = {
+    ...target,
+    id: "ses_A",
+    name: "A",
+    model: "mA",
+    uiMessages: [{ id: "unsaved-u1", role: "user", parts: [{ type: "text", text: "not on disk yet" }] }],
+  };
+  const missingStore = {
+    load: async (id) => {
+      loads.push(id);
+      return id === "ses_A" ? { ...leavingA, uiMessages: [] } : null;
+    },
+    save: async () => {},
+    exists: async () => true,
+    getEnv: () => ({ rootPath: "/tmp/opencode/restore-rollback", path: { join: (...parts) => parts.join("/") } }),
+  };
+  const s = new SessionService();
+  s.setStore(missingStore, { modelStyle: "openai", model: "mA" });
+  s.setSessionData({ ...leavingA });
+  const m = new ManagedAgent(
+    { name: "recover-missing", model: "mA" },
+    { log: new AgentLog(), tools: {}, todoManager: null, session: s }
+  );
+  const claims = new Map([["ses_A", m.id]]);
+  m.manager = {
+    acquireSessionOwnership: (id, agentId) => {
+      const owner = claims.get(id);
+      if (owner && owner !== agentId) return false;
+      claims.set(id, agentId);
+      return true;
+    },
+    releaseSessionOwnership: (id, agentId) => {
+      if (claims.get(id) === agentId) claims.delete(id);
+    },
+    getLogExtension: () => ({ attachSink: () => () => {} }),
+  };
+
+  await assert.rejects(() => m.restoreSession("ses_missing"), /Session not found/);
+  assert.deepEqual(loads, ["ses_missing"], "a missing target is not answered by re-reading the departure");
+  assert.equal(m.getSessionData()?.id, "ses_A", "the departure stays active");
+  assert.equal(
+    m.getSessionData()?.uiMessages?.[0]?.id,
+    "unsaved-u1",
+    "an unsaved in-memory message survives a failed /resume"
+  );
+  assert.equal(claims.get("ses_A"), m.id, "the departure claim was never handed over");
+}
+
 clearCoreEnv();
 console.log("session-restore-rollback validation passed");

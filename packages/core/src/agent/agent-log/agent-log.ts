@@ -363,10 +363,14 @@ export class AgentLog {
   attachFileSink(options: AgentLogFileSinkOptions): () => void {
     const level = configuredLogLevel();
     if (level) this.setMinLevel(level);
+    // `attachSink` only re-points the seam; it cannot release the previous sink. This is the
+    // fallback path (embedded hosts call it directly), so land that sink's pending batch first —
+    // otherwise a second call dropped the lines written since the last flush.
+    this.sinkFlushSync?.();
     const sink = createJsonlFileSink(options);
     this.attachSink(sink);
     return () => {
-      void sink.detach();
+      void sink.detach().catch(() => undefined);
       this.detachSink(sink.handleEntry);
     };
   }

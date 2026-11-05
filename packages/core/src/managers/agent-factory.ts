@@ -117,6 +117,10 @@ export async function buildManagedAgent({
   try {
     const toolsRecord = { ...(await buildToolset({ profile: toolsetProfile, managed })) };
     managed.tools = toolsRecord;
+    // Bind the registry to the record the factory just built. The service was constructed with an
+    // empty placeholder, so without this every read (approval / presentation / catalog) fell back to
+    // `useTools`' lazy re-seed on first use, and anything that read before that saw no tools.
+    managed.toolService.useTools(managed.tools);
     managed.runtime = runtime;
     managed.resolveTextAdapter = () => resolveTextAdapterForManaged(managed);
     // Scoped unified event bus for this agent. Routes session-channel projections

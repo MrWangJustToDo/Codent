@@ -51,9 +51,14 @@ export function serverAdvertisedModels(info: ProviderInfoResponse): readonly str
  *
  * @throws if the server does not expose provider info or returns a non-remote payload.
  */
-export async function fetchProviderInfo(serverUrl: string): Promise<ProviderInfoResponse> {
+export async function fetchProviderInfo(
+  serverUrl: string,
+  fetcher: typeof fetch = fetch
+): Promise<ProviderInfoResponse> {
   const baseUrl = serverUrl.replace(/\/+$/, "");
-  const infoRes = await fetch(`${baseUrl}/api/provider/info`);
+  // `fetcher` is the owning runtime's `CoreEnv.fetch` when the caller has one: a remote workspace
+  // may need its proxy/timeouts, and global `fetch` bypasses the runtime abstraction entirely.
+  const infoRes = await fetcher(`${baseUrl}/api/provider/info`);
   if (!infoRes.ok) {
     throw new Error(
       `Remote provider unavailable at ${baseUrl}/api/provider/info (HTTP ${infoRes.status}). ` +
@@ -72,9 +77,9 @@ export async function fetchProviderInfo(serverUrl: string): Promise<ProviderInfo
  *
  * @throws if the server does not expose provider info or returns an error.
  */
-export async function createRemoteProvider(serverUrl: string): Promise<ModelProvider> {
+export async function createRemoteProvider(serverUrl: string, fetcher: typeof fetch = fetch): Promise<ModelProvider> {
   const baseUrl = serverUrl.replace(/\/+$/, "");
-  const info = await fetchProviderInfo(serverUrl);
+  const info = await fetchProviderInfo(serverUrl, fetcher);
   return {
     getConnection: async () => ({
       mode: "remote",

@@ -1,5 +1,5 @@
 /**
- * Typed payloads for {@link AgentEventType}.
+ * Typed payloads for {@link TelemetryEventType}.
  *
  * Wire shape uses `payload` (not a loose `data` bag). Field names for tools keep
  * existing snake_case keys (`tool_name`, `tool_call_id`) used by Event→Log and app timing.
@@ -11,7 +11,7 @@
  * no semantics — only where each family is written down.
  */
 
-import type { AgentEventType } from "./agent-events.js";
+import type { TelemetryEventType } from "./agent-events.js";
 import type { AgentEventPayloads } from "./event-payloads/agent.js";
 import type { CompactionEventPayloads } from "./event-payloads/compaction.js";
 import type { PlanEventPayloads } from "./event-payloads/plan.js";
@@ -36,4 +36,10 @@ export type AgentEventPayloadMap = SessionEventPayloads &
   SubagentEventPayloads &
   PlanEventPayloads;
 
-export type AgentEventPayload<T extends AgentEventType> = AgentEventPayloadMap[T];
+/**
+ * Payload by telemetry event type.
+ *
+ * Named `TelemetryEventPayload` so it cannot be confused with the bus registry's
+ * `AgentEventPayload` (which covers projection events too).
+ */
+export type TelemetryEventPayload<T extends TelemetryEventType> = AgentEventPayloadMap[T];

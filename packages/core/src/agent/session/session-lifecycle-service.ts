@@ -8,6 +8,8 @@
 
 import { errorMessage } from "../../utils/errors.js";
 
+import { isRestoreReadFailure } from "./session-restore.js";
+
 import type { SessionSwitchReason } from "../../runtime-types/agent-event-payloads.js";
 import type { SessionRuntime } from "../../runtime-types/session-runtime.js";
 import type { SessionData } from "../persistence/types.js";
@@ -376,7 +378,7 @@ export class SessionLifecycleService {
       this.rt.transcript.sessionPersistence.clearRestorePlaceholder();
       if (this.rt.transcript.getSessionData()?.id !== sessionId) {
         this.rt.lease.abortClaim();
-        await this.recoverLeavingSession(leavingId);
+        await this.recoverLeavingSession(leavingId, error);
       }
       throw error;
     }
@@ -402,8 +404,15 @@ export class SessionLifecycleService {
    * ended the aborted run's streams and cascaded the abort to its children; what it leaves
    * (ended buffers, aborted children, extension slots) describes this same conversation.
    */
-  private async recoverLeavingSession(leavingId: string | undefined): Promise<void> {
+  private async recoverLeavingSession(leavingId: string | undefined, cause: unknown): Promise<void> {
     if (!leavingId) return;
+    // A failure BEFORE the read means nothing was applied: the agent is still on the leaving
+    // transcript (the target was never adopted, and `unloadCurrent` only stopped producers). Reloading
+    // from disk here would roll the session back to the last successful persist — silently dropping
+    // messages whose write had failed — which is the bug this recovery was meant to avoid.
+    // A failure after the read may have applied the target's model/mode/UI, so that case still
+    // reloads (and the disk record is authoritative because writes were drained before the load).
+    if (isRestoreReadFailure(cause)) return;
     try {
       await this.rt.transcript.sessionPersistence.restore(leavingId);
     } catch (error) {

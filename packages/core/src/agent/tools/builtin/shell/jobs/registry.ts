@@ -160,8 +160,12 @@ let teardownHookRegistered = false;
 function ensureTeardownHook(): void {
   if (teardownHookRegistered) return;
   teardownHookRegistered = true;
-  registerEnvTeardownHook(() => {
+  registerEnvTeardownHook((env) => {
     for (const registry of [...liveRegistries]) {
+      // Only the workspace being cleared. `clearCoreEnv()` is process-scoped, but a background job
+      // belongs to the runtime that started it: reaping every registry on any teardown killed a
+      // second instance's running commands.
+      if (!registry.belongsTo(env?.rootPath)) continue;
       // Best-effort and intentionally not awaited: the hook is synchronous. `destroyAll` preserves
       // terminal un-notified records, so a subsequent resume can still deliver them.
       void registry.destroyAll().catch(() => undefined);
@@ -177,6 +181,12 @@ export class CommandJobRegistry {
   ) {
     ensureTeardownHook();
     liveRegistries.add(this);
+  }
+
+  /** Whether a `clearCoreEnv(rootPath)` for `rootPath` owns this registry's jobs. */
+  belongsTo(rootPath?: string): boolean {
+    if (!rootPath) return true;
+    return this.env === undefined || this.env.rootPath === rootPath;
   }
 
   private readonly jobs = new Map<string, CommandJobRecord>();

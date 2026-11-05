@@ -27,7 +27,7 @@ import type { ResolvedCoreEnv } from "../env";
 import type { AgentManager } from "./agent-manager.js";
 import type { ManagedAgent, ManagedAgentConfig } from "./managed-agent.js";
 import type { AgentEventPayloadMap, SessionDiagnosticArea } from "../runtime-types/agent-event-payloads.js";
-import type { AgentEventType } from "../runtime-types/agent-events.js";
+import type { TelemetryEventType } from "../runtime-types/agent-events.js";
 import type { AnyServerTool } from "@tanstack/ai";
 
 /** Phases a bootstrap-time extension failure can be attributed to. */
@@ -109,7 +109,7 @@ export class AgentBootstrap {
    * a failure the extension runner cannot see yet (module load / factory throw →
    * `agent:extension-error`), and the aggregated report (`session:bootstrap-summary`).
    */
-  private emitEvent<T extends AgentEventType>(type: T, payload: AgentEventPayloadMap[T]): void {
+  private emitEvent<T extends TelemetryEventType>(type: T, payload: AgentEventPayloadMap[T]): void {
     this.deps.managed.emitEvent(type, payload);
   }
 
@@ -212,7 +212,13 @@ export class AgentBootstrap {
       skillRegistry.registerAll(BUILTIN_SKILLS);
     }
 
-    managed.tools[BUILTIN_TOOL_NAMES.task] = createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager });
+    // Through the service, not a direct record write: `task` must exist in the registry's stacks
+    // from the same moment the record has it (approval, presentation and the catalog all read the
+    // registry, and waiting for a later `useTools` left them disagreeing).
+    managed.toolService.seedTool(
+      BUILTIN_TOOL_NAMES.task,
+      createTaskTool({ parentAgentId: managed.id, manager: this.deps.manager })
+    );
     report.skills = { count: skillRegistry.size };
     return skillRegistry;
   }
@@ -340,12 +346,16 @@ export class AgentBootstrap {
       for (const factory of config.extensions) {
         try {
           const api = await factory.create();
+          // `ExtensionFactory.env` is the extension's own config map, and `ExtensionConfig` exposes
+          // it as `config` (`ctx.env`). Writing `{ env }` here was silently dropped by the
+          // structural type (the object literal is spread-built, so excess-property checking never
+          // ran) and every factory-provided setting vanished.
           const extensionConfig =
             factory.enabled === false || factory.env
               ? {
                   id: api.id,
                   ...(factory.enabled === false ? { enabled: false } : {}),
-                  ...(factory.env ? { env: { ...factory.env } } : {}),
+                  ...(factory.env ? { config: { ...factory.env } } : {}),
                 }
               : undefined;
           recordExtensionResult(report, api.id, await extensionRunner.loadExtension(api, extensionConfig));

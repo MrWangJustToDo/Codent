@@ -69,6 +69,10 @@ function resolveId(input: AgentStreamResetInput): { id: string; channel: AgentSt
 
 /** Max completed commands retained for remount (both stdout/stderr channels count as one). */
 const MAX_COMPLETED_COMMAND_ENTRIES = 16;
+/** Completed task summaries retained for `/summary-streams` after their run ends. */
+const MAX_COMPLETED_TASK_ENTRIES = 16;
+/** A newline-free chunk may not grow a task/compact preview's pending line past this. */
+const MAX_SUMMARY_PENDING_LENGTH = 64 * 1024;
 /** Max settled command ids remembered to reject late transport chunks. */
 const MAX_CLOSED_COMMAND_IDS = 1024;
 
@@ -172,7 +176,13 @@ export class AgentStreamHub {
       maxCompleteLines: options?.maxCompleteLines ?? AGENT_STREAM_SNAPSHOT_LINE_CAP,
     });
     entry.lines = next.lines;
-    entry.pendingLine = next.pendingLine;
+    // The line buffer only trims COMPLETE lines; a stream that emits one huge newline-free chunk
+    // (a minified JSON blob, a long stack trace) would otherwise grow `pendingLine` without bound.
+    // Commands have the per-stream byte cap below; summaries had none.
+    entry.pendingLine =
+      entry.source === "command" || next.pendingLine.length <= MAX_SUMMARY_PENDING_LENGTH
+        ? next.pendingLine
+        : next.pendingLine.slice(-MAX_SUMMARY_PENDING_LENGTH);
     entry.seq += 1;
     this.emit({
       type: "append",
@@ -199,6 +209,30 @@ export class AgentStreamHub {
       channel: entry.channel,
       seq: entry.seq,
     });
+    // Task streams are keyed by tool-call id, so every delegated task used to leave a dead entry
+    // behind until the session switched (`clearAll`). `pruneCommandEntries` deliberately skips
+    // non-command sources, so this is the only bound for them.
+    if (entry.source === "task") this.pruneTaskEntries(key);
+  }
+
+  /**
+   * Bound completed task summaries; the active stream is never evicted.
+   *
+   * A task's result also lives on its tool part, so dropping an old preview only costs a `/resume`
+   * snapshot line — keeping them forever cost memory in every long session and grew the payload of
+   * `/summary-streams` without bound.
+   */
+  private pruneTaskEntries(keepKey: string): void {
+    const completed: string[] = [];
+    for (const [key, entry] of this.streams) {
+      if (entry.source !== "task" || entry.status !== "ended" || key === keepKey) continue;
+      completed.push(key);
+    }
+    while (completed.length >= MAX_COMPLETED_TASK_ENTRIES) {
+      const oldest = completed.shift();
+      if (!oldest) break;
+      this.streams.delete(oldest);
+    }
   }
 
   /** Append a command chunk; opens the stdout/stderr stream on first use. */

@@ -43,21 +43,29 @@ function isSensitiveKey(key: string): boolean {
  * Objects keep their shape (a reader can see that a field existed) but a sensitive key's value is
  * replaced wholesale. Depth is bounded so a cyclic/huge payload cannot turn logging into a walk.
  */
-export function redactLogValue(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+export function redactLogValue(value: unknown, depth = 0, ancestors = new WeakSet<object>()): unknown {
   if (depth > 8) return "[redacted-depth]";
   if (typeof value === "string") return redactSecrets(value);
+  // `ancestors` is the CURRENT path, not every object ever seen. A true cycle is returned as-is so
+  // the serializer still rejects the whole entry (the documented contract: an unserializable value
+  // is dropped, never written as a placeholder). A DAG — the same object referenced twice on
+  // sibling branches — is NOT a cycle, so it is walked again and redacted at both occurrences
+  // instead of the second one leaking because the first put it in a global `seen` set.
   if (Array.isArray(value)) {
-    if (seen.has(value)) return value; // preserve the cycle so the serializer still rejects it
-    seen.add(value);
-    return value.map((item) => redactLogValue(item, depth + 1, seen));
+    if (ancestors.has(value)) return value;
+    ancestors.add(value);
+    const out = value.map((item) => redactLogValue(item, depth + 1, ancestors));
+    ancestors.delete(value);
+    return out;
   }
   if (value && typeof value === "object") {
-    if (seen.has(value)) return value;
-    seen.add(value);
+    if (ancestors.has(value)) return value;
+    ancestors.add(value);
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = isSensitiveKey(key) ? "[redacted]" : redactLogValue(item, depth + 1, seen);
+      out[key] = isSensitiveKey(key) ? "[redacted]" : redactLogValue(item, depth + 1, ancestors);
     }
+    ancestors.delete(value);
     return out;
   }
   return value;

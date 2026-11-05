@@ -19,6 +19,8 @@
  * ```
  */
 
+import { compareCodeUnits } from "../../utils/code-unit-order.js";
+
 import { SkillLoader } from "./skill-loader.js";
 
 import type { Skill, SkillSource, SkillSummary } from "./types.js";
@@ -141,11 +143,23 @@ export class SkillRegistry {
    * @returns Array of skill summaries (name + description + source)
    */
   list(): SkillSummary[] {
-    return Array.from(this.skills.values()).map((skill) => ({
+    return this.sortedSkills().map((skill) => ({
       name: skill.name,
       description: skill.description,
       source: skill.source,
     }));
+  }
+
+  /**
+   * Skills in a stable order.
+   *
+   * Registration order is directory-scan order (`readdir`), which is filesystem- and host-dependent.
+   * The `<skills>` index is a cacheable prompt section, so an unstable order changed its content hash
+   * and re-injected the whole block on an unrelated turn. Sort by code unit (not `localeCompare`:
+   * collation is ICU/locale dependent — see `compareCodeUnits`).
+   */
+  private sortedSkills(): Skill[] {
+    return Array.from(this.skills.values()).sort((a, b) => compareCodeUnits(a.name, b.name));
   }
 
   /**
@@ -171,8 +185,8 @@ export class SkillRegistry {
     }
 
     const lines: string[] = [];
-    for (const [name, skill] of this.skills) {
-      lines.push(`  - ${name} (${skill.source}): ${skill.description}`);
+    for (const skill of this.sortedSkills()) {
+      lines.push(`  - ${skill.name} (${skill.source}): ${skill.description}`);
     }
     return lines.join("\n");
   }
@@ -195,14 +209,14 @@ export class SkillRegistry {
    * Get all skill names.
    */
   names(): string[] {
-    return Array.from(this.skills.keys());
+    return this.sortedSkills().map((skill) => skill.name);
   }
 
   /**
    * Names of the currently loaded built-in skills.
    */
   builtinNames(): string[] {
-    return Array.from(this.skills.values())
+    return this.sortedSkills()
       .filter((skill) => skill.source === "builtin")
       .map((skill) => skill.name);
   }

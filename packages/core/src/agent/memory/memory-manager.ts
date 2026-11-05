@@ -21,6 +21,7 @@ import { parse as parseYaml } from "yaml";
 
 import { getEnv, type ResolvedCoreEnv } from "../../env";
 import { truncateToUtf8Bytes } from "../../utils/bytes.js";
+import { compareCodeUnits } from "../../utils/code-unit-order.js";
 import { splitFrontmatter } from "../../utils/frontmatter.js";
 import { slugifyName } from "../../utils/slug.js";
 
@@ -148,7 +149,7 @@ export class MemoryManager {
       const entries = await this.env.fs.readdir(this.memoryPath);
       const mdFiles = entries
         .filter((e) => e.type === "file" && e.name.endsWith(".md") && e.name !== MEMORY_INDEX_FILENAME)
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort((a, b) => compareCodeUnits(a.name, b.name));
 
       for (const entry of mdFiles) {
         try {

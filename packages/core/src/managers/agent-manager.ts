@@ -446,7 +446,12 @@ export class AgentManager {
     // The factory already built the default read-only subagent set; only an override needs to
     // replace it here.
     if (customTools !== undefined) {
+      // Replace the record AND rebuild the registry from it. Assigning the field alone left the
+      // registry resolving the factory's explore toolset while the runner executed this one.
+      // A subagent never loads extensions (`bootstrapRoot` runs for roots only), so there are no
+      // owner claims for `useTools` to refuse.
       subagent.tools = customTools ?? {};
+      subagent.toolService.useTools(subagent.tools);
       subagent.invalidateRunner();
     }
 

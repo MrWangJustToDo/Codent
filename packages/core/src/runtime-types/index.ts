@@ -12,8 +12,8 @@ export {
   resolveFinishStatus,
 } from "./agent-status.js";
 
-export type { AgentEventType, EmitAgentTelemetryFn } from "./agent-events.js";
-export type { AgentEventPayloadMap, AgentEventPayload, EmptyAgentEventPayload } from "./agent-event-payloads.js";
+export type { TelemetryEventType, EmitAgentTelemetryFn } from "./agent-events.js";
+export type { AgentEventPayloadMap, TelemetryEventPayload, EmptyAgentEventPayload } from "./agent-event-payloads.js";
 
 export type { ManagedAgent, AgentManager, UsageTracker, AgentUIChannel, AgentStatusController } from "./hosts.js";
 

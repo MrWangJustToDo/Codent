@@ -385,6 +385,15 @@ export function formatToolOutput(
         return formatTaskOutput(out as TaskOutput);
       case BUILTIN_TOOL_NAMES.createPlan:
       case BUILTIN_TOOL_NAMES.updatePlan:
+        // A REJECTED plan is the model's actionable failure and must stay visible; only a
+        // successful plan body is redundant with the PlanReadyBanner preview.
+        if (out.ok === false) {
+          return typeof out.error === "string"
+            ? out.error
+            : typeof out.message === "string"
+              ? out.message
+              : "Plan rejected";
+        }
         // Plan body is reviewed via PlanReadyBanner markdown preview — no tool output dump.
         return "";
       case BUILTIN_TOOL_NAMES.completePlan: {

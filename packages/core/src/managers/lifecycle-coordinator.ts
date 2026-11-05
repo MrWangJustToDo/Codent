@@ -92,6 +92,20 @@ export class LifecycleCoordinator {
         // Best-effort: teardown still has to close and flush what exists.
       }
 
+      // ORDER MATTERS: let the aborted run finish BEFORE removing what it writes through. The
+      // pump's final tool results/usage land through registrations, and doing extension teardown
+      // first revoked the lease under a run that was still unwinding (tail results were refused and
+      // the last assistant message could be lost). Background jobs stay after the extensions on
+      // purpose: their delivery goes through the extension middleware, so tearing that down first
+      // stops new work from being pushed into a session that is closing.
+      try {
+        // Let the pump write its final tool results/usage before persistence closes. The abort
+        // above should end it; a parked approval has no live pump and resolves immediately.
+        await managedAgent.getChatController?.()?.settleRun?.();
+      } catch {
+        // Best effort; close() still drains what was admitted.
+      }
+
       try {
         if (runner) {
           // Awaited: the shutdown hook is how an extension lands final work, and the teardown
@@ -101,14 +115,6 @@ export class LifecycleCoordinator {
         }
       } catch {
         // Teardown failures are reported per phase on the bus; continue to cleanup.
-      }
-
-      try {
-        // Let the pump write its final tool results/usage before persistence closes. The abort
-        // above should end it; a parked approval has no live pump and resolves immediately.
-        await managedAgent.getChatController?.()?.settleRun?.();
-      } catch {
-        // Best effort; close() still drains what was admitted.
       }
 
       try {

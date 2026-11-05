@@ -99,7 +99,11 @@ export class ExtensionTurnContext {
     const turnContextSections: ExtensionTurnContextSection[] = [];
     const ordered = sortByDispatchRank(Array.from(this.providers, ([id, entry]) => ({ id, ...entry })));
     for (const { id, provider } of ordered) {
+      // The provider snapshot was taken before the loop; an `await` above (another provider's
+      // content) gives a concurrent disable time to run. Calling the producer with no context made
+      // it throw and reported a phantom `agent:extension-error` on every turn until it was removed.
       const ctx = this.deps.getContext(id);
+      if (!ctx) continue;
       try {
         const value = await provider.content?.(ctx);
         if (value?.trim()) turnContextSections.push({ id: this.sectionKind(id), content: value.trim() });
@@ -161,9 +165,9 @@ export class ExtensionTurnContext {
     try {
       return (await produce()) ?? undefined;
     } catch (err) {
-      const message = errorMessage(err);
-      this.deps.log("warn", extensionId, `${source} disabledContent failed: ${message}`);
-      this.deps.reportFailure(extensionId, "disable-notice", message);
+      // One report, not two: `reportFailure` already emits `agent:extension-error`, which the log
+      // bridge writes as a row. Logging here as well produced a duplicate line for one failure.
+      this.deps.reportFailure(extensionId, "disable-notice", errorMessage(err));
       return undefined;
     }
   }

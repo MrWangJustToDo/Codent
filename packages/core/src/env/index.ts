@@ -520,6 +520,13 @@ export interface CoreEnv {
 // ============================================================================
 
 let _env: CoreEnv | null = null;
+/**
+ * Resolved form of {@link _env}, computed once at registration.
+ *
+ * `getEnv()` is on every tool hot path (87 call sites) and used to rebuild the object — including a
+ * fresh `cwd` closure — on each call, which also broke identity checks (`getEnv() !== getEnv()`).
+ */
+let _resolvedEnv: ResolvedCoreEnv | null = null;
 
 /** Resolved environment with all defaults applied (non-optional accessors). */
 export interface ResolvedCoreEnv extends CoreEnv {
@@ -554,6 +561,7 @@ export interface ResolvedCoreEnv extends CoreEnv {
  */
 export function registerCoreEnv(env: CoreEnv): void {
   _env = env;
+  _resolvedEnv = resolveCoreEnv(env);
 }
 
 /**
@@ -562,8 +570,11 @@ export function registerCoreEnv(env: CoreEnv): void {
  * Also best-effort kills any background command jobs.
  */
 export function clearCoreEnv(): void {
-  runEnvTeardownHooks();
+  // Pass the env being cleared: process-scoped hooks (background job registries) must only reap the
+  // runtime that is going away, not every runtime in a multi-instance process.
+  runEnvTeardownHooks(_env ?? undefined);
   _env = null;
+  _resolvedEnv = null;
 }
 
 /**
@@ -595,7 +606,7 @@ export function getEnv(): ResolvedCoreEnv {
         "See the CoreEnv interface for the required API surface."
     );
   }
-  return resolveCoreEnv(_env);
+  return (_resolvedEnv ??= resolveCoreEnv(_env));
 }
 
 /**

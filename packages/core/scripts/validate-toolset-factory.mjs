@@ -126,8 +126,8 @@ assert.match(factory, /Unknown agent profile/, "the factory rejects unknown prof
 assert.match(manager, /Subagents cannot spawn subagents/, "the manager enforces one child level");
 assert.match(
   manager,
-  /if \(customTools !== undefined\) \{\s*subagent\.tools = customTools/,
-  "only custom tools override the factory result"
+  /if \(customTools !== undefined\) \{[\s\S]*?subagent\.tools = customTools[\s\S]*?subagent\.toolService\.useTools\(subagent\.tools\)/,
+  "only custom tools override the factory result, through the tool registry"
 );
 assert.match(
   manager,

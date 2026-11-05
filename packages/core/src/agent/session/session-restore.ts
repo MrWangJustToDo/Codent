@@ -15,6 +15,31 @@ import type { SessionSyncTracker } from "../persistence/session-sync-tracker.js"
 import type { SessionData } from "../persistence/types.js";
 import type { UIMessage as TanStackUIMessage } from "@tanstack/ai";
 
+/**
+ * Marks an error thrown before the restore applied anything to the HOST.
+ *
+ * The distinction is what makes a failed `/resume` non-destructive: if the target could not even be
+ * read, the agent still holds the leaving transcript untouched, and re-reading that transcript from
+ * disk would replace newer in-memory messages with a stale record (a persist that failed earlier).
+ * A failure AFTER the apply phase does need the disk reload, because the target's model/mode/UI have
+ * already been written onto the host.
+ */
+export const RESTORE_READ_FAILED = Symbol.for("@codent/core/restore-read-failed");
+
+export function isRestoreReadFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as Record<symbol, unknown>)[RESTORE_READ_FAILED] === true
+  );
+}
+
+/** Tag an error thrown while READING the target, so recovery knows nothing was applied. */
+export function markRestoreReadFailure<T>(error: T): T {
+  if (typeof error === "object" && error !== null) {
+    Object.defineProperty(error, RESTORE_READ_FAILED, { value: true, configurable: true });
+  }
+  return error;
+}
+
 export function getSessionPersistInput(host: SessionHost, uiMessages?: TanStackUIMessage[]): SessionPersistInput {
   const mode = host.getModeState().snapshot();
   return {

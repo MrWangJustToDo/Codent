@@ -84,8 +84,8 @@ export interface ContextFactoryHost {
   ) => void;
   registerContextProvider: (extensionId: string, provider: ExtensionContextProvider, rank: DispatchRank) => () => void;
   registerMessageTransformer: (extensionId: string, transformer: MessageTransformer, rank: DispatchRank) => void;
-  /** Drop one transformer (the disposer a registration returns). */
-  disposeMessageTransformer: (extensionId: string, transformer: MessageTransformer) => void;
+  /** Drop one transformer (the disposer a registration returns). `false` = a newer one kept it. */
+  disposeMessageTransformer: (extensionId: string, transformer: MessageTransformer) => boolean;
 
   /** The bus surface an extension may emit on / query. */
   eventBus: Pick<ExtensionEventBus, "emit" | "hasInterceptors">;
@@ -274,6 +274,9 @@ export function createExtensionContext(
       });
       registrations.exitFlushRef = ref;
       return () => {
+        // Same lease rule as every other registration disposer: a callback retained from a dead
+        // incarnation must not edit the live one's ledger.
+        if (!host.isLive(context)) return;
         if (registrations.exitFlush === flush) registrations.exitFlush = null;
         // Identity-checked like `registerFlush` / `registerContextProvider`: a disposer held
         // across a replacement must not unregister the LIVE flush. The field guard alone was not
@@ -298,7 +301,11 @@ export function createExtensionContext(
       // clear the newer registration (mirrors `registerContextProvider` above).
       return () => {
         if (!host.isLive(context)) return;
-        host.disposeMessageTransformer(api.id, transformer);
+        // Only touch the ledger when the registry actually dropped THIS transformer. A stale
+        // disposer (an older transformer replaced by a newer one) is a no-op in the registry, and
+        // splicing anyway emptied the ledger — the extension's real transformer then survived
+        // disable/destroy and kept cloning every message on every model call.
+        if (!host.disposeMessageTransformer(api.id, transformer)) return;
         // A disposed transformer must also leave the registration ledger, or `hasLiveArtifacts`
         // still reports the incarnation as active after its only transformer was removed.
         const index = registrations?.messageTransformers.indexOf(api.id) ?? -1;

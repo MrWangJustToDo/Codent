@@ -84,9 +84,14 @@ export function bridgeTelemetryToAgentLog(
     const log = resolveLog(event);
     if (!log) return;
 
-    // Policy overrides must win before the specialized handlers: those events have their own
-    // multi-row formatting, but an explicit `false` still means "never write this event" and an
-    // explicit rule still means "use this".
+    // The table's `false` cells are authoritative, BEFORE any override. They are the projection /
+    // internal events (`session:messages`, `tool:chunk`, …), and letting a host policy re-enable
+    // one wrote a whole transcript snapshot into a single log line. The table already says "never".
+    if (DEFAULT_EVENT_LOG_RULES[event.type] === false) return;
+
+    // Policy overrides must still win before the specialized handlers: those events have their own
+    // multi-row formatting, but an explicit `false` means "never write this event" and an explicit
+    // rule means "use this".
     const override = policy?.events?.[event.type];
     if (override === false) return;
     if (override) {
@@ -94,11 +99,6 @@ export function bridgeTelemetryToAgentLog(
       writeLog(log, override, event, override.formatMessage(event));
       return;
     }
-
-    // The table can also silence a specialized event. Without this check the handler ran first, so
-    // flipping a `"specialized"` cell to `false` looked like a suppression and wrote rows anyway —
-    // fail-open on the one decision the table is supposed to own.
-    if (DEFAULT_EVENT_LOG_RULES[event.type] === false) return;
 
     const specialized = (
       SPECIALIZED_EVENT_LOG_HANDLERS as Record<string, ((l: AgentLog, e: AgentEvent) => void) | undefined>

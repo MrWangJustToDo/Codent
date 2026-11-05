@@ -4,10 +4,8 @@ import type {
   EmitAgentTelemetryFn,
   EmitAgentTelemetryOptions,
   EmitPayloadArgs,
+  TelemetryEventType,
 } from "../../runtime-types/agent-events.js";
-
-/** Telemetry event names (payload-map keys); excludes session-projection events. */
-type TelemetryEventType = keyof AgentEventPayloadMap;
 
 export type { EmitAgentTelemetryFn, EmitAgentTelemetryOptions } from "../../runtime-types/agent-events.js";
 

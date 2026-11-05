@@ -115,10 +115,10 @@ export class MessageTransformerRegistry {
    * Drop an extension's transformer, but only when `transformer` is still the registered
    * one — a stale disposer must not clear a later re-registration.
    */
-  dispose(extensionId: string, transformer: MessageTransformer): void {
-    if (this.transformers.get(extensionId)?.transformer === transformer) {
-      this.transformers.delete(extensionId);
-    }
+  dispose(extensionId: string, transformer: MessageTransformer): boolean {
+    if (this.transformers.get(extensionId)?.transformer !== transformer) return false;
+    this.transformers.delete(extensionId);
+    return true;
   }
 
   /** Remove every transformer registered by an extension (disable / destroy). */

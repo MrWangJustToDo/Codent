@@ -20,8 +20,15 @@
  * This module is part of the `env` layer and must stay import-free.
  */
 
+/**
+ * A hook receives the env that is being cleared (absent when the caller has no env registered).
+ * Process-scoped resources that belong to ONE workspace must filter on it; a hook that ignores the
+ * argument reaps every runtime in a multi-instance process.
+ */
+export type EnvTeardownHook = (env?: { rootPath: string }) => void;
+
 /** Teardown callbacks, in registration order. */
-const hooks = new Set<() => void>();
+const hooks = new Set<EnvTeardownHook>();
 
 /**
  * Register a callback to run when the CoreEnv is cleared.
@@ -29,7 +36,7 @@ const hooks = new Set<() => void>();
  * @returns an unsubscribe function, so a resource that is itself destroyed can
  *          stop being called on the next teardown.
  */
-export function registerEnvTeardownHook(hook: () => void): () => void {
+export function registerEnvTeardownHook(hook: EnvTeardownHook): () => void {
   hooks.add(hook);
   return () => hooks.delete(hook);
 }
@@ -39,10 +46,10 @@ export function registerEnvTeardownHook(hook: () => void): () => void {
  * teardown runs while the host is giving up, and one failing resource may not
  * strand the rest.
  */
-export function runEnvTeardownHooks(): void {
+export function runEnvTeardownHooks(env?: { rootPath: string }): void {
   for (const hook of hooks) {
     try {
-      hook();
+      hook(env);
     } catch {
       // Teardown is best-effort; a failing hook is not a reason to leak the others.
     }

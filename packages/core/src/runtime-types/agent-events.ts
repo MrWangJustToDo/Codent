@@ -5,11 +5,14 @@ import type { AgentEventPayloadMap } from "./agent-event-payloads.js";
 // ============================================================================
 
 /**
- * Agent telemetry event types (emitted via ManagedAgent.emitEvent /
- * emitAgentTelemetry). Derived from the payload map — the authoritative full
- * registry (including session-projection events) lives on `AgentEventBus`.
+ * Telemetry event types (emitted via ManagedAgent.emitEvent / emitAgentTelemetry).
+ *
+ * Deliberately NOT named `AgentEventType`: the authoritative full registry (telemetry + session
+ * projection events) lives on `AgentEventBus`, and two same-named types in one package meant a
+ * consumer could hold the narrower one while calling the wider bus API (`AgentEventPayload<...>`
+ * failing its own constraint was the first symptom). Anything host-facing uses the bus type.
  */
-export type AgentEventType = keyof AgentEventPayloadMap;
+export type TelemetryEventType = keyof AgentEventPayloadMap;
 
 /**
  * Keys of a payload type whose value is required (not `undefined`-able).
@@ -57,7 +60,7 @@ export type EmitPayloadArgs<T> =
     : [payload?: T, options?: EmitAgentTelemetryOptions];
 
 /** Callback shape for services/middleware that emit lifecycle telemetry. */
-export type EmitAgentTelemetryFn = <T extends AgentEventType>(
+export type EmitAgentTelemetryFn = <T extends TelemetryEventType>(
   type: T,
   ...args: EmitPayloadArgs<AgentEventPayloadMap[T]>
 ) => void;

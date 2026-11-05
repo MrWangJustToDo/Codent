@@ -349,8 +349,11 @@ export async function saveModelsConfig(config: ModelsConfig, rootPath?: string, 
 // Remote provider info (server mode)
 // ============================================================================
 
-export async function resolveModelsConfigFromProvider(serverUrl: string): Promise<ModelsConfig> {
-  const info = await fetchProviderInfo(serverUrl);
+export async function resolveModelsConfigFromProvider(
+  serverUrl: string,
+  fetcher: typeof fetch = fetch
+): Promise<ModelsConfig> {
+  const info = await fetchProviderInfo(serverUrl, fetcher);
   // A provider source ALWAYS routes through the server proxy: keys stay on the
   // server and the client must never talk to an upstream directly. Collapsing
   // the server's config (if any) into one remote-provider entry is what keeps
@@ -382,9 +385,9 @@ interface AgentModelsResponse {
   active?: ModelsConfigActive;
 }
 
-async function fetchAgentModels(serverUrl: string): Promise<AgentModelsResponse> {
+async function fetchAgentModels(serverUrl: string, fetcher: typeof fetch = fetch): Promise<AgentModelsResponse> {
   const baseUrl = serverUrl.replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/api/agent/models`);
+  const res = await fetcher(`${baseUrl}/api/agent/models`);
   if (!res.ok) {
     throw new Error(`Agent-session server unavailable at ${baseUrl}/api/agent/models (HTTP ${res.status}).`);
   }
@@ -402,8 +405,11 @@ async function fetchAgentModels(serverUrl: string): Promise<AgentModelsResponse>
  * @returns the config, or `null` when a local file mode config does not exist.
  */
 export async function resolveModelsConfig(source: ModelsConfigSource): Promise<ModelsConfig | null> {
+  // The owning runtime's env, resolved once: its `fetch` is the only HTTP seam a remote workspace
+  // can proxy. Falling back to global `fetch` keeps legacy callers (no env) working.
+  const fetcher = source.env ? resolveCoreEnv(source.env).fetch : undefined;
   if (source.kind === "provider" && source.serverUrl) {
-    return resolveModelsConfigFromProvider(source.serverUrl);
+    return resolveModelsConfigFromProvider(source.serverUrl, fetcher);
   }
   return loadModelsConfigFromFile(source.rootPath, source.env);
 }
@@ -412,7 +418,10 @@ export async function resolveModelsConfig(source: ModelsConfigSource): Promise<M
 // Load into memory
 // ============================================================================
 
-export async function loadModelEntries(config: ModelsConfig): Promise<LoadedModelEntry[]> {
+export async function loadModelEntries(
+  config: ModelsConfig,
+  fetcher: typeof fetch = fetch
+): Promise<LoadedModelEntry[]> {
   const entries: LoadedModelEntry[] = [];
   for (const entry of config.models) {
     if (entry.type === "direct") {
@@ -428,7 +437,7 @@ export async function loadModelEntries(config: ModelsConfig): Promise<LoadedMode
     // remote-provider: ask the server for its connection + selectable list. The allowlist is the
     // shared `serverAdvertisedModels` — its ids ∪ its recorded `active.model` ∪ the served model —
     // so this list and bootstrap's `selectModel` cannot disagree about what the proxy accepts.
-    const info = await fetchProviderInfo(entry.url);
+    const info = await fetchProviderInfo(entry.url, fetcher);
     const baseUrl = entry.url.replace(/\/+$/, "");
     const remoteModels = [...serverAdvertisedModels(info)];
     entries.push({
@@ -456,8 +465,9 @@ export async function loadModelEntries(config: ModelsConfig): Promise<LoadedMode
  *   session entries and must not write them into `config.model` mid-session.
  */
 export async function loadModels(source: ModelsConfigSource): Promise<LoadedModelsState | null> {
+  const fetcher = source.env ? resolveCoreEnv(source.env).fetch : undefined;
   if (source.kind === "session" && source.serverUrl) {
-    const data = await fetchAgentModels(source.serverUrl);
+    const data = await fetchAgentModels(source.serverUrl, fetcher);
     const entries: LoadedModelEntry[] = data.entries.map((e) => ({
       type: "session" as const,
       style: e.style,
@@ -471,7 +481,7 @@ export async function loadModels(source: ModelsConfigSource): Promise<LoadedMode
   }
   const config = await resolveModelsConfig(source);
   if (!config) return null;
-  const entries = await loadModelEntries(config);
+  const entries = await loadModelEntries(config, fetcher);
   let active: ModelsConfigActive = config.active ?? { entryIndex: 0 };
   // A hand-edited / stale file can point past the entry list (a deleted entry). The schema has no
   // upper bound, and `registerModelProviderForEntry` throws `No model entry at index N` — which a

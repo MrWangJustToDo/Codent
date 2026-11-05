@@ -193,7 +193,6 @@ function logCompactionManualError(log: AgentLog, event: AgentEvent): void {
 /** Transition events whose meaning is already carried by a dedicated event. */
 const MECHANICAL_STATE_EVENTS: ReadonlySet<string> = new Set([
   "prepare",
-  "stream-start",
   "stream-chunk",
   "settle",
   "reset",

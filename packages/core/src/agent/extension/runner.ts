@@ -376,9 +376,8 @@ export class ExtensionRunner {
       registerMessageTransformer: (extensionId, transformer, rank) => {
         this.messageTransformers.register(extensionId, transformer, rank);
       },
-      disposeMessageTransformer: (extensionId, transformer) => {
-        this.messageTransformers.dispose(extensionId, transformer);
-      },
+      disposeMessageTransformer: (extensionId, transformer) =>
+        this.messageTransformers.dispose(extensionId, transformer),
       eventBus: {
         emit: (event) => this.eventBus.emit(event),
         hasInterceptors: (type) => this.eventBus.hasInterceptors(type),
@@ -590,13 +589,20 @@ export class ExtensionRunner {
    */
   async emitSessionShutdown(agentId: string): Promise<void> {
     const sessionId = this.options.getRuntime?.()?.sessionId() ?? null;
-    await this.eventBus
-      .emit({
-        type: "session:shutdown",
-        payload: { agentId, ...(sessionId ? { sessionId } : {}) },
-        defaultReturn: undefined,
-      })
-      .catch(() => {});
+    // Bounded like every other extension callback. A shutdown handler that never settles used to
+    // hold the whole teardown (`LifecycleCoordinator` awaits this, and `AgentManager.dispose()`
+    // awaits that), turning "quit the app" into a hang with no timeout anywhere in the chain.
+    await withCallbackTimeout(
+      this.eventBus
+        .emit({
+          type: "session:shutdown",
+          payload: { agentId, ...(sessionId ? { sessionId } : {}) },
+          defaultReturn: undefined,
+        })
+        .catch(() => {}),
+      "session:shutdown",
+      this.callbackTimeoutMs
+    ).catch(() => {});
   }
 
   /** The extension tools this runner still holds, one per name — a mirror of what the host holds,
@@ -1093,9 +1099,15 @@ export class ExtensionRunner {
           error: errorMessage(error),
         });
       }
+      // `teardownIncarnation` awaits the extension's own `deactivate`, so `destroyAll` can have run
+      // to completion in the meantime. Proceeding would install a fresh context into a runner that
+      // is already destroyed: `destroyAll` iterated its instances once, so nothing would ever
+      // teardown this incarnation and `contexts.set` would look live to every lease check.
+      if (this.destroyed) return { ok: false, message: "ExtensionRunner has been destroyed" };
     }
 
     if (enabled) {
+      if (this.destroyed) return { ok: false, message: "ExtensionRunner has been destroyed" };
       // A fresh context per activation: the context IS the registration lease (see
       // `isContextLive`), so a callback retained from the previous incarnation cannot land its
       // tool/transformer in this one. The registrations object is shared on purpose — it is this

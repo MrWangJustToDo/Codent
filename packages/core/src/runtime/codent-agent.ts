@@ -253,17 +253,28 @@ export class CodentAgent {
    */
   async dispose(): Promise<void> {
     // Cache the in-flight teardown: a second caller must await the same completion, not observe
-    // a half-finished shutdown because `disposed` was set before the first await.
-    return (this.disposePromise ??= this.disposeInner());
+    // a half-finished shutdown because `disposed` was set before the first await. A FAILED teardown
+    // drops the cache so a retry can finish the sessions that are still owned — keeping it meant a
+    // transient failure made every later `dispose()` (and every owned agent) permanently stuck.
+    if (!this.disposePromise) {
+      const attempt = this.disposeInner();
+      this.disposePromise = attempt;
+      void attempt.catch(() => {
+        if (this.disposePromise === attempt) this.disposePromise = undefined;
+      });
+    }
+    return this.disposePromise;
   }
 
   private async disposeInner(): Promise<void> {
     const owned = [...this.ownedSessionIds];
-    this.ownedSessionIds.clear();
     let firstError: unknown;
     for (const agentId of owned) {
       try {
         await this.host.destroy(agentId);
+        // Only an actually-destroyed session stops being ours. Clearing up front made a failed
+        // destroy look owned=false, so no retry could ever reach it again.
+        this.ownedSessionIds.delete(agentId);
       } catch (error) {
         firstError ??= error;
       }

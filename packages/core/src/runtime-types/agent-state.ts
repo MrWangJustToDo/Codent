@@ -41,7 +41,6 @@ export interface AgentState {
 
 export type AgentTransitionEvent =
   | { type: "prepare" }
-  | { type: "stream-start" }
   | { type: "stream-chunk"; stream: "thinking" | "responding" | "tooling" }
   | { type: "stream-end"; result: "completed" | "error" | "aborted"; error?: string }
   /** Settle a turn from a state that has no live stream (client-tool resume, reconcile). */
@@ -164,15 +163,10 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
         stream: "none",
       };
 
-    case "stream-start":
-      if (state.run !== "preparing" && state.run !== "idle") {
-        reject(`stream-start requires preparing/idle, got ${state.run}`, event, options);
-      }
-      return { ...state, lifecycle: "busy", run: "streaming", stream: "none" };
-
     case "stream-chunk":
-      // A chunk implies a stream even when the caller missed `stream-start` (a retry resumes
-      // mid-stream), so promote instead of rejecting.
+      // A chunk is the only stream signal: it promotes from `preparing` (or `idle`, for a retry
+      // that resumes mid-stream) instead of rejecting. `stream-start` used to exist for this and
+      // was never dispatched, so it was removed rather than left as a misleading edge.
       if (event.stream === "tooling") {
         return { ...state, lifecycle: "busy", run: "tooling", stream: "none" };
       }
@@ -242,6 +236,14 @@ function applyTransition(state: AgentState, event: AgentTransitionEvent, options
       if (state.run === "compacting") reject("pause requires no active compaction", event, options);
       if (state.lifecycle !== "busy" && state.lifecycle !== "ready") {
         reject(`pause requires a live agent, got ${state.lifecycle}`, event, options);
+      }
+      // An APPROVAL wait belongs to the run that asked for it. A late `onToolPhaseComplete` (a retry,
+      // a pump unwinding after an abort) used to pause a turn that had already settled: the
+      // projection kept reporting error/aborted while `isActiveState` became true forever. A QUESTION
+      // is deliberately exempt — an unanswered `ask_user` outlives a failed run and must keep the
+      // session parked on the user (`syncPendingQuestionWait`).
+      if (event.wait === "approval" && (state.outcome === "error" || state.outcome === "aborted")) {
+        reject(`pause requires a live run, got outcome ${state.outcome}`, event, options);
       }
       return { ...state, lifecycle: "busy", wait: event.wait };
 
